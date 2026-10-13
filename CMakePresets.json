@@ -1,0 +1,28 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "native",
+      "displayName": "Native Release preview",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "BUILD_TESTING": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "native", "configurePreset": "native", "configuration": "Release", "jobs": 3 }
+  ],
+  "testPresets": [
+    { "name": "native", "configurePreset": "native", "configuration": "Release", "output": { "outputOnFailure": true } }
+  ],
+  "workflowPresets": [
+    {
+      "name": "preview",
+      "steps": [
+        { "type": "configure", "name": "native" },
+        { "type": "build", "name": "native" },
+        { "type": "test", "name": "native" }
+      ]
+    }
+  ]
+}

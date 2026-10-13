@@ -1,8 +1,11 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.25)
 project(Halftrack VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 17)
+    message(FATAL_ERROR "Halftrack's pinned engine requires AppleClang 17 or newer (Xcode 16.3+).")
+endif()
 if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version")
 endif()
@@ -35,7 +38,7 @@ juce_add_gui_app(Halftrack
     PLUGINHOST_AU TRUE)
 
 juce_add_binary_data(HalftrackAssets SOURCES assets/halftrack-mark.svg)
-target_sources(Halftrack PRIVATE src/Main.cpp src/Session.cpp src/MainComponent.cpp tests/SessionTests.cpp)
+target_sources(Halftrack PRIVATE src/Main.cpp src/Session.cpp src/SubtractiveSynth.cpp src/MainComponent.cpp tests/SessionTests.cpp tests/MidiTests.cpp tests/PersistenceTests.cpp)
 target_include_directories(Halftrack PRIVATE src)
 target_compile_definitions(Halftrack PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
@@ -44,7 +47,9 @@ target_compile_definitions(Halftrack PRIVATE
     JUCE_ASIO=$<BOOL:${WIN32}>
     JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_STRICT_REFCOUNTEDPOINTER=1
-    TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
+    TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=0
+    TRACKTION_ENABLE_TIMESTRETCH_SIGNALSMITH=1
+    TRACKTION_ENABLE_TIMESTRETCH_RUBBERBAND=0)
 target_link_libraries(Halftrack PRIVATE
     tracktion::tracktion_engine tracktion::tracktion_core tracktion::tracktion_graph
     juce::juce_audio_utils juce::juce_recommended_config_flags
@@ -53,7 +58,9 @@ if(APPLE)
     target_compile_options(Halftrack PRIVATE -fno-aligned-allocation)
 endif()
 include(CTest)
+target_compile_definitions(Halftrack PRIVATE HALFTRACK_TESTS_ENABLED=$<BOOL:${BUILD_TESTING}>)
 if(BUILD_TESTING)
+    target_sources(Halftrack PRIVATE tests/RealtimeTests.cpp)
     juce_add_plugin(HalftrackTestGain
         BUNDLE_ID "org.halftrack.testgain"
         COMPANY_NAME "Halftrack Contributors"

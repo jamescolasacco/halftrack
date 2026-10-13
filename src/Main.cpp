@@ -6,6 +6,10 @@
 
 namespace halftrack
 {
+int runPersistenceTests (const juce::File&);
+#if HALFTRACK_TESTS_ENABLED
+int runRealtimeTests();
+#endif
 class Application final : public juce::JUCEApplication
 {
 public:
@@ -27,7 +31,14 @@ public:
             auto destination = i + 1 < args.size()
                 ? juce::File (args[i + 1])
                 : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-tests");
-            setApplicationReturnValue (runSessionTests (destination));
+            int result = runSessionTests (destination);
+            if (result == 0) result = runMidiTests (destination);
+            if (result == 0) result = runPersistenceTests (destination);
+            #if HALFTRACK_TESTS_ENABLED
+            if (result == 0) result = runRealtimeTests();
+            if (result == 0) result = MainComponent::runInteractionTests();
+            #endif
+            setApplicationReturnValue (result);
             quit();
             return;
         }
@@ -88,6 +99,7 @@ private:
             setResizeLimits (1100, 720, 7680, 4320);
             centreWithSize (1440, 900);
             setVisible (true);
+            content->grabKeyboardFocus();
         }
         void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }
         MainComponent* content = nullptr;
