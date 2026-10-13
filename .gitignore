@@ -1,0 +1,9 @@
+/.deps/
+/.venv/
+/build/
+/build-*/
+/dist/
+/artifacts/
+.DS_Store
+*.user
+*.suo

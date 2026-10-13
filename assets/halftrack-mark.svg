@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Halftrack temporary mark</title>
+  <desc>Two tape tracks form an H between two reel hubs. Editable vector placeholder.</desc>
+  <rect x="8" y="8" width="240" height="240" rx="46" fill="#292b2c"/>
+  <g fill="none" stroke="#e9b66d" stroke-width="15">
+    <circle cx="77" cy="88" r="29"/><circle cx="179" cy="88" r="29"/>
+    <path d="M48 88v95m160-95v95M48 151h160M48 180h160"/>
+  </g>
+  <g fill="#e9b66d"><circle cx="77" cy="88" r="7"/><circle cx="179" cy="88" r="7"/></g>
+</svg>
