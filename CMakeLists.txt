@@ -54,6 +54,10 @@ target_link_libraries(Halftrack PRIVATE
     tracktion::tracktion_engine tracktion::tracktion_core tracktion::tracktion_graph
     juce::juce_audio_utils juce::juce_recommended_config_flags
     HalftrackAssets)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Tracktion's wider atomic operations use the compiler runtime on Linux.
+    target_link_libraries(Halftrack PRIVATE atomic)
+endif()
 if(APPLE)
     target_compile_options(Halftrack PRIVATE -fno-aligned-allocation)
 endif()
