@@ -40,7 +40,7 @@ juce_add_gui_app(Halftrack
     PLUGINHOST_AU TRUE)
 
 juce_add_binary_data(HalftrackAssets SOURCES assets/halftrack-mark.svg)
-target_sources(Halftrack PRIVATE src/Main.cpp src/Session.cpp src/SubtractiveSynth.cpp src/MainComponent.cpp tests/SessionTests.cpp tests/MidiTests.cpp tests/PersistenceTests.cpp)
+target_sources(Halftrack PRIVATE src/Main.cpp src/Session.cpp src/SubtractiveSynth.cpp src/MainComponent.cpp tests/SessionTests.cpp tests/MidiTests.cpp tests/PersistenceTests.cpp tests/LatencyTests.cpp)
 target_include_directories(Halftrack PRIVATE src)
 target_compile_definitions(Halftrack PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
@@ -81,7 +81,22 @@ if(BUILD_TESTING)
     target_sources(HalftrackTestGain PRIVATE tests/TestGainPlugin.cpp)
     target_compile_definitions(HalftrackTestGain PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
     target_link_libraries(HalftrackTestGain PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
-    add_dependencies(Halftrack HalftrackTestGain_VST3)
+    juce_add_plugin(HalftrackTestLatency
+        BUNDLE_ID "org.halftrack.testlatency"
+        COMPANY_NAME "Halftrack Contributors"
+        PLUGIN_MANUFACTURER_CODE Htrk
+        PLUGIN_CODE Htlt
+        FORMATS VST3
+        PRODUCT_NAME "Halftrack Test Latency"
+        IS_SYNTH FALSE NEEDS_MIDI_INPUT FALSE NEEDS_MIDI_OUTPUT FALSE
+        COPY_PLUGIN_AFTER_BUILD FALSE)
+    target_sources(HalftrackTestLatency PRIVATE tests/TestLatencyPlugin.cpp)
+    target_compile_definitions(HalftrackTestLatency PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+    target_link_libraries(HalftrackTestLatency PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
+    add_dependencies(Halftrack HalftrackTestGain_VST3 HalftrackTestLatency_VST3)
+    add_test(NAME latency-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-latency ${CMAKE_BINARY_DIR}/test-artifacts)
+    set_tests_properties(latency-acceptance PROPERTIES TIMEOUT 90
+        ENVIRONMENT "HALFTRACK_TEST_LATENCY_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestLatency_VST3>/../..")
     add_test(NAME session-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(session-acceptance PROPERTIES TIMEOUT 180
         ENVIRONMENT "HALFTRACK_TEST_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_VST3>/../..")
