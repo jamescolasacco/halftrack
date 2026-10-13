@@ -31,6 +31,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Test synthetic Mach-O inventory fixtures
+        run: python -m unittest discover -s tests -p 'test_macho_inventory.py' -v
       - name: Install build tools
         run: python -m pip install cmake==4.4.4 ninja==1.13.0
       - name: Install Linux audio and display dependencies
