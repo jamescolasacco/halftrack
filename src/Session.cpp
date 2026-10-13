@@ -290,7 +290,7 @@ struct Session::Impl
     Session& owner;
     te::Engine engine;
     bool useDevices;
-    bool explicitChanges = false, pristineNewDocument = false;
+    bool explicitChanges = false, pristineNewDocument = false, exporting = false;
     File scratch, projectFile;
     std::unique_ptr<te::Edit> edit;
     std::unique_ptr<te::Edit::UndoTransactionInhibitor> gesture;
@@ -369,6 +369,7 @@ Session::Snapshot Session::snapshot() const
 
 Result Session::newProject()
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     endEditGesture();
     closePluginEditors();
     if (impl->edit) impl->edit->getTransport().stop (false, false);
@@ -391,6 +392,7 @@ Result Session::newProject()
 
 Result Session::loadProject (const File& file)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto xml = juce::XmlDocument::parse (file);
     if (! xml || ! xml->hasTagName ("HALFTRACK") || xml->getIntAttribute ("version") != 1)
         return Result::fail ("This is not a supported Halftrack project.");
@@ -433,6 +435,7 @@ Result Session::loadProject (const File& file)
 
 Result Session::saveProject (const File& destination)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before saving.");
     auto file = destination.withFileExtension (".halftrack");
     auto assets = file.getSiblingFile (file.getFileNameWithoutExtension() + " Assets");
@@ -479,6 +482,7 @@ Result Session::saveProject (const File& destination)
 
 Result Session::addAudioTrack (String name)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     impl->transaction ("Add audio track");
     const auto count = te::getAudioTracks (*impl->edit).size();
     impl->edit->ensureNumberOfAudioTracks (count + 1);
@@ -493,6 +497,7 @@ Result Session::addAudioTrack (String name)
 }
 Result Session::addMidiTrack (String name)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     impl->transaction ("Add MIDI track");
     const auto count = te::getAudioTracks (*impl->edit).size();
     impl->edit->ensureNumberOfAudioTracks (count + 1);
@@ -509,6 +514,7 @@ Result Session::addMidiTrack (String name)
 }
 Result Session::addMidiClip (const String& trackId, double start, double length)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (trackId);
     if (! track || ! static_cast<bool> (track->state.getProperty (midiTrackProperty))) return Result::fail ("Select a MIDI track first.");
     if (! std::isfinite (start) || ! std::isfinite (length) || start < 0 || length <= 0 || start + length > 1000000)
@@ -522,6 +528,7 @@ Result Session::addMidiClip (const String& trackId, double start, double length)
 }
 Result Session::addMidiNote (const String& clipId, int pitch, double start, double length, float velocity)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
     auto valid = impl->validateNote (*clip, pitch, start, length, velocity); if (valid.failed()) return valid;
     if (clip->getSequence().getNumNotes() >= 100000) return Result::fail ("The MIDI clip has reached its note limit.");
@@ -535,6 +542,7 @@ Result Session::addMidiNote (const String& clipId, int pitch, double start, doub
 }
 Result Session::updateMidiNote (const String& clipId, const String& noteId, int pitch, double start, double length, float velocity)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
     auto* note = Impl::note (*clip, noteId); if (! note) return Result::fail ("MIDI note not found.");
     auto valid = impl->validateNote (*clip, pitch, start, length, velocity); if (valid.failed()) return valid;
@@ -547,6 +555,7 @@ Result Session::updateMidiNote (const String& clipId, const String& noteId, int 
 }
 Result Session::removeMidiNote (const String& clipId, const String& noteId)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
     auto* note = Impl::note (*clip, noteId); if (! note) return Result::fail ("MIDI note not found.");
     impl->transaction ("Remove MIDI note");
@@ -555,6 +564,7 @@ Result Session::removeMidiNote (const String& clipId, const String& noteId)
 }
 Result Session::setSynthSettings (const String& trackId, const SynthSettings& settings)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (trackId); auto* synth = track ? Impl::synth (*track) : nullptr;
     if (! synth) return Result::fail ("Built-in synthesizer not found.");
     auto valid = [] (float value, float low, float high) { return std::isfinite (value) && value >= low && value <= high; };
@@ -567,6 +577,7 @@ Result Session::setSynthSettings (const String& trackId, const SynthSettings& se
 }
 Result Session::removeTrack (int index)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before removing tracks.");
     closePluginEditors(); impl->meters.clear(); impl->transaction ("Remove track");
@@ -574,6 +585,7 @@ Result Session::removeTrack (int index)
 }
 Result Session::importAudio (const File& source, int index, double start)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! source.existsAsFile()) return Result::fail ("The audio file does not exist.");
     te::AudioFile audio (impl->engine, source);
     if (! audio.isValid() || audio.getLength() <= 0) return Result::fail ("This audio file could not be read.");
@@ -595,40 +607,47 @@ Result Session::importAudio (const File& source, int index, double start)
 }
 Result Session::moveClip (int t, int c, double start)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->clip (t, c); if (! clip) return Result::fail ("Clip not found.");
     if (! std::isfinite (start) || start < 0) return Result::fail ("Clip start must be zero or greater.");
     impl->transaction ("Move clip"); clip->setStart (te::TimePosition::fromSeconds (start), false, true); impl->changed(); return Result::ok();
 }
 Result Session::removeClip (int t, int c)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->clip (t, c); if (! clip) return Result::fail ("Clip not found.");
     impl->transaction ("Remove clip"); clip->removeFromParent(); impl->changed(); return Result::ok();
 }
 Result Session::renameTrack (int index, const String& name)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (name.trim().isEmpty()) return Result::fail ("Enter a track name.");
     impl->transaction ("Rename track"); t->setName (name.trim()); impl->changed(); return Result::ok();
 }
 Result Session::setTrackGain (int index, float value)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (! std::isfinite (value)) return Result::fail ("Invalid gain.");
     impl->transaction ("Track gain"); t->getVolumePlugin()->setVolumeDb (juce::jlimit (-100.0f, 12.0f, value)); impl->changed(); return Result::ok();
 }
 Result Session::setTrackPan (int index, float value)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (! std::isfinite (value)) return Result::fail ("Invalid pan.");
     impl->transaction ("Track pan"); t->getVolumePlugin()->setPan (juce::jlimit (-1.0f, 1.0f, value)); impl->changed(); return Result::ok();
 }
 Result Session::setTrackMute (int index, bool value)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     impl->transaction ("Track mute"); t->setMute (value); impl->changed(); return Result::ok();
 }
 Result Session::setTrackSolo (int index, bool value)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     impl->transaction ("Track solo"); t->setSolo (value); impl->changed(); return Result::ok();
 }
@@ -641,6 +660,7 @@ juce::StringArray Session::inputNames() const
 }
 Result Session::setTrackInput (int index, const String& name)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing inputs.");
     // Enabling a device rebuilds the engine's device list, invalidating its pointers.
@@ -670,12 +690,14 @@ Result Session::setTrackInput (int index, const String& name)
 }
 Result Session::setTrackArmed (int index, bool value)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     auto* input = impl->input (*t); if (! input) return Result::fail ("Select an audio input before arming this track.");
     input->setRecordingEnabled (t->itemID, value); impl->changed(); return Result::ok();
 }
 Result Session::setTrackMonitor (int index, MonitorMode mode)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     auto* input = impl->input (*t); if (! input) return Result::fail ("Select an audio input before enabling monitoring.");
     input->getInputDevice().setMonitorMode (static_cast<te::InputDevice::MonitorMode> (mode));
@@ -684,12 +706,18 @@ Result Session::setTrackMonitor (int index, MonitorMode mode)
 }
 Result Session::play()
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio output in Audio Settings.");
     impl->edit->getTransport().play (false); sendChangeMessage(); return Result::ok();
 }
-void Session::stop() { impl->edit->getTransport().stop (false, false); sendChangeMessage(); }
+void Session::stop()
+{
+    if (impl->exporting) return;
+    impl->edit->getTransport().stop (false, false); sendChangeMessage();
+}
 Result Session::record()
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio device in Audio Settings.");
     bool armed = false;
     for (auto* t : te::getAudioTracks (*impl->edit)) if (auto* d = impl->input (*t)) armed |= d->isRecordingEnabled (t->itemID);
@@ -699,14 +727,20 @@ Result Session::record()
     if (! impl->edit->getTransport().isRecording()) return Result::fail ("Recording could not start. Check the audio input and microphone permission.");
     impl->changed(); return Result::ok();
 }
-void Session::seek (double seconds) { if (std::isfinite (seconds)) impl->edit->getTransport().setPosition (te::TimePosition::fromSeconds (juce::jmax (0.0, seconds))); }
+void Session::seek (double seconds)
+{
+    if (impl->exporting) return;
+    if (std::isfinite (seconds)) impl->edit->getTransport().setPosition (te::TimePosition::fromSeconds (juce::jmax (0.0, seconds)));
+}
 void Session::setTempo (double bpm)
 {
+    if (impl->exporting) return;
     if (! std::isfinite (bpm)) return;
     impl->transaction ("Tempo"); impl->edit->tempoSequence.getTempo (0)->setBpm (juce::jlimit (20.0, 999.0, bpm)); impl->changed();
 }
 void Session::setLoop (bool enabled, double start, double end)
 {
+    if (impl->exporting) return;
     if (! std::isfinite (start) || ! std::isfinite (end) || start < 0 || end <= start) return;
     auto& t = impl->edit->getTransport();
     impl->transaction ("Loop range");
@@ -720,33 +754,48 @@ void Session::setLoop (bool enabled, double start, double end)
 }
 void Session::beginEditGesture (const String& name)
 {
+    if (impl->exporting) return;
     endEditGesture();
     impl->edit->getUndoManager().beginNewTransaction (name);
     impl->gesture = std::make_unique<te::Edit::UndoTransactionInhibitor> (*impl->edit);
 }
 void Session::endEditGesture()
 {
+    if (impl->exporting) return;
     if (! impl->gesture) return;
     impl->gesture.reset();
     impl->edit->getUndoManager().beginNewTransaction();
 }
-void Session::undo() { endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshParameterValues(); sendChangeMessage(); }
-void Session::redo() { endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshParameterValues(); sendChangeMessage(); }
-bool Session::canUndo() const { return impl->edit->getUndoManager().canUndo(); }
-bool Session::canRedo() const { return impl->edit->getUndoManager().canRedo(); }
+void Session::undo()
+{
+    if (impl->exporting) return;
+    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshParameterValues(); sendChangeMessage();
+}
+void Session::redo()
+{
+    if (impl->exporting) return;
+    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshParameterValues(); sendChangeMessage();
+}
+bool Session::canUndo() const { return ! impl->exporting && impl->edit->getUndoManager().canUndo(); }
+bool Session::canRedo() const { return ! impl->exporting && impl->edit->getUndoManager().canRedo(); }
 
 Result Session::exportWav (const File& file, double rate, int bits, double tailSeconds)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before exporting.");
     if (rate < 8000 || rate > 384000 || ! std::isfinite (rate) || (bits != 16 && bits != 24 && bits != 32)) return Result::fail ("Unsupported export format.");
     if (! std::isfinite (tailSeconds) || tailSeconds < 0 || tailSeconds > 60) return Result::fail ("Export tail must be between 0 and 60 seconds.");
     endEditGesture();
     double end = 0;
     for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* c : t->getClips()) end = juce::jmax (end, c->getPosition().time.getEnd().inSeconds());
-    if (end <= 0) return Result::fail ("Import or record audio before exporting.");
+    if (end <= 0) return Result::fail ("Add audio or MIDI clips before exporting.");
     end += tailSeconds;
     auto r = file.getParentDirectory().createDirectory(); if (r.failed()) return r;
     juce::TemporaryFile output (file);
+    // Native menu callbacks still dispatch during a modal progress window. Hold
+    // this guard until the worker and render scopes have completely released the
+    // edit; a reentrant New, Undo or Export must never mutate their graph.
+    const juce::ScopedValueSetter<bool> exporting (impl->exporting, true);
     impl->edit->dispatchPendingUpdatesSynchronously();
     // Nesting is supported by the engine. This outer scope drains playback
     // before resetting owned control queues and restores it only after export.
@@ -768,6 +817,7 @@ Result Session::exportWav (const File& file, double rate, int bits, double tailS
     sendChangeMessage(); return Result::ok();
 }
 
+bool Session::isExporting() const { return impl->exporting; }
 void Session::cancelExport() { static_cast<UIBehaviour&> (impl->engine.getUIBehaviour()).cancelTask(); }
 
 juce::AudioDeviceManager& Session::audioDeviceManager() { return impl->engine.getDeviceManager().deviceManager; }
@@ -780,6 +830,7 @@ File Session::pluginScanDeadMansFile() const
 }
 Result Session::addPlugin (int index, const juce::PluginDescription& description)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     impl->transaction ("Add plug-in");
     // Tracktion resolves its persisted plug-in identity through this registry.
@@ -795,16 +846,19 @@ Result Session::addPlugin (int index, const juce::PluginDescription& description
 }
 Result Session::setPluginEnabled (int t, int p, bool enabled)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* plugin = impl->plugin (t, p); if (! plugin) return Result::fail ("Plug-in not found.");
     impl->transaction ("Bypass plug-in"); plugin->setEnabled (enabled); impl->changed(); return Result::ok();
 }
 Result Session::removePlugin (int t, int p)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* plugin = impl->plugin (t, p); if (! plugin) return Result::fail ("Plug-in not found.");
     plugin->windowState->closeWindowExplicitly(); impl->transaction ("Remove plug-in"); plugin->deleteFromParent(); impl->changed(); return Result::ok();
 }
 Result Session::setPluginParameter (int t, int p, int parameter, float value)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* plugin = impl->plugin (t, p);
     if (! plugin || ! std::isfinite (value)) return Result::fail ("Plug-in parameter not found.");
     auto* processor = plugin->getWrappedAudioProcessor();
@@ -816,6 +870,7 @@ Result Session::setPluginParameter (int t, int p, int parameter, float value)
 }
 Result Session::showPluginEditor (int t, int p)
 {
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* plugin = impl->plugin (t, p); if (! plugin) return Result::fail ("Plug-in not found.");
     plugin->windowState->showWindowExplicitly();
     if (! plugin->windowState->isWindowShowing()) return Result::fail ("This plug-in has no available editor.");
@@ -823,6 +878,7 @@ Result Session::showPluginEditor (int t, int p)
 }
 void Session::closePluginEditors()
 {
+    if (impl->exporting) return;
     if (impl && impl->edit)
         for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* p : t->pluginList.getPlugins()) p->windowState->closeWindowExplicitly();
 }

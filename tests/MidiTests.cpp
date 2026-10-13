@@ -179,6 +179,68 @@ int runMidiTests (const juce::File& requestedDirectory)
         float difference = 0;
         for (int i = 0; i < 96000; ++i) difference = std::max (difference, std::abs (audio.getSample (0, i) - restoredAudio.getSample (0, i)));
         check (difference < 0.00001f, "reopened MIDI render matches original output");
+        // Export deliberately pumps native events while a worker owns the graph.
+        // Recreate native-menu reentrancy without opening hardware or a window.
+        ok (session.setTrackGain (2, -3), "create undoable edit before export reentrancy test");
+        const auto beforeExport = session.snapshot();
+        check (session.canUndo() && ! session.isExporting(), "editing is available before export");
+        const auto protectedOutput = directory.getChildFile ("protected-export.wav");
+        const auto nestedOutput = directory.getChildFile ("nested-export.wav");
+        const auto rejectedSave = directory.getChildFile ("reentrant-save.halftrack");
+        const juce::String originalDestination = "Original destination survives cancelled rendering";
+        check (protectedOutput.replaceWithText (originalDestination), "prepare protected export destination");
+        bool eventDispatched = false, busyDuringDispatch = false, mutationsRejected = false;
+        bool undoIgnored = false, navigationIgnored = false, identitiesPreserved = false;
+        juce::MessageManager::callAsync ([&]
+        {
+            eventDispatched = true;
+            busyDuringDispatch = session.isExporting() && ! session.canUndo() && ! session.canRedo();
+            const std::array<juce::Result, 10> attempts {
+                session.newProject(), session.loadProject (project), session.saveProject (rejectedSave),
+                session.removeTrack (2), session.addMidiNote (clipId, 60, 0, 1, 1),
+                session.setSynthSettings (trackId, flatSettings()), session.setTrackGain (2, -20),
+                session.addAudioTrack ("Reentrant track"), session.removeClip (2, 0),
+                session.exportWav (nestedOutput)
+            };
+            mutationsRejected = std::all_of (attempts.begin(), attempts.end(), [] (const auto& result)
+            {
+                return result.failed() && result.getErrorMessage() == "Finish or cancel the current export first.";
+            });
+            auto state = session.snapshot();
+            identitiesPreserved = state.projectFile == beforeExport.projectFile
+                && state.tracks.size() == beforeExport.tracks.size()
+                && state.tracks[2].id == trackId && state.tracks[2].clips.size() == 1
+                && state.tracks[2].clips[0].id == clipId && state.tracks[2].clips[0].notes.size() == 1
+                && state.tracks[2].clips[0].notes[0].id == noteId
+                && state.tracks[2].synth.waveform == settings.waveform
+                && state.tracks[2].synth.level == settings.level;
+            session.undo();
+            undoIgnored = session.snapshot().tracks[2].gainDb == beforeExport.tracks[2].gainDb;
+            session.redo();
+            undoIgnored = undoIgnored && session.snapshot().tracks[2].gainDb == beforeExport.tracks[2].gainDb;
+            const auto position = session.snapshot().position;
+            session.stop(); session.seek (100); session.setTempo (81); session.setLoop (true, 5, 10);
+            session.beginEditGesture ("Blocked gesture"); session.endEditGesture();
+            state = session.snapshot();
+            navigationIgnored = state.position == position && state.tempo == beforeExport.tempo
+                && state.looping == beforeExport.looping && state.loopStart == beforeExport.loopStart
+                && state.loopEnd == beforeExport.loopEnd;
+            session.cancelExport();
+        });
+        const auto cancelled = session.exportWav (protectedOutput, 48000, 24, 60);
+        check (eventDispatched && busyDuringDispatch && mutationsRejected,
+               "nested native events reject project replacement, edits and recursive export");
+        check (identitiesPreserved && undoIgnored && navigationIgnored,
+               "rendering preserves model identity, parameters, undo history and navigation");
+        check (cancelled.failed() && cancelled.getErrorMessage() == "Export cancelled."
+               && protectedOutput.loadFileAsString() == originalDestination
+               && ! nestedOutput.exists() && ! rejectedSave.exists(),
+               "reentrant cancellation preserves target and creates no nested output");
+        check (! session.isExporting() && session.canUndo(), "export guard releases after worker cancellation");
+        session.undo();
+        check (std::abs (session.snapshot().tracks[2].gainDb) < 0.001f,
+               "original edit can still be undone after cancelled export");
+        ok (session.setTrackGain (2, -1), "editing resumes after cancelled export");
         std::cout << "Halftrack MIDI tests passed. Artifacts: " << directory.getFullPathName() << std::endl;
         return 0;
     }

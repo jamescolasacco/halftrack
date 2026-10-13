@@ -97,6 +97,8 @@ public:
     bool canUndo() const;
     bool canRedo() const;
     juce::Result exportWav (const juce::File&, double sampleRate = 48000, int bitDepth = 24, double tailSeconds = 0);
+    // Export pumps native events; edits reject while it owns the render graph.
+    bool isExporting() const;
     void cancelExport();
 
     juce::AudioDeviceManager& audioDeviceManager();
