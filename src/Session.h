@@ -12,14 +12,36 @@ class Session final : public juce::ChangeBroadcaster
 {
 public:
     enum class MonitorMode { off, automatic, on };
-    struct ClipInfo { juce::String id, name; double start = 0, length = 0, sourceOffset = 0; juce::File file; };
+    struct SynthSettings
+    {
+        float cutoffHz = 5000, resonance = 0.15f, attackSeconds = 0.01f, decaySeconds = 0.12f;
+        float sustain = 0.65f, releaseSeconds = 0.25f, level = 0.15f;
+        int waveform = 0; // 0 = saw, 1 = square.
+    };
+    struct MidiNoteInfo
+    {
+        juce::String id;
+        int pitch = 60;
+        double startBeat = 0, lengthBeats = 1;
+        float velocity = 0.8f;
+    };
+    struct ClipInfo
+    {
+        juce::String id, name;
+        double start = 0, length = 0, sourceOffset = 0;
+        juce::File file;
+        bool isMidi = false;
+        double startBeat = 0, lengthBeats = 0;
+        std::vector<MidiNoteInfo> notes;
+    };
     struct PluginInfo { juce::String id, name; bool enabled = true; };
     struct TrackInfo
     {
         juce::String id, name;
         juce::Colour colour;
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
-        bool mute = false, solo = false, armed = false;
+        bool mute = false, solo = false, armed = false, isMidi = false;
+        SynthSettings synth;
         MonitorMode monitor = MonitorMode::off;
         juce::String inputName;
         std::vector<ClipInfo> clips;
@@ -42,6 +64,13 @@ public:
     juce::Result loadProject (const juce::File&);
     juce::Result saveProject (const juce::File&); // Copies media into <name> Assets beside the .halftrack file.
     juce::Result addAudioTrack (juce::String name = {});
+    juce::Result addMidiTrack (juce::String name = {});
+    juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
+    juce::Result addMidiNote (const juce::String& clipId, int pitch, double startBeat, double lengthBeats, float velocity);
+    juce::Result updateMidiNote (const juce::String& clipId, const juce::String& noteId,
+                                 int pitch, double startBeat, double lengthBeats, float velocity);
+    juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);
+    juce::Result setSynthSettings (const juce::String& trackId, const SynthSettings&);
     juce::Result removeTrack (int trackIndex);
     juce::Result importAudio (const juce::File&, int trackIndex = -1, double startSeconds = 0);
     juce::Result moveClip (int trackIndex, int clipIndex, double startSeconds);
@@ -88,4 +117,5 @@ private:
 };
 
 int runSessionTests (const juce::File& artifactDirectory);
+int runMidiTests (const juce::File& artifactDirectory);
 }

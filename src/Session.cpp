@@ -1,4 +1,5 @@
 #include "Session.h"
+#include "SubtractiveSynth.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 
@@ -11,6 +12,8 @@ using juce::File;
 using juce::Result;
 using juce::String;
 const juce::Identifier monitorProperty { "halftrackMonitor" };
+const juce::Identifier midiTrackProperty { "halftrackMidiTrack" };
+const juce::Identifier midiNoteIDProperty { "halftrackNoteId" };
 
 class Behaviour final : public te::EngineBehaviour
 {
@@ -155,6 +158,7 @@ struct Session::Impl
         : owner (s), engine (devices ? "Halftrack" : "Halftrack Tests", std::make_unique<UIBehaviour> (devices),
                             std::make_unique<Behaviour> (devices)), useDevices (devices)
     {
+        engine.getPluginManager().createBuiltInType<SubtractiveSynthPlugin>();
         engine.getPluginManager().setUsesSeparateProcessForScanning (devices);
         if (customDeviceType)
         {
@@ -180,6 +184,37 @@ struct Session::Impl
     {
         auto tracks = te::getAudioTracks (*edit);
         return juce::isPositiveAndBelow (index, tracks.size()) ? tracks[index] : nullptr;
+    }
+    te::AudioTrack* track (const String& id) const
+    {
+        for (auto* t : te::getAudioTracks (*edit)) if (t->itemID.toString() == id) return t;
+        return nullptr;
+    }
+    te::MidiClip* midiClip (const String& id) const
+    {
+        for (auto* t : te::getAudioTracks (*edit))
+            for (auto* c : t->getClips()) if (c->itemID.toString() == id) return dynamic_cast<te::MidiClip*> (c);
+        return nullptr;
+    }
+    static SubtractiveSynthPlugin* synth (te::AudioTrack& track)
+    {
+        for (auto* plugin : track.pluginList.getPlugins())
+            if (auto* instrument = dynamic_cast<SubtractiveSynthPlugin*> (plugin)) return instrument;
+        return nullptr;
+    }
+    static te::MidiNote* note (te::MidiClip& clip, const String& id)
+    {
+        for (auto* n : clip.getSequence().getNotes()) if (n->state.getProperty (midiNoteIDProperty).toString() == id) return n;
+        return nullptr;
+    }
+    Result validateNote (te::MidiClip& clip, int pitch, double start, double length, float velocity) const
+    {
+        const auto beats = edit->tempoSequence.toBeats (clip.getPosition().time).getLength().inBeats();
+        if (pitch < 0 || pitch > 127 || ! std::isfinite (start) || ! std::isfinite (length)
+            || start < 0 || length < 1.0 / 960 || start + length > beats + 0.0000001
+            || ! std::isfinite (velocity) || velocity <= 0 || velocity > 1)
+            return Result::fail ("Notes need a pitch from 0 to 127, positive velocity, and a duration inside the MIDI clip.");
+        return Result::ok();
     }
     te::Clip* clip (int t, int c) const
     {
@@ -210,6 +245,7 @@ struct Session::Impl
         // Tracktion resets initialization changes on a deferred timer. Keep an
         // independent flag so that timer cannot clear a real user edit.
         explicitChanges = true;
+        pristineNewDocument = false;
         edit->markAsChanged();
         owner.sendChangeMessage();
     }
@@ -254,7 +290,7 @@ struct Session::Impl
     Session& owner;
     te::Engine engine;
     bool useDevices;
-    bool explicitChanges = false;
+    bool explicitChanges = false, pristineNewDocument = false;
     File scratch, projectFile;
     std::unique_ptr<te::Edit> edit;
     std::unique_ptr<te::Edit::UndoTransactionInhibitor> gesture;
@@ -272,7 +308,7 @@ Session::Snapshot Session::snapshot() const
     auto& transport = e.getTransport();
     s.projectFile = impl->projectFile;
     s.name = s.projectFile == File() ? "Untitled" : s.projectFile.getFileNameWithoutExtension();
-    s.dirty = impl->explicitChanges || e.hasChangedSinceSaved();
+    s.dirty = impl->explicitChanges || (! impl->pristineNewDocument && e.hasChangedSinceSaved());
     s.playing = transport.isPlaying(); s.recording = transport.isRecording();
     s.looping = transport.looping;
     s.position = transport.getPosition().inSeconds();
@@ -287,6 +323,8 @@ Session::Snapshot Session::snapshot() const
         TrackInfo info;
         info.id = t->itemID.toString(); info.name = t->getName(); info.colour = t->getColour();
         info.mute = t->isMuted (false); info.solo = t->isSolo (false);
+        info.isMidi = t->state.getProperty (midiTrackProperty, false);
+        if (auto* synth = Impl::synth (*t)) info.synth = synth->getSettings();
         if (auto* v = t->getVolumePlugin()) { info.gainDb = v->getVolumeDb(); info.pan = v->getPan(); }
         if (auto* input = impl->input (*t))
         {
@@ -305,7 +343,17 @@ Session::Snapshot Session::snapshot() const
             ClipInfo clipInfo;
             clipInfo.id = c->itemID.toString(); clipInfo.name = c->getName();
             clipInfo.start = pos.time.getStart().inSeconds(); clipInfo.length = pos.time.getLength().inSeconds();
-            clipInfo.sourceOffset = pos.offset.inSeconds(); clipInfo.file = c->getSourceFileReference().getFile();
+            clipInfo.sourceOffset = pos.offset.inSeconds();
+            if (c->usesSourceFile()) clipInfo.file = c->getSourceFileReference().getFile();
+            if (auto* midi = dynamic_cast<te::MidiClip*> (c))
+            {
+                clipInfo.isMidi = true;
+                const auto beats = e.tempoSequence.toBeats (pos.time);
+                clipInfo.startBeat = beats.getStart().inBeats(); clipInfo.lengthBeats = beats.getLength().inBeats();
+                for (auto* note : midi->getSequence().getNotes())
+                    clipInfo.notes.push_back ({ note->state.getProperty (midiNoteIDProperty).toString(), note->getNoteNumber(),
+                                               note->getStartBeat().inBeats(), note->getLengthBeats().inBeats(), note->getVelocity() / 127.0f });
+            }
             info.clips.push_back (std::move (clipInfo));
         }
         for (auto* p : impl->plugins (index++)) info.plugins.push_back ({ p->itemID.toString(), p->getName(), p->isEnabled() });
@@ -337,6 +385,7 @@ Result Session::newProject()
     for (auto* t : te::getAudioTracks (*impl->edit)) impl->edit->deleteTrack (t);
     addAudioTrack ("Audio 1"); addAudioTrack ("Audio 2");
     impl->prepareEdit();
+    impl->pristineNewDocument = true;
     return Result::ok();
 }
 
@@ -359,13 +408,16 @@ Result Session::loadProject (const File& file)
         for (auto* p : t->pluginList.getPlugins())
             if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
                 if (! external->isInitialisingAsync() && external->getAudioPluginInstance() == nullptr)
-                    return Result::fail ("Could not load plug-in " + external->getName() + ": " + external->getLoadError());
+                    return Result::fail ("Could not load plug-in " + external->getName()
+                        + ". Open Scan / Manage Plug-ins and scan its installed format, then reopen this project. "
+                        + external->getLoadError());
     for (auto* t : te::getAudioTracks (*candidate))
         for (auto* c : t->getClips())
             if (c->usesSourceFile() && ! c->getSourceFileReference().getFile().existsAsFile())
                 return Result::fail ("Missing audio file: " + c->getSourceFileReference().getFile().getFullPathName());
     endEditGesture(); closePluginEditors(); stop(); impl->meters.clear();
     impl->projectFile = file;
+    impl->pristineNewDocument = false;
     impl->edit = std::move (candidate);
     impl->prepareEdit();
     impl->refreshInputs();
@@ -439,6 +491,80 @@ Result Session::addAudioTrack (String name)
     impl->changed();
     return Result::ok();
 }
+Result Session::addMidiTrack (String name)
+{
+    impl->transaction ("Add MIDI track");
+    const auto count = te::getAudioTracks (*impl->edit).size();
+    impl->edit->ensureNumberOfAudioTracks (count + 1);
+    auto* track = impl->track (count);
+    if (! track) return Result::fail ("Could not create a MIDI track.");
+    track->setName (name.isEmpty() ? "MIDI " + String (count + 1) : name);
+    track->setColour (juce::Colour (0xff9d91bc));
+    track->state.setProperty (midiTrackProperty, true, &impl->edit->getUndoManager());
+    track->getVolumePlugin()->setVolumeDb (0);
+    auto synth = impl->edit->getPluginCache().createNewPlugin (SubtractiveSynthPlugin::xmlTypeName, {});
+    if (! synth) return Result::fail ("Could not create the built-in synthesizer.");
+    track->pluginList.insertPlugin (synth, 0, nullptr);
+    impl->changed(); return Result::ok();
+}
+Result Session::addMidiClip (const String& trackId, double start, double length)
+{
+    auto* track = impl->track (trackId);
+    if (! track || ! static_cast<bool> (track->state.getProperty (midiTrackProperty))) return Result::fail ("Select a MIDI track first.");
+    if (! std::isfinite (start) || ! std::isfinite (length) || start < 0 || length <= 0 || start + length > 1000000)
+        return Result::fail ("Enter a positive MIDI clip duration and a valid start beat.");
+    impl->transaction ("Add MIDI clip");
+    const auto time = impl->edit->tempoSequence.toTime (te::BeatRange { te::BeatPosition::fromBeats (start), te::BeatPosition::fromBeats (start + length) });
+    auto clip = track->insertMIDIClip ("MIDI clip", time, nullptr);
+    if (! clip) return Result::fail ("Could not create the MIDI clip.");
+    clip->setSyncType (te::Clip::syncBarsBeats);
+    impl->changed(); return Result::ok();
+}
+Result Session::addMidiNote (const String& clipId, int pitch, double start, double length, float velocity)
+{
+    auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    auto valid = impl->validateNote (*clip, pitch, start, length, velocity); if (valid.failed()) return valid;
+    if (clip->getSequence().getNumNotes() >= 100000) return Result::fail ("The MIDI clip has reached its note limit.");
+    impl->transaction ("Add MIDI note");
+    auto* undo = &impl->edit->getUndoManager();
+    auto* note = clip->getSequence().addNote (pitch, te::BeatPosition::fromBeats (start), te::BeatDuration::fromBeats (length),
+                                             juce::jlimit (1, 127, juce::roundToInt (velocity * 127)), 0, undo);
+    if (! note) return Result::fail ("Could not add the MIDI note.");
+    note->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), undo);
+    impl->changed(); return Result::ok();
+}
+Result Session::updateMidiNote (const String& clipId, const String& noteId, int pitch, double start, double length, float velocity)
+{
+    auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    auto* note = Impl::note (*clip, noteId); if (! note) return Result::fail ("MIDI note not found.");
+    auto valid = impl->validateNote (*clip, pitch, start, length, velocity); if (valid.failed()) return valid;
+    impl->transaction ("Edit MIDI note");
+    auto* undo = &impl->edit->getUndoManager();
+    note->setNoteNumber (pitch, undo);
+    note->setStartAndLength (te::BeatPosition::fromBeats (start), te::BeatDuration::fromBeats (length), undo);
+    note->setVelocity (juce::jlimit (1, 127, juce::roundToInt (velocity * 127)), undo);
+    impl->changed(); return Result::ok();
+}
+Result Session::removeMidiNote (const String& clipId, const String& noteId)
+{
+    auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    auto* note = Impl::note (*clip, noteId); if (! note) return Result::fail ("MIDI note not found.");
+    impl->transaction ("Remove MIDI note");
+    clip->getSequence().removeNote (*note, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::setSynthSettings (const String& trackId, const SynthSettings& settings)
+{
+    auto* track = impl->track (trackId); auto* synth = track ? Impl::synth (*track) : nullptr;
+    if (! synth) return Result::fail ("Built-in synthesizer not found.");
+    auto valid = [] (float value, float low, float high) { return std::isfinite (value) && value >= low && value <= high; };
+    if (! valid (settings.cutoffHz, 20, 20000) || ! valid (settings.resonance, 0, 1)
+        || ! valid (settings.attackSeconds, 0, 10) || ! valid (settings.decaySeconds, 0, 10)
+        || ! valid (settings.sustain, 0, 1) || ! valid (settings.releaseSeconds, 0, 20)
+        || ! valid (settings.level, 0, 1) || settings.waveform < 0 || settings.waveform > 1)
+        return Result::fail ("Synthesizer settings are outside their supported range.");
+    impl->transaction ("Synthesizer settings"); synth->setSettings (settings); impl->changed(); return Result::ok();
+}
 Result Session::removeTrack (int index)
 {
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
@@ -454,6 +580,7 @@ Result Session::importAudio (const File& source, int index, double start)
     if (! std::isfinite (start) || start < 0) return Result::fail ("Clip start must be zero or greater.");
     if (index < 0) { auto r = addAudioTrack (source.getFileNameWithoutExtension()); if (r.failed()) return r; index = te::getAudioTracks (*impl->edit).size() - 1; }
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
+    if (static_cast<bool> (t->state.getProperty (midiTrackProperty))) return Result::fail ("Import audio onto an audio track.");
     auto assets = impl->assets(); auto r = assets.createDirectory(); if (r.failed()) return r;
     auto file = source.isAChildOf (assets) ? source : assets.getNonexistentChildFile (source.getFileNameWithoutExtension(), source.getFileExtension(), true);
     if (file != source && ! source.copyFileTo (file)) return Result::fail ("Could not copy the imported audio.");
@@ -621,6 +748,11 @@ Result Session::exportWav (const File& file, double rate, int bits, double tailS
     auto r = file.getParentDirectory().createDirectory(); if (r.failed()) return r;
     juce::TemporaryFile output (file);
     impl->edit->dispatchPendingUpdatesSynchronously();
+    // Nesting is supported by the engine. This outer scope drains playback
+    // before resetting owned control queues and restores it only after export.
+    const te::Edit::ScopedRenderStatus renderStatus (*impl->edit, true);
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        if (auto* synth = Impl::synth (*track)) synth->prepareForOfflineRender();
     te::Renderer::Parameters p (*impl->edit);
     p.destFile = output.getFile(); p.audioFormat = impl->engine.getAudioFileFormatManager().getWavFormat();
     p.bitDepth = bits; p.sampleRateForAudio = rate; p.blockSizeForAudio = 512;
@@ -657,7 +789,8 @@ Result Session::addPlugin (int index, const juce::PluginDescription& description
     auto* external = dynamic_cast<te::ExternalPlugin*> (plugin.get());
     if (! external || (! external->getAudioPluginInstance() && ! external->isInitialisingAsync()))
         return Result::fail (external ? external->getLoadError() : "The plug-in could not be instantiated.");
-    t->pluginList.insertPlugin (plugin, 0, nullptr);
+    const auto insertIndex = Impl::synth (*t) ? 1 : 0;
+    t->pluginList.insertPlugin (plugin, insertIndex, nullptr);
     impl->changed(); return Result::ok();
 }
 Result Session::setPluginEnabled (int t, int p, bool enabled)
