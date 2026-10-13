@@ -52,3 +52,7 @@ BinDiff identifies identical/similar functions and supports transferring labels 
 5. Implement and test against those criteria on both supported desktop targets; expand the corpus when a discrepancy appears.
 
 Unknowns not settled by web research: the target's symbol/debug-info availability; actual compiler settings; processor-extension use; helper/library boundaries; whether attach is permitted; analysis duration and memory footprint; compatibility of BinDiff 8 with the exact Ghidra 12.1.4/BinExport build; and the amount of behavior identifiable from selected functions. None should be represented as a verified fact before measurement. No tool surveyed provides a defensible promise of zero differences across every function, input, device, and platform.
+
+## Follow-up execution record
+
+This report records the research snapshot before implementation. Subsequent verified local tool installation, bounded analysis and original mixer corrections are recorded separately in [local reverse-engineering results](reverse-engineering-results.md).

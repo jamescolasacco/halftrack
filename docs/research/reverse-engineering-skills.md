@@ -79,3 +79,7 @@ npx skills add https://github.com/trailofbits/skills --skill dwarf-expert
 ```
 
 For this project, reading the pinned skill and invoking a separately verified local Ghidra installation is sufficient; global installation and an MCP server are not required. Re-review changed scripts before updating. Keep binary-derived research outputs separate from the public application source and report findings with provenance and explicit unknowns.
+
+## Follow-up execution record
+
+This report records the research snapshot before implementation. Subsequent verified local tool installation, bounded analysis and original mixer corrections are recorded separately in [local reverse-engineering results](reverse-engineering-results.md).

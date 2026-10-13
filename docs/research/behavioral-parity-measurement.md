@@ -102,3 +102,7 @@ For deadline tests, preserve callback-budget distributions and OS underrun evide
 6. Build the paired reference corpus feature by feature. Record **specified**, **implemented**, **self-tested**, **reference-compared**, and **platform/hardware-verified** as separate statuses. A single percentage obscures which evidence actually exists.
 
 These steps create a measurable route toward close behavior. Binary analysis, if separately pursued, should answer a concrete unresolved question and produce a testable hypothesis; it cannot replace this evidence or turn an untested draft into an exact clone.
+
+## Follow-up execution record
+
+This report records the research snapshot before implementation. Subsequent verified local tool installation, bounded analysis and original mixer corrections are recorded separately in [local reverse-engineering results](reverse-engineering-results.md).
