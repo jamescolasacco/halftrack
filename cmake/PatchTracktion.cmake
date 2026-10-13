@@ -31,10 +31,12 @@ function(halftrack_patch_tracktion source_dir)
 
     if (lastMIDIDeviceList == nullptr)]=])
     string(REPLACE "${before}" "${after}" content "${content}")
-    file(WRITE "${source}" "${content}")
+    # WRITE uses text mode and changes LF to CRLF on Windows. Explicit LF
+    # CONFIGURE output uses binary mode, preserving the same source-byte pin.
+    file(CONFIGURE OUTPUT "${source}" CONTENT "${content}" @ONLY NEWLINE_STYLE LF)
     file(SHA256 "${source}" patched_hash)
     if(NOT patched_hash STREQUAL "04869fc7afd45b70fdadebd891742c57c77101ac58e9227298d3531aafef3d32")
-        message(FATAL_ERROR "Halftrack's Tracktion recording-safety patch did not produce the expected source.")
+        message(FATAL_ERROR "Halftrack's Tracktion recording-safety patch did not produce the expected source. Actual SHA256: ${patched_hash}.")
     endif()
     message(STATUS "Applied Tracktion recording-safety patch: defer MIDI discovery during takes")
 endfunction()
