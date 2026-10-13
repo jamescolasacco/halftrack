@@ -2,8 +2,13 @@
 #include "Session.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <filesystem>
 #include <cmath>
 #include <map>
+#include <mutex>
+#include <thread>
 
 namespace halftrack
 {
@@ -205,8 +210,8 @@ public:
         browserList.setRowHeight (27);
         browserList.setOutlineThickness (0);
         browserList.setTooltip ("Double-click an audio file to import, or a plug-in to add it to the selected track.");
-        browserFolder = juce::File::getSpecialLocation (juce::File::userMusicDirectory);
-        if (! browserFolder.isDirectory()) browserFolder = juce::File::getSpecialLocation (juce::File::userHomeDirectory);
+        // Do not touch a user or cloud folder before the window is visible.
+        // Folder enumeration begins only after an explicit choice or import.
         zoomIn.onClick = [this] { zoom (1.3); };
         zoomOut.onClick = [this] { zoom (1.0 / 1.3); };
         fitButton.onClick = [this] { fitTimeline(); };
@@ -224,6 +229,8 @@ public:
     ~Impl() override
     {
         stopTimer();
+        if (browserScan) browserScan->cancelled.store (true);
+        browserScan.reset();
         session.removeChangeListener (this);
         session.knownPlugins().removeChangeListener (this);
         session.closePluginEditors();
@@ -256,15 +263,22 @@ public:
         g.setColour (muted);
         g.drawText ("BPM", tempo.getX() - 30, toolbarBounds.getY(), 27, toolbarBounds.getHeight(), juce::Justification::centredRight);
         g.drawText ("ARRANGEMENT", sectionBounds.getX() + 12, sectionBounds.getY(), 120, sectionBounds.getHeight(), juce::Justification::centredLeft);
-        g.drawText (pluginBrowser ? "PLUG-IN LIBRARY" : browserFolder.getFileName().toUpperCase(),
+        g.drawText (pluginBrowser ? "PLUG-IN LIBRARY" : browserFolder == juce::File() ? "AUDIO FILES" : browserFolder.getFileName().toUpperCase(),
                     browserBounds.getX() + 12, browserBounds.getY() + 112,
                     browserBounds.getWidth() - 24, 20, juce::Justification::centredLeft, true);
         if (browserItems.empty() && pluginItems.empty())
         {
             g.setFont (font (12.0f));
-            g.drawFittedText (pluginBrowser ? "No scanned plug-ins.\nUse Manage to scan your\nAudio Units and VST3 library."
-                                           : "No audio files here.\nChoose a folder or drag\naudio into the arrangement.",
-                              browserList.getBounds().reduced (14).withHeight (120), juce::Justification::centred, 5);
+            juce::String message;
+            if (pluginBrowser) message = "No scanned plug-ins.\nUse Manage to scan your\nAudio Units and VST3 library.";
+            else if (browserFolder == juce::File()) message = "Choose an audio folder,\nor import audio to begin.\nYou can also drop files\ninto the arrangement.";
+            else if (browserError.isNotEmpty()) message = "Cannot read this folder.\n" + browserError;
+            else if (browserLoading)
+                message = juce::Time::getMillisecondCounterHiRes() - browserScanStarted > 5000.0
+                    ? "This folder is taking longer\nto respond. You can choose\nanother folder to continue."
+                    : "Loading audio folder...";
+            else message = browserSearch.getText().isEmpty() ? "No audio files here.\nChoose another folder or drag\naudio into the arrangement." : "No matching audio files.\nTry another search.";
+            g.drawFittedText (message, browserList.getBounds().reduced (14).withHeight (150), juce::Justification::centred, 7);
         }
         g.setColour (line);
         g.drawHorizontalLine (getHeight() - statusHeight, 0.0f, (float) getWidth());
@@ -382,6 +396,14 @@ private:
     static constexpr int browserWidth = 214, trackWidth = 280, trackHeight = 112, rulerHeight = 38,
                          deviceHeight = 177, statusHeight = 24;
     struct BrowserItem { juce::File file; bool directory = false; };
+    struct FolderScan
+    {
+        struct Entry { std::string name; bool directory = false; };
+        std::atomic<bool> cancelled { false }, finished { false };
+        std::mutex mutex;
+        std::vector<Entry> entries;
+        std::string error;
+    };
 
     class TrackRow final : public juce::Component
     {
@@ -896,7 +918,13 @@ private:
     std::vector<juce::Component::SafePointer<juce::DialogWindow>> dialogs;
     std::vector<juce::Component::SafePointer<juce::AlertWindow>> alerts;
     juce::Rectangle<int> toolbarBounds, browserBounds, sectionBounds;
-    std::vector<BrowserItem> browserItems;
+    std::vector<BrowserItem> browserItems, allBrowserItems;
+    std::shared_ptr<FolderScan> browserScan;
+    std::shared_ptr<std::atomic<int>> activeBrowserScans = std::make_shared<std::atomic<int>> (0);
+    juce::File scannedBrowserFolder;
+    juce::String browserError;
+    bool browserLoading = false;
+    double browserScanStarted = 0;
     std::vector<juce::PluginDescription> pluginItems;
     juce::File browserFolder;
     juce::String status;
@@ -948,6 +976,7 @@ private:
     }
     void timerCallback() override
     {
+        pollBrowserScan();
         if (statusFrames > 0 && --statusFrames == 0) status.clear();
         ++ticks;
         refresh();
@@ -1145,6 +1174,7 @@ private:
             {
                 firstImportedTrack = target;
                 browserFolder = file.getParentDirectory();
+                scannedBrowserFolder = juce::File();
             }
             nextTrack = target + 1;
             ++imported;
@@ -1213,7 +1243,7 @@ private:
         chooser = std::make_unique<juce::FileChooser> ("Choose an Audio Folder", browserFolder);
         auto safe = juce::Component::SafePointer<Impl> (this);
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
-            [safe] (const juce::FileChooser& fc) { if (safe != nullptr && fc.getResult().isDirectory()) { safe->browserFolder = fc.getResult(); safe->updateBrowser(); } });
+            [safe] (const juce::FileChooser& fc) { if (safe != nullptr && fc.getResult() != juce::File()) { safe->browserFolder = fc.getResult(); safe->scannedBrowserFolder = juce::File(); safe->updateBrowser(); } });
     }
 
     void showDialog (juce::String title, std::unique_ptr<juce::Component> content, int width, int height)
@@ -1260,6 +1290,101 @@ private:
             else if (choice > 0 && choice <= types.size()) { safe->report (safe->session.addPlugin (track, types[choice - 1])); safe->refresh(); }
         });
     }
+    void startBrowserScan()
+    {
+        if (browserScan) browserScan->cancelled.store (true);
+        browserScan.reset();
+        scannedBrowserFolder = browserFolder;
+        allBrowserItems.clear();
+        browserError.clear();
+        browserLoading = false;
+        if (browserFolder == juce::File()) return;
+        // A filesystem call may remain blocked inside the OS. Keep at most four
+        // outstanding workers, including cancelled scans still waiting on I/O.
+        if (activeBrowserScans->fetch_add (1) >= 4)
+        {
+            activeBrowserScans->fetch_sub (1);
+            browserError = "Previous folders are still waiting on the filesystem. Try again shortly.";
+            return;
+        }
+        browserLoading = true;
+        browserScanStarted = juce::Time::getMillisecondCounterHiRes();
+        auto scan = std::make_shared<FolderScan>();
+        browserScan = scan;
+        auto active = activeBrowserScans;
+        const auto path = browserFolder.getFullPathName().toStdString();
+        // Workers own only standard-library data. They never capture a Component,
+        // call JUCE, or post callbacks. A blocked OS operation can finish after the
+        // window closes without touching its memory or delaying destruction.
+        try
+        {
+            std::thread ([scan, active, path]
+            {
+                std::vector<FolderScan::Entry> entries;
+                std::string error;
+                try
+                {
+                    std::error_code ec;
+                    const std::u8string utf8Path (reinterpret_cast<const char8_t*> (path.data()), path.size());
+                    std::filesystem::directory_iterator iterator (std::filesystem::path (utf8Path), ec), end;
+                    if (ec) error = ec.message();
+                    while (! ec && iterator != end && ! scan->cancelled.load())
+                    {
+                        const auto nameBytes = iterator->path().filename().u8string();
+                        std::string name (reinterpret_cast<const char*> (nameBytes.data()), nameBytes.size());
+                        if (! name.empty() && name.front() != '.')
+                        {
+                            std::error_code typeError;
+                            const auto directory = iterator->is_directory (typeError);
+                            auto extensionBytes = iterator->path().extension().u8string();
+                            std::string extension (reinterpret_cast<const char*> (extensionBytes.data()), extensionBytes.size());
+                            std::transform (extension.begin(), extension.end(), extension.begin(), [] (unsigned char c) { return (char) std::tolower (c); });
+                            const auto audio = extension == ".wav" || extension == ".wave" || extension == ".aif" || extension == ".aiff"
+                                || extension == ".flac" || extension == ".ogg" || extension == ".mp3";
+                            if (! typeError && (directory || audio)) entries.push_back ({ std::move (name), directory });
+                        }
+                        iterator.increment (ec);
+                    }
+                    if (ec) error = ec.message();
+                }
+                catch (const std::exception& e) { error = e.what(); }
+                {
+                    const std::lock_guard<std::mutex> lock (scan->mutex);
+                    scan->entries = std::move (entries);
+                    scan->error = std::move (error);
+                }
+                scan->finished.store (true);
+                active->fetch_sub (1);
+            }).detach();
+        }
+        catch (const std::exception& e)
+        {
+            activeBrowserScans->fetch_sub (1);
+            browserLoading = false;
+            browserError = juce::String::fromUTF8 (e.what());
+            browserScan.reset();
+        }
+    }
+    void pollBrowserScan()
+    {
+        if (! browserScan || ! browserScan->finished.load()) return;
+        std::vector<FolderScan::Entry> entries;
+        std::string error;
+        {
+            const std::lock_guard<std::mutex> lock (browserScan->mutex);
+            entries = std::move (browserScan->entries);
+            error = std::move (browserScan->error);
+        }
+        browserScan.reset();
+        browserLoading = false;
+        browserError = juce::String::fromUTF8 (error.data(), (int) error.size());
+        allBrowserItems.clear();
+        for (const auto& entry : entries)
+            allBrowserItems.push_back ({ browserFolder.getChildFile (juce::String::fromUTF8 (entry.name.data(), (int) entry.name.size())), entry.directory });
+        std::sort (allBrowserItems.begin(), allBrowserItems.end(), [] (const auto& a, const auto& b)
+        { return a.directory != b.directory ? a.directory : a.file.getFileName().compareNatural (b.file.getFileName()) < 0; });
+        updateBrowser();
+    }
     void updateBrowser()
     {
         browserItems.clear(); pluginItems.clear();
@@ -1267,7 +1392,9 @@ private:
         filesButton.setToggleState (! pluginBrowser, juce::dontSendNotification);
         pluginsButton.setToggleState (pluginBrowser, juce::dontSendNotification);
         folderButton.setButtonText (pluginBrowser ? "Manage / Scan..." : "Choose Folder...");
+        upButton.setEnabled (browserFolder != juce::File() && browserFolder.getParentDirectory() != browserFolder);
         browserSearch.setTextToShowWhenEmpty (pluginBrowser ? "Search plug-ins" : "Search current folder", muted);
+        if (browserFolder != scannedBrowserFolder) startBrowserScan();
         if (pluginBrowser)
         {
             for (const auto& type : session.knownPlugins().getTypes()) if (query.isEmpty() || type.name.containsIgnoreCase (query)) pluginItems.push_back (type);
@@ -1275,10 +1402,8 @@ private:
         }
         else
         {
-            for (const auto& file : browserFolder.findChildFiles (juce::File::findFilesAndDirectories | juce::File::ignoreHiddenFiles, false))
-                if ((file.isDirectory() || isAudio (file)) && (query.isEmpty() || file.getFileName().containsIgnoreCase (query))) browserItems.push_back ({ file, file.isDirectory() });
-            std::sort (browserItems.begin(), browserItems.end(), [] (const auto& a, const auto& b)
-            { return a.directory != b.directory ? a.directory : a.file.getFileName().compareIgnoreCase (b.file.getFileName()) < 0; });
+            for (const auto& item : allBrowserItems)
+                if (query.isEmpty() || item.file.getFileName().containsIgnoreCase (query)) browserItems.push_back (item);
         }
         browserList.updateContent(); browserList.repaint(); repaint();
     }
