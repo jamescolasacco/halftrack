@@ -17,6 +17,7 @@ import unittest
 
 # Explicit roots keep disappearance/renaming from silently weakening the guard.
 ROOTS = {
+    "src/Session.cpp": ("applyToBuffer",),  # Original TrackMixer normalization wrapper.
     "src/SubtractiveSynth.cpp": ("SubtractiveSynthDSP::render", "SubtractiveSynthPlugin::applyToBuffer"),
     "tests/TestGainPlugin.cpp": ("processBlock",),
 }
@@ -141,6 +142,13 @@ class GuardTests(unittest.TestCase):
     def test_missing_callback_is_failure(self):
         self.check('void renamed() {}', 'missing audited callback')
 
+    def test_mixer_wrapper_checks_owned_helper_after_dependency_call(self):
+        errors, _ = inspect_sources(
+            {'mixer.cpp': 'void normalize() { auto* p = new float; } '
+             'void applyToBuffer() { VolumeAndPanPlugin::applyToBuffer(); normalize(); }'},
+            {'mixer.cpp': ('applyToBuffer',)})
+        self.assertTrue(any('heap lifetime' in error for error in errors), errors)
+
     def test_nested_blocks_keep_helper_reachable(self):
         self.check('void helper() { throw 1; } void processBlock() { if (ready) { helper(); } }', 'exception')
 
@@ -169,6 +177,7 @@ def main() -> int:
         print('\n'.join(failures), file=sys.stderr)
         return 1
     print(f'Owned callback source guard passed: {visited} callback/helper bodies inspected.')
+    print('Excluded engine call: VolumeAndPanPlugin::applyToBuffer inherits engine locking; it is not certified realtime-safe.')
     print('Scope: source patterns only; dependencies, compiler output, runtime allocations, and deadlines are not certified.')
     return 0
 

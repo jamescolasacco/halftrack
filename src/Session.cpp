@@ -15,6 +15,40 @@ const juce::Identifier monitorProperty { "halftrackMonitor" };
 const juce::Identifier midiTrackProperty { "halftrackMidiTrack" };
 const juce::Identifier midiNoteIDProperty { "halftrackNoteId" };
 
+// Keep the engine's automation, smoothing and gain range, but normalize its
+// sine/cosine law to unity at center. A distinct type preserves older projects'
+// serialized linear mixers rather than silently changing their sound.
+class TrackMixer final : public te::VolumeAndPanPlugin
+{
+public:
+    static constexpr const char* xmlTypeName = "halftrack-mixer";
+    explicit TrackMixer (te::PluginCreationInfo info) : VolumeAndPanPlugin (info)
+    {
+        setPanLaw (te::PanLaw3dBCenter);
+    }
+    juce::String getPluginType() override { return xmlTypeName; }
+    void applyToBuffer (const te::PluginRenderContext& context) override
+    {
+        VolumeAndPanPlugin::applyToBuffer (context);
+        if (isEnabled() && context.destBuffer != nullptr)
+            for (int channel = 0; channel < juce::jmin (2, context.destBuffer->getNumChannels()); ++channel)
+                context.destBuffer->applyGain (channel, context.bufferStartSample,
+                                               context.bufferNumSamples, 1.4142135623730951f);
+    }
+};
+
+Result useTrackMixer (te::AudioTrack& track)
+{
+    auto* previous = track.getVolumePlugin();
+    if (previous == nullptr) return Result::fail ("The track has no mixer.");
+    const int index = track.pluginList.indexOf (previous);
+    auto mixer = track.edit.getPluginCache().createNewPlugin (TrackMixer::xmlTypeName, {});
+    if (mixer == nullptr) return Result::fail ("Could not create the track mixer.");
+    previous->deleteFromParent();
+    track.pluginList.insertPlugin (mixer, index, nullptr);
+    return Result::ok();
+}
+
 class Behaviour final : public te::EngineBehaviour
 {
 public:
@@ -158,6 +192,7 @@ struct Session::Impl
         : owner (s), engine (devices ? "Halftrack" : "Halftrack Tests", std::make_unique<UIBehaviour> (devices),
                             std::make_unique<Behaviour> (devices)), useDevices (devices)
     {
+        engine.getPluginManager().createBuiltInType<TrackMixer>();
         engine.getPluginManager().createBuiltInType<SubtractiveSynthPlugin>();
         engine.getPluginManager().setUsesSeparateProcessForScanning (devices);
         if (customDeviceType)
@@ -491,6 +526,7 @@ Result Session::addAudioTrack (String name)
     t->setName (name.isEmpty() ? "Audio " + String (count + 1) : name);
     const juce::uint32 colours[] = { 0xffd0a35e, 0xff86a395, 0xff899bbb, 0xffb98579, 0xffaaa179, 0xffa58aaa };
     t->setColour (juce::Colour (colours[count % 6]));
+    if (auto result = useTrackMixer (*t); result.failed()) return result;
     t->getVolumePlugin()->setVolumeDb (0);
     impl->changed();
     return Result::ok();
@@ -506,6 +542,7 @@ Result Session::addMidiTrack (String name)
     track->setName (name.isEmpty() ? "MIDI " + String (count + 1) : name);
     track->setColour (juce::Colour (0xff9d91bc));
     track->state.setProperty (midiTrackProperty, true, &impl->edit->getUndoManager());
+    if (auto result = useTrackMixer (*track); result.failed()) return result;
     track->getVolumePlugin()->setVolumeDb (0);
     auto synth = impl->edit->getPluginCache().createNewPlugin (SubtractiveSynthPlugin::xmlTypeName, {});
     if (! synth) return Result::fail ("Could not create the built-in synthesizer.");
@@ -643,13 +680,17 @@ Result Session::setTrackMute (int index, bool value)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
-    impl->transaction ("Track mute"); t->setMute (value); impl->changed(); return Result::ok();
+    impl->transaction ("Track mute");
+    t->state.setProperty (te::IDs::mute, value, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
 }
 Result Session::setTrackSolo (int index, bool value)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
-    impl->transaction ("Track solo"); t->setSolo (value); impl->changed(); return Result::ok();
+    impl->transaction ("Track solo");
+    t->state.setProperty (te::IDs::solo, value, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
 }
 
 juce::StringArray Session::inputNames() const

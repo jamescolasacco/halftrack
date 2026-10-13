@@ -111,6 +111,128 @@ void compare (const juce::AudioBuffer<float>& actual, const juce::AudioBuffer<fl
     require (maxError < 0.0001f, label + " PCM max error " + juce::String (maxError, 8)
              + ", squared error " + juce::String (squaredError, 8));
 }
+
+void panLawTests (const juce::File& root)
+{
+    // Non-overlapping left/right tones identify both diagonal gains and any
+    // unwanted channel crossfeed. Silent margins let the graph settle without
+    // discarding any samples from the comparison or hiding clip-edge output.
+    juce::AudioBuffer<float> fixture (2, 48000);
+    fixture.clear();
+    for (int i = 8192; i < 16384; ++i)
+        fixture.setSample (0, i, 0.125f * std::sin (juce::MathConstants<double>::twoPi * i * 440.0 / 48000.0));
+    for (int i = 24576; i < 32768; ++i)
+        fixture.setSample (1, i, 0.125f * std::sin (juce::MathConstants<double>::twoPi * i * 660.0 / 48000.0));
+    const auto source = root.getChildFile ("pan-matrix-source.wav");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::OutputStream> stream (source.createOutputStream());
+        auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (2).withBitsPerSample (24));
+        require (writer && writer->writeFromAudioSampleBuffer (fixture, 0, fixture.getNumSamples()), "write isolated stereo pan matrix fixture");
+    }
+    fixture = read (source); // Use the actual quantized source as the reference.
+    Session session (false);
+    success (session.importAudio (source, 0), "import pan matrix fixture");
+    success (session.addMidiTrack ("Mixer persistence probe"), "create MIDI track with the same mixer");
+    const auto output = root.getChildFile ("pan-matrix.wav");
+    auto compareMatrix = [&] (double gainL, double gainR, const juce::String& label)
+    {
+        success (session.exportWav (output), "render " + label);
+        const auto rendered = read (output);
+        double maxError = 0;
+        for (int channel = 0; channel < 2; ++channel)
+            for (int sample = 0; sample < fixture.getNumSamples(); ++sample)
+                maxError = std::max (maxError, std::abs (double (rendered.getSample (channel, sample))
+                    - double (fixture.getSample (channel, sample)) * (channel == 0 ? gainL : gainR)));
+        require (gainL == 0 && gainR == 0 ? maxError == 0 : maxError < 0.000002,
+                 label + " complete-window matrix max error " + juce::String (maxError, 9));
+    };
+    // Independent mathematical specification: theta=(pan+1)*pi/4,
+    // gains=sqrt(2)*[cos(theta),sin(theta)] times the user volume gain.
+    auto comparePan = [&] (double pan, double gain, const juce::String& label)
+    {
+        const double theta = (pan + 1.0) * juce::MathConstants<double>::pi / 4.0;
+        compareMatrix (gain * std::sqrt (2.0) * std::cos (theta),
+                       gain * std::sqrt (2.0) * std::sin (theta), label);
+    };
+    for (int step = -10; step <= 10; ++step)
+    {
+        const double pan = step / 10.0;
+        success (session.setTrackPan (0, float (pan)), "set pan " + juce::String (pan, 1));
+        comparePan (pan, 1.0, "unity-center pan " + juce::String (pan, 1));
+    }
+    success (session.setTrackGain (0, -12), "set low fader gain");
+    success (session.setTrackPan (0, -0.4f), "set intermediate pan at low gain");
+    comparePan (-0.4, std::pow (10.0, -12.0 / 20.0), "pan with -12 dB fader");
+    success (session.setTrackGain (0, 6), "set engine's maximum fader gain");
+    success (session.setTrackPan (0, 1), "set hard pan at maximum fader gain");
+    comparePan (1, std::pow (10.0, 6.0 / 20.0), "maximum fader preserves pan headroom");
+    success (session.setTrackGain (0, -100), "set fader to silence");
+    compareMatrix (0, 0, "zero gain is exactly silent");
+    success (session.setTrackGain (0, 0), "restore unity fader");
+    success (session.setTrackPan (0, 0.6f), "set pan for mute/solo/undo");
+    success (session.setTrackMute (0, true), "mute panned channel");
+    compareMatrix (0, 0, "panned mute");
+    session.undo();
+    require (! session.snapshot().tracks[0].mute, "undo restores mute state");
+    comparePan (0.6, 1, "undo mute restores panned signal");
+    session.redo();
+    require (session.snapshot().tracks[0].mute, "redo restores mute state");
+    compareMatrix (0, 0, "redo mute restores exact silence");
+    session.undo();
+    success (session.importAudio (source, 1), "add second matrix source");
+    success (session.setTrackSolo (0, true), "solo panned channel");
+    comparePan (0.6, 1, "panned solo excludes second source");
+    session.undo();
+    require (! session.snapshot().tracks[0].solo, "undo restores solo state");
+    const double soloTheta = 1.6 * juce::MathConstants<double>::pi / 4.0;
+    compareMatrix (1 + std::sqrt (2.0) * std::cos (soloTheta),
+                   1 + std::sqrt (2.0) * std::sin (soloTheta), "undo solo restores both tracks");
+    session.redo();
+    require (session.snapshot().tracks[0].solo, "redo restores solo state");
+    comparePan (0.6, 1, "redo solo excludes second source");
+    success (session.setTrackSolo (0, false), "clear panned solo");
+    success (session.removeClip (1, 0), "remove second matrix source");
+    success (session.setTrackPan (0, -0.3f), "change pan before undo");
+    session.undo();
+    comparePan (0.6, 1, "undo pan restores curve");
+    session.redo();
+    comparePan (-0.3, 1, "redo pan restores curve");
+
+    const auto project = root.getChildFile ("Pan law.halftrack");
+    success (session.saveProject (project), "save normalized mixers");
+    success (session.newProject(), "reset before mixer reopen");
+    success (session.loadProject (project), "reopen normalized mixer types");
+    comparePan (-0.3, 1, "saved mixer restores exact pan behavior");
+    require (std::abs (session.snapshot().tracks[0].gainDb) < 0.001f
+             && std::abs (session.snapshot().tracks[0].pan + 0.3f) < 0.00001f,
+             "normalization preserves facade fader and pan values");
+
+    auto xml = juce::XmlDocument::parse (project);
+    int converted = 0;
+    auto makeLegacy = [&] (auto&& self, juce::XmlElement& node) -> void
+    {
+        if (node.hasTagName ("PLUGIN") && node.getStringAttribute ("type") == "halftrack-mixer")
+        {
+            ++converted;
+            node.setAttribute ("type", "volume");
+            node.setAttribute ("panLaw", 0); // Engine's legacy default: linear.
+        }
+        for (auto* child = node.getFirstChildElement(); child != nullptr; child = child->getNextElement())
+            self (self, *child);
+    };
+    require (xml != nullptr, "parse saved mixer project");
+    makeLegacy (makeLegacy, *xml);
+    require (converted == 3, "both audio tracks and the MIDI track persist the normalized mixer type");
+    const auto legacy = root.getChildFile ("Legacy pan law.halftrack");
+    require (xml->writeTo (legacy), "create isolated legacy project fixture");
+    success (session.loadProject (legacy), "load pre-correction mixer type");
+    compareMatrix (1.3, 0.7, "legacy mixer retains linear gains");
+    success (session.saveProject (legacy), "save legacy mixer without migration");
+    success (session.newProject(), "reset before legacy reopen");
+    success (session.loadProject (legacy), "reopen legacy mixer");
+    compareMatrix (1.3, 0.7, "legacy save and reopen retains previous sound");
+}
 }
 
 int runSessionTests (const juce::File& requestedDirectory)
@@ -119,6 +241,7 @@ int runSessionTests (const juce::File& requestedDirectory)
     {
         const auto root = requestedDirectory.getChildFile ("run-" + juce::Uuid().toString());
         success (root.createDirectory(), "create isolated artifacts");
+        panLawTests (root);
         const auto source = root.getChildFile ("fixture.wav");
         juce::AudioBuffer<float> fixture (2, 48000);
         for (int sample = 0; sample < fixture.getNumSamples(); ++sample)
