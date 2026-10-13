@@ -205,7 +205,14 @@ struct Session::Impl
     }
     File editLocation() const { return projectFile == File() ? scratch.getChildFile ("Untitled.halftrack") : projectFile; }
     File assets() const { auto f = editLocation(); return f.getSiblingFile (f.getFileNameWithoutExtension() + " Assets"); }
-    void changed() { edit->markAsChanged(); owner.sendChangeMessage(); }
+    void changed()
+    {
+        // Tracktion resets initialization changes on a deferred timer. Keep an
+        // independent flag so that timer cannot clear a real user edit.
+        explicitChanges = true;
+        edit->markAsChanged();
+        owner.sendChangeMessage();
+    }
     void transaction (const String& name) { if (! gesture) edit->getUndoManager().beginNewTransaction (name); }
     void refreshParameterValues()
     {
@@ -223,6 +230,7 @@ struct Session::Impl
         edit->dispatchPendingUpdatesSynchronously();
         edit->getUndoManager().clearUndoHistory();
         edit->resetChangedStatus();
+        explicitChanges = false;
         owner.sendChangeMessage();
     }
     te::InputDeviceInstance* input (te::AudioTrack& t) const
@@ -246,6 +254,7 @@ struct Session::Impl
     Session& owner;
     te::Engine engine;
     bool useDevices;
+    bool explicitChanges = false;
     File scratch, projectFile;
     std::unique_ptr<te::Edit> edit;
     std::unique_ptr<te::Edit::UndoTransactionInhibitor> gesture;
@@ -263,7 +272,7 @@ Session::Snapshot Session::snapshot() const
     auto& transport = e.getTransport();
     s.projectFile = impl->projectFile;
     s.name = s.projectFile == File() ? "Untitled" : s.projectFile.getFileNameWithoutExtension();
-    s.dirty = e.hasChangedSinceSaved();
+    s.dirty = impl->explicitChanges || e.hasChangedSinceSaved();
     s.playing = transport.isPlaying(); s.recording = transport.isRecording();
     s.looping = transport.looping;
     s.position = transport.getPosition().inSeconds();
@@ -411,6 +420,7 @@ Result Session::saveProject (const File& destination)
     for (auto& [clip, source] : sources)
         clip->getSourceFileReference().setToFile (source, te::SourceFileReference::PathStyle::alwaysRelative, false);
     impl->edit->resetChangedStatus();
+    impl->explicitChanges = false;
     sendChangeMessage();
     return Result::ok();
 }
