@@ -14,7 +14,7 @@ Updated 2026-10-13. Current milestone: preview handed off; renewed implementatio
 - Engine MIDI tracks/clips/notes and built-in polyphonic synth pass deterministic DSP, undo, saturated FIFO and persistence tests. Export reentrancy now rejects edits/project replacement while the worker owns its graph, with a cancellation/preservation regression.
 - UI: piano roll and synth editing compile. Browser relaunch is verified. Actual editor handler and hit-test regressions pass. Native automation grid input is inconclusive; physical mouse delivery remains unverified.
 - Persistence/root: MIDI project round-trip checks, architecture/ownership contract, branding/research retirement, packaging and Signalsmith selection.
-- QA: Linux CI, callback audit, manual test script; combined preview Mac and Windows CI passed; Linux failed at linking and a focused libatomic correction is in verification. First clean Mac CI exposed an older compiler in macOS 14; workflow now targets macOS 15 and requires AppleClang 17+.
+- QA: combined research CI at ac20d09 passed on Windows and Linux, confirming the libatomic correction. macOS exposed active-recording loss during deferred MIDI discovery; a reproducible regression and narrow engine patch are in verification. The workflow targets macOS 15 and requires AppleClang 17+.
 
 ## Missing, not stubbed controls
 
@@ -24,7 +24,7 @@ Session launch grid/scenes, full MIDI expression, automation, advanced routing/r
 
 - Browser relaunch and GUI audio save/reopen/export passed. MIDI grid input through native automation and plug-in editor lifetime checks remain pending.
 - Whole-host strict callback safety is not met: the dependency has locks and recording fallback allocations; see docs/realtime-safety.md.
-- Combined preview Mac and Windows CI passed. Linux link correction is pending a new CI result.
+- Latest research CI: Windows and Linux passed; the macOS recording failure is being fixed. See the recording investigation below; do not treat the ac20d09 package as a recording-ready release.
 - No measured physical input latency, acoustic loopback, deadline stress, or arbitrary plug-in real-time safety evidence.
 - Existing PCM tests exclude opening/closing ramp regions; they do not prove complete-file numerical identity or nonlinear processor parity.
 
@@ -76,4 +76,16 @@ The generated stereo matrix test covers 21 pan positions, -12 dB and maximum +6 
 
 The isolated ARM64 reference imported and seven explicitly selected utility-processing entries decompiled successfully with per-address manifests; no whole-program or zero-difference claim is made. The reference's 392,926 declared ARM64 function-start addresses exactly match Apple's independent LLVM inventory. Original binary SHA-256 is unchanged after analysis. See [local research results](research/reverse-engineering-results.md) for versions, scope and private artifact locations.
 
-Commit c805766 passes the full local acceptance suite in 48.01 seconds, including 35 complete-window mixer renders with a worst PCM error of 1.28e-7 against independent math. New tracks get normalized sinusoidal panning; existing project tracks preserve legacy behavior. Mute/solo now undo correctly. Callback audit passes nine self-tests / seventeen owned bodies, with inherited dependency locks still explicitly unresolved. Final combined CI and portable package refresh remain pending.
+Commit c805766 passes the full local acceptance suite in 48.01 seconds, including 35 complete-window mixer renders with a worst PCM error of 1.28e-7 against independent math. New tracks get normalized sinusoidal panning; existing project tracks preserve legacy behavior. Mute/solo now undo correctly. Callback audit passes nine self-tests / seventeen owned bodies, with inherited dependency locks still explicitly unresolved. Combined CI at ac20d09 caught a macOS synthetic-recording failure after the new mixer checks passed. Diagnosis is in progress; CI is not green. The refreshed macOS package is `dist/Halftrack-preview-darwin-arm64-ac20d09.tar.gz`; binary identity, source revision and exclusion of raw analysis artifacts were verified.
+
+The retained opt-in Ghidra integration fixture (15b3587) passed in 9.686 seconds against local Ghidra 12.1.4/JDK 21. Ordinary parser tests remain tool-independent. Independent source review found no regression in mixer automation ordering, bypass dispatch, smoothing initialization, subtype lookup or extra-channel gain handling; these source findings do not substitute for new dynamic automation/multichannel runtime tests.
+
+Recording CI diagnosis ownership: the parity-research agent owns the focused recording fixture extraction in `tests/SessionTests.cpp` and the root-authorized `--self-test-recording` dispatch seam in `src/Main.cpp`. Production changes, if justified by reproduction, remain limited to recording behavior in `src/Session.cpp`. No physical audio input is opened.
+
+Recording CI fix ownership extension: the parity-research agent owns the narrow Tracktion integration patch and CMake application block, as authorized by root after reproducing the active-take loss during deferred MIDI discovery. Root retains dependency/architecture/package documentation.
+
+## Active-take loss during MIDI discovery
+
+Combined CI [38476341206](https://github.com/jamescolasacco/halftrack/actions/runs/38476341206) passed Windows (45.52 s acceptance) and Linux (38.27 s), including all 20 parser tests and packaging. macOS passed the mixer checks but failed recording after 121.78 s. The missing WAV was reproduced locally by pacing the injected synthetic driver at 30 ms per block: the engine's initial MIDI refresh cleared playback contexts and discarded the take before the test called Stop. Fast 2 ms pacing passed, proving that a longer post-stop wait would not repair the lost recording.
+
+The coordinated fix is a pin-checked, idempotent Tracktion source patch applied by CMake to downloaded and local dependency sources. Automatic and explicit MIDI refresh wait until all recordings stop, with a 100 ms retry and no persisted scan-setting change. The regression crosses the timer deadline, explicitly rescans during capture, verifies recording remains active, and checks captured signal plus discovery after stop. Temporary diagnostic logging and environment-based pacing controls have been removed. The permanent regression failed before the patch and passes twice afterward (8.93 s and 8.17 s). Independent review found no actionable issue; temporary-copy checks passed initial application, repeat application, unknown-source rejection without mutation, and CRLF helper compatibility. The full native suite and fresh cross-platform results remain pending.

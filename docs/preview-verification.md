@@ -1,6 +1,6 @@
 # Preview verification
 
-Evidence date: **2026-10-13**. This is the first runnable audio and MIDI preview, awaiting its owner's review. It is not a completed DAW or a feature/sound parity certification.
+Evidence date: **2026-10-13**. This records the original audio/MIDI preview and subsequent research-driven corrections. It is not a completed DAW or a feature/sound parity certification.
 
 ## Automated evidence
 
@@ -43,3 +43,15 @@ The preview contains native audio and MIDI editing, one polyphonic subtractive s
 The complete target remains much larger: clip/scene launching and follow actions, automation, sends/returns and advanced routing, racks/macros, full instruments/effects, warp-marker editing, comping/slicing, MIDI expression/tuning, CLAP hosting, recovery and library management are unfinished. AU hosting is enabled on macOS but not verified here. No controls are described as implemented merely because a drawing exists.
 
 The requested **whole-host no-lock/no-allocation callback contract is not met by the selected engine**. Dependency callbacks use locks and recording has fallback allocations. Owned synth checks passing do not waive this gap. Existing proprietary project compatibility, a programmable patch environment, branded hardware integration and cloud features are outside the current accepted scope.
+
+## Research-driven mixer update (2026-10-13)
+
+Original mixer/undo change c805766 built in Release and passed the full local acceptance suite in 48.01 seconds. The new known-good formula tests cover 35 complete-window stereo renders, including 21 pan positions, fader headroom, silent/muted/soloed cases, undo/redo and new/legacy project reopening. Worst observed error was 1.28e-7 PCM. This establishes settled transfer behavior for those generated fixtures; moving automation, active clip-edge transients, internal mixer bypass and physical hardware remain outside this new runtime evidence.
+
+The refreshed local package is `dist/Halftrack-preview-darwin-arm64-ac20d09.tar.gz` (60,952,470 bytes; SHA-256 `449a6ca154874cadc8d531173c59292c3110a684b7d849ac3e14bbc2c2b447bd`). Its executable matches the built app byte-for-byte. The corresponding original source points to ac20d09, includes the reproducible analysis-tool tests, and excludes ignored reference binaries/decompiler outputs. The earlier c2383a5 preview remains a separate historical artifact.
+
+The Ghidra exporter was independently exercised on tiny original C fixtures: two successful outputs, one explicit invalid-address failure, matching hashes/body ranges, duplicate rejection and overwrite preservation. The retained opt-in test passed in 9.686 seconds against local Ghidra 12.1.4/JDK 21. This verifies tooling behavior; the seven selected reference decompilations are research evidence, not application equivalence tests. See [research results](research/reverse-engineering-results.md).
+
+## Recording follow-up
+
+Combined research CI [38476341206](https://github.com/jamescolasacco/halftrack/actions/runs/38476341206) passed Windows and Linux but exposed recording loss on macOS. Slower synthetic driver pacing reproduced it locally: MIDI discovery discarded an active take by clearing playback contexts. A narrow Tracktion patch now defers discovery until recording stops; fresh validation is pending. The ac20d09 package above is historical evidence and contains the discovered defect. No physical microphone was used in this diagnosis.

@@ -1,6 +1,6 @@
 # Local reverse-engineering results
 
-Recorded 2026-10-13. This is a reproducible starting point for binary-assisted research, not a reconstructed application or an exact-clone claim. Tool and skill selection is explained in the [toolchain report](reverse-engineering-toolchain.md), [vetted skill report](reverse-engineering-skills.md), and [behavioral measurement report](behavioral-parity-measurement.md).
+Recorded 2026-10-13. This is a reproducible starting point for binary-assisted research, not a reconstructed application or an exact-clone claim. Tool and skill selection is explained in the [toolchain report](reverse-engineering-toolchain.md), [vetted skill report](reverse-engineering-skills.md), and [behavioral measurement report](behavioral-parity-measurement.md). The [local runbook](reverse-engineering-runbook.md) records reproducible commands and interpretation checks.
 
 ## Reference identity and independent inventory
 

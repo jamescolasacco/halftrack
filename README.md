@@ -10,7 +10,7 @@ C++20, JUCE 8, and Tracktion Engine share one model and interface across macOS, 
 
 The first preview combines audio recording/mixing/export with MIDI tracks, a piano roll, a built-in polyphonic subtractive synth, project save/reopen, and undo/redo. Only behavior backed by evidence is marked verified. The first preview has been handed off; further development and local reverse-engineering research are now authorized.
 
-See [build instructions](docs/building.md), [architecture](docs/architecture.md), [progress and known gaps](docs/progress.md), [verification evidence](docs/preview-verification.md), [capability inventory](docs/feature-parity.md), and [open questions](docs/open-questions.md), and [reverse-engineering research](docs/research/reverse-engineering-skills.md).
+See [build instructions](docs/building.md), [architecture](docs/architecture.md), [progress and known gaps](docs/progress.md), [verification evidence](docs/preview-verification.md), [capability inventory](docs/feature-parity.md), [open questions](docs/open-questions.md), and [reverse-engineering results and research](docs/research/reverse-engineering-results.md).
 
 ## Independent implementation
 
