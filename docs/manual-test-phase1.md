@@ -1,5 +1,24 @@
 # Native preview manual test checklist
 
+## Eight-minute user smoke test
+
+**Before starting the timer:** build with `cmake --workflow --preset preview`, open the resulting application, choose an intentional audio output with no input enabled, and have an empty disposable folder ready. Compilation, dependency downloads, and device setup are outside this test. No microphone or external plug-in is needed. This is a procedure, not a recorded pass.
+
+| Time | Action | Check |
+| --- | --- | --- |
+| 0:00–0:45 | Start a new project; click **+ MIDI** (Command+Shift+T / Ctrl+Shift+T). | A MIDI track, a 16-beat clip, piano editor, and real synth controls appear. |
+| 0:45–2:00 | Draw C4, E4, and G4 on the same beat; press Space to play, then stop. | The chord produces synth output and real meters; transport stops when requested. If you cannot listen, record acoustic audition as untested. |
+| 2:00–3:15 | Select a note; drag its body to a new pitch/time, drag its right edge, and change Velocity. Undo the last gesture once, then redo once. | Each edit affects the selected note; one undo reverses the whole gesture and redo restores it. |
+| 3:15–4:15 | Play again; lower track volume, pan, and toggle Mute. Restore Mute, then change Saw/Square and filter cutoff. | The mix and timbre change; meters follow the real signal; the controls remain responsive. Stop playback. |
+| 4:15–5:15 | Save as `Smoke.halftrack` in the disposable folder. | Saving succeeds and clears the unsaved marker. Note the chord positions and changed synth settings. |
+| 5:15–6:15 | Start a new project, then reopen `Smoke.halftrack` through File → Open. | The saved MIDI track, notes, mixer values, and synth settings return. |
+| 6:15–7:15 | Play the reopened chord; stop, move one note, then undo and redo that gesture. | The reopened project plays; editing and undo still work after loading. |
+| 7:15–8:00 | Undo the final test edit, save, and close. Record the build/OS and any failed step. | The saved project closes without losing an unconfirmed edit. Mark untouched checks as NOT RUN. |
+
+Stop and record a failure if a step cannot be completed; do not count a drawn control or a moving meter as proof of an untested behavior. This quick path checks the basic MIDI workflow. Export, external editors, media relocation, device changes, and hardware timing belong to the extended checks below.
+
+## Extended QA
+
 Use this checklist to record evidence for a particular build. It is not a claim that the checks have passed, nor a restriction imposed by a numbered roadmap. Automated, interactive, and physical-hardware results are separate.
 
 Record the commit, operating system/architecture, build type, sample rate/block size, test IDs, actual result, and any generated artifacts. Do not put personal plug-in inventories, private projects, hardware serial numbers, or user recordings in public reports. Use generated fixtures and disposable project folders. Never capture an unattended microphone.
