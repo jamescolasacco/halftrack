@@ -16,6 +16,9 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
     void requestClose (std::function<void()> onClose);
+   #if HALFTRACK_TESTS_ENABLED
+    static int runInteractionTests();
+   #endif
 
 private:
     class Impl;
