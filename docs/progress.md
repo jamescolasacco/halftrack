@@ -6,15 +6,15 @@ Updated 2026-10-13. Current milestone: one runnable preview including audio and 
 
 - Repository/folder named Halftrack, original SVG identity, AGPL-3.0-only source, pinned C++20/JUCE 8/Tracktion build.
 - Native audio arrangement, generated-source waveforms, playback, mixer gain/pan/mute/solo, input assignment/monitoring, recording, owned media, atomic XML projects, VST3 hosting, offline WAV export.
-- Local Mac acceptance suite passed in 12.66 seconds on a6f7e2e. Includes synthetic recording, controlled VST3 state, portable project/media, rendered mixer samples, cancellation preserving an existing destination, tail duration, gesture undo, startup dirty-state regression.
+- Combined local Mac acceptance suite passed in 15.47 seconds after MIDI/FIFO, editor-handler and export-guard integration. Includes synthetic recording, controlled VST3 state, portable project/media, rendered mixer samples, cancellation preserving an existing destination, tail duration, gesture undo, startup dirty-state regression.
 - Earlier GUI check: four generated stems imported, playback position/meters advanced, CoreAudio output setup visible, Fit and unsaved Discard worked. No microphone was captured.
 
 ## In progress
 
-- Engine: MIDI tracks/clips/notes, built-in polyphonic subtractive synth, deterministic DSP and undo tests.
-- UI: piano roll and synth editing; browser launch stall fix built, relaunch verification pending.
+- Engine MIDI tracks/clips/notes and built-in polyphonic synth pass deterministic DSP, undo, saturated FIFO and persistence tests. Export reentrancy now rejects edits/project replacement while the worker owns its graph, with a cancellation/preservation regression.
+- UI: piano roll and synth editing compile. Browser relaunch is verified. Actual editor handler and hit-test regressions pass. Native automation grid input is inconclusive; physical mouse delivery remains unverified.
 - Persistence/root: MIDI project round-trip checks, architecture/ownership contract, branding/research retirement, packaging and Signalsmith selection.
-- QA: Linux CI, callback audit, manual test script; current Windows CI ongoing. First clean Mac CI exposed an older compiler in macOS 14; workflow now targets macOS 15 and requires AppleClang 17+.
+- QA: Linux CI, callback audit, manual test script; previous audio-only Windows CI passed; combined three-platform run pending. First clean Mac CI exposed an older compiler in macOS 14; workflow now targets macOS 15 and requires AppleClang 17+.
 
 ## Missing, not stubbed controls
 
@@ -22,7 +22,8 @@ Session launch grid/scenes, full MIDI expression, automation, advanced routing/r
 
 ## Known issues / verification remaining
 
-- New startup browser fix needs GUI retest. GUI save/reopen/export and editor lifetime checks remain pending.
+- Browser relaunch and GUI audio save/reopen/export passed. MIDI grid input through native automation and plug-in editor lifetime checks remain pending.
+- Whole-host strict callback safety is not met: the dependency has locks and recording fallback allocations; see docs/realtime-safety.md.
 - Windows/Linux results and final clean Mac build are pending.
 - No measured physical input latency, acoustic loopback, deadline stress, or arbitrary plug-in real-time safety evidence.
 - Existing PCM tests exclude opening/closing ramp regions; they do not prove complete-file numerical identity or nonlinear processor parity.
@@ -30,3 +31,15 @@ Session launch grid/scenes, full MIDI expression, automation, advanced routing/r
 ## Ownership log
 
 Root revised repository policy and research/docs after the owner's new rules. Earlier branded research remains in history for transparency but is retired from the current tree; no history rewrite. Engine owns Session and synth; UI owns MainComponent; QA owns CI/audit/manual checks; root owns integration and persistence tests. Root will coordinate any edits to Session persistence functions with engine before writing them.
+
+Root added independent MIDI project round-trip/failure-preservation tests in tests/PersistenceTests.cpp and wired future engine MIDI tests into Main/CMake; no edits to engine-owned persistence implementation. Tests await the engine integration build.
+
+Root QA: browser-fixed app relaunch succeeded; native dialog imported4ordered stems into reused/new tracks, saved/reopened all4tracks, and exported stereo48kHz24-bit864000frames (18seconds including2second tail), independently decoded with Python wave. Added initial main-window keyboard focus in Main.cpp after observing shortcuts without a focused component.
+
+UI update: committed the bounded asynchronous browser fix separately as d31d42b after a successful local build. Implemented the MIDI editor against the engine-owned Session facade: stable-ID note drawing, selection, dragging, edge resizing, velocity, keyboard transposition/time moves, real arrangement note previews, and synth controls. MIDI integration build and GUI verification are pending; these controls are not yet being claimed as verified. This appended ownership note is the UI agent's only documentation edit; root retains the surrounding progress sections.
+
+Root coordinated a narrow Session::loadProject error-message change with engine: projects requiring unscanned plug-ins now direct the user to Scan / Manage before reopening. The registry remains the source of trusted discovered plug-ins; project files do not automatically register arbitrary executable paths. Independent persistence test covers failure preservation and successful reopen after registration.
+
+Root integration: MIDI/persistence/owned allocation suite passed15.21seconds. QA commits ab8b82f and8461038 add three-platform CI, scoped callback checks and an eight-minute user smoke path. Engine commit4b61e16 includes MIDI and the FIFO export preflight. Root wired actual UI handler tests after native automation grid clicks showed no edits; verification remains explicit.
+
+Final local integration passed15.47seconds, including actual piano-roll mouse/key handlers and graph reentrancy tests. Export lifetime guard is fe02b10. Static callback audit passes8self-tests and16owned callback/helper bodies. No global real-time guarantee or full native MIDI walkthrough is claimed.

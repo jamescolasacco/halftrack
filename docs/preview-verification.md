@@ -1,56 +1,45 @@
 # Preview verification
 
-Evidence snapshot: **2026-10-13**, macOS / Apple Silicon, Release build. The latest local automated result covers revision `a6f7e2e` (including the early-edit dirty-state fix). GUI observations below came from an earlier preview build; later browser changes still need verification. This is not a final release attestation. The full full capability feature sweep remains behind the user's preview approval gate.
+Evidence date: **2026-10-13**. This is the first runnable audio and MIDI preview, awaiting its owner's review. It is not a completed DAW or a feature/sound parity certification.
 
-## Current result
+## Automated evidence
 
-The shared session acceptance test passed on the local Mac: **1/1 CTest test, 12.66 seconds**. This includes the controlled VST3 fixture, virtual-device recording, worker-export cancellation, explicit tail duration, undo gestures, and dirty-state regression checks. Sources: [acceptance test](../tests/SessionTests.cpp), [test plug-in](../tests/TestGainPlugin.cpp), and the locally generated `build/Testing/Temporary/LastTest.log` (2026-10-13 13:31 EDT). Generated evidence is in `build/test-artifacts/run-5bd94109156344178a6e4a5402236eb1`. The log and generated files are local artifacts, not committed reports. This supersedes the earlier 9.53-second baseline pass.
+The combined Release acceptance executable passed on Apple Silicon macOS in **15.47 seconds** after integrating MIDI, persistence, FIFO export preflight, reentrant export protection and actual editor-handler tests. `ctest` supplies the generated VST3 fixture; direct `--self-test` execution without `HALFTRACK_TEST_PLUGIN` does not establish plug-in support.
 
-| Evidence | Result | Limit |
+| Area | Established by generated fixtures | Limits |
 | --- | --- | --- |
-| Native macOS build | Latest acceptance executable passed; earlier GUI build imported four generated stems, displayed waveforms, fitted the timeline, and played/stopped with advancing transport and active track/master meters | These observations do not verify all UI actions or acoustic output. A later launch stalled during synchronous Music-folder scanning; repair and retest are in progress. |
-| Windows | CI is running against the shared source | No Windows pass is recorded yet. Native UI, physical drivers, and cross-platform state parity remain pending. |
-| Physical audio | Earlier GUI reported CoreAudio built-in speaker output at 96 kHz / 512 samples, with no input | Device configuration and active meters were observed. No microphone, acoustic recording, loopback, measured latency, hot-plug, or dropout test was performed. |
-| Export refinements | API tests verify worker cancellation, preserved destination bytes, and a selected two-second post-source render interval | GUI export/save and the rate/depth choice matrix remain pending. Dry-source silence is not a reverb-tail comparison. |
-| User approval | Pending | Do not start the full implementation sweep until the owner explicitly approves the runnable preview. |
+| Audio mix | Unity routing, gain, pan, mute, solo and summing against expected PCM | The one-second audio comparisons exclude the first 4096 and final 1024 frames; maximum permitted error is 0.0001. This does not establish transient identity or latency compensation. |
+| Recording | Actual engine capture graph fed by an injected stereo sine device; arm, input selection, monitor Off/In, stop-to-clip, media ownership and export | No microphone or physical interface is opened by the test. Hardware clock drift, permissions, latency and deadlines are not measured. |
+| MIDI and synth | Stable track/clip/note IDs; note create/move/resize/delete and parameter/tempo undo; fixed 16 voices; sustain/release; 440 Hz fundamental; independently calculated nonzero filter samples; block partition invariance | One bandlimited saw/square subtractive synth, not a complete instrument collection or comparison to proprietary DSP. |
+| MIDI render | A note starting at beat one after clip start at 120 BPM begins at sample 24001 at 48 kHz; release and polyphony are exercised | This is a controlled zero-external-latency graph. |
+| Parameter transfer | Bounded FIFO order, full-queue handling, concurrent delivery of 10000 complete packets, final state after 129 rapid changes before offline export | Direct owned DSP transfer only; host graph mutations and arbitrary plug-ins are outside this guarantee. |
+| Persistence | Versioned human-readable XML; track/clip/note IDs, musical timing, velocity, all synth settings, mixer/tempo, relative audio assets; identical MIDI render after reopening | Reopening intentionally starts a fresh undo history. Keep the project and sibling Assets directory together. |
+| Editor interaction | Production hit testing and mouse/key handlers create, move, resize, delete and undo notes; consecutive synth-control notifications preserve settings; track deletion/undo/recreation retains a valid editor | Synthesized JUCE events exercise real handlers, but do not establish OS mouse delivery. |
+| Export lifetime | Nested project replacement, edits, undo, transport and recursive export are rejected while rendering; cancellation preserves output and restores editing | Native hardware and arbitrary plug-in reentrancy still need further coverage. |
+| Failure preservation | Invalid/malformed project leaves current project intact; failed save retains prior file; unknown plug-in registry entry rejects load with scanning guidance | Project files cannot silently register executable plug-in paths. |
+| VST3 | Generated gain fixture discovery, actual processing, nondefault state save/reopen, bypass and removal | No third-party plug-in or Audio Unit compatibility claim follows from this fixture. |
+| Export | Exact duration/rate/channels, selected extra render time, worker cancellation preserving an existing destination | A dry tail tests duration and silence, not effect decay. The full rate/depth matrix remains untested. |
+| Owned callback checks | Static audit of 16 owned callback/helper bodies and runtime interception of C++ new/delete during prepared synth and queue processing | No complete malloc, mutex, syscall, dependency or deadline certification. See [the real-time audit](realtime-safety.md). |
 
-## What the automated test established
+Tests are in `tests/SessionTests.cpp`, `tests/MidiTests.cpp`, `tests/PersistenceTests.cpp`, `tests/RealtimeTests.cpp` and `tests/realtime_audit.py`. Generated signals, projects, logs and diagnostic exports stay in ignored build/artifact folders. No vendor samples, presets or reference recordings are used.
 
-All fixtures are generated locally; no reference recordings or vendor samples are used.
+The initial Windows audio build passed [CI run 38439413736](https://github.com/jamescolasacco/halftrack/actions/runs/38439413736). Its macOS 14 job exposed an older upstream-incompatible compiler. The current workflow targets macOS 15, Windows 2022 and Ubuntu 24.04; combined MIDI results are still pending. Do not infer physical driver or native UI parity from a compile/test pass.
 
-- **Import and media ownership:** a one-second stereo WAV is imported, and its owned copy exists separately from the source. A missing import returns an error.
-- **Mixing and undo:** rendered samples verify unity routing, approximately −6.0206 dB gain, mute, hard-left pan, solo exclusion, and two-track summing. Single API gestures restore the complete gain, pan, clip-start, or loop-range change with one undo. The volume gesture spans a 450 ms message-loop wait, crossing the undo timer interval, and its redo restores the complete change. These are API gesture tests, not simulated mouse drags.
-- **WAV output and extra time:** baseline exports decode as stereo, 48 kHz, exactly 48,000 frames, with expected signal content. A one-second source plus an explicit two-second tail produces exactly 144,000 frames at 48 kHz. Its final second has magnitude below 0.0001 because the source has no effects. This checks render duration and post-source silence, not actual delay/reverb decay. The reader is a fresh JUCE decoder; a separate application/decoder implementation has not been used.
-- **Responsive cancellation:** a posted message calls `cancelExport()` while the worker renders a 60-second-tail request. The test confirms the message was dispatched, the result is `Export cancelled.`, and an existing destination retains its exact original bytes. Cancel-button interaction and responsiveness under demanding third-party plug-ins remain untested.
-- **Native projects:** save clears the dirty flag; the project and its Assets directory survive relocation after the original source and old project folder are deleted. Track name, tempo, loop settings, resolved media location, and rendered audio are checked. An unsupported project version fails without replacing the current session.
-- **Controlled VST3 hosting:** the generated gain plug-in is discovered and instantiated, its parameter is set to 0.25, and its processing, saved/restored parameter state, bypass, and removal are verified. This uses the host API, not editor gestures. No third-party plug-in or Audio Unit compatibility is established.
-- **Recording through the engine:** an injected two-channel, 48 kHz / 256-frame device supplies generated sine waves to the actual audio callback and recording graph. Input assignment, arming, monitor Off/In, recording state, stop-to-clip creation, saved WAV existence and signal magnitude, export, and project save pass. The captured duration is checked between 0.8 and 1.3 seconds after 200 callbacks. The device never enumerates or opens physical hardware.
-- **Guards and dirty-state initialization:** recording without a device and arming without an assigned input fail. A new session remains clean after 650 ms of message-loop activity. A separate session with the virtual device begins clean, then an immediate gain edit remains dirty after 300 ms; deferred engine initialization no longer clears the first user edit.
+## Native app observations
 
-The PCM comparisons require maximum absolute sample error below **0.0001**. This run reported at most **0.00000012** in the compared regions. They exclude the first **4096 frames** (85.33 ms) and last **1024 frames** (21.33 ms) of each one-second fixture to avoid startup/dezippering ramps. These are interior-signal checks, not proof of transient preservation, complete-file identity, or effect-tail fidelity.
+- The repaired browser starts without enumerating a personal Music folder; it launches responsively and waits for a chosen folder.
+- Four original generated audio stems imported with source-derived waveforms. Fit, playback/stop and actual track/master meter activity were observed.
+- The audio demo was saved and reopened through native dialogs, retaining all four tracks. GUI export decoded independently with Python `wave` as stereo, 48 kHz, 24-bit, 864000 frames: 16 seconds plus a two-second tail.
+- Audio Setup reported CoreAudio speaker output, 96 kHz and 512 samples, with no input selected. This establishes the observed configuration, not measured acoustic output or latency.
+- The combined MIDI build starts with a clean project; creating a MIDI track opens its 16-beat clip and actual synth controls. Space and Escape operate transport after the editor receives focus. Coordinate input through the native automation tool did not produce grid edits. The independent production hit-test and actual mouse/key-handler regression passed. Native mouse delivery remains inconclusive; do not mark the full manual MIDI workflow passed.
+- Attempting to load a project whose controlled plug-in has not been scanned preserves the active project. The new error directs the user to Scan / Manage; a backend regression verifies reopen after registry discovery.
 
-The synthetic callback is driven by the test with message-loop pumping. It establishes functional signal flow and capture; it does not simulate hardware clock drift, concurrent real-time scheduling, buffer deadline pressure, driver latency, or system permission behavior. The test plug-in has no latency or tail, so delay compensation and effect tails need different fixtures.
+The [eight-minute smoke path and extended checklist](manual-test-phase1.md) distinguish performed GUI checks from API tests. Physical input, loopback, hot-plug, acoustic monitoring, stress/deadline measurement, and all unlisted GUI cases remain unverified.
 
-## Review the native preview
+## Current boundaries
 
-Follow [the build and launch instructions](building.md). Prefer the CTest command, which supplies the controlled VST3 path:
+The preview contains native audio and MIDI editing, one polyphonic subtractive synth, basic track mixing, audio device controls, recording, portable projects, external plug-in hosting and WAV export. Its UI uses an original dark/amber identity and editable SVG mark.
 
-```sh
-ctest --test-dir build -C Release --output-on-failure
-```
+The complete target remains much larger: clip/scene launching and follow actions, automation, sends/returns and advanced routing, racks/macros, full instruments/effects, warp-marker editing, comping/slicing, MIDI expression/tuning, CLAP hosting, recovery and library management are unfinished. AU hosting is enabled on macOS but not verified here. No controls are described as implemented merely because a drawing exists.
 
-Direct `--self-test` execution skips the VST3 case unless `HALFTRACK_TEST_PLUGIN` points to the generated test bundle. Check the output for `SKIP`; a passing suite with that case skipped is weaker evidence.
-
-The main task's GUI audit on an earlier preview build observed four generated stems imported, waveforms displayed, Fit working, and Play/Stop controlling an advancing transport with active track and master meters. Audio Setup reported CoreAudio built-in speaker output at 96 kHz with a 512-sample buffer and no input. The unsaved-close dialog's Discard path closed successfully. No microphone was opened and no acoustic or loopback signal was measured.
-
-A subsequent launch exposed a synchronous browser scan stall while reading the Music folder. The browser repair is in progress; successful launch of the revised build must be rechecked. GUI export/save remains pending, along with clip/loop drag and mixer gestures, project save/reopen, and plug-in editor lifetime. The export UI currently offers 44.1/48/88.2/96/192 kHz, 16/24/32-bit, and 0/1/2/5/10/30/60-second extra-time choices, but the full choice matrix has not been validated.
-
-Record concrete results and platform before advancing the corresponding [PRE rows](feature-parity.md#preview-acceptance-gate). Physical capture and output must be measured with intentionally selected hardware; virtual capture and active meters do not establish that behavior.
-
-## Current scope and gaps
-
-The preview provides a native audio Arrangement foundation, track mixing, input/monitor controls, plug-in hosting, Halftrack project persistence, and WAV export. GUI behavior is still being checked. A given input is assigned to one track in this preview; assigning it elsewhere moves its previous assignment. Projects use `.halftrack` plus a sibling Assets directory; move them together.
-
-The broad DAW target remains unimplemented: Session clip/scene launching, MIDI tracks and note editing, MPE/tuning, warp and reference time-stretch behavior, audio slicing/comping, automation, racks and advanced routing, native Suite instruments/effects, the extensible device environment, controller integrations, recovery, and the full browser/library workflow. Existing `.als` projects and unchanged Max patches are outside the agreed compatibility target. VST2 and CLAP are not enabled; macOS Audio Unit hosting is configured but unverified. Windows and cross-platform plug-in state parity remain pending.
-
-No tests here compare Halftrack against proprietary DSP, certify every audio file/plug-in format, establish optimization or latency targets, or demonstrate long-session/crash resilience. This is a basic preview evidence record, not product parity certification.
+The requested **whole-host no-lock/no-allocation callback contract is not met by the selected engine**. Dependency callbacks use locks and recording has fallback allocations. Owned synth checks passing do not waive this gap. Existing proprietary project compatibility, a programmable patch environment, branded hardware integration and cloud features are outside the current accepted scope.
