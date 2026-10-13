@@ -1,6 +1,6 @@
 # Halftrack progress
 
-Updated 2026-10-13. Current milestone: one runnable preview including audio and MIDI creation; owner approval remains pending. The numbered roadmap supplied later is not an active phase restriction.
+Updated 2026-10-13. Current milestone: preview handed off; renewed implementation and local reverse-engineering research authorized. The numbered roadmap supplied later is not an active phase restriction.
 
 ## Working and evidenced
 
@@ -14,7 +14,7 @@ Updated 2026-10-13. Current milestone: one runnable preview including audio and 
 - Engine MIDI tracks/clips/notes and built-in polyphonic synth pass deterministic DSP, undo, saturated FIFO and persistence tests. Export reentrancy now rejects edits/project replacement while the worker owns its graph, with a cancellation/preservation regression.
 - UI: piano roll and synth editing compile. Browser relaunch is verified. Actual editor handler and hit-test regressions pass. Native automation grid input is inconclusive; physical mouse delivery remains unverified.
 - Persistence/root: MIDI project round-trip checks, architecture/ownership contract, branding/research retirement, packaging and Signalsmith selection.
-- QA: Linux CI, callback audit, manual test script; previous audio-only Windows CI passed; combined three-platform run pending. First clean Mac CI exposed an older compiler in macOS 14; workflow now targets macOS 15 and requires AppleClang 17+.
+- QA: Linux CI, callback audit, manual test script; combined preview Mac and Windows CI passed; Linux failed at linking and a focused libatomic correction is in verification. First clean Mac CI exposed an older compiler in macOS 14; workflow now targets macOS 15 and requires AppleClang 17+.
 
 ## Missing, not stubbed controls
 
@@ -24,7 +24,7 @@ Session launch grid/scenes, full MIDI expression, automation, advanced routing/r
 
 - Browser relaunch and GUI audio save/reopen/export passed. MIDI grid input through native automation and plug-in editor lifetime checks remain pending.
 - Whole-host strict callback safety is not met: the dependency has locks and recording fallback allocations; see docs/realtime-safety.md.
-- Windows/Linux results and final clean Mac build are pending.
+- Combined preview Mac and Windows CI passed. Linux link correction is pending a new CI result.
 - No measured physical input latency, acoustic loopback, deadline stress, or arbitrary plug-in real-time safety evidence.
 - Existing PCM tests exclude opening/closing ramp regions; they do not prove complete-file numerical identity or nonlinear processor parity.
 
@@ -48,4 +48,22 @@ Final local integration passed15.47seconds, including actual piano-roll mouse/ke
 
 The owner requested an immediate draft handoff on 2026-10-13. Source is published through c2383a5; the locally tested macOS archive is `dist/Halftrack-preview-darwin-arm64-c2383a5.tar.gz`. The app is open with the original five-track `artifacts/demo/Halftrack First Session.halftrack` example, containing four generated stems and forty original synth notes. Playback advanced with real track/master meter activity. Native automation timed out after opening the file, but a stack sample showed normal event processing and reconnecting displayed the loaded session; no app-hang fix was justified.
 
-Local acceptance and production editor-handler tests passed in 15.47 seconds. Native grid mouse delivery remains inconclusive through automation. The three-platform CI run is [38445146571](https://github.com/jamescolasacco/halftrack/actions/runs/38445146571); at handoff macOS had compiled and was testing, while Windows/Linux builds were running. CI is not yet declared green. The complete feature sweep remains unfinished and awaits draft feedback. No additional implementation is underway.
+Local acceptance and production editor-handler tests passed in 15.47 seconds. Native grid mouse delivery remains inconclusive through automation. The three-platform CI run is [38445146571](https://github.com/jamescolasacco/halftrack/actions/runs/38445146571); at handoff macOS had compiled and was testing, while Windows/Linux builds were running. CI is not yet declared green. At handoff, the complete feature sweep remained unfinished and development paused for feedback. The subsequent owner instruction below authorizes renewed work.
+
+## Linux link portability correction
+
+QA ownership: root authorized this agent to edit only the Linux link dependency in CMakeLists.txt; engine, mixer tests and shared model code remain with their existing owners. CI run [38445146571](https://github.com/jamescolasacco/halftrack/actions/runs/38445146571/job/115461470388) compiled Linux sources but failed final linkage on Tracktion WaveNode/WaveNodeRealTime references to `__atomic_store`. The macOS and Windows jobs passed. The correction explicitly links Linux libatomic for the engine-dependent Halftrack executable; the JUCE-only plug-in fixture does not require it. JUCE's configure probe tests only long-long atomics and does not cover the engine's aggregate operations. Existing macOS CMake reconfiguration and whitespace checks passed. Linux runtime and final-link verification await the next CI run; no local Linux/container environment is available, and this build correction does not establish lock-free behavior.
+
+## New direction: binary-assisted research
+
+The owner explicitly superseded the earlier no-decompilation rule and preview pause. Parallel research covers tooling, vetted agent skills and measurable audio/workflow parity. Root begins read-only Mach-O inventory of the installed reference and an isolated official Ghidra setup. Raw target material stays in ignored local artifacts. No claim of source recovery, completed clone or zero differences is made.
+
+## Panning correction ownership and verification
+
+The parity-research agent has root-assigned ownership of `src/Session.cpp` and `tests/SessionTests.cpp` for the panning correction. This is a coordinated edit to the engine/mixer area. New tracks will use an explicitly serialized constant-power mixer with unity center; existing serialized mixers retain their prior sound. No proprietary source or assets are used. Focused offline-render matrix tests and combined acceptance results will be recorded below after execution.
+
+Root integration: three primary-source research reports now cover tool selection, inspected skills and behavioral measurement. Official Ghidra 12.1.4 archive SHA-256 matched the published digest; macOS ARM64 native components built successfully using JDK 21 and the supplied Gradle wrapper. The isolated ARM64 reference copy imported successfully with automatic analysis disabled and no dependent libraries imported. Local metadata inventory records both slices and embedded debug-section absence. Decompilation coverage is not yet claimed.
+
+Original Mach-O tooling has 20 passing synthetic tests (45a8eb9). The actual reference inventory succeeded. Linux atomic linkage correction is a93b813; both are pushed. Root owns shared documentation; agents own their respective tool, mixer and CI changes. Raw reference artifacts remain ignored.
+
+The panning task also has root-approved ownership of the narrow callback-root addition in `tests/realtime_audit.py`. The new multiplier is audited as owned source; the inherited engine mixer remains an explicitly excluded dependency call with its documented lock limitation.

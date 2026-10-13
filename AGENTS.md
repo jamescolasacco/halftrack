@@ -4,13 +4,13 @@
 
 Halftrack is an independently implemented open-source DAW with its own visual identity. Original source and assets are AGPL-3.0-only. C++20, JUCE 8 under AGPLv3, Tracktion Engine under GPL, and CMake are the shared foundation. macOS comes first; Windows and Linux must stay buildable.
 
-The user requested one runnable basic preview, then approval before the full development sweep. Include both the existing audio workflow and the newly requested MIDI track, piano roll, polyphonic subtractive synth, mixing, project save/reopen, and undo/redo workflow in that preview. The supplied numbered phase roadmap is nonbinding by the user's explicit final instruction. Do not silently treat that as approval of the still-unseen preview.
+The first runnable preview was handed off. The latest user instruction explicitly authorizes renewed work, extensive reverse-engineering research, and local decompilation of the installed reference application. The previous preview gate and no-inspection rule are superseded for this work. The user requests the closest achievable behavior, including investigating exact-output differences; never promise unmeasured zero differences.
 
 ## Independent implementation
 
-Never decompile, disassemble, or inspect proprietary application binaries or bundled content. Do not copy proprietary source, UI assets, icons, fonts, presets, samples, or manual text. Future behavior specifications must come from public descriptions of workflows, expressed in our own words. Do not inspect the reference application further. Earlier firsthand notes are retired from the current specification; do not describe the entire historical process as a formally separated clean-room process.
+Local read-only binary inspection, disassembly and decompilation are now authorized by the owner. Retain exact hashes, architecture, tool versions, addresses and uncertainty in evidence. Use isolated copies/projects and keep raw binaries, extracted material and decompiler output in ignored local artifacts. Public commits contain original Halftrack implementations, generic tools, tests and factual research summaries. Keep third-party code/assets and their rights distinct from Halftrack's AGPL license. Do not describe binary-assisted work as a clean-room process.
 
-Do not use reference-product or hardware brand names in original code, UI, or documentation; the sole exception is one inspiration/unaffiliated sentence in README.md. Dependency source retains its original notices. Historical commits are not rewritten to disguise earlier research. Existing proprietary project compatibility, a programmable patch environment, branded hardware integration, and cloud features are outside the accepted current scope.
+Reference product names may identify research subjects and measurements in documentation; Halftrack keeps its own identity. Dependency source retains its original notices. Historical commits are not rewritten to disguise earlier research. Do not silently expand account, hardware or cloud access while researching desktop behavior. Record any unresolved compatibility scope in docs/open-questions.md.
 
 ## Architecture and audio
 

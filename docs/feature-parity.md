@@ -6,9 +6,9 @@ Capability planning inventory, revised 2026-10-13. These are proposed behavior t
 
 ## Scope and progression
 
-Build one runnable macOS record/mix/plug-in/export preview, then wait for the user's explicit approval before starting the full sweep. Windows must share the product's engine/model/UI and receive its own verification; Mac-first work is not proof of Windows parity. Halftrack uses its own project format and its own extensible device environment. ALS and existing AMXD compatibility are excluded. Native-device sound matching aims for accepted closeness, not bit-identical proprietary DSP.
+The first audio/MIDI preview has been handed off. The latest owner instructions authorize renewed research, local binary analysis and implementation; the former preview approval gate is superseded. Windows shares the engine/model/UI and requires its own verification. Halftrack retains its own project format and original identity. Existing proprietary project/patch compatibility, a programmable patch environment, branded hardware integration and cloud features remain outside the current implementation.
 
-The rows cover major application domains, individual native devices, core Max-based comparison targets, Pack discovery, and engineering evidence. Some rows intentionally collect related operations. After the preview review, expand each into its parameter, gesture, shortcut, error-state, and interaction cases. Do not call this inventory exhaustive until that reconciliation is complete.
+The target is the closest measurable behavior, including exact-output comparisons for well-defined cases. No whole-product zero-difference claim is justified. The rows are a starting backlog, with broad groups still requiring parameter, gesture, shortcut, error-state and interaction cases. Consult [current progress](progress.md) for the latest verified results; older preview rows below retain their original observation scope.
 
 ### Status rules
 
@@ -37,12 +37,12 @@ Stage: **Preview**. Updated 2026-10-13 against the [preview verification record]
 | PRE-007 | Export | 48 kHz WAV PCM and duration passed; a two-second extension produces 144,000 frames from a one-second dry source. Worker cancellation dispatches messages and preserves existing output bytes. GUI export, rate/depth matrix, actual effect tails, and Windows remain pending. | PARTIAL — Mac API export/cancel |
 | PRE-008 | Save and reopen | Portable project/media, track name, tempo, loop, rendered audio, and VST3 state passed; invalid load retained the edit. Clean/dirty initialization regressions passed. GUI save/reopen and complete state coverage remain pending. | PARTIAL — tested API cases |
 | PRE-009 | Basic stability | Latest automated workflow passed; earlier GUI Play/Stop and unsaved-close Discard worked. Browser scan stall repair, repeated device changes, editor lifetime, save dialogs, and long-session checks remain pending. | PARTIAL — bounded automated/GUI evidence |
-| PRE-010 | User review gate | Evidence and gaps are documented. Runnable-preview handoff and the owner's explicit approval remain pending; full-sweep work is not authorized yet. | PENDING — user review |
+| PRE-010 | Preview handoff | Runnable preview delivered; latest owner instructions authorize further research and implementation. | HANDOFF COMPLETE — former gate superseded |
 
 ## Audio backend, device lifecycle, and recording alignment
 
 
-Stage: **After preview approval**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -62,7 +62,7 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 ## Transport, time, recording, and takes
 
 
-Stage: **After preview approval**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -82,7 +82,7 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 ## Arrangement and clip editing
 
 
-Stage: **After preview approval**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -102,7 +102,7 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 ## Session performance and launching
 
 
-Stage: **After preview approval**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -118,7 +118,7 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 ## Audio clip processing and timing
 
 
-Stage: **After preview approval**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -137,7 +137,7 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 ## MIDI editing, tools, MPE, and tuning
 
 
-Stage: **After preview approval**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -158,7 +158,7 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 ## Mixer, routing, racks, and automation
 
 
-Stage: **After preview approval**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -183,7 +183,7 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 ## Plug-in host contract
 
 
-Stage: **After preview approval**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -207,7 +207,7 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 ## Projects, browser, assets, export, and recovery
 
 
-Stage: **After preview approval**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -231,7 +231,7 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 ## Halftrack's own extensible device environment
 
 
-Stage: **After preview approval**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -249,7 +249,7 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 ## Controllers, accessibility, and product shell
 
 
-Stage: **After preview approval**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -268,7 +268,7 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 ## Reliability, performance, and shared-platform verification
 
 
-Stage: **After preview approval**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |

@@ -1,14 +1,14 @@
-# Public workflow specification policy
+# Behavior specification and evidence policy
 
-Future product specifications describe observable musical workflows in original language: creating tracks, editing notes and clips, arranging time, routing signals, recording, mixing, and saving. No proprietary application inspection or copied manual text is an input to future work.
+Updated 2026-10-13 after the owner explicitly authorized local reverse engineering. Public descriptions, firsthand observations and bounded binary analysis may inform independently written behavior specifications. The former public-descriptions-only restriction is superseded; no formal clean-room separation is claimed.
 
-Prior firsthand audit notes are retired. Historical commits are retained, so no formal historical clean-room separation is claimed. The capability inventory is a planning map, not proof of complete behavior or a source for copying another interface.
+Use exact reference version, binary hash, architecture, addresses, tool version and experiment inputs. Separate measured outputs, tool-generated hypotheses and unresolved behavior. Keep raw binaries, symbol inventories, screenshots and decompiler output in ignored local artifacts. Public source contains original implementations, generic tooling, generated fixtures and factual summaries; do not present extracted third-party material as AGPL-covered Halftrack code.
 
-Implementation references are primary open-source APIs and source code with preserved licenses:
+Primary implementation sources retain their licenses:
 
 - [JUCE documentation](https://docs.juce.com/master/index.html)
 - [Tracktion Engine](https://github.com/Tracktion/tracktion_engine)
 - [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch)
 - [CLAP SDK](https://github.com/free-audio/clap)
 
-Halftrack's own deterministic fixtures establish its processing contract. Functional tests and explicit listening/hardware checks serve different purposes; neither substitutes for the other.
+The capability ledger is a planning map, not proof of complete behavior. [Measurement research](behavioral-parity-measurement.md) defines the difference between bounded equivalence, static analysis coverage and whole-product claims. Functional tests, complete-file signal comparisons and physical hardware checks answer different questions.
