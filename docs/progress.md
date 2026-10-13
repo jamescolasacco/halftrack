@@ -43,3 +43,9 @@ Root coordinated a narrow Session::loadProject error-message change with engine:
 Root integration: MIDI/persistence/owned allocation suite passed15.21seconds. QA commits ab8b82f and8461038 add three-platform CI, scoped callback checks and an eight-minute user smoke path. Engine commit4b61e16 includes MIDI and the FIFO export preflight. Root wired actual UI handler tests after native automation grid clicks showed no edits; verification remains explicit.
 
 Final local integration passed15.47seconds, including actual piano-roll mouse/key handlers and graph reentrancy tests. Export lifetime guard is fe02b10. Static callback audit passes8self-tests and16owned callback/helper bodies. No global real-time guarantee or full native MIDI walkthrough is claimed.
+
+## Draft handoff requested by owner
+
+The owner requested an immediate draft handoff on 2026-10-13. Source is published through c2383a5; the locally tested macOS archive is `dist/Halftrack-preview-darwin-arm64-c2383a5.tar.gz`. The app is open with the original five-track `artifacts/demo/Halftrack First Session.halftrack` example, containing four generated stems and forty original synth notes. Playback advanced with real track/master meter activity. Native automation timed out after opening the file, but a stack sample showed normal event processing and reconnecting displayed the loaded session; no app-hang fix was justified.
+
+Local acceptance and production editor-handler tests passed in 15.47 seconds. Native grid mouse delivery remains inconclusive through automation. The three-platform CI run is [38445146571](https://github.com/jamescolasacco/halftrack/actions/runs/38445146571); at handoff macOS had compiled and was testing, while Windows/Linux builds were running. CI is not yet declared green. The complete feature sweep remains unfinished and awaits draft feedback. No additional implementation is underway.
