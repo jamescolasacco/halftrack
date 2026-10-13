@@ -4,7 +4,7 @@ Evidence date: **2026-10-13**. This records the original audio/MIDI preview and 
 
 ## Automated evidence
 
-The combined Release acceptance executable passed on Apple Silicon macOS in **15.47 seconds** after integrating MIDI, persistence, FIFO export preflight, reentrant export protection and actual editor-handler tests. `ctest` supplies the generated VST3 fixture; direct `--self-test` execution without `HALFTRACK_TEST_PLUGIN` does not establish plug-in support.
+The initial combined Release acceptance executable passed on Apple Silicon macOS in **15.47 seconds** after integrating MIDI, persistence, FIFO export preflight, reentrant export protection and actual editor-handler tests. `ctest` supplies the generated VST3 fixture; direct `--self-test` execution without `HALFTRACK_TEST_PLUGIN` does not establish plug-in support.
 
 | Area | Established by generated fixtures | Limits |
 | --- | --- | --- |
@@ -54,6 +54,12 @@ The Ghidra exporter was independently exercised on tiny original C fixtures: two
 
 ## Recording follow-up
 
-Combined research CI [38476341206](https://github.com/jamescolasacco/halftrack/actions/runs/38476341206) passed Windows and Linux but exposed recording loss on macOS. Slower synthetic driver pacing reproduced it locally: MIDI discovery discarded an active take by clearing playback contexts. A narrow Tracktion patch now defers discovery until recording stops. The focused regression passes twice (8.93 s / 8.17 s), and the full local acceptance suite passes in 53.60 s. The Windows patch-writing correction is committed as `1294f5b`; both exact source hashes remain unchanged. Fresh three-platform CI is [38479881217](https://github.com/jamescolasacco/halftrack/actions/runs/38479881217); results remain pending. The ac20d09 package above is historical evidence and contains the discovered defect. No physical microphone was used in this diagnosis.
+Combined research CI [38476341206](https://github.com/jamescolasacco/halftrack/actions/runs/38476341206) passed Windows and Linux but exposed recording loss on macOS. Slower synthetic driver pacing reproduced it locally: MIDI discovery discarded an active take by clearing playback contexts. A narrow Tracktion patch now defers discovery until recording stops. The focused regression passes twice (8.93 s / 8.17 s), and the full local acceptance suite passes in 53.60 s. The Windows patch-writing correction is committed as `1294f5b`; both exact source hashes remain unchanged. Final three-platform CI [38479881217](https://github.com/jamescolasacco/halftrack/actions/runs/38479881217) passed on macOS, Windows and Linux, including native acceptance and packaging. The ac20d09 package above is historical evidence and contains the discovered defect. No physical microphone was used in this diagnosis.
 
-Current macOS draft: `dist/Halftrack-preview-darwin-arm64-5f40131.tar.gz` (60,975,548 bytes; SHA-256 `cc2cb27799b126e3df8e874fb96af766ab603051c9ae2948460b4651dd62a79f`). The packaged executable matches the tested build byte-for-byte. Its source archive is exactly 5f40131; its Tracktion archive includes the checked recording-safety patch. Original-source packaging excludes ignored reference binaries and decompiler outputs.
+Intermediate macOS verification archive: `dist/Halftrack-preview-darwin-arm64-5f40131.tar.gz` (60,975,548 bytes; SHA-256 `cc2cb27799b126e3df8e874fb96af766ab603051c9ae2948460b4651dd62a79f`). The packaged executable matches the tested build byte-for-byte. Its source archive is exactly 5f40131; its Tracktion archive includes the checked recording-safety patch. Original-source packaging excludes ignored reference binaries and decompiler outputs.
+
+## Final platform verification
+
+Source `1294f5b` passes [all three CI jobs](https://github.com/jamescolasacco/halftrack/actions/runs/38479881217): macOS, Windows and Linux. This includes 20 synthetic Mach-O parser tests per platform, the owned callback source audit, native build, full acceptance and preview packaging. CI macOS acceptance took 145.04 s, Linux 44.09 s and Windows 51.52 s; the full local Release suite took 53.60 s. The opt-in Ghidra fixture remains separate from CI and passed locally as recorded above.
+
+The final local Mac draft is packaged from the clean source plus the completed handoff notes. Its revision is recorded in the archive filename and bundled `SOURCE.json`. Corresponding source includes the explicit-LF patch writer and the exact patched Tracktion source. These results verify the covered fixtures; they do not certify physical drivers, every plug-in, complete UI delivery or exact reference equivalence.
