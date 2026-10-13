@@ -131,7 +131,7 @@ class GhidraBulkTests(unittest.TestCase):
             source.write_text('\n'.join(f'__attribute__((noinline)) int fixture_{i}(int x) {{ return x * 3 + {i+7}; }}' for i in range(96))+'\nint main(int n,char **v) { return fixture_0(n); }\n')
             assembly=root/'tails.s'
             assembly.write_text('.text\n.globl _fixture_tail_a\n.globl _fixture_tail_b\n.p2align 2\n_fixture_tail_a:\ncmp w0, #0\nb.gt _fixture_tail_b\nadd w0, w0, #5\nret\n_fixture_tail_b:\nadd w0, w0, #11\nret\n')
-            binary=root/'fixture' 
+            binary=root/'fixture'
             subprocess.run([xcrun,'clang','-arch','arm64','-O1','-fno-inline','-o',str(binary),str(source),str(assembly)],check=True,timeout=30)
             nm=subprocess.check_output([xcrun,'nm','-n',str(binary)],text=True,timeout=10)
             addresses=[f'0x{int(line.split()[0],16):x}' for line in nm.splitlines() if len(line.split())==3 and line.split()[2].startswith('_fixture_')]
@@ -188,6 +188,11 @@ class GhidraBulkTests(unittest.TestCase):
             rows=[json.loads(row[0]) for row in c.db.execute("SELECT detail FROM functions WHERE status='completed'")]
             self.assertTrue(any(row.get('entry_already_decoded') for row in rows))
             self.assertTrue(any(row.get('prior_containing_model_revised') for row in rows))
+            tail_address=next(f'0x{int(line.split()[0],16):x}' for line in nm.splitlines()
+                              if len(line.split())==3 and line.split()[2]=='_fixture_tail_b')
+            tail_batch=c.db.execute('SELECT batch FROM functions WHERE address=?',(tail_address,)).fetchone()[0]
+            tail_text=(output/'batches'/f'{tail_batch:08d}'/(tail_address+'.c')).read_text()
+            self.assertRegex(tail_text,r'\+\s*(?:0xb|11)')
             c.close()
             code=(output/'batches/00000001'/f'{addresses[0]}.c').read_text()
             self.assertRegex(code,r'\*\s*3\s*\+\s*7')
