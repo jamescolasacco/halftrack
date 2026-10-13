@@ -41,7 +41,7 @@ def canonical(value):
     return f'0x{int(value, 16):x}'
 
 
-def read_json(path):
+def decode_json(text):
     # Reject duplicate keys; ordinary json.load would silently accept corruption.
     def pairs(items):
         out = {}
@@ -50,7 +50,11 @@ def read_json(path):
                 raise ValueError(f'Duplicate JSON key: {key}')
             out[key] = value
         return out
-    return json.loads(Path(path).read_text(encoding='utf-8'), object_pairs_hook=pairs)
+    return json.loads(text, object_pairs_hook=pairs)
+
+
+def read_json(path):
+    return decode_json(Path(path).read_text(encoding='utf-8'))
 
 
 def write_new(path, value):
@@ -208,7 +212,7 @@ class Coverage:
                     # A killed write may leave a final partial record; retain it verbatim.
                     break
                 try:
-                    value = json.loads(line)
+                    value = decode_json(line)
                 except (ValueError, UnicodeError) as error:
                     raise ValueError('Corrupt complete journal record') from error
                 if finished:

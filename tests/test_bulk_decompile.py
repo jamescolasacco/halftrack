@@ -94,6 +94,12 @@ class CoverageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'Corrupt complete'):
             self.coverage.ingest(number)
 
+    def test_duplicate_journal_keys_rejected(self):
+        number, folder = self.batch()
+        self.journal(folder, [], b'{"event":"started","event":"result","address":"0x1000"}\n')
+        with self.assertRaisesRegex(ValueError, 'Corrupt complete'):
+            self.coverage.ingest(number)
+
     def test_corrupt_request_and_manifest_rejected(self):
         number,folder=self.batch()
         (folder/'request.json').write_text('{}')
@@ -123,8 +129,10 @@ class GhidraBulkTests(unittest.TestCase):
             source=root/'fixture.c'
             # Enough distinct entries that a coordinator interrupt can be observed.
             source.write_text('\n'.join(f'__attribute__((noinline)) int fixture_{i}(int x) {{ return x * 3 + {i+7}; }}' for i in range(96))+'\nint main(int n,char **v) { return fixture_0(n); }\n')
-            binary=root/'fixture'
-            subprocess.run([xcrun,'clang','-arch','arm64','-O1','-fno-inline','-o',str(binary),str(source)],check=True,timeout=30)
+            assembly=root/'tails.s'
+            assembly.write_text('.text\n.globl _fixture_tail_a\n.globl _fixture_tail_b\n.p2align 2\n_fixture_tail_a:\ncmp w0, #0\nb.gt _fixture_tail_b\nadd w0, w0, #5\nret\n_fixture_tail_b:\nadd w0, w0, #11\nret\n')
+            binary=root/'fixture' 
+            subprocess.run([xcrun,'clang','-arch','arm64','-O1','-fno-inline','-o',str(binary),str(source),str(assembly)],check=True,timeout=30)
             nm=subprocess.check_output([xcrun,'nm','-n',str(binary)],text=True,timeout=10)
             addresses=[f'0x{int(line.split()[0],16):x}' for line in nm.splitlines() if len(line.split())==3 and line.split()[2].startswith('_fixture_')]
             addresses=sorted(addresses,key=lambda a:int(a,16))
@@ -174,16 +182,19 @@ class GhidraBulkTests(unittest.TestCase):
             self.assertEqual(before,{p.relative_to(output):p.read_bytes() for p in (output/'batches/00000001').iterdir()})
             c=bulk.Coverage(output,bulk.read_json(output/'manifest.json'),addresses)
             counts=c.summary()
-            self.assertEqual((counts['completed'],counts['failed'],counts['unattempted']), (96,1,0))
+            self.assertEqual((counts['completed'],counts['failed'],counts['unattempted']), (98,1,0))
             detail=json.loads(c.db.execute("SELECT detail FROM functions WHERE address='0x1deadbeef'").fetchone()[0])
             self.assertIn('initialized executable memory',detail['error'])
+            rows=[json.loads(row[0]) for row in c.db.execute("SELECT detail FROM functions WHERE status='completed'")]
+            self.assertTrue(any(row.get('entry_already_decoded') for row in rows))
+            self.assertTrue(any(row.get('prior_containing_model_revised') for row in rows))
             c.close()
             code=(output/'batches/00000001'/f'{addresses[0]}.c').read_text()
             self.assertRegex(code,r'\*\s*3\s*\+\s*7')
             self.assertIn('modeled_body_warning',bulk.read_json(output/'batches/00000001/metadata.json'))
             final=subprocess.run(command+['--status'],env=environment,capture_output=True,text=True,timeout=10)
             self.assertEqual(final.returncode,0,final.stderr)
-            self.assertIn('"completed": 96',final.stdout)
+            self.assertIn('"completed": 98',final.stdout)
 
 
 if __name__=='__main__':

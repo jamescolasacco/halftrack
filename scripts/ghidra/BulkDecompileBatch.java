@@ -153,21 +153,28 @@ public class BulkDecompileBatch extends HeadlessScript {
             result.put("created_function", false);
             return function;
         }
-        if (currentProgram.getFunctionManager().getFunctionContaining(entry) != null) {
-            throw new IllegalArgumentException("Entry lies inside a different existing function");
+        Function containing = currentProgram.getFunctionManager().getFunctionContaining(entry);
+        if (containing != null) {
+            // Declared starts can lie inside an earlier provisional flow-derived body.
+            // CreateFunctionCmd supports reconciling such overlaps at an exact entry.
+            result.put("prior_containing_entry", addressKey(containing.getEntryPoint()));
+            result.put("prior_containing_modeled_bytes", containing.getBody().getNumAddresses());
         }
         TimeoutTaskMonitor preparation = TimeoutTaskMonitor.timeoutIn(preparationSeconds, TimeUnit.SECONDS);
         try {
-            // Restrict flow decoding to this executable block and disable analysis scheduling.
-            DisassembleCommand disassemble = new DisassembleCommand(entry,
-                new AddressSet(block.getStart(), block.getEnd()), true);
-            disassemble.enableCodeAnalysis(false);
-            boolean decoded = disassemble.applyTo(currentProgram, preparation);
-            result.put("disassembly_message", disassemble.getStatusMsg());
-            result.put("disassembled_bytes", disassemble.getDisassembledAddressSet().getNumAddresses());
-            preparation.checkCancelled();
-            if (!decoded || currentProgram.getListing().getInstructionAt(entry) == null) {
-                throw new IllegalStateException("Could not disassemble entry: " + disassemble.getStatusMsg());
+            if (currentProgram.getListing().getInstructionAt(entry) == null) {
+                DisassembleCommand disassemble = new DisassembleCommand(entry,
+                    new AddressSet(block.getStart(), block.getEnd()), true);
+                disassemble.enableCodeAnalysis(false);
+                disassemble.applyTo(currentProgram, preparation);
+                result.put("disassembly_message", disassemble.getStatusMsg());
+                result.put("disassembled_bytes", disassemble.getDisassembledAddressSet().getNumAddresses());
+                preparation.checkCancelled();
+                if (currentProgram.getListing().getInstructionAt(entry) == null)
+                    throw new IllegalStateException("Could not decode entry: " + disassemble.getStatusMsg());
+            } else {
+                result.put("entry_already_decoded", true);
+                result.put("disassembled_bytes", 0);
             }
             CreateFunctionCmd create = new CreateFunctionCmd(entry, false);
             boolean created = create.applyTo(currentProgram, preparation);
@@ -177,6 +184,8 @@ public class BulkDecompileBatch extends HeadlessScript {
                 throw new IllegalStateException("Could not create function: " + create.getStatusMsg());
             }
             result.put("created_function", true);
+            if (containing != null)
+                result.put("prior_containing_model_revised", !containing.getBody().contains(entry));
             return function;
         }
         finally {
