@@ -1,27 +1,20 @@
-# Halftrack decisions
+# Product decisions
 
-Accepted 2026-10-13 by the project owner during the grilling interview.
+Updated 2026-10-13 following the owner's latest instructions.
 
 | Topic | Decision |
 |---|---|
-| Reference | Installed Ableton Live 12 Suite 12.2.1; exact build identity recorded in research. |
-| Product | Independent open-source clone of workflow/features, not a binary port. |
-| Project compatibility | Own format; Ableton .als import is not a goal. |
-| Audio fidelity | Matching behavior and very close sound with controlled comparison evidence; not bit identity. |
-| Extensibility | Eventually an open-source equivalent to Max for Live, not unchanged Max patch execution. |
-| Licensing | Distributed modified versions must share source. Original code AGPL-3.0-only. |
-| Platforms | Native macOS first, same code/model/interface/tests for Windows. |
-| First workflow | Select devices, record audio, mix through plug-ins, save/reopen and export. |
-| Review gate | Produce one runnable basic preview; wait for the owner's approval before the full implementation sweep. |
-| Branding | Halftrack, editable temporary logo now; analog redesign after baseline. |
-| Repository | Public jamescolasacco/halftrack, meaningful incremental commits. |
+| Product | Independent workflow-oriented open-source DAW, original UI and assets. |
+| Specification | Public workflow descriptions only, paraphrased independently; no proprietary binary or content inspection. |
+| Persistence | Versioned human-readable `.halftrack` XML; no proprietary project import target. |
+| Audio | Test observable behavior and known-good DSP output; no bit-identical emulation claim. |
+| Scope exclusions | Programmable patch environment, branded hardware integration, and cloud features. |
+| License | Original code/assets AGPL-3.0-only, distributed modified versions remain open. |
+| Stack | C++20, JUCE 8, Tracktion, CMake, Signalsmith Stretch MIT. |
+| Platforms | macOS first, shared Windows and Linux builds and tests. |
+| Preview | Audio recording/mixing/export plus MIDI tracks/piano roll/synth/save/reopen/undo. |
+| Gate | One runnable preview, then owner approval before larger development sweep. |
+| Naming | Halftrack; one inspiration/unaffiliated README sentence, no reference branding elsewhere. |
+| Workflow | Small tested commits per owned feature; architecture/progress current; ambiguity recorded with simple defaults. |
 
-## Foundation
-
-Evaluate C++20 + JUCE + Tracktion Engine. Tracktion supplies sequencing and graph infrastructure but does not establish Ableton behavior. Halftrack owns the interface and application commands, with a facade around engine details. Pin compatible dependency revisions and carry platform-independent regression tests.
-
-JUCE's open-source license is AGPLv3, Tracktion's is GPLv3-or-later. Preserve each upstream license and notices. Third-party plug-ins are external user-installed components, never bundled. The precise distribution obligations of all dependencies and external plugin integration remain part of release review; do not invent a license exception on behalf of dependencies.
-
-## Completion evidence
-
-A feature needs an observed/reference description, an acceptance test or documented manual check, and platform status. Basic preview success is not full product parity. Exact hardware latency, native-device sound matching, controller behavior, and crash resilience require separate measured verification.
+The later rules supersede the earlier firsthand-research and programmable-device plans. Earlier commits remain intact for transparency; retired research is not current implementation evidence. The current workflow does not pretend that historical application inspection never occurred.

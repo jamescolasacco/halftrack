@@ -1,23 +1,21 @@
 # Halftrack
 
-An open-source desktop music studio, built around a familiar clip-and-arrangement workflow.
+An open-source desktop music studio with an original dark interface and an analog identity.
 
-**Status: the first native preview is under development. This is not a feature-complete DAW or an Ableton-compatible project loader.**
+Halftrack is inspired by Ableton Live and is unaffiliated with Ableton.
 
-Halftrack targets macOS and Windows from one C++20 codebase. The reference for behavioral research is Ableton Live 12 Suite 12.2.1. Halftrack is an independent implementation with original branding, code, and assets; it is not affiliated with Ableton.
+**Status: native preview in development and verification. This is not a complete DAW.**
 
-## Direction
+C++20, JUCE 8, and Tracktion Engine share one model and interface across macOS, Windows, and Linux. Original code and SVG assets are AGPL-3.0-only. Dependencies retain their own licenses.
 
-- Record, edit, arrange, mix, and export in a shared desktop interface.
-- Reproduce the reference workflow and closely match sound through measured comparisons.
-- Keep the engine, project model, commands, and interface shared across platforms.
-- Build an open-source programmable device environment over time.
-- Keep distributed modifications open source.
+The first preview combines audio recording/mixing/export with MIDI tracks, a piano roll, a built-in polyphonic subtractive synth, project save/reopen, and undo/redo. Only behavior backed by evidence is marked verified. The owner reviews this one preview before the larger implementation sweep.
 
-The first review milestone is an actual audio recording, plug-in mixing, save/reopen, and WAV export workflow. Full feature work continues after approval of that preview. The project does not aim to load `.als` projects or execute existing Max patches unchanged.
+See [build instructions](docs/building.md), [architecture](docs/architecture.md), [progress and known gaps](docs/progress.md), [verification evidence](docs/preview-verification.md), [capability inventory](docs/feature-parity.md), and [open questions](docs/open-questions.md).
 
-See [the feature ledger](docs/feature-parity.md), [research](docs/research/ableton-reference.md), and [decisions](docs/decisions.md). Features are only marked verified when evidence exists for the relevant platform.
+## Independent implementation
+
+Original code, UI, and assets; no copied proprietary binaries, libraries of sounds, presets, artwork, fonts, or manual text. Future behavior specifications use public workflow descriptions. The project uses its own versioned `.halftrack` XML format with a sibling Assets folder.
 
 ## License
 
-Halftrack's original code is licensed under AGPL-3.0-only; see [LICENSE](LICENSE). Dependencies retain their own licenses. JUCE is used under its open-source AGPLv3 option and Tracktion Engine under its GPLv3-or-later option. No commercial plug-ins, vendor sound libraries, or Ableton assets are bundled.
+See [LICENSE](LICENSE) and [dependency inventory](docs/dependencies.md). JUCE uses its AGPLv3 option and Tracktion its GPLv3-or-later option. External commercial plug-ins are not redistributed. Preview archives include corresponding source and dependency notices.

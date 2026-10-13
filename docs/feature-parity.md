@@ -1,8 +1,8 @@
 # Halftrack feature-parity ledger
 
-Initial research baseline: 2026-10-13. Reference: **Ableton Live 12 Suite 12.2.1**. See [research evidence, source limits, and UI observations](research/ableton-reference.md).
+Capability planning inventory, revised 2026-10-13. These are proposed behavior tests, not completed parity claims. See [specification policy](research/workflows.md).
 
-**This is a planned capability inventory, not an implementation report or a claim that every Live function has been examined.** Every entry is initialized to **NOT IMPLEMENTED / UNVERIFIED**. No status is inferred from a screenshot, a control, a class name, a build, or another contributor's in-progress code.
+**This is a planned capability inventory, not a claim that every reference DAW function has been examined.** Entries began as **NOT IMPLEMENTED / UNVERIFIED**. The preview rows below now record narrowly scoped evidence; later-stage rows retain their initial status. No completion is inferred from a screenshot, a control, a class name, a build, or another contributor's in-progress code.
 
 ## Scope and progression
 
@@ -24,26 +24,23 @@ There are **170 behavior/scope rows** and **105 device/content rows** in this in
 
 ## Preview acceptance gate
 
-Project interview; these are proposed acceptance checks, not completed tests.
+Stage: **Preview**. Updated 2026-10-13 against the [preview verification record](preview-verification.md). The local Mac suite passed in **12.66 seconds** at `a6f7e2e`; some GUI observations came from an earlier build. Windows CI, browser-stall repair/retest, and GUI export/save are pending. **PARTIAL** below never implies the whole row or the other platform has passed.
 
-Stage: **Preview**. All checks below are proposed, not performed.
-
-| ID | Capability / target | Proposed acceptance evidence | Status |
+| ID | Capability / target | Acceptance evidence and remaining gap | Status |
 | --- | --- | --- | --- |
-| PRE-001 | Launch and honest status | Launch the native macOS application from the documented command; show its actual build and clearly identify unavailable controls. | NOT IMPLEMENTED / UNVERIFIED |
-| PRE-002 | Device selection | Enumerate available CoreAudio input/output choices, select them, and survive no device being selected. | NOT IMPLEMENTED / UNVERIFIED |
-| PRE-003 | Record a take | Arm an audio track, record a generated loopback or intentionally supplied source, stop, and play the captured take. | NOT IMPLEMENTED / UNVERIFIED |
-| PRE-004 | Import and arrange audio | Import an original WAV fixture; place at a timeline position, move it, and replay from the start. | NOT IMPLEMENTED / UNVERIFIED |
-| PRE-005 | Basic mix | Mix at least two tracks; exercise gain, pan, mute, and solo with independent audio evidence. | NOT IMPLEMENTED / UNVERIFIED |
-| PRE-006 | Plug-in audition | Discover and load at least one supported-format test plug-in; open its editor, change a parameter, and hear/render its output. | NOT IMPLEMENTED / UNVERIFIED |
-| PRE-007 | Export | Export a bounded stereo WAV; verify duration, channels, sample rate, actual audio content, and successful opening in an independent reader. | NOT IMPLEMENTED / UNVERIFIED |
-| PRE-008 | Save and reopen | Persist the preview session in Halftrack's format and recover the supported track, media, mix, and plug-in state. | NOT IMPLEMENTED / UNVERIFIED |
-| PRE-009 | Basic stability | Exercise repeated start/stop, import, device selection, plug-in removal, and app close without crash or orphaned recording. | NOT IMPLEMENTED / UNVERIFIED |
-| PRE-010 | User review gate | Deliver the runnable preview and a list of tested capabilities and gaps; wait for the user's explicit approval before the full sweep. | NOT IMPLEMENTED / UNVERIFIED |
+| PRE-001 | Launch and honest status | Mac native GUI launched and the latest acceptance executable passed. A later launch stalled scanning Music; repair/retest is pending. Windows CI has no result yet. | PARTIAL — earlier GUI launch; regression open |
+| PRE-002 | Device selection | Earlier GUI reported CoreAudio built-in output, 96 kHz / 512 samples, no input. No-device guards and virtual-device inputs passed. Hardware switching, permissions, hot-plug, and latency remain pending. | PARTIAL — observed output configuration |
+| PRE-003 | Record a take | Generated input passed the real recording graph; stop created a WAV clip with expected rate, duration bounds, and signal. Export and save passed. Physical/acoustic capture and alignment remain pending. | PARTIAL — Mac synthetic capture |
+| PRE-004 | Import and arrange audio | Earlier GUI imported four generated stems, showed waveforms, fitted the timeline, and played/stopped with advancing transport. API clip gesture undoes once. GUI clip placement/movement and seek checks remain pending. | PARTIAL — Mac import/playback observed |
+| PRE-005 | Basic mix | Two-track summing, gain, pan, mute, solo, and grouped gain/pan undo passed API checks. GUI track/master meters were active. GUI mixer gestures and Windows remain pending. | PARTIAL — automated mix; meters observed |
+| PRE-006 | Plug-in audition | Controlled VST3 discovery, instantiation, parameter change, processing, state round trip, bypass, and removal passed. Editor interactions, AU, arbitrary plug-ins, and Windows remain pending. | PARTIAL — controlled Mac VST3 |
+| PRE-007 | Export | 48 kHz WAV PCM and duration passed; a two-second extension produces 144,000 frames from a one-second dry source. Worker cancellation dispatches messages and preserves existing output bytes. GUI export, rate/depth matrix, actual effect tails, and Windows remain pending. | PARTIAL — Mac API export/cancel |
+| PRE-008 | Save and reopen | Portable project/media, track name, tempo, loop, rendered audio, and VST3 state passed; invalid load retained the edit. Clean/dirty initialization regressions passed. GUI save/reopen and complete state coverage remain pending. | PARTIAL — tested API cases |
+| PRE-009 | Basic stability | Latest automated workflow passed; earlier GUI Play/Stop and unsaved-close Discard worked. Browser scan stall repair, repeated device changes, editor lifetime, save dialogs, and long-session checks remain pending. | PARTIAL — bounded automated/GUI evidence |
+| PRE-010 | User review gate | Evidence and gaps are documented. Runnable-preview handoff and the owner's explicit approval remain pending; full-sweep work is not authorized yet. | PENDING — user review |
 
 ## Audio backend, device lifecycle, and recording alignment
 
-Reference: [audio setup](https://help.ableton.com/hc/en-us/articles/211476789-Setting-up-an-Audio-Interface), [ASIO](https://help.ableton.com/hc/en-us/articles/360003149240-Using-an-ASIO-audio-driver-on-Windows), [latency](https://help.ableton.com/hc/en-us/articles/209072289-How-to-reduce-latency).
 
 Stage: **After preview approval**. All checks below are proposed, not performed.
 
@@ -51,7 +48,7 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 | --- | --- | --- | --- |
 | AUD-001 | CoreAudio backend | Exercise output-only, input-only where useful, duplex, invalid device, and restart paths. | NOT IMPLEMENTED / UNVERIFIED |
 | AUD-002 | Windows ASIO backend | Build on Windows and repeat duplex capture/playback with an actual ASIO interface; do not equate compilation with driver verification. | NOT IMPLEMENTED / UNVERIFIED |
-| AUD-003 | Windows system-audio fallback | Specify and test available fallback modes and their limitations separately from ASIO; verify the selected implementation rather than imply Live equivalence. | NOT IMPLEMENTED / UNVERIFIED |
+| AUD-003 | Windows system-audio fallback | Specify and test available fallback modes and their limitations separately from ASIO; verify the selected implementation rather than imply reference DAW equivalence. | NOT IMPLEMENTED / UNVERIFIED |
 | AUD-004 | Separate and aggregate devices | Test supported macOS combinations, clock drift, changing device IDs, and unavailability on reopen; document the Windows counterpart. | NOT IMPLEMENTED / UNVERIFIED |
 | AUD-005 | Channel enablement | Enable mono/stereo inputs and outputs, rename aliases, and verify physical-to-track routing with distinct channel impulses. | NOT IMPLEMENTED / UNVERIFIED |
 | AUD-006 | Sample rate and buffer controls | Test negotiated rates and buffers, unsupported values, device-owned configuration panels, and changes during transport. | NOT IMPLEMENTED / UNVERIFIED |
@@ -64,7 +61,6 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 
 ## Transport, time, recording, and takes
 
-Reference: [recording](https://www.ableton.com/en/live-manual/12/recording-new-clips/), [comping](https://www.ableton.com/en/live-manual/12/comping/), [synchronization](https://www.ableton.com/en/live-manual/12/synchronizing-with-link-tempo-follower-and-midi/).
 
 Stage: **After preview approval**. All checks below are proposed, not performed.
 
@@ -85,7 +81,6 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 
 ## Arrangement and clip editing
 
-Reference: [Arrangement](https://www.ableton.com/en/live-manual/12/arrangement-view/), [Clip View](https://www.ableton.com/en/live-manual/12/clip-view/), [12.2 release changes](https://www.ableton.com/en/release-notes/live-12/).
 
 Stage: **After preview approval**. All checks below are proposed, not performed.
 
@@ -106,7 +101,6 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 
 ## Session performance and launching
 
-Reference: [Session](https://www.ableton.com/en/live-manual/12/session-view/), [launching](https://www.ableton.com/en/live-manual/12/launching-clips/).
 
 Stage: **After preview approval**. All checks below are proposed, not performed.
 
@@ -123,7 +117,6 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 
 ## Audio clip processing and timing
 
-Reference: [warping](https://www.ableton.com/en/live-manual/12/audio-clips-tempo-and-warping/), [grooves](https://www.ableton.com/en/live-manual/12/using-grooves/), [audio-to-MIDI](https://www.ableton.com/en/live-manual/12/converting-audio-to-midi/).
 
 Stage: **After preview approval**. All checks below are proposed, not performed.
 
@@ -143,7 +136,6 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 
 ## MIDI editing, tools, MPE, and tuning
 
-Reference: [MIDI editing](https://www.ableton.com/en/live-manual/12/editing-midi/), [tools](https://www.ableton.com/en/live-manual/12/midi-tools/), [MPE](https://www.ableton.com/en/live-manual/12/editing-mpe/), [tuning](https://www.ableton.com/en/live-manual/12/using-tuning-systems/).
 
 Stage: **After preview approval**. All checks below are proposed, not performed.
 
@@ -165,7 +157,6 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 
 ## Mixer, routing, racks, and automation
 
-Reference: [routing](https://www.ableton.com/en/live-manual/12/routing-and-i-o/), [mixing](https://www.ableton.com/en/live-manual/12/mixing/), [racks](https://www.ableton.com/en/live-manual/12/instrument-drum-and-effect-racks/), [automation](https://www.ableton.com/en/live-manual/12/automation-and-editing-envelopes/), [clip envelopes](https://www.ableton.com/en/live-manual/12/clip-envelopes/).
 
 Stage: **After preview approval**. All checks below are proposed, not performed.
 
@@ -191,7 +182,6 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 
 ## Plug-in host contract
 
-Reference: [supported formats](https://help.ableton.com/hc/en-us/articles/5937501570460-Supported-Plug-in-Formats), [plug-in manual](https://www.ableton.com/en/live-manual/12/using-plug-ins/), [Apple Silicon](https://help.ableton.com/hc/en-us/articles/4410323149074-Plug-ins-on-Mac-in-Live-11-1-and-later).
 
 Stage: **After preview approval**. All checks below are proposed, not performed.
 
@@ -216,7 +206,6 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 
 ## Projects, browser, assets, export, and recovery
 
-Reference: [file management](https://www.ableton.com/en/live-manual/12/managing-files-and-sets/), [browser](https://www.ableton.com/en/live-manual/12/working-with-the-browser/), [transfer](https://help.ableton.com/hc/en-us/articles/209071909-Transferring-Projects-to-another-computer).
 
 Stage: **After preview approval**. All checks below are proposed, not performed.
 
@@ -241,26 +230,24 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 
 ## Halftrack's own extensible device environment
 
-Reference capability families: [Max for Live](https://www.ableton.com/en/live-manual/12/max-for-live/). Existing Max/AMXD compatibility is not the agreed target.
 
 Stage: **After preview approval**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
-| EXT-001 | Patch document and editor | Define nodes, typed ports, connections, subpatches, edit transactions, and documented file versions. | NOT IMPLEMENTED / UNVERIFIED |
-| EXT-002 | Audio DSP graph | Build a small instrument/effect in the environment; verify realtime execution, feedback policy, allocation boundaries, and sample-rate changes. | NOT IMPLEMENTED / UNVERIFIED |
-| EXT-003 | MIDI/event graph | Build a note transform and generator; verify scheduling, ordering, loop behavior, and panic. | NOT IMPLEMENTED / UNVERIFIED |
-| EXT-004 | Parameter/UI exposure | Expose controls with units/ranges/defaults; map, automate, modulate, undo, and save them. | NOT IMPLEMENTED / UNVERIFIED |
-| EXT-005 | Host object API | Specify stable access to tracks, clips, notes, devices, routing, transport, and observers with bounded updates. | NOT IMPLEMENTED / UNVERIFIED |
-| EXT-006 | Modulation semantics | Define absolute versus relative modulation, multiple sources, mapping conflicts, and automation interaction. | NOT IMPLEMENTED / UNVERIFIED |
-| EXT-007 | Patch state and dependencies | Package resources and subpatches; detect missing versions and preserve unresolved state. | NOT IMPLEMENTED / UNVERIFIED |
-| EXT-008 | Safe editing while playing | Test graph replacement and code errors without uncontrolled output or audio-thread stalls. | NOT IMPLEMENTED / UNVERIFIED |
-| EXT-009 | MIDI tools integration | Host original transforms/generators in the note editor with preview, apply, seed control, and undo. | NOT IMPLEMENTED / UNVERIFIED |
-| EXT-010 | Extension API compatibility | Publish a versioned API contract and migration policy before third-party developers depend on internals. | NOT IMPLEMENTED / UNVERIFIED |
+| EXT-001 | Patch document and editor | Define nodes, typed ports, connections, subpatches, edit transactions, and documented file versions. | OUT OF SCOPE |
+| EXT-002 | Audio DSP graph | Build a small instrument/effect in the environment; verify realtime execution, feedback policy, allocation boundaries, and sample-rate changes. | OUT OF SCOPE |
+| EXT-003 | MIDI/event graph | Build a note transform and generator; verify scheduling, ordering, loop behavior, and panic. | OUT OF SCOPE |
+| EXT-004 | Parameter/UI exposure | Expose controls with units/ranges/defaults; map, automate, modulate, undo, and save them. | OUT OF SCOPE |
+| EXT-005 | Host object API | Specify stable access to tracks, clips, notes, devices, routing, transport, and observers with bounded updates. | OUT OF SCOPE |
+| EXT-006 | Modulation semantics | Define absolute versus relative modulation, multiple sources, mapping conflicts, and automation interaction. | OUT OF SCOPE |
+| EXT-007 | Patch state and dependencies | Package resources and subpatches; detect missing versions and preserve unresolved state. | OUT OF SCOPE |
+| EXT-008 | Safe editing while playing | Test graph replacement and code errors without uncontrolled output or audio-thread stalls. | OUT OF SCOPE |
+| EXT-009 | MIDI tools integration | Host original transforms/generators in the note editor with preview, apply, seed control, and undo. | OUT OF SCOPE |
+| EXT-010 | Extension API compatibility | Publish a versioned API contract and migration policy before third-party developers depend on internals. | OUT OF SCOPE |
 
 ## Controllers, accessibility, and product shell
 
-Reference: [remote control](https://www.ableton.com/en/live-manual/12/midi-and-key-remote-control/), [Push 1](https://www.ableton.com/en/live-manual/12/using-push-1/), [Push 2](https://www.ableton.com/en/live-manual/12/using-push-2/), [accessibility](https://www.ableton.com/en/live-manual/12/accessibility-options-in-live/).
 
 Stage: **After preview approval**. All checks below are proposed, not performed.
 
@@ -272,7 +259,7 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 | UX-004 | Numeric precision controls | Test typed values, fine/coarse drag, reset, units, modifiers, and accessible equivalents. | NOT IMPLEMENTED / UNVERIFIED |
 | UX-005 | Themes and contrast | Provide Halftrack-owned visual assets and readable contrast; verify selection, clipping, disabled states, and scaling. | NOT IMPLEMENTED / UNVERIFIED |
 | UX-006 | Generic controller integration | Test MIDI learn, relative encoders, pickup, LED feedback, reconnect, and shared mappings. | NOT IMPLEMENTED / UNVERIFIED |
-| UX-007 | Push integration | Separate each generation and controller mode; verify documented communication and real hardware before making a support claim. | NOT IMPLEMENTED / UNVERIFIED |
+| UX-007 | Branded hardware integration | Separate each generation and controller mode; verify documented communication and real hardware before making a support claim. | OUT OF SCOPE |
 | UX-008 | Other control surfaces | Maintain a public supported-model matrix using approved test fixtures; do not copy bundled proprietary scripts by assumption. | NOT IMPLEMENTED / UNVERIFIED |
 | UX-009 | Help and discoverability | Provide original contextual help and explanations for implemented controls, especially disabled or unavailable actions. | NOT IMPLEMENTED / UNVERIFIED |
 | UX-010 | Settings and migration | Persist preference versions safely and test defaults, reset, corrupt settings, and cross-platform migration. | NOT IMPLEMENTED / UNVERIFIED |
@@ -280,7 +267,6 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 
 ## Reliability, performance, and shared-platform verification
 
-Proposed Halftrack engineering gates, informed by the [Audio Fact Sheet](https://www.ableton.com/en/live-manual/12/audio-fact-sheet/) and [MIDI Fact Sheet](https://www.ableton.com/en/live-manual/12/midi-fact-sheet/). They are not measured results.
 
 Stage: **After preview approval**. All checks below are proposed, not performed.
 
@@ -303,16 +289,15 @@ Stage: **After preview approval**. All checks below are proposed, not performed.
 
 ## Explicit exclusions and later-version watchlist
 
-Scope from the interview plus [release history](https://www.ableton.com/en/release-notes/live-12/). Status remains unimplemented/unverified; these rows explain why they are not current acceptance targets.
 
 Stage: **Excluded / version review**. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
-| OUT-001 | ALS import/export or round-trip | Out of agreed scope. Do not advertise Live Set compatibility or silently add a compatibility commitment. | NOT IMPLEMENTED / UNVERIFIED |
+| OUT-001 | ALS import/export or round-trip | Out of agreed scope. Do not advertise reference DAW Set compatibility or silently add a compatibility commitment. | NOT IMPLEMENTED / UNVERIFIED |
 | OUT-002 | Existing AMXD/Max runtime compatibility | Out of agreed scope. The target is an independent extensible environment with its own contract. | NOT IMPLEMENTED / UNVERIFIED |
 | OUT-003 | Bit-identical proprietary device DSP | Out of agreed scope. Define measured and listening-based closeness criteria for independent implementations. | NOT IMPLEMENTED / UNVERIFIED |
-| OUT-004 | Redistributed Ableton content | Out of scope. Use original or appropriately licensed distributable media and presets. | NOT IMPLEMENTED / UNVERIFIED |
+| OUT-004 | Redistributed proprietary content | Out of scope. Use original or appropriately licensed distributable media and presets. | NOT IMPLEMENTED / UNVERIFIED |
 | OUT-005 | 12.3 stem separation and Splice | Later-version features; exclude from the frozen 12.2.1 baseline unless the user later requests them. | NOT IMPLEMENTED / UNVERIFIED |
 | OUT-006 | 12.4 Link Audio and Learn View | Later-version features; ordinary Link synchronization remains a separate baseline item. | NOT IMPLEMENTED / UNVERIFIED |
 | OUT-007 | Later native-device revisions | Do not substitute current Auto Pan/Erosion/Delay/Chorus behavior for a 12.2.1 comparison without a recorded decision. | NOT IMPLEMENTED / UNVERIFIED |
@@ -322,7 +307,7 @@ Stage: **Excluded / version review**. All checks below are proposed, not perform
 
 The names below identify reference behaviors. They are not Halftrack product names, redistributed vendor content, or a promise to run vendor device binaries. The native list is anchored to the dated pre-12.2 manual and reconciled with the 12.2/12.2.1 release notes; current online descriptions must be checked for later revisions.
 
-Every device needs the BASE checks and its indicated test profile. Profiles are Halftrack test-design proposals; they do not claim to document every parameter in the corresponding Live device. Implementation of one general filter, sampler, or patcher does not complete the devices that can be built with it.
+Every device needs the BASE checks and its indicated test profile. Profiles are Halftrack test-design proposals; they do not claim to document every parameter in the corresponding reference DAW device. Implementation of one general filter, sampler, or patcher does not complete the devices that can be built with it.
 
 ### Shared device test profiles
 
@@ -364,7 +349,6 @@ Every device needs the BASE checks and its indicated test profile. Profiles are 
 
 ### Native audio effects
 
-Names cross-checked against the dated manual's device inventory; use the 12.2 overlay for revised Auto Filter. The current [audio-effect reference](https://www.ableton.com/en/live-manual/12/live-audio-effect-reference/) is a secondary navigation aid because its device revisions have moved beyond the baseline.
 
 Stage: **After preview approval**; Pack/legacy entries require version reconciliation first.
 
@@ -415,7 +399,6 @@ Stage: **After preview approval**; Pack/legacy entries require version reconcili
 
 ### Native MIDI effects
 
-Reference: [MIDI effects](https://www.ableton.com/en/live-manual/12/live-midi-effect-reference/), checked against the dated manual's inventory.
 
 Stage: **After preview approval**; Pack/legacy entries require version reconciliation first.
 
@@ -432,7 +415,6 @@ Stage: **After preview approval**; Pack/legacy entries require version reconcili
 
 ### Native instruments
 
-Reference: [instruments](https://www.ableton.com/en/live-manual/12/live-instrument-reference/), checked against the dated inventory. Apply the 12.2 revisions to Meld, Drift, and Drum Sampler. Device names below identify comparison targets and do not authorize copying presets or synthesis code.
 
 Stage: **After preview approval**; Pack/legacy entries require version reconciliation first.
 
@@ -454,7 +436,6 @@ Stage: **After preview approval**; Pack/legacy entries require version reconcili
 
 ### Rack infrastructure
 
-Reference: [racks](https://www.ableton.com/en/live-manual/12/instrument-drum-and-effect-racks/). These are hosting/routing structures, not four additional independent synthesis engines.
 
 Stage: **After preview approval**; Pack/legacy entries require version reconciliation first.
 
@@ -467,7 +448,6 @@ Stage: **After preview approval**; Pack/legacy entries require version reconcili
 
 ### Built-in Max-based reference devices
 
-Reference: [Max device reference](https://www.ableton.com/en/live-manual/12/max-for-live-devices/) and the dated manual's Max-device inventory. Halftrack will implement equivalent capabilities through its own environment; these rows do not promise existing patch compatibility.
 
 Stage: **After preview approval**; Pack/legacy entries require version reconciliation first.
 
@@ -498,7 +478,6 @@ Stage: **After preview approval**; Pack/legacy entries require version reconcili
 
 ### Additional content/Pack capability candidates
 
-Sources: [Granulator III](https://www.ableton.com/en/packs/granulator-iii/), [Expressive Chords](https://www.ableton.com/en/packs/expressive-chords/), [Convolution Reverb](https://www.ableton.com/en/packs/convolution-reverb/), [updated Live 12 Packs](https://help.ableton.com/hc/en-us/articles/12955161906076-Updated-Packs-in-Live-12), [Pack release history](https://www.ableton.com/en/release-notes/packs-release-notes/). This is a discovery queue, not a complete or version-pinned Suite entitlement manifest. Verify the appropriate pre/post-12.2 Pack revision before specifying its exact behavior.
 
 Stage: **After preview approval**; Pack/legacy entries require version reconciliation first.
 
