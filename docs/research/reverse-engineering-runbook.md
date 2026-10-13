@@ -61,6 +61,6 @@ Read `manifest.json`, not just the shell exit status: Ghidra can return process 
 
 ## Interpretation and implementation
 
-Pseudocode can have incorrect types, incomplete indirect-call targets, merged/tail-shared code and compiler artifacts. Keep byte addresses and hashes when refining a hypothesis. Corroborate important observations with an independent disassembly or controlled runtime/render experiment. Do not publish raw target code or treat it as original Halftrack source.
+Pseudocode can have incorrect types, incomplete indirect-call targets, merged/tail-shared code and compiler artifacts. Manifest body ranges and their hashes describe Ghidra's current function model, not a proven complete set of reachable instructions. In the retained no-analysis pass, indirect branch targets fell outside that model even though they appeared in the decompiler output; the whole-program hash remains the complete input identity. Keep byte addresses and hashes when refining a hypothesis. Corroborate important observations with an independent disassembly or controlled runtime/render experiment. Do not publish raw target code or treat it as original Halftrack source.
 
 Turn each useful finding into an independently written observable contract and generated test. Distinguish tool success, known-good Halftrack output, paired reference comparison and physical hardware validation. The [current results](reverse-engineering-results.md) record exactly what has been done; the [measurement report](behavioral-parity-measurement.md) describes the remaining comparison work.

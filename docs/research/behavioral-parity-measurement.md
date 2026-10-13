@@ -16,9 +16,9 @@ Keep three distinct acceptance levels:
 
 The reference's public audio fact sheet itself distinguishes transparent operations from transformations, documents controlled cancellation tests, and specifies a sinusoidal pan law with unity center and approximately +3 dB at the extremes. Its neutral-render assumptions exclude signal changes such as stretching, rate conversion, dither, and fades. Use these descriptions to define separate fixtures, not one universal null-test expectation. [Official version 12 audio fact sheet](https://www.ableton.com/en/live-manual/12/audio-fact-sheet/).
 
-## Concrete gaps in the current source
+## Gaps identified in the initial preview
 
-Reviewed source locations below refer to the checkout read on the research date; they are observations of source/tests, not freshly executed measurements.
+Reviewed source locations below refer to the initial preview before correction c805766; they are historical observations of source/tests. The pan-law mismatch and mute/solo undo gap have since been corrected and verified with 35 renders. Recording-take loss during MIDI discovery was also reproduced and fixed in 5f40131. See [the execution results](reverse-engineering-results.md) and [current progress](../progress.md) for measured outcomes; other gaps below remain open.
 
 | Area | Current evidence | What the evidence misses |
 | --- | --- | --- |
