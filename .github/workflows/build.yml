@@ -1,7 +1,19 @@
 name: Native parity builds
 on:
   push:
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CONTRIBUTING.md'
+      - 'CHANGELOG.md'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CONTRIBUTING.md'
+      - 'CHANGELOG.md'
 concurrency:
   group: native-${{ github.ref }}
   cancel-in-progress: true
