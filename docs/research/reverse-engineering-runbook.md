@@ -7,7 +7,7 @@ Use only a binary the owner has authorized for analysis. This workflow reads the
 From the repository root:
 
 ```sh
-python3 -m unittest discover -s tests -p 'test_macho_inventory.py' -v
+python3 -m unittest discover -s tests -p 'test_*.py' -v
 python3 scripts/inspect_macho.py /path/to/authorized/binary --output /path/to/new-local-inventory.json
 ```
 
@@ -58,6 +58,35 @@ GHIDRA_HEADLESS_MAXMEM=4G "$GHIDRA_HOME/support/analyzeHeadless" \
 Replace the address placeholder with one or more explicit hexadecimal entries. The original exporter uses address keys, preserves a per-entry outcome and never silently truncates a name-keyed graph. It disables broad automatic analysis, bounds preparation and decompilation separately to 30 seconds per entry, saves body ranges/hashes, and emits one `.c` only after a successful decompiler result.
 
 Read `manifest.json`, not just the shell exit status: Ghidra can return process success after a script failure. Check requested/completed/failed/pending counts, timeout and cancellation flags, error messages, nonempty output and matching program hash. An incomplete run may leave pending entries in its last atomic manifest. Repeat with a new output directory instead of overwriting earlier evidence. Long lists still multiply per-entry work; keep selections purposeful.
+
+## Resumable inventory sweep
+
+The inventory-wide runner is separate from the explicit-entry exporter. It holds an exclusive coordinator lock for the Ghidra project and a separate output lock. Do not run another modifying script against that project while a sweep owns it. The runner never imports or installs tools itself.
+
+```sh
+GHIDRA_HOME=/path/to/ghidra JAVA_HOME=/path/to/jdk GHIDRA_HEADLESS_MAXMEM=4G \
+  python3 scripts/bulk_decompile.py \
+  --inventory /path/to/local-inventory.json --architecture arm64 \
+  --binary /path/to/isolated-arm64.macho \
+  --project-dir /path/to/local/projects --project-name ResearchProject \
+  --program isolated-arm64.macho --output /path/to/new-local-sweep \
+  --batch-size 1024 --max-batches 384 --process-timeout 600
+```
+
+The manifest binds the binary hash, inventory hash, architecture, complete address count, project/program identity and exporter hash. The SQLite coverage index distinguishes completed, failed, timed out, interrupted and unattempted addresses. Every batch has a create-only request and per-address durable JSONL events; successful pseudocode files have content hashes. Complete malformed records, duplicate JSON keys and mismatched output hashes fail validation. A trailing partial record from interruption is retained as evidence.
+
+Repeat the same arguments to resume unfinished entries in new batch folders. Existing completed outputs are not overwritten. Explicit per-function failures/timeouts remain recorded rather than silently retried. A changed exporter requires a new output identity; preserve the earlier pass to compare recovery. An interrupted or failed process stops that invocation so its evidence can be reviewed before resuming. `--status` checks provenance and reports indexed counts without launching Ghidra, but also takes the project lock; use it between invocations, not concurrently with the sweep.
+
+Preparation accepts an existing decoded instruction and lets Ghidra reconcile a new declared entry with an overlapping provisional function. The result records the prior containing model where applicable. This improves preparation coverage but does not prove the resulting boundary is exact. Per-address preparation/decompilation budgets and the total batch timeout remain independent; bounded settings may leave difficult entries unresolved.
+
+The optional original-fixture integration suite exercises real interruption/resume, predecoded instructions and shared-tail overlap recovery:
+
+```sh
+GHIDRA_HOME=/path/to/ghidra JAVA_HOME=/path/to/jdk \
+  python3 -m unittest discover -s tests -p 'test_bulk_decompile.py' -v
+```
+
+Without Ghidra on macOS, the native integration fixture explicitly skips while all pure coverage/provenance tests still run on macOS, Windows and Linux. Generated fixture pseudocode and proprietary target output remain outside public source.
 
 ## Interpretation and implementation
 
