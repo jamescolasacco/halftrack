@@ -26,6 +26,8 @@ FetchContent_Declare(tracktion
     URL_HASH SHA256=d4f0af1514b55f147c13dd68c9ac0effc839a5270541653731e9ad3b23d9fd41
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(tracktion)
+include(cmake/PatchTracktion.cmake)
+halftrack_patch_tracktion("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"

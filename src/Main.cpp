@@ -7,6 +7,7 @@
 namespace halftrack
 {
 int runPersistenceTests (const juce::File&);
+int runRecordingTests (const juce::File&);
 #if HALFTRACK_TESTS_ENABLED
 int runRealtimeTests();
 #endif
@@ -25,6 +26,16 @@ public:
         auto args = juce::StringArray::fromTokens (commandLine, true);
         args.removeEmptyStrings();
         for (auto& arg : args) arg = arg.unquoted();
+        if (args.contains ("--self-test-recording"))
+        {
+            const int i = args.indexOf ("--self-test-recording");
+            const auto destination = i + 1 < args.size()
+                ? juce::File (args[i + 1])
+                : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-tests");
+            setApplicationReturnValue (runRecordingTests (destination));
+            quit();
+            return;
+        }
         if (args.contains ("--self-test"))
         {
             const int i = args.indexOf ("--self-test");

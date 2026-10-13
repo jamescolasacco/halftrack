@@ -1,4 +1,5 @@
 #include "Session.h"
+#include <tracktion_engine/tracktion_engine.h>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -37,7 +38,7 @@ public:
     juce::BigInteger getActiveInputChannels() const override { return inputs; }
     int getOutputLatencyInSamples() override { return 0; }
     int getInputLatencyInSamples() override { return 0; }
-    float pump (int blocks)
+    float pump (int blocks, int dispatchMilliseconds = 2)
     {
         float peak = 0;
         for (int block = 0; block < blocks; ++block)
@@ -51,7 +52,7 @@ public:
             out.clear();
             if (callback) callback->audioDeviceIOCallbackWithContext (in.getArrayOfReadPointers(), 2, out.getArrayOfWritePointers(), 2, 256, {});
             peak = juce::jmax (peak, out.getMagnitude (0, 256));
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (2);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (dispatchMilliseconds);
         }
         return peak;
     }
@@ -233,6 +234,74 @@ void panLawTests (const juce::File& root)
     success (session.loadProject (legacy), "reopen legacy mixer");
     compareMatrix (1.3, 0.7, "legacy save and reopen retains previous sound");
 }
+
+void recordingTests (const juce::File& root)
+{
+    Session recording (false, std::make_unique<SyntheticDeviceType>());
+    auto* device = dynamic_cast<SyntheticDevice*> (recording.audioDeviceManager().getCurrentAudioDevice());
+    require (device != nullptr, "recording uses only injected synthetic device");
+    tracktion::engine::DeviceManager* engineDevices = nullptr;
+    for (auto* engine : tracktion::engine::Engine::getEngines())
+        if (&engine->getDeviceManager().deviceManager == &recording.audioDeviceManager())
+            engineDevices = &engine->getDeviceManager();
+    require (engineDevices != nullptr, "find injected device's engine without a production test hook");
+    auto names = recording.inputNames();
+    require (! names.isEmpty(), "engine discovers synthetic input channels");
+    success (recording.saveProject (root.getChildFile ("Recording").getChildFile ("Take.halftrack")), "save recording destination");
+    success (recording.setTrackInput (0, names[0]), "assign synthetic input");
+    success (recording.setTrackArmed (0, true), "arm actual recording destination");
+    success (recording.setTrackMonitor (0, Session::MonitorMode::off), "monitor off");
+    require (device->pump (10) < 0.0001f, "monitor off suppresses live input");
+    success (recording.setTrackMonitor (0, Session::MonitorMode::on), "monitor on");
+    require (device->pump (20) > 0.05f, "monitor on routes synthetic input to output");
+    success (recording.setTrackMonitor (0, Session::MonitorMode::off), "record without monitoring");
+    recording.seek (0);
+    success (recording.record(), "start real recording through injected driver");
+    require (recording.snapshot().recording, "transport enters recording state");
+    // Cross the engine's four-second initial MIDI refresh deadline while
+    // feeding 51,200 audio frames before an explicit rescan. A device-list refresh must not
+    // discard a take just because the message thread runs more slowly.
+    device->pump (200, 30);
+    require (recording.snapshot().recording, "MIDI refresh preserves an active recording");
+    engineDevices->rescanMidiDeviceList();
+    device->pump (20);
+    require (recording.snapshot().recording, "explicit MIDI refresh also preserves the active take");
+    recording.stop();
+    const auto deadline = juce::Time::getMillisecondCounterHiRes() + 2000;
+    while (engineDevices->getNumMidiInDevices() == 0 && juce::Time::getMillisecondCounterHiRes() < deadline)
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+    require (engineDevices->getNumMidiInDevices() > 0, "deferred MIDI discovery resumes after recording stops");
+    auto captured = recording.snapshot();
+    require (! captured.recording && ! captured.tracks[0].clips.empty(), "stop recording creates an audio clip");
+    const auto recordedClip = captured.tracks[0].clips[0];
+    require (recordedClip.file.existsAsFile() && recordedClip.file.isAChildOf (root), "recorded WAV is inside project assets");
+    require (recordedClip.length > 0.8 && recordedClip.length < 1.3, "recording duration follows supplied callback frames");
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (recordedClip.file));
+    require (reader != nullptr && reader->sampleRate == 48000, "recorded media has driver sample rate");
+    juce::AudioBuffer<float> samples (static_cast<int> (reader->numChannels), static_cast<int> (reader->lengthInSamples));
+    require (reader->read (&samples, 0, samples.getNumSamples(), 0, true, true), "read recorded signal");
+    require (samples.getMagnitude (0, samples.getNumSamples()) > 0.15f, "recording contains generated signal");
+    success (recording.exportWav (root.getChildFile ("recorded-mix.wav")), "export captured audio through mix graph");
+    success (recording.saveProject (captured.projectFile), "save recorded clip and assets");
+}
+}
+
+int runRecordingTests (const juce::File& requestedDirectory)
+{
+    try
+    {
+        const auto root = requestedDirectory.getChildFile ("recording-" + juce::Uuid().toString());
+        success (root.createDirectory(), "create isolated recording artifacts");
+        recordingTests (root);
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "FAIL " << error.what() << std::endl;
+        return 1;
+    }
 }
 
 int runSessionTests (const juce::File& requestedDirectory)
@@ -401,41 +470,7 @@ int runSessionTests (const juce::File& requestedDirectory)
             require (session.snapshot().tracks[0].plugins.empty(), "plugin removal changes real graph");
         }
         else std::cout << "SKIP controlled VST3 test: HALFTRACK_TEST_PLUGIN is unset" << std::endl;
-        {
-            Session recording (false, std::make_unique<SyntheticDeviceType>());
-            auto* device = dynamic_cast<SyntheticDevice*> (recording.audioDeviceManager().getCurrentAudioDevice());
-            require (device != nullptr, "recording uses only injected synthetic device");
-            auto names = recording.inputNames();
-            require (! names.isEmpty(), "engine discovers synthetic input channels");
-            success (recording.saveProject (root.getChildFile ("Recording").getChildFile ("Take.halftrack")), "save recording destination");
-            success (recording.setTrackInput (0, names[0]), "assign synthetic input");
-            success (recording.setTrackArmed (0, true), "arm actual recording destination");
-            success (recording.setTrackMonitor (0, Session::MonitorMode::off), "monitor off");
-            require (device->pump (10) < 0.0001f, "monitor off suppresses live input");
-            success (recording.setTrackMonitor (0, Session::MonitorMode::on), "monitor on");
-            require (device->pump (20) > 0.05f, "monitor on routes synthetic input to output");
-            success (recording.setTrackMonitor (0, Session::MonitorMode::off), "record without monitoring");
-            recording.seek (0);
-            success (recording.record(), "start real recording through injected driver");
-            require (recording.snapshot().recording, "transport enters recording state");
-            device->pump (200);
-            recording.stop();
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
-            auto captured = recording.snapshot();
-            require (! captured.recording && ! captured.tracks[0].clips.empty(), "stop recording creates an audio clip");
-            const auto recordedClip = captured.tracks[0].clips[0];
-            require (recordedClip.file.existsAsFile() && recordedClip.file.isAChildOf (root), "recorded WAV is inside project assets");
-            require (recordedClip.length > 0.8 && recordedClip.length < 1.3, "recording duration follows supplied callback frames");
-            juce::AudioFormatManager formats;
-            formats.registerBasicFormats();
-            std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (recordedClip.file));
-            require (reader != nullptr && reader->sampleRate == 48000, "recorded media has driver sample rate");
-            juce::AudioBuffer<float> samples (static_cast<int> (reader->numChannels), static_cast<int> (reader->lengthInSamples));
-            require (reader->read (&samples, 0, samples.getNumSamples(), 0, true, true), "read recorded signal");
-            require (samples.getMagnitude (0, samples.getNumSamples()) > 0.15f, "recording contains generated signal");
-            success (recording.exportWav (root.getChildFile ("recorded-mix.wav")), "export captured audio through mix graph");
-            success (recording.saveProject (captured.projectFile), "save recorded clip and assets");
-        }
+        recordingTests (root);
         std::cout << "Halftrack acceptance tests passed. Artifacts: " << root.getFullPathName() << std::endl;
         return 0;
     }
