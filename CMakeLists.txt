@@ -1,0 +1,75 @@
+cmake_minimum_required(VERSION 3.24)
+project(Halftrack VERSION 0.1.0 LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version")
+endif()
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+include(FetchContent)
+# Fetch JUCE separately: the upstream engine submodule uses SSH URLs.
+# Full commit and archive hashes make clean builds independent of moving branches.
+FetchContent_Declare(juce
+    URL https://codeload.github.com/juce-framework/JUCE/tar.gz/37c894f83d379179b2070d437ccd0f1cd9af9576
+    URL_HASH SHA256=42524a87f3569273ab7286545816ad1f0cc95240504a7d4464ef1e32c50692aa
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(juce)
+set(TE_ADD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(tracktion
+    URL https://codeload.github.com/Tracktion/tracktion_engine/tar.gz/07e2d674884293f1a6c8f35fb8d1b9f469ffa41f
+    URL_HASH SHA256=d4f0af1514b55f147c13dd68c9ac0effc839a5270541653731e9ad3b23d9fd41
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(tracktion)
+
+juce_add_gui_app(Halftrack
+    PRODUCT_NAME "Halftrack"
+    COMPANY_NAME "Halftrack Contributors"
+    BUNDLE_ID "org.halftrack.studio"
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "Halftrack records audio from the input you choose when you arm a track and press Record."
+    NEEDS_CURL FALSE
+    NEEDS_WEB_BROWSER FALSE
+    PLUGINHOST_AU TRUE)
+
+juce_add_binary_data(HalftrackAssets SOURCES assets/halftrack-mark.svg)
+target_sources(Halftrack PRIVATE src/Main.cpp src/Session.cpp src/MainComponent.cpp tests/SessionTests.cpp)
+target_include_directories(Halftrack PRIVATE src)
+target_compile_definitions(Halftrack PRIVATE
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+    JUCE_PLUGINHOST_VST=0 JUCE_PLUGINHOST_VST3=1
+    JUCE_PLUGINHOST_AU=$<BOOL:${APPLE}>
+    JUCE_ASIO=$<BOOL:${WIN32}>
+    JUCE_MODAL_LOOPS_PERMITTED=1
+    JUCE_STRICT_REFCOUNTEDPOINTER=1
+    TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
+target_link_libraries(Halftrack PRIVATE
+    tracktion::tracktion_engine tracktion::tracktion_core tracktion::tracktion_graph
+    juce::juce_audio_utils juce::juce_recommended_config_flags
+    HalftrackAssets)
+if(APPLE)
+    target_compile_options(Halftrack PRIVATE -fno-aligned-allocation)
+endif()
+include(CTest)
+if(BUILD_TESTING)
+    juce_add_plugin(HalftrackTestGain
+        BUNDLE_ID "org.halftrack.testgain"
+        COMPANY_NAME "Halftrack Contributors"
+        PLUGIN_MANUFACTURER_CODE Htrk
+        PLUGIN_CODE Htgn
+        FORMATS VST3
+        PRODUCT_NAME "Halftrack Test Gain"
+        IS_SYNTH FALSE
+        NEEDS_MIDI_INPUT FALSE
+        NEEDS_MIDI_OUTPUT FALSE
+        COPY_PLUGIN_AFTER_BUILD FALSE)
+    target_sources(HalftrackTestGain PRIVATE tests/TestGainPlugin.cpp)
+    target_compile_definitions(HalftrackTestGain PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+    target_link_libraries(HalftrackTestGain PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
+    add_dependencies(Halftrack HalftrackTestGain_VST3)
+    add_test(NAME session-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test ${CMAKE_BINARY_DIR}/test-artifacts)
+    set_tests_properties(session-acceptance PROPERTIES TIMEOUT 180
+        ENVIRONMENT "HALFTRACK_TEST_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_VST3>/../..")
+endif()

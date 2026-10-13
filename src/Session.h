@@ -1,0 +1,91 @@
+#pragma once
+
+#include <juce_audio_utils/juce_audio_utils.h>
+#include <memory>
+#include <vector>
+
+namespace halftrack
+{
+// All public calls, including snapshots, belong on JUCE's message thread.
+// Positions and lengths are seconds; pan is -1 (left) through +1 (right).
+class Session final : public juce::ChangeBroadcaster
+{
+public:
+    enum class MonitorMode { off, automatic, on };
+    struct ClipInfo { juce::String id, name; double start = 0, length = 0, sourceOffset = 0; juce::File file; };
+    struct PluginInfo { juce::String id, name; bool enabled = true; };
+    struct TrackInfo
+    {
+        juce::String id, name;
+        juce::Colour colour;
+        float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
+        bool mute = false, solo = false, armed = false;
+        MonitorMode monitor = MonitorMode::off;
+        juce::String inputName;
+        std::vector<ClipInfo> clips;
+        std::vector<PluginInfo> plugins;
+    };
+    struct Snapshot
+    {
+        juce::String name;
+        juce::File projectFile;
+        bool dirty = false, playing = false, recording = false, looping = false;
+        double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
+        float masterPeakL = 0, masterPeakR = 0;
+        std::vector<TrackInfo> tracks;
+    };
+
+    explicit Session (bool enableAudioDevices = true, std::unique_ptr<juce::AudioIODeviceType> customDeviceType = {});
+    ~Session() override;
+    Snapshot snapshot() const;
+    juce::Result newProject();
+    juce::Result loadProject (const juce::File&);
+    juce::Result saveProject (const juce::File&); // Copies media into <name> Assets beside the .halftrack file.
+    juce::Result addAudioTrack (juce::String name = {});
+    juce::Result removeTrack (int trackIndex);
+    juce::Result importAudio (const juce::File&, int trackIndex = -1, double startSeconds = 0);
+    juce::Result moveClip (int trackIndex, int clipIndex, double startSeconds);
+    juce::Result removeClip (int trackIndex, int clipIndex);
+    juce::Result renameTrack (int trackIndex, const juce::String&);
+    juce::Result setTrackGain (int trackIndex, float decibels);
+    juce::Result setTrackPan (int trackIndex, float pan);
+    juce::Result setTrackMute (int trackIndex, bool);
+    juce::Result setTrackSolo (int trackIndex, bool);
+    juce::StringArray inputNames() const;
+    juce::Result setTrackInput (int trackIndex, const juce::String& inputName);
+    juce::Result setTrackArmed (int trackIndex, bool);
+    juce::Result setTrackMonitor (int trackIndex, MonitorMode);
+    juce::Result play();
+    void stop();
+    juce::Result record();
+    void seek (double seconds);
+    void setTempo (double bpm);
+    void setLoop (bool enabled, double startSeconds, double endSeconds);
+    void beginEditGesture (const juce::String& name);
+    void endEditGesture();
+    void undo();
+    void redo();
+    bool canUndo() const;
+    bool canRedo() const;
+    juce::Result exportWav (const juce::File&, double sampleRate = 48000, int bitDepth = 24, double tailSeconds = 0);
+    void cancelExport();
+
+    juce::AudioDeviceManager& audioDeviceManager();
+    juce::KnownPluginList& knownPlugins();
+    juce::AudioPluginFormatManager& pluginFormats();
+    juce::File pluginScanDeadMansFile() const;
+    juce::Result addPlugin (int trackIndex, const juce::PluginDescription&);
+    juce::Result setPluginEnabled (int trackIndex, int pluginIndex, bool);
+    juce::Result removePlugin (int trackIndex, int pluginIndex);
+    juce::Result setPluginParameter (int trackIndex, int pluginIndex, int parameterIndex, float normalisedValue);
+    juce::Result showPluginEditor (int trackIndex, int pluginIndex);
+    void closePluginEditors();
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Session)
+};
+
+int runSessionTests (const juce::File& artifactDirectory);
+}
