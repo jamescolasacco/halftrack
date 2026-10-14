@@ -158,9 +158,9 @@ Draw or select several notes and open **Note tools**. Try Quantize Starts, Quant
 
 ## Audio clip editing (about three minutes)
 
-1. Import a disposable audio file into Arrangement. Double-click its clip (or right-click and choose **Gain, fades and range...**). Change gain, fade durations and curves; the envelope should follow the fades. Undo a slider drag once.
+1. Import a disposable audio file into Arrangement. Double-click its clip (or right-click and choose **Gain, fades and range...**). Change gain, fade durations and curves; the envelope should follow the fades. Undo a slider drag once. Close the editor, select the clip and drag its two orange timeline handles; each drag should undo in one step.
 2. Set Length shorter than the source and Source offset inside it, then **Apply range**. Playback should use that source region. An overrun or fades longer than the new range must report an error without changing the clip.
-3. Place the playhead inside the clip, outside its fades. Right-click **Split at playhead**; the right half should become selected. **Duplicate after clip** should create a new adjacent copy. Undo each action once, then redo.
+3. Place the playhead inside the clip, outside its fades. Right-click **Split at playhead** (Cmd/Ctrl+E); the right half should become selected. **Duplicate after clip** (Cmd/Ctrl+D) should create a new adjacent copy. Undo each action once, then redo.
 4. Overlap two clips and give the first a fade out and the second a fade in. Export, save/reopen and verify settings and sound remain consistent.
 5. Import audio into a Session slot and use **Audio clip gain...**. Gain should affect launch playback immediately; manual fade/range controls are disabled there.
 

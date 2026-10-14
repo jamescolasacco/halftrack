@@ -403,6 +403,17 @@ public:
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
             if (code == 'I') { importDialog(); return true; }
             if (code == 'E' && shift) { exportDialog(); return true; }
+            if (! shift && ! showSession && ! showPiano && (code == 'E' || code == 'D'))
+            {
+                for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused != nullptr; focused = focused->getParentComponent())
+                    if (dynamic_cast<juce::TextEditor*> (focused)) return false;
+                if (const auto* track = currentTrack(); track && juce::isPositiveAndBelow (selectedClip, (int) track->clips.size())
+                    && track->clips[(size_t) selectedClip].isAudio)
+                {
+                    const auto id = track->clips[(size_t) selectedClip].id;
+                    audioClipCommand (code == 'E' ? 3 : 4, id); return true;
+                }
+            }
             if (code == ',') { showAudioSettings(); return true; }
         }
         if (code == juce::KeyPress::tabKey) { if (showSession) showArrangementView(); else showSessionView(); return true; }
@@ -648,6 +659,20 @@ private:
             return { (float) ((clip.start - owner.viewStart) * owner.pixelsPerSecond), (float) (track * trackHeight + 6),
                      (float) juce::jmax (3.0, clip.length * owner.pixelsPerSecond), (float) trackHeight - 12.0f };
         }
+        juce::Point<float> fadeHandle (const Session::ClipInfo& clip, int track, bool out) const
+        {
+            const auto b = clipBounds (clip, track);
+            const auto time = out ? clip.length - clip.audio.fadeOutSeconds : clip.audio.fadeInSeconds;
+            return { juce::jlimit (b.getX()+4, b.getRight()-4, b.getX()+(float) (time*owner.pixelsPerSecond)),
+                     b.getY()+(out ? 39.0f : 27.0f) };
+        }
+        int hitFade (const Session::ClipInfo& clip, int track, juce::Point<float> point) const
+        {
+            if (! clip.isAudio || ! clip.canEditAudioFades || clipBounds (clip, track).getWidth() < 20) return 0;
+            if (fadeHandle (clip, track, false).getDistanceFrom (point) <= 6) return 1;
+            if (fadeHandle (clip, track, true).getDistanceFrom (point) <= 6) return 2;
+            return 0;
+        }
         void paint (juce::Graphics& g) override
         {
             g.fillAll (panel);
@@ -719,6 +744,36 @@ private:
                         const auto endSeconds = juce::jmin (clip.length, startSeconds + visible.getWidth() / owner.pixelsPerSecond);
                         thumbnail->drawChannels (g, visible.toNearestInt(), clip.sourceOffset + startSeconds, clip.sourceOffset + endSeconds, 0.9f);
                     }
+                    if (selected && clip.isAudio && clip.canEditAudioFades && bounds.getWidth() >= 20)
+                    {
+                        const auto curve = [] (double x, Session::FadeCurve type)
+                        {
+                            const auto a = x*juce::MathConstants<double>::halfPi;
+                            if (type == Session::FadeCurve::convex) return std::sin (a);
+                            if (type == Session::FadeCurve::concave) return 1-std::cos (a);
+                            if (type == Session::FadeCurve::sCurve) return (1-x)*(1-std::cos (a))+x*std::sin (a);
+                            return x;
+                        };
+                        juce::Path envelope;
+                        for (int n=0; n<=128; ++n)
+                        {
+                            const auto time = clip.length*n/128; double level = 1;
+                            if (clip.audio.fadeInSeconds > 0 && time < clip.audio.fadeInSeconds)
+                                level *= curve (time/clip.audio.fadeInSeconds, clip.audio.fadeInCurve);
+                            if (clip.audio.fadeOutSeconds > 0 && time > clip.length-clip.audio.fadeOutSeconds)
+                                level *= curve ((clip.length-time)/clip.audio.fadeOutSeconds, clip.audio.fadeOutCurve);
+                            const auto x = bounds.getX()+bounds.getWidth()*n/128;
+                            const auto y = wave.getBottom()-(float) level*wave.getHeight();
+                            if (n == 0) envelope.startNewSubPath (x,y); else envelope.lineTo (x,y);
+                        }
+                        g.setColour (orange); g.strokePath (envelope, juce::PathStrokeType (1.5f));
+                        for (bool out : { false, true })
+                        {
+                            const auto handle = fadeHandle (clip,t,out);
+                            g.setColour (background); g.fillRect (handle.x-4,handle.y-4,8.0f,8.0f);
+                            g.setColour (orange); g.drawRect (handle.x-4,handle.y-4,8.0f,8.0f,1.5f);
+                        }
+                    }
                     g.setColour (selected ? orange : colour.darker (0.45f)); g.drawRect (bounds, selected ? 2.0f : 1.0f);
                 }
                 if (owner.state.recording && track.armed)
@@ -753,8 +808,10 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             if (e.x >= timelineWidth()) return;
-            grabKeyboardFocus();
+            grabKeyboardFocus(); fadeDrag = 0; fadeClipId.clear();
+            const auto previousTrack = owner.selectedTrack, previousClip = owner.selectedClip;
             auto track = e.y / trackHeight;
+            if (track < 0) return;
             owner.selectedClip = -1;
             owner.selectedLauncherClipId.clear();
             if (track < (int) owner.state.tracks.size())
@@ -770,6 +827,12 @@ private:
                         draggedTrack = track;
                         originalStart = clips[(size_t) c].start;
                         dragStartX = e.x;
+                        if (! e.mods.isPopupMenu())
+                        {
+                            fadeDrag = track == previousTrack && c == previousClip ? hitFade (clips[(size_t) c],track,e.position) : 0;
+                            fadeClipId = clips[(size_t) c].id;
+                            originalFade = fadeDrag == 2 ? clips[(size_t) c].audio.fadeOutSeconds : clips[(size_t) c].audio.fadeInSeconds;
+                        }
                         if (e.mods.isPopupMenu()) showClipMenu();
                         repaint();
                         return;
@@ -793,6 +856,21 @@ private:
         void mouseDrag (const juce::MouseEvent& e) override
         {
             if (draggedClip < 0 || e.mods.isPopupMenu() || ! e.mouseWasDraggedSinceMouseDown()) return;
+            if (fadeDrag != 0)
+            {
+                for (const auto& track : owner.state.tracks) for (const auto& clip : track.clips)
+                    if (clip.id == fadeClipId && clip.isAudio)
+                    {
+                        auto settings = clip.audio;
+                        const auto other = fadeDrag == 1 ? settings.fadeOutSeconds : settings.fadeInSeconds;
+                        const auto value = juce::jlimit (0.0, juce::jmax (0.0,clip.length-other),
+                            originalFade+(e.x-dragStartX)/owner.pixelsPerSecond*(fadeDrag == 1 ? 1 : -1));
+                        if (! clipGesture) { owner.session.beginEditGesture ("Adjust clip fade"); clipGesture = true; }
+                        if (fadeDrag == 1) settings.fadeInSeconds = value; else settings.fadeOutSeconds = value;
+                        owner.report (owner.session.setAudioClipSettings (fadeClipId,settings)); owner.refresh(); return;
+                    }
+                return;
+            }
             auto start = juce::jmax (0.0, originalStart + (e.x - dragStartX) / owner.pixelsPerSecond);
             if (! e.mods.isAltDown()) start = std::round (start / owner.gridSeconds()) * owner.gridSeconds();
             if (! clipGesture) { owner.session.beginEditGesture ("Move clip"); clipGesture = true; }
@@ -802,7 +880,19 @@ private:
         void mouseUp (const juce::MouseEvent&) override
         {
             if (clipGesture) { owner.session.endEditGesture(); clipGesture = false; }
-            draggedClip = -1;
+            draggedClip = -1; fadeDrag = 0; fadeClipId.clear();
+        }
+        void mouseMove (const juce::MouseEvent& e) override
+        {
+            const auto track = e.y/trackHeight; bool handle = false;
+            if (e.x < timelineWidth() && e.y >= 0 && juce::isPositiveAndBelow (track,(int) owner.state.tracks.size()))
+            {
+                const auto& clips = owner.state.tracks[(size_t) track].clips;
+                for (int c=(int)clips.size()-1; c>=0; --c)
+                    if (clipBounds (clips[(size_t)c],track).contains (e.position))
+                    { handle = track == owner.selectedTrack && c == owner.selectedClip && hitFade (clips[(size_t)c],track,e.position) != 0; break; }
+            }
+            setMouseCursor (handle ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
         }
         void mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
         {
@@ -822,7 +912,9 @@ private:
         std::vector<std::unique_ptr<TrackRow>> rows;
         std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbnails;
         int draggedClip = -1, draggedTrack = -1, dragStartX = 0;
-        double originalStart = 0;
+        double originalStart = 0, originalFade = 0;
+        int fadeDrag = 0;
+        juce::String fadeClipId;
         bool clipGesture = false;
         void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
         juce::AudioThumbnail* thumbnailFor (const juce::File& file)
@@ -3864,6 +3956,60 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(dialogs.size()==beforeDialogs+1 && dialogs.back()!=nullptr,"production audio editor opens a native dialog");
     session.newProject();session.dispatchPendingMessages();
     if(dialogs.back()!=nullptr)delete dialogs.back().getComponent();
+
+    check(session.importAudio(audioFixture,0).wasOk(),"import direct fade gesture fixture");
+    showArrangementView();pixelsPerSecond=4000;viewStart=0;selectedTrack=0;selectedClip=0;refresh();
+    const auto fadeEvent = [&] (juce::Point<float> at,juce::Point<float> down,bool dragged=false)
+    {
+        const auto now=juce::Time::getCurrentTime();
+        return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(),at,
+            juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier),1.0f,0,0,0,0,&canvas,&canvas,now,down,now,1,dragged);
+    };
+    auto fadePoint=canvas.fadeHandle(state.tracks[0].clips[0],0,false);
+    canvas.mouseDown(fadeEvent(fadePoint,fadePoint));
+    auto fadeTo=fadePoint+juce::Point<float>(100,0);canvas.mouseDrag(fadeEvent(fadeTo,fadePoint,true));
+    fadeTo=fadePoint+juce::Point<float>(140,0);canvas.mouseDrag(fadeEvent(fadeTo,fadePoint,true));canvas.mouseUp(fadeEvent(fadeTo,fadePoint,true));
+    check(std::abs(state.tracks[0].clips[0].audio.fadeInSeconds-.035)<1e-9&&state.tracks[0].clips[0].start==0,
+        "timeline fade-in drag changes duration without moving the clip");
+    session.undo();refresh();check(state.tracks[0].clips[0].audio.fadeInSeconds==0,"one undo restores a complete fade drag");session.redo();refresh();
+    fadePoint=canvas.fadeHandle(state.tracks[0].clips[0],0,true);
+    canvas.mouseDown(fadeEvent(fadePoint,fadePoint));fadeTo=fadePoint-juce::Point<float>(2000,0);
+    canvas.mouseDrag(fadeEvent(fadeTo,fadePoint,true));canvas.mouseUp(fadeEvent(fadeTo,fadePoint,true));
+    check(std::abs(state.tracks[0].clips[0].audio.fadeOutSeconds-.065)<1e-9,"fade-out handle clamps against the retained fade-in");
+    // Both handles remain separately selectable when the fades meet.
+    const auto inHandle=canvas.fadeHandle(state.tracks[0].clips[0],0,false),outHandle=canvas.fadeHandle(state.tracks[0].clips[0],0,true);
+    check(canvas.hitFade(state.tracks[0].clips[0],0,inHandle)==1&&canvas.hitFade(state.tracks[0].clips[0],0,outHandle)==2,
+        "meeting fade handles have distinct pointer targets");
+    session.undo();refresh();
+    fadePoint=canvas.fadeHandle(state.tracks[0].clips[0],0,false);
+    canvas.mouseDown(fadeEvent(fadePoint,fadePoint));fadeTo=fadePoint-juce::Point<float>(1000,0);
+    canvas.mouseDrag(fadeEvent(fadeTo,fadePoint,true));canvas.mouseUp(fadeEvent(fadeTo,fadePoint,true));
+    check(state.tracks[0].clips[0].audio.fadeInSeconds==0,"fade-in clamps to zero");session.undo();refresh();
+    if(const auto path=juce::SystemStats::getEnvironmentVariable("HALFTRACK_UI_SNAPSHOT",{});path.isNotEmpty())
+    {
+        const juce::File requested(path);const auto output=requested.getSiblingFile(requested.getFileNameWithoutExtension()+"-audio.png");
+        auto stream=output.createOutputStream();juce::PNGImageFormat png;
+        check(stream&&stream->setPosition(0)&&stream->truncate().wasOk()&&png.writeImageToStream(canvas.createComponentSnapshot(canvas.getLocalBounds()),*stream),
+            "render actual timeline fade controls");
+    }
+    fadePoint=canvas.fadeHandle(state.tracks[0].clips[0],0,false);canvas.mouseDown(fadeEvent(fadePoint,fadePoint));
+    check(session.removeClip(0,0).wasOk()&&session.importAudio(audioFixture,0).wasOk(),"replace clip during pending pointer drag");refresh();
+    fadeTo=fadePoint+juce::Point<float>(60,0);canvas.mouseDrag(fadeEvent(fadeTo,fadePoint,true));canvas.mouseUp(fadeEvent(fadeTo,fadePoint,true));
+    check(state.tracks[0].clips[0].audio.fadeInSeconds==0,"stale fade drag cannot edit the replacement at the same index");
+    selectedClip=0;session.seek(.05);refresh();
+    check(canvas.keyPressed(commandKey('E'))&&state.tracks[0].clips.size()==2,"Cmd/Ctrl+E splits selected arrangement audio");
+    check(canvas.keyPressed(commandKey('D'))&&state.tracks[0].clips.size()==3,"Cmd/Ctrl+D duplicates selected arrangement audio");
+    session.undo();session.undo();refresh();check(state.tracks[0].clips.size()==1,"keyboard split and duplicate undo separately");selectedClip=0;
+    {
+        juce::TextEditor editor;juce::DocumentWindow focusWindow("Halftrack audio shortcut test",panel,juce::DocumentWindow::closeButton);
+        focusWindow.setUsingNativeTitleBar(true);focusWindow.setContentNonOwned(&editor,false);focusWindow.centreWithSize(300,70);focusWindow.setVisible(true);
+        juce::Process::makeForegroundProcess();focusWindow.toFront(true);
+        for(int attempt=0;attempt<20&&!editor.hasKeyboardFocus(true);++attempt)
+        {editor.grabKeyboardFocus();juce::MessageManager::getInstance()->runDispatchLoopUntil(10);}
+        check(editor.hasKeyboardFocus(true)&&!canvas.keyPressed(commandKey('E'))&&!canvas.keyPressed(commandKey('D'))&&state.tracks[0].clips.size()==1,
+            "focused text entry does not trigger audio split or duplicate");
+        editor.giveAwayKeyboardFocus();focusWindow.clearContentComponent();
+    }
 }
 
 int MainComponent::runInteractionTests()

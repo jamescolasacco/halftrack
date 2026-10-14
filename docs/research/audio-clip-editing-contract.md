@@ -30,4 +30,10 @@ Production component-handler checks exercise grouped gain drag, full range submi
 
 ## Remaining boundaries
 
-Timeline edge/fade drag handles, linked/automatic crossfades, consolidation, audio clipboard/multiselection, Session edge-fade toggle, warp marker editing, native pitch/reverse controls and arbitrary tempo-map comparisons are unfinished. Current range controls do not alter warp or loop geometry. No paired reference render, subjective listening study or physical-interface latency measurement is claimed.
+Timeline range-edge drag handles, linked/automatic crossfades, consolidation, audio clipboard/multiselection, Session edge-fade toggle, warp marker editing, native pitch/reverse controls and arbitrary tempo-map comparisons are unfinished. Current range controls do not alter warp or loop geometry. No paired reference render, subjective listening study or physical-interface latency measurement is claimed.
+
+## Direct Arrangement gestures
+
+Selecting an audio clip exposes its actual fade envelope and two orange duration handles. Dragging them changes seconds without grid snapping, clamps at zero and against the other fade, and groups intermediate changes into one undo transaction. The handles use different vertical positions so meeting fades remain selectable. Narrow clips under 20 pixels retain the numeric editor. A drag resolves the original stable clip identity on every update; a replacement at the same track/index is never edited accidentally.
+
+Cmd/Ctrl+E splits selected Arrangement audio at the playhead; Cmd/Ctrl+D duplicates it. These commands preserve focused text editing and do not override Session/piano-roll contexts. Production pointer/keyboard tests cover both ends, clamping, undo/redo, meeting handles, disappearing source clips, new identities, and real text-editor focus. Native OS pointer delivery and listening remain separate checks.
