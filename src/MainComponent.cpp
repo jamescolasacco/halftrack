@@ -10,6 +10,7 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <unordered_set>
 #if HALFTRACK_TESTS_ENABLED
  #include <cstdlib>
  #include <iostream>
@@ -300,7 +301,7 @@ public:
         g.drawHorizontalLine (getHeight() - statusHeight, 0.0f, (float) getWidth());
         g.setColour (muted);
         g.setFont (font (10.5f));
-        auto message = status.isNotEmpty() ? status : showPiano ? "Click: draw / select     Drag: move     Drag right edge: resize     Delete: remove     Arrows: move note     Alt: unsnapped" : "Space: play / pause     Click ruler: seek     Shift-drag ruler: loop     Double-click MIDI clip: edit notes";
+        auto message = status.isNotEmpty() ? status : showPiano ? "Click: draw / select    Shift-click / drag: select    Drag: move / resize edge    Arrows: move    Delete: remove    Esc: deselect" : "Space: play / pause     Click ruler: seek     Shift-drag ruler: loop     Double-click MIDI clip: edit notes";
         if (status.isEmpty() && showSession && ! showPiano) message = "Click triangle: launch     Double-click MIDI slot: edit     Enter: launch slot     Shift+Enter: launch scene     Tab: switch view";
         g.drawText (message, 13, getHeight() - statusHeight, getWidth() - 280, statusHeight, juce::Justification::centredLeft, true);
         auto* device = session.audioDeviceManager().getCurrentAudioDevice();
@@ -1201,17 +1202,17 @@ private:
             velocity.textFromValueFunction = [] (double value) { return juce::String ((int) std::round (value * 100.0)) + "%"; };
             velocity.valueFromTextFunction = [] (const juce::String& text) { return text.getDoubleValue() / 100.0; };
             velocity.updateText();
-            velocity.setTooltip ("Velocity of the selected note, or of the next note you draw");
-            velocity.onDragStart = [this] { owner.session.beginEditGesture ("Note velocity"); };
-            velocity.onDragEnd = [this] { owner.session.endEditGesture(); };
+            velocity.setTooltip ("Set velocity for all selected notes, or for the next note you draw");
+            velocity.onDragStart = [this] { endGesture(); owner.session.beginEditGesture ("Note velocity"); gesture = true; };
+            velocity.onDragEnd = [this] { endGesture(); };
             velocity.onValueChange = [this]
             {
                 drawVelocity = (float) velocity.getValue();
-                const auto* clip = owner.currentMidiClip(); const auto* note = selectedNote();
-                if (clip != nullptr && note != nullptr)
+                if (const auto* clip = owner.currentMidiClip())
                 {
-                    owner.report (owner.session.updateMidiNote (clip->id, note->id, note->pitch, note->startBeat, note->lengthBeats, drawVelocity));
-                    owner.refresh();
+                    auto notes = selectedNotes();
+                    for (auto& note : notes) note.velocity = drawVelocity;
+                    updateNotes (clip->id, notes, "Note velocity");
                 }
             };
             horizontal.addListener (this); vertical.addListener (this);
@@ -1226,7 +1227,7 @@ private:
             auto id = clip == nullptr ? juce::String() : clip->id;
             if (id != loadedClip)
             {
-                endGesture(); loadedClip = id; selectedNoteId.clear(); viewBeat = 0;
+                endGesture(); loadedClip = id; clearSelection(); originalNotes.clear(); marquee = false; viewBeat = 0;
                 if (clip != nullptr && ! clip->notes.empty())
                 {
                     int high = 60; for (const auto& note : clip->notes) high = juce::jmax (high, note.pitch);
@@ -1235,8 +1236,21 @@ private:
                 else topPitch = 77;
                 fit();
             }
+            std::unordered_set<juce::String> liveIds;
+            if (clip != nullptr)
+            {
+                liveIds.reserve (clip->notes.size());
+                for (const auto& note : clip->notes) liveIds.insert (note.id);
+            }
+            std::erase_if (selectedNoteIds, [&] (const auto& noteId) { return ! liveIds.contains (noteId); });
+            std::erase_if (originalNotes, [&] (const auto& note) { return ! selectedNoteIds.contains (note.id); });
+            if (! selectedNoteIds.contains (selectedNoteId))
+            {
+                selectedNoteId.clear();
+                if (clip != nullptr) for (const auto& note : clip->notes)
+                    if (selectedNoteIds.contains (note.id)) { selectedNoteId = note.id; break; }
+            }
             if (const auto* note = selectedNote()) { drawVelocity = note->velocity; velocity.setValue (note->velocity, juce::dontSendNotification); }
-            else selectedNoteId.clear();
             const bool active = clip != nullptr;
             snap.setEnabled (active); noteLength.setEnabled (active); velocity.setEnabled (active);
             updateScroll(); repaint();
@@ -1271,6 +1285,8 @@ private:
             g.drawText ("Snap", 244, 0, 32, headerHeight, juce::Justification::centredLeft);
             g.drawText ("Length", 352, 0, 45, headerHeight, juce::Justification::centredLeft);
             g.drawText ("Velocity", 488, 0, 52, headerHeight, juce::Justification::centredLeft);
+            if (! selectedNoteIds.empty())
+                g.drawText (juce::String ((int) selectedNoteIds.size()) + " selected", 700, 0, juce::jmax (0, getWidth() - 714), headerHeight, juce::Justification::centredRight);
             if (clip == nullptr)
             {
                 g.setColour (muted); g.setFont (font (14.0f));
@@ -1313,7 +1329,7 @@ private:
             for (const auto& note : clip->notes)
             {
                 auto r = noteBounds (note);
-                const bool selected = note.id == selectedNoteId;
+                const bool selected = selectedNoteIds.contains (note.id);
                 g.setColour ((selected ? orange : juce::Colour (0xff8cc4b5)).withAlpha (0.48f + note.velocity * 0.52f)); g.fillRect (r);
                 g.setColour (selected ? ink : juce::Colour (0xff203d36)); g.drawRect (r, 1.0f);
                 if (r.getWidth() > 22)
@@ -1322,6 +1338,11 @@ private:
                     g.drawText (pitchName (note.pitch), r.reduced (4, 0), juce::Justification::centredLeft, true);
                 }
                 if (selected) { g.setColour (ink); g.fillRect (r.getRight() - 4, r.getY() + 3, 2.0f, r.getHeight() - 6); }
+            }
+            if (marquee)
+            {
+                g.setColour (orange.withAlpha (0.13f)); g.fillRect (marqueeBounds);
+                g.setColour (orange); g.drawRect (marqueeBounds, 1.0f);
             }
             const auto* launched = owner.editedLauncherSlot();
             const auto beatPosition = launched != nullptr ? launched->playPositionBeats : (owner.state.position - clip->start) * owner.state.tempo / 60.0;
@@ -1347,17 +1368,34 @@ private:
             }
             if (! gridBounds().contains (e.getPosition())) return;
             grabKeyboardFocus();
-            endGesture();
+            endGesture(); originalNotes.clear(); drawing = false; marquee = false;
             for (auto it = clip->notes.rbegin(); it != clip->notes.rend(); ++it)
                 if (noteBounds (*it).contains (e.position))
                 {
-                    selectedNoteId = it->id; original = *it; dragOrigin = e.position; dragClipId = clip->id;
-                    resizeNote = e.x >= noteBounds (*it).getRight() - 8;
-                    drawing = false;
+                    const auto note = *it;
+                    if (e.mods.isShiftDown() && ! e.mods.isPopupMenu())
+                    {
+                        if (selectedNoteIds.contains (note.id))
+                        {
+                            selectedNoteIds.erase (note.id); sync(); return;
+                        }
+                        selectedNoteIds.insert (note.id);
+                    }
+                    else if (! selectedNoteIds.contains (note.id)) selectOnly (note.id);
+                    selectedNoteId = note.id; original = note; originalNotes = selectedNotes();
+                    dragOrigin = e.position; dragClipId = clip->id;
+                    resizeNote = e.x >= noteBounds (note).getRight() - 8;
                     if (e.mods.isPopupMenu()) { showNoteMenu(); return; }
                     sync(); return;
                 }
-            selectedNoteId.clear();
+            if (e.mods.isShiftDown() && ! e.mods.isPopupMenu())
+            {
+                // Keep direct drawing on ordinary clicks. Shift-drag adds a box
+                // selection; a Shift-click on empty space clears the selection.
+                marquee = true; marqueeBase = selectedNoteIds; dragOrigin = e.position;
+                dragClipId = clip->id; marqueeBounds = {}; repaint(); return;
+            }
+            clearSelection();
             if (e.mods.isPopupMenu()) { repaint(); return; }
             const auto start = std::floor (beatAt (e.x) / snapBeats()) * snapBeats();
             if (start < 0 || start >= clip->lengthBeats) return;
@@ -1371,32 +1409,59 @@ private:
             if (result.failed()) { endGesture(); return; }
             if (const auto* updated = owner.currentMidiClip())
                 for (const auto& note : updated->notes)
-                    if (std::none_of (oldNotes.begin(), oldNotes.end(), [&] (const auto& old) { return old.id == note.id; })) { selectedNoteId = note.id; original = note; break; }
+                    if (std::none_of (oldNotes.begin(), oldNotes.end(), [&] (const auto& old) { return old.id == note.id; })) { selectOnly (note.id); original = note; originalNotes = { note }; break; }
             dragClipId = clipId; dragOrigin = e.position; resizeNote = true; drawing = true; sync();
         }
         void mouseDrag (const juce::MouseEvent& e) override
         {
             const auto* clip = owner.currentMidiClip();
-            if (clip == nullptr || selectedNoteId.isEmpty() || e.mods.isPopupMenu() || ! e.mouseWasDraggedSinceMouseDown()) return;
-            if (! gesture) { owner.session.beginEditGesture (resizeNote ? "Resize MIDI note" : "Move MIDI note"); gesture = true; }
-            auto start = original.startBeat, length = original.lengthBeats;
-            auto pitch = original.pitch;
+            if (clip == nullptr || clip->id != dragClipId || e.mods.isPopupMenu() || ! e.mouseWasDraggedSinceMouseDown()) return;
+            if (marquee)
+            {
+                marqueeBounds = juce::Rectangle<float>::leftTopRightBottom (juce::jmin (dragOrigin.x, e.position.x), juce::jmin (dragOrigin.y, e.position.y),
+                                                                           juce::jmax (dragOrigin.x, e.position.x), juce::jmax (dragOrigin.y, e.position.y)).getIntersection (gridBounds().toFloat());
+                selectedNoteIds = marqueeBase;
+                for (const auto& note : clip->notes) if (marqueeBounds.intersects (noteBounds (note))) selectedNoteIds.insert (note.id);
+                sync(); return;
+            }
+            if (originalNotes.empty() || selectedNoteIds.empty()) return;
+            if (! gesture) { owner.session.beginEditGesture (resizeNote ? "Resize MIDI notes" : "Move MIDI notes"); gesture = true; }
+            double beatDelta = (e.x - dragOrigin.x) / pixelsPerBeat;
             if (resizeNote)
             {
-                length = drawing ? beatAt (e.x) - original.startBeat : original.lengthBeats + (e.x - dragOrigin.x) / pixelsPerBeat;
+                auto length = drawing ? beatAt (e.x) - original.startBeat : original.lengthBeats + beatDelta;
                 if (! e.mods.isAltDown()) length = std::round (length / snapBeats()) * snapBeats();
-                length = juce::jlimit (0.03125, juce::jmax (0.03125, clip->lengthBeats - start), length);
+                // Preserve valid model notes shorter than the mouse resize floor.
+                // Every selected note must admit the same length delta.
+                double minimum = juce::jmin (0.03125, originalNotes.front().lengthBeats) - originalNotes.front().lengthBeats;
+                double maximum = clip->lengthBeats - originalNotes.front().startBeat - originalNotes.front().lengthBeats;
+                for (const auto& note : originalNotes)
+                {
+                    minimum = juce::jmax (minimum, juce::jmin (0.03125, note.lengthBeats) - note.lengthBeats);
+                    maximum = juce::jmin (maximum, clip->lengthBeats - note.startBeat - note.lengthBeats);
+                }
+                if (minimum > maximum || ! std::isfinite (minimum) || ! std::isfinite (maximum)) return;
+                const auto lengthDelta = juce::jlimit (minimum, maximum, length - original.lengthBeats);
+                auto notes = originalNotes;
+                for (auto& note : notes) note.lengthBeats += lengthDelta;
+                updateNotes (dragClipId, notes, "Resize MIDI notes");
             }
             else
             {
-                start += (e.x - dragOrigin.x) / pixelsPerBeat;
-                if (! e.mods.isAltDown()) start = std::round (start / snapBeats()) * snapBeats();
-                start = juce::jlimit (0.0, juce::jmax (0.0, clip->lengthBeats - length), start);
-                pitch = juce::jlimit (0, 127, original.pitch - (int) std::round ((e.y - dragOrigin.y) / rowHeight));
+                if (! e.mods.isAltDown()) beatDelta = std::round ((original.startBeat + beatDelta) / snapBeats()) * snapBeats() - original.startBeat;
+                const auto pitchDelta = -(int) std::round ((e.y - dragOrigin.y) / rowHeight);
+                moveNotes (dragClipId, originalNotes, beatDelta, pitchDelta);
             }
-            owner.report (owner.session.updateMidiNote (dragClipId, selectedNoteId, pitch, start, length, original.velocity)); owner.refresh();
         }
-        void mouseUp (const juce::MouseEvent&) override { endGesture(); drawing = false; }
+        void mouseUp (const juce::MouseEvent& e) override
+        {
+            endGesture(); drawing = false; originalNotes.clear();
+            if (marquee)
+            {
+                if (! e.mouseWasDraggedSinceMouseDown()) clearSelection();
+                marquee = false; sync();
+            }
+        }
         void mouseMove (const juce::MouseEvent& e) override
         {
             const auto* clip = owner.currentMidiClip();
@@ -1413,16 +1478,24 @@ private:
         }
         bool keyPressed (const juce::KeyPress& key) override
         {
-            const auto* clip = owner.currentMidiClip(); const auto* note = selectedNote();
+            endGesture(); originalNotes.clear(); drawing = false; marquee = false;
+            const auto* clip = owner.currentMidiClip();
             const auto code = key.getKeyCode();
-            if (clip != nullptr && note != nullptr && (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey || code == juce::KeyPress::upKey || code == juce::KeyPress::downKey))
+            if (code == juce::KeyPress::escapeKey) { clearSelection(); repaint(); return true; }
+            if (clip != nullptr && key.getModifiers().isCommandDown() && (code == 'A' || code == 'a'))
             {
-                auto pitch = note->pitch; auto start = note->startBeat;
-                if (code == juce::KeyPress::leftKey) start -= snapBeats();
-                if (code == juce::KeyPress::rightKey) start += snapBeats();
-                if (code == juce::KeyPress::upKey) pitch += key.getModifiers().isShiftDown() ? 12 : 1;
-                if (code == juce::KeyPress::downKey) pitch -= key.getModifiers().isShiftDown() ? 12 : 1;
-                owner.report (owner.session.updateMidiNote (clip->id, note->id, juce::jlimit (0, 127, pitch), juce::jlimit (0.0, juce::jmax (0.0, clip->lengthBeats - note->lengthBeats), start), note->lengthBeats, note->velocity)); owner.refresh(); return true;
+                for (const auto& note : clip->notes) selectedNoteIds.insert (note.id);
+                sync(); return true;
+            }
+            if (clip != nullptr && hasSelectedNote() && ! key.getModifiers().isCommandDown()
+                && (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey || code == juce::KeyPress::upKey || code == juce::KeyPress::downKey))
+            {
+                double beatDelta = 0; int pitchDelta = 0;
+                if (code == juce::KeyPress::leftKey) beatDelta = -snapBeats();
+                if (code == juce::KeyPress::rightKey) beatDelta = snapBeats();
+                if (code == juce::KeyPress::upKey) pitchDelta = key.getModifiers().isShiftDown() ? 12 : 1;
+                if (code == juce::KeyPress::downKey) pitchDelta = key.getModifiers().isShiftDown() ? -12 : -1;
+                moveNotes (clip->id, selectedNotes(), beatDelta, pitchDelta); return true;
             }
             return owner.handleKey (key);
         }
@@ -1430,8 +1503,13 @@ private:
         void deleteSelectedNote()
         {
             const auto* clip = owner.currentMidiClip();
-            if (clip == nullptr || selectedNoteId.isEmpty()) return;
-            endGesture(); owner.report (owner.session.removeMidiNote (clip->id, selectedNoteId)); selectedNoteId.clear(); owner.refresh();
+            if (clip == nullptr) return;
+            const auto clipId = clip->id;
+            const auto notes = selectedNotes();
+            if (notes.empty()) return;
+            endGesture(); owner.session.beginEditGesture ("Delete MIDI notes");
+            for (const auto& note : notes) owner.report (owner.session.removeMidiNote (clipId, note.id));
+            owner.session.endEditGesture(); clearSelection(); owner.refresh();
         }
     private:
         Impl& owner;
@@ -1441,11 +1519,14 @@ private:
         juce::ScrollBar horizontal { false }, vertical { true };
         juce::String loadedClip, selectedNoteId, dragClipId;
         Session::MidiNoteInfo original;
+        std::unordered_set<juce::String> selectedNoteIds, marqueeBase;
+        std::vector<Session::MidiNoteInfo> originalNotes;
         juce::Point<float> dragOrigin;
+        juce::Rectangle<float> marqueeBounds;
         double viewBeat = 0, pixelsPerBeat = 60;
         int topPitch = 77;
         float drawVelocity = 0.8f;
-        bool gesture = false, resizeNote = false, drawing = false;
+        bool gesture = false, resizeNote = false, drawing = false, marquee = false;
         double snapBeats() const { return std::pow (0.5, juce::jmax (0, snap.getSelectedId() - 1)); }
         double defaultLength() const { return std::pow (2.0, noteLength.getSelectedId() - 3); }
         double beatAt (float x) const { return viewBeat + (x - keysWidth) / pixelsPerBeat; }
@@ -1463,6 +1544,49 @@ private:
         {
             if (const auto* clip = owner.currentMidiClip()) for (const auto& note : clip->notes) if (note.id == selectedNoteId) return &note;
             return nullptr;
+        }
+        void clearSelection() { selectedNoteIds.clear(); selectedNoteId.clear(); }
+        void selectOnly (const juce::String& id) { clearSelection(); selectedNoteIds.insert (id); selectedNoteId = id; }
+        std::vector<Session::MidiNoteInfo> selectedNotes() const
+        {
+            std::vector<Session::MidiNoteInfo> notes;
+            if (const auto* clip = owner.currentMidiClip())
+                for (const auto& note : clip->notes) if (selectedNoteIds.contains (note.id)) notes.push_back (note);
+            return notes;
+        }
+        void updateNotes (juce::String clipId, const std::vector<Session::MidiNoteInfo>& notes, const juce::String& name)
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr || clip->id != clipId || notes.empty()) return;
+            // Snapshot values and stable IDs survive the model changes below.
+            // Refresh once after the batch, and leave drag-owned transactions open.
+            const bool ownGesture = ! gesture;
+            if (ownGesture) owner.session.beginEditGesture (name);
+            owner.report (owner.session.updateMidiNotes (clipId, notes));
+            if (ownGesture) owner.session.endEditGesture();
+            owner.refresh();
+        }
+        void moveNotes (juce::String clipId, std::vector<Session::MidiNoteInfo> notes, double beatDelta, int pitchDelta)
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr || clip->id != clipId || notes.empty()) return;
+            double minimumBeatDelta = -notes.front().startBeat;
+            double maximumBeatDelta = clip->lengthBeats - notes.front().startBeat - notes.front().lengthBeats;
+            int minimumPitchDelta = -notes.front().pitch, maximumPitchDelta = 127 - notes.front().pitch;
+            for (const auto& note : notes)
+            {
+                minimumBeatDelta = juce::jmax (minimumBeatDelta, -note.startBeat);
+                maximumBeatDelta = juce::jmin (maximumBeatDelta, clip->lengthBeats - note.startBeat - note.lengthBeats);
+                minimumPitchDelta = juce::jmax (minimumPitchDelta, -note.pitch);
+                maximumPitchDelta = juce::jmin (maximumPitchDelta, 127 - note.pitch);
+            }
+            // Loaded clips may retain offscreen notes. An impossible interval
+            // must not turn a group edit into per-note clamping or partial repair.
+            if (minimumBeatDelta > maximumBeatDelta || ! std::isfinite (minimumBeatDelta) || ! std::isfinite (maximumBeatDelta)) return;
+            beatDelta = juce::jlimit (minimumBeatDelta, maximumBeatDelta, beatDelta);
+            pitchDelta = juce::jlimit (minimumPitchDelta, maximumPitchDelta, pitchDelta);
+            for (auto& note : notes) { note.startBeat += beatDelta; note.pitch += pitchDelta; }
+            updateNotes (clipId, notes, "Move MIDI notes");
         }
         void endGesture() { if (gesture) { owner.session.endEditGesture(); gesture = false; } }
         void updateScroll()
@@ -1483,9 +1607,13 @@ private:
         }
         void showNoteMenu()
         {
-            juce::PopupMenu popup; popup.addItem (1, "Delete Note");
+            juce::PopupMenu popup; popup.addItem (1, "Delete Selected Notes");
             auto safe = juce::Component::SafePointer<PianoRoll> (this);
-            popup.showMenuAsync (juce::PopupMenu::Options(), [safe] (int result) { if (safe != nullptr && result == 1) safe->deleteSelectedNote(); });
+            const auto clipId = loadedClip; const auto ids = selectedNoteIds;
+            popup.showMenuAsync (juce::PopupMenu::Options(), [safe, clipId, ids] (int result)
+            {
+                if (safe != nullptr && result == 1 && safe->loadedClip == clipId && safe->selectedNoteIds == ids) safe->deleteSelectedNote();
+            });
         }
     };
 
@@ -2158,7 +2286,7 @@ private:
         else if (index == 1)
         {
             popup.addItem (20, "Undo", session.canUndo()); popup.addItem (21, "Redo", session.canRedo()); popup.addSeparator();
-            popup.addItem (22, showPiano ? "Delete Selected Note" : showSession ? "Clear Selected Slot" : "Delete Selected Clip", showPiano ? pianoRoll.hasSelectedNote() : showSession ? selectedSlot() != nullptr && selectedSlot()->hasClip : selectedClip >= 0);
+            popup.addItem (22, showPiano ? "Delete Selected Notes" : showSession ? "Clear Selected Slot" : "Delete Selected Clip", showPiano ? pianoRoll.hasSelectedNote() : showSession ? selectedSlot() != nullptr && selectedSlot()->hasClip : selectedClip >= 0);
         }
         else if (index == 2)
         {
@@ -2629,7 +2757,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         std::cout << "PASS UI " << message << std::endl;
     };
     // Drive the same entry points used by the native menu and mouse dispatch.
-    // No direct note or synth facade mutations are used by this regression.
+    // User-facing note/synth edits use production handlers. The bounded fixture
+    // at the end also establishes a facade-valid length below the mouse minimum.
     menuItemSelected (33, 2);
     check (currentMidiClip() != nullptr && currentMidiClip()->lengthBeats == 16.0 && showPiano,
            "MIDI track action creates and opens a four-bar editor");
@@ -3027,6 +3156,291 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             }
         }
     }
+    // Multi-note regression: all edits enter through the production piano mouse,
+    // key, menu and slider callbacks. Fixture notes are drawn by the mouse handler.
+    menuItemSelected (43, 3); menuItemSelected (33, 2); pianoRoll.fit();
+    const auto groupClipId = currentMidiClip()->id;
+    const auto groupTrack = selectedTrack;
+    const auto groupBeatWidth = (pianoRoll.getWidth() - 66.0) / 16.0;
+    auto groupPoint = [&] (double beat, int pitch)
+    {
+        return juce::Point<float> ((float) (55 + beat * groupBeatWidth), (float) (60 + (77 - pitch) * 15 + 7));
+    };
+    auto groupEvent = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged, int modifiers)
+    {
+        const auto now = juce::Time::getCurrentTime();
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at,
+                                juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers), 1.0f, 0, 0, 0, 0,
+                                &pianoRoll, &pianoRoll, now, down, now, 1, dragged);
+    };
+    auto groupClick = [&] (juce::Point<float> at, int modifiers = 0)
+    {
+        check (getComponentAt (getLocalPoint (&pianoRoll, at.toInt())) == &pianoRoll, "multi-note pointer target is the live piano editor");
+        pianoRoll.mouseDown (groupEvent (at, at, false, modifiers)); pianoRoll.mouseUp (groupEvent (at, at, false, modifiers));
+    };
+    auto groupDrag = [&] (juce::Point<float> from, juce::Point<float> to, int modifiers = 0)
+    {
+        pianoRoll.mouseDown (groupEvent (from, from, false, modifiers));
+        pianoRoll.mouseDrag (groupEvent ((from + to) * 0.5f, from, true, modifiers));
+        pianoRoll.mouseDrag (groupEvent (to, from, true, modifiers));
+        pianoRoll.mouseUp (groupEvent (to, from, true, modifiers));
+    };
+    auto noteById = [&] (const juce::String& id)
+    {
+        const auto* clip = currentMidiClip();
+        if (clip != nullptr) for (const auto& note : clip->notes) if (note.id == id) return note;
+        throw std::runtime_error ("Expected fixture note is missing");
+    };
+    const auto shiftModifier = juce::ModifierKeys::shiftModifier;
+    const auto allNotes = juce::KeyPress ('A', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0);
+    const auto escape = juce::KeyPress (juce::KeyPress::escapeKey);
+    const auto deleteNotes = juce::KeyPress (juce::KeyPress::deleteKey);
+    groupClick (groupPoint (1.1, 60)); const auto aId = currentMidiClip()->notes.back().id;
+    groupClick (groupPoint (4.1, 64)); const auto bId = currentMidiClip()->notes.back().id;
+    groupClick (groupPoint (8.1, 67)); const auto cId = currentMidiClip()->notes.back().id;
+    groupClick (groupPoint (1.1, 60), shiftModifier); // C + A
+    groupClick (groupPoint (8.1, 67), shiftModifier); // A (toggle C off)
+    groupClick (groupPoint (4.1, 64), shiftModifier); // A + B
+    pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+    check (noteById (aId).startBeat == 1.25 && noteById (bId).startBeat == 4.25 && noteById (cId).startBeat == 8,
+           "Shift-click adds and toggles notes; an arrow moves exactly the remaining selection");
+    pianoRoll.keyPressed (undo);
+    check (noteById (aId).startBeat == 1 && noteById (bId).startBeat == 4, "one undo reverses the entire multi-note arrow edit");
+    pianoRoll.keyPressed (redo);
+    check (noteById (aId).startBeat == 1.25 && noteById (bId).startBeat == 4.25, "redo preserves selected note identities and relative timing");
+    pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys (shiftModifier), 0));
+    check (noteById (aId).pitch == 72 && noteById (bId).pitch == 76 && noteById (cId).pitch == 67,
+           "Shift-arrow transposes every selected note by an octave");
+    pianoRoll.keyPressed (undo);
+    groupClick (groupPoint (11, 70), shiftModifier);
+    check (! pianoRoll.hasSelectedNote() && currentMidiClip()->notes.size() == 3, "Shift-click empty space clears selection without drawing");
+    groupDrag (groupPoint (0.5, 66), groupPoint (5.75, 58), shiftModifier);
+    check (currentMidiClip()->notes.size() == 3, "Shift-marquee selects existing notes without drawing a fourth note");
+    auto body = groupPoint (1.35, 60);
+    groupDrag (body, body + juce::Point<float> ((float) (2 * groupBeatWidth), -45));
+    check (noteById (aId).startBeat == 3.25 && noteById (bId).startBeat == 6.25 && noteById (aId).pitch == 63
+               && noteById (bId).pitch == 67 && noteById (cId).startBeat == 8,
+           "marquee-selected notes drag as a group while unselected notes stay fixed");
+    pianoRoll.keyPressed (undo);
+    check (noteById (aId).startBeat == 1.25 && noteById (bId).startBeat == 4.25 && noteById (aId).pitch == 60,
+           "one undo reverses every event and note in a group drag");
+    pianoRoll.keyPressed (redo);
+    auto edge = groupPoint (4.25, 63) - juce::Point<float> (2, 0);
+    groupDrag (edge, edge + juce::Point<float> ((float) (0.5 * groupBeatWidth), 0));
+    check (noteById (aId).lengthBeats == 1.5 && noteById (bId).lengthBeats == 1.5 && noteById (cId).lengthBeats == 1,
+           "a selected right edge resizes every selected note by one common length delta");
+    pianoRoll.keyPressed (undo);
+    check (noteById (aId).lengthBeats == 1 && noteById (bId).lengthBeats == 1, "one undo reverses the complete group resize");
+    pianoRoll.keyPressed (redo);
+    check (noteById (aId).lengthBeats == 1.5 && noteById (bId).lengthBeats == 1.5, "redo restores every grouped note length");
+    pianoRoll.keyPressed (undo);
+    body = groupPoint (3.35, 63);
+    groupDrag (body, body - juce::Point<float> ((float) (100 * groupBeatWidth), 0));
+    check (noteById (aId).startBeat == 0 && noteById (bId).startBeat == 3, "group drag clamps at the earliest note without collapsing timing offsets");
+    body = groupPoint (0.1, 63);
+    groupDrag (body, body + juce::Point<float> ((float) (100 * groupBeatWidth), 0));
+    check (noteById (aId).startBeat == 12 && noteById (bId).startBeat == 15, "group drag clamps at the latest note's clip end");
+    pianoRoll.keyPressed (undo); pianoRoll.keyPressed (undo);
+    auto* groupVelocity = dynamic_cast<juce::Slider*> (findNamed (pianoRoll, "Note velocity"));
+    check (groupVelocity != nullptr, "group velocity uses the existing accessible native slider");
+    const auto beforeVelocityA = noteById (aId).velocity, beforeVelocityB = noteById (bId).velocity, beforeVelocityC = noteById (cId).velocity;
+    groupVelocity->onDragStart(); groupVelocity->setValue (0.33, juce::sendNotificationSync);
+    groupVelocity->setValue (0.66, juce::sendNotificationSync); groupVelocity->onDragEnd();
+    const auto nativeVelocity = 84.0f / 127.0f; // Session stores MIDI 1.0 integer velocity.
+    check (noteById (aId).velocity == nativeVelocity && noteById (bId).velocity == nativeVelocity && noteById (cId).velocity == beforeVelocityC,
+           "velocity changes affect the whole selected group with native MIDI quantization");
+    pianoRoll.keyPressed (undo);
+    check (noteById (aId).velocity == beforeVelocityA && noteById (bId).velocity == beforeVelocityB,
+           "one undo reverses every event of grouped velocity editing");
+    pianoRoll.keyPressed (redo);
+    check (noteById (aId).velocity == nativeVelocity && noteById (bId).velocity == nativeVelocity, "redo restores the entire velocity group");
+    if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+    {
+        const juce::File directory (juce::String::fromUTF8 (configured));
+        if (directory.createDirectory().wasOk()) if (auto* host = getParentComponent())
+        {
+            const auto oldBounds = host->getBounds();
+            for (const auto size : { juce::Point<int> (1440, 900), juce::Point<int> (1100, 720) })
+            {
+                host->setSize (size.x, size.y); pianoRoll.fit(); refresh();
+                const auto scale = (pianoRoll.getWidth() - 66.0) / 16.0;
+                const auto from = juce::Point<float> ((float) (55 + 2.75 * scale), 60 + (77 - 69) * 15.0f);
+                const auto to = juce::Point<float> ((float) (55 + 7.5 * scale), 60 + (77 - 62) * 15.0f);
+                pianoRoll.mouseDown (groupEvent (from, from, false, shiftModifier));
+                pianoRoll.mouseDrag (groupEvent (to, from, true, shiftModifier));
+                const auto image = host->createComponentSnapshot (host->getLocalBounds(), true, 1.0f);
+                const auto output = directory.getChildFile ("piano-multiselect-" + juce::String (size.x) + "x" + juce::String (size.y) + ".png");
+                auto stream = output.createOutputStream(); juce::PNGImageFormat png;
+                if (stream && stream->setPosition (0) && stream->truncate().wasOk() && png.writeImageToStream (image, *stream)) std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                else std::cerr << "UI snapshot export failed: " << output.getFullPathName() << std::endl;
+                pianoRoll.mouseUp (groupEvent (to, from, true, shiftModifier));
+            }
+            host->setSize (oldBounds.getWidth(), oldBounds.getHeight()); pianoRoll.fit(); refresh();
+        }
+    }
+    pianoRoll.keyPressed (deleteNotes);
+    check (currentMidiClip()->notes.size() == 1 && currentMidiClip()->notes.front().id == cId, "Delete removes every selected note and preserves unselected notes");
+    pianoRoll.keyPressed (undo);
+    check (currentMidiClip()->notes.size() == 3 && noteById (aId).id == aId && noteById (bId).id == bId && ! pianoRoll.hasSelectedNote(),
+           "bulk delete undo restores stable identities without reviving pruned selection");
+    pianoRoll.keyPressed (redo);
+    check (currentMidiClip()->notes.size() == 1, "one redo removes the entire restored group");
+    pianoRoll.keyPressed (undo);
+    pianoRoll.keyPressed (escape);
+    groupClick (groupPoint (8.1, 67));
+    groupDrag (groupPoint (2.75, 69), groupPoint (7.5, 62), shiftModifier);
+    pianoRoll.keyPressed (deleteNotes);
+    check (currentMidiClip()->notes.empty(), "Shift-marquee adds intersecting notes to the prior selection");
+    pianoRoll.keyPressed (undo);
+    pianoRoll.keyPressed (allNotes); pianoRoll.keyPressed (escape); pianoRoll.keyPressed (deleteNotes);
+    check (currentMidiClip()->notes.size() == 3 && ! pianoRoll.hasSelectedNote(), "Escape clears select-all and makes Delete harmless");
+    pianoRoll.keyPressed (allNotes); pianoRoll.keyPressed (deleteNotes);
+    check (currentMidiClip()->notes.empty(), "Cmd/Ctrl+A selects all notes for bulk deletion");
+    pianoRoll.keyPressed (undo); pianoRoll.keyPressed (allNotes);
+    menuItemSelected (34, 2);
+    check (currentMidiClip() != nullptr && currentMidiClip()->id != groupClipId && ! pianoRoll.hasSelectedNote(), "switching to a new clip clears the prior note selection");
+    pianoRoll.keyPressed (deleteNotes);
+    check (state.tracks[(size_t) groupTrack].clips.front().notes.size() == 3, "a new clip cannot delete selected IDs from the previous clip");
+    pianoRoll.keyPressed (undo); menuItemSelected (44, 3);
+    check (currentMidiClip() != nullptr && currentMidiClip()->id == groupClipId && ! pianoRoll.hasSelectedNote(), "clip creation undo resolves live clip identity without stale selection");
+
+    menuItemSelected (33, 2); pianoRoll.fit();
+    groupClick (groupPoint (0.1, 60)); const auto lowId = currentMidiClip()->notes.back().id;
+    edge = groupPoint (1, 60) - juce::Point<float> (2, 0);
+    groupDrag (edge, edge + juce::Point<float> ((float) groupBeatWidth, 0));
+    groupClick (groupPoint (15.1, 64)); const auto highId = currentMidiClip()->notes.back().id;
+    pianoRoll.keyPressed (allNotes);
+    pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::leftKey)); pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+    check (noteById (lowId).startBeat == 0 && noteById (highId).startBeat == 15,
+           "mixed clip-boundary notes share one arrow clamp in both directions");
+    edge = groupPoint (2, 60) - juce::Point<float> (2, 0);
+    groupDrag (edge, edge - juce::Point<float> ((float) (4 * groupBeatWidth), 0));
+    check (noteById (lowId).lengthBeats == 1.03125 && noteById (highId).lengthBeats == 0.03125,
+           "group resize stops at the shortest note and preserves relative lengths");
+    pianoRoll.keyPressed (undo);
+    check (noteById (lowId).lengthBeats == 2 && noteById (highId).lengthBeats == 1, "boundary resize is one reversible transaction");
+    groupDrag (edge, edge + juce::Point<float> ((float) groupBeatWidth, 0));
+    check (noteById (lowId).lengthBeats == 2 && noteById (highId).lengthBeats == 1, "group resize cannot extend another selected note beyond the clip");
+    for (int i = 0; i < 7; ++i) pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys (shiftModifier), 0));
+    check (noteById (lowId).pitch == 123 && noteById (highId).pitch == 127, "octave movement clamps the whole group at MIDI pitch 127");
+    for (int i = 0; i < 12; ++i) pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::downKey, juce::ModifierKeys (shiftModifier), 0));
+    check (noteById (lowId).pitch == 0 && noteById (highId).pitch == 4, "octave movement preserves intervals at MIDI pitch zero");
+    pianoRoll.keyPressed (undo);
+    check (noteById (lowId).pitch == 3 && noteById (highId).pitch == 7, "bounded no-op arrows add no undo step");
+    pianoRoll.keyPressed (redo);
+    check (noteById (lowId).pitch == 0 && noteById (highId).pitch == 4, "redo restores a partially bounded common pitch delta");
+
+    // Reopen a generated native project with offscreen note content. Loading
+    // currently preserves such content, so UI edits must not partially repair it.
+    struct NoteLoadFixture
+    {
+        juce::File directory = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-note-ui-" + juce::Uuid().toString());
+        ~NoteLoadFixture() { directory.deleteRecursively(); }
+    } noteLoad;
+    check (noteLoad.directory.createDirectory().wasOk(), "create isolated note-load fixture directory");
+    const auto noteProject = noteLoad.directory.getChildFile ("Offscreen notes.halftrack");
+    check (session.saveProject (noteProject).wasOk(), "save generated note-load fixture");
+    auto noteXml = juce::XmlDocument::parse (noteProject);
+    std::function<juce::XmlElement* (juce::XmlElement*, const juce::String&)> findNoteXml;
+    findNoteXml = [&] (juce::XmlElement* xml, const juce::String& id) -> juce::XmlElement*
+    {
+        if (xml == nullptr) return nullptr;
+        if (xml->getStringAttribute ("halftrackNoteId") == id) return xml;
+        for (auto* child : xml->getChildIterator()) if (auto* found = findNoteXml (child, id)) return found;
+        return nullptr;
+    };
+    auto* lowXml = findNoteXml (noteXml.get(), lowId); auto* highXml = findNoteXml (noteXml.get(), highId);
+    check (lowXml != nullptr && highXml != nullptr, "locate original fixture notes by persisted identity");
+    lowXml->setAttribute ("p", 60); lowXml->setAttribute ("l", 1.0);
+    highXml->setAttribute ("p", 64); highXml->setAttribute ("l", 2.0);
+    check (noteXml->writeTo (noteProject), "write original offscreen-note project fixture");
+    groupClick (groupPoint (8.1, 60));
+    check (pianoRoll.hasSelectedNote() && currentMidiClip()->notes.size() == 3, "a newly drawn note is selected before reopening earlier state");
+    check (session.loadProject (noteProject).wasOk(), "loader accepts original MIDI content extending past the clip");
+    refresh();
+    check (noteById (lowId).startBeat == 0 && noteById (lowId).lengthBeats == 1 && noteById (highId).startBeat == 15 && noteById (highId).lengthBeats == 2
+               && ! pianoRoll.hasSelectedNote(), "reopen preserves offscreen content and prunes selected IDs absent from the loaded clip");
+    pianoRoll.keyPressed (deleteNotes);
+    check (currentMidiClip()->notes.size() == 2, "Delete after load cannot target a stale note ID");
+    pianoRoll.keyPressed (allNotes);
+    pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::upKey));
+    groupDrag (groupPoint (0.1, 60), groupPoint (1.1, 60));
+    edge = groupPoint (1, 60) - juce::Point<float> (2, 0);
+    groupDrag (edge, edge - juce::Point<float> ((float) groupBeatWidth, 0));
+    check (noteById (lowId).pitch == 60 && noteById (highId).pitch == 64 && noteById (lowId).startBeat == 0
+               && noteById (highId).startBeat == 15 && noteById (lowId).lengthBeats == 1 && noteById (highId).lengthBeats == 2 && ! session.canUndo(),
+           "infeasible loaded note groups reject movement and resize before any mutation or undo action");
+    const auto lowVelocity = noteById (lowId).velocity, highVelocity = noteById (highId).velocity;
+    groupVelocity->onDragStart(); groupVelocity->setValue (0.23, juce::sendNotificationSync); groupVelocity->onDragEnd();
+    check (noteById (lowId).velocity == lowVelocity && noteById (highId).velocity == highVelocity && ! session.canUndo()
+               && status.contains ("duration inside the MIDI clip"),
+           "grouped velocity rejects loaded overhang atomically and reports the validation error");
+
+    // The facade also accepts notes shorter than the mouse editor's 1/32-beat
+    // floor. Establish that valid fixture directly, then use real UI handlers.
+    menuItemSelected (33, 2); pianoRoll.fit();
+    groupClick (groupPoint (1.1, 60)); const auto shortId = currentMidiClip()->notes.back().id;
+    groupClick (groupPoint (15.1, 64)); const auto endId = currentMidiClip()->notes.back().id;
+    check (session.updateMidiNote (currentMidiClip()->id, shortId, 60, 1, 1.0 / 64, 0.8f).wasOk(),
+           "facade-valid short note fixture is accepted before UI resizing");
+    refresh(); pianoRoll.keyPressed (allNotes);
+    edge = groupPoint (1, 60) + juce::Point<float> (1.5f, 0);
+    groupDrag (edge, edge - juce::Point<float> ((float) groupBeatWidth, 0));
+    check (noteById (shortId).lengthBeats == 1.0 / 64 && noteById (endId).lengthBeats == 1,
+           "group resize preserves valid sub-grid notes without an inverted interval or partial edit");
+    // A bounded, preexisting dense clip exercises Select All across notes outside
+    // the current viewport. This checks correctness without a timing threshold.
+    menuItemSelected (33, 2); pianoRoll.fit();
+    const auto denseTrackId = currentTrack()->id, denseClipId = currentMidiClip()->id;
+    const auto denseProject = noteLoad.directory.getChildFile ("Dense notes.halftrack");
+    check (session.saveProject (denseProject).wasOk(), "save generated dense-note project fixture");
+    auto denseXml = juce::XmlDocument::parse (denseProject);
+    auto* denseEdit = denseXml != nullptr ? denseXml->getChildByName ("EDIT") : nullptr;
+    auto* denseTrackXml = denseEdit != nullptr ? denseEdit->getChildByAttribute ("id", denseTrackId) : nullptr;
+    auto* denseClipXml = denseTrackXml != nullptr ? denseTrackXml->getChildByAttribute ("id", denseClipId) : nullptr;
+    check (denseClipXml != nullptr, "locate original dense clip by stable persisted IDs");
+    auto* sequence = denseClipXml->getChildByName ("SEQUENCE");
+    if (sequence == nullptr) sequence = denseClipXml->createNewChildElement ("SEQUENCE");
+    sequence->deleteAllChildElements();
+    constexpr int denseCount = 512;
+    for (int i = 0; i < denseCount; ++i)
+    {
+        auto* note = sequence->createNewChildElement ("NOTE");
+        note->setAttribute ("halftrackNoteId", juce::Uuid().toString());
+        note->setAttribute ("p", 48 + i / 64); note->setAttribute ("b", (i % 64) * 0.25);
+        note->setAttribute ("l", 0.125); note->setAttribute ("v", 80); note->setAttribute ("c", 0);
+    }
+    check (denseXml->writeTo (denseProject) && session.loadProject (denseProject).wasOk(), "load original 512-note fixture");
+    refresh();
+    const auto denseBefore = currentMidiClip()->notes;
+    check (denseBefore.size() == denseCount, "dense fixture retains all on-screen and offscreen notes");
+    pianoRoll.keyPressed (allNotes); pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::upKey));
+    auto denseMatches = [&] (int pitchDelta, bool changedVelocity)
+    {
+        const auto* clip = currentMidiClip();
+        if (clip == nullptr || clip->notes.size() != denseBefore.size()) return false;
+        std::map<juce::String, Session::MidiNoteInfo> byId;
+        for (const auto& note : clip->notes) byId.emplace (note.id, note);
+        for (const auto& old : denseBefore)
+        {
+            const auto found = byId.find (old.id);
+            if (found == byId.end()) return false;
+            const auto& note = found->second;
+            if (note.pitch != old.pitch + pitchDelta || note.startBeat != old.startBeat || note.lengthBeats != old.lengthBeats
+                || note.velocity != (changedVelocity ? 53.0f / 127.0f : old.velocity)) return false;
+        }
+        return true;
+    };
+    check (denseMatches (1, false), "Select All transposes every note in a larger clip and preserves IDs and timing");
+    pianoRoll.keyPressed (undo);
+    check (denseMatches (0, false), "one undo restores every note in the larger selection");
+    pianoRoll.keyPressed (redo);
+    groupVelocity->onDragStart(); groupVelocity->setValue (0.42, juce::sendNotificationSync); groupVelocity->onDragEnd();
+    check (denseMatches (1, true), "larger selected-note set receives one consistent velocity change");
+    pianoRoll.keyPressed (deleteNotes);
+    check (currentMidiClip()->notes.empty(), "bulk deletion removes all 512 selected notes");
+    pianoRoll.keyPressed (undo);
+    check (denseMatches (1, true) && ! pianoRoll.hasSelectedNote(), "one bulk-delete undo restores all dense note identities while selection stays pruned");
 }
 
 int MainComponent::runInteractionTests()
