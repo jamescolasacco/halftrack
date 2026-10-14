@@ -457,7 +457,8 @@ private:
     public:
         TrackRow (Impl& o, int i, bool verticalLayout = false) : owner (o), index (i), columnLayout (verticalLayout)
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &name, &mute, &solo, &arm, &gain, &pan, &input, &monitor }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &name, &mute, &solo, &arm, &gain, &pan, &input, &monitor, &sendMode }) addAndMakeVisible (c);
+            name.setName ("Track name");
             name.setFont (font (12.0f, true));
             name.setEditable (false, true, false);
             name.onTextChange = [this] { owner.report (owner.session.renameTrack (index, name.getText())); };
@@ -472,6 +473,17 @@ private:
             solo.onClick = [this] { owner.selectTrack (index); owner.report (owner.session.setTrackSolo (index, solo.getToggleState())); };
             arm.onClick = [this] { owner.selectTrack (index); owner.report (owner.session.setTrackArmed (index, arm.getToggleState())); owner.refresh(); };
             mute.setTooltip ("Mute track"); solo.setTooltip ("Solo track"); arm.setTooltip ("Arm track for audio recording");
+            arm.setName ("Record arm"); input.setName ("Track audio input"); monitor.setName ("Track monitoring");
+            sendMode.setName ("Return send position");
+            sendMode.addItem ("Pre-fader", 1); sendMode.addItem ("Post-fader", 2);
+            sendMode.setTooltip ("All sends into this return are taken before or after their source track volume fader.");
+            sendMode.onChange = [this]
+            {
+                if (! returnTrack || index >= (int) owner.state.tracks.size()) return;
+                owner.report (owner.session.setReturnSendMode (owner.state.tracks[(size_t) index].id,
+                    sendMode.getSelectedId() == 1 ? Session::SendMode::pre : Session::SendMode::post));
+                owner.refresh();
+            };
             arm.setColour (juce::TextButton::buttonOnColourId, red);
             gain.setSliderStyle (juce::Slider::LinearHorizontal);
             gain.setRange (-60.0, 12.0, 0.1);
@@ -506,8 +518,10 @@ private:
         void sync (const Session::TrackInfo& track)
         {
             colour = track.colour;
-            midi = track.isMidi;
-            input.setVisible (! midi); monitor.setVisible (! midi); arm.setVisible (! midi);
+            midi = track.isMidi; returnTrack = track.isReturn;
+            input.setVisible (! midi && ! returnTrack); monitor.setVisible (! midi && ! returnTrack); arm.setVisible (! midi && ! returnTrack);
+            sendMode.setVisible (returnTrack);
+            sendMode.setSelectedId (track.sendMode == Session::SendMode::pre ? 1 : 2, juce::dontSendNotification);
             peakL = track.peakL; peakR = track.peakR;
             if (! name.isBeingEdited()) name.setText (track.name, juce::dontSendNotification);
             if (! gain.isMouseButtonDown()) gain.setValue (track.gainDb, juce::dontSendNotification);
@@ -539,7 +553,8 @@ private:
             {
                 g.drawText ("VOL", 9, 67, 29, 20, juce::Justification::centredLeft);
                 g.drawText ("PAN", 9, 97, 29, 20, juce::Justification::centredLeft);
-                if (midi) g.drawFittedText ("MIDI / SYNTH", 9, 138, getWidth() - 18, 28, juce::Justification::centred, 1);
+                if (returnTrack) { g.setColour (orange); g.drawText ("RETURN / SEND INPUT", 9, 126, getWidth() - 18, 22, juce::Justification::centredLeft); }
+                else if (midi) g.drawFittedText ("MIDI / SYNTH", 9, 138, getWidth() - 18, 28, juce::Justification::centred, 1);
                 const auto peak = juce::jmax (peakL, peakR);
                 const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (peak, -60.0f) + 60.0f) / 60.0f);
                 g.setColour (background); g.fillRect (9, getHeight() - 7, getWidth() - 18, 3);
@@ -548,7 +563,8 @@ private:
             }
             g.drawText ("VOL", 12, 38, 25, 17, juce::Justification::centredLeft);
             g.drawText ("PAN", 174, 38, 25, 17, juce::Justification::centredLeft);
-            if (midi) g.drawText ("MIDI  /  HALFTRACK SYNTH", 12, 78, getWidth() - 24, 23, juce::Justification::centredLeft);
+            if (returnTrack) { g.setColour (orange); g.drawText ("RETURN / SEND INPUT", 12, 78, 129, 23, juce::Justification::centredLeft); }
+            else if (midi) g.drawText ("MIDI  /  HALFTRACK SYNTH", 12, 78, getWidth() - 24, 23, juce::Justification::centredLeft);
             else
             {
                 g.drawText ("IN", 12, 78, 18, 23, juce::Justification::centredLeft);
@@ -567,6 +583,7 @@ private:
                 mute.setBounds (9, 35, 38, 23); solo.setBounds (49, 35, 38, 23); arm.setBounds (89, 35, 38, 23);
                 gain.setBounds (36, 63, getWidth() - 43, 27); pan.setBounds (36, 93, getWidth() - 43, 27);
                 input.setBounds (9, 127, getWidth() - 18, 23); monitor.setBounds (9, 153, getWidth() - 18, 23);
+                sendMode.setBounds (9, 153, getWidth() - 18, 23);
                 return;
             }
             name.setBounds (10, 5, getWidth() - 104, 25);
@@ -577,6 +594,7 @@ private:
             pan.setBounds (199, 37, getWidth() - 207, 28);
             input.setBounds (31, 79, 135, 23);
             monitor.setBounds (201, 79, getWidth() - 209, 23);
+            sendMode.setBounds (143, 79, getWidth() - 151, 23);
         }
         void mouseDown (const juce::MouseEvent&) override { owner.selectTrack (index); }
     private:
@@ -584,11 +602,11 @@ private:
         int index;
         juce::Colour colour;
         float peakL = 0, peakR = 0;
-        bool midi = false, columnLayout = false;
+        bool midi = false, columnLayout = false, returnTrack = false;
         juce::Label name;
         juce::TextButton mute { "M" }, solo { "S" }, arm { "R" };
         juce::Slider gain, pan;
-        juce::ComboBox input, monitor;
+        juce::ComboBox input, monitor, sendMode;
         juce::StringArray inputNames;
     };
 
@@ -657,6 +675,13 @@ private:
             for (int t = 0; t < (int) owner.state.tracks.size(); ++t)
             {
                 const auto& track = owner.state.tracks[(size_t) t];
+                if (track.isReturn)
+                {
+                    g.setColour (background); g.fillRect (0, t * trackHeight + 1, tw, trackHeight - 2);
+                    g.setColour (muted); g.setFont (font (11.0f));
+                    g.drawText ("RETURN  /  Audio from track sends", 16, t * trackHeight + 40, tw - 32, 26, juce::Justification::centredLeft);
+                    continue;
+                }
                 for (int c = 0; c < (int) track.clips.size(); ++c)
                 {
                     const auto& clip = track.clips[(size_t) c];
@@ -732,6 +757,7 @@ private:
             if (track < (int) owner.state.tracks.size())
             {
                 owner.selectTrack (track);
+                if (owner.state.tracks[(size_t) track].isReturn) { draggedClip = -1; return; }
                 const auto& clips = owner.state.tracks[(size_t) track].clips;
                 for (int c = (int) clips.size() - 1; c >= 0; --c)
                     if (clipBounds (clips[(size_t) c], track).contains (e.position))
@@ -948,7 +974,7 @@ private:
             if (point.y < gridTop || point.y >= gridArea().getBottom() || point.x < 0 || point.x >= tracksWidth()) return { -1, -1 };
             const int track = (int) ((point.x + offsetX) / columnWidth);
             const int scene = (int) ((point.y - gridTop) / (double) rowHeight + offsetScene);
-            return track < (int) owner.state.tracks.size() && scene < (int) owner.state.scenes.size() ? std::pair<int, int> { track, scene } : std::pair<int, int> { -1, -1 };
+            return track >= 0 && track < (int) owner.state.tracks.size() && ! owner.state.tracks[(size_t) track].isReturn && scene < (int) owner.state.scenes.size() ? std::pair<int, int> { track, scene } : std::pair<int, int> { -1, -1 };
         }
         void paint (juce::Graphics& g) override
         {
@@ -964,6 +990,13 @@ private:
                 g.setColour (track.colour.withAlpha (t == owner.selectedTrack ? 0.75f : 0.4f)); g.fillRect (x, toolbarHeight, columnWidth, headerHeight);
                 g.setColour (ink); g.setFont (font (11.5f, true)); g.drawText (track.name, x + 9, toolbarHeight, columnWidth - 18, headerHeight, juce::Justification::centredLeft, true);
                 g.setColour (line); g.drawRect (x, toolbarHeight, columnWidth, headerHeight);
+                if (track.isReturn)
+                {
+                    g.setColour (panel); g.fillRect (x + 1, gridTop, columnWidth - 2, grid.getHeight() + stopHeight);
+                    g.setColour (muted); g.setFont (font (10.5f, true));
+                    g.drawText ("RETURN", x + 9, gridTop + 15, columnWidth - 18, 24, juce::Justification::centred);
+                    continue;
+                }
                 g.saveState(); g.reduceClipRegion (grid.withWidth (tracksWidth()));
                 for (int scene = 0; scene < (int) owner.state.scenes.size(); ++scene)
                 {
@@ -1031,7 +1064,7 @@ private:
             if (event.x < tracksWidth() && track >= 0 && track < (int) owner.state.tracks.size())
             {
                 owner.selectTrack (track);
-                if (event.y >= gridArea().getBottom() && event.y < gridArea().getBottom() + stopHeight) { owner.report (owner.session.stopLauncherTrack (track)); owner.refresh(); }
+                if (! owner.state.tracks[(size_t) track].isReturn && event.y >= gridArea().getBottom() && event.y < gridArea().getBottom() + stopHeight) { owner.report (owner.session.stopLauncherTrack (track)); owner.refresh(); }
                 repaint();
             }
         }
@@ -1059,7 +1092,8 @@ private:
             if (code == juce::KeyPress::returnKey)
             {
                 const auto scene = owner.selectedSceneIndex();
-                if (scene >= 0) owner.report (key.getModifiers().isShiftDown() ? owner.session.launchScene (scene) : owner.session.launchSlot (owner.selectedTrack, scene));
+                if (scene >= 0 && (key.getModifiers().isShiftDown() || (owner.currentTrack() != nullptr && ! owner.currentTrack()->isReturn)))
+                    owner.report (key.getModifiers().isShiftDown() ? owner.session.launchScene (scene) : owner.session.launchSlot (owner.selectedTrack, scene));
                 owner.refresh(); return true;
             }
             if (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey || code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
@@ -1531,12 +1565,115 @@ private:
         }
     };
 
+    class SendsPanel final : public juce::Component
+    {
+        class SendRow final : public juce::Component
+        {
+        public:
+            SendRow (Impl& o, juce::String destination) : destinationId (std::move (destination)), owner (o)
+            {
+                addAndMakeVisible (label); addAndMakeVisible (level);
+                label.setFont (font (10.5f));
+                level.setSliderStyle (juce::Slider::LinearHorizontal);
+                level.setRange (-100, 0, 0.1); level.setSkewFactorFromMidPoint (-18);
+                level.setTextBoxStyle (juce::Slider::TextBoxRight, false, 55, 21);
+                level.textFromValueFunction = [] (double v) { return v <= -100 ? juce::String ("Off") : juce::String (v, 1) + " dB"; };
+                level.valueFromTextFunction = [] (const juce::String& v) { return v.trim().equalsIgnoreCase ("Off") ? -100.0 : v.getDoubleValue(); };
+                level.setDoubleClickReturnValue (true, -100);
+                level.onDragStart = [this] { gesture = true; owner.session.beginEditGesture ("Send level"); };
+                level.onDragEnd = [this] { gesture = false; owner.session.endEditGesture(); };
+                level.onValueChange = [this]
+                {
+                    const int index = owner.launcherIndices (sourceId, {}).first;
+                    if (index >= 0) owner.report (owner.session.setTrackSendGain (index, destinationId, (float) level.getValue()));
+                };
+            }
+            ~SendRow() override { if (gesture) owner.session.endEditGesture(); }
+            void sync (const Session::TrackInfo& source, const Session::TrackInfo& destination, float value)
+            {
+                if (! gesture) sourceId = source.id;
+                label.setText (destination.name + (destination.sendMode == Session::SendMode::pre ? "  |  Pre" : "  |  Post"), juce::dontSendNotification);
+                level.setName ("Send to " + destination.name);
+                level.setTooltip ("Send to " + destination.name + ". Off to 0 dB. Double-click to turn off.");
+                if (! level.isMouseButtonDown()) level.setValue (value, juce::dontSendNotification);
+            }
+            void resized() override { label.setBounds (0, 0, getWidth(), 16); level.setBounds (0, 17, getWidth(), 24); }
+            const juce::String destinationId;
+        private:
+            Impl& owner;
+            juce::String sourceId;
+            juce::Label label;
+            juce::Slider level;
+            bool gesture = false;
+        };
+    public:
+        explicit SendsPanel (Impl& o) : owner (o)
+        {
+            setName ("Track sends"); addAndMakeVisible (addReturn); addAndMakeVisible (viewport);
+            addReturn.setName ("Insert return track");
+            addReturn.onClick = [this] { owner.addReturnTrack(); };
+            viewport.setViewedComponent (&content, false); viewport.setScrollBarsShown (true, false); viewport.setScrollBarThickness (9);
+        }
+        ~SendsPanel() override { viewport.setViewedComponent (nullptr, false); }
+        void sync()
+        {
+            const auto* source = owner.currentTrack();
+            setVisible (source != nullptr && ! source->isReturn);
+            if (! isVisible()) return;
+            std::vector<const Session::TrackInfo*> returns;
+            for (const auto& track : owner.state.tracks) if (track.isReturn) returns.push_back (&track);
+            bool rebuild = rows.size() != returns.size();
+            if (! rebuild) for (size_t i = 0; i < rows.size(); ++i) if (rows[i]->destinationId != returns[i]->id) rebuild = true;
+            if (rebuild)
+            {
+                rows.clear();
+                for (const auto* track : returns)
+                {
+                    auto row = std::make_unique<SendRow> (owner, track->id);
+                    content.addAndMakeVisible (*row); rows.push_back (std::move (row));
+                }
+            }
+            for (size_t i = 0; i < rows.size(); ++i)
+            {
+                float gainDb = -100;
+                for (const auto& send : source->sends) if (send.returnTrackId == returns[i]->id) gainDb = send.gainDb;
+                rows[i]->sync (*source, *returns[i], gainDb);
+            }
+            resized(); repaint();
+        }
+        void resized() override
+        {
+            addReturn.setBounds (getWidth() - 89, 4, 81, 23);
+            viewport.setBounds (8, 32, getWidth() - 16, getHeight() - 39);
+            content.setSize (viewport.getWidth() - 10, juce::jmax (viewport.getHeight(), (int) rows.size() * 44));
+            for (size_t i = 0; i < rows.size(); ++i) rows[i]->setBounds (0, (int) i * 44, content.getWidth(), 42);
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (raised); g.setColour (orange); g.setFont (font (10.5f, true));
+            g.drawText ("SENDS", 10, 4, 64, 23, juce::Justification::centredLeft);
+            if (rows.empty())
+            {
+                g.setColour (muted); g.setFont (font (11.0f));
+                g.drawFittedText ("Add a return track to share an effect across tracks.", 13, 42, getWidth() - 26, getHeight() - 52, juce::Justification::centred, 3);
+            }
+            g.setColour (line); g.drawRect (getLocalBounds());
+        }
+    private:
+        Impl& owner;
+        juce::TextButton addReturn { "+ Return" };
+        juce::Viewport viewport;
+        juce::Component content;
+        std::vector<std::unique_ptr<SendRow>> rows;
+    };
+
     class DeviceChain final : public juce::Component
     {
     public:
-        explicit DeviceChain (Impl& o) : owner (o), synthPanel (o)
+        explicit DeviceChain (Impl& o) : owner (o), synthPanel (o), sendsPanel (o)
         {
-            addAndMakeVisible (addButton); addAndMakeVisible (manageButton); addAndMakeVisible (synthPanel);
+            addAndMakeVisible (addButton); addAndMakeVisible (manageButton); addAndMakeVisible (synthClip); addAndMakeVisible (sendsPanel);
+            synthClip.addAndMakeVisible (synthPanel); synthClip.setInterceptsMouseClicks (false, true);
             addButton.onClick = [this] { owner.addPluginMenu(); };
             manageButton.onClick = [this] { owner.showPlugins(); };
         }
@@ -1544,13 +1681,16 @@ private:
         {
             manageButton.setBounds (getWidth() - 212, 8, 94, 24);
             addButton.setBounds (getWidth() - 320, 8, 101, 24);
-            synthPanel.setBounds (14 - offset, 44, 536, getHeight() - 59);
+            sendsPanel.setBounds (9, 39, 232, getHeight() - 48);
+            synthClip.setBounds (chainLeft(), 39, getWidth() - chainLeft() - 114, getHeight() - 48);
+            synthPanel.setBounds (5 - offset, 5, 536, getHeight() - 59);
         }
         void sync()
         {
             const auto* track = owner.currentTrack();
             const auto total = track != nullptr ? (int) track->plugins.size() * 208 + (track->isMidi ? 554 : 0) : 0;
-            offset = juce::jlimit (0, juce::jmax (0, total - getWidth() + 150), offset);
+            sendsPanel.sync();
+            offset = juce::jlimit (0, juce::jmax (0, total - getWidth() + chainLeft() + 141), offset);
             synthPanel.sync(); resized(); repaint();
         }
         void paint (juce::Graphics& g) override
@@ -1562,16 +1702,16 @@ private:
             auto title = track == nullptr ? juce::String ("DEVICE CHAIN") : "DEVICE CHAIN  /  " + track->name.toUpperCase();
             g.drawText (title, 14, 8, juce::jmax (150, getWidth() - 350), 24, juce::Justification::centredLeft);
             addButton.setEnabled (track != nullptr);
-            g.saveState(); g.reduceClipRegion (9, 39, getWidth() - 123, getHeight() - 48);
+            g.saveState(); g.reduceClipRegion (chainLeft(), 39, getWidth() - chainLeft() - 114, getHeight() - 48);
             if (track == nullptr || (! track->isMidi && track->plugins.empty()))
             {
                 g.setColour (juce::Colour (0xff343b40));
-                g.drawRect (14, 44, getWidth() - 138, getHeight() - 59);
+                g.drawRect (chainLeft() + 5, 44, getWidth() - chainLeft() - 129, getHeight() - 59);
                 g.setColour (muted); g.setFont (font (12.0f));
                 g.drawText (track == nullptr ? "Select an audio track to view its device chain." : "Add a plug-in, or double-click one in the browser.",
-                            25, 59, getWidth() - 160, 32, juce::Justification::centred);
+                            chainLeft() + 16, 59, getWidth() - chainLeft() - 151, 32, juce::Justification::centred);
                 g.setFont (font (10.5f));
-                g.drawText ("Audio flows through devices from left to right.", 25, 91, getWidth() - 160, 25, juce::Justification::centred);
+                g.drawText ("Audio flows through devices from left to right.", chainLeft() + 16, 91, getWidth() - chainLeft() - 151, 25, juce::Justification::centred);
             }
             else
             {
@@ -1603,7 +1743,7 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             const auto* track = owner.currentTrack();
-            if (track == nullptr || e.x >= getWidth() - 111) return;
+            if (track == nullptr || e.x < chainLeft() || e.x >= getWidth() - 111) return;
             for (int i = 0; i < (int) track->plugins.size(); ++i)
             {
                 const auto box = pluginBounds (i);
@@ -1620,15 +1760,18 @@ private:
         {
             const auto* track = owner.currentTrack();
             const auto total = track != nullptr ? (int) track->plugins.size() * 208 + (track->isMidi ? 554 : 0) : 0;
-            offset = juce::jlimit (0, juce::jmax (0, total - getWidth() + 150), offset - (int) ((details.deltaX + details.deltaY) * 220));
+            offset = juce::jlimit (0, juce::jmax (0, total - getWidth() + chainLeft() + 141), offset - (int) ((details.deltaX + details.deltaY) * 220));
             resized(); repaint();
         }
     private:
         Impl& owner;
         juce::TextButton addButton { "+ Plug-in" }, manageButton { "Manage..." };
         SynthPanel synthPanel;
+        juce::Component synthClip;
+        SendsPanel sendsPanel;
+        int chainLeft() const { return sendsPanel.isVisible() ? 250 : 9; }
         int offset = 0;
-        juce::Rectangle<int> pluginBounds (int i) const { const auto* track = owner.currentTrack(); return { 14 + (track != nullptr && track->isMidi ? 554 : 0) + i * 208 - offset, 44, 192, getHeight() - 59 }; }
+        juce::Rectangle<int> pluginBounds (int i) const { const auto* track = owner.currentTrack(); return { chainLeft() + 5 + (track != nullptr && track->isMidi ? 554 : 0) + i * 208 - offset, 44, 192, getHeight() - 59 }; }
         void paintMaster (juce::Graphics& g)
         {
             auto box = getLocalBounds().removeFromRight (107).reduced (8, 8);
@@ -1728,13 +1871,15 @@ private:
     void selectLauncherSlot (int track, int scene)
     {
         if (track < 0 || track >= (int) state.tracks.size() || scene < 0 || scene >= (int) state.scenes.size()) return;
-        selectTrack (track); selectedClip = -1; selectedSceneId = state.scenes[(size_t) scene].id;
+        selectTrack (track); selectedClip = -1;
+        if (currentTrack()->isReturn) { selectedLauncherClipId.clear(); return; }
+        selectedSceneId = state.scenes[(size_t) scene].id;
         const auto* slot = selectedSlot(); selectedLauncherClipId = slot != nullptr && slot->hasClip ? slot->clip.id : juce::String();
         pianoRoll.sync(); launcher.repaint(); deviceChain.sync();
     }
     void clearSelectedSlot()
     {
-        const auto scene = selectedSceneIndex(); if (selectedTrack < 0 || scene < 0) return;
+        const auto scene = selectedSceneIndex(); if (currentTrack() == nullptr || scene < 0 || currentTrack()->isReturn) return;
         report (session.clearSlot (selectedTrack, scene)); selectedLauncherClipId.clear(); refresh();
     }
     void createLauncherMidiClip()
@@ -1772,7 +1917,7 @@ private:
     {
         if (track < 0 || track >= (int) state.tracks.size() || scene < 0 || scene >= (int) state.scenes.size())
         { report (juce::Result::fail ("Select an empty audio slot in Session first.")); return; }
-        if (state.tracks[(size_t) track].isMidi) { report (juce::Result::fail ("Choose an audio track to import audio into a Session slot.")); return; }
+        if (state.tracks[(size_t) track].isMidi || state.tracks[(size_t) track].isReturn) { report (juce::Result::fail ("Choose an audio track to import audio into a Session slot.")); return; }
         if (scene < (int) state.tracks[(size_t) track].slots.size() && state.tracks[(size_t) track].slots[(size_t) scene].hasClip)
         { report (juce::Result::fail ("This slot already contains a clip. Clear it before importing a replacement.")); return; }
         const auto trackId = state.tracks[(size_t) track].id, sceneId = state.scenes[(size_t) scene].id;
@@ -1789,7 +1934,7 @@ private:
     void importLauncherFiles (const juce::StringArray& files, int track, int firstScene)
     {
         if (track < 0 || track >= (int) state.tracks.size() || firstScene < 0) return;
-        if (state.tracks[(size_t) track].isMidi) { report (juce::Result::fail ("Drop audio into an audio track's Session slot.")); return; }
+        if (state.tracks[(size_t) track].isMidi || state.tracks[(size_t) track].isReturn) { report (juce::Result::fail ("Drop audio into an audio track's Session slot.")); return; }
         std::vector<juce::File> audioFiles;
         for (const auto& file : files) if (isAudio (juce::File (file))) audioFiles.emplace_back (file);
         std::sort (audioFiles.begin(), audioFiles.end(), [] (const auto& a, const auto& b) { return a.getFileName().compareNatural (b.getFileName()) < 0; });
@@ -1889,13 +2034,22 @@ private:
     {
         if (selectedTrack != track) { selectedClip = -1; selectedLauncherClipId.clear(); }
         selectedTrack = track;
+        importButton.setEnabled (currentTrack() == nullptr || ! currentTrack()->isReturn);
+        newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
         canvas.repaint(); deviceChain.sync();
         for (int i = 0; i < canvas.getNumChildComponents(); ++i) canvas.getChildComponent (i)->repaint();
     }
     void refresh()
     {
         const auto previous = state;
+        const auto selectedId = currentTrack() != nullptr ? currentTrack()->id : juce::String();
         state = session.snapshot();
+        if (selectedId.isNotEmpty())
+        {
+            const int liveIndex = launcherIndices (selectedId, {}).first;
+            if (liveIndex >= 0) selectedTrack = liveIndex;
+            else { selectedClip = -1; selectedLauncherClipId.clear(); }
+        }
         if (state.recording && ! previous.recording) recordingStart = state.position;
         if (selectedTrack >= (int) state.tracks.size()) { selectedTrack = (int) state.tracks.size() - 1; selectedClip = -1; }
         if (selectedTrack < 0 && ! state.tracks.empty()) selectedTrack = 0;
@@ -1915,7 +2069,8 @@ private:
         if (selectedSceneIndex() < 0) selectedSceneId = state.scenes.empty() ? juce::String() : state.scenes.front().id;
         launcher.sync();
         pianoRoll.sync();
-        newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi);
+        newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
+        importButton.setEnabled (currentTrack() == nullptr || ! currentTrack()->isReturn);
         ruler.repaint(); deviceChain.sync(); repaint();
         updateScroll();
     }
@@ -1950,6 +2105,11 @@ private:
         showPiano = false;
         report (session.addAudioTrack()); refresh(); selectTrack ((int) state.tracks.size() - 1);
         viewport.setViewPosition (0, juce::jmax (0, selectedTrack * trackHeight - viewport.getHeight() + trackHeight));
+    }
+    void addReturnTrack()
+    {
+        const auto result = session.addReturnTrack(); report (result); refresh();
+        if (result.wasOk()) { selectTrack ((int) state.tracks.size() - 1); showPiano = false; resized(); }
     }
     void deleteSelectedClip()
     {
@@ -1992,7 +2152,7 @@ private:
         {
             popup.addItem (1, "New Project"); popup.addItem (2, "Open Project..."); popup.addSeparator();
             popup.addItem (3, "Save Project"); popup.addItem (4, "Save Project As..."); popup.addSeparator();
-            popup.addItem (5, "Import Audio..."); popup.addItem (6, "Export Arrangement as WAV...", ! state.tracks.empty()); popup.addSeparator();
+            popup.addItem (5, "Import Audio...", currentTrack() == nullptr || ! currentTrack()->isReturn); popup.addItem (6, "Export Arrangement as WAV...", ! state.tracks.empty()); popup.addSeparator();
             popup.addItem (7, "Audio Setup..."); popup.addItem (8, "Manage Plug-ins...");
         }
         else if (index == 1)
@@ -2002,7 +2162,7 @@ private:
         }
         else if (index == 2)
         {
-            popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", currentTrack() != nullptr);
+            popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (35, "Insert Return Track"); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", currentTrack() != nullptr);
             popup.addSeparator(); popup.addItem (32, "Add Plug-in...", currentTrack() != nullptr);
         }
         else if (index == 3)
@@ -2037,6 +2197,7 @@ private:
             case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); break;
             case 30: showPiano = false; addTrack(); resized(); break;
             case 33: addMidiTrack(); break;
+            case 35: addReturnTrack(); break;
             case 34: if (showSession) createLauncherMidiClip(); else createMidiClip (state.position); break;
             case 31: if (selectedTrack >= 0) { session.closePluginEditors(); report (session.removeTrack (selectedTrack)); selectedClip = -1; } break;
             case 32: addPluginMenu(); break;
@@ -2096,6 +2257,7 @@ private:
     }
     void importDialog()
     {
+        if (currentTrack() != nullptr && currentTrack()->isReturn) return;
         if (showSession) { importSlotDialog (selectedTrack, selectedSceneIndex()); return; }
         chooser = std::make_unique<juce::FileChooser> ("Import Audio", browserFolder, "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
         auto safe = juce::Component::SafePointer<Impl> (this);
@@ -2110,6 +2272,8 @@ private:
     }
     void importFiles (const juce::StringArray& files, int track, double at)
     {
+        if (track >= 0 && track < (int) state.tracks.size() && state.tracks[(size_t) track].isReturn)
+        { report (juce::Result::fail ("Return tracks receive audio from sends. Import clips into an audio track.")); return; }
         std::vector<juce::File> audioFiles;
         for (const auto& path : files)
         {
@@ -2134,7 +2298,7 @@ private:
             if (imported == 0 && validSelection) target = track;
             else
                 for (int i = nextTrack; i < (int) before.tracks.size(); ++i)
-                    if (! before.tracks[(size_t) i].isMidi && before.tracks[(size_t) i].clips.empty()) { target = i; break; }
+                    if (! before.tracks[(size_t) i].isMidi && ! before.tracks[(size_t) i].isReturn && before.tracks[(size_t) i].clips.empty()) { target = i; break; }
             const bool reusedEmptyTrack = target >= 0 && before.tracks[(size_t) target].clips.empty();
             const auto result = session.importAudio (file, target, at);
             report (result);
@@ -2704,6 +2868,165 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     menuItemSelected (31, 2); menuItemSelected (20, 1); menuItemSelected (21, 1); menuItemSelected (50, 4);
     check (currentTrack() != nullptr && selectedSceneIndex() >= 0,
            "track delete, undo, redo and new scene leave Session selection attached to live state");
+
+    menuItemSelected (35, 2);
+    check (currentTrack() != nullptr && currentTrack()->isReturn && currentTrack()->sends.empty(),
+           "Insert Return Track command creates and selects a real return without outgoing sends");
+    const auto firstReturnId = currentTrack()->id;
+    auto* returnRow = canvas.getChildComponent (selectedTrack);
+    auto* returnMode = dynamic_cast<juce::ComboBox*> (findNamed (*returnRow, "Return send position"));
+    auto* returnName = dynamic_cast<juce::Label*> (findNamed (*returnRow, "Track name"));
+    check (returnMode != nullptr && returnMode->isVisible() && returnName != nullptr
+               && ! findNamed (*returnRow, "Record arm")->isVisible()
+               && ! findNamed (*returnRow, "Track audio input")->isVisible()
+               && ! findNamed (*returnRow, "Track monitoring")->isVisible(),
+           "return mixer exposes send position and hides recording and input controls");
+    returnMode->setSelectedId (1, juce::sendNotificationSync);
+    check (currentTrack()->sendMode == Session::SendMode::pre,
+           "return Pre-fader control changes the actual destination routing mode");
+    returnName->setText ("Room Return", juce::sendNotificationSync); refresh();
+    check (currentTrack()->id == firstReturnId && currentTrack()->name == "Room Return",
+           "existing rename control preserves the return identity");
+    menuItemSelected (35, 2);
+    const auto secondReturnId = currentTrack()->id;
+    returnName = dynamic_cast<juce::Label*> (findNamed (*canvas.getChildComponent (selectedTrack), "Track name"));
+    returnName->setText ("Echo Return", juce::sendNotificationSync); refresh();
+    const int sourceTrack = 0;
+    selectTrack (sourceTrack);
+    auto sendSlider = [&] (const juce::String& name)
+    {
+        auto* slider = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "Send to " + name));
+        bool visible = slider != nullptr;
+        for (auto* child = static_cast<juce::Component*> (slider); child != this; child = child != nullptr ? child->getParentComponent() : nullptr)
+        {
+            if (child == nullptr || ! child->isVisible()) { visible = false; break; }
+        }
+        check (visible, "selected source exposes a visible named send control for " + name);
+        auto* hit = getComponentAt (getLocalPoint (slider, slider->getLocalBounds().getCentre()));
+        check (hit == slider || slider->isParentOf (hit), "send control receives pointer hits without a covering component");
+        return slider;
+    };
+    auto sendGain = [&] (int track, const juce::String& id)
+    {
+        const auto snapshot = session.snapshot();
+        for (const auto& send : snapshot.tracks[(size_t) track].sends) if (send.returnTrackId == id) return send.gainDb;
+        throw std::runtime_error ("Expected send route missing from snapshot");
+    };
+    // Native sends store a float fader position via exp, then recover dB via
+    // log. Allow 0.00001 dB round-trip error, far below the 0.1 dB UI step;
+    // Off remains an exact sentinel and is never covered by this tolerance.
+    auto sendIs = [&] (int track, const juce::String& id, float expected)
+    {
+        const auto actual = sendGain (track, id);
+        return expected == -100 ? actual == -100 : std::isfinite (actual) && std::abs (actual - expected) < 0.00001f;
+    };
+    auto* roomSend = sendSlider ("Room Return");
+    auto* echoSend = sendSlider ("Echo Return");
+    check (roomSend->getValue() == -100 && echoSend->getValue() == -100 && roomSend->getTextFromValue (-100) == "Off",
+           "new send controls start Off with exact silence semantics");
+    roomSend->setValue (-12, juce::sendNotificationSync);
+    echoSend->setValue (0, juce::sendNotificationSync);
+    check (sendIs (sourceTrack, firstReturnId, -12) && sendIs (sourceTrack, secondReturnId, 0) && echoSend->getValue() == 0,
+           "independent send controls target stable destinations and allow 0 dB");
+    roomSend->setValue (-100, juce::sendNotificationSync);
+    check (sendIs (sourceTrack, firstReturnId, -100) && sendIs (sourceTrack, secondReturnId, 0),
+           "turning one send Off leaves the other route unchanged");
+    roomSend->setValue (-9, juce::sendNotificationSync);
+    menuItemSelected (33, 2);
+    const auto midiSourceId = currentTrack()->id;
+    check (sendSlider ("Room Return")->getValue() == -100 && sendSlider ("Echo Return")->getValue() == -100,
+           "new MIDI source exposes its own independent send levels");
+    sendSlider ("Room Return")->setValue (-6, juce::sendNotificationSync);
+    refresh();
+    check (sendIs (selectedTrack, firstReturnId, -6) && sendIs (sourceTrack, firstReturnId, -9),
+           "MIDI send change cannot overwrite the audio source route");
+    selectTrack (launcherIndices (firstReturnId, {}).first);
+    menuItemSelected (31, 2);
+    check (launcherIndices (firstReturnId, {}).first < 0, "existing delete-track command removes a return");
+    selectTrack (launcherIndices (midiSourceId, {}).first);
+    check (currentTrack()->sends.size() == 1 && currentTrack()->sends.front().returnTrackId == secondReturnId,
+           "return deletion removes its send row without retargeting the surviving destination");
+    menuItemSelected (20, 1);
+    check (currentTrack()->id == midiSourceId && currentTrack()->sends.size() == 2
+               && sendIs (selectedTrack, firstReturnId, -6),
+           "undo restores the return and source routing while preserving source selection across index changes");
+    auto* restoredRoomSend = sendSlider ("Room Return");
+    check (std::isfinite (restoredRoomSend->getValue()) && std::abs (restoredRoomSend->getValue() + 6.0) < 0.00001
+               && restoredRoomSend->getTextFromValue (restoredRoomSend->getValue()) == "-6.0 dB"
+               && sendSlider ("Echo Return")->getValue() == -100,
+           "restored send controls follow stable IDs and original values");
+    const int returnIndex = launcherIndices (firstReturnId, {}).first;
+    selectTrack (returnIndex); menuItemSelected (43, 3);
+    check (! importButton.isEnabled() && ! newMidiClipButton.isEnabled() && ! findNamed (deviceChain, "Track sends")->isVisible(),
+           "selected return disables clip actions and has no outgoing-send panel");
+    viewport.setViewPosition (0, returnIndex * trackHeight);
+    const auto returnDrop = getLocalPoint (&canvas, juce::Point<int> (40, returnIndex * trackHeight + 42));
+    const auto beforeReturnDrop = clipIdentities();
+    filesDropped ({ audioFixture.getFullPathName() }, returnDrop.x, returnDrop.y);
+    check (clipIdentities() == beforeReturnDrop && currentTrack()->clips.empty(),
+           "actual Arrangement drop handler cannot create or redirect clips dropped on a return");
+    menuItemSelected (45, 3); launcher.scrollSelectionIntoView();
+    // The return is selected from its mixer/header; keyboard launch and deletion
+    // must never treat its empty column as a clip slot.
+    const auto beforeReturnKeys = clipIdentities();
+    launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey));
+    launcher.keyPressed (juce::KeyPress (juce::KeyPress::deleteKey));
+    check (clipIdentities() == beforeReturnKeys && ! currentTrack()->launcherActive
+               && std::none_of (currentTrack()->slots.begin(), currentTrack()->slots.end(), [] (const auto& slot)
+                   { return slot.hasClip || slot.playing || slot.queued || slot.stopQueued; }),
+           "Session Enter and Delete leave a selected return outside clip launching");
+    // Locate the return's visible column via its shared mixer row, then use the
+    // same pointer entry point as native Session clicks.
+    std::function<juce::Component* (juce::Component&)> findReturnLabel;
+    findReturnLabel = [&] (juce::Component& parent) -> juce::Component*
+    {
+        for (int i = 0; i < parent.getNumChildComponents(); ++i)
+        {
+            auto* child = parent.getChildComponent (i);
+            if (auto* label = dynamic_cast<juce::Label*> (child); label != nullptr && label->getName() == "Track name" && label->getText() == "Room Return") return label;
+            if (auto* found = findReturnLabel (*child)) return found;
+        }
+        return nullptr;
+    };
+    auto* sessionReturnLabel = findReturnLabel (launcher);
+    check (sessionReturnLabel != nullptr, "Session return mixer exposes its real track label");
+    auto returnPoint = launcher.getLocalPoint (sessionReturnLabel, juce::Point<int> (0, 0)).toFloat();
+    returnPoint.y = 79;
+    check (launcher.cellAt (returnPoint.toInt()).first == -1, "return column has no clickable clip or stop slot");
+    launcher.mouseDown (launcherEvent (returnPoint)); launcher.mouseDoubleClick (launcherEvent (returnPoint));
+    check (currentTrack()->id == firstReturnId && ! showPiano && clipIdentities() == beforeReturnKeys,
+           "return column pointer handlers select the return without creating or launching clips");
+    returnMode = dynamic_cast<juce::ComboBox*> (findNamed (*sessionReturnLabel->getParentComponent(), "Return send position"));
+    returnMode->setSelectedId (2, juce::sendNotificationSync);
+    check (currentTrack()->sendMode == Session::SendMode::post, "Session return mixer changes the same destination to Post-fader");
+    if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+    {
+        const juce::File directory (juce::String::fromUTF8 (configured));
+        if (directory.createDirectory().wasOk())
+        {
+            auto* host = getParentComponent();
+            auto capture = [&] (const juce::String& view, bool sessionView, bool returnSelected, int width, int height)
+            {
+                if (host == nullptr) return;
+                const auto oldBounds = host->getBounds(); host->setSize (width, height);
+                selectTrack (returnSelected ? launcherIndices (firstReturnId, {}).first : sourceTrack);
+                if (sessionView) { showSessionView(); launcher.scrollSelectionIntoView(); }
+                else { showArrangementView(); viewport.setViewPosition (0, returnSelected ? selectedTrack * trackHeight : 0); }
+                refresh();
+                const auto image = host->createComponentSnapshot (host->getLocalBounds(), true, 1.0f);
+                const auto output = directory.getChildFile (view + "-" + juce::String (width) + "x" + juce::String (height) + ".png");
+                auto stream = output.createOutputStream(); juce::PNGImageFormat png;
+                if (stream && stream->setPosition (0) && stream->truncate().wasOk() && png.writeImageToStream (image, *stream)) std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                else std::cerr << "UI snapshot export failed: " << output.getFullPathName() << std::endl;
+                host->setSize (oldBounds.getWidth(), oldBounds.getHeight()); refresh();
+            };
+            for (bool sessionView : { false, true }) for (bool returnSelected : { false, true })
+            {
+                const auto view = juce::String (sessionView ? "session-" : "arrangement-") + (returnSelected ? "return" : "sends");
+                capture (view, sessionView, returnSelected, 1440, 900); capture (view, sessionView, returnSelected, 1100, 720);
+            }
+        }
+    }
 }
 
 int MainComponent::runInteractionTests()
