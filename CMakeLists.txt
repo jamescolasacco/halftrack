@@ -30,6 +30,8 @@ include(cmake/PatchTracktion.cmake)
 halftrack_patch_tracktion("${tracktion_SOURCE_DIR}")
 include(cmake/PatchClipLauncher.cmake)
 halftrack_patch_clip_launcher("${tracktion_SOURCE_DIR}")
+include(cmake/PatchRenderLatency.cmake)
+halftrack_patch_render_latency("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"
