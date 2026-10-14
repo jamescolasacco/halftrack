@@ -3,6 +3,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <tracktion_engine/tracktion_engine.h>
 #include <algorithm>
+#include <iostream>
 
 namespace halftrack
 {
@@ -12,6 +13,12 @@ int runLatencyTests (const juce::File&);
 int runLauncherTests (const juce::File&);
 #if HALFTRACK_TESTS_ENABLED
 int runRealtimeTests();
+int runPluginScanTests (const juce::File&);
+int runPluginEditorTests (const juce::File&);
+#if JUCE_MAC
+juce::Result registerAudioUnitTestFixture();
+int runAudioUnitTests (const juce::File&);
+#endif
 #endif
 class Application final : public juce::JUCEApplication
 {
@@ -23,12 +30,53 @@ public:
 
     void initialise (const juce::String& commandLine) override
     {
+        #if HALFTRACK_TESTS_ENABLED && JUCE_MAC
+        if (auto registered = registerAudioUnitTestFixture(); registered.failed())
+        {
+            std::cerr << registered.getErrorMessage() << std::endl;
+            setApplicationReturnValue (1);
+            quit();
+            return;
+        }
+        #endif
         if (tracktion::PluginManager::startChildProcessPluginScan (commandLine))
             return;
         auto args = juce::StringArray::fromTokens (commandLine, true);
         args.removeEmptyStrings();
         for (auto& arg : args) arg = arg.unquoted();
         #if HALFTRACK_TESTS_ENABLED
+        #if JUCE_MAC
+        if (args.contains ("--self-test-au"))
+        {
+            const int i = args.indexOf ("--self-test-au");
+            const auto destination = i + 1 < args.size()
+                ? juce::File (args[i + 1])
+                : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-tests");
+            setApplicationReturnValue (runAudioUnitTests (destination));
+            quit();
+            return;
+        }
+        #endif
+        if (args.contains ("--self-test-plugin-editor"))
+        {
+            const int i = args.indexOf ("--self-test-plugin-editor");
+            const auto destination = i + 1 < args.size()
+                ? juce::File (args[i + 1])
+                : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-tests");
+            setApplicationReturnValue (runPluginEditorTests (destination));
+            quit();
+            return;
+        }
+        if (args.contains ("--self-test-plugin-scan"))
+        {
+            const int i = args.indexOf ("--self-test-plugin-scan");
+            const auto destination = i + 1 < args.size()
+                ? juce::File (args[i + 1])
+                : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-tests");
+            setApplicationReturnValue (runPluginScanTests (destination));
+            quit();
+            return;
+        }
         if (args.contains ("--self-test-ui"))
         {
             setApplicationReturnValue (MainComponent::runInteractionTests());

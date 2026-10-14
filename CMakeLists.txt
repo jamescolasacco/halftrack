@@ -32,6 +32,10 @@ include(cmake/PatchClipLauncher.cmake)
 halftrack_patch_clip_launcher("${tracktion_SOURCE_DIR}")
 include(cmake/PatchRenderLatency.cmake)
 halftrack_patch_render_latency("${tracktion_SOURCE_DIR}")
+include(cmake/PatchPluginScanner.cmake)
+halftrack_patch_plugin_scanner("${tracktion_SOURCE_DIR}")
+include(cmake/PatchAsyncPlugin.cmake)
+halftrack_patch_async_plugin("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"
@@ -70,13 +74,18 @@ endif()
 include(CTest)
 target_compile_definitions(Halftrack PRIVATE HALFTRACK_TESTS_ENABLED=$<BOOL:${BUILD_TESTING}>)
 if(BUILD_TESTING)
-    target_sources(Halftrack PRIVATE tests/RealtimeTests.cpp)
+    target_sources(Halftrack PRIVATE tests/RealtimeTests.cpp tests/PluginScanTests.cpp tests/PluginEditorTests.cpp)
+    set(HALFTRACK_GAIN_TEST_FORMATS VST3)
+    if(APPLE)
+        list(APPEND HALFTRACK_GAIN_TEST_FORMATS AU)
+        target_sources(Halftrack PRIVATE tests/AudioUnitTests.cpp tests/AudioUnitTestRegistration.cpp)
+    endif()
     juce_add_plugin(HalftrackTestGain
         BUNDLE_ID "org.halftrack.testgain"
         COMPANY_NAME "Halftrack Contributors"
         PLUGIN_MANUFACTURER_CODE Htrk
         PLUGIN_CODE Htgn
-        FORMATS VST3
+        FORMATS ${HALFTRACK_GAIN_TEST_FORMATS}
         PRODUCT_NAME "Halftrack Test Gain"
         IS_SYNTH FALSE
         NEEDS_MIDI_INPUT FALSE
@@ -98,6 +107,17 @@ if(BUILD_TESTING)
     target_compile_definitions(HalftrackTestLatency PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
     target_link_libraries(HalftrackTestLatency PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
     add_dependencies(Halftrack HalftrackTestGain_VST3 HalftrackTestLatency_VST3)
+    if(APPLE)
+        add_dependencies(Halftrack HalftrackTestGain_AU)
+        add_test(NAME au-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-au ${CMAKE_BINARY_DIR}/test-artifacts)
+        set_tests_properties(au-acceptance PROPERTIES TIMEOUT 90
+            ENVIRONMENT "HALFTRACK_TEST_AU_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_AU>/../..")
+    endif()
+    add_test(NAME plugin-editor-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-plugin-editor ${CMAKE_BINARY_DIR}/test-artifacts)
+    set_tests_properties(plugin-editor-acceptance PROPERTIES TIMEOUT 90)
+    add_test(NAME plugin-scan-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-plugin-scan ${CMAKE_BINARY_DIR}/test-artifacts)
+    set_tests_properties(plugin-scan-acceptance PROPERTIES TIMEOUT 90
+        ENVIRONMENT "HALFTRACK_TEST_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_VST3>/../..")
     add_test(NAME latency-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-latency ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(latency-acceptance PROPERTIES TIMEOUT 90
         ENVIRONMENT "HALFTRACK_TEST_LATENCY_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestLatency_VST3>/../..")
