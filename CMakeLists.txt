@@ -36,6 +36,8 @@ include(cmake/PatchPluginScanner.cmake)
 halftrack_patch_plugin_scanner("${tracktion_SOURCE_DIR}")
 include(cmake/PatchAsyncPlugin.cmake)
 halftrack_patch_async_plugin("${tracktion_SOURCE_DIR}")
+include(cmake/PatchEditSort.cmake)
+halftrack_patch_edit_sort("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"
@@ -74,7 +76,7 @@ endif()
 include(CTest)
 target_compile_definitions(Halftrack PRIVATE HALFTRACK_TESTS_ENABLED=$<BOOL:${BUILD_TESTING}>)
 if(BUILD_TESTING)
-    target_sources(Halftrack PRIVATE tests/RealtimeTests.cpp tests/PluginScanTests.cpp tests/PluginEditorTests.cpp)
+    target_sources(Halftrack PRIVATE tests/RealtimeTests.cpp tests/PluginScanTests.cpp tests/PluginEditorTests.cpp tests/SendReturnTests.cpp)
     set(HALFTRACK_GAIN_TEST_FORMATS VST3)
     if(APPLE)
         list(APPEND HALFTRACK_GAIN_TEST_FORMATS AU)
@@ -113,6 +115,9 @@ if(BUILD_TESTING)
         set_tests_properties(au-acceptance PROPERTIES TIMEOUT 90
             ENVIRONMENT "HALFTRACK_TEST_AU_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_AU>/../..")
     endif()
+    add_test(NAME sends-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-sends ${CMAKE_BINARY_DIR}/test-artifacts)
+    set_tests_properties(sends-acceptance PROPERTIES TIMEOUT 180
+        ENVIRONMENT "HALFTRACK_TEST_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_VST3>/../..;HALFTRACK_TEST_LATENCY_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestLatency_VST3>/../..")
     add_test(NAME plugin-editor-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-plugin-editor ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(plugin-editor-acceptance PROPERTIES TIMEOUT 90)
     add_test(NAME plugin-scan-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-plugin-scan ${CMAKE_BINARY_DIR}/test-artifacts)
