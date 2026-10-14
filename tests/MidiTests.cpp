@@ -122,6 +122,9 @@ void batchEditTests (const juce::File& directory)
     ok (session.loadProject (overhang), "load existing overhanging MIDI note");
     auto velocities = current(); velocities[0].velocity = 0.25f; velocities[1].velocity = 0.5f;
     reject (velocities, "overhanging later note cannot partially apply a group velocity edit");
+    const auto overhangingNotes = current();
+    ok (session.removeMidiNotes (clipId, { overhangingNotes[0].id, overhangingNotes[1].id }), "batch delete can remove existing overhanging notes");
+    session.undo(); check (sameNotes (current(), overhangingNotes), "undo overhanging note removal restores exact values");
     noteStates[1].setProperty ("l", 1.0, nullptr);
     noteStates[1].setProperty ("halftrackNoteId", noteStates[0].getProperty ("halftrackNoteId"), nullptr);
     const auto duplicate = directory.getChildFile ("Duplicate-ID.halftrack");
@@ -132,6 +135,116 @@ void batchEditTests (const juce::File& directory)
     check (session.updateMidiNotes (clipId, { ambiguous }).failed() && current()[0].pitch == before[0].pitch
            && current()[1].pitch == before[1].pitch && ! session.canUndo() && ! session.snapshot().dirty,
            "one-item batch rejects an ambiguous native ID without editing either note");
+    check (session.removeMidiNotes (clipId, { ambiguous.id }).failed()
+           && current()[0].pitch == before[0].pitch && current()[1].pitch == before[1].pitch
+           && ! session.canUndo() && ! session.snapshot().dirty,
+           "one-item removal rejects ambiguous loaded IDs without changing history");
+    juce::StringArray validIds;
+    ok (session.addMidiNotes (clipId, { { {}, 76, 0, 1, 0.5f } }, validIds), "add unambiguous note beside loaded duplicate IDs");
+    const auto beforeMixedRemoval = current();
+    const auto dirtyBeforeRemoval = session.snapshot().dirty;
+    const auto mixedRemoval = session.removeMidiNotes (clipId, { validIds[0], ambiguous.id });
+    const auto afterMixedRemoval = current();
+    check (mixedRemoval.failed()
+           && afterMixedRemoval.size() == beforeMixedRemoval.size()
+           && std::any_of (afterMixedRemoval.begin(), afterMixedRemoval.end(), [&] (const auto& note) { return note.id == validIds[0]; })
+           && session.snapshot().dirty == dirtyBeforeRemoval && session.canUndo() && ! session.canRedo(),
+           "ambiguous later removal cannot partially delete an earlier valid target");
+    session.undo(); check (current().size() == 2, "rejected ambiguous deletion preserves original insertion undo");
+}
+void insertRemoveBatchTests (const juce::File& directory)
+{
+    Session session (false);
+    ok (session.addMidiTrack ("Clipboard edits"), "create insertion test instrument");
+    const auto trackId = instrument (session).id;
+    ok (session.addMidiClip (trackId, 0, 4), "create insertion test clip");
+    const auto clipId = instrument (session).clips[0].id;
+    const auto emptyProject = directory.getChildFile ("Empty-insertion.halftrack");
+    ok (session.saveProject (emptyProject), "save empty insertion fixture");
+    ok (session.loadProject (emptyProject), "load clean insertion fixture");
+    const std::vector<Session::MidiNoteInfo> source {
+        { "copied-source-id", 60, 2, 0.5, 0.5f }, { "copied-source-id", 67, 0, 1, 0.001f }
+    };
+    auto current = [&] { return instrument (session).clips[0].notes; };
+    juce::StringArray ids { "prior-output" };
+    ok (session.addMidiNotes (clipId, {}, ids), "empty insertion is a successful no-op");
+    ok (session.removeMidiNotes (clipId, {}), "empty removal is a successful no-op");
+    check (ids.isEmpty() && current().empty() && ! session.snapshot().dirty && ! session.canUndo(),
+           "empty batches preserve clean project and return no inserted IDs");
+    ok (session.addMidiNotes (clipId, source, ids), "insert complete batch with copied IDs ignored");
+    auto expected = source;
+    check (ids.size() == 2 && ids[0].isNotEmpty() && ids[1].isNotEmpty() && ids[0] != ids[1]
+           && ! ids.contains (source[0].id), "insertion returns distinct fresh IDs in source order");
+    expected[0].id = ids[0]; expected[0].velocity = 64 / 127.0f;
+    expected[1].id = ids[1]; expected[1].velocity = 1 / 127.0f;
+    check (sameNotes (current(), expected), "inserted IDs identify exact pitches, times and native-quantized velocities");
+    session.undo();
+    check (current().empty() && ! session.canUndo() && session.canRedo(), "one undo removes entire inserted batch");
+    auto rejectInsert = [&] (const juce::String& target, const std::vector<Session::MidiNoteInfo>& values, const juce::String& message)
+    {
+        const auto before = current(); const auto dirty = session.snapshot().dirty;
+        const auto undo = session.canUndo(), redo = session.canRedo();
+        juce::StringArray output { "preserved-output" };
+        check (session.addMidiNotes (target, values, output).failed() && sameNotes (current(), before)
+               && output == juce::StringArray { "preserved-output" } && session.snapshot().dirty == dirty
+               && session.canUndo() == undo && session.canRedo() == redo, message);
+    };
+    auto invalid = source; invalid[1].lengthBeats = 5;
+    rejectInsert (clipId, invalid, "later out-of-clip insertion rejects whole batch without dirty/history/output changes");
+    invalid = source; invalid[1].pitch = 128;
+    rejectInsert (clipId, invalid, "later invalid pitch rejects whole insertion");
+    invalid = source; invalid[1].velocity = std::numeric_limits<float>::quiet_NaN();
+    rejectInsert (clipId, invalid, "later nonfinite velocity rejects whole insertion");
+    invalid = source; invalid[1].startBeat = std::numeric_limits<double>::infinity();
+    rejectInsert (clipId, invalid, "later nonfinite time rejects whole insertion");
+    rejectInsert ("missing", source, "insertion resolves target clip before editing");
+    rejectInsert ("missing", {}, "empty insertion still requires a current clip");
+    juce::StringArray noIds;
+    ok (session.addMidiNotes (clipId, {}, noIds), "empty insertion preserves redo");
+    ok (session.removeMidiNotes (clipId, {}), "empty removal preserves redo");
+    session.redo();
+    check (sameNotes (current(), expected), "redo after rejected and empty calls restores original inserted identities");
+    std::vector<Session::MidiNoteInfo> oversized (99999, source[0]);
+    rejectInsert (clipId, oversized, "batch plus existing notes enforces existing100000-note limit before insertion");
+
+    auto rejectRemove = [&] (const juce::StringArray& values, const juce::String& message)
+    {
+        const auto before = current(); const auto dirty = session.snapshot().dirty;
+        const auto undo = session.canUndo(), redo = session.canRedo();
+        check (session.removeMidiNotes (clipId, values).failed() && sameNotes (current(), before)
+               && session.snapshot().dirty == dirty && session.canUndo() == undo && session.canRedo() == redo, message);
+    };
+    rejectRemove ({ ids[0], "missing" }, "later missing removal ID cannot delete earlier target");
+    rejectRemove ({ ids[0], ids[0] }, "duplicate removal ID rejects whole batch");
+    rejectRemove ({ ids[0], juce::String() }, "empty later removal ID rejects whole batch");
+    const auto populated = directory.getChildFile ("Inserted.halftrack");
+    ok (session.saveProject (populated), "save inserted note IDs");
+    ok (session.newProject(), "replace insertion session");
+    juce::StringArray staleOutput { "untouched" };
+    check (session.addMidiNotes (clipId, source, staleOutput).failed()
+           && staleOutput == juce::StringArray { "untouched" } && ! session.canUndo() && ! session.snapshot().dirty,
+           "old clip ID cannot insert into a replacement project");
+    ok (session.loadProject (populated), "reload populated insertion fixture");
+    check (sameNotes (current(), expected), "inserted stable IDs and note values persist after reopen");
+    juce::StringArray copies;
+    ok (session.addMidiNotes (clipId, expected, copies), "insert copied values into current reopened clip");
+    check (copies.size() == 2 && copies[0] != copies[1] && ! ids.contains (copies[0]) && ! ids.contains (copies[1]),
+           "reopened clip gets fresh IDs distinct from source and existing notes");
+    session.undo(); check (sameNotes (current(), expected) && ! session.canUndo(), "one undo removes reopened batch only");
+    rejectRemove ({ ids[0], "missing" }, "invalid removal preserves pending insertion redo");
+    session.redo(); check (current().size() == 4, "actual insertion redo survives failed removal"); session.undo();
+    ok (session.removeMidiNotes (clipId, { ids[1], ids[0] }), "remove multiple current notes in requested order");
+    check (current().empty(), "valid removal removes whole selected group");
+    session.undo(); check (sameNotes (current(), expected) && ! session.canUndo(), "one undo restores removed group identities and values");
+    session.redo(); check (current().empty(), "redo removes whole group"); session.undo();
+
+    session.beginEditGesture ("Clipboard edit gesture");
+    ok (session.addMidiNotes (clipId, source, copies), "insert within existing gesture");
+    ok (session.removeMidiNotes (clipId, ids), "remove within existing gesture");
+    session.endEditGesture();
+    const auto gestureResult = current();
+    session.undo(); check (sameNotes (current(), expected) && ! session.canUndo(), "one undo groups insertion and removal in existing gesture");
+    session.redo(); check (sameNotes (current(), gestureResult), "redo restores combined insert/remove gesture");
 }
 void coreTests()
 {
@@ -201,6 +314,7 @@ int runMidiTests (const juce::File& requestedDirectory)
         auto directory = requestedDirectory.getChildFile ("midi-" + juce::Uuid().toString());
         ok (directory.createDirectory(), "create isolated MIDI artifacts");
         batchEditTests (directory);
+        insertRemoveBatchTests (directory);
         Session session (false);
         ok (session.addMidiTrack ("Synth notes"), "add real MIDI instrument track");
         auto trackId = instrument (session).id;
@@ -294,14 +408,16 @@ int runMidiTests (const juce::File& requestedDirectory)
         {
             eventDispatched = true;
             busyDuringDispatch = session.isExporting() && ! session.canUndo() && ! session.canRedo();
-            const std::array<juce::Result, 11> attempts {
+            juce::StringArray inserted { "export-preserved" };
+            const std::array<juce::Result, 13> attempts {
                 session.newProject(), session.loadProject (project), session.saveProject (rejectedSave),
                 session.removeTrack (2), session.addMidiNote (clipId, 60, 0, 1, 1),
                 session.setSynthSettings (trackId, flatSettings()), session.setTrackGain (2, -20),
                 session.addAudioTrack ("Reentrant track"), session.removeClip (2, 0),
-                session.exportWav (nestedOutput), session.updateMidiNotes (clipId, restored.clips[0].notes)
+                session.exportWav (nestedOutput), session.updateMidiNotes (clipId, restored.clips[0].notes),
+                session.addMidiNotes (clipId, restored.clips[0].notes, inserted), session.removeMidiNotes (clipId, { noteId })
             };
-            mutationsRejected = std::all_of (attempts.begin(), attempts.end(), [] (const auto& result)
+            mutationsRejected = inserted == juce::StringArray { "export-preserved" } && std::all_of (attempts.begin(), attempts.end(), [] (const auto& result)
             {
                 return result.failed() && result.getErrorMessage() == "Finish or cancel the current export first.";
             });

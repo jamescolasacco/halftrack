@@ -99,10 +99,13 @@ public:
     juce::Result returnToArrangement();
     juce::Result setLaunchQuantisation (LaunchQuantisation);
     juce::Result addMidiNote (const juce::String& clipId, int pitch, double startBeat, double lengthBeats, float velocity);
+    // Input IDs are ignored. Successful insertion replaces insertedIds in input order; failure leaves it unchanged.
+    juce::Result addMidiNotes (const juce::String& clipId, const std::vector<MidiNoteInfo>& notes, juce::StringArray& insertedIds);
     juce::Result updateMidiNote (const juce::String& clipId, const juce::String& noteId,
                                  int pitch, double startBeat, double lengthBeats, float velocity);
     juce::Result updateMidiNotes (const juce::String& clipId, const std::vector<MidiNoteInfo>& notes);
     juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);
+    juce::Result removeMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds);
     juce::Result setSynthSettings (const juce::String& trackId, const SynthSettings&);
     juce::Result removeTrack (int trackIndex);
     juce::Result importAudio (const juce::File&, int trackIndex = -1, double startSeconds = 0);

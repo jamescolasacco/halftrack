@@ -475,11 +475,6 @@ struct Session::Impl
             if (auto* instrument = dynamic_cast<SubtractiveSynthPlugin*> (plugin)) return instrument;
         return nullptr;
     }
-    static te::MidiNote* note (te::MidiClip& clip, const String& id)
-    {
-        for (auto* n : clip.getSequence().getNotes()) if (n->state.getProperty (midiNoteIDProperty).toString() == id) return n;
-        return nullptr;
-    }
     Result validateNote (te::MidiClip& clip, int pitch, double start, double length, float velocity) const
     {
         const auto beats = edit->tempoSequence.toBeats (clip.getPosition().time).getLength().inBeats();
@@ -1148,16 +1143,43 @@ Result Session::returnToArrangement()
 
 Result Session::addMidiNote (const String& clipId, int pitch, double start, double length, float velocity)
 {
+    juce::StringArray insertedIds;
+    return addMidiNotes (clipId, { { {}, pitch, start, length, velocity } }, insertedIds);
+}
+Result Session::addMidiNotes (const String& clipId, const std::vector<MidiNoteInfo>& notes, juce::StringArray& insertedIds)
+{
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
-    auto valid = impl->validateNote (*clip, pitch, start, length, velocity); if (valid.failed()) return valid;
-    if (clip->getSequence().getNumNotes() >= 100000) return Result::fail ("The MIDI clip has reached its note limit.");
-    impl->transaction ("Add MIDI note");
+    if (notes.empty()) { insertedIds.clear(); return Result::ok(); }
+    const auto count = clip->getSequence().getNumNotes();
+    if (count >= 100000 || notes.size() > static_cast<size_t> (100000 - count))
+        return Result::fail ("The MIDI clip has reached its note limit.");
+    for (const auto& note : notes)
+        if (auto valid = impl->validateNote (*clip, note.pitch, note.startBeat, note.lengthBeats, note.velocity); valid.failed())
+            return valid;
+    std::set<String> unavailableIds;
+    for (auto* note : clip->getSequence().getNotes())
+        unavailableIds.insert (note->state.getProperty (midiNoteIDProperty).toString());
+    for (const auto& note : notes) unavailableIds.insert (note.id);
+    auto prepared = notes;
+    juce::StringArray newIds;
+    for (auto& note : prepared)
+    {
+        do { note.id = juce::Uuid().toString(); } while (! unavailableIds.insert (note.id).second);
+        newIds.add (note.id);
+    }
+    impl->transaction (prepared.size() == 1 ? "Add MIDI note" : "Add MIDI notes");
     auto* undo = &impl->edit->getUndoManager();
-    auto* note = clip->getSequence().addNote (pitch, te::BeatPosition::fromBeats (start), te::BeatDuration::fromBeats (length),
-                                             juce::jlimit (1, 127, juce::roundToInt (velocity * 127)), 0, undo);
-    if (! note) return Result::fail ("Could not add the MIDI note.");
-    note->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), undo);
+    for (const auto& value : prepared)
+    {
+        auto* note = clip->getSequence().addNote (value.pitch, te::BeatPosition::fromBeats (value.startBeat),
+                                                 te::BeatDuration::fromBeats (value.lengthBeats),
+                                                 juce::jlimit (1, 127, juce::roundToInt (value.velocity * 127)), 0, undo);
+        // Native addNote synchronously creates an event for its new NOTE state.
+        jassert (note != nullptr);
+        note->state.setProperty (midiNoteIDProperty, value.id, undo);
+    }
+    insertedIds = std::move (newIds);
     impl->changed(); return Result::ok();
 }
 Result Session::updateMidiNote (const String& clipId, const String& noteId, int pitch, double start, double length, float velocity)
@@ -1209,11 +1231,32 @@ Result Session::updateMidiNotes (const String& clipId, const std::vector<MidiNot
 }
 Result Session::removeMidiNote (const String& clipId, const String& noteId)
 {
+    return removeMidiNotes (clipId, { noteId });
+}
+Result Session::removeMidiNotes (const String& clipId, const juce::StringArray& noteIds)
+{
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
-    auto* note = Impl::note (*clip, noteId); if (! note) return Result::fail ("MIDI note not found.");
-    impl->transaction ("Remove MIDI note");
-    clip->getSequence().removeNote (*note, &impl->edit->getUndoManager());
+    if (noteIds.isEmpty()) return Result::ok();
+    std::map<String, te::MidiNote*> existing;
+    for (auto* note : clip->getSequence().getNotes())
+    {
+        auto [entry, inserted] = existing.emplace (note->state.getProperty (midiNoteIDProperty).toString(), note);
+        if (! inserted) entry->second = nullptr;
+    }
+    std::set<String> requested;
+    std::vector<te::MidiNote*> targets;
+    for (const auto& id : noteIds)
+    {
+        if (id.isEmpty() || ! requested.insert (id).second)
+            return Result::fail ("Each MIDI note needs a unique identifier.");
+        const auto found = existing.find (id);
+        if (found == existing.end() || found->second == nullptr)
+            return Result::fail ("MIDI note not found or its identifier is ambiguous.");
+        targets.push_back (found->second);
+    }
+    impl->transaction (targets.size() == 1 ? "Remove MIDI note" : "Remove MIDI notes");
+    for (auto* note : targets) clip->getSequence().removeNote (*note, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
 Result Session::setSynthSettings (const String& trackId, const SynthSettings& settings)
