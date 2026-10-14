@@ -18,8 +18,13 @@ include(FetchContent)
 FetchContent_Declare(juce
     URL https://codeload.github.com/juce-framework/JUCE/tar.gz/37c894f83d379179b2070d437ccd0f1cd9af9576
     URL_HASH SHA256=42524a87f3569273ab7286545816ad1f0cc95240504a7d4464ef1e32c50692aa
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    # Populate first so the exact-source patch also precedes configure-time juceaide.
+    SOURCE_SUBDIR halftrack-populate-only)
 FetchContent_MakeAvailable(juce)
+include(cmake/PatchChildProcess.cmake)
+halftrack_patch_child_process("${juce_SOURCE_DIR}")
+add_subdirectory("${juce_SOURCE_DIR}" "${juce_BINARY_DIR}")
 set(TE_ADD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(tracktion
     URL https://codeload.github.com/Tracktion/tracktion_engine/tar.gz/07e2d674884293f1a6c8f35fb8d1b9f469ffa41f

@@ -10,7 +10,7 @@ The build uses the exact compatible revisions recorded here. New upstream releas
 | ASIO SDK bundled by JUCE | See pinned JUCE source | GPLv3 option | Windows device backend |
 | Signalsmith Stretch | Bundled by pinned Tracktion revision | MIT | Selected stretching backend; editing and fidelity tests pending |
 
-JUCE and Tracktion have additional bundled dependencies (including codecs, font rendering, resampling, queues, and allocators). Preserve their source notices. See [pinned JUCE license inventory](https://github.com/juce-framework/JUCE/blob/37c894f83d379179b2070d437ccd0f1cd9af9576/LICENSE.md) and [pinned Tracktion license](https://github.com/Tracktion/tracktion_engine/blob/07e2d674884293f1a6c8f35fb8d1b9f469ffa41f/LICENSE.md). CMake records archive SHA-256 values and validates downloads. The Tracktion revision additionally receives the recording-safety, clip-launcher, offline-render, scanner, asynchronous plug-in and structural-sort patches documented below.
+JUCE and Tracktion have additional bundled dependencies (including codecs, font rendering, resampling, queues, and allocators). Preserve their source notices. See [pinned JUCE license inventory](https://github.com/juce-framework/JUCE/blob/37c894f83d379179b2070d437ccd0f1cd9af9576/LICENSE.md) and [pinned Tracktion license](https://github.com/Tracktion/tracktion_engine/blob/07e2d674884293f1a6c8f35fb8d1b9f469ffa41f/LICENSE.md). CMake records archive SHA-256 values and validates downloads. JUCE receives the Windows confirmed-exit coordinator patch described below. The Tracktion revision additionally receives the recording-safety, clip-launcher, offline-render, scanner, asynchronous plug-in and structural-sort patches documented below.
 
 Original Halftrack code and SVG marks are AGPL-3.0-only. No commercial JUCE or Tracktion license is selected. Their commercial terms apply to different licensing choices and are not a substitute for preserving open-source obligations. Preview packaging includes complete corresponding source archives with embedded third-party notices. Signed public releases still require distribution review. No third-party plug-in binaries or vendor sample libraries are redistributed.
 
@@ -59,7 +59,7 @@ Paths are relative to `modules/tracktion_engine/`:
 
 | Patched file | Original SHA-256 | Patched SHA-256 |
 | --- | --- | --- |
-| `plugins/tracktion_PluginScanHelpers.h` | `94eb54614af016e38e67af2e27f870e0ad14aa6bf83b42638d7b36c8291f8d8c` | `a4498068deaeec17081d992825d1df2faf49a1e6c289b91d0fc9a8a54aa7071c` |
+| `plugins/tracktion_PluginScanHelpers.h` | `94eb54614af016e38e67af2e27f870e0ad14aa6bf83b42638d7b36c8291f8d8c` | `f26479c74d2e829a26997f46f6225a8ea2c3887738e560392f06ff48373c464f` |
 | `utilities/tracktion_EngineBehaviour.h` | `71025051424caea898d1f07a8a6a67b4d7500b4d1c3991a734bcad0188c6ee18` | `09b64a7d5a5e58b45370424262f61a562f620affdb9e2b92829666d0a024347d` |
 
 Both inputs and transformed outputs are checked before either file is written. Exact original/current inputs and the previous scanner result `521a1479001bb633c73f5a4780fe85418128728e1dab2f3c0abe43d84c4b0895` are accepted; unexpected content fails configuration. Explicit LF output keeps Windows and Unix hashes identical. Disposable checks covered original/current/mixed/repeated application, either unknown input without mutation, and CRLF helper encoding.
@@ -87,3 +87,18 @@ All three files are checked before any write; original and already-patched state
 | `model/tracks/tracktion_TrackUtils.h` | `fcad3688f77edb794f819be0e8a070d249a1396bc32278b979a4095a68a541e3` | `7eaef085fa9693bcb82435b0965ad6b87f0cecb9251517bffe05c30a5c8aacf3` |
 | `model/clips/tracktion_ClipOwner.h` | `cc332f9847996d75c8af0f20c04557692a22bd1c341afb94ac5aacabaed549db` | `35fbc1ab47d65d5551f67ce283c6ebb70f6388acf9682bc8b1e7939b82218d90` |
 | `model/clips/tracktion_ClipOwner.cpp` | `b40eeba8bf5d812cad05ce4485bab191ce39b612d6131b5367ef4b4bf868cb11` | `2fbdcae339880e99bb1a83005f7063d896f263026604b3e7b9656a5ac3d972c9` |
+
+## Windows confirmed-exit scanner recovery
+
+`cmake/PatchChildProcess.cmake` adds a Windows-only protected coordinator query using JUCE's retained child process handle. The pinned Windows `isRunning()` reports false only for a signaled handle; missing ownership or a failed query is not treated as exit. The existing scanner worker polls this query in its reply loop and uses the existing crash/retry/blacklist path. A complete reply already retrieved by that iteration takes precedence. This does not establish ordering for a reply concurrently arriving after the queue read.
+
+Coordinator teardown skips the kill-message write only when the same retained handle already confirms exit; it still disconnects, cancels pipe I/O and releases ownership. Healthy workers and workers that are still alive retain their original timeouts. No generic pipe code, polling frequency, audio callback or background-thread ownership is changed. A child can still exit immediately after the query, so this is not a universal immediate-recovery guarantee.
+
+CMake populates JUCE without adding its subdirectory, applies the patch, then adds it to the build. This covers downloaded archives and source overrides before JUCE's configure-time helper is built, using the documented [FetchContent SOURCE_SUBDIR behavior](https://cmake.org/cmake/help/latest/module/FetchContent.html). Both original inputs and transformed outputs are verified before any write. The pinned JUCE files contain CRLF; transformed output deliberately uses LF. Packaging retains this helper and the complete modified JUCE source with its existing notices.
+
+| File under `modules/juce_events/interprocess` | Original SHA-256 | Patched SHA-256 |
+| --- | --- | --- |
+| `juce_ConnectedChildProcess.h` | `697e20d898c9bee6d8f2e87bd2763fe086118c8dd207b36e981d342289911933` | `870a7ac9264e8d53dba2a08ff56e20a8afd760e9764c0311588842408f1fde32` |
+| `juce_ConnectedChildProcess.cpp` | `a8e7e6de59390d48c4b44a8240804e82d4276f57d8aefe51199464c0ea4e53c1` | `9563a5c0cb0bfbf90c307742e1a2afbff820d5daca0cbfaff5955e0c699cebef` |
+
+The scanner helper additionally accepts its preceding exact `a4498068deaeec17081d992825d1df2faf49a1e6c289b91d0fc9a8a54aa7071c` result as an upgrade input. Fourteen disposable application, reapplication, upgrade, unknown-source rejection and CRLF-helper checks pass. Windows-only test observations are static and compile out when `HALFTRACK_TESTS_ENABLED` is false. The ordinary crash test remains notification-enabled; a second test suppresses only the competing notification classification so actual process exit must exercise the new branch. Runtime measurements are recorded separately in progress.
