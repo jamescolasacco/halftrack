@@ -75,6 +75,7 @@ struct Event
 {
     juce::String kind, mode;
     int pid = 0;
+    juce::String identity;
 };
 std::vector<Event> events (const juce::File& root)
 {
@@ -82,10 +83,41 @@ std::vector<Event> events (const juce::File& root)
     for (const auto& file : root.getChildFile ("events").findChildFiles (juce::File::findFiles, false, "*.txt"))
     {
         const auto parts = juce::StringArray::fromTokens (file.loadFileAsString().trim(), "\t", {});
-        if (parts.size() == 3) result.push_back ({ parts[0], parts[2], parts[1].getIntValue() });
+        if (parts.size() == 3)
+            result.push_back ({ parts[0], parts[2], parts[1].getIntValue(), file.getFileName() });
     }
     return result;
 }
+std::set<juce::String> eventIdentities (const juce::File& root)
+{
+    std::set<juce::String> result;
+    for (const auto& event : events (root)) result.insert (event.identity);
+    return result;
+}
+std::set<int> constructedProcessesSince (const juce::File& root,
+                                        const std::set<juce::String>& before,
+                                        const juce::String& mode)
+{
+    std::set<int> result;
+    for (const auto& event : events (root))
+        if (event.kind == "construct" && event.mode == mode && ! before.contains (event.identity))
+            result.insert (event.pid);
+    return result;
+}
+#if JUCE_WINDOWS && HALFTRACK_TESTS_ENABLED
+struct ScopedExitDrivenScan
+{
+    ScopedExitDrivenScan()
+        : previous (juce::ChildProcessCoordinator::setExitTestSuppressConnectionLoss (true)) {}
+    ~ScopedExitDrivenScan()
+    {
+        juce::ChildProcessCoordinator::setExitTestSuppressConnectionLoss (previous);
+    }
+    ScopedExitDrivenScan (const ScopedExitDrivenScan&) = delete;
+    ScopedExitDrivenScan& operator= (const ScopedExitDrivenScan&) = delete;
+    bool previous;
+};
+#endif
 void setMode (const juce::File& root, const juce::String& mode)
 {
     check (root.getChildFile ("mode.txt").replaceWithText (mode), "select fixture mode " + mode);
@@ -216,12 +248,11 @@ int runPluginScanTests (const juce::File& destination)
         finish();
 
         setMode (root, "crash");
-        // The pinned JUCE Windows named-pipe owner reconnects after a broken
-        // peer: both crash detection and the subsequent kill-message write can
-        // each wait its default 8000 ms. This case deliberately loses two peers
-        // (the native scanner retries once), so its 15-second normal deadline
-        // is insufficient. Keep a bounded allowance for those four IPC waits
-        // plus process startup/dispatch; every other scan keeps the short limit.
+        // Before the confirmed-exit fix, the pinned Windows pipe could spend
+        // 8000 ms detecting each lost peer and another 8000 ms writing its kill
+        // message. Preserve the 45-second crash watchdog for this regression;
+        // elapsed times are diagnostics, not a fragile performance threshold.
+        // Normal scans retain their separate 15-second watchdog.
         const auto crashStarted = juce::Time::getMillisecondCounterHiRes();
         double nextCrashProbe = crashStarted;
         std::set<int> observedCrashChildren;
@@ -245,11 +276,62 @@ int runPluginScanTests (const juce::File& destination)
                "native scanner survives two controlled child crashes and its one retry");
         check (manager.knownPluginList.getBlacklistedFiles().contains (plugin.getFullPathName()), "crashed fixture is marked failed");
         finish();
+        std::cout << "Scanner ordinary crash case including teardown completed after "
+                  << juce::String (juce::Time::getMillisecondCounterHiRes() - crashStarted, 0) << " ms" << std::endl;
 
+        const auto recoveryEventsBefore = eventIdentities (root);
         setMode (root, "normal");
         runWorker (manager, [&] { found = scanOnce(); });
-        check (found == 1, "fresh child discovers fixture after crash recovery");
+        const auto recoveryChildren = constructedProcessesSince (root, recoveryEventsBefore, "normal");
+        check (found == 1 && recoveryChildren.size() == 1
+                   && ! recoveryChildren.contains (scan_test::processID()),
+               "fresh isolated child constructs and discovers fixture after crash recovery");
         finish();
+
+       #if JUCE_WINDOWS && HALFTRACK_TESTS_ENABLED
+        // Pipe-loss notification can precede the OS process handle becoming
+        // signaled. Retain the ordinary case above, then suppress only that
+        // competing classification here so actual child exit must drive retry.
+        // Callbacks still run. The fixture constructors terminate their actual
+        // child processes, and the retained OS handles report those exits.
+        const auto exitCountsBefore = juce::ChildProcessCoordinator::getExitTestCounts();
+        const auto exitEventsBefore = eventIdentities (root);
+        setMode (root, "crash");
+        found = -1;
+        const auto exitStarted = juce::Time::getMillisecondCounterHiRes();
+        {
+            const ScopedExitDrivenScan forceExitClassification;
+            runWorker (manager, [&] { found = scanOnce(); }, {}, 45000.0);
+        }
+        check (! juce::ChildProcessCoordinator::setExitTestSuppressConnectionLoss (false),
+               "scoped OS-exit test restores native connection-loss classification");
+        const auto exitChildren = constructedProcessesSince (root, exitEventsBefore, "crash");
+        check (found == 0 && exitChildren.size() == 2
+                   && ! exitChildren.contains (scan_test::processID()),
+               "OS-exit scan survives two real child crashes and exactly one retry");
+        check (manager.knownPluginList.getBlacklistedFiles().contains (plugin.getFullPathName()),
+               "OS-exit scan retains actual-crash blacklisting");
+        // scanFinished must tear down the second child before reading counters.
+        finish();
+        const auto exitCountsAfter = juce::ChildProcessCoordinator::getExitTestCounts();
+        check (exitCountsAfter.classifications - exitCountsBefore.classifications == 2,
+               "both crashed workers are classified through retained OS process handles");
+        check (exitCountsAfter.teardownSkips - exitCountsBefore.teardownSkips == 2,
+               "both confirmed-dead worker teardowns skip kill-message writes");
+        check (exitCountsAfter.deadPeerWrites - exitCountsBefore.deadPeerWrites == 0,
+               "no kill message is written to either confirmed-dead worker");
+        std::cout << "Scanner forced OS-exit case including teardown completed after "
+                  << juce::String (juce::Time::getMillisecondCounterHiRes() - exitStarted, 0) << " ms" << std::endl;
+
+        const auto exitRecoveryBefore = eventIdentities (root);
+        setMode (root, "normal");
+        runWorker (manager, [&] { found = scanOnce(); });
+        const auto exitRecoveryChildren = constructedProcessesSince (root, exitRecoveryBefore, "normal");
+        check (found == 1 && exitRecoveryChildren.size() == 1
+                   && ! exitRecoveryChildren.contains (scan_test::processID()),
+               "fresh isolated child constructs and discovers fixture after OS-exit recovery");
+        finish();
+       #endif
 
         setMode (root, "block");
         bool cancellationSent = false;
