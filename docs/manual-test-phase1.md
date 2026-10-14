@@ -155,3 +155,13 @@ Automated DSP, model and editor-handler tests are separate from this native mous
 ## Piano-roll transformations (about two minutes)
 
 Draw or select several notes and open **Note tools**. Try Quantize Starts, Quantize Ends, Reverse Time, Invert Pitch, Legato, Compress Time by Half, Stretch Time to Double and Set Fixed Length. The last operation uses the Length chooser; quantization uses Snap. Undo each operation once and verify the whole group returns. Cmd/Ctrl+U quantizes starts; adding Shift quantizes endings. With no selection, these tools apply to all notes in the current clip. A stretch that exceeds clip bounds reports an error and leaves every note unchanged. Repeat in a Session MIDI slot, then save/reopen. Native input walkthrough remains NOT RUN; production handlers are tested separately.
+
+## Audio clip editing (about three minutes)
+
+1. Import a disposable audio file into Arrangement. Double-click its clip (or right-click and choose **Gain, fades and range...**). Change gain, fade durations and curves; the envelope should follow the fades. Undo a slider drag once.
+2. Set Length shorter than the source and Source offset inside it, then **Apply range**. Playback should use that source region. An overrun or fades longer than the new range must report an error without changing the clip.
+3. Place the playhead inside the clip, outside its fades. Right-click **Split at playhead**; the right half should become selected. **Duplicate after clip** should create a new adjacent copy. Undo each action once, then redo.
+4. Overlap two clips and give the first a fade out and the second a fade in. Export, save/reopen and verify settings and sound remain consistent.
+5. Import audio into a Session slot and use **Audio clip gain...**. Gain should affect launch playback immediately; manual fade/range controls are disabled there.
+
+Native mouse/audio walkthrough: NOT RUN. Generated full-buffer and production-handler tests are separate evidence.

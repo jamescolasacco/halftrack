@@ -43,6 +43,8 @@ include(cmake/PatchAsyncPlugin.cmake)
 halftrack_patch_async_plugin("${tracktion_SOURCE_DIR}")
 include(cmake/PatchEditSort.cmake)
 halftrack_patch_edit_sort("${tracktion_SOURCE_DIR}")
+include(cmake/PatchClipGain.cmake)
+halftrack_patch_clip_gain("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"
@@ -55,7 +57,7 @@ juce_add_gui_app(Halftrack
     PLUGINHOST_AU TRUE)
 
 juce_add_binary_data(HalftrackAssets SOURCES assets/halftrack-mark.svg)
-target_sources(Halftrack PRIVATE src/Main.cpp src/Session.cpp src/SubtractiveSynth.cpp src/UtilityProcessor.cpp src/UtilityEditor.cpp src/NativeEffects.cpp src/NativeEffectEditor.cpp src/MainComponent.cpp tests/SessionTests.cpp tests/MidiTests.cpp tests/PersistenceTests.cpp tests/LatencyTests.cpp tests/LauncherTests.cpp)
+target_sources(Halftrack PRIVATE src/Main.cpp src/Session.cpp src/SubtractiveSynth.cpp src/UtilityProcessor.cpp src/UtilityEditor.cpp src/NativeEffects.cpp src/NativeEffectEditor.cpp src/AudioClipEditor.cpp src/MainComponent.cpp tests/SessionTests.cpp tests/MidiTests.cpp tests/PersistenceTests.cpp tests/LatencyTests.cpp tests/LauncherTests.cpp)
 target_include_directories(Halftrack PRIVATE src)
 target_compile_definitions(Halftrack PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
@@ -81,7 +83,7 @@ endif()
 include(CTest)
 target_compile_definitions(Halftrack PRIVATE HALFTRACK_TESTS_ENABLED=$<BOOL:${BUILD_TESTING}>)
 if(BUILD_TESTING)
-    target_sources(Halftrack PRIVATE tests/RealtimeTests.cpp tests/PluginScanTests.cpp tests/PluginEditorTests.cpp tests/SendReturnTests.cpp tests/UtilityTests.cpp tests/NativeEffectsTests.cpp tests/NoteToolsTests.cpp)
+    target_sources(Halftrack PRIVATE tests/RealtimeTests.cpp tests/PluginScanTests.cpp tests/PluginEditorTests.cpp tests/SendReturnTests.cpp tests/UtilityTests.cpp tests/NativeEffectsTests.cpp tests/NoteToolsTests.cpp tests/AudioClipTests.cpp)
     set(HALFTRACK_GAIN_TEST_FORMATS VST3)
     if(APPLE)
         list(APPEND HALFTRACK_GAIN_TEST_FORMATS AU)
@@ -120,6 +122,8 @@ if(BUILD_TESTING)
         set_tests_properties(au-acceptance PROPERTIES TIMEOUT 90
             ENVIRONMENT "HALFTRACK_TEST_AU_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_AU>/../..")
     endif()
+    add_test(NAME audio-clips-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-audio-clips ${CMAKE_BINARY_DIR}/test-artifacts)
+    set_tests_properties(audio-clips-acceptance PROPERTIES TIMEOUT 180)
     add_test(NAME note-tools-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-note-tools ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(note-tools-acceptance PROPERTIES TIMEOUT 90)
     add_test(NAME native-effects-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-effects ${CMAKE_BINARY_DIR}/test-artifacts)

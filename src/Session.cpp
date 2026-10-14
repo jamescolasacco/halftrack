@@ -211,6 +211,51 @@ juce::Array<te::Clip*> allTrackClips (te::AudioTrack& track)
     return result;
 }
 
+Session::AudioClipSettings audioSettings (const te::WaveAudioClip& clip)
+{
+    return { clip.getGainDB(), clip.getFadeIn().inSeconds(), clip.getFadeOut().inSeconds(),
+        static_cast<Session::FadeCurve> (clip.getFadeInType()), static_cast<Session::FadeCurve> (clip.getFadeOutType()) };
+}
+bool validAudioSettings (const Session::AudioClipSettings& s, double length)
+{
+    const auto curve = [] (auto v) { return static_cast<int> (v) >= 1 && static_cast<int> (v) <= 4; };
+    return std::isfinite (s.gainDb) && s.gainDb >= -100 && s.gainDb <= 24
+        && std::isfinite (s.fadeInSeconds) && std::isfinite (s.fadeOutSeconds)
+        && s.fadeInSeconds >= 0 && s.fadeOutSeconds >= 0
+        && s.fadeInSeconds + s.fadeOutSeconds <= length + 1e-10
+        && curve (s.fadeInCurve) && curve (s.fadeOutCurve);
+}
+bool canEditAudioRange (const te::WaveAudioClip& clip)
+{
+    return clip.getClipSlot() == nullptr && ! clip.isLooping() && ! clip.getAutoTempo() && ! clip.getWarpTime()
+        && ! clip.getIsReversed() && clip.getSpeedRatio() == 1 && ! clip.isGrouped();
+}
+Result validateAudioClips (const juce::ValueTree& state)
+{
+    if (state.hasType (te::IDs::AUDIOCLIP))
+    {
+        const auto parse = [&state] (const juce::Identifier& key, double fallback, double& result)
+        {
+            if (! state.hasProperty (key)) { result = fallback; return true; }
+            const auto value = state[key].toString().trim().toStdString(); char* end = nullptr;
+            result = std::strtod (value.c_str(), &end);
+            return ! value.empty() && end == value.c_str()+value.size() && std::isfinite (result);
+        };
+        double gain = 0, in = 0, out = 0, length = 0, inType = 1, outType = 1;
+        if (! parse (te::IDs::gain, 0, gain) || ! parse (te::IDs::fadeIn, 0, in)
+            || ! parse (te::IDs::fadeOut, 0, out) || ! parse (te::IDs::length, 0, length)
+            || ! parse (te::IDs::fadeInType, 1, inType) || ! parse (te::IDs::fadeOutType, 1, outType)
+            || gain < -100 || gain > 24 || length < 0 || inType < 1 || inType > 4 || outType < 1 || outType > 4
+            || std::floor (inType) != inType || std::floor (outType) != outType
+            || ! validAudioSettings ({ static_cast<float> (gain), in, out,
+                static_cast<Session::FadeCurve> (static_cast<int> (inType)),
+                static_cast<Session::FadeCurve> (static_cast<int> (outType)) }, length))
+            return Result::fail ("The project contains invalid audio clip gain or fades.");
+    }
+    for (const auto& child : state) if (auto r = validateAudioClips (child); r.failed()) return r;
+    return Result::ok();
+}
+
 Session::ClipInfo describeClip (te::Clip& clip)
 {
     Session::ClipInfo result;
@@ -219,6 +264,12 @@ Session::ClipInfo describeClip (te::Clip& clip)
     result.start = position.time.getStart().inSeconds(); result.length = position.time.getLength().inSeconds();
     result.sourceOffset = position.offset.inSeconds();
     if (clip.usesSourceFile()) result.file = clip.getSourceFileReference().getFile();
+    if (auto* audio = dynamic_cast<te::WaveAudioClip*> (&clip))
+    {
+        result.isAudio = true; result.audio = audioSettings (*audio);
+        result.sourceLength = audio->getSourceLength().inSeconds(); result.canEditAudioRange = canEditAudioRange (*audio);
+        result.canEditAudioFades = audio->getClipSlot() == nullptr;
+    }
     if (auto* midi = dynamic_cast<te::MidiClip*> (&clip))
     {
         result.isMidi = true;
@@ -428,6 +479,17 @@ struct Session::Impl
     {
         for (auto* t : te::getAudioTracks (*edit)) if (t->itemID.toString() == id) return t;
         return nullptr;
+    }
+    te::WaveAudioClip* audioClip (const String& id) const
+    {
+        te::WaveAudioClip* result = nullptr;
+        for (auto* t : te::getAudioTracks (*edit)) for (auto* c : allTrackClips (*t))
+            if (c->itemID.toString() == id)
+            {
+                if (result) return nullptr;
+                result = dynamic_cast<te::WaveAudioClip*> (c);
+            }
+        return result;
     }
     te::MidiClip* midiClip (const String& id) const
     {
@@ -804,6 +866,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateRouting (state); result.failed()) return result;
     if (auto result = UtilityPlugin::validateState (state); result.failed()) return result;
     if (auto result = NativeEffectPlugin::validateState (state); result.failed()) return result;
+    if (auto result = validateAudioClips (state); result.failed()) return result;
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
     auto options = te::Edit::Options { impl->engine, state, id };
@@ -1403,6 +1466,70 @@ Result Session::importAudio (const File& source, int index, double start)
     clip->setAutoTempo (false); clip->setAutoPitch (false);
     clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
     impl->changed(); return Result::ok();
+}
+Result Session::setAudioClipSettings (const String& id, const AudioClipSettings& settings)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
+    if (! validAudioSettings (settings, clip->getPosition().getLength().inSeconds()))
+        return Result::fail ("Clip gain or fades are outside their supported range. Fades must fit inside the clip.");
+    const auto previous = audioSettings (*clip);
+    if (clip->getClipSlot() && (previous.fadeInSeconds != settings.fadeInSeconds || previous.fadeOutSeconds != settings.fadeOutSeconds
+        || previous.fadeInCurve != settings.fadeInCurve || previous.fadeOutCurve != settings.fadeOutCurve))
+        return Result::fail ("Manual fade editing is available for Arrangement clips.");
+    if (previous == settings && ! clip->getAutoCrossfade()) return Result::ok();
+    impl->transaction ("Audio clip gain and fades");
+    clip->setAutoCrossfade (false); clip->setGainDB (settings.gainDb);
+    // Clear first so the engine's one-edge setters cannot rescale the other edge.
+    clip->setFadeIn ({}); clip->setFadeOut (te::TimeDuration::fromSeconds (settings.fadeOutSeconds));
+    clip->setFadeIn (te::TimeDuration::fromSeconds (settings.fadeInSeconds));
+    clip->setFadeInType (static_cast<te::AudioFadeCurve::Type> (settings.fadeInCurve));
+    clip->setFadeOutType (static_cast<te::AudioFadeCurve::Type> (settings.fadeOutCurve));
+    impl->changed(); return Result::ok();
+}
+Result Session::setAudioClipRange (const String& id, double start, double length, double offset)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before trimming clips.");
+    auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
+    if (! canEditAudioRange (*clip)) return Result::fail ("Range editing requires an unwarped, unlooped arrangement audio clip.");
+    const auto sourceLength = clip->getSourceLength().inSeconds();
+    if (! std::isfinite (start) || ! std::isfinite (length) || ! std::isfinite (offset)
+        || start < 0 || start > 1e9 || length < .001 || length > 1e9 || offset < 0
+        || offset + length > sourceLength + 1e-9 || ! validAudioSettings (audioSettings (*clip), length))
+        return Result::fail ("The range must fit the source and existing fades, with at least 1 ms of audio.");
+    const auto p = clip->getPosition();
+    if (p.getStart().inSeconds() == start && p.getLength().inSeconds() == length && p.offset.inSeconds() == offset) return Result::ok();
+    impl->transaction ("Trim audio clip");
+    clip->setPosition ({ { te::TimePosition::fromSeconds (start), te::TimePosition::fromSeconds (start+length) }, te::TimeDuration::fromSeconds (offset) });
+    impl->changed(); return Result::ok();
+}
+Result Session::splitAudioClip (const String& id, double at, String& rightId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before splitting clips.");
+    auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
+    const auto p = clip->getPosition(); const auto s = audioSettings (*clip);
+    const auto left = at-p.getStart().inSeconds(), right = p.getEnd().inSeconds()-at;
+    if (! canEditAudioRange (*clip) || ! std::isfinite (at) || left < .002 || right < .002
+        || left < s.fadeInSeconds || right < s.fadeOutSeconds)
+        return Result::fail ("Split inside an unwarped arrangement clip, outside its fades, leaving at least 2 ms on each side.");
+    impl->transaction ("Split audio clip");
+    auto* second = clip->getClipTrack()->splitClip (*clip, te::TimePosition::fromSeconds (at));
+    if (! second) return Result::fail ("The audio clip could not be split.");
+    rightId = second->itemID.toString(); impl->changed(); return Result::ok();
+}
+Result Session::duplicateAudioClip (const String& id, String& duplicateId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before duplicating clips.");
+    auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
+    if (clip->getClipSlot()) return Result::fail ("Duplicate an arrangement audio clip; a Session slot holds one clip.");
+    const auto end = clip->getPosition().getEnd();
+    impl->transaction ("Duplicate audio clip");
+    auto second = te::duplicateClip (*clip);
+    if (! second) return Result::fail ("The audio clip could not be duplicated.");
+    second->setStart (end, false, true); duplicateId = second->itemID.toString(); impl->changed(); return Result::ok();
 }
 Result Session::moveClip (int t, int c, double start)
 {

@@ -47,12 +47,22 @@ public:
         double startBeat = 0, lengthBeats = 1;
         float velocity = 0.8f;
     };
+    enum class FadeCurve { linear = 1, convex, concave, sCurve };
+    struct AudioClipSettings
+    {
+        float gainDb = 0;
+        double fadeInSeconds = 0, fadeOutSeconds = 0;
+        FadeCurve fadeInCurve = FadeCurve::linear, fadeOutCurve = FadeCurve::linear;
+        bool operator== (const AudioClipSettings&) const = default;
+    };
     struct ClipInfo
     {
         juce::String id, name;
         double start = 0, length = 0, sourceOffset = 0;
         juce::File file;
-        bool isMidi = false;
+        bool isMidi = false, isAudio = false, canEditAudioRange = false, canEditAudioFades = false;
+        double sourceLength = 0;
+        AudioClipSettings audio;
         double startBeat = 0, lengthBeats = 0;
         std::vector<MidiNoteInfo> notes;
     };
@@ -136,6 +146,10 @@ public:
     juce::Result setSynthSettings (const juce::String& trackId, const SynthSettings&);
     juce::Result removeTrack (int trackIndex);
     juce::Result importAudio (const juce::File&, int trackIndex = -1, double startSeconds = 0);
+    juce::Result setAudioClipSettings (const juce::String& clipId, const AudioClipSettings&);
+    juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
+    juce::Result splitAudioClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
+    juce::Result duplicateAudioClip (const juce::String& clipId, juce::String& duplicateId);
     juce::Result moveClip (int trackIndex, int clipIndex, double startSeconds);
     juce::Result removeClip (int trackIndex, int clipIndex);
     juce::Result renameTrack (int trackIndex, const juce::String&);

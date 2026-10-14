@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "AudioClipEditor.h"
 #include "NativeEffects.h"
 #include "Session.h"
 
@@ -786,6 +787,8 @@ private:
                 if (owner.selectedClip >= 0) owner.openPianoRoll();
                 else owner.createMidiClip (juce::jmax (0.0, owner.viewStart + e.x / owner.pixelsPerSecond));
             }
+            else if (const auto* track = owner.currentTrack(); track && juce::isPositiveAndBelow (owner.selectedClip, (int)track->clips.size()))
+                if (track->clips[(size_t)owner.selectedClip].isAudio) owner.audioClipCommand (2, track->clips[(size_t)owner.selectedClip].id);
         }
         void mouseDrag (const juce::MouseEvent& e) override
         {
@@ -839,8 +842,18 @@ private:
         {
             juce::PopupMenu popup;
             popup.addItem (1, "Delete clip");
+            const auto* track = owner.currentTrack();
+            const auto* clip = track && juce::isPositiveAndBelow(owner.selectedClip,(int)track->clips.size()) ? &track->clips[(size_t)owner.selectedClip] : nullptr;
+            const auto id = clip ? clip->id : juce::String();
+            if (clip && clip->isAudio)
+            {
+                popup.addItem (2, "Gain, fades and range...");
+                popup.addItem (3, "Split at playhead", clip->canEditAudioRange);
+                popup.addItem (4, "Duplicate after clip");
+            }
             auto safe = juce::Component::SafePointer<Impl> (&owner);
-            popup.showMenuAsync (juce::PopupMenu::Options(), [safe] (int choice) { if (safe != nullptr && choice == 1) safe->deleteSelectedClip(); });
+            popup.showMenuAsync (juce::PopupMenu::Options(), [safe, id] (int choice)
+            { if (safe == nullptr) return; if (choice == 1) safe->deleteSelectedClip(); else if (choice > 1) safe->audioClipCommand (choice, id); });
         }
     };
 
@@ -1153,7 +1166,7 @@ private:
         {
             const auto* slot = slotAt (track, scene); if (slot == nullptr) return;
             juce::PopupMenu menu;
-            if (slot->hasClip) { menu.addItem (1, "Launch Clip"); if (slot->clip.isMidi) menu.addItem (2, "Edit MIDI Notes"); menu.addItem (3, "Clear Clip"); }
+            if (slot->hasClip) { menu.addItem (1, "Launch Clip"); if (slot->clip.isMidi) menu.addItem (2, "Edit MIDI Notes"); if (slot->clip.isAudio) menu.addItem (7, "Audio clip gain..."); menu.addItem (3, "Clear Clip"); }
             else menu.addItem (owner.state.tracks[(size_t) track].isMidi ? 4 : 5, owner.state.tracks[(size_t) track].isMidi ? "Create MIDI Clip" : "Import Audio Here...");
             menu.addSeparator(); menu.addItem (6, "Stop Track Clips");
             const auto trackId = owner.state.tracks[(size_t) track].id, sceneId = owner.state.scenes[(size_t) scene].id;
@@ -1166,6 +1179,8 @@ private:
                 if (choice == 1) safe->report (safe->session.launchSlot (indices.first, indices.second));
                 if (choice == 2) safe->openPianoRoll(); if (choice == 3) safe->clearSelectedSlot(); if (choice == 4) safe->createLauncherMidiClip();
                 if (choice == 5) safe->importSlotDialog (indices.first, indices.second); if (choice == 6) safe->report (safe->session.stopLauncherTrack (indices.first));
+                if (choice == 7) if (const auto* selected = safe->selectedSlot(); selected && selected->hasClip && selected->clip.isAudio)
+                    safe->audioClipCommand (2, selected->clip.id);
                 safe->refresh();
             });
         }
@@ -2688,6 +2703,18 @@ private:
         dialog->setLookAndFeel (&theme);
         dialogs.emplace_back (dialog);
     }
+    void audioClipCommand (int choice, const juce::String& id)
+    {
+        if (choice == 2) { showDialog ("Halftrack - Audio Clip", makeAudioClipEditor (session, id), 620, 480); return; }
+        juce::String created;
+        const auto result = choice == 3 ? session.splitAudioClip (id, session.snapshot().position, created)
+            : session.duplicateAudioClip (id, created);
+        report (result); refresh();
+        if (result.wasOk()) for (int t=0;t<(int)state.tracks.size();++t)
+            for (int c=0;c<(int)state.tracks[(size_t)t].clips.size();++c)
+                if (state.tracks[(size_t)t].clips[(size_t)c].id == created)
+                { selectTrack(t);selectedClip=c;selectedLauncherClipId.clear();canvas.repaint();return; }
+    }
     void showAudioSettings()
     {
         auto settings = std::make_unique<juce::AudioDeviceSelectorComponent> (session.audioDeviceManager(), 0, 128, 0, 128, true, true, true, false);
@@ -3824,7 +3851,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         && std::abs (currentMidiClip()->notes.front().startBeat-unquantized.front().startBeat) < 1e-8,
         "one production undo restores quantized group");
 
-
+    check (session.newProject().wasOk() && session.importAudio(audioFixture,0).wasOk(), "prepare arrangement audio command fixture"); refresh();
+    const auto originalAudio = state.tracks[0].clips[0].id;
+    session.seek(.05); audioClipCommand(3,originalAudio);
+    check(state.tracks[0].clips.size()==2 && selectedClip>=0 && state.tracks[0].clips[(size_t)selectedClip].id!=originalAudio,
+        "production split command selects the newly created audio clip");
+    const auto splitAudio = state.tracks[0].clips[(size_t)selectedClip].id;audioClipCommand(4,splitAudio);
+    check(state.tracks[0].clips.size()==3 && state.tracks[0].clips[(size_t)selectedClip].id!=splitAudio,
+        "production duplicate command selects a fresh clip identity");
+    session.undo();session.undo();refresh();check(state.tracks[0].clips.size()==1,"two undo steps restore split and duplicate");
+    const auto beforeDialogs=dialogs.size();audioClipCommand(2,originalAudio);
+    check(dialogs.size()==beforeDialogs+1 && dialogs.back()!=nullptr,"production audio editor opens a native dialog");
+    session.newProject();session.dispatchPendingMessages();
+    if(dialogs.back()!=nullptr)delete dialogs.back().getComponent();
 }
 
 int MainComponent::runInteractionTests()

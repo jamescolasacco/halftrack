@@ -106,16 +106,16 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | --- | --- | --- | --- |
 | ARR-001 | Timeline navigation | Test horizontal/vertical zoom, fit, follow, selection, scroll, and navigation while playback continues. | NOT IMPLEMENTED / UNVERIFIED |
 | ARR-002 | Tracks and groups | Create, rename, color, reorder, duplicate, delete, nest, and ungroup tracks with stable references. | NOT IMPLEMENTED / UNVERIFIED |
-| ARR-003 | Move, trim, loop, slip | Exercise clip edges, source offsets, negative/late starts where supported, and repetition without destructive media changes. | NOT IMPLEMENTED / UNVERIFIED |
+| ARR-003 | Move, trim, loop, slip | Exercise clip edges, source offsets, negative/late starts where supported, and repetition without destructive media changes. | PARTIAL — validated numeric trim/slip and move; warp/loop edge editing missing |
 | ARR-004 | Selection and grid | Test single/multiple clips, time ranges, fixed/adaptive/triplet grids, temporary snap override, and keyboard equivalents. | NOT IMPLEMENTED / UNVERIFIED |
-| ARR-005 | Cut, copy, paste, duplicate | Verify cross-track/time moves, copy modifiers, clipboard scope, undo, and automation ownership. | NOT IMPLEMENTED / UNVERIFIED |
-| ARR-006 | Split and consolidate | Test edits at start/end/loop boundaries; compare reconstructed audio and handle tails or selection gaps explicitly. | NOT IMPLEMENTED / UNVERIFIED |
+| ARR-005 | Cut, copy, paste, duplicate | Verify cross-track/time moves, copy modifiers, clipboard scope, undo, and automation ownership. | PARTIAL — native duplicate with undo and portable source; audio clipboard missing |
+| ARR-006 | Split and consolidate | Test edits at start/end/loop boundaries; compare reconstructed audio and handle tails or selection gaps explicitly. | PARTIAL — interior split preserves complete rendered audio; consolidate missing |
 | ARR-007 | Time insertion/removal | Insert, delete, duplicate, and paste time across tracks with clips, tempo, markers, and automation. | NOT IMPLEMENTED / UNVERIFIED |
-| ARR-008 | Fades and crossfades | Edit overlapping clips and edge fades; test click avoidance, curve state, persistence, and render agreement. | NOT IMPLEMENTED / UNVERIFIED |
+| ARR-008 | Fades and crossfades | Edit overlapping clips and edge fades; test click avoidance, curve state, persistence, and render agreement. | PARTIAL — four manual curves, overlap/render/state tests; linked fades and timeline handles missing |
 | ARR-009 | Locators and loop regions | Create/name/jump/delete locators and edit loop endpoints; test meter changes and playback jumps. | NOT IMPLEMENTED / UNVERIFIED |
 | ARR-010 | Freeze and bounce | Specify 12.2.1 freeze/bounce behavior, retained source state, tails, sidechains, output placement, and undo. | NOT IMPLEMENTED / UNVERIFIED |
 | ARR-011 | Session/Arrangement ownership | Native generated output verifies boundary takeover, stop retaining Session silence, delayed UI publication, graph rebuild and explicit Return; handler tests prove view switches do not change ownership. Stale-generation and same-pitch MIDI handoff cases pass. Native manual delivery and hardware timing remain unverified. | PARTIAL — Mac Session subset |
-| ARR-012 | Clip properties | Persist activation, name/color, source bounds, loop bounds, gain, tuning, RAM/interpolation options, and batch edits. | NOT IMPLEMENTED / UNVERIFIED |
+| ARR-012 | Clip properties | Persist activation, name/color, source bounds, loop bounds, gain, tuning, RAM/interpolation options, and batch edits. | PARTIAL — gain, fades and source bounds persist; broader clip properties missing |
 
 ## Session performance and launching
 
@@ -140,7 +140,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
-| WRP-001 | Unwarped audio | Verify sample-rate conversion policy, start offset, pitch, reverse, looping, gain, and end-of-file handling. | NOT IMPLEMENTED / UNVERIFIED |
+| WRP-001 | Unwarped audio | Verify sample-rate conversion policy, start offset, pitch, reverse, looping, gain, and end-of-file handling. | PARTIAL — gain/offset/duration/full-buffer tests at 48 kHz; pitch/reverse and broader conversion unverified |
 | WRP-002 | Transient and tempo analysis | Use original percussive and sustained fixtures; record detection accuracy and provide editable results. | NOT IMPLEMENTED / UNVERIFIED |
 | WRP-003 | Warp-marker editing | Add/move/remove/reset markers; test segment continuity, undo, and save/reopen. | NOT IMPLEMENTED / UNVERIFIED |
 | WRP-004 | Rhythmic stretching | Compare timing and transient preservation for a Beats-like mode over several tempo ratios. | NOT IMPLEMENTED / UNVERIFIED |
@@ -527,3 +527,5 @@ For a platform matrix, keep separate results for macOS Apple Silicon, any suppor
 Device profiles need per-parameter cases before a device can be marked VERIFIED. Pack families need versioned device manifests before their scope can be called complete. Physical controllers and interface behaviors require real hardware evidence in addition to simulation.
 
 The first preview was delivered and the owner explicitly authorized continued development. No preview approval gate remains; every new capability still needs its own implementation and verification evidence.
+
+Audio clip gain/fades, non-destructive range, split and duplicate have original implementations and known-output tests; see the [audio-editing contract](research/audio-clip-editing-contract.md). These six additional PARTIAL ledger rows do not assert complete feature or numerical reference parity.
