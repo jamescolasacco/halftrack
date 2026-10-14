@@ -79,15 +79,29 @@ void SubtractiveSynthDSP::noteOff (int channel, int pitch) noexcept
 void SubtractiveSynthDSP::controlChange (int channel, int controller, int value) noexcept
 {
     if (channel < 1 || channel > 16) return;
-    if (controller == 64)
+    if (controller == 64 || controller == 121)
     {
-        sustainPedal[static_cast<size_t> (channel - 1)] = value >= 64;
-        if (value < 64)
+        auto& pedal = sustainPedal[static_cast<size_t> (channel - 1)];
+        const bool down = controller == 64 && value >= 64;
+        if (pedal && ! down)
             for (auto& voice : voices)
-                if (voice.channel == channel && voice.stage != 0 && ! voice.keyDown) release (voice);
+                if (voice.channel == channel && voice.stage != 0 && voice.stage != 4 && ! voice.keyDown)
+                    release (voice);
+        pedal = down;
     }
-    if (controller == 120 || controller == 123)
+    else if (controller == 120)
+    {
         for (auto& voice : voices) if (voice.channel == channel) voice = {};
+    }
+    else if (controller == 123)
+    {
+        for (auto& voice : voices)
+            if (voice.channel == channel && voice.stage != 0 && voice.keyDown)
+            {
+                voice.keyDown = false;
+                if (! sustainPedal[static_cast<size_t> (channel - 1)]) release (voice);
+            }
+    }
 }
 void SubtractiveSynthDSP::render (float* left, float* right, int samples) noexcept
 {

@@ -156,10 +156,12 @@ int runRealtimeTests()
                         finite = finite && std::isfinite (left[static_cast<std::size_t> (sample)])
                                         && std::isfinite (right[static_cast<std::size_t> (sample)]);
                 }
+                synth.controlChange (1, 123, 0);
                 for (int note = 0; note < 24; ++note) synth.noteOff (1, 48 + note);
+                synth.controlChange (1, 121, 0);
                 synth.controlChange (1, 64, 0);
                 synth.render (left.data(), nullptr, 1024);
-                synth.controlChange (1, 123, 0);
+                synth.controlChange (1, 120, 0);
                 synth.reset();
             }
         });

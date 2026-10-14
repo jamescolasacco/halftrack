@@ -246,6 +246,84 @@ void insertRemoveBatchTests (const juce::File& directory)
     session.undo(); check (sameNotes (current(), expected) && ! session.canUndo(), "one undo groups insertion and removal in existing gesture");
     session.redo(); check (sameNotes (current(), gestureResult), "redo restores combined insert/remove gesture");
 }
+void controllerReleaseTests()
+{
+    SubtractiveSynthDSP actual, reference;
+    auto prepare = [&]
+    {
+        actual.prepare (48000); reference.prepare (48000);
+        actual.setSettings (flatSettings()); reference.setSettings (flatSettings());
+    };
+    auto note = [&] (int channel, int pitch)
+    {
+        actual.noteOn (channel, pitch, 0.75f); reference.noteOn (channel, pitch, 0.75f);
+    };
+    auto compare = [&] (int samples, const juce::String& label)
+    {
+        std::array<float, 1024> left {}, right {}, expectedLeft {}, expectedRight {};
+        actual.render (left.data(), right.data(), samples);
+        reference.render (expectedLeft.data(), expectedRight.data(), samples);
+        check (left == expectedLeft && right == expectedRight
+               && std::all_of (left.begin(), left.end(), [] (float v) { return std::isfinite (v); }), label);
+    };
+    prepare(); note (1, 60); note (1, 64); note (16, 67);
+    compare (79, "controller fixture starts with identical nonzero synth state");
+    actual.controlChange (1, 123, 0); reference.noteOff (1, 60); reference.noteOff (1, 64);
+    compare (137, "All Notes Off retains the same release audio as individual note-offs and isolates channels");
+    actual.controlChange (1, 123, 0);
+    compare (1024, "repeated All Notes Off does not restart an existing release");
+    check (actual.activeVoices() == 1, "All Notes Off leaves another channel sounding");
+    actual.controlChange (16, 123, 0); reference.noteOff (16, 67);
+    compare (1024, "All Notes Off supports the final MIDI channel");
+    check (actual.activeVoices() == 0, "All Notes Off eventually reaches exact silence");
+
+    prepare(); note (1, 60);
+    actual.controlChange (1, 64, 127); reference.controlChange (1, 64, 127);
+    compare (79, "sustain fixture starts with matching held note");
+    actual.controlChange (1, 123, 0); reference.noteOff (1, 60);
+    compare (1024, "All Notes Off honors the sustain pedal like an ordinary note-off");
+    check (actual.activeVoices() == 1, "sustained All Notes Off leaves its voice active");
+    actual.controlChange (1, 64, 0); reference.controlChange (1, 64, 0);
+    compare (1024, "pedal up releases notes retained after All Notes Off");
+    check (actual.activeVoices() == 0, "pedal up completes sustained All Notes Off");
+
+    prepare(); note (1, 60); note (1, 64); note (16, 67);
+    for (auto* synth : { &actual, &reference })
+    {
+        synth->controlChange (1, 64, 127); synth->controlChange (16, 64, 127);
+    }
+    compare (79, "controller reset fixture starts with matching audio");
+    for (auto* synth : { &actual, &reference }) { synth->noteOff (1, 60); synth->noteOff (16, 67); }
+    actual.controlChange (1, 121, 0); reference.controlChange (1, 64, 0);
+    compare (137, "Reset All Controllers releases only its channel's pedal-held notes");
+    actual.controlChange (1, 121, 0);
+    compare (1024, "repeated controller reset preserves release timing and held keys");
+    check (actual.activeVoices() == 2, "controller reset preserves a held key and another channel's sustain");
+    actual.noteOff (1, 64); reference.noteOff (1, 64);
+    compare (1024, "later note-offs see the reset sustain state");
+    check (actual.activeVoices() == 1, "controller reset leaves the other channel sustained");
+
+    prepare(); note (1, 69); compare (79, "repeated pedal-up fixture starts with matching audio");
+    actual.noteOff (1, 69); reference.noteOff (1, 69);
+    for (int step = 0; step < 20; ++step)
+    {
+        actual.controlChange (1, 64, 0);
+        compare (31, "repeated pedal-up preserves the original release sample sequence");
+    }
+    check (actual.activeVoices() == 0, "repeated pedal-up cannot prolong the release");
+
+    prepare(); note (1, 60); note (16, 67); compare (79, "All Sound Off fixture starts with matching audio");
+    actual.controlChange (1, 64, 127); actual.noteOff (1, 60);
+    actual.controlChange (1, 120, 0);
+    reference.reset(); reference.setSettings (flatSettings()); reference.noteOn (16, 67, 0.75f);
+    std::array<float, 79> warmup {}; reference.render (warmup.data(), nullptr, 79);
+    compare (1024, "All Sound Off immediately removes its channel even with sustain down");
+    check (actual.activeVoices() == 1, "All Sound Off preserves other channels");
+    actual.controlChange (16, 120, 0); reference.reset();
+    compare (1024, "All Sound Off has exact silence without a release tail");
+    check (actual.activeVoices() == 0, "All Sound Off kills the final channel immediately");
+}
+
 void coreTests()
 {
     // Independent reference: bilinear-transform second-order analog low-pass,
@@ -283,8 +361,8 @@ void coreTests()
     synth.reset(); synth.setSettings (flatSettings());
     for (int pitch = 40; pitch < 57; ++pitch) synth.noteOn (1, pitch, 1);
     check (synth.activeVoices() == 16, "seventeenth note steals within fixed sixteen-voice storage");
-    synth.controlChange (1, 123, 0);
-    check (synth.activeVoices() == 0, "all-notes-off clears voices");
+    synth.controlChange (1, 120, 0);
+    check (synth.activeVoices() == 0, "all-sound-off clears voices");
     synth.noteOn (1, 60, 1); synth.render (left.data(), nullptr, 16);
     synth.controlChange (1, 64, 127); synth.noteOff (1, 60);
     std::array<float, 1024> tail {};
@@ -310,6 +388,7 @@ int runMidiTests (const juce::File& requestedDirectory)
 {
     try
     {
+        controllerReleaseTests();
         coreTests();
         auto directory = requestedDirectory.getChildFile ("midi-" + juce::Uuid().toString());
         ok (directory.createDirectory(), "create isolated MIDI artifacts");
