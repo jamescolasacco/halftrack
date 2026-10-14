@@ -376,13 +376,13 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-006 | Cabinet | FILTER | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-007 | Channel EQ | FILTER | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-008 | Chorus-Ensemble (12.2.1 behavior) | MODULATION | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-009 | Compressor | DYNAMICS | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-009 | Compressor | Linked peak/RMS compressor, soft knee, makeup and parallel mix; independent dynamics tests and native project/editor integration. Sidechain/lookahead and numerical parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated Mac acceptance |
 | AFX-010 | Corpus | RESONANCE | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-011 | Delay (12.2.1 behavior) | TIME | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-011 | Delay (12.2.1 behavior) | Stereo and ping-pong delay, feedback damping, link, freeze and complete export tails; tempo sync and reference parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated Mac acceptance |
 | AFX-012 | Drum Buss | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-013 | Dynamic Tube | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-014 | Echo | TIME | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-015 | EQ Eight | FILTER | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-015 | EQ Eight | Eight serial bands, seven filter modes plus off, output/mix and actual response plot; independent response and project tests. Advanced modes and numerical parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated Mac acceptance |
 | AFX-016 | EQ Three | FILTER | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-017 | Erosion (12.2.1 behavior) | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-018 | External Audio Effect | EXTERNAL | NOT IMPLEMENTED / UNVERIFIED |
@@ -399,7 +399,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-029 | Phaser-Flanger | MODULATION | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-030 | Redux | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-031 | Resonators | RESONANCE | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-032 | Reverb | REVERB | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-032 | Reverb | Original eight-line room with pre-delay, decay, size, damping, width and mix; reflected-impulse and export-tail tests. Proprietary topology and full controls remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated Mac acceptance |
 | AFX-033 | Roar | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-034 | Saturator | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-035 | Shifter | PITCH | NOT IMPLEMENTED / UNVERIFIED |

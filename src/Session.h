@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_utils/juce_audio_utils.h>
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -29,6 +30,13 @@ public:
         bool midSideMode = false, invertLeft = false, invertRight = false, mono = false;
         bool bassMono = false, bassAudition = false, mute = false, dcFilter = false;
         bool operator== (const UtilitySettings&) const = default;
+    };
+    enum class EffectKind { equalizer, compressor, delay, reverb };
+    struct EffectSettings
+    {
+        EffectKind kind = EffectKind::equalizer;
+        std::array<float, 34> values {};
+        bool operator== (const EffectSettings&) const = default;
     };
     struct MidiNoteInfo
     {
@@ -59,6 +67,8 @@ public:
         juce::String id, name;
         bool enabled = true, isUtility = false;
         UtilitySettings utility;
+        bool isNativeEffect = false;
+        EffectSettings effect;
     };
     struct TrackInfo
     {
@@ -155,6 +165,8 @@ public:
     juce::KnownPluginList& knownPlugins();
     juce::AudioPluginFormatManager& pluginFormats();
     juce::File pluginScanDeadMansFile() const;
+    juce::Result addNativeEffect (int trackIndex, EffectKind);
+    juce::Result setNativeEffectSettings (const juce::String& pluginId, const EffectSettings&);
     juce::Result addUtility (int trackIndex);
     juce::Result setUtilitySettings (const juce::String& pluginId, const UtilitySettings&);
     juce::Result movePlugin (int trackIndex, int pluginIndex, int destinationIndex);

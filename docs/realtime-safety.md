@@ -84,3 +84,5 @@ The utility plugin wrapper and prepared DSP are now source-guard roots; the guar
 
 
 The subsequent third-order bass/two-pole DC and constant-power balance refinement passes all nine local suites in 146.16 seconds. The callback guard now covers 29 bodies; prepared filter/balance changes and the existing Utility queue stress still report zero intercepted new/delete calls. Computing filter coefficients and trigonometric gains on receipt of a packet introduces standard-library math but no new owned allocation, lock or I/O path. Worst-case callback timing remains unmeasured.
+
+Native effects extend the owned scope: EQ, compressor, delay and room reverb use fixed coefficient/state storage and delay memory allocated only in preparation. Their 34-value SPSC packets have fixed capacity; audio validates and applies complete packets without model reads. Runtime guards cover parameter extremes, mono/stereo blocks, reset and queue saturation. A two-thread test checks 10,000 intact packets. Source scanning now includes NativeEffects.cpp. These checks still exclude engine locks, third-party plugins, non-C++ allocators and deadline guarantees.

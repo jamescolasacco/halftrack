@@ -141,3 +141,13 @@ Optional two-minute check, **NOT RUN** through physical mouse/audio delivery: cr
 ## Channel utility
 
 Optional three-minute native-input check, **NOT RUN**: use a disposable audio or MIDI project and an intentional output. Choose **+ Device → Utility (Built-in)**, open it, adjust Gain/Balance and undo one drag. Check Left/Right/Swap and independent polarity; Left/Right should disable stereo controls without losing their values. Compare Width, Mid / Side and Mono, then enable Bass mono and Audition bass. Toggle DC filter and Mute. The device's context menu moves it left/right through insert effects; its chain buttons support bypass/removal. Save, reopen, undo/redo changes, and remove it while its editor is open. Values, device order and audible behavior should follow the model, and its window should close safely. Avoid extreme gain on an uncontrolled output. Automated tests separately cover known generated signals and production handlers.
+
+## Native effects check (about four minutes)
+
+1. On a track containing generated or chosen audio, open **+ Device** and add **Eight-band EQ**. Raise a bell band and confirm the response plot and sound change. Change it to Low Cut; gain becomes inactive while frequency and Q still operate. Undo the gesture once.
+2. Add **Compressor**. Lower threshold, change attack/release and compare Peak/RMS. Bypass it and restore it. Move it before and after an EQ output boost; the dynamics should change.
+3. Add **Stereo Delay**. Set short left/right times, raise wet mix, then compare linked and independent times and ping pong. Enable Freeze after feeding audio; new input stops entering the delay. Disable Freeze again.
+4. Put **Room Reverb** on a return and send the source to it. Compare pre-delay, short/long decay, size, damping and width. Export with several seconds of tail and confirm decay continues after the source ends.
+5. Save/reopen the project and confirm all four devices and settings return. Remove one with its editor open, undo, and reopen its editor.
+
+Automated DSP, model and editor-handler tests are separate from this native mouse/audio walkthrough. This section remains NOT RUN until explicitly recorded.

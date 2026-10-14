@@ -1,5 +1,6 @@
 #include "SubtractiveSynth.h"
 #include "UtilityProcessor.h"
+#include "NativeEffects.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -195,6 +196,61 @@ void utilityRealtimeTests()
 }
 }
 
+void nativeEffectsRealtimeTests()
+{
+    for (int kind = 0; kind < 4; ++kind)
+    {
+        NativeEffectDSP dsp; dsp.prepare (48000, static_cast<Session::EffectKind> (kind));
+        auto settings = defaultEffectSettings (static_cast<Session::EffectKind> (kind));
+        const auto fields = effectParameters (settings.kind);
+        std::array<float, 1024> left {}, right {}; bool finite = true;
+        const auto calls = allocationAudit::measure ([&]
+        {
+            for (int pass = 0; pass < 32; ++pass)
+            {
+                for (size_t i = 0; i < fields.size(); ++i) settings.values[i] = pass % 2 ? fields[i].minimum : fields[i].maximum;
+                dsp.configure (settings);
+                for (size_t i = 0; i < left.size(); ++i) { left[i] = (float) (i % 37) / 128; right[i] = -left[i] / 2; }
+                dsp.processSamples (left.data(), pass % 2 ? right.data() : nullptr, 1 + pass * 31);
+                for (auto value : left) finite = finite && std::isfinite (value);
+                for (auto value : right) finite = finite && std::isfinite (value);
+            }
+            dsp.reset();
+        });
+        noHeapCalls (calls, "native effect parameter extremes, processing and reset allocate/free nothing");
+        requireRealtime (finite, "native effect extrema and variable mono/stereo blocks remain finite");
+    }
+    EffectParameterQueue queue; auto value = defaultEffectSettings (Session::EffectKind::delay);
+    int accepted = 0, received = 0; bool coherent = true;
+    const auto calls = allocationAudit::measure ([&]
+    {
+        for (int i = 0; i < 64; ++i) { value.values[0] = (float) (i + 1); if (queue.push (value)) ++accepted; }
+        Session::EffectSettings out;
+        while (queue.pop (out)) { coherent = coherent && out.kind == value.kind && out.values[0] == ++received; }
+    });
+    noHeapCalls (calls, "native effects FIFO saturation and drain allocate/free nothing");
+    requireRealtime (accepted == 63 && received == 63 && coherent, "native effects FIFO preserves bounded complete packets");
+    EffectParameterQueue threaded; std::atomic<bool> abort { false };
+    constexpr int count = 10000;
+    std::thread producer ([&]
+    {
+        auto packet = defaultEffectSettings (Session::EffectKind::equalizer);
+        for (int i = 0; i < count && ! abort.load();)
+        { for (size_t j = 0; j < packet.values.size(); ++j) packet.values[j] = (float)(i * 34 + (int)j); if (threaded.push (packet)) ++i; }
+    });
+    received = 0; coherent = true;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds (5);
+    while (received < count && coherent && std::chrono::steady_clock::now() < deadline)
+    {
+        Session::EffectSettings out;
+        if (! threaded.pop (out)) { std::this_thread::yield(); continue; }
+        for (size_t j = 0; j < out.values.size(); ++j) coherent = coherent && out.values[j] == (float)(received*34+(int)j);
+        ++received;
+    }
+    abort.store (true); producer.join();
+    requireRealtime (received == count && coherent, "native effect FIFO delivers 10000 intact 34-value packets between threads");
+}
+
 int runRealtimeTests()
 {
     try
@@ -300,6 +356,7 @@ int runRealtimeTests()
         noHeapCalls (consumerCalls, "concurrent settings-queue consumer has zero intercepted C++ new/delete calls");
         requireRealtime (coherent && received == packetCount, "SPSC queue delivers 10000 complete ordered packets across threads");
         utilityRealtimeTests();
+        nativeEffectsRealtimeTests();
         std::cout << "Owned DSP allocation checks passed; malloc, locking, syscalls, external code and deadlines are not certified.\n";
         return 0;
     }

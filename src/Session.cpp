@@ -2,6 +2,7 @@
 #include "SubtractiveSynth.h"
 #include "UtilityProcessor.h"
 #include "UtilityEditor.h"
+#include "NativeEffects.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 #include <set>
@@ -294,6 +295,9 @@ public:
             if (dynamic_cast<UtilityPlugin*> (&p->plugin))
                 return std::make_unique<PluginWindow> (p->plugin, makeUtilityEditor (owner, p->plugin.itemID.toString()));
         if (auto* p = dynamic_cast<te::Plugin::WindowState*> (&state))
+            if (dynamic_cast<NativeEffectPlugin*> (&p->plugin))
+                return std::make_unique<PluginWindow> (p->plugin, makeNativeEffectEditor (owner, p->plugin.itemID.toString()));
+        if (auto* p = dynamic_cast<te::Plugin::WindowState*> (&state))
             if (auto* external = dynamic_cast<te::ExternalPlugin*> (&p->plugin))
                 if (! external->isInitialisingAsync())
                     if (auto* processor = external->getAudioPluginInstance())
@@ -393,6 +397,7 @@ struct Session::Impl
         engine.getPluginManager().createBuiltInType<TrackMixer>();
         engine.getPluginManager().createBuiltInType<SubtractiveSynthPlugin>();
         engine.getPluginManager().createBuiltInType<UtilityPlugin>();
+        engine.getPluginManager().createBuiltInType<NativeEffectPlugin>();
         engine.getPluginManager().setUsesSeparateProcessForScanning (devices);
         if (customDeviceType)
         {
@@ -512,7 +517,7 @@ struct Session::Impl
         juce::Array<te::Plugin*> result;
         if (auto* t = track (index))
             for (auto* p : t->pluginList.getPlugins())
-                if (dynamic_cast<te::ExternalPlugin*> (p) != nullptr || dynamic_cast<UtilityPlugin*> (p) != nullptr) result.add (p);
+                if (dynamic_cast<te::ExternalPlugin*> (p) != nullptr || dynamic_cast<UtilityPlugin*> (p) != nullptr || dynamic_cast<NativeEffectPlugin*> (p) != nullptr) result.add (p);
         return result;
     }
     te::Plugin* plugin (int trackIndex, int pluginIndex) const
@@ -717,6 +722,7 @@ Session::Snapshot Session::snapshot() const
         {
             PluginInfo device { p->itemID.toString(), p->getName(), p->isEnabled() };
             if (auto* utility = dynamic_cast<UtilityPlugin*> (p)) { device.isUtility = true; device.utility = utility->readSettings(); }
+            if (auto* effect = dynamic_cast<NativeEffectPlugin*> (p)) { device.isNativeEffect = true; device.effect = effect->readSettings(); }
             info.plugins.push_back (std::move (device));
         }
         s.tracks.push_back (std::move (info));
@@ -797,6 +803,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateSlots (validateSlots, state); result.failed()) return result;
     if (auto result = validateRouting (state); result.failed()) return result;
     if (auto result = UtilityPlugin::validateState (state); result.failed()) return result;
+    if (auto result = NativeEffectPlugin::validateState (state); result.failed()) return result;
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
     auto options = te::Edit::Options { impl->engine, state, id };
@@ -1548,7 +1555,10 @@ Result Session::exportWav (const File& file, double rate, int bits, double tailS
     {
         if (auto* synth = Impl::synth (*track)) synth->prepareForOfflineRender();
         for (auto* plugin : track->pluginList.getPlugins())
+        {
             if (auto* utility = dynamic_cast<UtilityPlugin*> (plugin)) utility->prepareForOfflineRender();
+            if (auto* effect = dynamic_cast<NativeEffectPlugin*> (plugin)) effect->prepareForOfflineRender();
+        }
     }
     te::Renderer::Parameters p (*impl->edit);
     p.destFile = output.getFile(); p.audioFormat = impl->engine.getAudioFileFormatManager().getWavFormat();
@@ -1577,6 +1587,41 @@ File Session::pluginScanDeadMansFile() const
 {
     auto folder = File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("Halftrack");
     folder.createDirectory(); return folder.getChildFile ("plugin-scan-in-progress.txt");
+}
+Result Session::addNativeEffect (int index, EffectKind kind)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* track = impl->track (index); if (! track) return Result::fail ("Track not found.");
+    if (effectParameters (kind).empty()) return Result::fail ("Unknown native effect.");
+    juce::ValueTree state (te::IDs::PLUGIN);
+    state.setProperty (te::IDs::type, NativeEffectPlugin::xmlTypeName, nullptr);
+    state.setProperty ("effectKind", static_cast<int> (kind), nullptr);
+    auto plugin = impl->edit->getPluginCache().createNewPlugin (state);
+    if (! plugin) return Result::fail ("The native effect could not be created.");
+    int insertion = track->pluginList.size();
+    for (int i = 0; i < track->pluginList.size(); ++i)
+        if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i]))
+        { insertion = i; break; }
+    impl->transaction ("Add " + String (effectName (kind)));
+    track->pluginList.insertPlugin (plugin, insertion, nullptr);
+    impl->changed(); return Result::ok();
+}
+Result Session::setNativeEffectSettings (const String& id, const EffectSettings& settings)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! validEffectSettings (settings)) return Result::fail ("Effect settings are outside their supported ranges.");
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        for (auto* plugin : track->pluginList.getPlugins())
+            if (plugin->itemID.toString() == id)
+                if (auto* effect = dynamic_cast<NativeEffectPlugin*> (plugin))
+                {
+                    const auto previous = effect->readSettings();
+                    if (previous.kind != settings.kind) return Result::fail ("Effect type cannot change during an edit.");
+                    if (previous == settings) return Result::ok();
+                    impl->transaction ("Edit " + String (effectName (settings.kind)));
+                    effect->writeSettings (settings); impl->changed(); return Result::ok();
+                }
+    return Result::fail ("Native effect not found.");
 }
 Result Session::addUtility (int index)
 {
