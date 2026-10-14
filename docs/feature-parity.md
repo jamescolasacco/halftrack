@@ -2,7 +2,7 @@
 
 Capability planning inventory, revised 2026-10-13. These are proposed behavior tests, not completed parity claims. See [specification policy](research/workflows.md).
 
-**This is a planned capability inventory, not a claim that every reference DAW function has been examined.** Entries began as **NOT IMPLEMENTED / UNVERIFIED**. The preview rows below now record narrowly scoped evidence; later-stage rows retain their initial status. No completion is inferred from a screenshot, a control, a class name, a build, or another contributor's in-progress code.
+**This is a planned capability inventory, not a claim that every reference DAW function has been examined.** Entries began as **NOT IMPLEMENTED / UNVERIFIED**. The preview and Session rows below now record narrowly scoped evidence; unverified rows retain their initial status. No completion is inferred from a screenshot, a control, a class name, a build, or another contributor's in-progress code.
 
 ## Scope and progression
 
@@ -22,27 +22,31 @@ A verification record should name the row ID, reference version, Halftrack commi
 
 There are **170 behavior/scope rows** and **105 device/content rows** in this initial ledger. These are backlog entries, not a completed-feature count.
 
-## Preview acceptance gate
+## Current Session subset
 
-Stage: **Preview**. Updated 2026-10-13 against the [preview verification record](preview-verification.md). The local Mac suite passed in **12.66 seconds** at `a6f7e2e`; some GUI observations came from an earlier build. Windows CI, browser-stall repair/retest, and GUI export/save are pending. **PARTIAL** below never implies the whole row or the other platform has passed.
+Engine `8606b05`, persistence/test integration `0f9e217`, and UI `16cb96b` pass the local Apple Silicon macOS launcher, UI-handler and session subsets. See [measured cases and limits](preview-verification.md#session-extension-local-verification). This is not complete Session parity or a current full-suite/CI pass. The new offline-latency edge correction passed its focused suite in 17.40 seconds; the expanded empty-slot takeover suite also passes in 3.75 seconds, while complete integration remains pending. Native Session manual checks UI-21 through UI-33 and physical hardware checks remain NOT RUN. Earlier platform passes apply only to their named source revisions.
+
+## Original preview acceptance record
+
+The original audio-preview subset passed locally in **12.66 seconds** at `a6f7e2e`. Browser repair and native save/reopen/export were subsequently observed, and the earlier preview later passed three-platform CI at `1294f5b`; details are in the [verification record](preview-verification.md). Those results do not certify the continued Session candidate. **PARTIAL** never implies the whole row or another platform has passed.
 
 | ID | Capability / target | Acceptance evidence and remaining gap | Status |
 | --- | --- | --- | --- |
-| PRE-001 | Launch and honest status | Mac native GUI launched and the latest acceptance executable passed. A later launch stalled scanning Music; repair/retest is pending. Windows CI has no result yet. | PARTIAL — earlier GUI launch; regression open |
+| PRE-001 | Launch and honest status | Native Mac launch was observed after the browser stopped scanning Music at startup; chosen-directory scanning runs asynchronously. Current Session platform/CI results remain pending. | PARTIAL — Mac launch observed |
 | PRE-002 | Device selection | Earlier GUI reported CoreAudio built-in output, 96 kHz / 512 samples, no input. No-device guards and virtual-device inputs passed. Hardware switching, permissions, hot-plug, and latency remain pending. | PARTIAL — observed output configuration |
 | PRE-003 | Record a take | Generated input passed the real recording graph; stop created a WAV clip with expected rate, duration bounds, and signal. Export and save passed. Physical/acoustic capture and alignment remain pending. | PARTIAL — Mac synthetic capture |
 | PRE-004 | Import and arrange audio | Earlier GUI imported four generated stems, showed waveforms, fitted the timeline, and played/stopped with advancing transport. API clip gesture undoes once. GUI clip placement/movement and seek checks remain pending. | PARTIAL — Mac import/playback observed |
 | PRE-005 | Basic mix | Two-track summing, gain, pan, mute, solo, and grouped gain/pan undo passed API checks. GUI track/master meters were active. GUI mixer gestures and Windows remain pending. | PARTIAL — automated mix; meters observed |
 | PRE-006 | Plug-in audition | Controlled VST3 discovery, instantiation, parameter change, processing, state round trip, bypass, and removal passed. Editor interactions, AU, arbitrary plug-ins, and Windows remain pending. | PARTIAL — controlled Mac VST3 |
-| PRE-007 | Export | 48 kHz WAV PCM and duration passed; a two-second extension produces 144,000 frames from a one-second dry source. Worker cancellation dispatches messages and preserves existing output bytes. GUI export, rate/depth matrix, actual effect tails, and Windows remain pending. | PARTIAL — Mac API export/cancel |
-| PRE-008 | Save and reopen | Portable project/media, track name, tempo, loop, rendered audio, and VST3 state passed; invalid load retained the edit. Clean/dirty initialization regressions passed. GUI save/reopen and complete state coverage remain pending. | PARTIAL — tested API cases |
-| PRE-009 | Basic stability | Latest automated workflow passed; earlier GUI Play/Stop and unsaved-close Discard worked. Browser scan stall repair, repeated device changes, editor lifetime, save dialogs, and long-session checks remain pending. | PARTIAL — bounded automated/GUI evidence |
+| PRE-007 | Export | 48 kHz WAV PCM and duration passed; a two-second extension produces 144,000 frames from a one-second dry source. Worker cancellation dispatches messages and preserves existing output bytes. Native Mac export was decoded independently; the rate/depth matrix, actual effect tails, and current candidate platform results remain pending. | PARTIAL — Mac API export/cancel |
+| PRE-008 | Save and reopen | Portable project/media, track name, tempo, loop, rendered audio, and VST3 state passed; invalid load retained the edit. Clean/dirty initialization regressions passed. Native Mac audio-demo save/reopen was observed; complete state coverage remains pending. | PARTIAL — tested API cases |
+| PRE-009 | Basic stability | Original preview workflows and scoped continued Session tests passed; the browser stall was repaired. Repeated device changes, arbitrary plug-in editor lifetime, and long-session checks remain pending. Full integration after the latest empty-slot takeover change remains pending. | PARTIAL — bounded automated/GUI evidence |
 | PRE-010 | Preview handoff | Runnable preview delivered; latest owner instructions authorize further research and implementation. | HANDOFF COMPLETE — former gate superseded |
 
 ## Audio backend, device lifecycle, and recording alignment
 
 
-Stage: **Further implementation authorized**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. Unverified rows are proposed checks; PARTIAL rows name the limited evidence already recorded.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -62,7 +66,7 @@ Stage: **Further implementation authorized**. All checks below are proposed, not
 ## Transport, time, recording, and takes
 
 
-Stage: **Further implementation authorized**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. Unverified rows are proposed checks; PARTIAL rows name the limited evidence already recorded.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -82,7 +86,7 @@ Stage: **Further implementation authorized**. All checks below are proposed, not
 ## Arrangement and clip editing
 
 
-Stage: **Further implementation authorized**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. Unverified rows are proposed checks; PARTIAL rows name the limited evidence already recorded.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -96,29 +100,29 @@ Stage: **Further implementation authorized**. All checks below are proposed, not
 | ARR-008 | Fades and crossfades | Edit overlapping clips and edge fades; test click avoidance, curve state, persistence, and render agreement. | NOT IMPLEMENTED / UNVERIFIED |
 | ARR-009 | Locators and loop regions | Create/name/jump/delete locators and edit loop endpoints; test meter changes and playback jumps. | NOT IMPLEMENTED / UNVERIFIED |
 | ARR-010 | Freeze and bounce | Specify 12.2.1 freeze/bounce behavior, retained source state, tails, sidechains, output placement, and undo. | NOT IMPLEMENTED / UNVERIFIED |
-| ARR-011 | Session/Arrangement ownership | Switch between launched clips and timeline playback; verify override indicators and return-to-arrangement behavior. | NOT IMPLEMENTED / UNVERIFIED |
+| ARR-011 | Session/Arrangement ownership | Native generated output verifies boundary takeover, stop retaining Session silence, delayed UI publication, graph rebuild and explicit Return; handler tests prove view switches do not change ownership. Stale-generation and same-pitch MIDI handoff cases pass. Native manual delivery and hardware timing remain unverified. | PARTIAL — Mac Session subset |
 | ARR-012 | Clip properties | Persist activation, name/color, source bounds, loop bounds, gain, tuning, RAM/interpolation options, and batch edits. | NOT IMPLEMENTED / UNVERIFIED |
 
 ## Session performance and launching
 
 
-Stage: **Further implementation authorized**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. Unverified rows are proposed checks; PARTIAL rows name the limited evidence already recorded.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
-| SES-001 | Clip grid and scenes | Create, move, copy, stop, and remove slots/scenes; verify track exclusivity and empty-slot behavior. | NOT IMPLEMENTED / UNVERIFIED |
-| SES-002 | Quantized launch and stop | Schedule launches/stops at musical boundaries, including requests near a processing-buffer edge. | NOT IMPLEMENTED / UNVERIFIED |
+| SES-001 | Clip grid and scenes | Create/import/clear slots; add/rename/delete scenes; undo, stable IDs, exclusive playback and empty-slot stop/silent arrangement takeover pass engine/handler cases. Slot MIDI editing and occupied-destination rejection pass. Clip/scene move/copy and complete native interaction remain missing or unverified. | PARTIAL — Mac Session subset |
+| SES-002 | Quantized launch and stop | None/Beat/Bar launch/stop, tempo-aware scheduling, loop wrap and stopped transport pass generated 48 kHz/128-frame cases; onset tolerance is 256 frames and tested scene-channel alignment is within one sample. Scene commands are serialized in the fixture; concurrent device callbacks can split native per-track enqueue across blocks. Exact request-edge timing and hardware jitter remain unverified. | PARTIAL — Mac generated timing |
 | SES-003 | Launch modes and legato | Specify gate, trigger, toggle, repeat, velocity response, and phase-preserving transitions. | NOT IMPLEMENTED / UNVERIFIED |
 | SES-004 | Follow actions | Exercise clip and scene actions, probabilities, repetition, timing, and global disable with seeded test fixtures. | NOT IMPLEMENTED / UNVERIFIED |
 | SES-005 | Scene tempo/signature | Launch scenes that change tempo/meter; verify transport continuity and existing clip phase. | NOT IMPLEMENTED / UNVERIFIED |
 | SES-006 | Session recording | Record audio/MIDI into slots and overdub; test arm routing, quantization, and loop length. | NOT IMPLEMENTED / UNVERIFIED |
 | SES-007 | Performance capture | Record a launch performance into the Arrangement and replay equivalent timing. | NOT IMPLEMENTED / UNVERIFIED |
-| SES-008 | Controller feedback | Verify playing/queued/recording/stopped state feedback from a test controller and keyboard. | NOT IMPLEMENTED / UNVERIFIED |
+| SES-008 | Controller feedback | Clip queued/playing/stopped and track ownership display actual engine state; Enter/Shift+Enter, scene/slot selection and stop/return handlers pass. External controller feedback, recording state and native OS key delivery remain unverified. | PARTIAL — native UI handler subset |
 
 ## Audio clip processing and timing
 
 
-Stage: **Further implementation authorized**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. Unverified rows are proposed checks; PARTIAL rows name the limited evidence already recorded.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -137,16 +141,16 @@ Stage: **Further implementation authorized**. All checks below are proposed, not
 ## MIDI editing, tools, MPE, and tuning
 
 
-Stage: **Further implementation authorized**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. Unverified rows are proposed checks; PARTIAL rows name the limited evidence already recorded.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
-| MID-001 | Piano-roll editing | Create, select, move, resize, split, duplicate, deactivate, and delete notes using mouse and keyboard. | NOT IMPLEMENTED / UNVERIFIED |
+| MID-001 | Piano-roll editing | Production handlers create/select/move/resize/delete and undo notes in arrangement and Session clips. Selected empty Session slots do not open another clip. Split, duplicate, deactivate and complete native input delivery remain unverified or missing. | PARTIAL — Mac editor handlers |
 | MID-002 | Pitch/time operations | Verify transpose, scale-aware movement, reverse/invert, stretch, legato, fixed lengths, and quantize without stuck notes. | NOT IMPLEMENTED / UNVERIFIED |
 | MID-003 | Velocity, release, probability | Persist expressive values and ranges; use deterministic seeds to test chance and repeated-note behavior. | NOT IMPLEMENTED / UNVERIFIED |
 | MID-004 | Multi-clip editing | Display/edit several MIDI clips; verify focus, selection boundaries, and notes at overlapping loop positions. | NOT IMPLEMENTED / UNVERIFIED |
 | MID-005 | Controller/program events | Edit and replay CCs, pitch bend, sustain, channel pressure, banks, and program changes in order. | NOT IMPLEMENTED / UNVERIFIED |
-| MID-006 | Note lifecycle | Test overlapping same-pitch notes, stop/seek, instrument replacement, panic, and MIDI device loss. | NOT IMPLEMENTED / UNVERIFIED |
+| MID-006 | Note lifecycle | Generated Session MIDI loops stop without stuck voices; held arrangement notes release on takeover while same-pitch and different-pitch new notes survive. Instrument replacement, panic, device loss and general overlapping-note semantics remain unverified. | PARTIAL — Mac generated handoff |
 | MID-007 | Transformation tools | Inventory Arpeggiate, Chop, Connect, Glissando, LFO, Ornament, Quantize, Recombine, Span, Strum, Time Warp, and Velocity Shaper; give each a reference fixture. | NOT IMPLEMENTED / UNVERIFIED |
 | MID-008 | Generative tools | Inventory Rhythm, Seed, Shape, Stacks, and Euclidean; verify ranges, deterministic regeneration, and undo. | NOT IMPLEMENTED / UNVERIFIED |
 | MID-009 | MPE recording/editing | Record and edit per-note pitch, pressure, slide, and release data; preserve association after trimming and copying. | NOT IMPLEMENTED / UNVERIFIED |
@@ -158,7 +162,7 @@ Stage: **Further implementation authorized**. All checks below are proposed, not
 ## Mixer, routing, racks, and automation
 
 
-Stage: **Further implementation authorized**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. Unverified rows are proposed checks; PARTIAL rows name the limited evidence already recorded.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -168,7 +172,7 @@ Stage: **Further implementation authorized**. All checks below are proposed, not
 | MIX-004 | Internal routing taps | Route pre/post processing and post-mixer signals; verify multichannel sources and feedback graph policy. | NOT IMPLEMENTED / UNVERIFIED |
 | MIX-005 | Cue and crossfade | Test independent cue output, preview level, crossfader assignment/curves, and master/cue separation. | NOT IMPLEMENTED / UNVERIFIED |
 | MIX-006 | Resampling and external inserts | Capture internal buses; loop external hardware with measured compensation and explicit render constraints. | NOT IMPLEMENTED / UNVERIFIED |
-| MIX-007 | Delay compensation | Test serial/parallel paths, returns, sidechains, changed plug-in latency, bypass, and monitoring exceptions. | NOT IMPLEMENTED / UNVERIFIED |
+| MIX-007 | Delay compensation | Controlled offline VST3 serial/parallel, bypass and removal cases pass. Two renderer defects are corrected; ten edge exports at 48000/64 frames and 127 through 635 samples of graph latency match their dry reference exactly with finite values and exact length. Live compensation, returns, sidechains, dynamic latency and monitoring exceptions remain unverified. | PARTIAL — Mac controlled offline graph |
 | MIX-008 | Track delay | Test positive/negative offsets and compensation while maintaining project-time alignment. | NOT IMPLEMENTED / UNVERIFIED |
 | MIX-009 | Serial and parallel devices | Add/reorder/bypass/remove devices and rack chains while maintaining valid graph/state. | NOT IMPLEMENTED / UNVERIFIED |
 | MIX-010 | Drum racks | Test pads, choke behavior, chain routing, independent outputs, and extraction without stuck voices. | NOT IMPLEMENTED / UNVERIFIED |
@@ -183,7 +187,7 @@ Stage: **Further implementation authorized**. All checks below are proposed, not
 ## Plug-in host contract
 
 
-Stage: **Further implementation authorized**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. Unverified rows are proposed checks; PARTIAL rows name the limited evidence already recorded.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -207,15 +211,15 @@ Stage: **Further implementation authorized**. All checks below are proposed, not
 ## Projects, browser, assets, export, and recovery
 
 
-Stage: **Further implementation authorized**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. Unverified rows are proposed checks; PARTIAL rows name the limited evidence already recorded.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
 | PRJ-001 | Halftrack project schema | Specify IDs, versioning, migrations, unknown fields, deterministic storage, and atomic save behavior. | NOT IMPLEMENTED / UNVERIFIED |
-| PRJ-002 | Save/reopen and Save As | Verify timeline, clips, devices, routing, automation, edit state, and media references survive reopen. | NOT IMPLEMENTED / UNVERIFIED |
+| PRJ-002 | Save/reopen and Save As | Generated Session cases preserve scenes/slots, MIDI notes, quantization, names and stable IDs; invalid launcher shape preserves the current edit and undo/redo. General routing/automation and full native-dialog coverage remain unverified. | PARTIAL — Mac project subset |
 | PRJ-003 | Undo/redo history | Test transactions spanning several objects, invalidated references, saved-state markers, and history limits. | NOT IMPLEMENTED / UNVERIFIED |
 | PRJ-004 | Autosave and recovery | Interrupt during save/record/render; recover the last consistent state without overwriting the original project. | NOT IMPLEMENTED / UNVERIFIED |
-| PRJ-005 | Media collection and relocation | Move a portable project between paths and systems; resolve relative paths, missing files, and case differences. | NOT IMPLEMENTED / UNVERIFIED |
+| PRJ-005 | Media collection and relocation | Generated slot audio is collected and reopens after moving project plus Assets and removing the original. Missing media rejects replacement. Cross-system, case and arbitrary media-library cases remain unverified. | PARTIAL — Mac relocation subset |
 | PRJ-006 | Asset formats | Enumerate actual decoder/encoder support; test WAV/AIFF/FLAC and supported compressed formats with invalid/truncated inputs. | NOT IMPLEMENTED / UNVERIFIED |
 | PRJ-007 | Browser indexing | Scan large permitted libraries asynchronously; handle duplicate names, moved files, cancellation, and unavailable paths. | NOT IMPLEMENTED / UNVERIFIED |
 | PRJ-008 | Search, tags, collections | Specify search/filter semantics, user tags, favorites, and 12.2-era browser interactions. | NOT IMPLEMENTED / UNVERIFIED |
@@ -231,7 +235,7 @@ Stage: **Further implementation authorized**. All checks below are proposed, not
 ## Halftrack's own extensible device environment
 
 
-Stage: **Further implementation authorized**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. Unverified rows are proposed checks; PARTIAL rows name the limited evidence already recorded.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
@@ -249,12 +253,12 @@ Stage: **Further implementation authorized**. All checks below are proposed, not
 ## Controllers, accessibility, and product shell
 
 
-Stage: **Further implementation authorized**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. Unverified rows are proposed checks; PARTIAL rows name the limited evidence already recorded.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
-| UX-001 | Keyboard workflow | Create a versioned shortcut map with platform modifiers; test focus, text entry, menus, and context-sensitive commands. | NOT IMPLEMENTED / UNVERIFIED |
-| UX-002 | Resizable workspace | Test Session/Arrangement, browser, detail panels, mixer, and multi-window layout at small and high-DPI sizes. | NOT IMPLEMENTED / UNVERIFIED |
+| UX-001 | Keyboard workflow | Session Enter/Shift+Enter, arrows, delete/undo and menu/view commands pass production handler cases. A complete shortcut map, OS dispatch, text-entry/focus and platform modifiers require further verification. | PARTIAL — Mac handler subset |
+| UX-002 | Resizable workspace | Actual original Session and piano snapshots generated at 1100x720 and 1440x900; Session 1100x720 and piano 1440x900 inspected as readable without clipping. Multi-window, high-DPI/native interaction and other-platform checks remain unverified. | PARTIAL — two Mac rendered layouts |
 | UX-003 | Screen reader and focus | Expose names, roles, states, values, and focus order; verify real VoiceOver and Windows screen-reader workflows. | NOT IMPLEMENTED / UNVERIFIED |
 | UX-004 | Numeric precision controls | Test typed values, fine/coarse drag, reset, units, modifiers, and accessible equivalents. | NOT IMPLEMENTED / UNVERIFIED |
 | UX-005 | Themes and contrast | Provide Halftrack-owned visual assets and readable contrast; verify selection, clipping, disabled states, and scaling. | NOT IMPLEMENTED / UNVERIFIED |
@@ -268,7 +272,7 @@ Stage: **Further implementation authorized**. All checks below are proposed, not
 ## Reliability, performance, and shared-platform verification
 
 
-Stage: **Further implementation authorized**. All checks below are proposed, not performed.
+Stage: **Further implementation authorized**. Unverified rows are proposed checks; PARTIAL rows name the limited evidence already recorded.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |

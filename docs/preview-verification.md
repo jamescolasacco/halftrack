@@ -2,7 +2,33 @@
 
 Evidence date: **2026-10-13**. This records the original audio/MIDI preview and subsequent research-driven corrections. It is not a completed DAW or a feature/sound parity certification.
 
-## Automated evidence
+## Session extension: local verification
+
+The continued Session implementation is recorded by engine commit `8606b05`, persistence/test integration `0f9e217`, and native UI commit `16cb96b`. The local Apple Silicon macOS Release build passed `launcher-acceptance`, `ui-acceptance`, and `session-acceptance` for this integration. The UI suite took **0.85 seconds**; the expanded launcher suite, including empty-slot takeover, passed in **3.75 seconds**. These are passing subsets, **not a green full-suite or current CI result**. The separate nonzero-latency edge tests exposed view-offset and partial-block export defects; the combined correction in `195bcd0` now passes `latency-acceptance` in **17.40 seconds**. Ten boundary exports cover 48000 and 64 frames at delays of 127, 254, 381, 508 and 635 samples, with exact length, finite values, and zero error against the dry graph reference. This is offline render evidence. The expanded empty-slot takeover suite also passes, but the complete integration rerun and current remote CI remain pending. Earlier CI passes below predate these commits.
+
+The generated launcher cases are in [LauncherTests.cpp](../tests/LauncherTests.cpp), production UI-handler cases in [MainComponent.cpp](../src/MainComponent.cpp), rejected-load cases in [PersistenceTests.cpp](../tests/PersistenceTests.cpp), and the export comparisons in [LatencyTests.cpp](../tests/LatencyTests.cpp).
+
+Reproduce the Session-related subset after building with tests enabled:
+
+```sh
+ctest --test-dir build -R '^(session-acceptance|launcher-acceptance|ui-acceptance)$' --output-on-failure
+```
+
+| Area | Established by this local subset | Limits |
+| --- | --- | --- |
+| Scenes and slots | Eight clean initial scenes; aligned audio/MIDI slots; scene add/rename/remove and undo/redo; occupied-slot rejection; clear/undo preserves clip identity | Clip/scene copy and move, launch modes, follow actions, scene tempo/signature, slot recording and Arrangement performance capture are not implemented. |
+| Launch and stop | None/Beat/Bar quantization; exclusive clip replacement; scene launch; empty-slot silent takeover of arrangement-only and source-free tracks; per-track/all stop; queued-launch cancellation on stop/seek | Generated output uses a 48 kHz, 128-frame hosted driver. Beat/bar onset checks allow 256 frames, and the tested scene channels start within one sample of each other. Commands are submitted serially in this fixture. Native per-track scene enqueue is not an atomic batch: a concurrent device callback may split None or near-boundary requests across blocks. Sample-exact request timing and hardware jitter are not established. |
+| Clock and looping | Current tempo at 90/120 BPM; non-grid arrangement-loop wrap; sub-bar loop fallback; immediate launch from stopped transport; repeated MIDI notes and clip-local playhead | No tempo-automation, meter-change, external-sync or long-duration clock guarantee follows. |
+| Ownership and MIDI handoff | Arrangement continues before a queued boundary; Session owns output afterward without waiting for a UI timer; Stop retains silence; Return restores arrangement; stale generations cannot reclaim it; adding sources/deleting scenes while silent does not restore arrangement; old held notes release while new same-pitch/different-pitch notes survive | The four-file native engine patch remains a dependency maintenance obligation. This is output/state coverage, not a complete race or real-time safety proof. |
+| Project preservation | Scene/slot IDs, names, MIDI notes, quantization and collected audio survive save/relocation/reopen; missing media and malformed launcher structure reject before replacing the edit; existing undo/redo history survives rejected loads | Reopening does not resume a prior live Session performance. Autosave/recovery and arbitrary external assets remain separate work. |
+| Session UI | Production hit testing, menu/mouse/key handlers, slot MIDI creation/editing, audio drop, occupied rejection, scene add/delete/undo, view ownership, stop/return and selection lifetime pass; empty-slot Piano Roll never opens another row; audio drops onto the Session MIDI editor cannot reach hidden Arrangement | Synthetic JUCE event dispatch is not native OS input delivery. Scene rename is engine-tested; its native dialog remains a manual check. |
+| Export | WAV export during Session ownership contains arrangement content and arrangement duration | The command is explicitly Export Arrangement as WAV. It does not capture a Session performance. |
+
+Optional `HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY` output captures the actual original JUCE interface using `createComponentSnapshot`, with nonempty generated audio/MIDI slots. Four PNGs were produced at 1100x720 and 1440x900 for Session and its piano editor. The Session 1100x720 and piano 1440x900 images were visually inspected and were readable without clipping. This verifies those rendered layouts, not interactive delivery, acoustic output, every scaling factor, or other operating systems.
+
+Manual Session checks **UI-21 through UI-33 remain NOT RUN** in the [checklist](manual-test-phase1.md#session-and-launcher-checks). Physical input, monitoring, loopback, hot-plug, timing and stress checks remain unmeasured. Current candidate Windows/Linux and remote CI results are pending; historical platform evidence below applies only to its named commits.
+
+## Initial automated evidence
 
 The initial combined Release acceptance executable passed on Apple Silicon macOS in **15.47 seconds** after integrating MIDI, persistence, FIFO export preflight, reentrant export protection and actual editor-handler tests. `ctest` supplies the generated VST3 fixture; direct `--self-test` execution without `HALFTRACK_TEST_PLUGIN` does not establish plug-in support.
 
@@ -23,7 +49,7 @@ The initial combined Release acceptance executable passed on Apple Silicon macOS
 
 Tests are in `tests/SessionTests.cpp`, `tests/MidiTests.cpp`, `tests/PersistenceTests.cpp`, `tests/RealtimeTests.cpp` and `tests/realtime_audit.py`. Generated signals, projects, logs and diagnostic exports stay in ignored build/artifact folders. No vendor samples, presets or reference recordings are used.
 
-The initial Windows audio build passed [CI run 38439413736](https://github.com/jamescolasacco/halftrack/actions/runs/38439413736). Its macOS 14 job exposed an older upstream-incompatible compiler. The current workflow targets macOS 15, Windows 2022 and Ubuntu 24.04; combined MIDI results are still pending. Do not infer physical driver or native UI parity from a compile/test pass.
+The initial Windows audio build passed [CI run 38439413736](https://github.com/jamescolasacco/halftrack/actions/runs/38439413736). Its macOS 14 job exposed an older upstream-incompatible compiler. The workflow targets macOS 15, Windows 2022 and Ubuntu 24.04. Subsequent results for the earlier preview are recorded below; the current Session extension has no remote result recorded here. Do not infer physical driver or native UI parity from a compile/test pass.
 
 ## Native app observations
 
@@ -38,9 +64,9 @@ The [eight-minute smoke path and extended checklist](manual-test-phase1.md) dist
 
 ## Current boundaries
 
-The preview contains native audio and MIDI editing, one polyphonic subtractive synth, basic track mixing, audio device controls, recording, portable projects, external plug-in hosting and WAV export. Its UI uses an original dark/amber identity and editable SVG mark.
+The current implementation contains native audio and MIDI editing, a Session clip/scene launcher with None/Beat/Bar quantization, one polyphonic subtractive synth, basic track mixing, audio device controls, arrangement recording, portable projects, external plug-in hosting and arrangement WAV export. Its UI uses an original dark/amber identity and editable SVG mark.
 
-The complete target remains much larger: clip/scene launching and follow actions, automation, sends/returns and advanced routing, racks/macros, full instruments/effects, warp-marker editing, comping/slicing, MIDI expression/tuning, CLAP hosting, recovery and library management are unfinished. AU hosting is enabled on macOS but not verified here. No controls are described as implemented merely because a drawing exists.
+The complete target remains much larger: additional launch modes, follow actions, Session recording and performance capture, automation, sends/returns and advanced routing, racks/macros, full instruments/effects, warp-marker editing, comping/slicing, MIDI expression/tuning, CLAP hosting, recovery and library management are unfinished. AU hosting is enabled on macOS but not verified here. No controls are described as implemented merely because a drawing exists.
 
 The requested **whole-host no-lock/no-allocation callback contract is not met by the selected engine**. Dependency callbacks use locks and recording has fallback allocations. Owned synth checks passing do not waive this gap. Existing proprietary project compatibility, a programmable patch environment, branded hardware integration and cloud features are outside the current accepted scope.
 
@@ -58,8 +84,8 @@ Combined research CI [38476341206](https://github.com/jamescolasacco/halftrack/a
 
 Intermediate macOS verification archive: `dist/Halftrack-preview-darwin-arm64-5f40131.tar.gz` (60,975,548 bytes; SHA-256 `cc2cb27799b126e3df8e874fb96af766ab603051c9ae2948460b4651dd62a79f`). The packaged executable matches the tested build byte-for-byte. Its source archive is exactly 5f40131; its Tracktion archive includes the checked recording-safety patch. Original-source packaging excludes ignored reference binaries and decompiler outputs.
 
-## Final platform verification
+## Historical platform verification before the Session extension
 
 Source `1294f5b` passes [all three CI jobs](https://github.com/jamescolasacco/halftrack/actions/runs/38479881217): macOS, Windows and Linux. This includes 20 synthetic Mach-O parser tests per platform, the owned callback source audit, native build, full acceptance and preview packaging. CI macOS acceptance took 145.04 s, Linux 44.09 s and Windows 51.52 s; the full local Release suite took 53.60 s. The opt-in Ghidra fixture remains separate from CI and passed locally as recorded above.
 
-The final local Mac draft is packaged from the clean source plus the completed handoff notes. Its revision is recorded in the archive filename and bundled `SOURCE.json`. Corresponding source includes the explicit-LF patch writer and the exact patched Tracktion source. These results verify the covered fixtures; they do not certify physical drivers, every plug-in, complete UI delivery or exact reference equivalence.
+That earlier local Mac draft was packaged from the clean source plus the completed handoff notes. Its revision is recorded in the archive filename and bundled `SOURCE.json`. Corresponding source includes the explicit-LF patch writer and the exact patched Tracktion source. These results verify the covered fixtures; they do not certify physical drivers, every plug-in, complete UI delivery or exact reference equivalence.
