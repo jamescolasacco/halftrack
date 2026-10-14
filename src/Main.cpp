@@ -12,6 +12,7 @@ int runRecordingTests (const juce::File&);
 int runLatencyTests (const juce::File&);
 int runLauncherTests (const juce::File&);
 #if HALFTRACK_TESTS_ENABLED
+int runUtilityTests (const juce::File&);
 int runRealtimeTests();
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -58,6 +59,13 @@ public:
             return;
         }
         #endif
+        if (args.contains ("--self-test-utility"))
+        {
+            const int i = args.indexOf ("--self-test-utility");
+            const auto destination = i + 1 < args.size() ? juce::File (args[i + 1])
+                : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-tests");
+            setApplicationReturnValue (runUtilityTests (destination)); quit(); return;
+        }
         if (args.contains ("--self-test-sends"))
         {
             const int i = args.indexOf ("--self-test-sends");

@@ -76,3 +76,8 @@ Before strengthening the claim, repeat these checks on the final revision and ot
 ## Pitch-wheel follow-up (2026-10-14)
 
 The source guard passes nine self-tests and eighteen owned callback/helper bodies after adding `pitchWheel`. The prepared-DSP allocation fixture now exercises first-event bending, channel 1/16 state, active/sustained/releasing voices, controller reset and full reset. It reports zero intercepted C++ allocation/deallocation calls in the full eight-suite Mac run (122.25 seconds). The sample-timing tests exercise the real plug-in callback, while allocation instrumentation remains scoped to the owned DSP and queue. Standard-library math, dependency locks, physical MIDI and callback deadlines retain the limitations above.
+
+
+## Channel utility (2026-10-14)
+
+The utility plugin wrapper and prepared DSP are now source-guard roots; the guard passes nine self-tests across 28 owned bodies. The full nine-suite Mac run passes in 145.41 seconds. Utility runtime cases exercise 512 parameter combinations across zero/short/odd/large blocks, mono/stereo buffers, filter switches and reset, with zero intercepted C++ new/delete calls. A bounded-queue test rejects overflow at 63 packets, and a concurrent producer supplies 10,000 complete ordered packets without consumer allocations. The DSP computes coefficients from fixed parameter packets and never reads model/UI state. The limitations above still apply: this is not a malloc, lock, syscall, deadline or whole-host certification.

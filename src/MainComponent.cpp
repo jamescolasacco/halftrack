@@ -1954,7 +1954,7 @@ private:
                 g.setColour (juce::Colour (0xff343b40));
                 g.drawRect (chainLeft() + 5, 44, getWidth() - chainLeft() - 129, getHeight() - 59);
                 g.setColour (muted); g.setFont (font (12.0f));
-                g.drawText (track == nullptr ? "Select an audio track to view its device chain." : "Add a plug-in, or double-click one in the browser.",
+                g.drawText (track == nullptr ? "Select an audio track to view its device chain." : "Add a built-in device or a scanned plug-in.",
                             chainLeft() + 16, 59, getWidth() - chainLeft() - 151, 32, juce::Justification::centred);
                 g.setFont (font (10.5f));
                 g.drawText ("Audio flows through devices from left to right.", chainLeft() + 16, 91, getWidth() - chainLeft() - 151, 25, juce::Justification::centred);
@@ -1994,6 +1994,25 @@ private:
             {
                 const auto box = pluginBounds (i);
                 if (! box.contains (e.getPosition())) continue;
+                if (e.mods.isPopupMenu())
+                {
+                    juce::PopupMenu menu;
+                    menu.addItem (1, "Move left", i > 0);
+                    menu.addItem (2, "Move right", i + 1 < (int) track->plugins.size());
+                    const auto trackId = track->id, pluginId = track->plugins[(size_t) i].id;
+                    juce::Component::SafePointer<Impl> safe (&owner);
+                    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe, trackId, pluginId] (int choice)
+                    {
+                        if (! safe || choice == 0) return;
+                        const auto snapshot = safe->session.snapshot();
+                        for (int t = 0; t < (int) snapshot.tracks.size(); ++t)
+                            if (snapshot.tracks[(size_t) t].id == trackId)
+                                for (int p = 0; p < (int) snapshot.tracks[(size_t) t].plugins.size(); ++p)
+                                    if (snapshot.tracks[(size_t) t].plugins[(size_t) p].id == pluginId)
+                                    { safe->report (safe->session.movePlugin (t, p, p + (choice == 1 ? -1 : 1))); safe->refresh(); return; }
+                    });
+                    return;
+                }
                 if (e.y < box.getBottom() - 30) { owner.report (owner.session.showPluginEditor (owner.selectedTrack, i)); return; }
                 const auto x = e.x - box.getX();
                 if (x < 61) owner.report (owner.session.showPluginEditor (owner.selectedTrack, i));
@@ -2011,7 +2030,7 @@ private:
         }
     private:
         Impl& owner;
-        juce::TextButton addButton { "+ Plug-in" }, manageButton { "Manage..." };
+        juce::TextButton addButton { "+ Device" }, manageButton { "Manage..." };
         SynthPanel synthPanel;
         juce::Component synthClip;
         SendsPanel sendsPanel;
@@ -2659,8 +2678,9 @@ private:
     {
         if (selectedTrack < 0) return;
         auto types = session.knownPlugins().getTypes();
-        if (types.isEmpty()) { showPlugins(); return; }
         juce::PopupMenu popup;
+        popup.addItem (100001, "Utility  (Built-in)");
+        popup.addSeparator();
         for (int i = 0; i < types.size(); ++i) popup.addItem (i + 1, types[i].name + "  (" + types[i].pluginFormatName + ")");
         popup.addSeparator(); popup.addItem (100000, "Scan / Manage Plug-ins...");
         auto safe = juce::Component::SafePointer<Impl> (this);
@@ -2668,7 +2688,8 @@ private:
         popup.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&deviceChain), [safe, types, track] (int choice)
         {
             if (safe == nullptr) return;
-            if (choice == 100000) safe->showPlugins();
+            if (choice == 100001) { safe->report (safe->session.addUtility (track)); safe->refresh(); }
+            else if (choice == 100000) safe->showPlugins();
             else if (choice > 0 && choice <= types.size()) { safe->report (safe->session.addPlugin (track, types[choice - 1])); safe->refresh(); }
         });
     }

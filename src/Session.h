@@ -21,6 +21,15 @@ public:
         float sustain = 0.65f, releaseSeconds = 0.25f, level = 0.15f, pulseWidth = 1.0f;
         int waveform = 0; // 0 = saw, 1 = pulse (default square), 2 = sine, 3 = white noise.
     };
+    struct UtilitySettings
+    {
+        enum class Channel { stereo, left, right, swap };
+        float gainDb = 0, balance = 0, width = 1, midSide = 0, bassFrequency = 120;
+        Channel channel = Channel::stereo;
+        bool midSideMode = false, invertLeft = false, invertRight = false, mono = false;
+        bool bassMono = false, bassAudition = false, mute = false, dcFilter = false;
+        bool operator== (const UtilitySettings&) const = default;
+    };
     struct MidiNoteInfo
     {
         juce::String id;
@@ -45,7 +54,12 @@ public:
         ClipInfo clip;
         double playPositionBeats = -1;
     };
-    struct PluginInfo { juce::String id, name; bool enabled = true; };
+    struct PluginInfo
+    {
+        juce::String id, name;
+        bool enabled = true, isUtility = false;
+        UtilitySettings utility;
+    };
     struct TrackInfo
     {
         juce::String id, name;
@@ -141,6 +155,9 @@ public:
     juce::KnownPluginList& knownPlugins();
     juce::AudioPluginFormatManager& pluginFormats();
     juce::File pluginScanDeadMansFile() const;
+    juce::Result addUtility (int trackIndex);
+    juce::Result setUtilitySettings (const juce::String& pluginId, const UtilitySettings&);
+    juce::Result movePlugin (int trackIndex, int pluginIndex, int destinationIndex);
     juce::Result addPlugin (int trackIndex, const juce::PluginDescription&);
     juce::Result setPluginEnabled (int trackIndex, int pluginIndex, bool);
     juce::Result removePlugin (int trackIndex, int pluginIndex);

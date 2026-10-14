@@ -1,5 +1,7 @@
 #include "Session.h"
 #include "SubtractiveSynth.h"
+#include "UtilityProcessor.h"
+#include "UtilityEditor.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 #include <set>
@@ -264,6 +266,13 @@ public:
         centreWithSize (juce::jmax (getWidth(), 320), juce::jmax (getHeight(), 200));
         setVisible (true);
     }
+    PluginWindow (te::Plugin& p, std::unique_ptr<juce::Component> editor)
+        : DocumentWindow (p.getName(), juce::Colour (0xff262724), closeButton), plugin (p)
+    {
+        setContentOwned (editor.release(), true);
+        setResizable (false, false); setUsingNativeTitleBar (true);
+        centreWithSize (getWidth(), getHeight()); setVisible (true);
+    }
     ~PluginWindow() override
     {
         if (auto* editor = dynamic_cast<juce::AudioProcessorEditor*> (getContentComponent()))
@@ -278,9 +287,12 @@ private:
 class UIBehaviour final : public te::UIBehaviour
 {
 public:
-    explicit UIBehaviour (bool showProgress) : showProgressWindow (showProgress) {}
+    explicit UIBehaviour (Session& s, bool showProgress) : owner (s), showProgressWindow (showProgress) {}
     std::unique_ptr<juce::Component> createPluginWindow (te::PluginWindowState& state) override
     {
+        if (auto* p = dynamic_cast<te::Plugin::WindowState*> (&state))
+            if (dynamic_cast<UtilityPlugin*> (&p->plugin))
+                return std::make_unique<PluginWindow> (p->plugin, makeUtilityEditor (owner, p->plugin.itemID.toString()));
         if (auto* p = dynamic_cast<te::Plugin::WindowState*> (&state))
             if (auto* external = dynamic_cast<te::ExternalPlugin*> (&p->plugin))
                 if (! external->isInitialisingAsync())
@@ -347,6 +359,7 @@ public:
     void cancelTask() { if (activeTask) { cancelled = true; activeTask->signalJobShouldExit(); } }
     bool cancelled = false;
 private:
+    Session& owner;
     bool showProgressWindow;
     te::ThreadPoolJobWithProgress* activeTask = nullptr;
 };
@@ -374,11 +387,12 @@ juce::ValueTree findStateWithID (juce::ValueTree tree, const juce::var& id)
 struct Session::Impl
 {
     explicit Impl (Session& s, bool devices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType)
-        : owner (s), engine (devices ? "Halftrack" : "Halftrack Tests", std::make_unique<UIBehaviour> (devices),
+        : owner (s), engine (devices ? "Halftrack" : "Halftrack Tests", std::make_unique<UIBehaviour> (s, devices),
                             std::make_unique<Behaviour> (devices)), useDevices (devices)
     {
         engine.getPluginManager().createBuiltInType<TrackMixer>();
         engine.getPluginManager().createBuiltInType<SubtractiveSynthPlugin>();
+        engine.getPluginManager().createBuiltInType<UtilityPlugin>();
         engine.getPluginManager().setUsesSeparateProcessForScanning (devices);
         if (customDeviceType)
         {
@@ -498,7 +512,7 @@ struct Session::Impl
         juce::Array<te::Plugin*> result;
         if (auto* t = track (index))
             for (auto* p : t->pluginList.getPlugins())
-                if (dynamic_cast<te::ExternalPlugin*> (p) != nullptr) result.add (p);
+                if (dynamic_cast<te::ExternalPlugin*> (p) != nullptr || dynamic_cast<UtilityPlugin*> (p) != nullptr) result.add (p);
         return result;
     }
     te::Plugin* plugin (int trackIndex, int pluginIndex) const
@@ -699,7 +713,12 @@ Session::Snapshot Session::snapshot() const
             }
             info.slots.push_back (std::move (slotInfo));
         }
-        for (auto* p : impl->plugins (index++)) info.plugins.push_back ({ p->itemID.toString(), p->getName(), p->isEnabled() });
+        for (auto* p : impl->plugins (index++))
+        {
+            PluginInfo device { p->itemID.toString(), p->getName(), p->isEnabled() };
+            if (auto* utility = dynamic_cast<UtilityPlugin*> (p)) { device.isUtility = true; device.utility = utility->readSettings(); }
+            info.plugins.push_back (std::move (device));
+        }
         s.tracks.push_back (std::move (info));
     }
     if (auto* output = impl->engine.getDeviceManager().getDefaultWaveOutDevice())
@@ -777,6 +796,7 @@ Result Session::loadProject (const File& file)
     };
     if (auto result = validateSlots (validateSlots, state); result.failed()) return result;
     if (auto result = validateRouting (state); result.failed()) return result;
+    if (auto result = UtilityPlugin::validateState (state); result.failed()) return result;
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
     auto options = te::Edit::Options { impl->engine, state, id };
@@ -1525,7 +1545,11 @@ Result Session::exportWav (const File& file, double rate, int bits, double tailS
     // before resetting owned control queues and restores it only after export.
     const te::Edit::ScopedRenderStatus renderStatus (*impl->edit, true);
     for (auto* track : te::getAudioTracks (*impl->edit))
+    {
         if (auto* synth = Impl::synth (*track)) synth->prepareForOfflineRender();
+        for (auto* plugin : track->pluginList.getPlugins())
+            if (auto* utility = dynamic_cast<UtilityPlugin*> (plugin)) utility->prepareForOfflineRender();
+    }
     te::Renderer::Parameters p (*impl->edit);
     p.destFile = output.getFile(); p.audioFormat = impl->engine.getAudioFileFormatManager().getWavFormat();
     p.bitDepth = bits; p.sampleRateForAudio = rate; p.blockSizeForAudio = 512;
@@ -1553,6 +1577,48 @@ File Session::pluginScanDeadMansFile() const
 {
     auto folder = File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("Halftrack");
     folder.createDirectory(); return folder.getChildFile ("plugin-scan-in-progress.txt");
+}
+Result Session::addUtility (int index)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* track = impl->track (index); if (! track) return Result::fail ("Track not found.");
+    auto plugin = impl->edit->getPluginCache().createNewPlugin (UtilityPlugin::xmlTypeName, {});
+    if (! plugin) return Result::fail ("The channel utility could not be created.");
+    int insertion = track->pluginList.size();
+    for (int i = 0; i < track->pluginList.size(); ++i)
+        if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i]))
+        { insertion = i; break; }
+    impl->transaction ("Add channel utility");
+    track->pluginList.insertPlugin (plugin, insertion, nullptr);
+    impl->changed(); return Result::ok();
+}
+Result Session::setUtilitySettings (const String& id, const UtilitySettings& settings)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! UtilityPlugin::validSettings (settings)) return Result::fail ("Channel utility settings are outside their supported ranges.");
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        for (auto* plugin : track->pluginList.getPlugins())
+            if (plugin->itemID.toString() == id)
+                if (auto* utility = dynamic_cast<UtilityPlugin*> (plugin))
+                {
+                    if (utility->readSettings() == settings) return Result::ok();
+                    impl->transaction ("Edit channel utility"); utility->writeSettings (settings);
+                    impl->changed(); return Result::ok();
+                }
+    return Result::fail ("Channel utility not found.");
+}
+Result Session::movePlugin (int t, int p, int destination)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto list = impl->plugins (t);
+    if (! juce::isPositiveAndBelow (p, list.size()) || ! juce::isPositiveAndBelow (destination, list.size()))
+        return Result::fail ("Device position not found.");
+    if (p == destination) return Result::ok();
+    auto state = list[p]->state; auto parent = state.getParent();
+    if (parent != list[destination]->state.getParent()) return Result::fail ("Devices must be on the same track.");
+    impl->transaction ("Move device");
+    parent.moveChild (parent.indexOf (state), parent.indexOf (list[destination]->state), &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
 }
 Result Session::addPlugin (int index, const juce::PluginDescription& description)
 {

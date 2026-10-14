@@ -1,4 +1,5 @@
 #include "SubtractiveSynth.h"
+#include "UtilityProcessor.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -120,6 +121,78 @@ Session::SynthSettings packet (int sequence)
     result.pulseWidth = float (sequence % 101) / 100.0f;
     return result;
 }
+Session::UtilitySettings utilityPacket (int sequence)
+{
+    Session::UtilitySettings result;
+    result.gainDb = float (sequence % 136) - 100;
+    result.balance = float (sequence % 201) / 100 - 1;
+    result.width = float (sequence % 401) / 100;
+    result.midSide = -result.balance;
+    result.bassFrequency = float (sequence % 451) + 50;
+    result.channel = static_cast<Session::UtilitySettings::Channel> (sequence % 4);
+    result.midSideMode = (sequence & 1) != 0;
+    result.invertLeft = (sequence & 2) != 0; result.invertRight = (sequence & 4) != 0;
+    result.mono = (sequence & 8) != 0; result.bassMono = (sequence & 16) != 0;
+    result.bassAudition = (sequence & 32) != 0; result.mute = (sequence & 64) != 0;
+    result.dcFilter = (sequence & 128) != 0;
+    return result;
+}
+void utilityRealtimeTests()
+{
+    UtilityDSP dsp; dsp.prepare (48000);
+    std::array<float, 1024> left {}, right {};
+    bool finite = true;
+    const auto processing = allocationAudit::measure ([&]
+    {
+        for (int pass = 0; pass < 512; ++pass)
+        {
+            dsp.configure (utilityPacket (pass));
+            for (const int samples : { 0, 1, 3, 64, 127, 256, 511, 1024 })
+            {
+                left.fill (0.125f); right.fill (-0.25f);
+                dsp.processSamples (left.data(), right.data(), samples);
+                for (int i = 0; i < samples; ++i)
+                    finite = finite && std::isfinite (left[(size_t) i]) && std::isfinite (right[(size_t) i]);
+            }
+            dsp.processSamples (left.data(), nullptr, 1024);
+            dsp.reset();
+        }
+    });
+    noHeapCalls (processing, "owned utility settings, stereo/mono processing and reset have zero intercepted C++ new/delete calls");
+    requireRealtime (finite, "utility parameter extremes, filter switches and variable blocks remain finite");
+    UtilityParameterQueue queue;
+    int accepted = 0, consumed = 0; bool coherent = true;
+    const auto queueCalls = allocationAudit::measure ([&]
+    {
+        for (int i = 0; i < 64; ++i) if (queue.push (utilityPacket (i))) ++accepted;
+        Session::UtilitySettings next;
+        while (queue.pop (next)) { coherent = coherent && next == utilityPacket (consumed++); dsp.configure (next); }
+    });
+    noHeapCalls (queueCalls, "utility queue fill, overflow, drain and application have zero intercepted new/delete calls");
+    requireRealtime (accepted == 63 && consumed == 63 && coherent, "utility queue preserves complete settings at its bounded capacity");
+    constexpr int count = 10000;
+    UtilityParameterQueue concurrent;
+    std::atomic<bool> abort { false };
+    std::thread producer ([&]
+    {
+        for (int i = 0; i < count && ! abort.load (std::memory_order_relaxed);)
+            if (concurrent.push (utilityPacket (i))) ++i;
+            else std::this_thread::yield();
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds (5);
+    int received = 0; allocationAudit::Counts calls {};
+    while (received < count && coherent && std::chrono::steady_clock::now() < deadline)
+    {
+        Session::UtilitySettings next; bool popped = false;
+        const auto iteration = allocationAudit::measure ([&] { popped = concurrent.pop (next); });
+        calls.allocations += iteration.allocations; calls.deallocations += iteration.deallocations;
+        if (! popped) { std::this_thread::yield(); continue; }
+        coherent = next == utilityPacket (received++);
+    }
+    abort.store (true, std::memory_order_relaxed); producer.join();
+    noHeapCalls (calls, "concurrent utility parameter consumer has zero intercepted new/delete calls");
+    requireRealtime (received == count && coherent, "utility SPSC queue delivers 10000 complete ordered packets across threads");
+}
 }
 
 int runRealtimeTests()
@@ -226,6 +299,7 @@ int runRealtimeTests()
         producer.join();
         noHeapCalls (consumerCalls, "concurrent settings-queue consumer has zero intercepted C++ new/delete calls");
         requireRealtime (coherent && received == packetCount, "SPSC queue delivers 10000 complete ordered packets across threads");
+        utilityRealtimeTests();
         std::cout << "Owned DSP allocation checks passed; malloc, locking, syscalls, external code and deadlines are not certified.\n";
         return 0;
     }

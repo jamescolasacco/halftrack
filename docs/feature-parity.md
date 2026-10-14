@@ -22,6 +22,10 @@ A verification record should name the row ID, reference version, Halftrack commi
 
 There are **170 behavior/scope rows** and **105 device/content rows** in this initial ledger. These are backlog entries, not a completed-feature count.
 
+## Channel utility subset
+
+The new original Utility passes all nine local Mac suites in 145.41 seconds. Its [contract](research/channel-utility-contract.md) records tested DSP, native controls, insertion/reordering, undo and saved state. The reference implementation's filter topology, balance law, smoothing and exact outputs have not been measured against this implementation; native input/hardware checks and the new platform CI run remain pending.
+
 ## Current Session subset
 
 The built-in instrument at `ea24869` adds sine, deterministic white noise and adjustable pulse width alongside the existing saw. Native controls, invalid-command preservation, project round trips, undo/redo and independent complete-buffer/harmonic tests pass all eight Mac suites in 133.15 seconds and [all three CI platforms](https://github.com/jamescolasacco/halftrack/actions/runs/38518528688). See the [oscillator contract](research/synth-oscillator-contract.md). Dual oscillators, full modulation, complete instrument-device reconstruction and measured reference sound matching remain absent or unverified.
@@ -403,7 +407,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-037 | Spectral Time | SPECTRAL | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-038 | Spectrum | METER | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-039 | Tuner | METER | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-040 | Utility | ROUTING | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-040 | Utility | Working original processor/editor, 320 matrix cases, bass/DC oracles, complete-file exports, insertion/order, undo and saved state; [contract](research/channel-utility-contract.md). Reference numerical identity unverified. | PARTIAL — local Mac automated acceptance |
 | AFX-041 | Vinyl Distortion | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-042 | Vocoder | VOCODER | NOT IMPLEMENTED / UNVERIFIED |
 
