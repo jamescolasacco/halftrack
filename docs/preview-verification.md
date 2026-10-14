@@ -1,8 +1,10 @@
 # Preview verification
 
-Evidence date: **2026-10-13**. This records the original audio/MIDI preview and subsequent research-driven corrections. It is not a completed DAW or a feature/sound parity certification.
+Evidence includes checkpoints through **2026-10-14**. This records the original audio/MIDI preview and subsequent research-driven corrections. It is not a completed DAW or a feature/sound parity certification.
 
 ## Current integrated checkpoint
+
+Latest source `ab9cbfe` passes [clean builds, all tests and source-inclusive packaging on macOS, Windows and Linux](https://github.com/jamescolasacco/halftrack/actions/runs/38510438644). This adds the original read-only analysis verifier and eleven synthetic cases, with explicit fixture database closure fixing the initial Windows cleanup failure. All 39 tooling tests run on each platform with two optional Ghidra integrations skipped. Application source is unchanged from the verified synth/media checkpoint below.
 
 Synth source `a542c56` passes all **eight local Mac suites in 120.70 seconds**, including full-buffer stereo comparisons of channel-local release, sustain, repeated messages and controller reset. All Notes Off now follows normal note release; All Sound Off remains immediate. The prepared-DSP allocation fixture exercises these paths, and the source guard still passes nine self-tests / seventeen owned bodies. Physical MIDI input and reference-instrument sound comparisons remain unverified.
 
