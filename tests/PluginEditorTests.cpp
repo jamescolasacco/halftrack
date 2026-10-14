@@ -2,11 +2,14 @@
 #include <tracktion_engine/tracktion_engine.h>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <functional>
 #include <deque>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 
 namespace halftrack
 {
@@ -57,6 +60,8 @@ struct Probe
         juce::AudioPluginFormat::PluginCreationCallback callback;
     };
     std::deque<Pending> pending;
+    const std::thread::id messageThread = std::this_thread::get_id();
+    std::atomic<int> nativeCompletions { 0 }, offThreadCompletions { 0 }, offThreadDisposals { 0 };
     std::atomic<int> instances { 0 }, editors { 0 }, editorCreations { 0 }, lifetimeViolations { 0 };
 };
 class TestParameter final : public juce::HostedAudioProcessorParameter
@@ -110,6 +115,7 @@ public:
     ~TestInstance() override
     {
         if (lifetime->editors != 0) ++probe->lifetimeViolations;
+        if (std::this_thread::get_id() != probe->messageThread) ++probe->offThreadDisposals;
         --probe->instances;
     }
     void fillInPluginDescription (juce::PluginDescription& d) const override { d = desc; }
@@ -120,6 +126,14 @@ public:
     double getTailLengthSeconds() const override { return 0; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
+    bool supportsMPE() const override
+    {
+        // Tracktion queries this hook during native instance completion. These
+        // device-free tests never render, so it records initialization itself.
+        ++probe->nativeCompletions;
+        if (std::this_thread::get_id() != probe->messageThread) ++probe->offThreadCompletions;
+        return false;
+    }
     juce::AudioProcessorEditor* createEditor() override
     { return hasEditor() ? new TestEditor (*this, probe, lifetime) : nullptr; }
     bool hasEditor() const override { return desc.fileOrIdentifier.endsWith ("custom"); }
@@ -198,6 +212,41 @@ void complete (const std::shared_ptr<Probe>& probe, bool success = true)
     pending.callback (success ? std::make_unique<TestInstance> (pending.description, probe) : nullptr,
                       success ? juce::String() : juce::String (failureMessage));
     juce::MessageManager::getInstance()->runDispatchLoopUntil (5);
+}
+// The message thread does not dispatch while the worker delivers its callback.
+// Waiting for callback return establishes that completion was queued before an
+// undo or destruction; the deadline bounds a broken blocking implementation.
+void completeFromWorker (const std::shared_ptr<Probe>& probe, bool success = true)
+{
+    check (! probe->pending.empty(), "worker completion has a pending request");
+    auto pending = std::move (probe->pending.front()); probe->pending.pop_front();
+    juce::WaitableEvent returned (true);
+    std::exception_ptr failure;
+    std::thread worker ([&, pending = std::move (pending)]() mutable
+    {
+        try
+        {
+            pending.callback (success ? std::make_unique<TestInstance> (pending.description, probe) : nullptr,
+                              success ? juce::String() : juce::String (failureMessage));
+        }
+        catch (...) { failure = std::current_exception(); }
+        returned.signal();
+    });
+    const bool nonblocking = returned.wait (2000);
+    if (! nonblocking)
+    {
+        // Drain a broken blocking callback before reporting it. A worker must
+        // never outlive the test's Session or turn CI into an unbounded join.
+        if (! pumpUntil ([&] { return returned.wait (0); }))
+        {
+            std::cerr << "FAIL editor worker completion exceeded its deadline" << std::endl;
+            std::_Exit (2);
+        }
+    }
+    worker.join();
+    if (failure) std::rethrow_exception (failure);
+    check (probe->offThreadCompletions == 0, "native initialization runs on the message thread after worker delivery");
+    check (nonblocking, "worker delivery returns without waiting for message dispatch");
 }
 void finishRestored (Session& session, const std::shared_ptr<Probe>& probe)
 {
@@ -315,6 +364,55 @@ void attachedCompletionPreservesRedo (const std::shared_ptr<Probe>& probe)
     check (session.snapshot().tracks.front().name == "Renamed during loading",
            "unrelated rename can still be redone after completion");
 }
+void workerCompletion (const std::shared_ptr<Probe>& probe, bool success)
+{
+    Session session (false); registerFormat (session, probe); addPending (session, probe);
+    completeFromWorker (probe, success);
+    auto* plugin = externalFor (session);
+    check (plugin != nullptr && plugin->isInitialisingAsync() && plugin->getAudioPluginInstance() == nullptr,
+           "worker delivery leaves model changes queued until message dispatch");
+    check (probe->nativeCompletions == 0, "native initialization has not run before queued dispatch");
+    check (pumpUntil ([&] { return ! plugin->isInitialisingAsync(); }), "message dispatch completes the worker result");
+    if (success)
+    {
+        check (probe->nativeCompletions == 1 && probe->offThreadCompletions == 0,
+               "worker-created processor initializes exactly once on the message thread");
+        visibleEditor (session);
+    }
+    else
+    {
+        check (plugin->getAudioPluginInstance() == nullptr && plugin->getLoadError() == failureMessage,
+               "worker-reported failure reaches the model without a processor");
+        check (session.showPluginEditor (0, 0).failed(), "worker failure creates no editor");
+    }
+}
+void queuedWorkerCompletion (const std::shared_ptr<Probe>& probe, bool destroySession)
+{
+    auto session = std::make_unique<Session> (false);
+    registerFormat (*session, probe); addPending (*session, probe);
+    completeFromWorker (probe);
+    check (probe->nativeCompletions == 0 && probe->instances == 1,
+           "worker-created processor is waiting in the message queue");
+    if (destroySession)
+        session.reset();
+    else
+    {
+        session->undo();
+        check (session->canRedo() && externalFor (*session) == nullptr,
+               "undo detaches the plug-in before queued completion");
+    }
+    check (pumpUntil ([&] { return probe->instances == 0; }),
+           "queued result is disposed after its target was removed");
+    check (probe->nativeCompletions == 0 && probe->offThreadDisposals == 0 && probe->editorCreations == 0,
+           "discarded queued result never initializes and is destroyed on the message thread");
+    if (session)
+    {
+        check (session->canRedo(), "queued completion preserves undo's redo history");
+        session->redo(); finishRestored (*session, probe); visibleEditor (*session);
+        check (probe->nativeCompletions == 1 && probe->offThreadCompletions == 0,
+               "redo initializes one replacement after discarding the queued result");
+    }
+}
 void destroyedSession (const std::shared_ptr<Probe>& probe)
 {
     { Session session (false); registerFormat (session, probe); addPending (session, probe); }
@@ -345,6 +443,10 @@ int runPluginEditorTests (const juce::File& requestedDirectory)
         run ("interrupted creation", [&, operation] (const auto& probe) { interruptedCreation (probe, operation, root); });
     run ("session destruction", destroyedSession);
     run ("attached redo", attachedCompletionPreservesRedo);
+    run ("worker success", [] (const auto& probe) { workerCompletion (probe, true); });
+    run ("worker failure", [] (const auto& probe) { workerCompletion (probe, false); });
+    run ("queued worker undo", [] (const auto& probe) { queuedWorkerCompletion (probe, false); });
+    run ("queued worker destruction", [] (const auto& probe) { queuedWorkerCompletion (probe, true); });
     if (failures == 0) std::cout << "Plug-in editor acceptance tests passed." << std::endl;
     return failures == 0 ? 0 : 1;
 }
