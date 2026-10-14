@@ -139,6 +139,61 @@ void structureTests (const juce::File& root, const juce::File& audio)
     check (session.snapshot().tracks.back().slots[1].clip.id == midiId, "rejected load preserves current project");
     check (held.moveFileTo (missing), "restore generated source");
 }
+void saveAsAudioTests (const juce::File& root)
+{
+    MemoryBuffers buffers;
+    Session session (false);
+    auto& engine = engineFor (session);
+    te::test_utilities::EnginePlayer player (engine, parameters());
+    constexpr float slotLevel = 0.19f, arrangementLevel = 0.07f;
+    const auto original = constantFile (root, "save-as-slot-source", slotLevel);
+    const auto arrangement = constantFile (root, "save-as-arrangement-source", arrangementLevel, 48000);
+    ok (session.importAudioToSlot (original, 0, 0), "import Save As slot source");
+    ok (session.importAudio (arrangement, 0), "import Save As arrangement source");
+    const auto first = root.getChildFile ("Slot original").getChildFile ("Same.halftrack");
+    const auto second = root.getChildFile ("Slot relocated").getChildFile ("Same.halftrack");
+    ok (session.saveProject (first), "save slot and arrangement before same-name relocation");
+    const auto oldTrack = session.snapshot().tracks[0];
+    ok (session.saveProject (second), "save audio to another directory with the same project name");
+    const auto movedTrack = session.snapshot().tracks[0];
+    for (const auto& pair : { std::pair { oldTrack.clips[0].file, movedTrack.clips[0].file },
+                              std::pair { oldTrack.slots[0].clip.file, movedTrack.slots[0].clip.file } })
+        check (pair.first != pair.second && pair.second.existsAsFile()
+            && pair.first.getRelativePathFrom (first.getParentDirectory()) == pair.second.getRelativePathFrom (second.getParentDirectory()),
+            "Save As changes the media location without changing its relative source text");
+    auto* nativeTrack = te::getAudioTracks (*engine.getActiveEdits().getEdits()[0])[0];
+    check (nativeTrack->getClips()[0]->getCurrentSourceFile() == movedTrack.clips[0].file,
+        "same-name Save As updates the arrangement clip's cached current source");
+    check (nativeTrack->getClipSlotList().getClipSlots()[0]->getClip()->getCurrentSourceFile() == movedTrack.slots[0].clip.file,
+        "same-name Save As updates the slot clip's cached current source");
+    check (first.getParentDirectory().deleteRecursively() && original.deleteFile() && arrangement.deleteFile(),
+        "remove old generated arrangement and slot media after Save As");
+    // Register only the new paths. Stale currentSourceFile paths cannot read
+    // synchronous fixtures, and the generated original files are gone.
+    registerConstant (buffers, engine, movedTrack.clips[0].file, arrangementLevel, 48000);
+    registerConstant (buffers, engine, movedTrack.slots[0].clip.file, slotLevel);
+    dispatchGraphChanges (session);
+    check (movedTrack.clips[0].id == oldTrack.clips[0].id && movedTrack.slots[0].clip.id == oldTrack.slots[0].clip.id,
+        "Save As retains the current arrangement and slot identities");
+    const auto checkOutput = [&] (float expected, const juce::String& name)
+    {
+        player.process (1024); // Complete the native graph-start fade before measuring.
+        const auto rendered = player.process (8192);
+        check (rendered.getNumChannels() == 2 && rendered.getNumSamples() == 8192, name + " capture dimensions");
+        checkFinite (rendered);
+        float error = 0;
+        for (int c = 0; c < rendered.getNumChannels(); ++c)
+            for (int i = 0; i < rendered.getNumSamples(); ++i)
+                error = std::max (error, std::abs (rendered.getSample (c, i) - expected));
+        check (error < 0.00001f, name + " both-channel full-window error " + juce::String (error, 8));
+    };
+    ok (session.play(), "play current arrangement after same-name Save As without reopening");
+    checkOutput (arrangementLevel, "current arrangement uses relocated media");
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::none), "Save As slot immediate launch");
+    ok (session.launchSlot (0, 0), "launch current slot after same-name Save As without reopening");
+    checkOutput (slotLevel, "current slot uses relocated media");
+    session.stop();
+}
 void audioTests (const juce::File& root, const juce::File& first, const juce::File& second)
 {
     MemoryBuffers buffers; // Outlive the session and every graph reader.
@@ -494,6 +549,7 @@ int runLauncherTests (const juce::File& requestedDirectory)
         ok (root.createDirectory(), "create isolated test artifacts");
         const auto first = constantFile (root, "first", 0.12f), second = constantFile (root, "second", 0.28f);
         structureTests (root, first);
+        saveAsAudioTests (root);
         audioTests (root, first, second);
         const auto longArrangement = constantFile (root, "long-arrangement", 0.12f, 96000);
         ownershipTests (longArrangement, second);
