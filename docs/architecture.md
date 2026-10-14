@@ -136,3 +136,18 @@ history. The standalone send/return acceptance suite uses original generated PCM
 and plug-ins to verify full-window finite output, independent mix/pan formulas,
 undo, portable reopening, malformed routing, and compensated aux paths. Runtime
 verification results are recorded in progress when that suite has run.
+
+The selected tap is shared by all sources feeding a given return. The arrows below show the available signal paths; each send uses either Pre or Post.
+
+```mermaid
+flowchart LR
+    Source[Audio clip or instrument] --> FX[Source effects]
+    FX --> Pre[Pre tap]
+    Pre --> Mixer[Source volume / pan / mute]
+    Mixer --> Post[Post tap]
+    Post --> Main[Main mix]
+    Pre -. Selected Pre send .-> ReturnFX[Return effects]
+    Post -. Selected Post send .-> ReturnFX
+    ReturnFX --> ReturnMixer[Return volume / pan / mute]
+    ReturnMixer --> Main
+```
