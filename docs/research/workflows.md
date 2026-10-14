@@ -12,3 +12,7 @@ Primary implementation sources retain their licenses:
 - [CLAP SDK](https://github.com/free-audio/clap)
 
 The capability ledger is a planning map, not proof of complete behavior. [Measurement research](behavioral-parity-measurement.md) defines the difference between bounded equivalence, static analysis coverage and whole-product claims. Functional tests, complete-file signal comparisons and physical hardware checks answer different questions.
+
+## Multiple-note editing follow-up
+
+The public version-12 MIDI workflow describes Shift selection changes, marquee selection, select-all, deselection, semitone movement and octave movement. These inform the next original piano-roll extension. Halftrack currently keeps ordinary empty-space drawing and uses a modifier for marquee selection; that difference remains explicit. Boundary clamping and grouped velocity semantics require separate comparison before parity can be claimed. [Primary workflow reference](https://www.ableton.com/en/live-manual/12/editing-midi/).

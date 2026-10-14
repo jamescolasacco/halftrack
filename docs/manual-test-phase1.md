@@ -93,6 +93,17 @@ These additions are **NOT RUN** through native mouse/keyboard delivery. Use a di
 | UI-40 | Save with a send at 0 dB and another lower, then reopen and relocate the project plus Assets folder | Routing destinations, levels, Pre/Post, mixer state and media survive. Playback matches the saved mix. |
 | UI-41 | Open a return effect's editor, delete the return, then Undo/Redo | The editor closes before its processor is removed. The restored return opens the actual editor again and remains connected to the intended sources. |
 
+## Multiple-note editing follow-up
+
+These optional checks are **NOT RUN** through native mouse/keyboard delivery. Automated component-handler tests are recorded separately. Use a disposable MIDI clip with three notes at different pitches and times.
+
+| ID | Action | Expected evidence |
+| --- | --- | --- |
+| UI-42 | Click one note, Shift-click another, then Shift-click it again. Shift-drag from empty grid space across two notes. Try Cmd/Ctrl+A and Escape. | Shift toggles individual membership. The marquee adds intersecting notes without drawing new ones. Select All selects the clip's notes; Escape clears. Ordinary empty-space click still draws. |
+| UI-43 | Select two notes, drag a note body, then use arrows and Shift+Up/Down. Move toward the clip edge and the pitch limits. Undo and Redo. | The notes move by the same bounded amount, preserving spacing and intervals. Each completed drag or key edit undoes together. Octave keys request twelve semitones within the shared range. |
+| UI-44 | Drag a selected note's right edge, then change Velocity. Undo/Redo each edit. | All selected lengths change by the same allowed amount. Velocity sets every selected note to the displayed value. Each gesture undoes together; unselected notes stay unchanged. |
+| UI-45 | Delete a selection, Undo/Redo, switch clips and reopen a saved project. | Deletion is one undoable action. Stale selection IDs do not select unrelated notes or edit another clip. Notes and their musical edits persist; editor selection itself is not stored as project content. |
+
 ## Intentional hardware checks
 
 Run these only with an intentionally supplied generated source and selected hardware. Do not use ambient microphone input. Initial status for every platform is **NOT MEASURED** unless a specific report says otherwise.
