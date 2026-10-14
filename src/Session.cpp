@@ -269,8 +269,13 @@ struct Session::Impl
     void cancelLaunches()
     {
         for (auto* t : te::getAudioTracks (*edit))
+        {
             for (auto* slot : t->getClipSlotList().getClipSlots())
                 if (auto* c = slot->getClip()) if (auto h = c->getLaunchHandle()) h->stop (std::nullopt);
+            t->launcherSilence.stop (std::nullopt);
+            // Cancel stale claims without releasing already acquired ownership.
+            t->launcherOwnership.fetch_add (2, std::memory_order_acq_rel);
+        }
     }
     std::optional<te::MonotonicBeat> launchBoundary() const
     {
@@ -298,6 +303,8 @@ struct Session::Impl
     }
     void queueTrack (te::AudioTrack& track, te::Clip* selected, std::optional<te::MonotonicBeat> boundary)
     {
+        if (selected) track.launcherSilence.stop (boundary);
+        else track.launcherSilence.play (boundary);
         for (auto* slot : track.getClipSlotList().getClipSlots())
             if (auto* c = slot->getClip())
                 if (auto h = c->getLaunchHandle())
@@ -800,7 +807,6 @@ Result Session::launchSlot (int trackIndex, int sceneIndex)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* slot = impl->slot (trackIndex, sceneIndex);
     if (! slot) return Result::fail ("Slot not found.");
-    if (! slot->getClip()) return stopLauncherTrack (trackIndex);
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio output in Audio Settings.");
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->edit->getTransport().ensureContextAllocated();

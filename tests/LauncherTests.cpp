@@ -25,6 +25,13 @@ te::Engine& engineFor (Session& session)
         if (&engine->getDeviceManager().deviceManager == &session.audioDeviceManager()) return *engine;
     throw std::runtime_error ("session engine not found");
 }
+void dispatchGraphChanges (Session& session)
+{
+    // Accelerated callbacks do not run the desktop event loop. Flush the same
+    // engine edit update that its message-thread timer normally dispatches.
+    for (auto* edit : engineFor (session).getActiveEdits().getEdits())
+        edit->dispatchPendingUpdatesSynchronously();
+}
 juce::File constantFile (const juce::File& root, const juce::String& name, float value, int numSamples = 12000)
 {
     const auto file = root.getChildFile (name + ".wav");
@@ -238,6 +245,7 @@ void ownershipTests (const juce::File& arrangement, const juce::File& slotSource
     auto stopped = player.process (4096);
     level (stopped, 512, 3500, 0, "stop preserves launcher silence before UI publication");
     ok (session.addMidiTrack ("Rebuild"), "rebuild track graph during launcher ownership");
+    dispatchGraphChanges (session);
     ok (session.play(), "apply rebuilt graph");
     auto rebuilt = player.process (4096);
     level (rebuilt, 512, 3500, 0, "rebuild preserves stopped launcher ownership");
@@ -262,6 +270,123 @@ void ownershipTests (const juce::File& arrangement, const juce::File& slotSource
     player.process (256);
     check ((nativeTrack->launcherOwnership.load (std::memory_order_acquire) & 1) == 0, "old playing handle cannot claim a returned generation");
     ok (session.returnToArrangement(), "finish delayed-stop simulation");
+    session.stop();
+}
+void emptySlotTests (const juce::File& root, const juce::File& arrangement, const juce::File& slotSource)
+{
+    MemoryBuffers buffers;
+    Session session (false);
+    auto& engine = engineFor (session);
+    te::test_utilities::EnginePlayer player (engine, parameters());
+    ok (session.importAudio (arrangement, 0), "empty-target arrangement fixture");
+    registerConstant (buffers, engine, session.snapshot().tracks[0].clips[0].file, 0.12f, 96000);
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::beat), "empty-target beat grid");
+    const auto originalName = session.snapshot().tracks[0].name;
+    ok (session.renameTrack (0, "Silent target"), "structural undo before empty launch");
+    ok (session.play(), "start arrangement before empty target"); player.process (4800);
+    ok (session.launchSlot (0, 0), "launch empty slot over arrangement");
+    auto transition = player.process (28000);
+    level (transition, 512, 18000, 0.12f, "empty target preserves pre-boundary arrangement");
+    level (transition, 20000, 7500, 0, "empty target silences arrangement at beat");
+    check (session.snapshot().tracks[0].launcherActive && session.snapshot().playing, "empty target owns track while transport continues");
+    session.undo();
+    check (session.snapshot().tracks[0].name == originalName && session.snapshot().tracks[0].clips.size() == 1, "empty performance command adds no structural undo step");
+    session.redo();
+    check (session.snapshot().tracks[0].name == "Silent target", "structural redo survives empty launch");
+    session.stop(); ok (session.play(), "resume after empty target stop");
+    auto resumed = player.process (4096);
+    level (resumed, 512, 3500, 0, "transport stop preserves silent ownership");
+    ok (session.addMidiTrack ("Graph change"), "rebuild while empty target owns track");
+    dispatchGraphChanges (session);
+    ok (session.play(), "apply empty-target graph rebuild");
+    auto rebuilt = player.process (4096);
+    level (rebuilt, 512, 3500, 0, "rebuilt graph retains silent ownership");
+    ok (session.returnToArrangement(), "return after empty target"); session.seek (0);
+    auto returned = player.process (4096);
+    level (returned, 512, 3500, 0.12f, "Return restores arrangement after empty target");
+
+    session.stop(); session.seek (0); ok (session.play(), "restart before all-empty scene"); player.process (4800);
+    ok (session.launchScene (1), "launch all-empty scene");
+    auto scene = player.process (28000);
+    level (scene, 512, 18000, 0.12f, "all-empty scene waits for common boundary");
+    level (scene, 20000, 7500, 0, "all-empty scene stops arrangement");
+    check (session.snapshot().tracks[1].launcherActive && session.snapshot().tracks[2].launcherActive, "source-free audio and instrument tracks take silent ownership");
+    ok (session.importAudio (arrangement, 1), "add arrangement after source-free takeover");
+    registerConstant (buffers, engine, session.snapshot().tracks[1].clips[0].file, 0.12f, 96000);
+    dispatchGraphChanges (session);
+    ok (session.play(), "rebuild after adding previously absent source");
+    auto inserted = player.process (4096);
+    level (inserted, 512, 3500, 0, "new arrangement content stays silent under existing ownership");
+    while (! session.snapshot().scenes.empty()) ok (session.removeScene (0), "remove scene while silence owns tracks");
+    dispatchGraphChanges (session);
+    ok (session.play(), "rebuild with no scenes");
+    auto noScenes = player.process (4096);
+    level (noScenes, 512, 3500, 0, "removing every scene preserves silent ownership");
+    ok (session.returnToArrangement(), "return with no remaining scenes"); session.seek (0);
+    auto noScenesReturn = player.process (4096);
+    level (noScenesReturn, 512, 3500, 0.24f, "Return restores both arrangements after scene removal");
+    ok (session.addScene ("Restored row"), "restore empty scene for portable save");
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::none), "immediate empty target");
+    ok (session.launchScene (0), "silent ownership before save"); player.process (256);
+    const auto file = root.getChildFile ("Empty takeover").getChildFile ("Set.halftrack");
+    ok (session.saveProject (file), "save after empty performance command");
+    session.stop(); ok (session.loadProject (file), "reopen empty-target project");
+    const auto reopened = session.snapshot();
+    check (reopened.scenes.size() == 1 && ! reopened.tracks[0].slots[0].hasClip && ! reopened.tracks[1].slots[0].hasClip,
+           "empty takeover creates no hidden persisted clip");
+    check (! reopened.tracks[0].launcherActive && ! reopened.tracks[1].launcherActive && ! session.canUndo(),
+           "reopen clears transient ownership and undo history");
+    registerConstant (buffers, engine, reopened.tracks[0].clips[0].file, 0.12f, 96000);
+    registerConstant (buffers, engine, reopened.tracks[1].clips[0].file, 0.12f, 96000);
+    session.seek (0); ok (session.play(), "play reopened arrangement");
+    auto reopenedAudio = player.process (4096);
+    level (reopenedAudio, 512, 3500, 0.24f, "reopened project plays original arrangements");
+    session.stop();
+
+    // Each cancellation must prevent the old boundary from firing after playback resumes.
+    for (int cancellation = 0; cancellation < 3; ++cancellation)
+    {
+        ok (session.returnToArrangement(), "clear ownership before cancellation case");
+        session.seek (0); ok (session.setLaunchQuantisation (Session::LaunchQuantisation::beat), "cancellation beat grid");
+        ok (session.play(), "start cancellation case"); player.process (4800);
+        ok (session.launchSlot (0, 0), "queue empty target for cancellation");
+        if (cancellation == 0) { session.stop(); session.seek (0); ok (session.play(), "resume cancelled Stop"); }
+        if (cancellation == 1) session.seek (0);
+        if (cancellation == 2) ok (session.returnToArrangement(), "cancel queued empty target with Return");
+        auto cancelled = player.process (40000);
+        level (cancelled, 512, 39000, 0.24f, "cancelled empty target never silences arrangement");
+        check (! session.snapshot().tracks[0].launcherActive, "cancelled empty target does not claim ownership");
+        session.stop();
+    }
+    ok (session.importAudioToSlot (slotSource, 0, 0), "audible replacement for pending empty target");
+    registerConstant (buffers, engine, session.snapshot().tracks[0].slots[0].clip.file, 0.28f);
+    session.seek (0); ok (session.play(), "start replacement case"); player.process (4800);
+    // The single remaining row is occupied on track 0, so add an empty target row.
+    ok (session.addScene ("Empty"), "empty row beside audible slot");
+    ok (session.launchSlot (0, 1), "queue empty target before audible replacement");
+    ok (session.launchSlot (0, 0), "replace pending empty target with audible launch");
+    auto replacement = player.process (28000);
+    level (replacement, 20000, 7500, 0.4f, "audible launch replaces pending empty takeover");
+    session.stop();
+}
+
+void midiEmptySlotTests()
+{
+    Session session (false);
+    auto& engine = engineFor (session);
+    te::test_utilities::EnginePlayer player (engine, parameters());
+    ok (session.addMidiTrack ("Empty MIDI target"), "MIDI empty-target track");
+    auto track = session.snapshot().tracks.back();
+    auto synth = track.synth; synth.attackSeconds = synth.decaySeconds = 0; synth.sustain = 1; synth.releaseSeconds = 0.01f;
+    ok (session.setSynthSettings (track.id, synth), "MIDI empty-target envelope");
+    ok (session.addMidiClip (track.id, 0, 8), "MIDI empty-target arrangement");
+    ok (session.addMidiNote (session.snapshot().tracks.back().clips[0].id, 60, 0, 8, 1), "held note before empty target");
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::beat), "MIDI empty-target beat grid");
+    ok (session.play(), "start held note before empty target"); player.process (4800);
+    ok (session.launchSlot (2, 0), "launch empty MIDI slot");
+    auto output = player.process (40000);
+    check (magnitude (output, 512, 18000) > 0.01f, "MIDI empty target preserves pre-boundary note");
+    check (magnitude (output, 21000, 18000) < 0.00001f, "MIDI empty target releases held arrangement note");
     session.stop();
 }
 void quantisationTests (const juce::File& source)
@@ -372,6 +497,8 @@ int runLauncherTests (const juce::File& requestedDirectory)
         audioTests (root, first, second);
         const auto longArrangement = constantFile (root, "long-arrangement", 0.12f, 96000);
         ownershipTests (longArrangement, second);
+        emptySlotTests (root, longArrangement, second);
+        midiEmptySlotTests();
         quantisationTests (first);
         midiOwnershipTests (76);
         midiOwnershipTests (60);
