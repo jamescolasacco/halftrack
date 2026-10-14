@@ -24,7 +24,7 @@ There are **170 behavior/scope rows** and **105 device/content rows** in this in
 
 ## Channel utility subset
 
-The new original Utility, refined using traced filter topology and a normalized balance law, passes all nine local Mac suites in 146.16 seconds. Its [contract](research/channel-utility-contract.md) records tested DSP, native controls, insertion/reordering, undo and saved state. The reference's filter orders and balance law are traced; exact output, approximation rounding, switching transients and smoothing remain unmeasured against this implementation; native input/hardware checks and the new platform CI run remain pending.
+The new original Utility, refined using traced filter topology and a normalized balance law, passes all nine local Mac suites in 146.16 seconds. Its [contract](research/channel-utility-contract.md) records tested DSP, native controls, insertion/reordering, undo and saved state. The reference's filter orders and balance law are traced; exact output, approximation rounding, switching transients and smoothing remain unmeasured against this implementation; native input/hardware checks remain pending. Source `90c9eb2` passes [clean builds, acceptance and packaging on all three platforms](https://github.com/jamescolasacco/halftrack/actions/runs/38532090898).
 
 ## Current Session subset
 
@@ -407,7 +407,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-037 | Spectral Time | SPECTRAL | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-038 | Spectrum | METER | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-039 | Tuner | METER | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-040 | Utility | Working original processor/editor, 320 matrix cases, bass/DC oracles, complete-file exports, insertion/order, undo and saved state; [contract](research/channel-utility-contract.md). Reference numerical identity unverified. | PARTIAL — local Mac automated acceptance |
+| AFX-040 | Utility | Working original processor/editor, 320 matrix cases, bass/DC oracles, complete-file exports, insertion/order, undo and saved state; [contract](research/channel-utility-contract.md). Reference numerical identity unverified. | PARTIAL — automated Mac/Windows/Linux acceptance; reference numerical parity unverified |
 | AFX-041 | Vinyl Distortion | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-042 | Vocoder | VOCODER | NOT IMPLEMENTED / UNVERIFIED |
 
