@@ -358,7 +358,7 @@ Every device needs the BASE checks and its indicated test profile. Profiles are 
 ### Native audio effects
 
 
-Stage: **After preview approval**; Pack/legacy entries require version reconciliation first.
+Stage: **Further implementation authorized**; Pack/legacy entries require version reconciliation first.
 
 | ID | Reference target | Test profile (plus BASE) | Status |
 | --- | --- | --- | --- |
@@ -408,7 +408,7 @@ Stage: **After preview approval**; Pack/legacy entries require version reconcili
 ### Native MIDI effects
 
 
-Stage: **After preview approval**; Pack/legacy entries require version reconciliation first.
+Stage: **Further implementation authorized**; Pack/legacy entries require version reconciliation first.
 
 | ID | Reference target | Test profile (plus BASE) | Status |
 | --- | --- | --- | --- |
@@ -424,7 +424,7 @@ Stage: **After preview approval**; Pack/legacy entries require version reconcili
 ### Native instruments
 
 
-Stage: **After preview approval**; Pack/legacy entries require version reconciliation first.
+Stage: **Further implementation authorized**; Pack/legacy entries require version reconciliation first.
 
 | ID | Reference target | Test profile (plus BASE) | Status |
 | --- | --- | --- | --- |
@@ -445,7 +445,7 @@ Stage: **After preview approval**; Pack/legacy entries require version reconcili
 ### Rack infrastructure
 
 
-Stage: **After preview approval**; Pack/legacy entries require version reconciliation first.
+Stage: **Further implementation authorized**; Pack/legacy entries require version reconciliation first.
 
 | ID | Reference target | Test profile (plus BASE) | Status |
 | --- | --- | --- | --- |
@@ -457,7 +457,7 @@ Stage: **After preview approval**; Pack/legacy entries require version reconcili
 ### Built-in Max-based reference devices
 
 
-Stage: **After preview approval**; Pack/legacy entries require version reconciliation first.
+Stage: **Further implementation authorized**; Pack/legacy entries require version reconciliation first.
 
 | ID | Reference target | Test profile (plus BASE) | Status |
 | --- | --- | --- | --- |
@@ -487,7 +487,7 @@ Stage: **After preview approval**; Pack/legacy entries require version reconcili
 ### Additional content/Pack capability candidates
 
 
-Stage: **After preview approval**; Pack/legacy entries require version reconciliation first.
+Stage: **Further implementation authorized**; Pack/legacy entries require version reconciliation first.
 
 | ID | Reference target | Test profile (plus BASE) | Status |
 | --- | --- | --- | --- |
@@ -508,7 +508,7 @@ Stage: **After preview approval**; Pack/legacy entries require version reconcili
 | PAK-015 | Other version-pinned Suite Packs | PACK | NOT IMPLEMENTED / UNVERIFIED |
 | PAK-016 | Legacy native devices exposed by 12.2.1 | LEGACY | NOT IMPLEMENTED / UNVERIFIED |
 
-## How to use this ledger after preview approval
+## How to use this ledger during continued development
 
 Start from a complete song-making workflow and expand coverage while keeping the native app runnable. For each row, create the smallest meaningful reference fixture, then test its interactions with transport, save/reopen, undo, routing, automation, and rendering. Reuse general engine fixtures without pretending they verify every device's sound.
 
@@ -516,4 +516,4 @@ For a platform matrix, keep separate results for macOS Apple Silicon, any suppor
 
 Device profiles need per-parameter cases before a device can be marked VERIFIED. Pack families need versioned device manifests before their scope can be called complete. Physical controllers and interface behaviors require real hardware evidence in addition to simulation.
 
-The first preview review is a product gate, not a shortcut to full parity. Deliver it with its verified capabilities and remaining gaps, obtain the user's explicit approval, and only then execute this broader backlog.
+The first preview was delivered and the owner explicitly authorized continued development. No preview approval gate remains; every new capability still needs its own implementation and verification evidence.

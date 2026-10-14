@@ -158,3 +158,7 @@ flowchart LR
     ReturnFX --> ReturnMixer[Return volume / pan / mute]
     ReturnMixer --> Main
 ```
+
+## CLAP adapter decision
+
+CLAP remains unimplemented. The [pinned-source investigation](research/clap-hosting-path.md) found that the suggested JUCE extension library creates plug-ins but does not host them. The planned native-format adapter must register with both the parent engine manager and the separate scanner-child manager; parent-only registration silently misses child discovery. Preserve full module/descriptor identity and use the existing external-processor path. No dependency or advertised capability is added by this decision. Lifecycle, real-time communication, state, native editor, event timing and latency acceptance requirements are documented in the report before implementation.
