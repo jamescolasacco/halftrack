@@ -22,6 +22,10 @@ A verification record should name the row ID, reference version, Halftrack commi
 
 There are **170 behavior/scope rows** and **105 device/content rows** in this initial ledger. These are backlog entries, not a completed-feature count.
 
+## Native effects and note transformations
+
+Source `6467066` passes all eleven local Mac suites in 168.69 seconds, including complete-file signal tests for EQ/compressor/delay/reverb, project-tempo divisions, atomic MIDI note transformations and native editor handlers. The extracted Mac package passes both new dedicated suites. Both the four-effect checkpoint `4ebb163` and combined source `6467066` pass macOS, Windows and Linux builds, native tests and source-inclusive packaging. [Verification and remaining limits](preview-verification.md#native-effects-note-tools-and-tempo-sync--2026-10-14) distinguish actual working subsets from full device parity.
+
 ## Channel utility subset
 
 The new original Utility, refined using traced filter topology and a normalized balance law, passes all nine local Mac suites in 146.16 seconds. Its [contract](research/channel-utility-contract.md) records tested DSP, native controls, insertion/reordering, undo and saved state. The reference's filter orders and balance law are traced; exact output, approximation rounding, switching transients and smoothing remain unmeasured against this implementation; native input/hardware checks remain pending. Source `90c9eb2` passes [clean builds, acceptance and packaging on all three platforms](https://github.com/jamescolasacco/halftrack/actions/runs/38532090898).
@@ -48,7 +52,7 @@ The original audio-preview subset passed locally in **12.66 seconds** at `a6f7e2
 | PRE-004 | Import and arrange audio | Earlier GUI imported four generated stems, showed waveforms, fitted the timeline, and played/stopped with advancing transport. API clip gesture undoes once. GUI clip placement/movement and seek checks remain pending. | PARTIAL — Mac import/playback observed |
 | PRE-005 | Basic mix | Two-track summing, gain, pan, mute, solo, and grouped gain/pan undo passed API checks. GUI track/master meters were active. GUI mixer gestures and Windows remain pending. | PARTIAL — automated mix; meters observed |
 | PRE-006 | Plug-in audition | Controlled VST3 discovery, instantiation, parameter change, processing, state round trip, bypass, and removal passed. Controlled AUv2 processing/state and generated custom/generic editor lifecycle now pass locally at `727c36e`. Four deterministic worker-completion cases also pass locally at `6235185`; AUv3, arbitrary vendor plug-ins and native input delivery remain separate checks. | PARTIAL — controlled Mac VST3/AUv2 |
-| PRE-007 | Export | 48 kHz WAV PCM and duration passed; a two-second extension produces 144,000 frames from a one-second dry source. Worker cancellation dispatches messages and preserves existing output bytes. Native Mac export was decoded independently; the rate/depth matrix, actual effect tails, and current candidate platform results remain pending. | PARTIAL — Mac API export/cancel |
+| PRE-007 | Export | 48 kHz WAV PCM and duration passed; a two-second extension produces 144,000 frames from a one-second dry source. Worker cancellation dispatches messages and preserves existing output bytes. Native Mac export was decoded independently. The current effects suite additionally compares complete files with one second of actual delay/reverb tail. A full rate/depth matrix, arbitrary-plugin tails and hardware checks remain pending. | PARTIAL — tested export/cancel/tails |
 | PRE-008 | Save and reopen | Portable project/media, track name, tempo, loop, rendered audio, and VST3 state passed; invalid load retained the edit. Clean/dirty initialization regressions passed. Native Mac audio-demo save/reopen was observed; complete state coverage remains pending. | PARTIAL — tested API cases |
 | PRE-009 | Basic stability | Original preview workflows and scoped continued Session tests passed; the browser stall was repaired. Repeated device changes, arbitrary plug-in editor lifetime, and long-session checks remain pending. Full integration passes locally at `727c36e`; the subsequent integrated routing/plugin checkpoint `17a0575` passes macOS, Windows and Linux CI. | PARTIAL — bounded automated/GUI evidence |
 | PRE-010 | Preview handoff | Runnable preview delivered; latest owner instructions authorize further research and implementation. | HANDOFF COMPLETE — former gate superseded |
@@ -156,7 +160,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
 | MID-001 | Piano-roll editing | Production handlers create/select/move/resize/delete and undo notes in arrangement and Session clips. Selected empty Session slots do not open another clip. Copy/Cut/Paste/Duplicate, visible insertion cursor, whole-group rejection, fresh-ID selection and text-focus isolation now pass the Mac handler suite at `d5a3688`. Split, deactivate and complete native input delivery remain unverified or missing. | PARTIAL — Mac editor handlers |
-| MID-002 | Pitch/time operations | Eight deterministic note tools, complete-group undo, bounds/selection validation, arrangement/Session save/reopen and production quantize shortcut pass locally. Existing arrows transpose. Scale-aware operations and measured reference equivalence remain missing/unverified. | PARTIAL — automated Mac model/UI checks |
+| MID-002 | Pitch/time operations | Eight deterministic note tools, complete-group undo, bounds/selection validation, arrangement/Session save/reopen and production quantize shortcut pass locally and in three-platform CI at `6467066`. Existing arrows transpose. Scale-aware operations and measured reference equivalence remain missing/unverified. | PARTIAL — automated three-platform model/UI checks |
 | MID-003 | Velocity, release, probability | Persist expressive values and ranges; use deterministic seeds to test chance and repeated-note behavior. | NOT IMPLEMENTED / UNVERIFIED |
 | MID-004 | Multi-clip editing | Display/edit several MIDI clips; verify focus, selection boundaries, and notes at overlapping loop positions. | NOT IMPLEMENTED / UNVERIFIED |
 | MID-005 | Controller/program events | Edit and replay CCs, pitch bend, sustain, channel pressure, banks, and program changes in order. | NOT IMPLEMENTED / UNVERIFIED |
@@ -304,13 +308,13 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 ## Explicit exclusions and later-version watchlist
 
 
-Stage: **Excluded / version review**. All checks below are proposed, not performed.
+Stage: **Excluded / version review**, except OUT-003, restored by the later exact-output request. All checks below are proposed, not performed.
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
 | OUT-001 | ALS import/export or round-trip | Out of agreed scope. Do not advertise reference DAW Set compatibility or silently add a compatibility commitment. | NOT IMPLEMENTED / UNVERIFIED |
 | OUT-002 | Existing AMXD/Max runtime compatibility | Out of agreed scope. The target is an independent extensible environment with its own contract. | NOT IMPLEMENTED / UNVERIFIED |
-| OUT-003 | Bit-identical proprietary device DSP | Out of agreed scope. Define measured and listening-based closeness criteria for independent implementations. | NOT IMPLEMENTED / UNVERIFIED |
+| OUT-003 | Exact-output device comparisons | The later owner request supersedes the earlier exclusion. Compare controlled outputs where possible and report tolerances/differences; static extraction cannot establish whole-product identity. | REQUESTED — reference equality unverified |
 | OUT-004 | Redistributed proprietary content | Out of scope. Use original or appropriately licensed distributable media and presets. | NOT IMPLEMENTED / UNVERIFIED |
 | OUT-005 | 12.3 stem separation and Splice | Later-version features; exclude from the frozen 12.2.1 baseline unless the user later requests them. | NOT IMPLEMENTED / UNVERIFIED |
 | OUT-006 | 12.4 Link Audio and Learn View | Later-version features; ordinary Link synchronization remains a separate baseline item. | NOT IMPLEMENTED / UNVERIFIED |
@@ -376,13 +380,13 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-006 | Cabinet | FILTER | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-007 | Channel EQ | FILTER | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-008 | Chorus-Ensemble (12.2.1 behavior) | MODULATION | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-009 | Compressor | Linked peak/RMS compressor, soft knee, makeup and parallel mix; independent dynamics tests and native project/editor integration. Sidechain/lookahead and numerical parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated Mac acceptance |
+| AFX-009 | Compressor | Linked peak/RMS compressor, soft knee, makeup and parallel mix; independent dynamics tests and native project/editor integration. Sidechain/lookahead and numerical parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated three-platform acceptance |
 | AFX-010 | Corpus | RESONANCE | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-011 | Delay (12.2.1 behavior) | Stereo and ping-pong delay, feedback damping, link, freeze and complete export tails; eleven project-tempo divisions are tested; sample-accurate tempo automation and reference parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated Mac acceptance |
+| AFX-011 | Delay (12.2.1 behavior) | Stereo and ping-pong delay, feedback damping, link, freeze and complete export tails; eleven project-tempo divisions are tested; sample-accurate tempo automation and reference parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated three-platform acceptance |
 | AFX-012 | Drum Buss | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-013 | Dynamic Tube | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-014 | Echo | TIME | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-015 | EQ Eight | Eight serial bands, seven filter modes plus off, output/mix and actual response plot; independent response and project tests. Advanced modes and numerical parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated Mac acceptance |
+| AFX-015 | EQ Eight | Eight serial bands, seven filter modes plus off, output/mix and actual response plot; independent response and project tests. Advanced modes and numerical parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated three-platform acceptance |
 | AFX-016 | EQ Three | FILTER | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-017 | Erosion (12.2.1 behavior) | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-018 | External Audio Effect | EXTERNAL | NOT IMPLEMENTED / UNVERIFIED |
@@ -399,7 +403,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-029 | Phaser-Flanger | MODULATION | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-030 | Redux | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-031 | Resonators | RESONANCE | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-032 | Reverb | Original eight-line room with pre-delay, decay, size, damping, width and mix; reflected-impulse and export-tail tests. Proprietary topology and full controls remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated Mac acceptance |
+| AFX-032 | Reverb | Original eight-line room with pre-delay, decay, size, damping, width and mix; reflected-impulse and export-tail tests. Proprietary topology and full controls remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated three-platform acceptance |
 | AFX-033 | Roar | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-034 | Saturator | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-035 | Shifter | PITCH | NOT IMPLEMENTED / UNVERIFIED |

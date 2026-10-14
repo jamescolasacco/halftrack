@@ -1,6 +1,6 @@
 # Residual extraction recovery, 2026-10-14
 
-The independently verified main ARM64 inventory now has **392,920 completed outputs out of 392,926 declared entries**, with **four failures and two timeouts**. No entries remain unattempted or interrupted. The retained continuations recovered 74 entries beyond the earlier 392,846-output checkpoint, including ten in the latest pass. All 392,920 completed files are nonempty and match their recorded hashes; their total size is 873,848,226 bytes. These are extraction-integrity results, not a measure of implemented DAW features or recovered original source.
+The independently verified main ARM64 inventory now has **392,921 completed outputs out of 392,926 declared entries**, with **three preparation failures and two timeouts**. No entries remain unattempted or interrupted. The retained continuations recovered 75 entries beyond the earlier 392,846-output checkpoint, including one in the latest pass. All 392,921 completed files are nonempty and match their recorded hashes; their total size is 873,850,023 bytes. These are extraction-integrity results, not a measure of implemented DAW features or recovered original source.
 
 ## Retained experiments
 
@@ -17,8 +17,11 @@ The independently verified main ARM64 inventory now has **392,920 completed outp
 | Disable one invalid optional rewrite | 1 | 1 | 0 | 0 |
 | Second oversized-output follow-up | 1 | 1 | 0 | 0 |
 | Final isolated 300-second attempts | 2 | 1 | 0 | 1 |
+| Isolated 600-second attempts | 2 | 0 | 0 | 2 |
+| Independently verified stack-failure import metadata | 1 | 1 | 0 | 0 |
+| 600-second comparison after metadata correction | 2 | 0 | 0 | 2 |
 
-Selections overlap; these rows are not independent function inventories. The first retry recovered two conditional-execution errors and five former timeouts, but it does not establish which option caused each recovery. Two independently checked switch tables and 169 exact direct-branch annotations changed only isolated analysis metadata. Grouped results establish the outcome of the combined corrections, not each annotation's individual effect. Two later 120-second retries remained timed out. An earlier unsupported 180-second setting was rejected before execution and is not reported as a run. The latest explicitly fingerprinted local runner supports bounded 300-second decompilation and a 330-second process deadline; earlier results retain their original limits.
+Selections overlap; these rows are not independent function inventories. The first retry recovered two conditional-execution errors and five former timeouts, but it does not establish which option caused each recovery. Two independently checked switch tables and 169 exact direct-branch annotations changed only isolated analysis metadata. Grouped results establish the outcome of the combined corrections, not each annotation's individual effect. Two later 120-second retries remained timed out. An earlier unsupported 180-second setting was rejected before execution and is not reported as a run. The earlier explicitly fingerprinted local runner supports bounded 300-second decompilation and a 330-second process deadline. The latest owned runner/exporter copies extend those bounds to 600/630 seconds for the two retained timeout entries; fingerprints distinguish every run. One malformed selection was rejected before execution, then corrected in a separate retained selection. Earlier results retain their original limits.
 
 ## Instruction-model validation
 
@@ -35,7 +38,7 @@ Distinct tool copies keep concurrent passes and model versions separate. Each mo
 | Evidence | SHA-256 |
 | --- | --- |
 | Earlier combined nine-run verification | `c1947778be9bb8003d8173924818210b868a19c411df06ae4d472f93090f88ba` |
-| Final combined sixteen-run verification | `18e17c02d5333ab6f5620cbc0e2c759531319b95466935964f60eecfd45718ec` |
+| Earlier combined sixteen-run verification | `18e17c02d5333ab6f5620cbc0e2c759531319b95466935964f60eecfd45718ec` |
 | First fixture-passing compiled load model | `ab7373da5dc276a8f81d63b2cb28d1ede9171675ce2bfa502629171746e889f1` |
 | Earlier compiled load/interleave model | `73228f1dcc0e996bd151417694560680270a50ca65333216b21462c97b5d0c1d` |
 | Earlier 384-case load verification | `47db00b76ae145f81bb5789f119b1c089fc9d358c375e66ee5b1456ddbf2f4a4` |
@@ -54,10 +57,20 @@ The invalid-type failure was reproduced with a diagnostic build of the distribut
 
 The final bounded retries recover `0x10456ca58`; `0x10467ff64` still exceeds 300 seconds. The independent aggregate audit rechecks all sixteen runs, including earlier unsuccessful attempts. The frozen source project's nine files and the installed/universal and isolated ARM64 input hashes remain unchanged.
 
+## Non-returning import correction
+
+The memory-range failure in `0x10117055c` followed a call to the stack-failure handler. Apple LLVM's independent indirect-binding table identifies `0x10501e7b4` as `___stack_chk_fail`; the exact call at `0x1011706b4` has instruction word `0x94fab840`. The copied analysis project incorrectly allowed that imported function to return, admitting an impossible fallthrough into exception cleanup. A narrow metadata-only script validates the input hash, import identity, instruction word and destination before setting the non-returning flag. The 444-byte target body is unchanged; the recovered output is 1,797 bytes. No decompiler failure was suppressed.
+
+Two independently copied projects then repeat the remaining timeouts with the same metadata correction and 600-second decompiler / 630-second process limits. Both still time out, matching the preceding 600-second attempts without this correction. All jobs terminate with indexed outcomes. These comparisons do not claim the unresolved routines have been reconstructed.
+
+The final 21-run aggregate verification has SHA-256 `60c2e5b9e80be28e919c6c5fb4271701156ff167990583277b09b5a2a170d15c`. A separate final integrity check verifies twenty frozen source-project files across main/scanner and the three checked executable inputs remain unchanged; report SHA-256 `9a86ccd3827210801a7d46f08605171b7fa8cfae66808466d690fab3b8431bc9`. Both reports and the exact metadata script/commands remain in ignored local artifacts.
+
 ## Remaining boundaries and actual application code
 
-The four failed entries are three preparation/decoding failures (`0x100005680`, `0x10003de00`, `0x10007e000`) and one memory-range error (`0x10117055c`). Two entries (`0x100f9ebac`, `0x10467ff64`) still exceed the 300-second bound. The preparation entries contain data-like bytes and remain unresolved; they were not forcibly cleared and decoded merely to inflate coverage. Their original and later statuses remain explicit. Declared starts can include provisional or invalid boundaries; they are not automatically valid recoverable functions. Successfully emitted output can still have incorrect inferred types, unresolved calls and incomplete semantics.
+The three failed entries are preparation/decoding failures (`0x100005680`, `0x10003de00`, `0x10007e000`). Two entries (`0x100f9ebac`, `0x10467ff64`) still exceed the 600-second bound. The preparation entries map to `__TEXT,__text` but contain data-like bytes and remain unresolved; they were not forcibly cleared and decoded merely to inflate coverage. Their original and later statuses remain explicit. Declared starts can include provisional or invalid boundaries; they are not automatically valid recoverable functions. Successfully emitted output can still have incorrect inferred types, unresolved calls and incomplete semantics.
 
 Halftrack source `ea24869` separately adds working sine, deterministic noise and adjustable pulse synthesis, with native controls, validation, undo/redo, saved projects and offline audio tests. All eight local Mac suites pass, and [macOS, Windows and Linux CI](https://github.com/jamescolasacco/halftrack/actions/runs/38518528688) passes. Its [oscillator contract](synth-oscillator-contract.md) records independently implemented behavior and gaps.
 
 The later `8176007` and `90c9eb2` commits add a working insertable channel Utility: native editing, chain order, full project persistence, undo/redo and independently implemented DSP. Reference registration and arithmetic traces inform its bass/DC topology and normalized balance law, documented in [the Utility contract](channel-utility-contract.md). All nine local Mac suites and [macOS/Windows/Linux CI](https://github.com/jamescolasacco/halftrack/actions/runs/38532090898) pass; the freshly extracted Mac package passes its Utility suite. Exact sample parity remains unmeasured. This extraction work has not converted the complete reference application or seven external instruments into compiling Halftrack code. [Component coverage](additional-component-audit.md), [feature gaps](../feature-parity.md) and runtime sound comparisons remain separate work.
+
+Source `6467066` separately adds the four original [native effects](native-effects-contract.md), eight atomic MIDI transformations and project-tempo delay sync. All eleven local Mac suites pass, and the freshly extracted source-inclusive package passes its effects and note-tools tests. These standard DSP and workflow implementations are not mechanically translated versions of the recovered routines. Full component reconstruction, feature coverage and paired reference comparisons remain unfinished.

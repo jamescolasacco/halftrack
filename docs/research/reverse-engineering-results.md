@@ -2,7 +2,7 @@
 
 Recorded 2026-10-13. This is a reproducible starting point for binary-assisted research, not a reconstructed application or an exact-clone claim. Tool and skill selection is explained in the [toolchain report](reverse-engineering-toolchain.md), [vetted skill report](reverse-engineering-skills.md), and [behavioral measurement report](behavioral-parity-measurement.md). The [local runbook](reverse-engineering-runbook.md) records reproducible commands and interpretation checks.
 
-Latest 2026-10-14 continuation: **392,920 / 392,926** main ARM64 declared entries have verified outputs; four failures and two timeouts remain. The [residual-recovery report](residual-extraction-recovery.md) records the additional 74 recoveries, instruction-model tests, output-limit and rewrite diagnosis, and retained errors. Earlier checkpoints below remain historical evidence. Additional native components are tracked in [their separate audit](additional-component-audit.md).
+Latest 2026-10-14 continuation: **392,921 / 392,926** main ARM64 declared entries have verified outputs; three preparation failures and two 600-second timeouts remain. The [residual-recovery report](residual-extraction-recovery.md) records the additional 75 recoveries, instruction-model tests, output-limit/rewrite diagnosis, non-returning import correction and retained errors. Earlier checkpoints below remain historical evidence. Additional native components are tracked in [their separate audit](additional-component-audit.md).
 
 ## Reference identity and independent inventory
 
