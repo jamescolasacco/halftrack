@@ -1266,6 +1266,67 @@ Result Session::updateMidiNotes (const String& clipId, const std::vector<MidiNot
     }
     impl->changed(); return Result::ok();
 }
+Result Session::transformMidiNotes (const String& clipId, const juce::StringArray& ids, NoteTransform operation, double grid)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    if (! std::isfinite (grid) || grid < 1.0/960 || grid > 16
+        || static_cast<int> (operation) < 0 || static_cast<int> (operation) > 7)
+        return Result::fail ("Invalid note transformation or grid.");
+    if (ids.isEmpty()) return Result::ok();
+    std::set<String> requested;
+    for (const auto& id : ids) if (id.isEmpty() || ! requested.insert (id).second)
+        return Result::fail ("Each selected note needs a unique identifier.");
+    std::vector<MidiNoteInfo> notes;
+    for (auto* note : clip->getSequence().getNotes())
+    {
+        const auto id = note->state.getProperty (midiNoteIDProperty).toString();
+        if (requested.contains (id)) notes.push_back ({ id, note->getNoteNumber(), note->getStartBeat().inBeats(),
+            note->getLengthBeats().inBeats(), note->getVelocity()/127.0f });
+    }
+    if (notes.size() != requested.size()) return Result::fail ("A selected note is missing or ambiguous.");
+    const auto clipLength = clip->getLengthInBeats().inBeats();
+    double first = notes.front().startBeat, last = first + notes.front().lengthBeats;
+    int low = notes.front().pitch, high = low;
+    for (const auto& note : notes)
+    {
+        first = std::min (first, note.startBeat); last = std::max (last, note.startBeat+note.lengthBeats);
+        low = std::min (low, note.pitch); high = std::max (high, note.pitch);
+    }
+    const auto original = notes;
+    for (auto& note : notes)
+    {
+        switch (operation)
+        {
+            case NoteTransform::quantizeStarts:
+                note.startBeat = std::clamp (std::floor (note.startBeat/grid+.5)*grid, 0.0, std::max (0.0, clipLength-note.lengthBeats));
+                break;
+            case NoteTransform::quantizeEnds:
+            {
+                const auto end = std::min (clipLength, std::max (note.startBeat+std::min(grid,1.0/960),
+                    std::floor ((note.startBeat+note.lengthBeats)/grid+.5)*grid));
+                note.lengthBeats = std::max (1.0/960, end-note.startBeat); break;
+            }
+            case NoteTransform::reverse: note.startBeat = std::max (0.0, first+last-note.startBeat-note.lengthBeats); break;
+            case NoteTransform::invertPitch: note.pitch = low+high-note.pitch; break;
+            case NoteTransform::legato:
+            {
+                auto next = last;
+                for (const auto& other : original) if (other.startBeat > note.startBeat+1e-10) next = std::min (next, other.startBeat);
+                note.lengthBeats = next-note.startBeat; break;
+            }
+            case NoteTransform::halfTime:
+            case NoteTransform::doubleTime:
+            {
+                const auto factor = operation == NoteTransform::halfTime ? .5 : 2.0;
+                note.startBeat = first+(note.startBeat-first)*factor; note.lengthBeats *= factor; break;
+            }
+            case NoteTransform::fixedLength: note.lengthBeats = std::min (grid, clipLength-note.startBeat); break;
+        }
+    }
+    // Existing batch validation rejects the complete edit before changing any note.
+    return updateMidiNotes (clipId, notes);
+}
 Result Session::removeMidiNote (const String& clipId, const String& noteId)
 {
     return removeMidiNotes (clipId, { noteId });

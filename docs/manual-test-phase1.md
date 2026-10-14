@@ -151,3 +151,7 @@ Optional three-minute native-input check, **NOT RUN**: use a disposable audio or
 5. Save/reopen the project and confirm all four devices and settings return. Remove one with its editor open, undo, and reopen its editor.
 
 Automated DSP, model and editor-handler tests are separate from this native mouse/audio walkthrough. This section remains NOT RUN until explicitly recorded.
+
+## Piano-roll transformations (about two minutes)
+
+Draw or select several notes and open **Note tools**. Try Quantize Starts, Quantize Ends, Reverse Time, Invert Pitch, Legato, Compress Time by Half, Stretch Time to Double and Set Fixed Length. The last operation uses the Length chooser; quantization uses Snap. Undo each operation once and verify the whole group returns. Cmd/Ctrl+U quantizes starts; adding Shift quantizes endings. With no selection, these tools apply to all notes in the current clip. A stretch that exceeds clip bounds reports an error and leaves every note unchanged. Repeat in a Session MIDI slot, then save/reopen. Native input walkthrough remains NOT RUN; production handlers are tested separately.

@@ -1188,7 +1188,7 @@ private:
         {
             setName ("Piano roll editor");
             setWantsKeyboardFocus (true);
-            for (auto* c : std::initializer_list<juce::Component*> { &snap, &noteLength, &velocity, &horizontal, &vertical }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &snap, &noteLength, &velocity, &noteTools, &horizontal, &vertical }) addAndMakeVisible (c);
             snap.addItem ("1/4", 1); snap.addItem ("1/8", 2); snap.addItem ("1/16", 3); snap.addItem ("1/32", 4);
             snap.setName ("Note grid");
             snap.setSelectedId (3); snap.onChange = [this] { repaint(); };
@@ -1216,6 +1216,8 @@ private:
                     updateNotes (clip->id, notes, "Note velocity");
                 }
             };
+            noteTools.setName ("Note tools"); noteTools.setTooltip ("Transform selected notes, or all clip notes when none are selected. Cmd/Ctrl+U quantizes starts.");
+            noteTools.onClick = [this] { showNoteMenu(); };
             horizontal.addListener (this); vertical.addListener (this);
         }
         ~PianoRoll() override
@@ -1254,7 +1256,7 @@ private:
             }
             if (const auto* note = selectedNote()) { drawVelocity = note->velocity; velocity.setValue (note->velocity, juce::dontSendNotification); }
             const bool active = clip != nullptr;
-            snap.setEnabled (active); noteLength.setEnabled (active); velocity.setEnabled (active);
+            snap.setEnabled (active); noteLength.setEnabled (active); velocity.setEnabled (active); noteTools.setEnabled (active);
             updateScroll(); repaint();
         }
         void zoom (double factor)
@@ -1271,6 +1273,7 @@ private:
         }
         void resized() override
         {
+            noteTools.setBounds (698, 7, 100, 23);
             snap.setBounds (278, 7, 66, 23); noteLength.setBounds (400, 7, 76, 23); velocity.setBounds (544, 5, 142, 27);
             horizontal.setBounds (keysWidth, getHeight() - scrollSize, getWidth() - keysWidth - scrollSize, scrollSize);
             vertical.setBounds (getWidth() - scrollSize, gridTop, scrollSize, getHeight() - gridTop - scrollSize);
@@ -1288,7 +1291,7 @@ private:
             g.drawText ("Length", 352, 0, 45, headerHeight, juce::Justification::centredLeft);
             g.drawText ("Velocity", 488, 0, 52, headerHeight, juce::Justification::centredLeft);
             g.drawText ((selectedNoteIds.empty() ? juce::String() : juce::String ((int) selectedNoteIds.size()) + " selected  |  ")
-                        + "Insert " + juce::String (insertionBeat + 1, 2), 700, 0, juce::jmax (0, getWidth() - 714), headerHeight, juce::Justification::centredRight);
+                        + "Insert " + juce::String (insertionBeat + 1, 2), 810, 0, juce::jmax (0, getWidth() - 824), headerHeight, juce::Justification::centredRight);
             if (clip == nullptr)
             {
                 g.setColour (muted); g.setFont (font (14.0f));
@@ -1507,6 +1510,8 @@ private:
             if (code == juce::KeyPress::escapeKey) { clearSelection(); repaint(); return true; }
             if (clip != nullptr && key.getModifiers().isCommandDown())
             {
+                if (code == 'U' || code == 'u')
+                { transformSelected (key.getModifiers().isShiftDown() ? Session::NoteTransform::quantizeEnds : Session::NoteTransform::quantizeStarts); return true; }
                 if (code == 'C' || code == 'c') { copySelectedNotes (false); return true; }
                 if (code == 'X' || code == 'x') { copySelectedNotes (true); return true; }
                 if (code == 'V' || code == 'v') { insertNotes (noteClipboard, insertionBeat, false); return true; }
@@ -1563,6 +1568,7 @@ private:
         Impl& owner;
         static constexpr int headerHeight = 37, rulerHeight = 23, gridTop = headerHeight + rulerHeight, keysWidth = 55, rowHeight = 15, scrollSize = 11;
         juce::ComboBox snap, noteLength;
+        juce::TextButton noteTools { "Note tools" };
         juce::Slider velocity;
         juce::ScrollBar horizontal { false }, vertical { true };
         juce::String loadedClip, selectedNoteId, dragClipId;
@@ -1714,10 +1720,28 @@ private:
             if (bar == &horizontal) viewBeat = start; else topPitch = 127 - (int) std::round (start);
             repaint();
         }
+        void transformSelected (Session::NoteTransform operation)
+        {
+            const auto* clip = owner.currentMidiClip(); if (! clip) return;
+            const auto clipId = clip->id;
+            auto notes = selectedNotes(); if (notes.empty()) notes = clip->notes;
+            juce::StringArray ids; for (const auto& note : notes) ids.add (note.id);
+            endGesture();
+            owner.report (owner.session.transformMidiNotes (clipId, ids, operation,
+                operation == Session::NoteTransform::fixedLength ? defaultLength() : snapBeats()));
+            owner.refresh();
+        }
         void showNoteMenu()
         {
             juce::PopupMenu popup;
-            popup.addItem (2, "Copy Notes"); popup.addItem (3, "Cut Notes");
+            const auto* clip = owner.currentMidiClip();
+            const bool hasNotes = clip && ! clip->notes.empty();
+            popup.addSectionHeader (selectedNoteIds.empty() ? "Transform all clip notes" : "Transform selected notes");
+            const char* names[] { "Quantize Starts to Grid", "Quantize Ends to Grid", "Reverse Time", "Invert Pitch", "Legato",
+                                  "Compress Time by Half", "Stretch Time to Double", "Set Fixed Length" };
+            for (int i=0;i<8;++i) popup.addItem (10+i, names[i], hasNotes);
+            popup.addSeparator();
+            popup.addItem (2, "Copy Notes", hasSelectedNote()); popup.addItem (3, "Cut Notes", hasSelectedNote());
             popup.addItem (4, "Paste Notes at Marker", ! noteClipboard.empty()); popup.addItem (5, "Duplicate Notes");
             popup.addSeparator(); popup.addItem (1, "Delete Selected Notes");
             popup.addSeparator(); popup.addItem (6, "Notes clipboard: Halftrack only", false);
@@ -1726,6 +1750,7 @@ private:
             popup.showMenuAsync (juce::PopupMenu::Options(), [safe, clipId, ids] (int result)
             {
                 if (safe == nullptr || safe->loadedClip != clipId || safe->selectedNoteIds != ids) return;
+                if (result >= 10 && result <= 17) safe->transformSelected (static_cast<Session::NoteTransform> (result-10));
                 if (result == 1) safe->deleteSelectedNote();
                 const char command = result == 2 ? 'C' : result == 3 ? 'X' : result == 4 ? 'V' : result == 5 ? 'D' : 0;
                 if (command != 0) safe->keyPressed (juce::KeyPress (command, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0));
@@ -3780,6 +3805,25 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
            "ambiguous Delete is one prevalidated group operation and never partially deletes");
     menuItemSelected (34, 2); pianoRoll.fit(); pianoRoll.keyPressed (pasteNotes);
     check (matchesCopiedGroup (currentMidiClip()->notes, 0), "rejected Cut preserves the prior typed clipboard across another clip switch");
+
+    // Exercise the actual quantization shortcut and selection preservation.
+    pianoRoll.keyPressed (allNotes);
+    auto unquantized = currentMidiClip()->notes;
+    for (auto& note : unquantized) note.startBeat += .06;
+    const auto toolsClip = currentMidiClip()->id;
+    check (session.updateMidiNotes (toolsClip, unquantized).wasOk(), "prepare off-grid notes for production quantize shortcut"); refresh();
+    pianoRoll.keyPressed (allNotes);
+    const auto toolIds = noteIds (currentMidiClip()->notes);
+    const juce::KeyPress quantize ('U', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0);
+    check (pianoRoll.keyPressed (quantize), "production Cmd/Ctrl+U is handled");
+    bool onGrid = true;
+    for (const auto& note : currentMidiClip()->notes) onGrid = onGrid && std::abs (note.startBeat/.25-std::round(note.startBeat/.25)) < 1e-8;
+    check (onGrid && noteIds (currentMidiClip()->notes) == toolIds && pianoRoll.hasSelectedNote(), "quantization preserves selection and stable IDs");
+    pianoRoll.keyPressed (undo);
+    check (noteIds (currentMidiClip()->notes) == toolIds
+        && std::abs (currentMidiClip()->notes.front().startBeat-unquantized.front().startBeat) < 1e-8,
+        "one production undo restores quantized group");
+
 
 }
 

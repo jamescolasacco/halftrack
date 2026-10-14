@@ -38,6 +38,7 @@ public:
         std::array<float, 34> values {};
         bool operator== (const EffectSettings&) const = default;
     };
+    enum class NoteTransform { quantizeStarts, quantizeEnds, reverse, invertPitch, legato, halfTime, doubleTime, fixedLength };
     struct MidiNoteInfo
     {
         juce::String id;
@@ -128,6 +129,7 @@ public:
     juce::Result updateMidiNote (const juce::String& clipId, const juce::String& noteId,
                                  int pitch, double startBeat, double lengthBeats, float velocity);
     juce::Result updateMidiNotes (const juce::String& clipId, const std::vector<MidiNoteInfo>& notes);
+    juce::Result transformMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, NoteTransform, double gridBeats);
     juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);
     juce::Result removeMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds);
     juce::Result setSynthSettings (const juce::String& trackId, const SynthSettings&);
