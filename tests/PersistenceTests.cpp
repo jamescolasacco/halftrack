@@ -18,6 +18,81 @@ void ok (const juce::Result& result, const juce::String& description)
     check (result.wasOk(), description + (result.failed() ? ": " + result.getErrorMessage() : ""));
 }
 bool near (double actual, double expected) { return std::abs (actual - expected) < 0.001; }
+void saveAsPreservesHistory (const juce::File& root)
+{
+    const auto source = root.getChildFile ("save-history-source.wav");
+    {
+        juce::AudioBuffer<float> signal (2, 4800);
+        for (int sample = 0; sample < signal.getNumSamples(); ++sample)
+            for (int channel = 0; channel < 2; ++channel)
+                signal.setSample (channel, sample, ((sample + channel) % 2 == 0 ? 0.125f : -0.125f));
+        juce::WavAudioFormat format;
+        std::unique_ptr<juce::OutputStream> stream (source.createOutputStream());
+        auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (2).withBitsPerSample (24));
+        check (writer && writer->writeFromAudioSampleBuffer (signal, 0, signal.getNumSamples()), "write original save-history audio");
+    }
+    juce::MemoryBlock expectedAudio;
+    check (source.loadFileAsData (expectedAudio), "retain expected portable media bytes");
+    Session session (false);
+    ok (session.importAudio (source, 0), "import arrangement audio for save history");
+    ok (session.importAudioToSlot (source, 1, 0), "import launcher audio for save history");
+    ok (session.addMidiTrack ("Save history notes"), "create mixed-session MIDI track");
+    const auto trackId = session.snapshot().tracks.back().id;
+    ok (session.addMidiClip (trackId, 0, 4), "create mixed-session MIDI clip");
+    const auto clipId = session.snapshot().tracks.back().clips.front().id;
+    ok (session.addMidiNote (clipId, 60, 0, 1, 0.5f), "create mixed-session note");
+    const auto firstDirectory = root.getChildFile ("Original folder");
+    const auto first = firstDirectory.getChildFile ("Original.halftrack");
+    ok (session.saveProject (first), "collect mixed-session media before history check");
+    ok (session.loadProject (first), "begin clean mixed-session undo history");
+    const auto note = session.snapshot().tracks.back().clips.front().notes.front();
+    ok (session.updateMidiNote (clipId, note.id, 67, 0.5, 1.5, 0.75f), "prepare note edit before Save As");
+    session.undo();
+    check (session.canRedo() && ! session.canUndo(), "note redo is the only pending history action");
+    const auto target = root.getChildFile ("New folder").getChildFile ("Renamed.halftrack");
+    ok (session.saveProject (target), "Save As changes both project folder and media location");
+    check (! session.snapshot().dirty && session.canRedo() && ! session.canUndo(),
+           "successful mixed-session Save As preserves pending redo without adding an undo action");
+    const auto assets = target.getSiblingFile ("Renamed Assets");
+    const auto saved = session.snapshot();
+    const auto arrangementId = saved.tracks[0].clips.front().id;
+    const auto slotClipId = saved.tracks[1].slots[0].clip.id;
+    const auto checkMedia = [&] (const Session::Snapshot& snapshot)
+    {
+        const auto& arrangement = snapshot.tracks[0].clips.front();
+        const auto& slot = snapshot.tracks[1].slots[0].clip;
+        check (arrangement.id == arrangementId && slot.id == slotClipId
+               && arrangement.file.isAChildOf (assets) && slot.file.isAChildOf (assets),
+               "arrangement and launcher identities resolve to new project-owned media");
+        juce::MemoryBlock arrangementBytes, slotBytes;
+        check (arrangement.file.loadFileAsData (arrangementBytes) && slot.file.loadFileAsData (slotBytes)
+               && arrangementBytes == expectedAudio && slotBytes == expectedAudio,
+               "both relocated media sources preserve every original byte");
+    };
+    checkMedia (saved);
+    session.redo();
+    auto edited = session.snapshot().tracks.back().clips.front().notes.front();
+    check (edited.id == note.id && edited.pitch == 67 && near (edited.startBeat, 0.5) && near (edited.lengthBeats, 1.5),
+           "actual note redo survives Save As media relinking");
+    session.undo();
+    check (session.snapshot().tracks.back().clips.front().notes.front().pitch == 60 && ! session.canUndo(),
+           "undo after Save As reverses the note rather than media bookkeeping");
+    ok (session.saveProject (target), "repeat save with a pending redo");
+    check (session.canRedo() && ! session.canUndo() && ! session.snapshot().dirty, "unchanged media save retains history and clean state");
+    session.redo();
+    ok (session.saveProject (target), "save redone musical edit");
+    check (session.canUndo(), "saving an applied note edit retains its undo");
+    session.undo();
+    check (session.snapshot().tracks.back().clips.front().notes.front().pitch == 60, "saved applied edit still undoes in one step");
+    session.redo();
+    checkMedia (session.snapshot());
+    check (firstDirectory.deleteRecursively() && source.deleteFile(), "remove only original generated fixture sources");
+    ok (session.loadProject (target), "reopen relocated project after original sources are gone");
+    checkMedia (session.snapshot());
+    check (session.snapshot().tracks.back().clips.front().notes.front().pitch == 67,
+           "portable reopened project retains the saved redone note");
+}
+
 void launcherLoadValidation (const juce::File& root)
 {
     Session session (false);
@@ -172,6 +247,7 @@ int runPersistenceTests (const juce::File& destination)
             ok (session.loadProject (withPlugin), "reopen after controlled plug-in has been registered");
             check (session.snapshot().tracks.back().id == trackId, "registered effect project retains MIDI identity");
         }
+        saveAsPreservesHistory (root);
         launcherLoadValidation (root);
         std::cout << "Persistence acceptance passed." << std::endl;
         return 0;

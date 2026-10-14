@@ -856,10 +856,21 @@ Result Session::saveProject (const File& destination)
     juce::TemporaryFile temp (file);
     if (! document.writeTo (temp.getFile()) || ! temp.overwriteTargetFileWithTemporary())
         return Result::fail ("Could not write the project file.");
+    const bool directoryChanged = impl->editLocation().getParentDirectory() != file.getParentDirectory();
     impl->projectFile = file;
     impl->edit->editFileRetriever = [this] { return impl->editLocation(); };
     for (auto& [clip, source] : sources)
-        clip->getSourceFileReference().setToFile (source, te::SourceFileReference::PathStyle::alwaysRelative, false);
+    {
+        auto& reference = clip->getSourceFileReference();
+        const auto relativePath = te::SourceFileReference::findPathFromFile (*impl->edit, source, true);
+        const bool sameText = reference.source.get() == relativePath;
+        // Relocation is save bookkeeping. Keep native source notifications
+        // without recording an edit that would discard the user's pending redo.
+        reference.source.setValue (relativePath, nullptr);
+        // A same-name Save As can keep identical relative text in a new folder.
+        // The no-op property assignment then needs the ordinary media refresh.
+        if (directoryChanged && sameText) clip->sourceMediaChanged();
+    }
     impl->edit->resetChangedStatus();
     impl->explicitChanges = false;
     sendChangeMessage();
