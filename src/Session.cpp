@@ -100,23 +100,24 @@ private:
 class PluginWindow final : public juce::DocumentWindow
 {
 public:
-    explicit PluginWindow (te::Plugin& p)
+    PluginWindow (te::Plugin& p, juce::AudioPluginInstance& processor)
         : DocumentWindow (p.getName(), juce::Colour (0xff262724), closeButton), plugin (p)
     {
-        if (auto external = dynamic_cast<te::ExternalPlugin*> (&p))
-            if (auto processor = external->getAudioPluginInstance())
-            {
-                auto* editor = processor->createEditorAndMakeActive();
-                if (editor == nullptr)
-                    editor = new juce::GenericAudioProcessorEditor (*processor);
-                setContentOwned (editor, true);
-                setResizable (editor->isResizable(), false);
-            }
+        auto* editor = processor.createEditorAndMakeActive();
+        if (editor == nullptr)
+            editor = new juce::GenericAudioProcessorEditor (processor);
+        setContentOwned (editor, true);
+        setResizable (editor->isResizable(), false);
         setUsingNativeTitleBar (true);
         centreWithSize (juce::jmax (getWidth(), 320), juce::jmax (getHeight(), 200));
         setVisible (true);
     }
-    ~PluginWindow() override { clearContentComponent(); }
+    ~PluginWindow() override
+    {
+        if (auto* editor = dynamic_cast<juce::AudioProcessorEditor*> (getContentComponent()))
+            editor->getAudioProcessor()->editorBeingDeleted (editor);
+        clearContentComponent();
+    }
     void closeButtonPressed() override { plugin.windowState->closeWindowExplicitly(); }
 private:
     te::Plugin& plugin;
@@ -129,7 +130,10 @@ public:
     std::unique_ptr<juce::Component> createPluginWindow (te::PluginWindowState& state) override
     {
         if (auto* p = dynamic_cast<te::Plugin::WindowState*> (&state))
-            return std::make_unique<PluginWindow> (p->plugin);
+            if (auto* external = dynamic_cast<te::ExternalPlugin*> (&p->plugin))
+                if (! external->isInitialisingAsync())
+                    if (auto* processor = external->getAudioPluginInstance())
+                        return std::make_unique<PluginWindow> (p->plugin, *processor);
         return {};
     }
     void runTaskWithProgressBar (te::ThreadPoolJobWithProgress& task) override
@@ -1210,8 +1214,20 @@ Result Session::showPluginEditor (int t, int p)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* plugin = impl->plugin (t, p); if (! plugin) return Result::fail ("Plug-in not found.");
+    if (auto* external = dynamic_cast<te::ExternalPlugin*> (plugin))
+    {
+        if (external->isInitialisingAsync())
+            return Result::fail ("This plug-in is still loading. Try opening its editor again when loading completes.");
+        if (external->getAudioPluginInstance() == nullptr)
+        {
+            const auto error = external->getLoadError();
+            return Result::fail (error.isNotEmpty() ? error : "This plug-in could not be loaded.");
+        }
+    }
     plugin->windowState->showWindowExplicitly();
-    if (! plugin->windowState->isWindowShowing()) return Result::fail ("This plug-in has no available editor.");
+    auto* window = dynamic_cast<PluginWindow*> (plugin->windowState->pluginWindow.get());
+    if (window == nullptr || ! window->isVisible() || window->getContentComponent() == nullptr)
+        return Result::fail ("This plug-in has no available editor.");
     return Result::ok();
 }
 void Session::closePluginEditors()
