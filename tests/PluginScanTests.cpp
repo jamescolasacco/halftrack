@@ -216,7 +216,28 @@ int runPluginScanTests (const juce::File& destination)
         finish();
 
         setMode (root, "crash");
-        runWorker (manager, [&] { found = scanOnce(); });
+        // The pinned JUCE Windows named-pipe owner reconnects after a broken
+        // peer: both crash detection and the subsequent kill-message write can
+        // each wait its default 8000 ms. This case deliberately loses two peers
+        // (the native scanner retries once), so its 15-second normal deadline
+        // is insufficient. Keep a bounded allowance for those four IPC waits
+        // plus process startup/dispatch; every other scan keeps the short limit.
+        const auto crashStarted = juce::Time::getMillisecondCounterHiRes();
+        double nextCrashProbe = crashStarted;
+        std::set<int> observedCrashChildren;
+        runWorker (manager, [&] { found = scanOnce(); }, [&]
+        {
+            const auto now = juce::Time::getMillisecondCounterHiRes();
+            if (now < nextCrashProbe) return;
+            nextCrashProbe = now + 50.0;
+            for (const auto& event : events (root))
+                if (event.kind == "construct" && event.mode == "crash"
+                    && observedCrashChildren.insert (event.pid).second)
+                    std::cout << "Scanner crash fixture reached child " << event.pid
+                              << " after " << juce::String (now - crashStarted, 0) << " ms" << std::endl;
+        }, 45000.0);
+        std::cout << "Scanner two-crash request completed after "
+                  << juce::String (juce::Time::getMillisecondCounterHiRes() - crashStarted, 0) << " ms" << std::endl;
         std::set<int> crashedChildren;
         for (const auto& event : events (root))
             if (event.kind == "construct" && event.mode == "crash") crashedChildren.insert (event.pid);
