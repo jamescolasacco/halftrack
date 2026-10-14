@@ -9,7 +9,7 @@
 | 0:00–0:45 | Start a new project; click **+ MIDI** (Command+Shift+T / Ctrl+Shift+T). | A MIDI track, a 16-beat clip, piano editor, and real synth controls appear. |
 | 0:45–2:00 | Draw C4, E4, and G4 on the same beat; press Space to play, then stop. | The chord produces synth output and real meters; transport stops when requested. If you cannot listen, record acoustic audition as untested. |
 | 2:00–3:15 | Select a note; drag its body to a new pitch/time, drag its right edge, and change Velocity. Undo the last gesture once, then redo once. | Each edit affects the selected note; one undo reverses the whole gesture and redo restores it. |
-| 3:15–4:15 | Play again; lower track volume, pan, and toggle Mute. Restore Mute, then change Saw/Square and filter cutoff. | The mix and timbre change; meters follow the real signal; the controls remain responsive. Stop playback. |
+| 3:15–4:15 | Play again; lower track volume, pan, and toggle Mute. Restore Mute, then change Saw/Pulse/Sine/Noise and filter cutoff. | The mix and timbre change; meters follow the real signal; the controls remain responsive. Stop playback. |
 | 4:15–5:15 | Save as `Smoke.halftrack` in the disposable folder. | Saving succeeds and clears the unsaved marker. Note the chord positions and changed synth settings. |
 | 5:15–6:15 | Start a new project, then reopen `Smoke.halftrack` through File → Open. | The saved MIDI track, notes, mixer values, and synth settings return. |
 | 6:15–7:15 | Play the reopened chord; stop, move one note, then undo and redo that gesture. | The reopened project plays; editing and undo still work after loading. |

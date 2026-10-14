@@ -1,5 +1,7 @@
 # Preview verification
 
+Latest application source: `ea24869`, adding sine/noise/pulse-width synthesis, native controls and patch persistence/undo. All eight local Mac suites pass in **133.15 seconds**; [macOS, Windows and Linux CI](https://github.com/jamescolasacco/halftrack/actions/runs/38518528688) also passes clean builds, tests and source-inclusive packaging. The verified Mac archive is `Halftrack-preview-darwin-arm64-ea24869.tar.gz`, SHA-256 `84ae468976c7a731132328beec607c88ead67e2fbf13ae9abb273020db1f0b72`. Its executable and corresponding source match the tested commit. Generated 1100×720 UI rendering was inspected; physical input/audio and reference-instrument equivalence remain unverified. Earlier checkpoints below retain their original scope.
+
 Evidence includes checkpoints through **2026-10-14**. This records the original audio/MIDI preview and subsequent research-driven corrections. It is not a completed DAW or a feature/sound parity certification.
 
 ## Current integrated checkpoint
