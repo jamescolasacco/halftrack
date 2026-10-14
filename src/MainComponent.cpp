@@ -301,7 +301,7 @@ public:
         g.drawHorizontalLine (getHeight() - statusHeight, 0.0f, (float) getWidth());
         g.setColour (muted);
         g.setFont (font (10.5f));
-        auto message = status.isNotEmpty() ? status : showPiano ? "Click: draw / select    Shift-click / drag: select    Drag: move / resize edge    Arrows: move    Delete: remove    Esc: deselect" : "Space: play / pause     Click ruler: seek     Shift-drag ruler: loop     Double-click MIDI clip: edit notes";
+        auto message = status.isNotEmpty() ? status : showPiano ? "Click: draw / select    Shift: group select    Ruler: insertion point    Cmd/Ctrl+C/X/V/D: notes clipboard (Halftrack only)" : "Space: play / pause     Click ruler: seek     Shift-drag ruler: loop     Double-click MIDI clip: edit notes";
         if (status.isEmpty() && showSession && ! showPiano) message = "Click triangle: launch     Double-click MIDI slot: edit     Enter: launch slot     Shift+Enter: launch scene     Tab: switch view";
         g.drawText (message, 13, getHeight() - statusHeight, getWidth() - 280, statusHeight, juce::Justification::centredLeft, true);
         auto* device = session.audioDeviceManager().getCurrentAudioDevice();
@@ -1227,7 +1227,7 @@ private:
             auto id = clip == nullptr ? juce::String() : clip->id;
             if (id != loadedClip)
             {
-                endGesture(); loadedClip = id; clearSelection(); originalNotes.clear(); marquee = false; viewBeat = 0;
+                endGesture(); loadedClip = id; clearSelection(); originalNotes.clear(); marquee = false; viewBeat = 0; insertionBeat = 0;
                 if (clip != nullptr && ! clip->notes.empty())
                 {
                     int high = 60; for (const auto& note : clip->notes) high = juce::jmax (high, note.pitch);
@@ -1239,6 +1239,7 @@ private:
             std::unordered_set<juce::String> liveIds;
             if (clip != nullptr)
             {
+                insertionBeat = juce::jlimit (0.0, clip->lengthBeats, insertionBeat);
                 liveIds.reserve (clip->notes.size());
                 for (const auto& note : clip->notes) liveIds.insert (note.id);
             }
@@ -1285,8 +1286,8 @@ private:
             g.drawText ("Snap", 244, 0, 32, headerHeight, juce::Justification::centredLeft);
             g.drawText ("Length", 352, 0, 45, headerHeight, juce::Justification::centredLeft);
             g.drawText ("Velocity", 488, 0, 52, headerHeight, juce::Justification::centredLeft);
-            if (! selectedNoteIds.empty())
-                g.drawText (juce::String ((int) selectedNoteIds.size()) + " selected", 700, 0, juce::jmax (0, getWidth() - 714), headerHeight, juce::Justification::centredRight);
+            g.drawText ((selectedNoteIds.empty() ? juce::String() : juce::String ((int) selectedNoteIds.size()) + " selected  |  ")
+                        + "Insert " + juce::String (insertionBeat + 1, 2), 700, 0, juce::jmax (0, getWidth() - 714), headerHeight, juce::Justification::centredRight);
             if (clip == nullptr)
             {
                 g.setColour (muted); g.setFont (font (14.0f));
@@ -1348,12 +1349,25 @@ private:
             const auto beatPosition = launched != nullptr ? launched->playPositionBeats : (owner.state.position - clip->start) * owner.state.tempo / 60.0;
             const auto playhead = (float) (keysWidth + (beatPosition - viewBeat) * pixelsPerBeat);
             if (beatPosition >= 0 && (owner.selectedLauncherClipId.isEmpty() || launched != nullptr)) { g.setColour (ink); g.drawLine (playhead, (float) gridTop, playhead, (float) grid.getBottom(), 1.2f); }
+            const auto insertX = (float) (keysWidth + (insertionBeat - viewBeat) * pixelsPerBeat);
+            if (insertX >= grid.getX() && insertX <= grid.getRight())
+            {
+                const float dashes[] { 3, 4 };
+                g.setColour (orange.withAlpha (0.65f));
+                g.drawDashedLine ({ insertX, (float) gridTop, insertX, (float) grid.getBottom() }, dashes, 2);
+            }
             g.restoreState();
             g.setColour (raised); g.fillRect (0, headerHeight, getWidth(), rulerHeight);
             g.setColour (muted); g.setFont (font (10.0f));
             for (double beat = std::floor (viewBeat / 4.0) * 4.0; beat <= viewBeat + grid.getWidth() / pixelsPerBeat; beat += 4.0)
                 g.drawText (juce::String ((int) (beat / 4) + 1), (int) (keysWidth + (beat - viewBeat) * pixelsPerBeat) + 4, headerHeight, 45, rulerHeight, juce::Justification::centredLeft);
             g.setColour (line); g.drawHorizontalLine (headerHeight, 0.0f, (float) getWidth());
+            if (insertX >= grid.getX() && insertX <= grid.getRight())
+            {
+                juce::Path marker;
+                marker.addTriangle (insertX - 5, (float) gridTop - 8, insertX + 5, (float) gridTop - 8, insertX, (float) gridTop);
+                g.setColour (orange); g.fillPath (marker);
+            }
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
@@ -1361,10 +1375,13 @@ private:
             if (clip == nullptr || e.x < keysWidth) return;
             if (e.y >= headerHeight && e.y < gridTop)
             {
-                // Session playback has a clip-local clock; seeking the arrangement
-                // here would change unrelated transport state instead of this clip.
-                if (owner.selectedLauncherClipId.isNotEmpty()) return;
-                owner.session.seek (clip->start + juce::jmax (0.0, beatAt (e.x)) * 60.0 / owner.state.tempo); owner.refresh(); return;
+                grabKeyboardFocus(); endGesture(); clearSelection();
+                insertionBeat = juce::jlimit (0.0, clip->lengthBeats, std::round (beatAt (e.x) / snapBeats()) * snapBeats());
+                // Launcher playback has a clip-local clock. Its insertion cursor
+                // must not seek unrelated arrangement transport state.
+                if (owner.selectedLauncherClipId.isEmpty())
+                    owner.session.seek (clip->start + juce::jmax (0.0, beatAt (e.x)) * 60.0 / owner.state.tempo);
+                owner.refresh(); return;
             }
             if (! gridBounds().contains (e.getPosition())) return;
             grabKeyboardFocus();
@@ -1478,10 +1495,37 @@ private:
         }
         bool keyPressed (const juce::KeyPress& key) override
         {
+            // Unhandled text commands (for example Duplicate) can bubble from
+            // a slider's editor. A note command must never consume text input.
+            for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused != nullptr; focused = focused->getParentComponent())
+                if (dynamic_cast<juce::TextEditor*> (focused) != nullptr) return false;
+            if (owner.session.isExporting()) return true;
             endGesture(); originalNotes.clear(); drawing = false; marquee = false;
             const auto* clip = owner.currentMidiClip();
             const auto code = key.getKeyCode();
             if (code == juce::KeyPress::escapeKey) { clearSelection(); repaint(); return true; }
+            if (clip != nullptr && key.getModifiers().isCommandDown())
+            {
+                if (code == 'C' || code == 'c') { copySelectedNotes (false); return true; }
+                if (code == 'X' || code == 'x') { copySelectedNotes (true); return true; }
+                if (code == 'V' || code == 'v') { insertNotes (noteClipboard, insertionBeat, false); return true; }
+                if (code == 'D' || code == 'd')
+                {
+                    auto notes = selectedNotes();
+                    if (! notes.empty())
+                    {
+                        const auto end = noteExtent (notes).second;
+                        insertNotes (normalisedNotes (notes), std::ceil ((end - 1.0e-9) / snapBeats()) * snapBeats(), true);
+                    }
+                    return true;
+                }
+            }
+            if (clip != nullptr && ! hasSelectedNote() && ! key.getModifiers().isCommandDown()
+                && (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey))
+            {
+                insertionBeat = juce::jlimit (0.0, clip->lengthBeats, insertionBeat + (code == juce::KeyPress::leftKey ? -snapBeats() : snapBeats()));
+                revealInsertion(); repaint(); return true;
+            }
             if (clip != nullptr && key.getModifiers().isCommandDown() && (code == 'A' || code == 'a'))
             {
                 for (const auto& note : clip->notes) selectedNoteIds.insert (note.id);
@@ -1507,9 +1551,12 @@ private:
             const auto clipId = clip->id;
             const auto notes = selectedNotes();
             if (notes.empty()) return;
-            endGesture(); owner.session.beginEditGesture ("Delete MIDI notes");
-            for (const auto& note : notes) owner.report (owner.session.removeMidiNote (clipId, note.id));
-            owner.session.endEditGesture(); clearSelection(); owner.refresh();
+            endGesture();
+            juce::StringArray ids; for (const auto& note : notes) ids.add (note.id);
+            const auto result = owner.session.removeMidiNotes (clipId, ids);
+            owner.report (result);
+            if (result.wasOk()) clearSelection();
+            owner.refresh();
         }
     private:
         Impl& owner;
@@ -1520,10 +1567,10 @@ private:
         juce::String loadedClip, selectedNoteId, dragClipId;
         Session::MidiNoteInfo original;
         std::unordered_set<juce::String> selectedNoteIds, marqueeBase;
-        std::vector<Session::MidiNoteInfo> originalNotes;
+        std::vector<Session::MidiNoteInfo> originalNotes, noteClipboard;
         juce::Point<float> dragOrigin;
         juce::Rectangle<float> marqueeBounds;
-        double viewBeat = 0, pixelsPerBeat = 60;
+        double viewBeat = 0, pixelsPerBeat = 60, insertionBeat = 0;
         int topPitch = 77;
         float drawVelocity = 0.8f;
         bool gesture = false, resizeNote = false, drawing = false, marquee = false;
@@ -1553,6 +1600,67 @@ private:
             if (const auto* clip = owner.currentMidiClip())
                 for (const auto& note : clip->notes) if (selectedNoteIds.contains (note.id)) notes.push_back (note);
             return notes;
+        }
+        static std::pair<double, double> noteExtent (const std::vector<Session::MidiNoteInfo>& notes)
+        {
+            double start = notes.front().startBeat, end = start + notes.front().lengthBeats;
+            for (const auto& note : notes) { start = juce::jmin (start, note.startBeat); end = juce::jmax (end, note.startBeat + note.lengthBeats); }
+            return { start, end };
+        }
+        static std::vector<Session::MidiNoteInfo> normalisedNotes (std::vector<Session::MidiNoteInfo> notes)
+        {
+            if (notes.empty()) return notes;
+            const auto start = noteExtent (notes).first;
+            for (auto& note : notes) { note.id.clear(); note.startBeat -= start; }
+            return notes;
+        }
+        void copySelectedNotes (bool cut)
+        {
+            const auto* clip = owner.currentMidiClip();
+            const auto notes = selectedNotes();
+            if (clip == nullptr || notes.empty()) return;
+            const auto start = noteExtent (notes).first;
+            auto copied = normalisedNotes (notes);
+            if (cut)
+            {
+                juce::StringArray ids; for (const auto& note : notes) ids.add (note.id);
+                const auto result = owner.session.removeMidiNotes (clip->id, ids);
+                if (result.failed()) { owner.report (result); owner.refresh(); return; }
+                insertionBeat = start; clearSelection();
+            }
+            noteClipboard = std::move (copied);
+            owner.report (juce::Result::ok(), juce::String ((int) noteClipboard.size())
+                          + (cut ? " notes cut. " : " notes copied. ") + "Notes clipboard stays inside Halftrack; paste at the orange ruler marker.");
+            owner.refresh();
+        }
+        void insertNotes (const std::vector<Session::MidiNoteInfo>& relativeNotes, double atBeat, bool duplicate)
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr || relativeNotes.empty()) return;
+            const auto clipId = clip->id;
+            auto notes = relativeNotes;
+            for (auto& note : notes) note.startBeat += atBeat;
+            juce::StringArray insertedIds;
+            // The facade validates the entire group before creating any undo
+            // action. A rejected paste must preserve selection, cursor and redo.
+            const auto result = owner.session.addMidiNotes (clipId, notes, insertedIds);
+            owner.report (result, juce::String ((int) insertedIds.size()) + (duplicate ? " notes duplicated." : " notes pasted."));
+            if (result.wasOk())
+            {
+                clearSelection();
+                for (const auto& id : insertedIds) selectedNoteIds.insert (id);
+                selectedNoteId = insertedIds.isEmpty() ? juce::String() : insertedIds[0];
+                insertionBeat = noteExtent (notes).second;
+            }
+            owner.refresh();
+            if (result.wasOk()) { revealInsertion(); repaint(); }
+        }
+        void revealInsertion()
+        {
+            const auto visibleBeats = gridBounds().getWidth() / pixelsPerBeat;
+            if (insertionBeat < viewBeat) viewBeat = insertionBeat;
+            if (insertionBeat > viewBeat + visibleBeats) viewBeat = insertionBeat - visibleBeats;
+            updateScroll();
         }
         void updateNotes (juce::String clipId, const std::vector<Session::MidiNoteInfo>& notes, const juce::String& name)
         {
@@ -1607,12 +1715,19 @@ private:
         }
         void showNoteMenu()
         {
-            juce::PopupMenu popup; popup.addItem (1, "Delete Selected Notes");
+            juce::PopupMenu popup;
+            popup.addItem (2, "Copy Notes"); popup.addItem (3, "Cut Notes");
+            popup.addItem (4, "Paste Notes at Marker", ! noteClipboard.empty()); popup.addItem (5, "Duplicate Notes");
+            popup.addSeparator(); popup.addItem (1, "Delete Selected Notes");
+            popup.addSeparator(); popup.addItem (6, "Notes clipboard: Halftrack only", false);
             auto safe = juce::Component::SafePointer<PianoRoll> (this);
             const auto clipId = loadedClip; const auto ids = selectedNoteIds;
             popup.showMenuAsync (juce::PopupMenu::Options(), [safe, clipId, ids] (int result)
             {
-                if (safe != nullptr && result == 1 && safe->loadedClip == clipId && safe->selectedNoteIds == ids) safe->deleteSelectedNote();
+                if (safe == nullptr || safe->loadedClip != clipId || safe->selectedNoteIds != ids) return;
+                if (result == 1) safe->deleteSelectedNote();
+                const char command = result == 2 ? 'C' : result == 3 ? 'X' : result == 4 ? 'V' : result == 5 ? 'D' : 0;
+                if (command != 0) safe->keyPressed (juce::KeyPress (command, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0));
             });
         }
     };
@@ -3441,6 +3556,185 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (currentMidiClip()->notes.empty(), "bulk deletion removes all 512 selected notes");
     pianoRoll.keyPressed (undo);
     check (denseMatches (1, true) && ! pianoRoll.hasSelectedNote(), "one bulk-delete undo restores all dense note identities while selection stays pruned");
+
+    // Clipboard commands use copied values and exact IDs returned by the facade.
+    // All note edits below enter through the production mouse/key handlers.
+    menuItemSelected (33, 2); pianoRoll.fit();
+    const auto clipboardTrackId = currentTrack()->id, clipboardClipId = currentMidiClip()->id;
+    const auto commandKey = [] (char key) { return juce::KeyPress (key, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0); };
+    const auto copyNotes = commandKey ('C'), cutNotes = commandKey ('X'), pasteNotes = commandKey ('V'), duplicateNotes = commandKey ('D');
+    auto noteIds = [] (const std::vector<Session::MidiNoteInfo>& notes)
+    {
+        std::vector<juce::String> ids; for (const auto& note : notes) ids.push_back (note.id);
+        std::sort (ids.begin(), ids.end()); return ids;
+    };
+    auto addedSince = [&] (const std::vector<Session::MidiNoteInfo>& before)
+    {
+        std::vector<Session::MidiNoteInfo> added;
+        for (const auto& note : currentMidiClip()->notes)
+            if (std::none_of (before.begin(), before.end(), [&] (const auto& old) { return old.id == note.id; })) added.push_back (note);
+        return added;
+    };
+    auto markerClick = [&] (double beat)
+    {
+        const auto at = juce::Point<float> ((float) (55 + beat * groupBeatWidth), 48);
+        pianoRoll.mouseDown (groupEvent (at, at, false, 0)); pianoRoll.mouseUp (groupEvent (at, at, false, 0));
+    };
+    groupClick (groupPoint (1.1, 60));
+    groupVelocity->setValue (0.31, juce::sendNotificationSync);
+    groupClick (groupPoint (3.35, 64));
+    groupVelocity->setValue (0.73, juce::sendNotificationSync);
+    pianoRoll.keyPressed (allNotes);
+    const auto sourceNotes = currentMidiClip()->notes;
+    auto matchesCopiedGroup = [&] (std::vector<Session::MidiNoteInfo> actual, double start)
+    {
+        auto expected = sourceNotes;
+        const auto byPitch = [] (const auto& a, const auto& b) { return a.pitch < b.pitch; };
+        std::sort (actual.begin(), actual.end(), byPitch); std::sort (expected.begin(), expected.end(), byPitch);
+        if (actual.size() != expected.size()) return false;
+        for (size_t i = 0; i < actual.size(); ++i)
+            if (actual[i].pitch != expected[i].pitch || actual[i].startBeat != start + expected[i].startBeat - 1
+                || actual[i].lengthBeats != expected[i].lengthBeats || actual[i].velocity != expected[i].velocity
+                || actual[i].id == expected[i].id) return false;
+        return true;
+    };
+    pianoRoll.keyPressed (copyNotes);
+    check (noteIds (currentMidiClip()->notes) == noteIds (sourceNotes) && status.contains ("inside Halftrack"),
+           "Copy preserves notes and explicitly describes the internal clipboard");
+    markerClick (6); pianoRoll.keyPressed (pasteNotes);
+    const auto firstPaste = addedSince (sourceNotes);
+    check (matchesCopiedGroup (firstPaste, 6) && pianoRoll.hasSelectedNote(),
+           "Paste uses the visible ruler marker with fresh IDs and exact relative pitch, timing and velocity");
+    pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::upKey));
+    bool exactSelection = true;
+    for (const auto& old : sourceNotes) exactSelection = exactSelection && noteById (old.id).pitch == old.pitch;
+    for (const auto& pasted : firstPaste) exactSelection = exactSelection && noteById (pasted.id).pitch == pasted.pitch + 1;
+    check (exactSelection, "Paste selects exactly returned IDs, so later edits leave source notes untouched");
+    pianoRoll.keyPressed (undo);
+    const auto beforeSecondPaste = currentMidiClip()->notes;
+    pianoRoll.keyPressed (pasteNotes);
+    check (matchesCopiedGroup (addedSince (beforeSecondPaste), 9.25), "repeated Paste advances by the complete group extent");
+    const auto beforeDuplicate = currentMidiClip()->notes;
+    pianoRoll.keyPressed (duplicateNotes);
+    const auto duplicated = addedSince (beforeDuplicate);
+    check (matchesCopiedGroup (duplicated, 12.5), "Duplicate inserts after the selected extent on the note grid");
+    pianoRoll.keyPressed (undo);
+    check (noteIds (currentMidiClip()->notes) == noteIds (beforeDuplicate) && session.canRedo(), "one undo removes the whole duplicate group");
+    const auto clipboardProject = noteLoad.directory.getChildFile ("Clipboard notes.halftrack");
+    const auto clipboardSave = session.saveProject (clipboardProject);
+    check (clipboardSave.wasOk(), "save clipboard project: " + clipboardSave.getErrorMessage());
+    check (! session.snapshot().dirty, "saved clipboard project has no pending edits");
+    check (session.canRedo(), "saving preserves duplicate redo before rejected Paste");
+    pianoRoll.keyPressed (pasteNotes);
+    check (noteIds (currentMidiClip()->notes) == noteIds (beforeDuplicate) && ! session.snapshot().dirty && session.canRedo()
+               && status.contains ("duration inside the MIDI clip"),
+           "out-of-bounds Paste rejects the entire group without dirtying the project or discarding redo");
+    pianoRoll.keyPressed (redo);
+    for (const auto& copied : duplicated) check (noteById (copied.id).startBeat == copied.startBeat, "redo restores each duplicate identity and position");
+    groupClick (groupPoint (12.6, 60)); groupClick (groupPoint (14.85, 64), shiftModifier);
+    check (session.saveProject (clipboardProject).wasOk(), "save before impossible duplicate");
+    const auto beforeRejectedDuplicate = currentMidiClip()->notes;
+    pianoRoll.keyPressed (duplicateNotes);
+    check (noteIds (currentMidiClip()->notes) == noteIds (beforeRejectedDuplicate) && ! session.snapshot().dirty && pianoRoll.hasSelectedNote(),
+           "out-of-bounds Duplicate neither trims notes nor clears the original selection");
+    pianoRoll.keyPressed (cutNotes);
+    check (noteIds (currentMidiClip()->notes) == noteIds (beforeDuplicate) && ! pianoRoll.hasSelectedNote(), "Cut atomically removes the selected group");
+    pianoRoll.keyPressed (undo);
+    check (noteIds (currentMidiClip()->notes) == noteIds (beforeRejectedDuplicate), "one Cut undo restores all original IDs");
+    pianoRoll.keyPressed (redo);
+    check (noteIds (currentMidiClip()->notes) == noteIds (beforeDuplicate), "one Cut redo removes the complete group again");
+    pianoRoll.keyPressed (pasteNotes);
+    const auto afterCutPaste = addedSince (beforeDuplicate);
+    check (matchesCopiedGroup (afterCutPaste, 12.5) && noteIds (afterCutPaste) != noteIds (duplicated),
+           "Paste after Cut uses the cut start marker and allocates distinct identities");
+    const auto oldClipNotes = currentMidiClip()->notes;
+    menuItemSelected (34, 2); pianoRoll.fit();
+    check (currentMidiClip()->id != clipboardClipId && currentMidiClip()->notes.empty() && ! pianoRoll.hasSelectedNote(),
+           "changing clips resets the insertion point and prunes selection");
+    pianoRoll.keyPressed (pasteNotes);
+    check (matchesCopiedGroup (currentMidiClip()->notes, 0), "typed note clipboard survives switching clips and pastes at the new clip start");
+    bool oldClipUnchanged = false;
+    for (const auto& track : state.tracks) if (track.id == clipboardTrackId)
+        for (const auto& clip : track.clips) if (clip.id == clipboardClipId) oldClipUnchanged = noteIds (clip.notes) == noteIds (oldClipNotes);
+    check (oldClipUnchanged, "cross-clip Paste cannot edit stale source IDs");
+    markerClick (5); pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+    const auto beforeCursorPaste = currentMidiClip()->notes;
+    pianoRoll.keyPressed (pasteNotes);
+    check (matchesCopiedGroup (addedSince (beforeCursorPaste), 5.25), "arrow key moves the insertion marker by one grid step when no notes are selected");
+
+    if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+    {
+        const juce::File directory (juce::String::fromUTF8 (configured));
+        if (directory.createDirectory().wasOk()) if (auto* host = getParentComponent())
+        {
+            const auto oldBounds = host->getBounds();
+            for (const auto size : { juce::Point<int> (1440, 900), juce::Point<int> (1100, 720) })
+            {
+                host->setSize (size.x, size.y); pianoRoll.fit(); refresh();
+                const auto image = host->createComponentSnapshot (host->getLocalBounds(), true, 1.0f);
+                const auto output = directory.getChildFile ("piano-clipboard-" + juce::String (size.x) + "x" + juce::String (size.y) + ".png");
+                auto stream = output.createOutputStream(); juce::PNGImageFormat png;
+                if (stream && stream->setPosition (0) && stream->truncate().wasOk() && png.writeImageToStream (image, *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                else throw std::runtime_error ("Could not write clipboard UI snapshot");
+            }
+            host->setSize (oldBounds.getWidth(), oldBounds.getHeight()); pianoRoll.fit(); refresh();
+        }
+    }
+
+    // Exercise real focus rather than sending commands to an unfocused text
+    // editor. These calls intentionally do not invoke the OS clipboard at all.
+    {
+        const auto beforeText = noteIds (currentMidiClip()->notes);
+        juce::TextEditor editor;
+        editor.setText ("Text entry keeps its own commands");
+        juce::DocumentWindow focusWindow ("Halftrack shortcut test", panel, juce::DocumentWindow::closeButton);
+        focusWindow.setUsingNativeTitleBar (true); focusWindow.setContentNonOwned (&editor, false);
+        focusWindow.centreWithSize (300, 70); focusWindow.setVisible (true);
+        // A CTest-launched macOS app is initially inactive. Showing a temporary
+        // peer alone does not give it key-window focus; activate the real host.
+        juce::Process::makeForegroundProcess(); focusWindow.toFront (true);
+        for (int attempt = 0; attempt < 20 && ! editor.hasKeyboardFocus (true); ++attempt)
+        {
+            editor.grabKeyboardFocus();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+        }
+        check (editor.hasKeyboardFocus (true), "native text entry receives real keyboard focus for shortcut isolation");
+        check (! pianoRoll.keyPressed (copyNotes) && ! pianoRoll.keyPressed (cutNotes)
+                   && ! pianoRoll.keyPressed (pasteNotes) && ! pianoRoll.keyPressed (duplicateNotes)
+                   && noteIds (currentMidiClip()->notes) == beforeText,
+               "Copy/Cut/Paste/Duplicate bubbling from text entry never become note commands");
+        editor.giveAwayKeyboardFocus(); focusWindow.clearContentComponent();
+    }
+
+    // A project can contain ambiguous note IDs. Neither Cut nor Delete may
+    // remove a valid first note before rejecting a later ambiguous identity.
+    menuItemSelected (33, 2); pianoRoll.fit();
+    groupClick (groupPoint (1.1, 60)); const auto uniqueCutId = currentMidiClip()->notes.back().id;
+    groupClick (groupPoint (3.1, 64)); const auto ambiguousCutId = currentMidiClip()->notes.back().id;
+    groupClick (groupPoint (5.1, 67)); const auto repeatedCutId = currentMidiClip()->notes.back().id;
+    const auto ambiguousProject = noteLoad.directory.getChildFile ("Ambiguous clipboard notes.halftrack");
+    check (session.saveProject (ambiguousProject).wasOk(), "save original ambiguous-ID fixture before mutation");
+    auto ambiguousXml = juce::XmlDocument::parse (ambiguousProject);
+    auto* repeatedNote = findNoteXml (ambiguousXml.get(), repeatedCutId);
+    check (repeatedNote != nullptr, "find generated note for repeated-ID fixture");
+    repeatedNote->setAttribute ("halftrackNoteId", ambiguousCutId);
+    check (ambiguousXml->writeTo (ambiguousProject) && session.loadProject (ambiguousProject).wasOk(), "reopen generated project containing a repeated note identity");
+    refresh();
+    groupClick (groupPoint (1.1, 60)); pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::rightKey)); pianoRoll.keyPressed (undo);
+    check (noteById (uniqueCutId).startBeat == 1 && session.saveProject (ambiguousProject).wasOk() && session.canRedo(),
+           "unique-note edit establishes redo before ambiguous group commands");
+    pianoRoll.keyPressed (allNotes);
+    const auto ambiguousBefore = currentMidiClip()->notes;
+    pianoRoll.keyPressed (cutNotes);
+    check (noteIds (currentMidiClip()->notes) == noteIds (ambiguousBefore) && ! session.snapshot().dirty && session.canRedo() && pianoRoll.hasSelectedNote(),
+           "ambiguous Cut preserves every note, selection, clean state and redo");
+    pianoRoll.keyPressed (deleteNotes);
+    check (noteIds (currentMidiClip()->notes) == noteIds (ambiguousBefore) && ! session.snapshot().dirty && session.canRedo() && pianoRoll.hasSelectedNote(),
+           "ambiguous Delete is one prevalidated group operation and never partially deletes");
+    menuItemSelected (34, 2); pianoRoll.fit(); pianoRoll.keyPressed (pasteNotes);
+    check (matchesCopiedGroup (currentMidiClip()->notes, 0), "rejected Cut preserves the prior typed clipboard across another clip switch");
+
 }
 
 int MainComponent::runInteractionTests()
