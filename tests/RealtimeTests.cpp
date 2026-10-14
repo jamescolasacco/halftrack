@@ -209,6 +209,7 @@ void nativeEffectsRealtimeTests()
             for (int pass = 0; pass < 32; ++pass)
             {
                 for (size_t i = 0; i < fields.size(); ++i) settings.values[i] = pass % 2 ? fields[i].minimum : fields[i].maximum;
+                settings.tempoBpm = pass % 2 ? 20.0f : 999.0f;
                 dsp.configure (settings);
                 for (size_t i = 0; i < left.size(); ++i) { left[i] = (float) (i % 37) / 128; right[i] = -left[i] / 2; }
                 dsp.processSamples (left.data(), pass % 2 ? right.data() : nullptr, 1 + pass * 31);

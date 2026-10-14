@@ -29,11 +29,15 @@ constexpr EffectParameter delayFields[] {
     { "feedback", "Feedback", 0, 0.95f, 0.35f, 0, "" }, { "mix", "Dry / Wet", 0, 1, 0.3f, 0, "" },
     { "pingPong", "Routing", 0, 1, 0, 0, "", "Stereo|Ping pong" },
     { "highCutHz", "Feedback high cut", 20, 20000, 12000, 2000, " Hz" },
-    { "freeze", "Freeze", 0, 1, 0, 0, "", "Off|On" }, { "link", "Link times", 0, 1, 0, 0, "", "Independent|Linked" } };
+    { "freeze", "Freeze", 0, 1, 0, 0, "", "Off|On" }, { "link", "Link times", 0, 1, 0, 0, "", "Independent|Linked" },
+    { "sync", "Time mode", 0, 1, 0, 0, "", "Milliseconds|Project tempo" },
+    { "leftDivision", "Left division", 0, 10, 3, 0, "", "1/16|1/8 triplet|1/16 dotted|1/8|1/4 triplet|1/8 dotted|1/4|1/4 dotted|1/2|1/2 dotted|Whole note" },
+    { "rightDivision", "Right division", 0, 10, 5, 0, "", "1/16|1/8 triplet|1/16 dotted|1/8|1/4 triplet|1/8 dotted|1/4|1/4 dotted|1/2|1/2 dotted|Whole note" } };
 constexpr EffectParameter reverbFields[] {
     { "preDelayMs", "Pre-delay", 0, 250, 15, 50, " ms" }, { "decaySeconds", "Decay", 0.1f, 20, 2, 2, " s" },
     { "size", "Room size", 0.25f, 2, 1, 0, "" }, { "dampingHz", "Damping", 500, 20000, 6000, 4000, " Hz" },
     { "width", "Stereo width", 0, 2, 1, 0, "" }, { "mix", "Dry / Wet", 0, 1, 0.25f, 0, "" } };
+constexpr std::array<double, 11> delayBeats { .25, 1.0/3, .375, .5, 2.0/3, .75, 1, 1.5, 2, 3, 4 };
 constexpr std::array<double, 8> roomSeconds { .0297, .0371, .0411, .0437, .0531, .0617, .0713, .0799 };
 double finiteSample (double v) noexcept { return std::isfinite (v) ? std::clamp (v, -1.0e12, 1.0e12) : 0; }
 }
@@ -57,7 +61,8 @@ Settings defaultEffectSettings (Kind kind) noexcept
 }
 bool validEffectSettings (const Settings& s) noexcept
 {
-    const auto fields = effectParameters (s.kind); if (fields.empty()) return false;
+    const auto fields = effectParameters (s.kind);
+    if (fields.empty() || ! std::isfinite (s.tempoBpm) || s.tempoBpm < 20 || s.tempoBpm > 999) return false;
     for (size_t i = 0; i < s.values.size(); ++i)
     {
         const auto v = s.values[i];
@@ -72,7 +77,7 @@ void NativeEffectDSP::prepare (double sampleRate, Kind kind)
 {
     rate = std::isfinite (sampleRate) ? std::clamp (sampleRate, 8000.0, 384000.0) : 48000;
     if (settings.kind != kind) settings = defaultEffectSettings (kind);
-    const auto delaySize = kind == Kind::delay ? static_cast<size_t> (std::ceil (rate * 2)) + 4
+    const auto delaySize = kind == Kind::delay ? static_cast<size_t> (std::ceil (rate * 12)) + 4
         : kind == Kind::reverb ? static_cast<size_t> (std::ceil (rate * .25)) + 4 : 0;
     for (auto& buffer : delays) buffer.assign (delaySize, 0);
     for (size_t i = 0; i < room.size(); ++i)
@@ -137,7 +142,8 @@ void NativeEffectDSP::configure (const Settings& next) noexcept
     }
     if (settings.kind == Kind::delay)
     {
-        delayTargetLeft = v[0] * rate * .001; delayTargetRight = (v[7] != 0 ? v[0] : v[1]) * rate * .001;
+        delayTargetLeft = v[8] != 0 ? delayBeats[static_cast<size_t>(v[9])] * rate * 60 / settings.tempoBpm : v[0] * rate * .001;
+        delayTargetRight = v[7] != 0 ? delayTargetLeft : v[8] != 0 ? delayBeats[static_cast<size_t>(v[10])] * rate * 60 / settings.tempoBpm : v[1] * rate * .001;
         damping = std::exp (-2 * pi * std::min (static_cast<double> (v[5]), rate * .45) / rate); wetTarget = v[3];
     }
     if (settings.kind == Kind::reverb)
@@ -256,6 +262,7 @@ NativeEffectPlugin::~NativeEffectPlugin() { stopTimer(); }
 Settings NativeEffectPlugin::readSettings() const
 {
     auto s = defaultEffectSettings (kind); const auto fields = effectParameters (kind);
+    if (kind == Kind::delay) s.tempoBpm = static_cast<float> (edit.tempoSequence.getTempo (0)->getBpm());
     for (size_t i = 0; i < fields.size(); ++i) s.values[i] = state.getProperty (fields[i].key, fields[i].initial);
     return validEffectSettings (s) ? s : defaultEffectSettings (kind);
 }
@@ -293,7 +300,12 @@ juce::Result NativeEffectPlugin::validateState (const juce::ValueTree& tree)
 void NativeEffectPlugin::valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& property)
 { Plugin::valueTreePropertyChanged (tree, property); if (tree == state && ! writing) publish(); }
 void NativeEffectPlugin::publish() { pendingSettings = readSettings(); pending = ! parameters.push (pendingSettings); }
-void NativeEffectPlugin::timerCallback() { if (pending) pending = ! parameters.push (pendingSettings); }
+void NativeEffectPlugin::timerCallback()
+{
+    if (kind == Kind::delay && static_cast<float> (edit.tempoSequence.getTempo (0)->getBpm()) != pendingSettings.tempoBpm)
+        publish();
+    else if (pending) pending = ! parameters.push (pendingSettings);
+}
 void NativeEffectPlugin::prepareForOfflineRender() { JUCE_ASSERT_MESSAGE_THREAD parameters.resetWhileStopped(); publish(); }
 void NativeEffectPlugin::initialise (const tracktion::PluginInitialisationInfo& info)
 { sampleRate = info.sampleRate; processor.prepare (sampleRate, kind); }

@@ -146,7 +146,7 @@ Optional three-minute native-input check, **NOT RUN**: use a disposable audio or
 
 1. On a track containing generated or chosen audio, open **+ Device** and add **Eight-band EQ**. Raise a bell band and confirm the response plot and sound change. Change it to Low Cut; gain becomes inactive while frequency and Q still operate. Undo the gesture once.
 2. Add **Compressor**. Lower threshold, change attack/release and compare Peak/RMS. Bypass it and restore it. Move it before and after an EQ output boost; the dynamics should change.
-3. Add **Stereo Delay**. Set short left/right times, raise wet mix, then compare linked and independent times and ping pong. Enable Freeze after feeding audio; new input stops entering the delay. Disable Freeze again.
+3. Add **Stereo Delay**. Set short left/right times, raise wet mix, then compare linked and independent times and ping pong. Switch Time mode to Project tempo, try straight/dotted/triplet divisions, and change the transport tempo; repeats should follow it. Enable Freeze after feeding audio; new input stops entering the delay. Disable Freeze again.
 4. Put **Room Reverb** on a return and send the source to it. Compare pre-delay, short/long decay, size, damping and width. Export with several seconds of tail and confirm decay continues after the source ends.
 5. Save/reopen the project and confirm all four devices and settings return. Remove one with its editor open, undo, and reopen its editor.
 

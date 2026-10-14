@@ -378,7 +378,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-008 | Chorus-Ensemble (12.2.1 behavior) | MODULATION | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-009 | Compressor | Linked peak/RMS compressor, soft knee, makeup and parallel mix; independent dynamics tests and native project/editor integration. Sidechain/lookahead and numerical parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated Mac acceptance |
 | AFX-010 | Corpus | RESONANCE | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-011 | Delay (12.2.1 behavior) | Stereo and ping-pong delay, feedback damping, link, freeze and complete export tails; tempo sync and reference parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated Mac acceptance |
+| AFX-011 | Delay (12.2.1 behavior) | Stereo and ping-pong delay, feedback damping, link, freeze and complete export tails; eleven project-tempo divisions are tested; sample-accurate tempo automation and reference parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated Mac acceptance |
 | AFX-012 | Drum Buss | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-013 | Dynamic Tube | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-014 | Echo | TIME | NOT IMPLEMENTED / UNVERIFIED |

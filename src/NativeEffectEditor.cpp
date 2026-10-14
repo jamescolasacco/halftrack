@@ -59,7 +59,7 @@ public:
         }
         error.setColour (juce::Label::textColourId, juce::Colour (0xfff4ab84)); addAndMakeVisible (error);
         session.addChangeListener (this); setSize (kind == Session::EffectKind::equalizer ? 1000 : 660,
-            kind == Session::EffectKind::equalizer ? 640 : 400); synchronise(); startTimerHz (15);
+            kind == Session::EffectKind::equalizer ? 640 : kind == Session::EffectKind::delay ? 540 : 400); synchronise(); startTimerHz (15);
     }
     ~NativeEffectEditor() override
     { stopTimer(); session.removeChangeListener (this); finishGesture(); setLookAndFeel (nullptr); }
@@ -147,7 +147,10 @@ public:
             }
         if (value && kind == Session::EffectKind::delay)
         {
-            sliders[1].setEnabled (enabled && value->values[7] == 0);
+            sliders[0].setEnabled (enabled && value->values[8] == 0);
+            sliders[1].setEnabled (enabled && value->values[7] == 0 && value->values[8] == 0);
+            choices[9].setEnabled (enabled && value->values[8] != 0);
+            choices[10].setEnabled (enabled && value->values[7] == 0 && value->values[8] != 0);
             sliders[2].setEnabled (enabled && value->values[6] == 0);
             sliders[5].setEnabled (enabled && value->values[6] == 0);
         }

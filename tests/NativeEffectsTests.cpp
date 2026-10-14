@@ -112,6 +112,27 @@ void delayTests()
     check(std::abs(fractional.getSample(0,(int)t)-(1-(t-std::floor(t)))) < 1e-6,"fractional delay distributes impulse between adjacent samples");
     s.values[0]=s.values[1]=10;s.values[6]=1;check(run(a,s).getMagnitude(0,1800)==0,"freeze rejects fresh input into an empty buffer");
 }
+void syncedDelayTests()
+{
+    constexpr std::array<double,11> beats { .25, 1.0/3, .375, .5, 2.0/3, .75, 1, 1.5, 2, 3, 4 };
+    for (float bpm : {20.0f, 60.0f, 123.0f, 300.0f, 999.0f})
+        for (int division=0;division<11;++division)
+        {
+            auto settings=defaultEffectSettings(Kind::delay);settings.values[2]=0;settings.values[3]=1;
+            settings.values[8]=1;settings.values[9]=(float)division;settings.values[10]=(float)(10-division);settings.tempoBpm=bpm;
+            const double times[] { beats[(size_t)division]*8000*60/bpm, beats[(size_t)(10-division)]*8000*60/bpm };
+            const int count=(int)std::ceil(std::max(times[0],times[1]))+3;
+            juce::AudioBuffer<float> impulse(2,count);impulse.clear();impulse.setSample(0,0,.5f);impulse.setSample(1,0,-.25f);
+            const auto output=run(impulse,settings,8000);double error=0;
+            for(int c=0;c<2;++c)for(int n=0;n<count;++n)
+            {
+                const auto fraction=times[c]-std::floor(times[c]);
+                const auto weight=n==(int)times[c]?1-fraction:n==(int)times[c]+1?fraction:0;
+                error=std::max(error,std::abs(output.getSample(c,n)-(c==0?.5:-.25)*weight));
+            }
+            check(error<1e-6,"tempo division impulse at "+juce::String(bpm)+" BPM / division "+juce::String(division));
+        }
+}
 void reverbTests()
 {
     auto s=defaultEffectSettings(Kind::reverb);s.values[0]=0;s.values[5]=1;
@@ -188,6 +209,22 @@ void projectTests(const juce::File& root)
         ok(s.setPluginEnabled(0,0,false),"bypass effect");ok(s.exportWav(render),"render bypass");check(difference(readAudio(render),input)<2e-6,"bypass restores every dry sample");s.undo();
         ok(s.removePlugin(0,0),"remove effect");s.undo();ok(s.exportWav(render),"render undo removal");check(difference(readAudio(render),expected)<2e-6,"undo removal restores signal and identity");
     }
+    {
+        Session synced(false);ok(synced.importAudio(file,0),"import tempo-follow source");ok(synced.addNativeEffect(0,Kind::delay),"add tempo-follow delay");
+        auto settings=defaultEffectSettings(Kind::delay);settings.values[2]=0;settings.values[3]=1;settings.values[8]=1;settings.values[9]=settings.values[10]=0;
+        const auto id=synced.snapshot().tracks[0].plugins[0].id;ok(synced.setNativeEffectSettings(id,settings),"enable synchronized timing");
+        for(float bpm : {120.0f,60.0f,240.0f})
+        {
+            synced.setTempo(bpm);const auto actualSettings=synced.snapshot().tracks[0].plugins[0].effect;
+            check(actualSettings.tempoBpm==bpm,"snapshot uses project tempo without a device tempo property");
+            const auto rendered=root.getChildFile("tempo-delay.wav");ok(synced.exportWav(rendered),"export immediately after tempo edit");
+            check(difference(readAudio(rendered),run(input,actualSettings))<2e-6,"export refreshes derived tempo before processing");
+        }
+        const auto project=root.getChildFile("synced-delay.halftrack");ok(synced.saveProject(project),"save synchronized project");ok(synced.loadProject(project),"reopen synchronized project");
+        check(synced.snapshot().tracks[0].plugins[0].effect.tempoBpm==240,"reopened delay derives saved project tempo");
+        settings.tempoBpm=120;ok(synced.setNativeEffectSettings(id,settings),"stale derived tempo cannot override project tempo");
+        check(!synced.snapshot().dirty&&!synced.canUndo(),"unchanged device values with stale derived tempo remain a no-op");
+    }
     Session chain(false);ok(chain.importAudio(file,0),"import chain source");ok(chain.addNativeEffect(0,Kind::equalizer),"insert EQ");ok(chain.addNativeEffect(0,Kind::compressor),"insert compressor");
     auto first=chain.snapshot().tracks[0].plugins[0];auto gain=first.effect;gain.values[32]=12;ok(chain.setNativeEffectSettings(first.id,gain),"set pre-compression gain");
     const auto one=root.getChildFile("gain-first.wav"),two=root.getChildFile("gain-last.wav");ok(chain.exportWav(one),"render gain before compressor");ok(chain.movePlugin(0,0,1),"move actual effect order");ok(chain.exportWav(two),"render gain after compressor");check(difference(readAudio(one),readAudio(two))>.01,"order changes nonlinear output");chain.undo();ok(chain.exportWav(two),"undo device order");check(difference(readAudio(one),readAudio(two))==0,"undo order restores bit-identical output");
@@ -198,7 +235,7 @@ void projectTests(const juce::File& root)
 }
 int runNativeEffectsTests(const juce::File& artifacts)
 {
-    try {const auto root=artifacts.getChildFile("effects-"+juce::Uuid().toString());ok(root.createDirectory(),"create fixtures");equalizerTests();compressorTests();delayTests();reverbTests();lifecycleTests();projectTests(root);runNativeEffectEditorTests(root);std::cout<<"Native effects passed: "<<root.getFullPathName()<<std::endl;return 0;}
+    try {const auto root=artifacts.getChildFile("effects-"+juce::Uuid().toString());ok(root.createDirectory(),"create fixtures");equalizerTests();compressorTests();delayTests();syncedDelayTests();reverbTests();lifecycleTests();projectTests(root);runNativeEffectEditorTests(root);std::cout<<"Native effects passed: "<<root.getFullPathName()<<std::endl;return 0;}
     catch(const std::exception& e){std::cerr<<"FAIL native effects: "<<e.what()<<std::endl;return 1;}
 }
 }

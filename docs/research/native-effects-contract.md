@@ -20,7 +20,9 @@ Ranges: threshold -60–0 dB, ratio 1–20, attack 0.01–1,000 ms, release 1–
 
 Independent left/right times span 1–2,000 ms with linear interpolation. Linking retains the inactive right-time value. Stereo feedback stays in its channel; ping pong injects the summed mono input into the left delay and feeds each delayed channel into the other. Feedback is bounded to 95%, with a one-pole high cut. Freeze rejects input and recirculates the existing delayed signal at unity, bypassing feedback damping. Dry/wet is linear. Defaults are 250/375 ms, 35% feedback, 30% wet and 12 kHz damping.
 
-Time changes interpolate over 5 ms and intentionally change pitch. Tempo synchronization, modulation, alternate transition modes, input filtering and measured reference feedback/freeze behavior are not implemented. The engine tail estimate is capped at 300 seconds, including Freeze; explicit export duration remains user-selected. Freeze is a buffer loop, not an infinite-decay guarantee under fractional interpolation or changing times.
+Project-tempo mode adds eleven divisions from a sixteenth note through a whole note, including dotted and triplet timings. Left/right divisions remain independent unless linked. Musical divisions are quarter-note beat ratios, not time-signature-dependent bar lengths. Millisecond values remain stored when sync is enabled. The message-thread timer observes project tempo changes at 30 Hz and publishes a complete FIFO packet; export refreshes immediately after draining playback. This does not implement sample-accurate tempo automation.
+
+Time changes interpolate over 5 ms and intentionally change pitch. Modulation, alternate transition modes, input filtering and measured reference feedback/freeze behavior are not implemented. A prepared 12-second stereo buffer covers the longest supported division at 20 BPM; no tempo edit allocates audio-thread memory. The engine tail estimate is capped at 1,800 seconds, including Freeze; explicit export duration remains user-selected. Freeze is a buffer loop, not an infinite-decay guarantee under fractional interpolation or changing times.
 
 ## Room reverb
 

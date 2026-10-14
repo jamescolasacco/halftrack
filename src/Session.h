@@ -36,6 +36,7 @@ public:
     {
         EffectKind kind = EffectKind::equalizer;
         std::array<float, 34> values {};
+        float tempoBpm = 120; // Derived project tempo, never a separate stored device setting.
         bool operator== (const EffectSettings&) const = default;
     };
     enum class NoteTransform { quantizeStarts, quantizeEnds, reverse, invertPitch, legato, halfTime, doubleTime, fixedLength };

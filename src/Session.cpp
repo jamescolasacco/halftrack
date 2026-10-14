@@ -1678,7 +1678,7 @@ Result Session::setNativeEffectSettings (const String& id, const EffectSettings&
                 {
                     const auto previous = effect->readSettings();
                     if (previous.kind != settings.kind) return Result::fail ("Effect type cannot change during an edit.");
-                    if (previous == settings) return Result::ok();
+                    if (previous.values == settings.values) return Result::ok();
                     impl->transaction ("Edit " + String (effectName (settings.kind)));
                     effect->writeSettings (settings); impl->changed(); return Result::ok();
                 }
