@@ -8,7 +8,7 @@ Halftrack is inspired by Ableton Live and is unaffiliated with Ableton.
 
 C++20, JUCE 8, and Tracktion Engine share one model and interface across macOS, Windows, and Linux. Original code and SVG assets are AGPL-3.0-only. Dependencies retain their own licenses.
 
-The first preview combines audio recording/mixing/export with MIDI tracks, a piano roll, a built-in polyphonic subtractive synth, project save/reopen, and undo/redo. Only behavior backed by evidence is marked verified. Continued development adds Session audio/MIDI slots, scenes, beat/bar launching, tested plug-in latency compensation at export boundaries, native Pre/Post sends and shared return tracks, and hardened plug-in scanning/editor lifetime. Local reverse-engineering research remains separate from original application source.
+The first preview combines audio recording/mixing/export with MIDI tracks, a piano roll, a built-in polyphonic subtractive synth, project save/reopen, and undo/redo. Only behavior backed by evidence is marked verified. Continued development adds Session audio/MIDI slots, scenes, beat/bar launching, tested plug-in latency compensation at export boundaries, native Pre/Post sends and shared return tracks, hardened plug-in scanning/editor lifetime, grouped MIDI editing and a note clipboard with one-step undo. Local reverse-engineering research remains separate from original application source.
 
 See [build instructions](docs/building.md), [architecture](docs/architecture.md), [progress and known gaps](docs/progress.md), [verification evidence](docs/preview-verification.md), [capability inventory](docs/feature-parity.md), [open questions](docs/open-questions.md), and [reverse-engineering results and research](docs/research/reverse-engineering-results.md).
 

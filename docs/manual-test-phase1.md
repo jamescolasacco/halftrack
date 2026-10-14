@@ -104,6 +104,17 @@ These optional checks are **NOT RUN** through native mouse/keyboard delivery. Au
 | UI-44 | Drag a selected note's right edge, then change Velocity. Undo/Redo each edit. | All selected lengths change by the same allowed amount. Velocity sets every selected note to the displayed value. Each gesture undoes together; unselected notes stay unchanged. |
 | UI-45 | Delete a selection, Undo/Redo, switch clips and reopen a saved project. | Deletion is one undoable action. Stale selection IDs do not select unrelated notes or edit another clip. Notes and their musical edits persist; editor selection itself is not stored as project content. |
 
+## Note clipboard and Save As follow-up
+
+These optional native-input checks are **NOT RUN**. Use a disposable mixed audio/MIDI project.
+
+| ID | Action | Expected evidence |
+| --- | --- | --- |
+| UI-46 | Select two MIDI notes, Copy with Cmd/Ctrl+C, click the ruler, then Paste with Cmd/Ctrl+V twice. | The orange insertion marker sets the first paste location. Relative timing, pitch, length and velocity remain intact; each paste selects only its new notes and advances the marker by the whole group extent. |
+| UI-47 | Duplicate a group with Cmd/Ctrl+D, then Cut with Cmd/Ctrl+X and Paste. Undo/Redo each musical edit. | Duplicate begins after the selected extent on the grid. Each operation undoes together. Copying alone does not dirty the project. The notes clipboard stays within Halftrack and survives clip changes. |
+| UI-48 | Attempt to paste or duplicate a group beyond the clip end. Then edit a velocity text field using ordinary text shortcuts. | The out-of-bounds group is rejected without partial insertion, lost selection or discarded redo. Text commands do not edit notes. |
+| UI-49 | Undo a note edit in a project containing audio, Save As into another folder, then Redo and Undo. Repeat with the same project basename and play arrangement/slots before reopening. | Saving preserves the real note history, adds no musical undo step and relinks current playback to collected media. Keep the new project and Assets folder together. |
+
 ## Intentional hardware checks
 
 Run these only with an intentionally supplied generated source and selected hardware. Do not use ambient microphone input. Initial status for every platform is **NOT MEASURED** unless a specific report says otherwise.

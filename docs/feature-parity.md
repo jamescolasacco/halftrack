@@ -24,7 +24,7 @@ There are **170 behavior/scope rows** and **105 device/content rows** in this in
 
 ## Current Session subset
 
-Grouped piano-roll editing and the validating note-batch facade at `13406de` pass all eight local suites in 133.69 seconds. Shift selection/marquee, Select All/Escape, common group movement/resize, set-value velocity, group deletion, stable-ID pruning and one-step undo/redo have handler/model coverage, including 512 notes and rejection of infeasible loaded groups. This remains one-clip editing with Halftrack's current drawing convention, not full MIDI-editor parity; cross-platform confirmation is pending for this new source.
+Grouped piano-roll editing and the validating note-batch facade at `13406de` pass all eight local suites in 133.69 seconds. Shift selection/marquee, Select All/Escape, common group movement/resize, set-value velocity, group deletion, stable-ID pruning and one-step undo/redo have handler/model coverage, including 512 notes and rejection of infeasible loaded groups. This remains one-clip editing with Halftrack's current drawing convention, not full MIDI-editor parity; the published grouped-note checkpoint `9b59843` passes all three CI platforms.
 
 The scanner follow-up `5580373` passes all three platforms in [CI 38499473562](https://github.com/jamescolasacco/halftrack/actions/runs/38499473562). Its Windows ordinary two-crash request takes 56.14 ms and the full scanner regression 1.08 s; see the [verification record](preview-verification.md) for the prior baseline and limits.
 
@@ -149,7 +149,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
-| MID-001 | Piano-roll editing | Production handlers create/select/move/resize/delete and undo notes in arrangement and Session clips. Selected empty Session slots do not open another clip. Split, duplicate, deactivate and complete native input delivery remain unverified or missing. | PARTIAL — Mac editor handlers |
+| MID-001 | Piano-roll editing | Production handlers create/select/move/resize/delete and undo notes in arrangement and Session clips. Selected empty Session slots do not open another clip. Copy/Cut/Paste/Duplicate, visible insertion cursor, whole-group rejection, fresh-ID selection and text-focus isolation now pass the Mac handler suite at `d5a3688`. Split, deactivate and complete native input delivery remain unverified or missing. | PARTIAL — Mac editor handlers |
 | MID-002 | Pitch/time operations | Verify transpose, scale-aware movement, reverse/invert, stretch, legato, fixed lengths, and quantize without stuck notes. | NOT IMPLEMENTED / UNVERIFIED |
 | MID-003 | Velocity, release, probability | Persist expressive values and ranges; use deterministic seeds to test chance and repeated-note behavior. | NOT IMPLEMENTED / UNVERIFIED |
 | MID-004 | Multi-clip editing | Display/edit several MIDI clips; verify focus, selection boundaries, and notes at overlapping loop positions. | NOT IMPLEMENTED / UNVERIFIED |
@@ -220,7 +220,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
 | PRJ-001 | Halftrack project schema | Specify IDs, versioning, migrations, unknown fields, deterministic storage, and atomic save behavior. | NOT IMPLEMENTED / UNVERIFIED |
-| PRJ-002 | Save/reopen and Save As | Generated Session cases preserve scenes/slots, MIDI notes, quantization, names and stable IDs; invalid launcher shape preserves the current edit and undo/redo. General routing/automation and full native-dialog coverage remain unverified. | PARTIAL — Mac project subset |
+| PRJ-002 | Save/reopen and Save As | Generated Session cases preserve scenes/slots, MIDI notes, quantization, names and stable IDs; invalid launcher shape preserves the current edit and undo/redo. Save As now preserves pending musical undo/redo in mixed audio/MIDI projects; same-name folder moves refresh both native audio caches and current arrangement/slot output. Focused Mac regressions pass at `c98e564`/`d96f804`; broad automation and full native-dialog coverage remain unverified. | PARTIAL — Mac project subset |
 | PRJ-003 | Undo/redo history | Test transactions spanning several objects, invalidated references, saved-state markers, and history limits. | NOT IMPLEMENTED / UNVERIFIED |
 | PRJ-004 | Autosave and recovery | Interrupt during save/record/render; recover the last consistent state without overwriting the original project. | NOT IMPLEMENTED / UNVERIFIED |
 | PRJ-005 | Media collection and relocation | Generated slot audio is collected and reopens after moving project plus Assets and removing the original. Missing media rejects replacement. Cross-system, case and arbitrary media-library cases remain unverified. | PARTIAL — Mac relocation subset |
