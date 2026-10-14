@@ -4,7 +4,8 @@ function(halftrack_patch_plugin_scanner source_dir)
     set(relative_0 "modules/tracktion_engine/plugins/tracktion_PluginScanHelpers.h")
     set(original_0 "94eb54614af016e38e67af2e27f870e0ad14aa6bf83b42638d7b36c8291f8d8c")
     set(previous_0 "521a1479001bb633c73f5a4780fe85418128728e1dab2f3c0abe43d84c4b0895")
-    set(patched_0 "a4498068deaeec17081d992825d1df2faf49a1e6c289b91d0fc9a8a54aa7071c")
+    set(previous_current_0 "a4498068deaeec17081d992825d1df2faf49a1e6c289b91d0fc9a8a54aa7071c")
+    set(patched_0 "f26479c74d2e829a26997f46f6225a8ea2c3887738e560392f06ff48373c464f")
     set(relative_1 "modules/tracktion_engine/utilities/tracktion_EngineBehaviour.h")
     set(original_1 "71025051424caea898d1f07a8a6a67b4d7500b4d1c3991a734bcad0188c6ee18")
     set(patched_1 "09b64a7d5a5e58b45370424262f61a562f620affdb9e2b92829666d0a024347d")
@@ -16,7 +17,8 @@ function(halftrack_patch_plugin_scanner source_dir)
             continue()
         endif()
         if(NOT source_hash STREQUAL "${original_${index}}"
-           AND NOT (index EQUAL 0 AND source_hash STREQUAL "${previous_0}"))
+           AND NOT (index EQUAL 0 AND (source_hash STREQUAL "${previous_0}"
+                                        OR source_hash STREQUAL "${previous_current_0}")))
             message(FATAL_ERROR "Halftrack's scanner patch requires pinned ${relative_${index}}. Unexpected SHA256: ${source_hash}.")
         endif()
         file(READ "${source}" content)
@@ -62,6 +64,35 @@ function(halftrack_patch_plugin_scanner source_dir)
             // JUCE treats false as a plug-in crash and blacklists it. Startup
             // failure returns no descriptions, but must allow the next scan.
             return true;]=] content "${content}")
+            string(REPLACE [=[            if (reply == nullptr || ! reply->hasTagName ("FOUND"))
+            {
+                if (crashed)]=] [=[            if (reply == nullptr || ! reply->hasTagName ("FOUND"))
+            {
+               #if JUCE_WINDOWS
+                // The scan worker serialises launch, polling and teardown.
+                // Check even if an IPC callback already marked the connection
+                // lost; a complete FOUND reply above always takes precedence.
+                if (hasWorkerProcessExited())
+                {
+                   #if defined (HALFTRACK_TESTS_ENABLED) && HALFTRACK_TESTS_ENABLED
+                    recordExitTestClassification();
+                   #endif
+                    crashed = true;
+                }
+               #endif
+                if (crashed)]=] content "${content}")
+            string(REPLACE [=[    void handleConnectionLost() override
+    {
+        crashed = true;
+    }]=] [=[    void handleConnectionLost() override
+    {
+       #if JUCE_WINDOWS && defined (HALFTRACK_TESTS_ENABLED) && HALFTRACK_TESTS_ENABLED
+        // Test only: isolate confirmed process-exit handling without blocking IPC.
+        if (isExitTestConnectionLossSuppressed())
+            return;
+       #endif
+        crashed = true;
+    }]=] content "${content}")
         else()
             string(REPLACE [=[    virtual bool canScanPluginsOutOfProcess()                                       { return false; }]=] [=[    virtual bool canScanPluginsOutOfProcess()                                       { return false; }
 
