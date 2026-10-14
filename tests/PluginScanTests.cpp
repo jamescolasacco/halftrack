@@ -189,10 +189,15 @@ int runPluginScanTests (const juce::File& destination)
         }
         check (found == 0 && ! sawParentConstruction, "failed child startup never constructs a plug-in in the host");
         check (! scanUI->copyWarnings().isEmpty(), "failed child startup reports an error");
-        finish();
+        // Infrastructure failure is not evidence that the plug-in crashed. Keep
+        // the same registry and its blacklist intact when retrying this scan.
+        manager.knownPluginList.scanFinished();
         scanBehaviour->executable = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
-
         setMode (root, "normal");
+        runWorker (manager, [&] { found = scanOnce(); });
+        check (found == 1, "same-list retry succeeds after scanner startup failure without clearing the blacklist");
+        check (! manager.knownPluginList.getBlacklistedFiles().contains (plugin.getFullPathName()),
+               "scanner startup failure does not classify the untested fixture as crashed");
         runWorker (manager, [&]
         {
             for (int i = 0; i < 64; ++i)
