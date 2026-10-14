@@ -2,6 +2,8 @@
 #include "SubtractiveSynth.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
+#include <set>
+#include <cstdlib>
 
 namespace halftrack
 {
@@ -14,6 +16,154 @@ using juce::String;
 const juce::Identifier monitorProperty { "halftrackMonitor" };
 const juce::Identifier midiTrackProperty { "halftrackMidiTrack" };
 const juce::Identifier midiNoteIDProperty { "halftrackNoteId" };
+const juce::Identifier returnProperty { "halftrackReturn" };
+const juce::Identifier returnBusProperty { "halftrackReturnBus" };
+const juce::Identifier returnModeProperty { "halftrackReturnSendMode" };
+const juce::Identifier sendReturnProperty { "halftrackSendReturnID" };
+
+bool isReturn (const te::AudioTrack& track) { return track.state.getProperty (returnProperty, false); }
+Session::SendMode sendMode (const te::AudioTrack& track)
+{ return static_cast<Session::SendMode> (static_cast<int> (track.state.getProperty (returnModeProperty, 1))); }
+
+te::AuxSendPlugin* findSend (te::AudioTrack& source, const String& destination)
+{
+    for (auto* plugin : source.pluginList.getPlugins())
+        if (auto* send = dynamic_cast<te::AuxSendPlugin*> (plugin))
+            if (send->state.getProperty (sendReturnProperty).toString() == destination) return send;
+    return nullptr;
+}
+
+// Validate routing before constructing native objects, so invalid projects cannot
+// replace the active edit, load hidden media, or change its undo history.
+Result validateRouting (const juce::ValueTree& state)
+{
+    struct Destination { int bus; Session::SendMode mode; };
+    std::map<String, Destination> destinations;
+    std::set<int> buses;
+    std::set<String> returnInputTargets;
+    std::vector<juce::ValueTree> tracks, routePlugins;
+    auto number = [] (const juce::var& value, double low, double high, bool integral = false)
+    {
+        const auto text = value.toString().trim().toStdString();
+        char* end = nullptr;
+        const auto parsed = std::strtod (text.c_str(), &end);
+        return ! text.empty() && end == text.c_str() + text.size() && std::isfinite (parsed)
+            && parsed >= low && parsed <= high && (! integral || std::floor (parsed) == parsed);
+    };
+    const auto canonicalID = [] (const juce::var& value)
+    {
+        const auto id = te::EditItemID::fromVar (value);
+        return id.isValid() && id.toString() == value.toString();
+    };
+    const auto collect = [&] (auto&& self, const juce::ValueTree& node) -> void
+    {
+        if (node.hasType (te::IDs::TRACK)) tracks.push_back (node);
+        if (node.hasType (te::IDs::PLUGIN)
+            && (node[te::IDs::type].toString() == te::AuxSendPlugin::xmlTypeName
+                || node[te::IDs::type].toString() == te::AuxReturnPlugin::xmlTypeName)) routePlugins.push_back (node);
+        for (const auto& child : node) self (self, child);
+    };
+    collect (collect, state);
+    for (const auto& track : tracks)
+    {
+        if (! static_cast<bool> (track.getProperty (returnProperty, false)))
+        {
+            if (track.hasProperty (returnBusProperty) || track.hasProperty (returnModeProperty))
+                return Result::fail ("Return metadata requires a return track.");
+            continue;
+        }
+        if (! number (track[returnBusProperty], 0, 2147483646, true)
+            || ! number (track[returnModeProperty], 0, 1, true)
+            || static_cast<bool> (track.getProperty (midiTrackProperty, false)))
+            return Result::fail ("The project has invalid return track settings.");
+        const auto id = track[te::IDs::id].toString();
+        const auto bus = static_cast<int> (track[returnBusProperty]);
+        if (! canonicalID (track[te::IDs::id]) || destinations.contains (id) || ! buses.insert (bus).second)
+            return Result::fail ("Return tracks require unique identities and buses.");
+        destinations.emplace (id, Destination { bus, static_cast<Session::SendMode> (static_cast<int> (track[returnModeProperty])) });
+        returnInputTargets.insert (id);
+        const auto checkContents = [&] (auto&& self, const juce::ValueTree& node) -> bool
+        {
+            if (te::Clip::isClipState (node)) return false;
+            if (node.hasType (te::IDs::CLIPSLOT))
+            {
+                if (! canonicalID (node[te::IDs::id])) return false;
+                returnInputTargets.insert (node[te::IDs::id].toString());
+            }
+            for (const auto& child : node) if (! self (self, child)) return false;
+            return true;
+        };
+        if (! checkContents (checkContents, track)) return Result::fail ("Return tracks require empty clip slots with valid identities.");
+    }
+    std::vector<juce::ValueTree> validated;
+    for (const auto& track : tracks)
+    {
+        const auto destination = destinations.find (track[te::IDs::id].toString());
+        const bool returned = destination != destinations.end();
+        std::vector<juce::ValueTree> plugins;
+        int mixer = -1, mixers = 0, returns = 0;
+        bool routed = returned;
+        for (const auto& child : track)
+            if (child.hasType (te::IDs::PLUGIN))
+            {
+                const auto type = child[te::IDs::type].toString();
+                if (type == "volume" || type == "halftrack-mixer") { mixer = static_cast<int> (plugins.size()); ++mixers; }
+                if (type == te::AuxSendPlugin::xmlTypeName) routed = true;
+                plugins.push_back (child);
+            }
+        if (routed && (mixers != 1 || ! canonicalID (track[te::IDs::id])))
+            return Result::fail ("Routed tracks require a valid identity and exactly one track mixer.");
+        if (routed)
+            for (const auto& device : track.getChildWithName (te::IDs::OUTPUTDEVICES))
+                if (device[te::IDs::name].toString().startsWithIgnoreCase ("track "))
+                    return Result::fail ("Auxiliary-routed tracks cannot route their main output to another track.");
+        std::set<String> targets;
+        bool pastSourceEffects = false;
+        for (int index = 0; index < static_cast<int> (plugins.size()); ++index)
+        {
+            const auto& plugin = plugins[static_cast<size_t> (index)];
+            const auto type = plugin[te::IDs::type].toString();
+            if (type == te::AuxReturnPlugin::xmlTypeName)
+            {
+                if (! returned || ++returns != 1 || index != 0 || ! canonicalID (plugin[te::IDs::id])
+                    || ! number (plugin[te::IDs::busNum], 0, 2147483646, true)
+                    || static_cast<int> (plugin[te::IDs::busNum]) != destination->second.bus
+                    || ! static_cast<bool> (plugin.getProperty (te::IDs::enabled, true)))
+                    return Result::fail ("The project has an invalid return input.");
+                validated.push_back (plugin);
+            }
+            else if (type == te::AuxSendPlugin::xmlTypeName)
+            {
+                const auto target = plugin[sendReturnProperty].toString();
+                const auto found = destinations.find (target);
+                if (returned || found == destinations.end() || ! targets.insert (target).second
+                    || ! canonicalID (plugin[te::IDs::id])
+                    || ! number (plugin[te::IDs::busNum], 0, 2147483646, true)
+                    || static_cast<int> (plugin[te::IDs::busNum]) != found->second.bus
+                    || ! number (plugin[te::IDs::auxSendSliderPos], 0, te::decibelsToVolumeFaderPosition (0.0f))
+                    || static_cast<bool> (plugin.getProperty (te::IDs::phase, false))
+                    || ((index < mixer) != (found->second.mode == Session::SendMode::pre)))
+                    return Result::fail ("The project has an invalid send route or tap position.");
+                pastSourceEffects = true;
+                validated.push_back (plugin);
+            }
+            else if (index == mixer) pastSourceEffects = true;
+            else if (routed && pastSourceEffects && type != "level")
+                return Result::fail ("Source and return effects must precede the mixer and send taps.");
+        }
+        if (returned && returns != 1) return Result::fail ("The return track is missing its input.");
+    }
+    if (validated.size() != routePlugins.size()) return Result::fail ("Auxiliary routing is only supported directly on audio tracks.");
+    const auto checkInputs = [&] (auto&& self, const juce::ValueTree& node) -> bool
+    {
+        if (node.hasType (te::IDs::INPUTDEVICEDESTINATION) && returnInputTargets.contains (te::EditItemID::fromVar (node[te::IDs::targetID]).toString())) return false;
+        if (node.hasType (te::IDs::INPUTDEVICE) && destinations.contains (te::EditItemID::fromVar (node[te::IDs::sourceTrack]).toString())) return false;
+        for (const auto& child : node) if (! self (self, child)) return false;
+        return true;
+    };
+    if (! checkInputs (checkInputs, state)) return Result::fail ("Return tracks cannot receive recording inputs.");
+    return Result::ok();
+}
 
 // Keep the engine's automation, smoothing and gain range, but normalize its
 // sine/cosine law to unity at center. A distinct type preserves older projects'
@@ -86,6 +236,8 @@ public:
     bool shouldOpenAudioInputByDefault() override { return false; }
     bool addSystemAudioIODeviceTypes() override { return useDevices; }
     bool canScanPluginsOutOfProcess() override { return useDevices; }
+    // Pre sends and soloed returns still need content from a dry-muted source.
+    bool shouldProcessMutedTracks() override { return true; }
     File getFileForNewAudioRecording (te::Track& track, const String& extension) override
     {
         auto base = te::EditFileOperations (track.edit).getEditFile();
@@ -267,7 +419,7 @@ struct Session::Impl
     te::ClipSlot* slot (int trackIndex, int sceneIndex) const
     {
         if (! juce::isPositiveAndBelow (sceneIndex, edit->getSceneList().getNumScenes())) return nullptr;
-        if (auto* t = track (trackIndex)) return t->getClipSlotList().getClipSlots()[sceneIndex];
+        if (auto* t = track (trackIndex); t && ! isReturn (*t)) return t->getClipSlotList().getClipSlots()[sceneIndex];
         return nullptr;
     }
     void cancelLaunches()
@@ -361,8 +513,24 @@ struct Session::Impl
     }
     File editLocation() const { return projectFile == File() ? scratch.getChildFile ("Untitled.halftrack") : projectFile; }
     File assets() const { auto f = editLocation(); return f.getSiblingFile (f.getFileNameWithoutExtension() + " Assets"); }
+    void flushStructuralUpdates()
+    {
+        if (! edit) return;
+        // Native sort actions must remain in the edit that triggered them, not
+        // appear later as an unrelated Undo step when export pumps UI events.
+        edit->getTrackList().dispatchPendingSort();
+        edit->visitAllTracksRecursive ([] (te::Track& track)
+        {
+            if (auto* children = track.getSubTrackList()) children->dispatchPendingSort();
+            if (auto* owner = dynamic_cast<te::ClipOwner*> (&track)) owner->dispatchPendingSort();
+            if (auto* audio = dynamic_cast<te::AudioTrack*> (&track))
+                for (auto* slot : audio->getClipSlotList().getClipSlots()) slot->dispatchPendingSort();
+            return true;
+        });
+    }
     void changed()
     {
+        flushStructuralUpdates();
         // Tracktion resets initialization changes on a deferred timer. Keep an
         // independent flag so that timer cannot clear a real user edit.
         explicitChanges = true;
@@ -370,19 +538,56 @@ struct Session::Impl
         edit->markAsChanged();
         owner.sendChangeMessage();
     }
-    void transaction (const String& name) { if (! gesture) edit->getUndoManager().beginNewTransaction (name); }
+    void transaction (const String& name)
+    {
+        flushStructuralUpdates();
+        if (! gesture) edit->getUndoManager().beginNewTransaction (name);
+    }
+    void refreshRouting()
+    {
+        // Derived gates are published through native graph updates on the message
+        // thread. They never replace user send levels or create undo actions.
+        const auto tracks = te::getAudioTracks (*edit);
+        bool anySolo = false, anySourceSolo = false;
+        for (auto* t : tracks)
+        {
+            anySolo = anySolo || t->isSolo (false);
+            anySourceSolo = anySourceSolo || (! isReturn (*t) && t->isSolo (false));
+        }
+        for (auto* destination : tracks)
+        {
+            if (! isReturn (*destination)) continue;
+            for (auto* source : tracks)
+            {
+                if (isReturn (*source)) continue;
+                if (auto* send = findSend (*source, destination->itemID.toString()))
+                {
+                    const bool selected = ! anySolo || source->isSolo (false) || destination->isSolo (false);
+                    const bool audible = sendMode (*destination) == SendMode::pre || ! source->isMuted (false);
+                    send->state.setProperty (te::IDs::enabled, selected && audible, nullptr);
+                }
+            }
+            // Solo-in-place keeps every return output open, including effect
+            // tails left by sources whose feeds are now Off or solo-suppressed.
+            destination->state.setProperty (te::IDs::soloIsolate, anySourceSolo, nullptr);
+        }
+        edit->updateMuteSoloStatuses();
+    }
     void refreshParameterValues()
     {
         for (auto* t : te::getAudioTracks (*edit))
             for (auto* p : t->pluginList.getPlugins())
                 for (auto* parameter : p->getAutomatableParameters()) parameter->updateFromAttachedValue();
         for (auto* parameter : edit->getMasterVolumePlugin()->getAutomatableParameters()) parameter->updateFromAttachedValue();
+        refreshRouting();
         edit->dispatchPendingUpdatesSynchronously();
     }
     void prepareEdit()
     {
         edit->editFileRetriever = [this] { return editLocation(); };
+        flushStructuralUpdates();
         edit->playInStopEnabled = true;
+        refreshRouting();
         if (useDevices) edit->getTransport().ensureContextAllocated();
         edit->dispatchPendingUpdatesSynchronously();
         edit->getUndoManager().clearUndoHistory();
@@ -450,6 +655,15 @@ Session::Snapshot Session::snapshot() const
         info.id = t->itemID.toString(); info.name = t->getName(); info.colour = t->getColour();
         info.mute = t->isMuted (false); info.solo = t->isSolo (false);
         info.isMidi = t->state.getProperty (midiTrackProperty, false);
+        info.isReturn = isReturn (*t);
+        if (info.isReturn) info.sendMode = sendMode (*t);
+        else for (auto* destination : te::getAudioTracks (e))
+            if (isReturn (*destination))
+            {
+                const auto id = destination->itemID.toString();
+                auto* send = findSend (*t, id);
+                info.sends.push_back ({ id, send ? send->getGainDb() : -100.0f });
+            }
         if (auto* synth = Impl::synth (*t)) info.synth = synth->getSettings();
         if (auto* v = t->getVolumePlugin()) { info.gainDb = v->getVolumeDb(); info.pan = v->getPan(); }
         if (auto* input = impl->input (*t))
@@ -567,6 +781,7 @@ Result Session::loadProject (const File& file)
         return Result::ok();
     };
     if (auto result = validateSlots (validateSlots, state); result.failed()) return result;
+    if (auto result = validateRouting (state); result.failed()) return result;
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
     auto options = te::Edit::Options { impl->engine, state, id };
@@ -692,11 +907,83 @@ Result Session::addMidiTrack (String name)
     track->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
     impl->changed(); return Result::ok();
 }
+Result Session::addReturnTrack (String name)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    impl->transaction ("Add return track");
+    auto input = impl->edit->getPluginCache().createNewPlugin (te::AuxReturnPlugin::xmlTypeName, {});
+    auto* aux = dynamic_cast<te::AuxReturnPlugin*> (input.get());
+    if (! aux) return Result::fail ("Could not create the return input.");
+    std::set<int> used;
+    for (auto* t : te::getAudioTracks (*impl->edit)) if (isReturn (*t)) used.insert (static_cast<int> (t->state[returnBusProperty]));
+    int bus = 0;
+    while (used.contains (bus)) ++bus;
+    const auto count = te::getAudioTracks (*impl->edit).size();
+    impl->edit->ensureNumberOfAudioTracks (count + 1);
+    auto* track = impl->track (count);
+    if (! track) return Result::fail ("Could not create the return track.");
+    auto* undo = &impl->edit->getUndoManager();
+    track->state.setProperty (returnProperty, true, undo);
+    track->state.setProperty (returnBusProperty, bus, undo);
+    track->state.setProperty (returnModeProperty, static_cast<int> (SendMode::post), undo);
+    track->setName (name.trim().isEmpty() ? "Return " + String (static_cast<int> (used.size()) + 1) : name.trim());
+    track->setColour (juce::Colour (0xffb9a283));
+    if (auto result = useTrackMixer (*track); result.failed()) return result;
+    track->getVolumePlugin()->setVolumeDb (0);
+    aux->busNumber = bus;
+    track->pluginList.insertPlugin (input, 0, nullptr);
+    track->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
+    impl->refreshRouting(); impl->changed(); return Result::ok();
+}
+Result Session::setTrackSendGain (int index, const String& destinationID, float decibels)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* source = impl->track (index); auto* destination = impl->track (destinationID);
+    if (! source || isReturn (*source) || ! destination || ! isReturn (*destination))
+        return Result::fail ("Sends must connect an audio or MIDI track to a return track.");
+    if (! std::isfinite (decibels) || decibels < -100.0f || decibels > 0)
+        return Result::fail ("Send gain must be between Off (-100 dB) and 0 dB.");
+    auto* send = findSend (*source, destinationID);
+    if (! send && decibels == -100.0f) return Result::ok();
+    impl->transaction ("Send level");
+    if (! send)
+    {
+        auto plugin = impl->edit->getPluginCache().createNewPlugin (te::AuxSendPlugin::xmlTypeName, {});
+        send = dynamic_cast<te::AuxSendPlugin*> (plugin.get());
+        if (! send) return Result::fail ("Could not create the send.");
+        send->state.setProperty (sendReturnProperty, destinationID, &impl->edit->getUndoManager());
+        send->busNumber = static_cast<int> (destination->state[returnBusProperty]);
+        send->setGainDb (-100.0f);
+        const auto mixer = source->pluginList.indexOf (source->getVolumePlugin());
+        source->pluginList.insertPlugin (plugin, mixer + (sendMode (*destination) == SendMode::post ? 1 : 0), nullptr);
+    }
+    send->setGainDb (decibels);
+    impl->refreshRouting(); impl->changed(); return Result::ok();
+}
+Result Session::setReturnSendMode (const String& destinationID, SendMode mode)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* destination = impl->track (destinationID);
+    if (! destination || ! isReturn (*destination)) return Result::fail ("Return track not found.");
+    if (mode != SendMode::pre && mode != SendMode::post) return Result::fail ("Unknown send mode.");
+    if (mode == sendMode (*destination)) return Result::ok();
+    impl->transaction ("Return send mode");
+    destination->state.setProperty (returnModeProperty, static_cast<int> (mode), &impl->edit->getUndoManager());
+    for (auto* source : te::getAudioTracks (*impl->edit))
+        if (auto* send = findSend (*source, destinationID))
+        {
+            te::Plugin::Ptr keepAlive (send);
+            send->deleteFromParent();
+            const auto mixer = source->pluginList.indexOf (source->getVolumePlugin());
+            source->pluginList.insertPlugin (keepAlive, mixer + (mode == SendMode::post ? 1 : 0), nullptr);
+        }
+    impl->refreshRouting(); impl->changed(); return Result::ok();
+}
 Result Session::addMidiClip (const String& trackId, double start, double length)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (trackId);
-    if (! track || ! static_cast<bool> (track->state.getProperty (midiTrackProperty))) return Result::fail ("Select a MIDI track first.");
+    if (! track || isReturn (*track) || ! static_cast<bool> (track->state.getProperty (midiTrackProperty))) return Result::fail ("Select a MIDI track first.");
     if (! std::isfinite (start) || ! std::isfinite (length) || start < 0 || length <= 0 || start + length > 1000000)
         return Result::fail ("Enter a positive MIDI clip duration and a valid start beat.");
     impl->transaction ("Add MIDI clip");
@@ -767,7 +1054,7 @@ Result Session::addMidiClipToSlot (const String& trackId, int sceneIndex, double
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing slots.");
     auto* track = impl->track (trackId);
-    if (! track || ! static_cast<bool> (track->state.getProperty (midiTrackProperty))) return Result::fail ("Select a MIDI track first.");
+    if (! track || isReturn (*track) || ! static_cast<bool> (track->state.getProperty (midiTrackProperty))) return Result::fail ("Select a MIDI track first.");
     if (! juce::isPositiveAndBelow (sceneIndex, impl->edit->getSceneList().getNumScenes())) return Result::fail ("Scene not found.");
     auto* slot = track->getClipSlotList().getClipSlots()[sceneIndex];
     if (! slot) return Result::fail ("Slot not found.");
@@ -827,7 +1114,7 @@ Result Session::launchScene (int sceneIndex)
     impl->edit->getTransport().ensureContextAllocated();
     const auto boundary = impl->launchBoundary();
     for (auto* track : te::getAudioTracks (*impl->edit))
-        impl->queueTrack (*track, track->getClipSlotList().getClipSlots()[sceneIndex]->getClip(), boundary);
+        if (! isReturn (*track)) impl->queueTrack (*track, track->getClipSlotList().getClipSlots()[sceneIndex]->getClip(), boundary);
     if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().play (false);
     sendChangeMessage(); return Result::ok();
 }
@@ -835,6 +1122,7 @@ Result Session::stopLauncherTrack (int trackIndex)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (trackIndex); if (! track) return Result::fail ("Track not found.");
+    if (isReturn (*track)) return Result::fail ("Return tracks do not launch clips.");
     impl->queueTrack (*track, nullptr, impl->launchBoundary());
     sendChangeMessage(); return Result::ok();
 }
@@ -842,7 +1130,8 @@ Result Session::stopAllLauncherClips()
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     const auto boundary = impl->launchBoundary();
-    for (auto* track : te::getAudioTracks (*impl->edit)) impl->queueTrack (*track, nullptr, boundary);
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        if (! isReturn (*track)) impl->queueTrack (*track, nullptr, boundary);
     sendChangeMessage(); return Result::ok();
 }
 Result Session::returnToArrangement()
@@ -912,7 +1201,10 @@ Result Session::removeTrack (int index)
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before removing tracks.");
     closePluginEditors(); impl->meters.clear(); impl->transaction ("Remove track");
-    impl->edit->deleteTrack (t); impl->changed(); return Result::ok();
+    if (isReturn (*t))
+        for (auto* source : te::getAudioTracks (*impl->edit))
+            if (auto* send = findSend (*source, t->itemID.toString())) send->deleteFromParent();
+    impl->edit->deleteTrack (t); impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::importAudio (const File& source, int index, double start)
 {
@@ -923,7 +1215,7 @@ Result Session::importAudio (const File& source, int index, double start)
     if (! std::isfinite (start) || start < 0) return Result::fail ("Clip start must be zero or greater.");
     if (index < 0) { auto r = addAudioTrack (source.getFileNameWithoutExtension()); if (r.failed()) return r; index = te::getAudioTracks (*impl->edit).size() - 1; }
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
-    if (static_cast<bool> (t->state.getProperty (midiTrackProperty))) return Result::fail ("Import audio onto an audio track.");
+    if (isReturn (*t) || static_cast<bool> (t->state.getProperty (midiTrackProperty))) return Result::fail ("Import audio onto an audio track.");
     auto assets = impl->assets(); auto r = assets.createDirectory(); if (r.failed()) return r;
     auto file = source.isAChildOf (assets) ? source : assets.getNonexistentChildFile (source.getFileNameWithoutExtension(), source.getFileExtension(), true);
     if (file != source && ! source.copyFileTo (file)) return Result::fail ("Could not copy the imported audio.");
@@ -976,7 +1268,7 @@ Result Session::setTrackMute (int index, bool value)
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     impl->transaction ("Track mute");
     t->state.setProperty (te::IDs::mute, value, &impl->edit->getUndoManager());
-    impl->changed(); return Result::ok();
+    impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::setTrackSolo (int index, bool value)
 {
@@ -984,7 +1276,7 @@ Result Session::setTrackSolo (int index, bool value)
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     impl->transaction ("Track solo");
     t->state.setProperty (te::IDs::solo, value, &impl->edit->getUndoManager());
-    impl->changed(); return Result::ok();
+    impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 
 juce::StringArray Session::inputNames() const
@@ -997,6 +1289,7 @@ Result Session::setTrackInput (int index, const String& name)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
+    if (isReturn (*t)) return Result::fail ("Return tracks cannot receive recording inputs.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing inputs.");
     // Enabling a device rebuilds the engine's device list, invalidating its pointers.
     // Do so only for the input explicitly selected by the user, then re-query it.
@@ -1027,6 +1320,7 @@ Result Session::setTrackArmed (int index, bool value)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
+    if (isReturn (*t)) return Result::fail ("Return tracks cannot receive recording inputs.");
     auto* input = impl->input (*t); if (! input) return Result::fail ("Select an audio input before arming this track.");
     input->setRecordingEnabled (t->itemID, value); impl->changed(); return Result::ok();
 }
@@ -1034,6 +1328,7 @@ Result Session::setTrackMonitor (int index, MonitorMode mode)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
+    if (isReturn (*t)) return Result::fail ("Return tracks cannot receive recording inputs.");
     auto* input = impl->input (*t); if (! input) return Result::fail ("Select an audio input before enabling monitoring.");
     input->getInputDevice().setMonitorMode (static_cast<te::InputDevice::MonitorMode> (mode));
     t->state.setProperty (monitorProperty, static_cast<int> (mode), &impl->edit->getUndoManager());
@@ -1102,6 +1397,7 @@ void Session::beginEditGesture (const String& name)
 void Session::endEditGesture()
 {
     if (impl->exporting) return;
+    impl->flushStructuralUpdates();
     if (! impl->gesture) return;
     impl->gesture.reset();
     impl->edit->getUndoManager().beginNewTransaction();
@@ -1182,7 +1478,7 @@ Result Session::addPlugin (int index, const juce::PluginDescription& description
     auto* external = dynamic_cast<te::ExternalPlugin*> (plugin.get());
     if (! external || (! external->getAudioPluginInstance() && ! external->isInitialisingAsync()))
         return Result::fail (external ? external->getLoadError() : "The plug-in could not be instantiated.");
-    const auto insertIndex = Impl::synth (*t) ? 1 : 0;
+    const auto insertIndex = (isReturn (*t) || Impl::synth (*t)) ? 1 : 0;
     t->pluginList.insertPlugin (plugin, insertIndex, nullptr);
     impl->changed(); return Result::ok();
 }

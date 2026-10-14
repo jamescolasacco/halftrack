@@ -13,6 +13,8 @@ class Session final : public juce::ChangeBroadcaster
 public:
     enum class LaunchQuantisation { none, beat, bar };
     enum class MonitorMode { off, automatic, on };
+    enum class SendMode { pre, post };
+    struct SendInfo { juce::String returnTrackId; float gainDb = -100.0f; };
     struct SynthSettings
     {
         float cutoffHz = 5000, resonance = 0.15f, attackSeconds = 0.01f, decaySeconds = 0.12f;
@@ -49,7 +51,9 @@ public:
         juce::String id, name;
         juce::Colour colour;
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
-        bool mute = false, solo = false, armed = false, isMidi = false;
+        bool mute = false, solo = false, armed = false, isMidi = false, isReturn = false;
+        SendMode sendMode = SendMode::post;
+        std::vector<SendInfo> sends;
         SynthSettings synth;
         MonitorMode monitor = MonitorMode::off;
         juce::String inputName;
@@ -78,6 +82,9 @@ public:
     juce::Result saveProject (const juce::File&); // Copies media into <name> Assets beside the .halftrack file.
     juce::Result addAudioTrack (juce::String name = {});
     juce::Result addMidiTrack (juce::String name = {});
+    juce::Result addReturnTrack (juce::String name = {});
+    juce::Result setTrackSendGain (int sourceTrackIndex, const juce::String& returnTrackId, float decibels);
+    juce::Result setReturnSendMode (const juce::String& returnTrackId, SendMode);
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
     juce::Result addScene (juce::String name = {});
     juce::Result removeScene (int sceneIndex);
