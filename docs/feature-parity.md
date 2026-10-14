@@ -24,7 +24,7 @@ There are **170 behavior/scope rows** and **105 device/content rows** in this in
 
 ## Channel utility subset
 
-The new original Utility passes all nine local Mac suites in 145.41 seconds. Its [contract](research/channel-utility-contract.md) records tested DSP, native controls, insertion/reordering, undo and saved state. The reference implementation's filter topology, balance law, smoothing and exact outputs have not been measured against this implementation; native input/hardware checks and the new platform CI run remain pending.
+The new original Utility, refined using traced filter topology and a normalized balance law, passes all nine local Mac suites in 146.16 seconds. Its [contract](research/channel-utility-contract.md) records tested DSP, native controls, insertion/reordering, undo and saved state. The reference's filter orders and balance law are traced; exact output, approximation rounding, switching transients and smoothing remain unmeasured against this implementation; native input/hardware checks and the new platform CI run remain pending.
 
 ## Current Session subset
 

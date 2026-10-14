@@ -81,3 +81,6 @@ The source guard passes nine self-tests and eighteen owned callback/helper bodie
 ## Channel utility (2026-10-14)
 
 The utility plugin wrapper and prepared DSP are now source-guard roots; the guard passes nine self-tests across 28 owned bodies. The full nine-suite Mac run passes in 145.41 seconds. Utility runtime cases exercise 512 parameter combinations across zero/short/odd/large blocks, mono/stereo buffers, filter switches and reset, with zero intercepted C++ new/delete calls. A bounded-queue test rejects overflow at 63 packets, and a concurrent producer supplies 10,000 complete ordered packets without consumer allocations. The DSP computes coefficients from fixed parameter packets and never reads model/UI state. The limitations above still apply: this is not a malloc, lock, syscall, deadline or whole-host certification.
+
+
+The subsequent third-order bass/two-pole DC and constant-power balance refinement passes all nine local suites in 146.16 seconds. The callback guard now covers 29 bodies; prepared filter/balance changes and the existing Utility queue stress still report zero intercepted new/delete calls. Computing filter coefficients and trigonometric gains on receipt of a packet introduces standard-library math but no new owned allocation, lock or I/O path. Worst-case callback timing remains unmeasured.

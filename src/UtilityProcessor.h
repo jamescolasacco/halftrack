@@ -14,17 +14,24 @@ public:
     void configure (const Session::UtilitySettings&) noexcept;
     void processSamples (float* left, float* right, int samples) noexcept;
 private:
-    struct LowPass
+    struct Biquad
     {
         double z1 = 0, z2 = 0;
         double tick (double input, const std::array<double, 5>& coefficients) noexcept;
     };
+    struct FirstOrder
+    {
+        double state = 0;
+        double tick (double input, const std::array<double, 3>& coefficients) noexcept;
+    };
     Session::UtilitySettings settings;
     std::array<double, 5> current { 1, 1, 1, 1, 1 }, target { 1, 1, 1, 1, 1 }, step {};
-    std::array<double, 5> lowPassCoefficients {};
-    std::array<double, 2> dcInput {}, dcOutput {};
-    LowPass lowMid, lowSide;
-    double rate = 48000, dcPole = 0, dcScale = 1;
+    std::array<double, 5> lowPassCoefficients {}, highPassCoefficients {}, dcCoefficients {};
+    std::array<double, 3> firstLowCoefficients {}, firstHighCoefficients {};
+    FirstOrder firstLow, firstHigh;
+    Biquad lowMid, highSide;
+    std::array<Biquad, 2> dcFilters;
+    double rate = 48000;
     int remaining = 0;
     bool processed = false;
 };

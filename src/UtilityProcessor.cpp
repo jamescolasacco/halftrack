@@ -23,24 +23,31 @@ Session::UtilitySettings sanitise (Session::UtilitySettings s) noexcept
 }
 }
 
-double UtilityDSP::LowPass::tick (double input, const std::array<double, 5>& c) noexcept
+double UtilityDSP::Biquad::tick (double input, const std::array<double, 5>& c) noexcept
 {
     const auto output = c[0] * input + z1;
     z1 = c[1] * input - c[3] * output + z2;
     z2 = c[2] * input - c[4] * output;
     return output;
 }
+double UtilityDSP::FirstOrder::tick (double input, const std::array<double, 3>& c) noexcept
+{
+    const auto output = c[0] * input + state;
+    state = c[1] * input - c[2] * output;
+    return output;
+}
 void UtilityDSP::prepare (double sampleRate) noexcept
 {
     rate = std::isfinite (sampleRate) ? std::clamp (sampleRate, 8000.0, 768000.0) : 48000.0;
-    dcPole = std::exp (-2.0 * pi * 5.0 / rate);
-    dcScale = (1.0 + dcPole) * 0.5;
+    // Bilinear high-pass, Q = 1/2: two coincident real poles at 5 Hz.
+    const auto g = std::tan (pi * 5.0 / rate), norm = 1.0 / ((1.0 + g) * (1.0 + g));
+    dcCoefficients = { norm, -2.0 * norm, norm, 2.0 * (g * g - 1.0) * norm, (1.0 - g) * (1.0 - g) * norm };
     reset();
     configure (settings);
 }
 void UtilityDSP::reset() noexcept
 {
-    lowMid = {}; lowSide = {}; dcInput = {}; dcOutput = {};
+    firstLow = {}; firstHigh = {}; lowMid = {}; highSide = {}; dcFilters = {};
     processed = false; remaining = 0; current = target; step = {};
 }
 void UtilityDSP::configure (const Session::UtilitySettings& next) noexcept
@@ -56,8 +63,10 @@ void UtilityDSP::configure (const Session::UtilitySettings& next) noexcept
     if (settings.channel == Session::UtilitySettings::Channel::left || settings.channel == Session::UtilitySettings::Channel::right)
         mid = side = 1;
     if (settings.mono) side = 0;
-    target = { gain * (1.0 - std::max (0.0f, settings.balance)),
-               gain * (1.0 + std::min (0.0f, settings.balance)), mid, side, settings.mute ? 0.0 : 1.0 };
+    const auto angle = (static_cast<double> (settings.balance) + 1.0) * pi * 0.25;
+    const auto leftBalance = settings.balance >= 1 ? 0.0 : std::sqrt (2.0) * std::cos (angle);
+    const auto rightBalance = settings.balance <= -1 ? 0.0 : std::sqrt (2.0) * std::sin (angle);
+    target = { gain * leftBalance, gain * rightBalance, mid, side, settings.mute ? 0.0 : 1.0 };
     if (! processed) { current = target; remaining = 0; step = {}; }
     else
     {
@@ -65,9 +74,13 @@ void UtilityDSP::configure (const Session::UtilitySettings& next) noexcept
         for (size_t i = 0; i < step.size(); ++i) step[i] = (target[i] - current[i]) / remaining;
     }
     const auto k = std::tan (pi * settings.bassFrequency / rate);
-    const auto k2 = k * k, normal = 1.0 / (1.0 + std::sqrt (2.0) * k + k2);
+    // A third-order Butterworth factors into a real pole and a Q=1 pair.
+    const auto k2 = k * k, normal = 1.0 / (1.0 + k + k2), firstNormal = 1.0 / (1.0 + k);
+    firstLowCoefficients = { k * firstNormal, k * firstNormal, (k - 1.0) * firstNormal };
+    firstHighCoefficients = { firstNormal, -firstNormal, (k - 1.0) * firstNormal };
     lowPassCoefficients = { k2 * normal, 2.0 * k2 * normal, k2 * normal,
-                            2.0 * (k2 - 1.0) * normal, (1.0 - std::sqrt (2.0) * k + k2) * normal };
+                            2.0 * (k2 - 1.0) * normal, (1.0 - k + k2) * normal };
+    highPassCoefficients = { normal, -2.0 * normal, normal, lowPassCoefficients[3], lowPassCoefficients[4] };
 }
 void UtilityDSP::processSamples (float* left, float* right, int samples) noexcept
 {
@@ -94,18 +107,17 @@ void UtilityDSP::processSamples (float* left, float* right, int samples) noexcep
         const auto rawMid = 0.5 * (l + r), rawSide = 0.5 * (l - r);
         // Keep filters on the unweighted signal. A completed mono/side ramp
         // must silence that component even when the filters still have history.
-        const auto bassMid = lowMid.tick (rawMid, lowPassCoefficients);
-        const auto bassSide = lowSide.tick (rawSide, lowPassCoefficients);
+        const auto bassMid = lowMid.tick (firstLow.tick (rawMid, firstLowCoefficients), lowPassCoefficients);
+        const auto trebleSide = highSide.tick (firstHigh.tick (rawSide, firstHighCoefficients), highPassCoefficients);
         const auto mid = rawMid * current[2];
-        const auto side = (rawSide - (settings.bassMono ? bassSide : 0.0)) * current[3];
+        const auto side = (settings.bassMono ? trebleSide : rawSide) * current[3];
         if (settings.bassMono && settings.bassAudition) l = r = bassMid * current[2];
         else { l = mid + side; r = mid - side; }
         const double inputs[] { l * current[0], r * current[1] };
         double outputs[2] {};
         for (int channel = 0; channel < 2; ++channel)
         {
-            const auto filtered = dcScale * (inputs[channel] - dcInput[(size_t) channel]) + dcPole * dcOutput[(size_t) channel];
-            dcInput[(size_t) channel] = inputs[channel]; dcOutput[(size_t) channel] = filtered;
+            const auto filtered = dcFilters[(size_t) channel].tick (inputs[channel], dcCoefficients);
             outputs[channel] = (settings.dcFilter ? filtered : inputs[channel]) * current[4];
         }
         constexpr auto limit = static_cast<double> (std::numeric_limits<float>::max());

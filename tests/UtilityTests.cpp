@@ -38,6 +38,8 @@ juce::AudioBuffer<float> matrix (const juce::AudioBuffer<float>& input, const Se
     if (s.mono) d = 0;
     const auto common = (m + d) / 2, cross = (m - d) / 2;
     const auto gain = s.mute || s.gainDb <= -100 ? 0.0 : std::pow (10.0, s.gainDb / 20.0);
+    const auto powerOffset = std::sin (s.balance * pi * 0.5);
+    const auto leftBalance = std::sqrt (1.0 - powerOffset), rightBalance = std::sqrt (1.0 + powerOffset);
     for (int i = 0; i < input.getNumSamples(); ++i)
     {
         double l = input.getSample (0, i) * (s.invertLeft ? -1.0 : 1.0);
@@ -45,8 +47,8 @@ juce::AudioBuffer<float> matrix (const juce::AudioBuffer<float>& input, const Se
         if (s.channel == Settings::Channel::left) r = l;
         if (s.channel == Settings::Channel::right) l = r;
         if (s.channel == Settings::Channel::swap) std::swap (l, r);
-        result.setSample (0, i, static_cast<float> ((common * l + cross * r) * gain * (1 - std::max (0.0f, s.balance))));
-        result.setSample (1, i, static_cast<float> ((cross * l + common * r) * gain * (1 + std::min (0.0f, s.balance))));
+        result.setSample (0, i, static_cast<float> ((common * l + cross * r) * gain * leftBalance));
+        result.setSample (1, i, static_cast<float> ((cross * l + common * r) * gain * rightBalance));
     }
     return result;
 }
@@ -84,6 +86,16 @@ void signalTests()
                         maximum = std::max (maximum, difference (processed (input, s), matrix (input, s))); ++cases;
                     }
     check (cases == 320 && maximum < 0.000001f, "320 independent channel/phase/width/mid-side/mono/balance matrix cases");
+    juce::AudioBuffer<float> unity (2, 1); unity.setSample (0, 0, 1); unity.setSample (1, 0, 1);
+    double balanceError = 0, powerError = 0;
+    for (int position = -20; position <= 20; ++position)
+    {
+        Settings balance; balance.balance = position / 20.0f;
+        const auto out = processed (unity, balance), expected = matrix (unity, balance);
+        balanceError = std::max (balanceError, static_cast<double> (difference (out, expected)));
+        powerError = std::max (powerError, std::abs (std::pow (out.getSample (0, 0), 2) + std::pow (out.getSample (1, 0), 2) - 2.0));
+    }
+    check (balanceError < 0.000001 && powerError < 0.000001, "41 balance positions follow independently derived unity-center constant-power gains");
     Settings settings;
     check (difference (processed (input, settings), input) == 0, "default utility is exactly transparent");
     settings.mute = true; auto zero = input; zero.clear();
@@ -99,28 +111,55 @@ void signalTests()
     juce::AudioBuffer<float> impulse (2, 32); impulse.clear(); impulse.setSample (0, 0, 1); impulse.setSample (1, 0, 1);
     settings = {}; settings.bassMono = settings.bassAudition = true;
     const auto bass = processed (impulse, settings);
-    constexpr std::array<double, 16> golden { 6.100617875806423e-05, 0.00024266955329069699, 0.00048128883724865882, 0.00071454833050265461, 0.0009425088638476708, 0.0011652312247342421, 0.0013827761433870662, 0.0015952042792425501, 0.0018025762077015926, 0.0020049524071939053, 0.00220239324655019, 0.0023949589726784855, 0.0025827096985410118, 0.0027657053914278444, 0.0029440058615237547, 0.0031176707507645719 };
+    constexpr std::array<double, 16> golden { 4.7695178891211787e-07, 2.8467270051224994e-06, 8.4804823875154967e-06, 1.7751463176368688e-05, 3.0542623703929269e-05, 4.673878605188676e-05, 6.6226625028401335e-05, 8.8894653145629344e-05, 0.00011463320559798815, 0.00014333442524145176, 0.00017489224757421656, 0.00020920238571912257, 0.00024616231540826046, 0.00028567125997023689, 0.00032763017532061277, 0.00037194173495606848 };
     double error = 0;
     for (size_t i = 0; i < golden.size(); ++i)
         for (int c = 0; c < 2; ++c) error = std::max (error, std::abs (bass.getSample (c, (int) i) - golden[i]));
     check (error < 0.000000001, "bass audition matches independent impulse-response golden samples");
     impulse.setSample (1, 0, -1); settings.bassAudition = false;
     const auto side = processed (impulse, settings); error = 0;
+    constexpr std::array<double, 16> highGolden { 0.98441460436788586, -0.030925979016599658, -0.030438292524008315, -0.029954482018551776, -0.029474547445924423, -0.028998488709176456, -0.028526305655291004, -0.0280579980622041, -0.027593565626260363, -0.027133007950097279, -0.026676324530951059, -0.026223514749377085, -0.025774577858378056, -0.025329512972932931, -0.024888319059919908, -0.024450994928426659 };
     for (size_t i = 0; i < golden.size(); ++i)
     {
-        const auto expected = (i == 0 ? 1.0 : 0.0) - golden[i];
+        const auto expected = highGolden[i];
         error = std::max (error, std::abs (side.getSample (0, (int) i) - expected));
         error = std::max (error, std::abs (side.getSample (1, (int) i) + expected));
     }
-    check (error < 0.00000004, "bass mono removes the independently known low side response");
+    check (error < 0.00000004, "bass mono matches the independent third-order high-pass impulse");
     for (double rate : { 8000.0, 44100.0, 48000.0, 96000.0 })
     {
         juce::AudioBuffer<float> dc (2, 10000); for (int c = 0; c < 2; ++c) juce::FloatVectorOperations::fill (dc.getWritePointer (c), c == 0 ? 0.25f : -0.125f, dc.getNumSamples());
         settings = {}; settings.dcFilter = true; auto actual = processed (dc, settings, rate);
-        const auto pole = std::exp (-2 * pi * 5 / rate), scale = (1 + pole) / 2; error = 0;
+        const auto g = std::tan (pi * 5 / rate), pole = (1 - g) / (1 + g), scale = (1 + pole) / 2; error = 0;
         for (int c = 0; c < 2; ++c) for (int i = 0; i < dc.getNumSamples(); ++i)
-            error = std::max (error, std::abs (actual.getSample (c, i) - (c == 0 ? 0.25 : -0.125) * scale * std::pow (pole, i)));
-        check (error < 0.00000003, "DC step decay follows its closed-form response at " + juce::String (rate));
+            error = std::max (error, std::abs (actual.getSample (c, i) - (c == 0 ? 0.25 : -0.125) * scale * scale * (i == 0 ? 1.0 : std::pow (pole, i - 1) * ((i + 1) * pole - i))));
+        check (error < 0.00000003, "two-pole DC step follows its closed-form response at " + juce::String (rate));
+    }
+    // Known Butterworth magnitudes, independently expressed by filter order.
+    for (const int frequency : { 20, 120, 480, 2000 })
+    {
+        constexpr int frames = 96000;
+        juce::AudioBuffer<float> tone (2, frames);
+        for (int i = 0; i < frames; ++i)
+        {
+            const auto sample = static_cast<float> (0.125 * std::sin (2 * pi * frequency * i / 48000));
+            tone.setSample (0, i, sample); tone.setSample (1, i, -sample);
+        }
+        Settings bassSettings; bassSettings.bassMono = true;
+        const auto high = processed (tone, bassSettings);
+        for (int i = 0; i < frames; ++i) tone.setSample (1, i, tone.getSample (0, i));
+        bassSettings.bassAudition = true; const auto low = processed (tone, bassSettings);
+        const auto ratio = std::tan (pi * frequency / 48000) / std::tan (pi * 120 / 48000);
+        const auto expectedLow = 1.0 / std::sqrt (1.0 + std::pow (ratio, 6));
+        const auto expectedHigh = std::pow (ratio, 3) * expectedLow;
+        double highPower = 0, lowPower = 0;
+        for (int i = 48000; i < frames; ++i)
+        { highPower += std::pow (high.getSample (0, i), 2); lowPower += std::pow (low.getSample (0, i), 2); }
+        check (std::abs (std::sqrt (highPower / 24000) / 0.125 - expectedHigh) < 0.000002
+            && std::abs (std::sqrt (lowPower / 24000) / 0.125 - expectedLow) < 0.000002,
+            "third-order bass high/low magnitudes match the independent order law at " + juce::String (frequency) + " Hz");
+        const auto mid = processed (tone, Settings { .bassMono = true });
+        check (difference (mid, tone) == 0, "bass mono preserves the complete mid signal at " + juce::String (frequency) + " Hz");
     }
     Settings filtered; filtered.width = 2.5f; filtered.bassMono = true; filtered.dcFilter = true; filtered.bassFrequency = 250;
     auto whole = input, partitioned = input; UtilityDSP a, b; a.prepare (48000); b.prepare (48000); a.configure (filtered); b.configure (filtered);
