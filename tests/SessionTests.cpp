@@ -288,6 +288,18 @@ void recordingTests (const juce::File& root)
 }
 }
 
+std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType()
+{
+    return std::make_unique<SyntheticDeviceType>();
+}
+
+float pumpSyntheticTestDevice (Session& session, int blocks)
+{
+    auto* device = dynamic_cast<SyntheticDevice*> (session.audioDeviceManager().getCurrentAudioDevice());
+    if (device == nullptr) throw std::runtime_error ("synthetic test device is not selected");
+    return device->pump (blocks);
+}
+
 int runRecordingTests (const juce::File& requestedDirectory)
 {
     try

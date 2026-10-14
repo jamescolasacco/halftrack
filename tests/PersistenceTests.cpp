@@ -18,6 +18,74 @@ void ok (const juce::Result& result, const juce::String& description)
     check (result.wasOk(), description + (result.failed() ? ": " + result.getErrorMessage() : ""));
 }
 bool near (double actual, double expected) { return std::abs (actual - expected) < 0.001; }
+void launcherLoadValidation (const juce::File& root)
+{
+    Session session (false);
+    const auto file = root.getChildFile ("Launcher-schema.halftrack");
+    ok (session.saveProject (file), "save launcher schema fixture");
+    const auto original = file.loadFileAsString();
+    const auto trackId = session.snapshot().tracks.front().id;
+    const auto originalName = session.snapshot().tracks.front().name;
+    ok (session.renameTrack (0, "Preserve this unsaved edit"), "prepare active unsaved project");
+    auto malformed = root.getChildFile ("Invalid-launcher.halftrack");
+    auto retained = [&]
+    {
+        const auto state = session.snapshot();
+        check (state.tracks.front().id == trackId && state.tracks.front().name == "Preserve this unsaved edit"
+               && state.dirty && session.canUndo(), "invalid launcher load preserves identity and unsaved state");
+        session.undo();
+        check (session.snapshot().tracks.front().name == originalName, "failed load preserves the actual rename undo action");
+        session.redo();
+        check (session.snapshot().tracks.front().name == "Preserve this unsaved edit", "failed load preserves the actual rename redo action");
+    };
+    auto xml = juce::XmlDocument::parse (original);
+    check (xml != nullptr, "parse launcher schema");
+    auto* edit = xml->getChildByName ("EDIT");
+    auto* scenes = edit ? edit->getChildByName ("SCENES") : nullptr;
+    check (scenes != nullptr, "find scene list in project");
+    while (scenes->getNumChildElements() < 257) scenes->createNewChildElement ("SCENE");
+    check (xml->writeTo (malformed), "write excessive scene fixture");
+    check (session.loadProject (malformed).failed(), "reject more than supported scene limit");
+    retained();
+
+    xml = juce::XmlDocument::parse (original);
+    edit = xml->getChildByName ("EDIT");
+    auto* track = edit->getChildByName ("TRACK");
+    auto* slots = track ? track->getChildByName ("CLIPSLOTS") : nullptr;
+    check (slots != nullptr, "find persistent clip slots");
+    slots->createNewChildElement ("CLIPSLOT")->setAttribute ("id", "99999999");
+    check (xml->writeTo (malformed), "write orphan slot fixture");
+    check (session.loadProject (malformed).failed(), "reject slot row without matching scene");
+    retained();
+
+    xml = juce::XmlDocument::parse (original);
+    edit = xml->getChildByName ("EDIT");
+    track = edit->getChildByName ("TRACK");
+    auto* firstSlot = track->getChildByName ("CLIPSLOTS")->getChildByName ("CLIPSLOT");
+    check (firstSlot != nullptr, "find empty slot for malformed ownership fixture");
+    firstSlot->createNewChildElement ("MIDICLIP")->setAttribute ("id", "99999990");
+    firstSlot->createNewChildElement ("MIDICLIP")->setAttribute ("id", "99999991");
+    check (xml->writeTo (malformed), "write two-clips-in-one-slot fixture");
+    const auto duplicateClipResult = session.loadProject (malformed);
+    check (duplicateClipResult.failed() && duplicateClipResult.getErrorMessage().contains ("more than one clip"),
+           "reject hidden second clip before constructing engine slot objects");
+    retained();
+
+    xml = juce::XmlDocument::parse (original);
+    edit = xml->getChildByName ("EDIT");
+    track = edit->getChildByName ("TRACK");
+    track->getChildByName ("CLIPSLOTS")->deleteAllChildElements();
+    track->setAttribute ("playSlotClips", 1);
+    check (xml->writeTo (malformed), "write legacy missing-empty-rows fixture");
+    ok (session.loadProject (malformed), "fill legacy empty rows on load");
+    const auto loaded = session.snapshot();
+    check (loaded.scenes.size() == 8 && loaded.tracks.front().slots.size() == 8
+           && ! loaded.tracks.front().launcherActive && ! loaded.dirty && ! session.canUndo(),
+           "legacy row repair is clean and does not restore performance playback");
+    for (const auto& slot : loaded.tracks.front().slots)
+        check (! slot.hasClip, "missing empty row remains empty");
+}
+
 }
 
 int runPersistenceTests (const juce::File& destination)
@@ -104,6 +172,7 @@ int runPersistenceTests (const juce::File& destination)
             ok (session.loadProject (withPlugin), "reopen after controlled plug-in has been registered");
             check (session.snapshot().tracks.back().id == trackId, "registered effect project retains MIDI identity");
         }
+        launcherLoadValidation (root);
         std::cout << "Persistence acceptance passed." << std::endl;
         return 0;
     }
