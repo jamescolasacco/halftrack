@@ -1739,18 +1739,19 @@ private:
         {
             setName ("Halftrack synthesizer");
             waveform.setName ("Oscillator waveform");
-            addAndMakeVisible (waveform); waveform.addItem ("Saw", 1); waveform.addItem ("Square", 2);
+            addAndMakeVisible (waveform); waveform.addItem ("Saw", 1); waveform.addItem ("Pulse", 2);
+            waveform.addItem ("Sine", 3); waveform.addItem ("Noise", 4);
             waveform.onChange = [this]
             {
                 if (const auto* track = owner.currentTrack(); track != nullptr && track->isMidi)
                 { auto settings = track->synth; settings.waveform = waveform.getSelectedId() - 1; owner.report (owner.session.setSynthSettings (track->id, settings)); owner.refresh(); }
             };
-            for (int i = 0; i < 7; ++i)
+            for (int i = 0; i < 8; ++i)
             {
                 auto& slider = controls[(size_t) i]; addAndMakeVisible (slider);
                 slider.setName (names[i]); slider.setTooltip (names[i]);
                 slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-                slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 67, 17);
+                slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 61, 17);
                 slider.onDragStart = [this] { owner.session.beginEditGesture ("Synth parameter"); };
                 slider.onDragEnd = [this] { owner.session.endEditGesture(); };
             }
@@ -1761,15 +1762,17 @@ private:
             controls[4].setRange (0, 1, 0.01);
             controls[5].setRange (0, 20, 0.001); controls[5].setSkewFactorFromMidPoint (0.4); controls[5].setTextValueSuffix (" s");
             controls[6].setRange (0, 1, 0.01);
-            for (int i = 0; i < 7; ++i) controls[(size_t) i].onValueChange = [this, i] { changeParameter (i, (float) controls[(size_t) i].getValue()); };
+            controls[7].setRange (0, 100, 1); controls[7].setTextValueSuffix (" %");
+            for (int i = 0; i < 8; ++i) controls[(size_t) i].onValueChange = [this, i] { changeParameter (i, (float) controls[(size_t) i].getValue()); };
         }
         void sync()
         {
             const auto* track = owner.currentTrack();
             if (track == nullptr || ! track->isMidi) { setVisible (false); return; }
             setVisible (true); waveform.setSelectedId (track->synth.waveform + 1, juce::dontSendNotification);
-            const float values[] { track->synth.cutoffHz, track->synth.resonance, track->synth.attackSeconds, track->synth.decaySeconds, track->synth.sustain, track->synth.releaseSeconds, track->synth.level };
-            for (int i = 0; i < 7; ++i) controls[(size_t) i].setValue (values[i], juce::dontSendNotification);
+            const float values[] { track->synth.cutoffHz, track->synth.resonance, track->synth.attackSeconds, track->synth.decaySeconds, track->synth.sustain, track->synth.releaseSeconds, track->synth.level, track->synth.pulseWidth * 100 };
+            for (int i = 0; i < 8; ++i) controls[(size_t) i].setValue (values[i], juce::dontSendNotification);
+            controls[7].setEnabled (track->synth.waveform == 1);
             repaint();
         }
         void paint (juce::Graphics& g) override
@@ -1777,21 +1780,21 @@ private:
             g.fillAll (raised); g.setColour (orange); g.setFont (font (10.5f, true));
             g.drawText ("HALFTRACK SYNTH", 11, 2, 185, 24, juce::Justification::centredLeft);
             g.setColour (muted); g.setFont (font (9.5f));
-            const auto width = (getWidth() - 16) / 7;
-            for (int i = 0; i < 7; ++i) g.drawText (names[i], 8 + i * width, 30, width, 14, juce::Justification::centred);
+            const auto width = (getWidth() - 16) / 8;
+            for (int i = 0; i < 8; ++i) g.drawText (names[i], 8 + i * width, 30, width, 14, juce::Justification::centred);
             g.setColour (line); g.drawRect (getLocalBounds());
         }
         void resized() override
         {
             waveform.setBounds (getWidth() - 118, 5, 107, 22);
-            const auto width = (getWidth() - 16) / 7;
-            for (int i = 0; i < 7; ++i) controls[(size_t) i].setBounds (8 + i * width, 43, width - 2, getHeight() - 46);
+            const auto width = (getWidth() - 16) / 8;
+            for (int i = 0; i < 8; ++i) controls[(size_t) i].setBounds (8 + i * width, 43, width - 2, getHeight() - 46);
         }
     private:
         Impl& owner;
         juce::ComboBox waveform;
-        std::array<juce::Slider, 7> controls;
-        static constexpr const char* names[] { "Cutoff", "Resonance", "Attack", "Decay", "Sustain", "Release", "Level" };
+        std::array<juce::Slider, 8> controls;
+        static constexpr const char* names[] { "Cutoff", "Resonance", "Attack", "Decay", "Sustain", "Release", "Level", "Pulse width" };
         void changeParameter (int index, float value)
         {
             const auto* track = owner.currentTrack(); if (track == nullptr || ! track->isMidi) return;
@@ -1801,7 +1804,7 @@ private:
                 case 0: settings.cutoffHz = value; break; case 1: settings.resonance = value; break;
                 case 2: settings.attackSeconds = value; break; case 3: settings.decaySeconds = value; break;
                 case 4: settings.sustain = value; break; case 5: settings.releaseSeconds = value; break;
-                case 6: settings.level = value; break; default: return;
+                case 6: settings.level = value; break; case 7: settings.pulseWidth = value / 100; break; default: return;
             }
             owner.report (owner.session.setSynthSettings (track->id, settings));
             owner.refresh();
@@ -2940,17 +2943,36 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     auto* cutoff = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "Cutoff"));
     auto* resonance = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "Resonance"));
     auto* release = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "Release"));
+    auto* width = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "Pulse width"));
     auto* waveform = dynamic_cast<juce::ComboBox*> (findNamed (deviceChain, "Oscillator waveform"));
-    check (cutoff != nullptr && resonance != nullptr && release != nullptr && waveform != nullptr,
+    check (cutoff != nullptr && resonance != nullptr && release != nullptr && waveform != nullptr && width != nullptr,
            "synth controls expose accessible names");
+    check (! width->isEnabled() && waveform->getNumItems() == 4, "width is disabled outside pulse mode and all four waveforms are available");
     cutoff->setValue (8100, juce::sendNotificationSync);
     resonance->setValue (0.72, juce::sendNotificationSync);
     waveform->setSelectedId (2, juce::sendNotificationSync);
+    check (width->isEnabled() && width->getValue() == 100, "pulse mode enables the legacy square width");
+    width->setValue (37, juce::sendNotificationSync);
     release->setValue (1.75, juce::sendNotificationSync);
     const auto settings = session.snapshot().tracks[(size_t) selectedTrack].synth;
     check (settings.cutoffHz == 8100 && std::abs (settings.resonance - 0.72f) < 0.0001f
-               && settings.waveform == 1 && settings.releaseSeconds == 1.75f,
+               && settings.waveform == 1 && settings.releaseSeconds == 1.75f && settings.pulseWidth == 0.37f,
            "immediate consecutive synth changes preserve every previous control value");
+    for (const int mode : { 3, 4 })
+    {
+        waveform->setSelectedId (mode, juce::sendNotificationSync);
+        check (! width->isEnabled() && session.snapshot().tracks[(size_t) selectedTrack].synth.waveform == mode - 1,
+               "native waveform control selects the new sound and disables width");
+    }
+    waveform->setSelectedId (2, juce::sendNotificationSync);
+    check (width->isEnabled() && width->getValue() == 37, "returning to pulse retains its previous width");
+    width->setValue (64, juce::sendNotificationSync);
+    session.undo(); refresh();
+    check (width->getValue() == 37 && session.snapshot().tracks[(size_t) selectedTrack].synth.pulseWidth == 0.37f,
+           "native width edit undo restores both UI and model");
+    session.redo(); refresh();
+    check (width->getValue() == 64 && session.snapshot().tracks[(size_t) selectedTrack].synth.pulseWidth == 0.64f,
+           "native width edit redo restores both UI and model");
     menuItemSelected (31, 2);
     menuItemSelected (20, 1);
     menuItemSelected (21, 1);

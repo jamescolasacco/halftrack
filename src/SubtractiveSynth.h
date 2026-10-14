@@ -29,6 +29,7 @@ private:
         int channel = 0, pitch = 0, stage = 0;
         bool keyDown = false;
         uint64_t age = 0;
+        uint32_t noiseState = 1;
     };
     void release (Voice&) noexcept;
     static double polyBlep (double phase, double increment) noexcept;

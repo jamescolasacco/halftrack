@@ -38,3 +38,8 @@ Copy/Cut/Paste/Duplicate act on the selected notes only. Keep a typed in-applica
 ## Built-in instrument pitch-wheel default
 
 The instrument has no specified bend-range control. Use a fixed range of two semitones down/up, center 8192, minimum 0 and maximum 16383. Normalize each side separately so both endpoints reach exactly two semitones. Bend is transient per-channel controller state, applies to existing and subsequent voices without restarting their envelopes or phases, and retains original note identity for note-off. CC121 centers that channel; CC120/123 preserve the wheel, while full host reset clears it. Ignore invalid channels/values. Range editing, RPNs, MPE, aftertouch, controller lanes and external MIDI-device UI remain separate work. These are explicit Halftrack defaults, not measured reference-instrument equivalence.
+
+
+## Oscillator expansion defaults
+
+Retain saved waveform values 0 (saw) and 1 (square at default width), then add 2 (sine) and 3 (white noise). Pulse width is a normalized 0–1 patch parameter, default 1; map it to 0–50% duty so 100% remains square, consistent with the public workflow description. Use an original zero-mean band-limited pulse; width zero has zero oscillator output. Preserve phase/envelope/filter state when changing controls, and use deterministic per-voice noise for repeatable offline renders. Noise sequence, exact width mapping between endpoints, DC treatment and filter/output response are Halftrack defaults pending controlled reference measurements. Existing projects lacking the field keep their previous square sound. This increment does not claim reconstruction of an entire reference instrument or its dual-oscillator/filter/modulation architecture.

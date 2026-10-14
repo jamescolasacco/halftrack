@@ -22,6 +22,7 @@ void SubtractiveSynthDSP::reset() noexcept
 void SubtractiveSynthDSP::setSettings (const Session::SynthSettings& next) noexcept
 {
     settings = next;
+    settings.pulseWidth = std::isfinite (next.pulseWidth) ? std::clamp (next.pulseWidth, 0.0f, 1.0f) : 1.0f;
     const auto g = std::tan (juce::MathConstants<double>::pi * std::clamp (double (settings.cutoffHz), 20.0, sampleRate * 0.45) / sampleRate);
     const auto damping = 2.0 - 1.95 * settings.resonance;
     a1 = 1.0 / (1.0 + g * (g + damping));
@@ -62,6 +63,10 @@ void SubtractiveSynthDSP::noteOn (int channel, int pitch, float velocity) noexce
                                       * pitchRatios[static_cast<size_t> (channel - 1)] / sampleRate);
     chosen->velocity = std::clamp (velocity, 0.0f, 1.0f);
     chosen->stage = 1; chosen->age = ++nextAge;
+    // A repeatable, nonzero per-note seed; host reset restarts the sequence.
+    chosen->noiseState = 0x9e3779b9u ^ (static_cast<uint32_t> (chosen->age) * 0x85ebca6bu)
+                         ^ (static_cast<uint32_t> (pitch) << 8) ^ static_cast<uint32_t> (channel);
+    if (chosen->noiseState == 0) chosen->noiseState = 1;
 }
 void SubtractiveSynthDSP::release (Voice& voice) noexcept
 {
@@ -145,9 +150,19 @@ void SubtractiveSynthDSP::render (float* left, float* right, int samples) noexce
             auto oscillator = 2 * phase - 1 - polyBlep (phase, voice.increment);
             if (settings.waveform == 1)
             {
-                auto shifted = phase + 0.5;
+                const double duty = settings.pulseWidth * 0.5;
+                auto shifted = phase + (1.0 - duty);
                 if (shifted >= 1) shifted -= 1;
-                oscillator = (phase < 0.5 ? 1.0 : -1.0) + polyBlep (phase, voice.increment) - polyBlep (shifted, voice.increment);
+                oscillator = duty == 0 ? 0 : (phase < duty ? 1.0 : -1.0)
+                    + polyBlep (phase, voice.increment) - polyBlep (shifted, voice.increment) - (2 * duty - 1);
+            }
+            else if (settings.waveform == 2)
+                oscillator = std::sin (juce::MathConstants<double>::twoPi * phase);
+            else if (settings.waveform == 3)
+            {
+                auto& noise = voice.noiseState;
+                noise ^= noise << 13; noise ^= noise >> 17; noise ^= noise << 5;
+                oscillator = static_cast<double> (noise >> 8) / 8388608.0 - 1.0;
             }
             voice.phase += voice.increment;
             if (voice.phase >= 1) voice.phase -= 1;
@@ -215,6 +230,7 @@ Session::SynthSettings SubtractiveSynthPlugin::getSettings() const
     s.releaseSeconds = state.getProperty ("releaseSeconds", s.releaseSeconds);
     s.level = state.getProperty ("level", s.level);
     s.waveform = state.getProperty ("waveform", s.waveform);
+    s.pulseWidth = state.getProperty ("pulseWidth", s.pulseWidth);
     const Session::SynthSettings defaults;
     auto safe = [] (float value, float low, float high, float fallback)
     { return std::isfinite (value) ? std::clamp (value, low, high) : fallback; };
@@ -225,7 +241,8 @@ Session::SynthSettings SubtractiveSynthPlugin::getSettings() const
     s.sustain = safe (s.sustain, 0, 1, defaults.sustain);
     s.releaseSeconds = safe (s.releaseSeconds, 0, 20, defaults.releaseSeconds);
     s.level = safe (s.level, 0, 1, defaults.level);
-    s.waveform = std::clamp (s.waveform, 0, 1);
+    s.waveform = std::clamp (s.waveform, 0, 3);
+    s.pulseWidth = safe (s.pulseWidth, 0, 1, defaults.pulseWidth);
     return s;
 }
 void SubtractiveSynthPlugin::setSettings (const Session::SynthSettings& s)
@@ -240,6 +257,7 @@ void SubtractiveSynthPlugin::setSettings (const Session::SynthSettings& s)
     state.setProperty ("releaseSeconds", s.releaseSeconds, undo);
     state.setProperty ("level", s.level, undo);
     state.setProperty ("waveform", s.waveform, undo);
+    state.setProperty ("pulseWidth", s.pulseWidth, undo);
     writingSettings = false;
     publishSettings();
 }

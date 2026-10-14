@@ -116,7 +116,8 @@ Session::SynthSettings packet (int sequence)
     Session::SynthSettings result;
     result.cutoffHz = float (100 + sequence);
     result.resonance = float (sequence % 100) / 100.0f;
-    result.waveform = sequence % 2;
+    result.waveform = sequence % 4;
+    result.pulseWidth = float (sequence % 101) / 100.0f;
     return result;
 }
 }
@@ -143,7 +144,8 @@ int runRealtimeTests()
         {
             for (int pass = 0; pass < 32; ++pass)
             {
-                settings.waveform = pass % 2;
+                settings.waveform = pass % 4;
+                settings.pulseWidth = float (pass % 3) * 0.5f;
                 settings.cutoffHz = 100.0f + pass * 400.0f;
                 synth.setSettings (settings);
                 synth.pitchWheel (1, pass % 2 == 0 ? 0 : 16383);
@@ -217,7 +219,7 @@ int runRealtimeTests()
             consumerCalls.deallocations += calls.deallocations;
             if (! popped) { std::this_thread::yield(); continue; }
             const auto expected = packet (received);
-            coherent = next.cutoffHz == expected.cutoffHz && next.resonance == expected.resonance && next.waveform == expected.waveform;
+            coherent = next.cutoffHz == expected.cutoffHz && next.resonance == expected.resonance && next.waveform == expected.waveform && next.pulseWidth == expected.pulseWidth;
             ++received;
         }
         abort.store (true, std::memory_order_relaxed);

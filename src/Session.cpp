@@ -1278,7 +1278,8 @@ Result Session::setSynthSettings (const String& trackId, const SynthSettings& se
     if (! valid (settings.cutoffHz, 20, 20000) || ! valid (settings.resonance, 0, 1)
         || ! valid (settings.attackSeconds, 0, 10) || ! valid (settings.decaySeconds, 0, 10)
         || ! valid (settings.sustain, 0, 1) || ! valid (settings.releaseSeconds, 0, 20)
-        || ! valid (settings.level, 0, 1) || settings.waveform < 0 || settings.waveform > 1)
+        || ! valid (settings.level, 0, 1) || ! valid (settings.pulseWidth, 0, 1)
+        || settings.waveform < 0 || settings.waveform > 3)
         return Result::fail ("Synthesizer settings are outside their supported range.");
     impl->transaction ("Synthesizer settings"); synth->setSettings (settings); impl->changed(); return Result::ok();
 }

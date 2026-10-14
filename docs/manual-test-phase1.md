@@ -132,3 +132,8 @@ Run these only with an intentionally supplied generated source and selected hard
 For each exercised ID, write `PASS`, `FAIL`, or `BLOCKED` with the exact observation. Keep `NOT RUN` for every untouched row. Include the commit and platform on every report, and link generated evidence where useful. A passing Mac check does not advance Windows or Linux status. Headless CI does not complete the GUI or hardware rows.
 
 Before handoff, list the remaining failures and unsupported controls plainly. The known dependency locks in the realtime audit remain a limitation even if this checklist passes.
+
+
+## Oscillator controls
+
+Optional two-minute check, **NOT RUN** through physical mouse/audio delivery: create a MIDI track, draw a sustained note, and play it. In the built-in instrument choose Saw, Pulse, Sine and Noise; each should sound different. Pulse enables its width control: 100% is the existing square, smaller values narrow it, and zero silences its oscillator after any filter tail. Other modes disable width but retain its value. Change width, undo, redo, save and reopen; the mode/value and sound should return. Use a disposable project and an intentional output. Automated fixtures separately cover production UI handlers and complete rendered stereo buffers.

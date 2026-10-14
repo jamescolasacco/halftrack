@@ -18,8 +18,8 @@ public:
     struct SynthSettings
     {
         float cutoffHz = 5000, resonance = 0.15f, attackSeconds = 0.01f, decaySeconds = 0.12f;
-        float sustain = 0.65f, releaseSeconds = 0.25f, level = 0.15f;
-        int waveform = 0; // 0 = saw, 1 = square.
+        float sustain = 0.65f, releaseSeconds = 0.25f, level = 0.15f, pulseWidth = 1.0f;
+        int waveform = 0; // 0 = saw, 1 = pulse (default square), 2 = sine, 3 = white noise.
     };
     struct MidiNoteInfo
     {

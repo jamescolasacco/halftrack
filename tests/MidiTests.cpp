@@ -556,6 +556,206 @@ void pitchWheelCallbackTests()
 
 }
 
+void oscillatorContractTests()
+{
+    // Independent sine input through a direct-form bilinear low-pass, evaluated
+    // offline at 440 Hz / 48 kHz with a 4.8 kHz cutoff and unity envelope.
+    constexpr std::array<float, 16> sineReference {
+        0.0000000000f, 0.0034619766f, 0.0173643557f, 0.0444233412f,
+        0.0820874596f, 0.1270060285f, 0.1763819598f, 0.2281903969f,
+        0.2810504561f, 0.3340379057f, 0.3865277173f, 0.4380823874f,
+        0.4883791413f, 0.5371648744f, 0.5842292587f, 0.6293891558f
+    };
+    SubtractiveSynthDSP synth;
+    synth.prepare (48000);
+    auto settings = flatSettings(); settings.waveform = 2;
+    synth.setSettings (settings); synth.noteOn (1, 69, 1);
+    std::array<float, 16> audio {};
+    synth.render (audio.data(), nullptr, static_cast<int> (audio.size()));
+    bool matches = true;
+    for (size_t i = 0; i < audio.size(); ++i)
+        matches = matches && std::isfinite (audio[i]) && std::abs (audio[i] - sineReference[i]) < 1.0e-6f;
+    check (matches, "sine oscillator matches independent filtered sample fixture");
+
+    // The original xorshift sequence is specified in the oscillator contract;
+    // these values were filtered independently using the direct-form equation.
+    constexpr std::array<float, 16> noiseReference {
+        -0.0423522658f, -0.1368658797f, -0.1763527645f, -0.0747432775f,
+        0.0853163925f, 0.1228154288f, 0.0960623471f, 0.1533577118f,
+        0.1697246414f, 0.0842179978f, 0.0523284775f, 0.0682284200f,
+        0.0028306478f, -0.0333308884f, 0.0729111282f, 0.1845906477f
+    };
+    synth.reset(); settings.waveform = 3; synth.setSettings (settings);
+    synth.noteOn (1, 69, 1); audio.fill (0); synth.render (audio.data(), nullptr, 16);
+    matches = true;
+    for (size_t i = 0; i < audio.size(); ++i)
+        matches = matches && std::isfinite (audio[i]) && std::abs (audio[i] - noiseReference[i]) < 1.0e-6f;
+    check (matches, "noise oscillator matches independent filtered sample fixture");
+
+    for (int mode = 0; mode < 4; ++mode)
+        for (float width : { 0.0f, 0.5f, 1.0f })
+        {
+            SubtractiveSynthDSP whole, split;
+            settings = flatSettings(); settings.waveform = mode; settings.pulseWidth = width;
+            settings.attackSeconds = 0.003f; settings.level = 0.2f;
+            for (auto* dsp : { &whole, &split })
+            {
+                dsp->prepare (48000); dsp->setSettings (settings);
+                dsp->noteOn (1, 69, 0.8f); dsp->noteOn (16, 64, 0.5f);
+            }
+            std::array<float, 4096> left {}, right {}, partitioned {};
+            whole.render (left.data(), right.data(), 4096);
+            for (int offset = 0; offset < 4096; offset += 31)
+                split.render (partitioned.data() + offset, nullptr, std::min (31, 4096 - offset));
+            check (left == right && left == partitioned, "all oscillator modes/widths preserve stereo and block partitioning");
+            // A control round trip without intervening audio must not restart
+            // envelopes, filter state, phase, or the noise sequence.
+            auto temporary = settings; temporary.waveform = (mode + 1) % 4; temporary.pulseWidth = 0.37f;
+            whole.setSettings (temporary); whole.setSettings (settings);
+            left.fill (0); partitioned.fill (0);
+            whole.render (left.data(), nullptr, 4096); split.render (partitioned.data(), nullptr, 4096);
+            check (left == partitioned, "oscillator control round trip preserves sounding voice histories");
+            whole.reset(); whole.noteOn (1, 69, 0.8f); whole.noteOn (16, 64, 0.5f);
+            left.fill (0); whole.render (left.data(), nullptr, 4096);
+            check (left == right, "reset restarts every oscillator mode deterministically");
+        }
+
+    // Coherent DFT: 440 Hz has exactly 128 samples per cycle at this rate.
+    // A square has no even harmonics; a quarter-duty pulse has a second/first
+    // amplitude ratio near sqrt(1/2), with slight filter/BLEP attenuation.
+    auto harmonic = [] (const auto& samples, int order)
+    {
+        double real = 0, imaginary = 0;
+        for (size_t i = 0; i < samples.size(); ++i)
+        {
+            const double angle = juce::MathConstants<double>::twoPi * order * (i % 128) / 128.0;
+            real += samples[i] * std::cos (angle); imaginary += samples[i] * std::sin (angle);
+        }
+        return std::hypot (real, imaginary) / samples.size();
+    };
+    std::array<float, 16384> square {}, narrow {}, zero {}, warmup {};
+    auto renderPulse = [&] (float width, auto& output)
+    {
+        synth.prepare (56320); settings = flatSettings(); settings.cutoffHz = 14080; settings.pulseWidth = width;
+        synth.setSettings (settings); synth.noteOn (1, 69, 1);
+        warmup.fill (0); synth.render (warmup.data(), nullptr, 16384);
+        synth.render (output.data(), nullptr, 16384);
+    };
+    renderPulse (1, square); renderPulse (0.5f, narrow); renderPulse (0, zero);
+    const auto squareRatio = harmonic (square, 2) / harmonic (square, 1);
+    const auto narrowRatio = harmonic (narrow, 2) / harmonic (narrow, 1);
+    double mean = 0; for (const auto sample : narrow) mean += sample;
+    check (squareRatio < 1.0e-5 && narrowRatio > 0.69 && narrowRatio < 0.72,
+           "pulse width changes the independently predicted harmonic structure");
+    check (std::abs (mean / narrow.size()) < 1.0e-6 && std::all_of (zero.begin(), zero.end(), [] (float v) { return v == 0; }),
+           "narrow pulse removes DC and zero width is silent");
+
+    settings = flatSettings(); settings.waveform = 3;
+    std::array<float, 1024> first {}, otherChannel {}, laterNote {};
+    synth.prepare (48000); synth.setSettings (settings); synth.noteOn (1, 69, 1); synth.render (first.data(), nullptr, 1024);
+    synth.reset(); synth.noteOn (16, 69, 1); synth.render (otherChannel.data(), nullptr, 1024);
+    synth.reset(); synth.noteOn (1, 69, 1); synth.controlChange (1, 120, 0);
+    synth.noteOn (1, 69, 1); synth.render (laterNote.data(), nullptr, 1024);
+    check (first != otherChannel && first != laterNote, "noise voices on different channels and repeated notes have distinct sequences");
+}
+
+void oscillatorProjectTests (const juce::File& directory)
+{
+    Session session (false);
+    ok (session.addMidiTrack ("Oscillator patches"), "create oscillator integration track");
+    const auto id = instrument (session).id;
+    ok (session.addMidiClip (id, 0, 1), "create short oscillator render clip");
+    ok (session.addMidiNote (instrument (session).clips[0].id, 69, 0, 0.75, 1), "add oscillator fixture note");
+    const auto project = directory.getChildFile ("Oscillator.halftrack");
+    auto settings = flatSettings(); settings.level = 0.2f;
+    ok (session.setSynthSettings (id, settings), "prepare square baseline");
+    ok (session.saveProject (project), "save oscillator baseline");
+    ok (session.loadProject (project), "clear oscillator edit history");
+    auto render = [&] (const juce::String& name)
+    {
+        const auto file = directory.getChildFile (name + ".wav");
+        ok (session.exportWav (file), "export oscillator " + name);
+        auto reader = readerFor (file);
+        check (reader != nullptr && reader->lengthInSamples == 24000, "oscillator export has the expected duration");
+        juce::AudioBuffer<float> result (2, 24000);
+        check (reader->read (&result, 0, 24000, 0, true, true), "read oscillator export");
+        return result;
+    };
+    auto equal = [] (const auto& a, const auto& b)
+    {
+        for (int channel = 0; channel < 2; ++channel)
+            for (int i = 0; i < 24000; ++i)
+                if (std::abs (a.getSample (channel, i) - b.getSample (channel, i)) > 1.0e-6f) return false;
+        return true;
+    };
+    const auto square = render ("square-baseline");
+    for (const int mode : { 1, 2, 3 })
+    {
+        auto patch = settings; patch.waveform = mode; patch.pulseWidth = 0.37f;
+        ok (session.setSynthSettings (id, patch), "edit oscillator waveform and width");
+        const auto changed = render ("changed-" + juce::String (mode));
+        check (! equal (changed, square), "oscillator edit changes the actual engine output");
+        session.undo();
+        check (instrument (session).synth.waveform == 1 && instrument (session).synth.pulseWidth == 1,
+               "one undo restores both oscillator controls");
+        const auto undone = render ("undone-" + juce::String (mode));
+        check (equal (undone, square), "undo restores the original sound");
+        session.redo();
+        check (instrument (session).synth.waveform == mode && instrument (session).synth.pulseWidth == patch.pulseWidth,
+               "one redo restores the whole oscillator patch");
+        ok (session.saveProject (project), "save changed oscillator patch");
+        ok (session.newProject(), "clear before reopening oscillator patch");
+        ok (session.loadProject (project), "reopen oscillator patch");
+        check (instrument (session).synth.waveform == mode && instrument (session).synth.pulseWidth == patch.pulseWidth,
+               "new oscillator controls survive save and reopen");
+        const auto reopened = render ("reopened-" + juce::String (mode));
+        check (equal (changed, reopened), "saved and reopened oscillator patch reproduces its complete stereo signal");
+        ok (session.setSynthSettings (id, settings), "restore square baseline for next mode");
+        ok (session.saveProject (project), "save reset oscillator baseline");
+        ok (session.loadProject (project), "restore clean baseline history");
+    }
+    for (float width : { -0.1f, 1.1f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() })
+    {
+        auto invalid = settings; invalid.pulseWidth = width;
+        check (session.setSynthSettings (id, invalid).failed() && ! session.canUndo() && ! session.snapshot().dirty
+               && instrument (session).synth.pulseWidth == 1, "invalid width preserves patch and clean history");
+    }
+    for (const int mode : { -1, 4 })
+    {
+        auto invalid = settings; invalid.waveform = mode;
+        check (session.setSynthSettings (id, invalid).failed() && ! session.canUndo() && ! session.snapshot().dirty,
+               "unsupported oscillator mode is rejected without editing");
+    }
+
+    auto xml = juce::parseXML (project);
+    check (xml != nullptr, "parse oscillator legacy fixture");
+    std::function<juce::XmlElement* (juce::XmlElement&)> findSynth;
+    findSynth = [&] (juce::XmlElement& element) -> juce::XmlElement*
+    {
+        if (element.getStringAttribute ("type") == "halftrackSubtractive") return &element;
+        for (auto* child : element.getChildIterator())
+            if (auto* found = findSynth (*child)) return found;
+        return nullptr;
+    };
+    auto* pluginState = findSynth (*xml);
+    check (pluginState != nullptr, "find saved native instrument state");
+    pluginState->removeAttribute ("pulseWidth");
+    const auto legacy = directory.getChildFile ("Legacy-oscillator.halftrack");
+    check (xml->writeTo (legacy), "write project without the new width field");
+    ok (session.loadProject (legacy), "load legacy oscillator project");
+    check (instrument (session).synth.pulseWidth == 1, "missing width defaults to the original square setting");
+    const auto legacyAudio = render ("legacy-square");
+    check (equal (legacyAudio, square), "old project retains its original square audio");
+    for (const auto value : { "nan", "inf", "2", "-1" })
+    {
+        pluginState->setAttribute ("pulseWidth", value);
+        check (xml->writeTo (legacy), "write out-of-range serialized width fixture");
+        ok (session.loadProject (legacy), "load sanitized oscillator state");
+        check (instrument (session).synth.pulseWidth == (juce::String (value) == "-1" ? 0.0f : 1.0f),
+               "serialized width uses finite clamping and nonfinite legacy fallback");
+    }
+}
+
 void coreTests()
 {
     // Independent reference: bilinear-transform second-order analog low-pass,
@@ -620,12 +820,14 @@ int runMidiTests (const juce::File& requestedDirectory)
 {
     try
     {
+        oscillatorContractTests();
         pitchWheelCallbackTests();
         pitchWheelStateTests();
         controllerReleaseTests();
         coreTests();
         auto directory = requestedDirectory.getChildFile ("midi-" + juce::Uuid().toString());
         ok (directory.createDirectory(), "create isolated MIDI artifacts");
+        oscillatorProjectTests (directory);
         batchEditTests (directory);
         insertRemoveBatchTests (directory);
         Session session (false);
