@@ -24,7 +24,7 @@ There are **170 behavior/scope rows** and **105 device/content rows** in this in
 
 ## Current Session subset
 
-Engine `8606b05`, persistence/test integration `0f9e217`, and UI `16cb96b` pass the local Apple Silicon macOS launcher, UI-handler and session subsets. See [measured cases and limits](preview-verification.md#session-extension-local-verification). This is not complete Session parity or a current full-suite/CI pass. The new offline-latency edge correction passed its focused suite in 17.40 seconds; the expanded empty-slot takeover suite also passes in 3.75 seconds, while complete integration remains pending. Native Session manual checks UI-21 through UI-33 and physical hardware checks remain NOT RUN. Earlier platform passes apply only to their named source revisions.
+The Session/export checkpoint `5961295` passes macOS, Windows and Linux CI. The newer plug-in checkpoint `727c36e` passes all seven local Mac suites in 88.10 seconds; its remote CI is pending. See [measured cases and limits](preview-verification.md#session-extension-local-verification). This is scoped implementation evidence, not complete Session parity. Manual checks UI-21 through UI-33 and physical hardware remain NOT RUN.
 
 ## Original preview acceptance record
 
@@ -32,15 +32,15 @@ The original audio-preview subset passed locally in **12.66 seconds** at `a6f7e2
 
 | ID | Capability / target | Acceptance evidence and remaining gap | Status |
 | --- | --- | --- | --- |
-| PRE-001 | Launch and honest status | Native Mac launch was observed after the browser stopped scanning Music at startup; chosen-directory scanning runs asynchronously. Current Session platform/CI results remain pending. | PARTIAL — Mac launch observed |
+| PRE-001 | Launch and honest status | Native Mac launch was observed after the browser stopped scanning Music at startup; chosen-directory scanning runs asynchronously. Session/export builds and tests pass across all three CI platforms at `5961295`; physical GUI parity remains unverified. | PARTIAL — Mac launch observed |
 | PRE-002 | Device selection | Earlier GUI reported CoreAudio built-in output, 96 kHz / 512 samples, no input. No-device guards and virtual-device inputs passed. Hardware switching, permissions, hot-plug, and latency remain pending. | PARTIAL — observed output configuration |
 | PRE-003 | Record a take | Generated input passed the real recording graph; stop created a WAV clip with expected rate, duration bounds, and signal. Export and save passed. Physical/acoustic capture and alignment remain pending. | PARTIAL — Mac synthetic capture |
 | PRE-004 | Import and arrange audio | Earlier GUI imported four generated stems, showed waveforms, fitted the timeline, and played/stopped with advancing transport. API clip gesture undoes once. GUI clip placement/movement and seek checks remain pending. | PARTIAL — Mac import/playback observed |
 | PRE-005 | Basic mix | Two-track summing, gain, pan, mute, solo, and grouped gain/pan undo passed API checks. GUI track/master meters were active. GUI mixer gestures and Windows remain pending. | PARTIAL — automated mix; meters observed |
-| PRE-006 | Plug-in audition | Controlled VST3 discovery, instantiation, parameter change, processing, state round trip, bypass, and removal passed. Editor interactions, AU, arbitrary plug-ins, and Windows remain pending. | PARTIAL — controlled Mac VST3 |
+| PRE-006 | Plug-in audition | Controlled VST3 discovery, instantiation, parameter change, processing, state round trip, bypass, and removal passed. Controlled AUv2 processing/state and generated custom/generic editor lifecycle now pass locally at `727c36e`. Worker completion, AUv3, arbitrary vendor plug-ins and native input delivery remain separate checks. | PARTIAL — controlled Mac VST3/AUv2 |
 | PRE-007 | Export | 48 kHz WAV PCM and duration passed; a two-second extension produces 144,000 frames from a one-second dry source. Worker cancellation dispatches messages and preserves existing output bytes. Native Mac export was decoded independently; the rate/depth matrix, actual effect tails, and current candidate platform results remain pending. | PARTIAL — Mac API export/cancel |
 | PRE-008 | Save and reopen | Portable project/media, track name, tempo, loop, rendered audio, and VST3 state passed; invalid load retained the edit. Clean/dirty initialization regressions passed. Native Mac audio-demo save/reopen was observed; complete state coverage remains pending. | PARTIAL — tested API cases |
-| PRE-009 | Basic stability | Original preview workflows and scoped continued Session tests passed; the browser stall was repaired. Repeated device changes, arbitrary plug-in editor lifetime, and long-session checks remain pending. Full integration after the latest empty-slot takeover change remains pending. | PARTIAL — bounded automated/GUI evidence |
+| PRE-009 | Basic stability | Original preview workflows and scoped continued Session tests passed; the browser stall was repaired. Repeated device changes, arbitrary plug-in editor lifetime, and long-session checks remain pending. Full integration passes locally at `727c36e`; its newer plug-in remote CI remains pending. | PARTIAL — bounded automated/GUI evidence |
 | PRE-010 | Preview handoff | Runnable preview delivered; latest owner instructions authorize further research and implementation. | HANDOFF COMPLETE — former gate superseded |
 
 ## Audio backend, device lifecycle, and recording alignment

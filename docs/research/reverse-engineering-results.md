@@ -49,7 +49,7 @@ The continued task adds an original durable coordinator (`scripts/bulk_decompile
 
 The initial conservative preparation pass is retained separately: 3,271 completed outputs, 362 preparation failures and one interrupted entry. Most sampled failures were declared starts inside a provisional containing function. Letting Ghidra reconcile those entries recovered all 21 such failures in the corrected 128-entry pilot. Its remaining entry did not decode as ARM64 instructions in either Ghidra or independent LLVM inspection; it stays an explicit failure. A declared function-start table is not proof that every listed location is a valid semantic function.
 
-The corrected full ARM64 sweep (`bulk-pass2`) is running in batches of 1,024, with a 4 GiB Java heap, two analysis CPUs, 10/20-second preparation/decompilation limits and a 600-second batch ceiling. Broad automatic analysis remains disabled. At **2026-10-13 23:44:50 UTC**, an independent read-only database snapshot contained **11,389 completed outputs, three decode failures and 381,534 unattempted entries**. All 11,389 completed files were present, nonempty and matched their recorded SHA-256. The active batch was excluded from that snapshot. These counts are a dated checkpoint, not a whole-program completion claim; current local progress is in the append-only sweep log and coverage database.
+The corrected full ARM64 sweep (`bulk-pass2`) is running in batches of 1,024, with a 4 GiB Java heap, two analysis CPUs, 10/20-second preparation/decompilation limits and a 600-second batch ceiling. Broad automatic analysis remains disabled. At **2026-10-14 00:34:22 UTC**, an independent read-only database snapshot contained **62,575 completed outputs, ten failures, seven timeouts and 330,334 unattempted entries**. All 62,575 completed files were present, nonempty and matched their recorded SHA-256 (130,933,193 bytes total). The read transaction was closed before hashing the frozen file list. The active batch was excluded from that snapshot. These counts are a dated checkpoint, not a whole-program completion claim; current local progress is in the append-only sweep log and coverage database.
 
 The private `coverage-check-*.json` records retain that independent verification. Pass folders, request hashes and per-address journals distinguish failures, timeouts, interruptions and entries never attempted. No output count establishes recovered source semantics, full function boundaries, a completed device or a matching application. The [runbook](reverse-engineering-runbook.md#resumable-inventory-sweep) documents continuation and evidence checks.
 
@@ -65,7 +65,11 @@ A separate Linux link correction (`a93b813`) adds the runtime required by the en
 
 1. Retain the selected-function manifest and investigate unresolved types/calls only for a concrete behavior question.
 2. Build a paired deterministic reference-output corpus; distinguish exact equality from measured tolerance and nondeterministic cases.
-3. Add nonzero-latency/event-context plug-in fixtures and exact recording-placement tests.
+3. Extend the now-passing nonzero-latency export oracle to event context and exact recording placement; complete-window export evidence is in [the regression report](export-latency-regression.md).
 4. Validate native UI gestures and physical device behavior independently on each supported platform.
 
 Whole-product identity, complete device reconstruction, every plug-in format and physical hardware parity remain unachieved. The reports identify a testable route forward and explicitly preserve unknowns.
+
+## Reference interaction limitation
+
+The installed reference was reopened during continued work, but macOS denied automated window access from the terminal (Accessibility error -25211). No reference project was edited or microphone captured. Automated firsthand comparisons therefore remain blocked in this environment; no alternate control path was used to bypass that denial. Offline implementation and original-fixture testing continue independently.

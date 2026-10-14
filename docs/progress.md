@@ -1,6 +1,6 @@
 # Halftrack progress
 
-Updated 2026-10-13. Active work continues beyond the delivered preview: native Session launching, complete-window plug-in compensation, and resumable local reference analysis. The numbered roadmap is not an active restriction. Current source is published through `195bcd0`; its three-platform CI is pending.
+Updated 2026-10-13. Active work continues beyond the delivered preview: native Session launching, complete-window plug-in compensation, and resumable local reference analysis. The numbered roadmap is not an active restriction. Published source `5961295` passes [CI on macOS, Windows and Linux](https://github.com/jamescolasacco/halftrack/actions/runs/38490535827). Plug-in integration `727c36e` is published and passes seven local suites in 88.10 seconds; its remote CI is pending. Sends/returns and worker-thread plug-in completion are the next active tasks.
 
 ## Working and evidenced
 
@@ -17,7 +17,7 @@ Updated 2026-10-13. Active work continues beyond the delivered preview: native S
 - Engine MIDI tracks/clips/notes and built-in polyphonic synth pass deterministic DSP, undo, saturated FIFO and persistence tests. Export reentrancy now rejects edits/project replacement while the worker owns its graph, with a cancellation/preservation regression.
 - UI: piano roll and synth editing compile. Browser relaunch is verified. Actual editor handler and hit-test regressions pass. Native automation grid input is inconclusive; physical mouse delivery remains unverified.
 - Persistence/root: MIDI project round-trip checks, architecture/ownership contract, branding/research retirement, packaging and Signalsmith selection.
-- QA: final source at `1294f5b` passes macOS, Windows and Linux CI, including parser tests, native acceptance and packaging. This verifies both the active-recording fix and the Windows patch-writing correction. Physical hardware and native GUI checks remain separate. The workflow targets macOS 15 and requires AppleClang 17+.
+- QA: source at `5961295` passes macOS, Windows and Linux CI, including parser tests, native acceptance and packaging. This verifies both the active-recording fix and the Windows patch-writing correction. Physical hardware and native GUI checks remain separate. The workflow targets macOS 15 and requires AppleClang 17+.
 
 ## Missing, not stubbed controls
 
@@ -25,7 +25,7 @@ Additional Session launch modes, follow actions, Session recording, full MIDI ex
 
 ## Known issues / verification remaining
 
-- Browser relaunch and GUI audio save/reopen/export passed. MIDI grid input through native automation and plug-in editor lifetime checks remain pending.
+- Browser relaunch and GUI audio save/reopen/export passed. MIDI grid input through native automation remains unverified. Generated custom/generic plug-in editor lifetime tests now pass; arbitrary vendor/native-input checks remain pending.
 - Whole-host strict callback safety is not met: the dependency has locks and recording fallback allocations; see docs/realtime-safety.md.
 - The earlier recording loss is fixed and verified locally and in all three platform CI jobs. Earlier ac20d09 is a historical package containing the discovered defect; use the final refreshed draft.
 - No measured physical input latency, acoustic loopback, deadline stress, or arbitrary plug-in real-time safety evidence.
@@ -134,3 +134,21 @@ Asynchronous editor ownership extension: root authorized the UI agent to add `te
 Integrated empty-slot/export checkpoint: the complete four-test native suite passes in **69.62 seconds** (latency 15.57 s, UI 0.83 s, launcher 3.59 s, session 49.61 s), including root's finite-sample oracle checks. Engine commit `b24cb42` owns silent empty targets through source insertion, graph rebuilds and all-scenes deletion; explicit Return restores arrangement playback. Root reconciled architecture, research contract and manual UI-26 expectations after engine released the shared documentation. Those manual checks remain NOT RUN. The new scanner and asynchronous-editor regressions are separate work in progress.
 
 Reference interaction check: the installed application reopened, but macOS refused terminal Accessibility access (osascript error -25211). No reference project was edited or recording captured. Automated firsthand interaction remains unverified in this environment; this does not block independent implementation or offline tests.
+
+### Controlled Audio Unit verification ownership
+
+The engine agent owns new `tests/AudioUnitTests.cpp` and its macOS-only process-local registration helper. Root owns the AU build target and test-dispatch wiring. The fixture remains inside the build directory, is registered only inside test processes, and is never copied into a user Components directory. Existing plug-in UI and scanner files remain with their assigned owners.
+
+Scanner and AUv2 checkpoint: scanner commit `27478dc` passes the real child-process regression in 4.44 seconds; initial combined integration passed it again in 4.23 seconds. AUv2 fixture commit `367b06d` passes in 6.75 seconds with child PID evidence and seven complete-window renders (maximum PCM difference 1.19e-7). Root owns their CMake/Main wiring and documentation. The asynchronous editor suite is intentionally red before correction: early editor requests, failed creation state and redo after undo during loading need resolution. The older four-suite code at `5961295` now passes all three CI platforms; this does not certify these newer changes.
+
+Scanner retry follow-up ownership: root authorized QA to extend the scanner patch and native regression after review found that infrastructure launch failure incorrectly blacklisted an untested plug-in. The regression must retry on the same known-plug-in list without clearing its blacklist; deliberate child crashes must remain blacklisted. Root retains build scheduling and final source-pin/documentation integration.
+
+Async completion diagnosis extension: root authorized the UI agent to extend the pinned ExternalPlugin.cpp correction to detached callback completion and its existing track-properties reattachment hook. The red lifecycle test proves that completing a plug-in after undoing its insertion destroys redo history (canRedo changes from true to false). The correction must retain undo/redo restoration and also test attached completion against unrelated redo; no general UndoManager or launcher changes are included.
+
+Scanner retry follow-up: independent review found that the first fail-closed branch classified scanner startup failure as a plug-in crash, causing a persistent blacklist entry. A same-list retry regression failed in 0.42 seconds and passes in 4.08 seconds after `de9a0d0`. No blacklist reset occurs between the failed launch and the successful retry; real child crashes still blacklist. Root retains integration wiring and final publication.
+
+Send/return ownership: root authorized the engine agent to prepare `tests/SendReturnTests.cpp` while Session remains with the UI agent for editor lifecycle fixes. No send API or controls are claimed as implemented yet. The accepted native-aux contract uses stable destination IDs, strict load validation, original audio fixtures and undo/redo; combined solo behavior is recorded as an explicit working default in open-questions. Root retains Main/CMake wiring, shared build coordination and final documentation.
+
+Integrated plug-in checkpoint: root wiring `727c36e` and UI lifecycle fix `6f4b63c` pass all seven local suites in **88.10 seconds** (AUv2 6.13 s, editor 3.31 s, scanner 4.15 s, latency 16.74 s, UI 0.87 s, launcher 3.69 s, session 53.19 s). Editor tests now verify actual custom/generic contents, processor registration, close/reopen, removal/undo/redo, track deletion and project replacement, detached completion and unrelated redo preservation. The host teardown omission was separate from the engine async-state defect. Root published this source checkpoint; remote CI is pending.
+
+Worker-completion ownership: independent review confirmed JUCE permits creation callbacks on other threads. Root assigned the QA reviewer only `tests/PluginEditorTests.cpp` and `cmake/PatchAsyncPlugin.cmake` for a deterministic callback-thread regression and narrowly demonstrated fix. Engine now owns Session/header and the new send/return tests; UI will consume the documented routing facade. The passing message-thread tests above do not establish worker completion safety.

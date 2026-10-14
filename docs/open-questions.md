@@ -11,3 +11,9 @@
 ## Reverse-engineering direction (2026-10-13)
 
 The owner now authorizes local binary analysis/decompilation and prioritizes the closest possible match over the earlier clean-room process. Original Halftrack code remains under the existing AGPL license; this does not relicense extracted third-party material. Default: keep binary/decompiler artifacts local and ignored, publish original tooling and factual summaries only. The absolute-zero-difference target needs explicit coverage of inputs, versions, hardware and nondeterministic behavior; no finite test run establishes every possible state. Hardware/account/cloud access is not expanded by this instruction.
+
+## Sends and returns: implementation defaults
+
+Use native auxiliary buses with return tracks feeding the main mix. Start with no returns; creating one selects Post, unity return gain, and every source send Off. Pre sends follow source effects but precede source pan, gain and explicit mute; Post follows those controls. Return-to-return sends, feedback and separate hardware output remain outside this first routing increment.
+
+The public mixer description does not fully enumerate combined source/return solos. Default: keep a feed when nothing is soloed, its source is soloed, or its destination return is soloed, then apply explicit source mute to Post feeds. Keep required returns audible for a soloed source. This combined rule must pass Halftrack's audio tests and remains unverified against the reference application. Return identity is a stable track ID, never its name or position. See the [primary workflow description](https://www.ableton.com/en/live-manual/12/mixing/).

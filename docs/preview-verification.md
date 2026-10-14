@@ -4,7 +4,9 @@ Evidence date: **2026-10-13**. This records the original audio/MIDI preview and 
 
 ## Session extension: local verification
 
-The continued Session implementation is recorded by engine commit `8606b05`, persistence/test integration `0f9e217`, and native UI commit `16cb96b`. The local Apple Silicon macOS Release build passed `launcher-acceptance`, `ui-acceptance`, and `session-acceptance` for this integration. The UI suite took **0.85 seconds**; the expanded launcher suite, including empty-slot takeover, passed in **3.75 seconds**. These are passing subsets, **not a green full-suite or current CI result**. The separate nonzero-latency edge tests exposed view-offset and partial-block export defects; the combined correction in `195bcd0` now passes `latency-acceptance` in **17.40 seconds**. Ten boundary exports cover 48000 and 64 frames at delays of 127, 254, 381, 508 and 635 samples, with exact length, finite values, and zero error against the dry graph reference. This is offline render evidence. The expanded empty-slot takeover suite also passes, but the complete integration rerun and current remote CI remain pending. Earlier CI passes below predate these commits.
+The Session, export-boundary and empty-slot work passes all three platform jobs at source `5961295` in [CI 38490535827](https://github.com/jamescolasacco/halftrack/actions/runs/38490535827). The following plug-in checkpoint `727c36e` passes all **seven local macOS suites in 88.10 seconds**: AUv2 6.13 s, editor 3.31 s, scanner 4.15 s, latency 16.74 s, UI 0.87 s, launcher 3.69 s, and session 53.19 s. Remote CI for this newer checkpoint is pending.
+
+The controlled VST3 latency oracle verifies 17 complete-window comparisons, including ten 48000/64-frame edge exports at 127 through 635 samples of graph latency. Those ten boundary exports also independently decode bit-identically to their dry references. The scanner suite verifies real child construction, startup failure without host fallback or false blacklisting, actual-crash blacklisting, cancellation and recovery. AUv2 discovery/processing/state/bypass/removal passes with a process-local generated component and no installation. Nine asynchronous editor scenarios establish message-thread lifecycle behavior; worker-delivered completion remains a separate follow-up. These are original-fixture checks, not full plug-in or reference-product equivalence.
 
 The generated launcher cases are in [LauncherTests.cpp](../tests/LauncherTests.cpp), production UI-handler cases in [MainComponent.cpp](../src/MainComponent.cpp), rejected-load cases in [PersistenceTests.cpp](../tests/PersistenceTests.cpp), and the export comparisons in [LatencyTests.cpp](../tests/LatencyTests.cpp).
 
@@ -26,7 +28,7 @@ ctest --test-dir build -R '^(session-acceptance|launcher-acceptance|ui-acceptanc
 
 Optional `HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY` output captures the actual original JUCE interface using `createComponentSnapshot`, with nonempty generated audio/MIDI slots. Four PNGs were produced at 1100x720 and 1440x900 for Session and its piano editor. The Session 1100x720 and piano 1440x900 images were visually inspected and were readable without clipping. This verifies those rendered layouts, not interactive delivery, acoustic output, every scaling factor, or other operating systems.
 
-Manual Session checks **UI-21 through UI-33 remain NOT RUN** in the [checklist](manual-test-phase1.md#session-and-launcher-checks). Physical input, monitoring, loopback, hot-plug, timing and stress checks remain unmeasured. Current candidate Windows/Linux and remote CI results are pending; historical platform evidence below applies only to its named commits.
+Manual Session checks **UI-21 through UI-33 remain NOT RUN** in the [checklist](manual-test-phase1.md#session-and-launcher-checks). Physical input, monitoring, loopback, hot-plug, timing and stress checks remain unmeasured. Session/export platform results pass at `5961295`; remote CI for the newer plug-in checkpoint remains pending. Historical evidence below applies only to its named commits.
 
 ## Initial automated evidence
 
@@ -49,7 +51,7 @@ The initial combined Release acceptance executable passed on Apple Silicon macOS
 
 Tests are in `tests/SessionTests.cpp`, `tests/MidiTests.cpp`, `tests/PersistenceTests.cpp`, `tests/RealtimeTests.cpp` and `tests/realtime_audit.py`. Generated signals, projects, logs and diagnostic exports stay in ignored build/artifact folders. No vendor samples, presets or reference recordings are used.
 
-The initial Windows audio build passed [CI run 38439413736](https://github.com/jamescolasacco/halftrack/actions/runs/38439413736). Its macOS 14 job exposed an older upstream-incompatible compiler. The workflow targets macOS 15, Windows 2022 and Ubuntu 24.04. Subsequent results for the earlier preview are recorded below; the current Session extension has no remote result recorded here. Do not infer physical driver or native UI parity from a compile/test pass.
+The initial Windows audio build passed [CI run 38439413736](https://github.com/jamescolasacco/halftrack/actions/runs/38439413736). Its macOS 14 job exposed an older upstream-incompatible compiler. The workflow targets macOS 15, Windows 2022 and Ubuntu 24.04. Subsequent results for the earlier preview are recorded below; the Session/export extension passes at `5961295` as recorded above. Do not infer physical driver or native UI parity from a compile/test pass.
 
 ## Native app observations
 
@@ -66,7 +68,7 @@ The [eight-minute smoke path and extended checklist](manual-test-phase1.md) dist
 
 The current implementation contains native audio and MIDI editing, a Session clip/scene launcher with None/Beat/Bar quantization, one polyphonic subtractive synth, basic track mixing, audio device controls, arrangement recording, portable projects, external plug-in hosting and arrangement WAV export. Its UI uses an original dark/amber identity and editable SVG mark.
 
-The complete target remains much larger: additional launch modes, follow actions, Session recording and performance capture, automation, sends/returns and advanced routing, racks/macros, full instruments/effects, warp-marker editing, comping/slicing, MIDI expression/tuning, CLAP hosting, recovery and library management are unfinished. AU hosting is enabled on macOS but not verified here. No controls are described as implemented merely because a drawing exists.
+The complete target remains much larger: additional launch modes, follow actions, Session recording and performance capture, automation, sends/returns and advanced routing, racks/macros, full instruments/effects, warp-marker editing, comping/slicing, MIDI expression/tuning, CLAP hosting, recovery and library management are unfinished. Controlled AUv2 hosting is verified on macOS; AUv3 and arbitrary vendor compatibility are not established. No controls are described as implemented merely because a drawing exists.
 
 The requested **whole-host no-lock/no-allocation callback contract is not met by the selected engine**. Dependency callbacks use locks and recording has fallback allocations. Owned synth checks passing do not waive this gap. Existing proprietary project compatibility, a programmable patch environment, branded hardware integration and cloud features are outside the current accepted scope.
 
