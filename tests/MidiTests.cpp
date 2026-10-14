@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 namespace halftrack
@@ -34,6 +35,103 @@ std::unique_ptr<juce::AudioFormatReader> readerFor (const juce::File& file)
 {
     juce::AudioFormatManager manager; manager.registerBasicFormats();
     return std::unique_ptr<juce::AudioFormatReader> (manager.createReaderFor (file));
+}
+bool sameNotes (const std::vector<Session::MidiNoteInfo>& a, const std::vector<Session::MidiNoteInfo>& b)
+{
+    if (a.size() != b.size()) return false;
+    for (const auto& note : a)
+    {
+        const auto found = std::find_if (b.begin(), b.end(), [&] (const auto& other) { return other.id == note.id; });
+        if (found == b.end() || note.pitch != found->pitch || note.startBeat != found->startBeat
+            || note.lengthBeats != found->lengthBeats || note.velocity != found->velocity) return false;
+    }
+    return true;
+}
+void batchEditTests (const juce::File& directory)
+{
+    Session session (false);
+    ok (session.addMidiTrack ("Batch edits"), "create batch edit instrument");
+    const auto trackId = instrument (session).id;
+    ok (session.addMidiClip (trackId, 0, 4), "create batch edit clip");
+    const auto clipId = instrument (session).clips[0].id;
+    ok (session.addMidiNote (clipId, 60, 0, 1, 0.5f), "add first batch note");
+    ok (session.addMidiNote (clipId, 64, 2, 1, 1), "add second batch note");
+    const auto project = directory.getChildFile ("Batch.halftrack");
+    ok (session.saveProject (project), "save batch baseline");
+    ok (session.loadProject (project), "load clean batch baseline");
+    auto current = [&] { return instrument (session).clips[0].notes; };
+    const auto original = current();
+    check (! session.canUndo() && ! session.canRedo() && ! session.snapshot().dirty, "batch baseline is clean without history");
+    auto unchanged = original; unchanged[0].velocity = 0.5f;
+    ok (session.updateMidiNotes (clipId, {}), "empty batch succeeds without editing");
+    ok (session.updateMidiNotes (clipId, unchanged), "native-quantized unchanged batch succeeds without editing");
+    check (sameNotes (current(), original) && ! session.canUndo() && ! session.snapshot().dirty,
+           "empty and quantized unchanged batches preserve clean state");
+
+    auto edited = original;
+    edited[0].pitch = 65; edited[0].startBeat = 0.25; edited[0].lengthBeats = 0.5; edited[0].velocity = 80 / 127.0f;
+    edited[1].pitch = 67; edited[1].startBeat = 2.25; edited[1].lengthBeats = 1.5; edited[1].velocity = 100 / 127.0f;
+    ok (session.updateMidiNotes (clipId, edited), "edit all note fields in one batch");
+    check (sameNotes (current(), edited), "valid batch changes both notes");
+    session.undo();
+    check (sameNotes (current(), original) && ! session.canUndo() && session.canRedo(), "one undo restores whole batch without extra history");
+    auto reject = [&] (const std::vector<Session::MidiNoteInfo>& values, const juce::String& message)
+    {
+        const auto before = current(); const auto dirty = session.snapshot().dirty;
+        const auto undo = session.canUndo(), redo = session.canRedo();
+        check (session.updateMidiNotes (clipId, values).failed() && sameNotes (current(), before)
+               && session.snapshot().dirty == dirty && session.canUndo() == undo && session.canRedo() == redo, message);
+    };
+    auto invalid = edited; invalid[1].lengthBeats = 5;
+    reject (invalid, "invalid later note leaves earlier note, dirty state and redo untouched");
+    invalid = edited; invalid[1].id = "missing";
+    reject (invalid, "missing later ID preserves whole batch and history");
+    invalid = edited; invalid[1].id = invalid[0].id;
+    reject (invalid, "duplicate requested ID preserves whole batch and history");
+    invalid = edited; invalid[1].id.clear();
+    reject (invalid, "empty requested ID preserves whole batch and history");
+    invalid = edited; invalid[1].velocity = std::numeric_limits<float>::quiet_NaN();
+    reject (invalid, "nonfinite later value preserves whole batch and history");
+    ok (session.updateMidiNotes (clipId, {}), "empty batch preserves pending redo");
+    ok (session.updateMidiNotes (clipId, unchanged), "quantized no-op preserves pending redo");
+    check (session.updateMidiNotes ("missing", {}).failed(), "empty batch still validates target clip");
+    session.redo();
+    check (sameNotes (current(), edited) && session.canUndo() && ! session.canRedo(), "redo still reapplies valid batch after rejected and no-op calls");
+    session.undo();
+    session.beginEditGesture ("Group note drag");
+    ok (session.updateMidiNotes (clipId, edited), "begin multi-note gesture");
+    auto dragged = edited; dragged[0].startBeat += 0.125; dragged[1].startBeat += 0.125;
+    ok (session.updateMidiNotes (clipId, dragged), "continue multi-note gesture");
+    session.endEditGesture(); session.undo();
+    check (sameNotes (current(), original) && ! session.canUndo(), "one undo restores every batch in the gesture");
+    session.redo(); check (sameNotes (current(), dragged), "redo restores complete multi-batch gesture");
+
+    auto xml = juce::parseXML (project);
+    check (xml != nullptr, "read saved batch fixture");
+    auto state = juce::ValueTree::fromXml (*xml);
+    std::vector<juce::ValueTree> noteStates;
+    std::function<void (juce::ValueTree)> collect = [&] (juce::ValueTree value)
+    {
+        if (value.hasType ("NOTE")) noteStates.push_back (value);
+        for (auto child : value) collect (child);
+    };
+    collect (state); check (noteStates.size() == 2, "find both serialized fixture notes");
+    noteStates[1].setProperty ("l", 4.0, nullptr);
+    const auto overhang = directory.getChildFile ("Overhang.halftrack");
+    check (state.createXml()->writeTo (overhang), "write accepted overhanging note fixture");
+    ok (session.loadProject (overhang), "load existing overhanging MIDI note");
+    auto velocities = current(); velocities[0].velocity = 0.25f; velocities[1].velocity = 0.5f;
+    reject (velocities, "overhanging later note cannot partially apply a group velocity edit");
+    noteStates[1].setProperty ("l", 1.0, nullptr);
+    noteStates[1].setProperty ("halftrackNoteId", noteStates[0].getProperty ("halftrackNoteId"), nullptr);
+    const auto duplicate = directory.getChildFile ("Duplicate-ID.halftrack");
+    check (state.createXml()->writeTo (duplicate), "write ambiguous existing note ID fixture");
+    ok (session.loadProject (duplicate), "load existing duplicate note IDs");
+    auto ambiguous = current()[0]; ambiguous.pitch = 72;
+    const auto before = current();
+    check (session.updateMidiNotes (clipId, { ambiguous }).failed() && current()[0].pitch == before[0].pitch
+           && current()[1].pitch == before[1].pitch && ! session.canUndo() && ! session.snapshot().dirty,
+           "one-item batch rejects an ambiguous native ID without editing either note");
 }
 void coreTests()
 {
@@ -102,6 +200,7 @@ int runMidiTests (const juce::File& requestedDirectory)
         coreTests();
         auto directory = requestedDirectory.getChildFile ("midi-" + juce::Uuid().toString());
         ok (directory.createDirectory(), "create isolated MIDI artifacts");
+        batchEditTests (directory);
         Session session (false);
         ok (session.addMidiTrack ("Synth notes"), "add real MIDI instrument track");
         auto trackId = instrument (session).id;
@@ -195,12 +294,12 @@ int runMidiTests (const juce::File& requestedDirectory)
         {
             eventDispatched = true;
             busyDuringDispatch = session.isExporting() && ! session.canUndo() && ! session.canRedo();
-            const std::array<juce::Result, 10> attempts {
+            const std::array<juce::Result, 11> attempts {
                 session.newProject(), session.loadProject (project), session.saveProject (rejectedSave),
                 session.removeTrack (2), session.addMidiNote (clipId, 60, 0, 1, 1),
                 session.setSynthSettings (trackId, flatSettings()), session.setTrackGain (2, -20),
                 session.addAudioTrack ("Reentrant track"), session.removeClip (2, 0),
-                session.exportWav (nestedOutput)
+                session.exportWav (nestedOutput), session.updateMidiNotes (clipId, restored.clips[0].notes)
             };
             mutationsRejected = std::all_of (attempts.begin(), attempts.end(), [] (const auto& result)
             {

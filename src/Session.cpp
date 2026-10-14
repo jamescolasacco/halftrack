@@ -1162,15 +1162,49 @@ Result Session::addMidiNote (const String& clipId, int pitch, double start, doub
 }
 Result Session::updateMidiNote (const String& clipId, const String& noteId, int pitch, double start, double length, float velocity)
 {
+    return updateMidiNotes (clipId, { { noteId, pitch, start, length, velocity } });
+}
+Result Session::updateMidiNotes (const String& clipId, const std::vector<MidiNoteInfo>& notes)
+{
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
-    auto* note = Impl::note (*clip, noteId); if (! note) return Result::fail ("MIDI note not found.");
-    auto valid = impl->validateNote (*clip, pitch, start, length, velocity); if (valid.failed()) return valid;
-    impl->transaction ("Edit MIDI note");
+    if (notes.empty()) return Result::ok();
+    std::map<String, te::MidiNote*> existing;
+    for (auto* note : clip->getSequence().getNotes())
+    {
+        const auto id = note->state.getProperty (midiNoteIDProperty).toString();
+        auto [entry, inserted] = existing.emplace (id, note);
+        if (! inserted) entry->second = nullptr; // A loaded duplicate ID is ambiguous.
+    }
+    struct Change { te::MidiNote* note; MidiNoteInfo value; int velocity; };
+    std::vector<Change> changes;
+    std::set<String> requested;
+    for (const auto& value : notes)
+    {
+        if (value.id.isEmpty() || ! requested.insert (value.id).second)
+            return Result::fail ("Each MIDI note needs a unique identifier.");
+        const auto found = existing.find (value.id);
+        if (found == existing.end() || found->second == nullptr)
+            return Result::fail ("MIDI note not found or its identifier is ambiguous.");
+        auto valid = impl->validateNote (*clip, value.pitch, value.startBeat, value.lengthBeats, value.velocity);
+        if (valid.failed()) return valid;
+        auto* note = found->second;
+        const int velocity = juce::jlimit (1, 127, juce::roundToInt (value.velocity * 127));
+        if (note->getNoteNumber() != value.pitch || note->getStartBeat().inBeats() != value.startBeat
+            || note->getLengthBeats().inBeats() != value.lengthBeats || note->getVelocity() != velocity)
+            changes.push_back ({ note, value, velocity });
+    }
+    // Resolve and validate the whole batch before touching native state or undo.
+    if (changes.empty()) return Result::ok();
+    impl->transaction ("Edit MIDI notes");
     auto* undo = &impl->edit->getUndoManager();
-    note->setNoteNumber (pitch, undo);
-    note->setStartAndLength (te::BeatPosition::fromBeats (start), te::BeatDuration::fromBeats (length), undo);
-    note->setVelocity (juce::jlimit (1, 127, juce::roundToInt (velocity * 127)), undo);
+    for (const auto& change : changes)
+    {
+        change.note->setNoteNumber (change.value.pitch, undo);
+        change.note->setStartAndLength (te::BeatPosition::fromBeats (change.value.startBeat),
+                                        te::BeatDuration::fromBeats (change.value.lengthBeats), undo);
+        change.note->setVelocity (change.velocity, undo);
+    }
     impl->changed(); return Result::ok();
 }
 Result Session::removeMidiNote (const String& clipId, const String& noteId)

@@ -101,6 +101,7 @@ public:
     juce::Result addMidiNote (const juce::String& clipId, int pitch, double startBeat, double lengthBeats, float velocity);
     juce::Result updateMidiNote (const juce::String& clipId, const juce::String& noteId,
                                  int pitch, double startBeat, double lengthBeats, float velocity);
+    juce::Result updateMidiNotes (const juce::String& clipId, const std::vector<MidiNoteInfo>& notes);
     juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);
     juce::Result setSynthSettings (const juce::String& trackId, const SynthSettings&);
     juce::Result removeTrack (int trackIndex);
