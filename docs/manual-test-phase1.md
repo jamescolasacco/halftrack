@@ -57,6 +57,27 @@ Every row below begins **NOT RUN** for the candidate build. Fill in actual resul
 | UI-19 | Export over an existing disposable destination and cancel while progress is active | The window continues processing input, cancellation completes, and the existing destination bytes remain unchanged. Repeat with a newly chosen path and check no incomplete final file is published. |
 | UI-20 | Open Audio Setup with no input chosen; change output and block size deliberately | The choices reflect the available backend; unavailable/removed devices fail clearly; the UI remains responsive. Record actual configuration without claiming measured latency. |
 
+
+## Session and launcher checks
+
+Each row below is **NOT RUN** for the candidate build until executed and recorded. Use generated audio, a disposable project, and an intentional output. The automated UI suite calls production hit testing and event handlers with an injected synthetic device; it does not establish native mouse delivery or acoustic output on a physical device.
+
+| ID | Action | Expected evidence |
+| --- | --- | --- |
+| UI-21 | Open a new project; switch Session, Arrangement, and Session again with the tabs and Tab key | Session shows eight real empty scene rows and tracks as columns. Switching views alone changes no playback ownership. |
+| UI-22 | Double-click an empty audio slot to import a generated WAV; separately drop another generated WAV onto a chosen empty slot and activate a browser file with that slot selected | Each clip appears in the addressed track/scene. Audio comes from that source. Drop the same file onto an occupied slot: an error preserves the existing clip; Clear Clip followed by import is the explicit replacement path. |
+| UI-23 | In Session, insert a MIDI track or double-click an empty MIDI slot; draw notes in the opened piano editor, move/resize one, then undo and redo | A real four-beat slot clip is edited. Return to Session and reopen the same clip: notes and identity are retained. An occupied MIDI slot opens for editing without replacing its content. Select an empty slot and open Piano Roll: it must not open another row's clip. Dropping audio into this editor gives an actionable error without changing arrangement or slot content. |
+| UI-24 | Set quantization to None and launch a clip using its triangle, then launch a selected slot with Enter | The addressed clip plays and the visible state follows the engine. Record actual acoustic output separately from meter or state movement. |
+| UI-25 | While transport is already playing, select 1 Beat and then 1 Bar; request a different clip shortly before each boundary | A queued state precedes the actual transition when a wait is required. Only one Session clip on that track plays after transition. Record timing error through a generated capture if measuring it; a visual check does not prove sample accuracy. |
+| UI-26 | Put audio and MIDI clips in a scene, leave another track's slot empty, and launch the scene using its triangle and Shift+Enter | Filled slots launch together under the chosen quantization. The empty slot stops that track's previous Session clip. No clip from an unrelated row is launched. |
+| UI-27 | Stop a track using the strip below its slots; launch again, then use Stop All Clips | The requested Session clips stop under the selected quantization. Queued/stopped indicators reflect actual engine state and no note remains sounding indefinitely. |
+| UI-28 | Play arrangement content, override a track by launching its Session clip, switch to Arrangement, then use Return to Arrangement | Merely switching views leaves the Session override intact. The explicit return command releases it and the arrangement becomes the playback source again. |
+| UI-29 | Add a scene; rename it by double-clicking its scene name or its menu; delete it; undo and redo; repeat using the native Session menu | Scene names, clip row alignment, and undo state remain correct. Deleting the selected scene moves selection to valid remaining model state without editing another clip. |
+| UI-30 | Scroll a grid with more tracks/scenes than fit, use arrow keys to move slot selection, and resize to 1100x720; operate the column volume/pan/mute/solo controls | Scene launches remain aligned with rows, mixer controls with tracks, and keyboard selection scrolls into view. Selected-track devices and the piano editor follow the chosen clip. |
+| UI-31 | Save a mixed arrangement/Session project, close and reopen it, then relocate its project plus sibling Assets directory | Scenes, slots, notes, source media, quantization, and mixer values persist. The reopened project does not resume a stale performance launch automatically; explicit launch still works. |
+| UI-32 | Edit slot notes, return to Session, delete the track, undo/redo, add another track, then delete/undo a scene containing a clip | Editor/selection references remain valid; no stale clip is edited and the application remains responsive. |
+| UI-33 | While Session clips are active, choose Export Arrangement as WAV; compare the export with arrangement content and inspect playback afterward | The export contains the arrangement, as the command states. Session performance ownership is restored afterward; do not report this as Session performance capture. |
+
 ## Intentional hardware checks
 
 Run these only with an intentionally supplied generated source and selected hardware. Do not use ambient microphone input. Initial status for every platform is **NOT MEASURED** unless a specific report says otherwise.

@@ -11,12 +11,17 @@
 #include <mutex>
 #include <thread>
 #if HALFTRACK_TESTS_ENABLED
+ #include <cstdlib>
  #include <iostream>
  #include <stdexcept>
 #endif
 
 namespace halftrack
 {
+#if HALFTRACK_TESTS_ENABLED
+std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
+float pumpSyntheticTestDevice (Session&, int blocks);
+#endif
 namespace
 {
 const juce::Colour background { 0xff202326 }, panel { 0xff2b2e31 }, raised { 0xff3b4044 },
@@ -143,7 +148,7 @@ class MainComponent::Impl final : public juce::Component,
                                   public juce::FileDragAndDropTarget
 {
 public:
-    explicit Impl (Session& s) : session (s), menu (this), canvas (*this), ruler (*this), pianoRoll (*this), deviceChain (*this)
+    explicit Impl (Session& s) : session (s), menu (this), canvas (*this), ruler (*this), launcher (*this), pianoRoll (*this), deviceChain (*this)
     {
         setLookAndFeel (&theme);
         formats.registerBasicFormats();
@@ -155,13 +160,13 @@ public:
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
                  &playButton, &stopButton, &recordButton, &tempo, &loopButton, &positionLabel,
-                 &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
+                 &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &ruler, &viewport,
-                 &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &pianoRoll, &deviceChain })
+                 &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &deviceChain })
             addAndMakeVisible (child);
 
         for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &loopButton,
-                 &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton, &folderButton,
+                 &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton, &folderButton,
                  &upButton, &zoomIn, &zoomOut, &fitButton })
         {
             button->setWantsKeyboardFocus (false);
@@ -200,8 +205,9 @@ public:
         audioButton.setTooltip ("Audio devices, input/output channels, sample rate and buffer size");
         addTrackButton.onClick = [this] { showPiano = false; addTrack(); resized(); };
         addMidiButton.onClick = [this] { addMidiTrack(); };
-        newMidiClipButton.onClick = [this] { createMidiClip (state.position); };
-        arrangementTab.onClick = [this] { showPiano = false; resized(); };
+        newMidiClipButton.onClick = [this] { if (showSession) createLauncherMidiClip(); else createMidiClip (state.position); };
+        sessionTab.onClick = [this] { showSessionView(); };
+        arrangementTab.onClick = [this] { showArrangementView(); };
         pianoTab.onClick = [this] { openPianoRoll(); };
         addMidiButton.setTooltip ("Insert a MIDI track with the Halftrack synthesizer | Cmd/Ctrl+Shift+T");
         newMidiClipButton.setTooltip ("Create a four-bar MIDI clip at the playhead");
@@ -295,6 +301,7 @@ public:
         g.setColour (muted);
         g.setFont (font (10.5f));
         auto message = status.isNotEmpty() ? status : showPiano ? "Click: draw / select     Drag: move     Drag right edge: resize     Delete: remove     Arrows: move note     Alt: unsnapped" : "Space: play / pause     Click ruler: seek     Shift-drag ruler: loop     Double-click MIDI clip: edit notes";
+        if (status.isEmpty() && showSession && ! showPiano) message = "Click triangle: launch     Double-click MIDI slot: edit     Enter: launch slot     Shift+Enter: launch scene     Tab: switch view";
         g.drawText (message, 13, getHeight() - statusHeight, getWidth() - 280, statusHeight, juce::Justification::centredLeft, true);
         auto* device = session.audioDeviceManager().getCurrentAudioDevice();
         const auto deviceText = device != nullptr
@@ -344,8 +351,9 @@ public:
         browserList.setBounds (browser);
         sectionBounds = area.removeFromTop (35);
         auto section = sectionBounds.reduced (8, 5);
+        sessionTab.setBounds (section.removeFromLeft (70));
         arrangementTab.setBounds (section.removeFromLeft (98));
-        pianoTab.setBounds (section.removeFromLeft (90));
+        pianoTab.setBounds (section.removeFromLeft (84));
         addMidiButton.setBounds (section.removeFromRight (71));
         addTrackButton.setBounds (section.removeFromRight (77));
         section.removeFromRight (7);
@@ -356,12 +364,17 @@ public:
         zoomIn.setBounds (section.removeFromRight (25));
         zoomOut.setBounds (section.removeFromRight (25));
         fitButton.setBounds (section.removeFromRight (36));
+        launcher.setBounds (area);
+        launcher.setVisible (showSession && ! showPiano);
         pianoRoll.setBounds (area);
         pianoRoll.setVisible (showPiano);
-        viewport.setVisible (! showPiano);
-        ruler.setVisible (! showPiano);
-        horizontalScroll.setVisible (! showPiano);
-        arrangementTab.setToggleState (! showPiano, juce::dontSendNotification);
+        viewport.setVisible (! showPiano && ! showSession);
+        ruler.setVisible (! showPiano && ! showSession);
+        horizontalScroll.setVisible (! showPiano && ! showSession);
+        sessionTab.setToggleState (showSession && ! showPiano, juce::dontSendNotification);
+        arrangementTab.setToggleState (! showPiano && ! showSession, juce::dontSendNotification);
+        const bool timelineTools = ! showSession || showPiano;
+        zoomIn.setVisible (timelineTools); zoomOut.setVisible (timelineTools); fitButton.setVisible (timelineTools);
         pianoTab.setToggleState (showPiano, juce::dontSendNotification);
         horizontalScroll.setBounds (area.removeFromBottom (12).withTrimmedRight (trackWidth + 10));
         ruler.setBounds (area.removeFromTop (rulerHeight));
@@ -389,12 +402,13 @@ public:
             if (code == 'E' && shift) { exportDialog(); return true; }
             if (code == ',') { showAudioSettings(); return true; }
         }
+        if (code == juce::KeyPress::tabKey) { if (showSession) showArrangementView(); else showSessionView(); return true; }
         if (code == juce::KeyPress::spaceKey) { togglePlay(); return true; }
         if (code == juce::KeyPress::escapeKey) { session.stop(); session.seek (0); refresh(); return true; }
         if (code == juce::KeyPress::F9Key) { if (state.recording) session.stop(); else report (session.record()); refresh(); return true; }
-        if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) { if (showPiano) pianoRoll.deleteSelectedNote(); else deleteSelectedClip(); return true; }
-        if (key.getTextCharacter() == '+' || key.getTextCharacter() == '=') { if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); return true; }
-        if (key.getTextCharacter() == '-') { if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); return true; }
+        if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) { if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); return true; }
+        if (key.getTextCharacter() == '+' || key.getTextCharacter() == '=') { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); return true; }
+        if (key.getTextCharacter() == '-') { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); return true; }
         return false;
     }
 
@@ -421,7 +435,8 @@ public:
     }
 
    #if HALFTRACK_TESTS_ENABLED
-    void runInteractionChecks();
+    void runInteractionChecks (const juce::File& audioFixture);
+    bool captureTestErrors = false;
    #endif
 
 private:
@@ -440,7 +455,7 @@ private:
     class TrackRow final : public juce::Component
     {
     public:
-        TrackRow (Impl& o, int i) : owner (o), index (i)
+        TrackRow (Impl& o, int i, bool verticalLayout = false) : owner (o), index (i), columnLayout (verticalLayout)
         {
             for (auto* c : std::initializer_list<juce::Component*> { &name, &mute, &solo, &arm, &gain, &pan, &input, &monitor }) addAndMakeVisible (c);
             name.setFont (font (12.0f, true));
@@ -520,6 +535,17 @@ private:
             g.setColour (colour); g.fillRect (0, 0, 4, getHeight() - 1);
             g.setColour (line); g.drawRect (getLocalBounds());
             g.setColour (muted); g.setFont (font (9.5f, true));
+            if (columnLayout)
+            {
+                g.drawText ("VOL", 9, 67, 29, 20, juce::Justification::centredLeft);
+                g.drawText ("PAN", 9, 97, 29, 20, juce::Justification::centredLeft);
+                if (midi) g.drawFittedText ("MIDI / SYNTH", 9, 138, getWidth() - 18, 28, juce::Justification::centred, 1);
+                const auto peak = juce::jmax (peakL, peakR);
+                const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (peak, -60.0f) + 60.0f) / 60.0f);
+                g.setColour (background); g.fillRect (9, getHeight() - 7, getWidth() - 18, 3);
+                g.setColour (peak >= 1.0f ? red : green); g.fillRect (9, getHeight() - 7, (int) ((getWidth() - 18) * fraction), 3);
+                return;
+            }
             g.drawText ("VOL", 12, 38, 25, 17, juce::Justification::centredLeft);
             g.drawText ("PAN", 174, 38, 25, 17, juce::Justification::centredLeft);
             if (midi) g.drawText ("MIDI  /  HALFTRACK SYNTH", 12, 78, getWidth() - 24, 23, juce::Justification::centredLeft);
@@ -535,6 +561,14 @@ private:
         }
         void resized() override
         {
+            if (columnLayout)
+            {
+                name.setBounds (8, 4, getWidth() - 16, 25);
+                mute.setBounds (9, 35, 38, 23); solo.setBounds (49, 35, 38, 23); arm.setBounds (89, 35, 38, 23);
+                gain.setBounds (36, 63, getWidth() - 43, 27); pan.setBounds (36, 93, getWidth() - 43, 27);
+                input.setBounds (9, 127, getWidth() - 18, 23); monitor.setBounds (9, 153, getWidth() - 18, 23);
+                return;
+            }
             name.setBounds (10, 5, getWidth() - 104, 25);
             mute.setBounds (getWidth() - 88, 7, 26, 23);
             solo.setBounds (getWidth() - 61, 7, 26, 23);
@@ -550,7 +584,7 @@ private:
         int index;
         juce::Colour colour;
         float peakL = 0, peakR = 0;
-        bool midi = false;
+        bool midi = false, columnLayout = false;
         juce::Label name;
         juce::TextButton mute { "M" }, solo { "S" }, arm { "R" };
         juce::Slider gain, pan;
@@ -694,6 +728,7 @@ private:
             grabKeyboardFocus();
             auto track = e.y / trackHeight;
             owner.selectedClip = -1;
+            owner.selectedLauncherClipId.clear();
             if (track < (int) owner.state.tracks.size())
             {
                 owner.selectTrack (track);
@@ -844,6 +879,272 @@ private:
         bool definingLoop = false;
     };
 
+    class LauncherGrid final : public juce::Component, private juce::ScrollBar::Listener
+    {
+    public:
+        explicit LauncherGrid (Impl& o) : owner (o)
+        {
+            setName ("Session clip grid"); setWantsKeyboardFocus (true);
+            for (auto* child : std::initializer_list<juce::Component*> { &quantisation, &stopAll, &arrangement, &addScene, &mixers, &horizontal, &vertical }) addAndMakeVisible (child);
+            mixers.setInterceptsMouseClicks (false, true);
+            quantisation.setName ("Global launch quantization");
+            quantisation.addItem ("None", 1); quantisation.addItem ("1 Beat", 2); quantisation.addItem ("1 Bar", 3);
+            quantisation.setTooltip ("Clip and scene launch timing. View switches do not change what is playing.");
+            quantisation.onChange = [this]
+            {
+                const auto q = quantisation.getSelectedId() == 1 ? Session::LaunchQuantisation::none
+                             : quantisation.getSelectedId() == 2 ? Session::LaunchQuantisation::beat : Session::LaunchQuantisation::bar;
+                owner.report (owner.session.setLaunchQuantisation (q)); owner.refresh();
+            };
+            stopAll.onClick = [this] { owner.report (owner.session.stopAllLauncherClips()); owner.refresh(); };
+            arrangement.onClick = [this] { owner.report (owner.session.returnToArrangement()); owner.refresh(); };
+            addScene.onClick = [this]
+            {
+                owner.addSceneFromUI();
+            };
+            for (auto* button : { &stopAll, &arrangement, &addScene }) { button->setWantsKeyboardFocus (false); button->setMouseClickGrabsKeyboardFocus (false); }
+            stopAll.setName ("Stop all Session clips"); arrangement.setName ("Return to Arrangement"); addScene.setName ("Add scene");
+            arrangement.setTooltip ("Release Session overrides so tracks play their arrangement again");
+            stopAll.setTooltip ("Stop every Session clip at the chosen launch quantization");
+            horizontal.addListener (this); vertical.addListener (this);
+        }
+        ~LauncherGrid() override { horizontal.removeListener (this); vertical.removeListener (this); }
+        void sync()
+        {
+            if (rows.size() != owner.state.tracks.size())
+            {
+                rows.clear();
+                for (int i = 0; i < (int) owner.state.tracks.size(); ++i)
+                {
+                    auto row = std::make_unique<TrackRow> (owner, i, true); mixers.addAndMakeVisible (*row); rows.push_back (std::move (row));
+                }
+            }
+            for (size_t i = 0; i < rows.size(); ++i) rows[i]->sync (owner.state.tracks[i]);
+            quantisation.setSelectedId (owner.state.launchQuantisation == Session::LaunchQuantisation::none ? 1 : owner.state.launchQuantisation == Session::LaunchQuantisation::beat ? 2 : 3, juce::dontSendNotification);
+            const bool overridden = std::any_of (owner.state.tracks.begin(), owner.state.tracks.end(), [] (const auto& track) { return track.launcherActive; });
+            arrangement.setEnabled (overridden); arrangement.setToggleState (overridden, juce::dontSendNotification);
+            stopAll.setEnabled (! owner.state.tracks.empty());
+            resized(); repaint();
+        }
+        void resized() override
+        {
+            quantisation.setBounds (89, 6, 87, 23); stopAll.setBounds (190, 6, 90, 23);
+            arrangement.setBounds (288, 6, 157, 23); addScene.setBounds (getWidth() - 105, 6, 93, 23);
+            const auto grid = gridArea();
+            mixers.setBounds (0, grid.getBottom() + stopHeight, tracksWidth(), mixerHeight);
+            for (int i = 0; i < (int) rows.size(); ++i) rows[(size_t) i]->setBounds (i * columnWidth - (int) offsetX, 0, columnWidth, mixerHeight);
+            horizontal.setBounds (0, getHeight() - scrollSize, tracksWidth(), scrollSize);
+            vertical.setBounds (getWidth() - scrollSize, gridTop, scrollSize, grid.getHeight());
+            const auto totalWidth = juce::jmax ((double) tracksWidth(), (double) owner.state.tracks.size() * columnWidth);
+            offsetX = juce::jlimit (0.0, juce::jmax (0.0, totalWidth - tracksWidth()), offsetX);
+            horizontal.setRangeLimits (0, totalWidth, juce::dontSendNotification); horizontal.setCurrentRange (offsetX, tracksWidth(), juce::dontSendNotification); horizontal.setSingleStepSize (columnWidth);
+            const auto visibleRows = (double) grid.getHeight() / rowHeight;
+            const auto totalRows = juce::jmax (visibleRows, (double) owner.state.scenes.size());
+            offsetScene = juce::jlimit (0.0, juce::jmax (0.0, totalRows - visibleRows), offsetScene);
+            vertical.setRangeLimits (0, totalRows, juce::dontSendNotification); vertical.setCurrentRange (offsetScene, visibleRows, juce::dontSendNotification); vertical.setSingleStepSize (1);
+        }
+        std::pair<int, int> cellAt (juce::Point<int> point) const
+        {
+            if (point.y < gridTop || point.y >= gridArea().getBottom() || point.x < 0 || point.x >= tracksWidth()) return { -1, -1 };
+            const int track = (int) ((point.x + offsetX) / columnWidth);
+            const int scene = (int) ((point.y - gridTop) / (double) rowHeight + offsetScene);
+            return track < (int) owner.state.tracks.size() && scene < (int) owner.state.scenes.size() ? std::pair<int, int> { track, scene } : std::pair<int, int> { -1, -1 };
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (background);
+            g.setColour (panel); g.fillRect (0, 0, getWidth(), toolbarHeight);
+            g.setColour (muted); g.setFont (font (10.0f)); g.drawText ("Quantization", 10, 4, 77, 26, juce::Justification::centredLeft);
+            const auto grid = gridArea();
+            g.saveState(); g.reduceClipRegion (0, toolbarHeight, tracksWidth(), getHeight() - toolbarHeight);
+            for (int t = 0; t < (int) owner.state.tracks.size(); ++t)
+            {
+                const auto& track = owner.state.tracks[(size_t) t]; const int x = t * columnWidth - (int) offsetX;
+                if (x + columnWidth <= 0 || x >= tracksWidth()) continue;
+                g.setColour (track.colour.withAlpha (t == owner.selectedTrack ? 0.75f : 0.4f)); g.fillRect (x, toolbarHeight, columnWidth, headerHeight);
+                g.setColour (ink); g.setFont (font (11.5f, true)); g.drawText (track.name, x + 9, toolbarHeight, columnWidth - 18, headerHeight, juce::Justification::centredLeft, true);
+                g.setColour (line); g.drawRect (x, toolbarHeight, columnWidth, headerHeight);
+                g.saveState(); g.reduceClipRegion (grid.withWidth (tracksWidth()));
+                for (int scene = 0; scene < (int) owner.state.scenes.size(); ++scene)
+                {
+                    const auto bounds = slotBounds (t, scene);
+                    if (! bounds.intersects (grid)) continue;
+                    const auto* slot = slotAt (t, scene);
+                    const bool filled = slot != nullptr && slot->hasClip;
+                    const bool selected = t == owner.selectedTrack && owner.state.scenes[(size_t) scene].id == owner.selectedSceneId;
+                    g.setColour (filled ? track.colour.withAlpha (0.30f) : scene % 2 == 0 ? panel : juce::Colour (0xff303438)); g.fillRect (bounds.reduced (1));
+                    const bool queued = slot != nullptr && (slot->queued || slot->stopQueued);
+                    const auto stateColour = queued ? orange.withAlpha (owner.ticks % 16 < 8 ? 1.0f : 0.45f) : slot != nullptr && slot->playing ? green : muted;
+                    g.setColour (stateColour);
+                    if (filled && ! (slot != nullptr && slot->stopQueued)) drawTriangle (g, bounds.getX() + 10, bounds.getY() + 10);
+                    else g.fillRect (bounds.getX() + 10, bounds.getY() + 11, 7, 7);
+                    if (filled)
+                    {
+                        g.setColour (ink); g.setFont (font (11.0f)); g.drawText (slot->clip.name, bounds.withTrimmedLeft (29).withTrimmedRight (7), juce::Justification::centredLeft, true);
+                        if (slot->playing) { g.setColour (green); g.fillRect (bounds.getX() + 1, bounds.getBottom() - 3, bounds.getWidth() - 2, 2); }
+                    }
+                    g.setColour (selected ? orange : line); g.drawRect (bounds, selected ? 2 : 1);
+                }
+                g.restoreState();
+                const auto stop = juce::Rectangle<int> (x, grid.getBottom(), columnWidth, stopHeight);
+                g.setColour (raised); g.fillRect (stop.reduced (1)); g.setColour (track.launcherActive ? orange : muted); g.fillRect (x + 10, stop.getY() + 9, 7, 7);
+                g.setFont (font (9.0f)); g.drawText (track.launcherActive ? "STOP / SESSION" : "STOP / ARRANGEMENT", stop.withTrimmedLeft (26), juce::Justification::centredLeft, true);
+            }
+            g.restoreState();
+            const int sceneX = tracksWidth();
+            g.setColour (raised); g.fillRect (sceneX, toolbarHeight, sceneWidth, headerHeight);
+            g.setColour (ink); g.setFont (font (10.0f, true)); g.drawText ("SCENES", sceneX + 12, toolbarHeight, sceneWidth - 20, headerHeight, juce::Justification::centredLeft);
+            g.saveState(); g.reduceClipRegion (sceneX, gridTop, sceneWidth, grid.getHeight());
+            for (int scene = 0; scene < (int) owner.state.scenes.size(); ++scene)
+            {
+                const auto bounds = juce::Rectangle<int> (sceneX, sceneY (scene), sceneWidth, rowHeight);
+                const bool selected = owner.state.scenes[(size_t) scene].id == owner.selectedSceneId;
+                g.setColour (selected ? raised : panel); g.fillRect (bounds.reduced (1)); g.setColour (selected ? orange : muted); drawTriangle (g, sceneX + 10, bounds.getY() + 10);
+                g.setColour (ink); g.setFont (font (11.0f)); g.drawText (owner.state.scenes[(size_t) scene].name, bounds.withTrimmedLeft (28).withTrimmedRight (24), juce::Justification::centredLeft, true);
+                g.setColour (muted); g.drawText ("...", bounds.withTrimmedLeft (sceneWidth - 22), juce::Justification::centred);
+            }
+            g.restoreState();
+            g.setColour (line); g.drawVerticalLine (sceneX, (float) toolbarHeight, (float) getHeight());
+            if (owner.state.scenes.empty()) { g.setColour (muted); g.setFont (font (13.0f)); g.drawText ("Add a scene to begin launching clips.", grid.reduced (20), juce::Justification::centred); }
+        }
+        void mouseDown (const juce::MouseEvent& event) override
+        {
+            if (owner.session.isExporting()) return;
+            grabKeyboardFocus();
+            const auto cell = cellAt (event.getPosition());
+            if (cell.first >= 0)
+            {
+                owner.selectLauncherSlot (cell.first, cell.second);
+                if (event.mods.isPopupMenu()) { slotMenu (cell.first, cell.second); return; }
+                if (event.x - slotBounds (cell.first, cell.second).getX() < 25) { owner.report (owner.session.launchSlot (cell.first, cell.second)); owner.refresh(); }
+                repaint(); return;
+            }
+            const auto scene = sceneAt (event.getPosition());
+            if (scene >= 0)
+            {
+                owner.selectedSceneId = owner.state.scenes[(size_t) scene].id;
+                if (event.mods.isPopupMenu() || event.x > tracksWidth() + sceneWidth - 24) sceneMenu (scene);
+                else if (event.x - tracksWidth() < 25) { owner.report (owner.session.launchScene (scene)); owner.refresh(); }
+                repaint(); return;
+            }
+            const auto track = (int) ((event.x + offsetX) / columnWidth);
+            if (event.x < tracksWidth() && track >= 0 && track < (int) owner.state.tracks.size())
+            {
+                owner.selectTrack (track);
+                if (event.y >= gridArea().getBottom() && event.y < gridArea().getBottom() + stopHeight) { owner.report (owner.session.stopLauncherTrack (track)); owner.refresh(); }
+                repaint();
+            }
+        }
+        void mouseDoubleClick (const juce::MouseEvent& event) override
+        {
+            const auto cell = cellAt (event.getPosition());
+            if (cell.first >= 0)
+            {
+                owner.selectLauncherSlot (cell.first, cell.second);
+                const auto* slot = slotAt (cell.first, cell.second);
+                if (owner.state.tracks[(size_t) cell.first].isMidi)
+                {
+                    if (slot != nullptr && ! slot->hasClip) owner.createLauncherMidiClip();
+                    else if (slot != nullptr && slot->hasClip && slot->clip.isMidi) owner.openPianoRoll();
+                }
+                else if (slot != nullptr && ! slot->hasClip) owner.importSlotDialog (cell.first, cell.second);
+                return;
+            }
+            const int scene = sceneAt (event.getPosition()); if (scene >= 0) owner.renameSceneDialog (scene);
+        }
+        bool keyPressed (const juce::KeyPress& key) override
+        {
+            if (owner.session.isExporting()) return true;
+            const auto code = key.getKeyCode();
+            if (code == juce::KeyPress::returnKey)
+            {
+                const auto scene = owner.selectedSceneIndex();
+                if (scene >= 0) owner.report (key.getModifiers().isShiftDown() ? owner.session.launchScene (scene) : owner.session.launchSlot (owner.selectedTrack, scene));
+                owner.refresh(); return true;
+            }
+            if (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey || code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
+            {
+                int track = owner.selectedTrack, scene = owner.selectedSceneIndex();
+                if (code == juce::KeyPress::leftKey) --track; if (code == juce::KeyPress::rightKey) ++track;
+                if (code == juce::KeyPress::upKey) --scene; if (code == juce::KeyPress::downKey) ++scene;
+                if (! owner.state.tracks.empty() && ! owner.state.scenes.empty()) owner.selectLauncherSlot (juce::jlimit (0, (int) owner.state.tracks.size() - 1, track), juce::jlimit (0, (int) owner.state.scenes.size() - 1, scene));
+                scrollSelectionIntoView(); return true;
+            }
+            return owner.handleKey (key);
+        }
+        void mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
+        {
+            if (event.mods.isShiftDown() || std::abs (wheel.deltaX) > std::abs (wheel.deltaY)) offsetX = juce::jmax (0.0, offsetX - (wheel.deltaX + wheel.deltaY) * 300.0);
+            else offsetScene = juce::jmax (0.0, offsetScene - wheel.deltaY * 5.0);
+            resized(); repaint();
+        }
+        void scrollSelectionIntoView()
+        {
+            const auto scene = owner.selectedSceneIndex();
+            if (scene >= 0) { if (scene < offsetScene) offsetScene = scene; if (scene + 1 > offsetScene + gridArea().getHeight() / (double) rowHeight) offsetScene = scene + 1 - gridArea().getHeight() / (double) rowHeight; }
+            if (owner.selectedTrack >= 0) { const auto x = owner.selectedTrack * columnWidth; if (x < offsetX) offsetX = x; if (x + columnWidth > offsetX + tracksWidth()) offsetX = x + columnWidth - tracksWidth(); }
+            resized(); repaint();
+        }
+    private:
+        Impl& owner;
+        static constexpr int toolbarHeight = 35, headerHeight = 29, gridTop = toolbarHeight + headerHeight,
+                             columnWidth = 170, rowHeight = 30, sceneWidth = 148, mixerHeight = 190, stopHeight = 26, scrollSize = 11;
+        juce::ComboBox quantisation;
+        juce::TextButton stopAll { "Stop All Clips" }, arrangement { "Return to Arrangement" }, addScene { "+ Scene" };
+        juce::Component mixers;
+        std::vector<std::unique_ptr<TrackRow>> rows;
+        juce::ScrollBar horizontal { false }, vertical { true };
+        double offsetX = 0, offsetScene = 0;
+        int tracksWidth() const { return juce::jmax (1, getWidth() - sceneWidth - scrollSize); }
+        juce::Rectangle<int> gridArea() const { return { 0, gridTop, tracksWidth(), juce::jmax (rowHeight, getHeight() - gridTop - mixerHeight - stopHeight - scrollSize) }; }
+        int sceneY (int scene) const { return gridTop + (int) std::round ((scene - offsetScene) * rowHeight); }
+        juce::Rectangle<int> slotBounds (int track, int scene) const { return { track * columnWidth - (int) offsetX, sceneY (scene), columnWidth, rowHeight }; }
+        const Session::SlotInfo* slotAt (int track, int scene) const
+        {
+            if (track < 0 || track >= (int) owner.state.tracks.size()) return nullptr;
+            const auto& slots = owner.state.tracks[(size_t) track].slots;
+            return scene >= 0 && scene < (int) slots.size() ? &slots[(size_t) scene] : nullptr;
+        }
+        int sceneAt (juce::Point<int> point) const
+        {
+            if (point.x < tracksWidth() || point.x >= tracksWidth() + sceneWidth || point.y < gridTop || point.y >= gridArea().getBottom()) return -1;
+            const int scene = (int) ((point.y - gridTop) / (double) rowHeight + offsetScene);
+            return scene < (int) owner.state.scenes.size() ? scene : -1;
+        }
+        static void drawTriangle (juce::Graphics& g, int x, int y) { juce::Path path; path.addTriangle ((float) x, (float) y, (float) x, (float) y + 10, (float) x + 8, (float) y + 5); g.fillPath (path); }
+        void scrollBarMoved (juce::ScrollBar* bar, double start) override { if (bar == &horizontal) offsetX = start; else offsetScene = start; resized(); repaint(); }
+        void slotMenu (int track, int scene)
+        {
+            const auto* slot = slotAt (track, scene); if (slot == nullptr) return;
+            juce::PopupMenu menu;
+            if (slot->hasClip) { menu.addItem (1, "Launch Clip"); if (slot->clip.isMidi) menu.addItem (2, "Edit MIDI Notes"); menu.addItem (3, "Clear Clip"); }
+            else menu.addItem (owner.state.tracks[(size_t) track].isMidi ? 4 : 5, owner.state.tracks[(size_t) track].isMidi ? "Create MIDI Clip" : "Import Audio Here...");
+            menu.addSeparator(); menu.addItem (6, "Stop Track Clips");
+            const auto trackId = owner.state.tracks[(size_t) track].id, sceneId = owner.state.scenes[(size_t) scene].id;
+            auto safe = juce::Component::SafePointer<Impl> (&owner);
+            menu.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId, sceneId] (int choice)
+            {
+                if (safe == nullptr || choice == 0) return;
+                const auto indices = safe->launcherIndices (trackId, sceneId); if (indices.first < 0 || indices.second < 0) return;
+                safe->selectLauncherSlot (indices.first, indices.second);
+                if (choice == 1) safe->report (safe->session.launchSlot (indices.first, indices.second));
+                if (choice == 2) safe->openPianoRoll(); if (choice == 3) safe->clearSelectedSlot(); if (choice == 4) safe->createLauncherMidiClip();
+                if (choice == 5) safe->importSlotDialog (indices.first, indices.second); if (choice == 6) safe->report (safe->session.stopLauncherTrack (indices.first));
+                safe->refresh();
+            });
+        }
+        void sceneMenu (int scene)
+        {
+            juce::PopupMenu menu; menu.addItem (1, "Launch Scene"); menu.addItem (2, "Rename Scene..."); menu.addItem (3, "Delete Scene");
+            const auto id = owner.state.scenes[(size_t) scene].id; auto safe = juce::Component::SafePointer<Impl> (&owner);
+            menu.showMenuAsync (juce::PopupMenu::Options(), [safe, id] (int choice)
+            {
+                if (safe == nullptr) return; const auto index = safe->launcherIndices ({}, id).second; if (index < 0) return;
+                if (choice == 1) safe->report (safe->session.launchScene (index)); if (choice == 2) safe->renameSceneDialog (index); if (choice == 3) safe->report (safe->session.removeScene (index)); safe->refresh();
+            });
+        }
+    };
+
     class PianoRoll final : public juce::Component, private juce::ScrollBar::Listener
     {
     public:
@@ -939,7 +1240,10 @@ private:
             if (clip == nullptr)
             {
                 g.setColour (muted); g.setFont (font (14.0f));
-                g.drawFittedText ("Create a MIDI track to start writing notes.\nDouble-click a MIDI clip in Arrangement to edit it here.", getLocalBounds().withTrimmedTop (headerHeight).reduced (35), juce::Justification::centred, 3);
+                const auto message = owner.showSession
+                    ? "Select a MIDI slot in Session.\nDouble-click an empty MIDI slot or use + MIDI Clip to start writing notes."
+                    : "Create a MIDI track to start writing notes.\nDouble-click a MIDI clip in Arrangement to edit it here.";
+                g.drawFittedText (message, getLocalBounds().withTrimmedTop (headerHeight).reduced (35), juce::Justification::centred, 3);
                 return;
             }
             const auto grid = gridBounds();
@@ -985,9 +1289,10 @@ private:
                 }
                 if (selected) { g.setColour (ink); g.fillRect (r.getRight() - 4, r.getY() + 3, 2.0f, r.getHeight() - 6); }
             }
-            const auto beatPosition = (owner.state.position - clip->start) * owner.state.tempo / 60.0;
+            const auto* launched = owner.editedLauncherSlot();
+            const auto beatPosition = launched != nullptr ? launched->playPositionBeats : (owner.state.position - clip->start) * owner.state.tempo / 60.0;
             const auto playhead = (float) (keysWidth + (beatPosition - viewBeat) * pixelsPerBeat);
-            g.setColour (ink); g.drawLine (playhead, (float) gridTop, playhead, (float) grid.getBottom(), 1.2f);
+            if (beatPosition >= 0 && (owner.selectedLauncherClipId.isEmpty() || launched != nullptr)) { g.setColour (ink); g.drawLine (playhead, (float) gridTop, playhead, (float) grid.getBottom(), 1.2f); }
             g.restoreState();
             g.setColour (raised); g.fillRect (0, headerHeight, getWidth(), rulerHeight);
             g.setColour (muted); g.setFont (font (10.0f));
@@ -1001,6 +1306,9 @@ private:
             if (clip == nullptr || e.x < keysWidth) return;
             if (e.y >= headerHeight && e.y < gridTop)
             {
+                // Session playback has a clip-local clock; seeking the arrangement
+                // here would change unrelated transport state instead of this clip.
+                if (owner.selectedLauncherClipId.isNotEmpty()) return;
                 owner.session.seek (clip->start + juce::jmax (0.0, beatAt (e.x)) * 60.0 / owner.state.tempo); owner.refresh(); return;
             }
             if (! gridBounds().contains (e.getPosition())) return;
@@ -1351,7 +1659,7 @@ private:
     juce::AudioThumbnailCache thumbnailCache { 128 };
     TransportButton playButton { TransportButton::play }, stopButton { TransportButton::stop }, recordButton { TransportButton::record };
     juce::TextButton loopButton { "Loop" }, audioButton { "Audio Setup" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
-                     arrangementTab { "Arrangement" }, pianoTab { "Piano Roll" }, importButton { "Import Audio" },
+                     sessionTab { "Session" }, arrangementTab { "Arrangement" }, pianoTab { "Piano Roll" }, importButton { "Import Audio" },
                      filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" },
                      zoomIn { "+" }, zoomOut { "-" }, fitButton { "Fit" };
     juce::Label tempo, positionLabel, projectLabel;
@@ -1359,6 +1667,7 @@ private:
     juce::ListBox browserList;
     Canvas canvas;
     Ruler ruler;
+    LauncherGrid launcher;
     PianoRoll pianoRoll;
     DeviceChain deviceChain;
     juce::Viewport viewport;
@@ -1378,8 +1687,140 @@ private:
     juce::File browserFolder;
     juce::String status;
     int selectedTrack = -1, selectedClip = -1, statusFrames = 0, ticks = 0;
-    bool pluginBrowser = false, showPiano = false;
+    bool pluginBrowser = false, showPiano = false, showSession = false;
+    juce::String selectedSceneId, selectedLauncherClipId;
     double viewStart = 0, pixelsPerSecond = 35, recordingStart = 0;
+
+    void showSessionView()
+    {
+        showSession = true; showPiano = false;
+        if (selectedTrack >= 0 && selectedSceneIndex() >= 0) selectLauncherSlot (selectedTrack, selectedSceneIndex());
+        resized(); launcher.grabKeyboardFocus();
+    }
+    void showArrangementView()
+    {
+        showSession = false; showPiano = false; selectedLauncherClipId.clear(); resized();
+    }
+    void addSceneFromUI()
+    {
+        const auto result = session.addScene(); report (result); refresh();
+        if (result.wasOk() && ! state.scenes.empty()) selectedSceneId = state.scenes.back().id;
+        launcher.scrollSelectionIntoView();
+    }
+    std::pair<int, int> launcherIndices (const juce::String& trackId, const juce::String& sceneId) const
+    {
+        int track = -1, scene = -1;
+        for (int i = 0; i < (int) state.tracks.size(); ++i) if (state.tracks[(size_t) i].id == trackId) { track = i; break; }
+        for (int i = 0; i < (int) state.scenes.size(); ++i) if (state.scenes[(size_t) i].id == sceneId) { scene = i; break; }
+        return { track, scene };
+    }
+    int selectedSceneIndex() const { return launcherIndices ({}, selectedSceneId).second; }
+    const Session::SlotInfo* selectedSlot() const
+    {
+        const auto* track = currentTrack(); const int scene = selectedSceneIndex();
+        return track != nullptr && scene >= 0 && scene < (int) track->slots.size() ? &track->slots[(size_t) scene] : nullptr;
+    }
+    const Session::SlotInfo* editedLauncherSlot() const
+    {
+        if (const auto* track = currentTrack()) for (const auto& slot : track->slots) if (slot.hasClip && slot.clip.id == selectedLauncherClipId) return &slot;
+        return nullptr;
+    }
+    void selectLauncherSlot (int track, int scene)
+    {
+        if (track < 0 || track >= (int) state.tracks.size() || scene < 0 || scene >= (int) state.scenes.size()) return;
+        selectTrack (track); selectedClip = -1; selectedSceneId = state.scenes[(size_t) scene].id;
+        const auto* slot = selectedSlot(); selectedLauncherClipId = slot != nullptr && slot->hasClip ? slot->clip.id : juce::String();
+        pianoRoll.sync(); launcher.repaint(); deviceChain.sync();
+    }
+    void clearSelectedSlot()
+    {
+        const auto scene = selectedSceneIndex(); if (selectedTrack < 0 || scene < 0) return;
+        report (session.clearSlot (selectedTrack, scene)); selectedLauncherClipId.clear(); refresh();
+    }
+    void createLauncherMidiClip()
+    {
+        if (currentTrack() == nullptr || ! currentTrack()->isMidi) return;
+        if (state.scenes.empty()) { report (session.addScene()); refresh(); }
+        if (state.scenes.empty()) return;
+        if (selectedSceneIndex() < 0) selectedSceneId = state.scenes.front().id;
+        if (const auto* slot = selectedSlot(); slot != nullptr && slot->hasClip)
+        {
+            if (slot->clip.isMidi) { selectedLauncherClipId = slot->clip.id; openPianoRoll(); }
+            return;
+        }
+        const auto track = selectedTrack, scene = selectedSceneIndex();
+        const auto result = session.addMidiClipToSlot (currentTrack()->id, scene, 4.0); report (result); refresh();
+        if (result.wasOk()) { selectLauncherSlot (track, scene); openPianoRoll(); pianoRoll.fit(); }
+    }
+    void renameSceneDialog (int scene)
+    {
+        if (scene < 0 || scene >= (int) state.scenes.size()) return;
+        const auto id = state.scenes[(size_t) scene].id;
+        auto* dialog = new juce::AlertWindow ("Rename Scene", "Enter a scene name.", juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor ("name", state.scenes[(size_t) scene].name, "Name");
+        dialog->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey)); dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
+        auto safe = juce::Component::SafePointer<Impl> (this); auto safeDialog = juce::Component::SafePointer<juce::AlertWindow> (dialog);
+        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog, id] (int result)
+        {
+            if (safe == nullptr || safeDialog == nullptr || result != 1) return;
+            const int index = safe->launcherIndices ({}, id).second; if (index < 0) return;
+            safe->report (safe->session.renameScene (index, safeDialog->getTextEditorContents ("name"))); safe->refresh();
+        }), true);
+    }
+    void importSlotDialog (int track, int scene)
+    {
+        if (track < 0 || track >= (int) state.tracks.size() || scene < 0 || scene >= (int) state.scenes.size())
+        { report (juce::Result::fail ("Select an empty audio slot in Session first.")); return; }
+        if (state.tracks[(size_t) track].isMidi) { report (juce::Result::fail ("Choose an audio track to import audio into a Session slot.")); return; }
+        if (scene < (int) state.tracks[(size_t) track].slots.size() && state.tracks[(size_t) track].slots[(size_t) scene].hasClip)
+        { report (juce::Result::fail ("This slot already contains a clip. Clear it before importing a replacement.")); return; }
+        const auto trackId = state.tracks[(size_t) track].id, sceneId = state.scenes[(size_t) scene].id;
+        chooser = std::make_unique<juce::FileChooser> ("Import Audio into Session Slot", browserFolder, "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
+        auto safe = juce::Component::SafePointer<Impl> (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+            [safe, trackId, sceneId] (const juce::FileChooser& fc)
+            {
+                if (safe == nullptr || fc.getResult() == juce::File()) return;
+                const auto indices = safe->launcherIndices (trackId, sceneId);
+                if (indices.first >= 0 && indices.second >= 0) safe->importLauncherFiles ({ fc.getResult().getFullPathName() }, indices.first, indices.second);
+            });
+    }
+    void importLauncherFiles (const juce::StringArray& files, int track, int firstScene)
+    {
+        if (track < 0 || track >= (int) state.tracks.size() || firstScene < 0) return;
+        if (state.tracks[(size_t) track].isMidi) { report (juce::Result::fail ("Drop audio into an audio track's Session slot.")); return; }
+        std::vector<juce::File> audioFiles;
+        for (const auto& file : files) if (isAudio (juce::File (file))) audioFiles.emplace_back (file);
+        std::sort (audioFiles.begin(), audioFiles.end(), [] (const auto& a, const auto& b) { return a.getFileName().compareNatural (b.getFileName()) < 0; });
+        if (audioFiles.empty()) return;
+        for (int i = 0; i < (int) audioFiles.size(); ++i)
+        {
+            const int scene = firstScene + i;
+            if (scene < (int) state.tracks[(size_t) track].slots.size() && state.tracks[(size_t) track].slots[(size_t) scene].hasClip)
+            { report (juce::Result::fail ("A destination slot already contains a clip. Clear it before importing a replacement.")); return; }
+        }
+        session.beginEditGesture ("Import Session clips");
+        bool imported = false;
+        for (int i = 0; i < (int) audioFiles.size(); ++i)
+        {
+            const int scene = firstScene + i;
+            while (scene >= (int) state.scenes.size())
+            {
+                const auto result = session.addScene(); report (result); refresh();
+                if (result.failed()) { session.endEditGesture(); return; }
+            }
+            const auto result = session.importAudioToSlot (audioFiles[(size_t) i], track, scene); report (result); refresh();
+            if (result.failed()) break;
+            imported = true;
+        }
+        session.endEditGesture();
+        if (imported)
+        {
+            showSession = true; showPiano = false; selectLauncherSlot (track, firstScene);
+            browserFolder = audioFiles.front().getParentDirectory(); pluginBrowser = false; updateBrowser(); resized(); launcher.scrollSelectionIntoView();
+        }
+    }
 
     const Session::TrackInfo* currentTrack() const
     {
@@ -1388,14 +1829,26 @@ private:
     const Session::ClipInfo* currentMidiClip() const
     {
         const auto* track = currentTrack();
-        if (track == nullptr || selectedClip < 0 || selectedClip >= (int) track->clips.size()) return nullptr;
+        if (track == nullptr) return nullptr;
+        if (selectedLauncherClipId.isNotEmpty())
+        {
+            for (const auto& slot : track->slots) if (slot.hasClip && slot.clip.id == selectedLauncherClipId) return slot.clip.isMidi ? &slot.clip : nullptr;
+            return nullptr;
+        }
+        if (selectedClip < 0 || selectedClip >= (int) track->clips.size()) return nullptr;
         const auto& clip = track->clips[(size_t) selectedClip];
         return clip.isMidi ? &clip : nullptr;
     }
     void openPianoRoll()
     {
         const auto* track = currentTrack();
-        if (track != nullptr && track->isMidi && currentMidiClip() == nullptr)
+        if (showSession)
+        {
+            const auto* slot = selectedSlot();
+            selectedClip = -1;
+            selectedLauncherClipId = slot != nullptr && slot->hasClip && slot->clip.isMidi ? slot->clip.id : juce::String();
+        }
+        if (track != nullptr && track->isMidi && currentMidiClip() == nullptr && ! showSession)
             for (int i = 0; i < (int) track->clips.size(); ++i)
                 if (track->clips[(size_t) i].isMidi) { selectedClip = i; break; }
         showPiano = true;
@@ -1421,7 +1874,7 @@ private:
     {
         session.beginEditGesture ("Create MIDI track");
         const auto result = session.addMidiTrack(); report (result); refresh();
-        if (result.wasOk()) { selectTrack ((int) state.tracks.size() - 1); createMidiClip (state.position); }
+        if (result.wasOk()) { selectTrack ((int) state.tracks.size() - 1); if (showSession) createLauncherMidiClip(); else createMidiClip (state.position); }
         session.endEditGesture();
     }
     double gridSeconds() const
@@ -1434,7 +1887,7 @@ private:
     }
     void selectTrack (int track)
     {
-        if (selectedTrack != track) selectedClip = -1;
+        if (selectedTrack != track) { selectedClip = -1; selectedLauncherClipId.clear(); }
         selectedTrack = track;
         canvas.repaint(); deviceChain.sync();
         for (int i = 0; i < canvas.getNumChildComponents(); ++i) canvas.getChildComponent (i)->repaint();
@@ -1459,6 +1912,8 @@ private:
         projectLabel.setText (state.name + (state.dirty ? "  *" : ""), juce::dontSendNotification);
         if (state.tracks.size() != previous.tracks.size()) resized();
         canvas.syncRows();
+        if (selectedSceneIndex() < 0) selectedSceneId = state.scenes.empty() ? juce::String() : state.scenes.front().id;
+        launcher.sync();
         pianoRoll.sync();
         newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi);
         ruler.repaint(); deviceChain.sync(); repaint();
@@ -1481,7 +1936,10 @@ private:
         if (result.failed())
         {
             status = result.getErrorMessage(); statusFrames = 24 * 12;
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Halftrack", result.getErrorMessage());
+           #if HALFTRACK_TESTS_ENABLED
+            if (! captureTestErrors)
+           #endif
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Halftrack", result.getErrorMessage());
         }
         else if (success.isNotEmpty()) { status = std::move (success); statusFrames = 24 * 7; }
         repaint();
@@ -1499,7 +1957,7 @@ private:
     }
     void resetView()
     {
-        selectedTrack = -1; selectedClip = -1; viewStart = 0; showPiano = false; resized();
+        selectedTrack = -1; selectedClip = -1; selectedLauncherClipId.clear(); selectedSceneId.clear(); viewStart = 0; showPiano = false; resized();
         refresh(); fitTimeline();
     }
     void zoom (double factor)
@@ -1525,7 +1983,7 @@ private:
     }
     void scrollBarMoved (juce::ScrollBar*, double start) override { viewStart = start; canvas.repaint(); ruler.repaint(); }
 
-    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Track", "View" }; }
+    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Track", "View", "Session" }; }
     juce::PopupMenu getMenuForIndex (int index, const juce::String&) override
     {
         juce::PopupMenu popup;
@@ -1534,23 +1992,30 @@ private:
         {
             popup.addItem (1, "New Project"); popup.addItem (2, "Open Project..."); popup.addSeparator();
             popup.addItem (3, "Save Project"); popup.addItem (4, "Save Project As..."); popup.addSeparator();
-            popup.addItem (5, "Import Audio..."); popup.addItem (6, "Export Mix as WAV...", ! state.tracks.empty()); popup.addSeparator();
+            popup.addItem (5, "Import Audio..."); popup.addItem (6, "Export Arrangement as WAV...", ! state.tracks.empty()); popup.addSeparator();
             popup.addItem (7, "Audio Setup..."); popup.addItem (8, "Manage Plug-ins...");
         }
         else if (index == 1)
         {
             popup.addItem (20, "Undo", session.canUndo()); popup.addItem (21, "Redo", session.canRedo()); popup.addSeparator();
-            popup.addItem (22, showPiano ? "Delete Selected Note" : "Delete Selected Clip", showPiano ? pianoRoll.hasSelectedNote() : selectedClip >= 0);
+            popup.addItem (22, showPiano ? "Delete Selected Note" : showSession ? "Clear Selected Slot" : "Delete Selected Clip", showPiano ? pianoRoll.hasSelectedNote() : showSession ? selectedSlot() != nullptr && selectedSlot()->hasClip : selectedClip >= 0);
         }
         else if (index == 2)
         {
             popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", currentTrack() != nullptr);
             popup.addSeparator(); popup.addItem (32, "Add Plug-in...", currentTrack() != nullptr);
         }
+        else if (index == 3)
+        {
+            popup.addItem (45, "Session"); popup.addItem (43, "Arrangement"); popup.addItem (44, "Piano Roll"); popup.addSeparator();
+            const bool canZoom = ! showSession || showPiano;
+            popup.addItem (40, showPiano ? "Fit Piano Roll" : "Fit Arrangement", canZoom); popup.addItem (41, "Zoom In", canZoom); popup.addItem (42, "Zoom Out", canZoom);
+        }
         else
         {
-            popup.addItem (43, "Arrangement"); popup.addItem (44, "Piano Roll"); popup.addSeparator();
-            popup.addItem (40, showPiano ? "Fit Piano Roll" : "Fit Arrangement"); popup.addItem (41, "Zoom In"); popup.addItem (42, "Zoom Out");
+            const bool sceneSelected = selectedSceneIndex() >= 0;
+            popup.addItem (50, "Insert Scene"); popup.addItem (51, "Rename Selected Scene...", sceneSelected); popup.addItem (52, "Delete Selected Scene", sceneSelected);
+            popup.addSeparator(); popup.addItem (53, "Launch Selected Scene", sceneSelected); popup.addItem (54, "Stop All Session Clips"); popup.addItem (55, "Return to Arrangement");
         }
         return popup;
     }
@@ -1569,16 +2034,23 @@ private:
             case 8: showPlugins(); break;
             case 20: session.undo(); break;
             case 21: session.redo(); break;
-            case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else deleteSelectedClip(); break;
+            case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); break;
             case 30: showPiano = false; addTrack(); resized(); break;
             case 33: addMidiTrack(); break;
-            case 34: createMidiClip (state.position); break;
+            case 34: if (showSession) createLauncherMidiClip(); else createMidiClip (state.position); break;
             case 31: if (selectedTrack >= 0) { session.closePluginEditors(); report (session.removeTrack (selectedTrack)); selectedClip = -1; } break;
             case 32: addPluginMenu(); break;
             case 40: if (showPiano) pianoRoll.fit(); else fitTimeline(); break;
             case 41: if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); break;
             case 42: if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); break;
-            case 43: showPiano = false; resized(); break;
+            case 43: showArrangementView(); break;
+            case 45: showSessionView(); break;
+            case 50: addSceneFromUI(); break;
+            case 51: renameSceneDialog (selectedSceneIndex()); break;
+            case 52: report (session.removeScene (selectedSceneIndex())); break;
+            case 53: report (session.launchScene (selectedSceneIndex())); break;
+            case 54: report (session.stopAllLauncherClips()); break;
+            case 55: report (session.returnToArrangement()); break;
             case 44: openPianoRoll(); break;
             default: break;
         }
@@ -1624,6 +2096,7 @@ private:
     }
     void importDialog()
     {
+        if (showSession) { importSlotDialog (selectedTrack, selectedSceneIndex()); return; }
         chooser = std::make_unique<juce::FileChooser> ("Import Audio", browserFolder, "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
         auto safe = juce::Component::SafePointer<Impl> (this);
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems,
@@ -1720,7 +2193,7 @@ private:
     }
     void chooseExportDestination (double sampleRate, int bitDepth, double tailSeconds)
     {
-        chooser = std::make_unique<juce::FileChooser> ("Export Mix as WAV", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (state.name + ".wav"), "*.wav");
+        chooser = std::make_unique<juce::FileChooser> ("Export Arrangement as WAV", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (state.name + ".wav"), "*.wav");
         auto safe = juce::Component::SafePointer<Impl> (this);
         chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
             [safe, sampleRate, bitDepth, tailSeconds] (const juce::FileChooser& fc)
@@ -1942,6 +2415,7 @@ private:
         {
             auto item = browserItems[(size_t) row];
             if (item.directory) { browserFolder = item.file; browserSearch.clear(); updateBrowser(); }
+            else if (showSession) importLauncherFiles ({ item.file.getFullPathName() }, selectedTrack, selectedSceneIndex());
             else importFiles ({ item.file.getFullPathName() }, selectedTrack, state.position);
         }
     }
@@ -1962,6 +2436,17 @@ private:
             auto safe = juce::Component::SafePointer<Impl> (this); auto file = juce::File (files[0]);
             ensureSaved ([safe, file] { if (safe != nullptr) { safe->report (safe->session.loadProject (file)); safe->resetView(); } }); return;
         }
+        if (showSession && showPiano)
+        {
+            report (juce::Result::fail ("Audio cannot be dropped into the MIDI editor. Choose an empty audio slot in Session."));
+            return;
+        }
+        if (showSession)
+        {
+            const auto cell = launcher.cellAt (launcher.getLocalPoint (this, juce::Point<int> (x, y)));
+            if (cell.first >= 0 && cell.second >= 0) importLauncherFiles (files, cell.first, cell.second);
+            return;
+        }
         const auto p = canvas.getLocalPoint (this, juce::Point<int> (x, y));
         const auto inside = viewport.getBounds().contains (x, y) && p.x < canvas.timelineWidth();
         const auto index = inside && p.y / trackHeight < (int) state.tracks.size() ? p.y / trackHeight : -1;
@@ -1972,7 +2457,7 @@ private:
 
 
 #if HALFTRACK_TESTS_ENABLED
-void MainComponent::Impl::runInteractionChecks()
+void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
 {
     auto check = [] (bool condition, const juce::String& message)
     {
@@ -1997,6 +2482,10 @@ void MainComponent::Impl::runInteractionChecks()
                                 juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
                                 &pianoRoll, &pianoRoll, now, down, now, 1, dragged);
     };
+    const auto arrangementRuler = juce::Point<float> ((float) (55 + 2 * beatWidth), 48.0f);
+    pianoRoll.mouseDown (event (arrangementRuler, arrangementRuler));
+    check (std::abs (state.position - 1.0) < 0.001, "arrangement MIDI ruler seeks the global transport");
+    pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
     auto click = [&] (juce::Point<float> at)
     {
         const auto parentPoint = getLocalPoint (&pianoRoll, at.toInt());
@@ -2060,15 +2549,181 @@ void MainComponent::Impl::runInteractionChecks()
     menuItemSelected (33, 2);
     check (currentMidiClip() != nullptr && currentMidiClip()->notes.empty(),
            "delete, undo, redo and new track leave the piano editor attached to live state");
+    menuItemSelected (45, 3);
+    check (showSession && ! showPiano && state.scenes.size() == 8, "Session view opens the eight real scene rows");
+    const int midiTrack = selectedTrack;
+    auto launcherEvent = [&] (juce::Point<float> at)
+    {
+        const auto now = juce::Time::getCurrentTime();
+        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at,
+                                juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                &launcher, &launcher, now, at, now, 1, false);
+    };
+    const auto slotPoint = juce::Point<float> ((float) (midiTrack * 170 + 65), 79.0f);
+    check (getComponentAt (getLocalPoint (&launcher, slotPoint.toInt())) == &launcher,
+           "Session slot hit testing reaches the production clip-grid handler");
+    launcher.mouseDown (launcherEvent (slotPoint)); launcher.mouseDoubleClick (launcherEvent (slotPoint));
+    check (showPiano && currentMidiClip() != nullptr && currentMidiClip()->lengthBeats == 4 && selectedLauncherClipId.isNotEmpty(),
+           "empty MIDI slot double-click creates and opens its own one-bar clip");
+    const auto launcherClipId = currentMidiClip()->id;
+    const auto launcherNotePoint = juce::Point<float> (139.0f, 322.0f);
+    pianoRoll.mouseDown (event (launcherNotePoint, launcherNotePoint)); pianoRoll.mouseUp (event (launcherNotePoint, launcherNotePoint));
+    check (currentMidiClip()->notes.size() == 1 && currentMidiClip()->notes.front().pitch == 60,
+           "existing piano mouse handler edits the selected Session clip");
+    auto clipIdentities = [this]
+    {
+        std::vector<juce::String> ids;
+        for (const auto& track : state.tracks)
+        {
+            ids.push_back (track.id);
+            for (const auto& clip : track.clips) ids.push_back (clip.id);
+            for (const auto& slot : track.slots) { ids.push_back (slot.id); if (slot.hasClip) ids.push_back (slot.clip.id); }
+        }
+        return ids;
+    };
+    const auto beforeEditorDrop = clipIdentities();
+    const auto editorDropPoint = getLocalPoint (&pianoRoll, launcherNotePoint.toInt());
+    filesDropped ({ audioFixture.getFullPathName() }, editorDropPoint.x, editorDropPoint.y);
+    check (clipIdentities() == beforeEditorDrop && currentMidiClip()->id == launcherClipId
+               && status.contains ("Choose an empty audio slot in Session"),
+           "audio drop onto a Session MIDI editor preserves arrangement and slot content");
+    menuItemSelected (45, 3);
+    launcher.mouseDown (launcherEvent (slotPoint.withY (109.0f)));
+    menuItemSelected (44, 3);
+    check (showPiano && currentMidiClip() == nullptr && selectedLauncherClipId.isEmpty() && selectedSceneIndex() == 1,
+           "Piano Roll on an empty selected Session slot never opens another row's clip");
+    menuItemSelected (45, 3);
+    launcher.mouseDown (launcherEvent (slotPoint)); launcher.mouseDoubleClick (launcherEvent (slotPoint));
+    check (currentMidiClip()->id == launcherClipId && currentMidiClip()->notes.size() == 1,
+           "double-click on an occupied MIDI slot opens it without replacing notes");
+    menuItemSelected (45, 3);
+    launcher.keyPressed (juce::KeyPress (juce::KeyPress::deleteKey));
+    check (! state.tracks[(size_t) midiTrack].slots.front().hasClip, "Session Delete key clears the selected slot");
+    launcher.keyPressed (undo);
+    check (state.tracks[(size_t) midiTrack].slots.front().hasClip && state.tracks[(size_t) midiTrack].slots.front().clip.id == launcherClipId,
+           "slot-clear undo restores clip identity and notes");
+    auto* launchGrid = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Global launch quantization"));
+    check (launchGrid != nullptr, "global launch quantization has a named native control");
+    launchGrid->setSelectedId (1, juce::sendNotificationSync);
+    check (state.launchQuantisation == Session::LaunchQuantisation::none, "quantization control updates the actual launcher setting");
+    auto launchPoint = slotPoint.withX ((float) (midiTrack * 170 + 12));
+    launcher.mouseDown (launcherEvent (launchPoint));
+    pumpSyntheticTestDevice (session, 48); refresh();
+    check (state.tracks[(size_t) midiTrack].slots.front().playing,
+           "Session launch triangle starts the selected clip through the synthetic audio device");
+    menuItemSelected (44, 3);
+    const auto beforeRuler = state;
+    const auto sessionRuler = juce::Point<float> (415.0f, 48.0f);
+    pianoRoll.mouseDown (event (sessionRuler, sessionRuler)); refresh();
+    const auto& beforeSlot = beforeRuler.tracks[(size_t) midiTrack].slots.front();
+    const auto& afterSlot = state.tracks[(size_t) midiTrack].slots.front();
+    check (state.position == beforeRuler.position && afterSlot.playing == beforeSlot.playing
+               && afterSlot.queued == beforeSlot.queued && afterSlot.stopQueued == beforeSlot.stopQueued,
+           "Session MIDI ruler leaves global time and launch state unchanged");
+    menuItemSelected (45, 3);
+    const auto trackStopPoint = juce::Point<float> (launchPoint.x, (float) (launcher.getHeight() - 227 + 12));
+    launcher.mouseDown (launcherEvent (trackStopPoint));
+    pumpSyntheticTestDevice (session, 8); refresh();
+    check (! state.tracks[(size_t) midiTrack].slots.front().playing,
+           "per-track stop control stops the active Session clip");
+    selectLauncherSlot (midiTrack, 0);
+    launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey));
+    pumpSyntheticTestDevice (session, 8); refresh();
+    check (state.tracks[(size_t) midiTrack].slots.front().playing,
+           "Enter key launches the selected Session slot through the production handler");
+    menuItemSelected (43, 3);
+    check (! showSession && state.tracks[(size_t) midiTrack].slots.front().playing,
+           "switching to Arrangement does not stop a launched clip");
+    menuItemSelected (45, 3);
+    const auto sceneCount = state.scenes.size();
+    menuItemSelected (50, 4);
+    const auto addedScene = selectedSceneId;
+    check (state.scenes.size() == sceneCount + 1 && selectedSceneIndex() == (int) state.scenes.size() - 1,
+           "Insert Scene command adds and selects a model scene");
+    menuItemSelected (52, 4);
+    check (state.scenes.size() == sceneCount && selectedSceneId != addedScene && selectedSceneIndex() >= 0,
+           "deleting the selected scene refreshes selection to live scene state");
+    menuItemSelected (20, 1);
+    check (state.scenes.size() == sceneCount + 1 && state.scenes.back().id == addedScene,
+           "scene deletion undo preserves the scene identity");
+    const auto dropPoint = getLocalPoint (&launcher, juce::Point<int> (65, 109));
+    filesDropped ({ audioFixture.getFullPathName() }, dropPoint.x, dropPoint.y);
+    check (state.tracks.front().slots[1].hasClip && ! state.tracks.front().slots[1].clip.isMidi,
+           "production file-drop handler imports decoded audio into the addressed Session slot");
+    const auto audioClipId = state.tracks.front().slots[1].clip.id;
+    if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+    {
+        const juce::File directory (juce::String::fromUTF8 (configured));
+        if (directory.createDirectory().wasOk())
+        {
+            auto* host = getParentComponent();
+            auto capture = [&] (const juce::String& view, int width, int height)
+            {
+                if (host == nullptr) return;
+                const auto oldSize = host->getBounds();
+                host->setSize (width, height); refresh();
+                const auto image = host->createComponentSnapshot (host->getLocalBounds(), true, 1.0f);
+                const auto output = directory.getChildFile (view + "-" + juce::String (width) + "x" + juce::String (height) + ".png");
+                auto stream = output.createOutputStream(); juce::PNGImageFormat png;
+                if (stream && stream->setPosition (0) && stream->truncate().wasOk() && png.writeImageToStream (image, *stream)) std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                else std::cerr << "UI snapshot export failed: " << output.getFullPathName() << std::endl;
+                host->setSize (oldSize.getWidth(), oldSize.getHeight()); refresh();
+            };
+            capture ("session", 1440, 900); capture ("session", 1100, 720);
+            selectLauncherSlot (midiTrack, 0); openPianoRoll();
+            capture ("session-piano", 1440, 900); capture ("session-piano", 1100, 720);
+            showSessionView(); selectLauncherSlot (0, 1);
+        }
+        else std::cerr << "UI snapshot directory could not be created" << std::endl;
+    }
+    status.clear();
+    filesDropped ({ audioFixture.getFullPathName() }, dropPoint.x, dropPoint.y);
+    check (state.tracks.front().slots[1].clip.id == audioClipId && status.contains ("already contains"),
+           "occupied audio-slot drop is rejected without replacing the existing clip");
+    launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey, juce::ModifierKeys (juce::ModifierKeys::shiftModifier), 0));
+    pumpSyntheticTestDevice (session, 8); refresh();
+    check (state.tracks.front().slots[1].playing && ! state.tracks[(size_t) midiTrack].slots.front().playing,
+           "Shift+Enter launches the selected scene and its empty MIDI slot stops the previous clip");
+    menuItemSelected (54, 4);
+    pumpSyntheticTestDevice (session, 8); refresh();
+    check (std::all_of (state.tracks.begin(), state.tracks.end(), [] (const auto& track)
+           { return std::none_of (track.slots.begin(), track.slots.end(), [] (const auto& slot) { return slot.playing || slot.queued; }); }),
+           "Stop All command stops active Session clips through the audio callback");
+    std::vector<bool> overrides; for (const auto& track : state.tracks) overrides.push_back (track.launcherActive);
+    menuItemSelected (43, 3);
+    bool unchanged = ! showSession;
+    for (size_t i = 0; i < overrides.size(); ++i) unchanged = unchanged && state.tracks[i].launcherActive == overrides[i];
+    check (unchanged, "switching to Arrangement leaves launcher playback ownership unchanged");
+    menuItemSelected (55, 4);
+    check (std::none_of (state.tracks.begin(), state.tracks.end(), [] (const auto& track) { return track.launcherActive; }),
+           "Return to Arrangement explicitly releases every launcher override");
+    menuItemSelected (45, 3);
+    selectLauncherSlot (midiTrack, 0);
+    launcher.keyPressed (juce::KeyPress (juce::KeyPress::downKey));
+    check (selectedSceneIndex() == 1, "Session arrow key moves the actual selected slot");
+    menuItemSelected (31, 2); menuItemSelected (20, 1); menuItemSelected (21, 1); menuItemSelected (50, 4);
+    check (currentTrack() != nullptr && selectedSceneIndex() >= 0,
+           "track delete, undo, redo and new scene leave Session selection attached to live state");
 }
 
 int MainComponent::runInteractionTests()
 {
     try
     {
-        Session session (false);
+        juce::TemporaryFile audioFixture (".wav");
+        {
+            std::unique_ptr<juce::OutputStream> stream = audioFixture.getFile().createOutputStream();
+            juce::WavAudioFormat wav;
+            auto writer = stream ? wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (1).withBitsPerSample (16)) : nullptr;
+            if (! writer) throw std::runtime_error ("Could not write UI audio-drop fixture");
+            juce::AudioBuffer<float> audio (1, 4800);
+            for (int i = 0; i < audio.getNumSamples(); ++i) audio.setSample (0, i, 0.1f * std::sin ((float) i * 0.031f));
+            if (! writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples())) throw std::runtime_error ("Could not finish UI audio-drop fixture");
+        }
+        Session session (false, makeSyntheticTestDeviceType());
         MainComponent component (session);
-        component.impl->runInteractionChecks();
+        component.impl->captureTestErrors = true;
+        component.impl->runInteractionChecks (audioFixture.getFile());
         return 0;
     }
     catch (const std::exception& error)
