@@ -194,6 +194,78 @@ void saveAsAudioTests (const juce::File& root)
     checkOutput (slotLevel, "current slot uses relocated media");
     session.stop();
 }
+void saveAsRemovedClipHistoryTests (const juce::File& root)
+{
+    MemoryBuffers buffers;
+    Session session (false);
+    auto& engine = engineFor (session);
+    te::test_utilities::EnginePlayer player (engine, parameters());
+    constexpr float arrangementLevel = 0.11f, slotLevel = 0.23f;
+    const auto arrangement = constantFile (root, "undo-save-arrangement", arrangementLevel, 48000);
+    const auto slot = constantFile (root, "undo-save-slot", slotLevel);
+    ok (session.importAudio (arrangement, 0), "import arrangement for removed-clip history");
+    ok (session.importAudioToSlot (slot, 1, 0), "import slot for removed-clip history");
+    const auto first = root.getChildFile ("Undo original").getChildFile ("Set.halftrack");
+    const auto second = root.getChildFile ("Undo relocated").getChildFile ("Set.halftrack");
+    ok (session.saveProject (first), "save removed-clip history fixture");
+    ok (session.loadProject (first), "load relative media with clean undo history");
+    const auto before = session.snapshot();
+    const auto arrangementId = before.tracks[0].clips[0].id;
+    const auto slotId = before.tracks[1].slots[0].clip.id;
+    ok (session.removeClip (0, 0), "remove arrangement clip before Save As");
+    ok (session.clearSlot (1, 0), "remove slot clip before Save As");
+    ok (session.saveProject (second), "Save As while both audio clips exist only in undo history");
+    session.undo(); session.undo();
+    auto restored = session.snapshot();
+    check (restored.tracks[0].clips.size() == 1 && restored.tracks[1].slots[0].hasClip
+           && restored.tracks[0].clips[0].id == arrangementId && restored.tracks[1].slots[0].clip.id == slotId,
+           "undo after relocation restores both original clip identities");
+    check (restored.tracks[0].clips[0].file == before.tracks[0].clips[0].file
+           && restored.tracks[1].slots[0].clip.file == before.tracks[1].slots[0].clip.file
+           && restored.tracks[0].clips[0].file.existsAsFile() && restored.tracks[1].slots[0].clip.file.existsAsFile(),
+           "undo-only media paths remain anchored to existing sources across Save As");
+    ok (session.saveProject (second), "collect restored undo media into the new project");
+    auto savedXml = juce::XmlDocument::parse (second);
+    int savedAudioSources = 0;
+    const auto checkPortableSources = [&] (auto&& self, const juce::XmlElement& node) -> void
+    {
+        if (node.hasTagName (te::IDs::AUDIOCLIP.toString()))
+        {
+            const auto sourceText = node.getStringAttribute ("source");
+            check (sourceText.isNotEmpty() && ! juce::File::isAbsolutePath (sourceText)
+                   && second.getParentDirectory().getChildFile (sourceText).existsAsFile(),
+                   "serialized restored audio remains project-relative and portable");
+            ++savedAudioSources;
+        }
+        for (auto* child = node.getFirstChildElement(); child != nullptr; child = child->getNextElement()) self (self, *child);
+    };
+    check (savedXml != nullptr, "parse relocated undo-history project");
+    checkPortableSources (checkPortableSources, *savedXml);
+    check (savedAudioSources == 2, "portable check covers both arrangement and slot audio");
+    check (session.canRedo() && ! session.canUndo(), "saving restored media preserves both deletion redo actions");
+    session.redo(); session.redo();
+    check (session.snapshot().tracks[0].clips.empty() && ! session.snapshot().tracks[1].slots[0].hasClip,
+           "actual redo removes both restored clips after their media was collected");
+    session.undo(); session.undo();
+    restored = session.snapshot();
+    const auto assets = second.getSiblingFile ("Set Assets");
+    check (restored.tracks[0].clips[0].file.isAChildOf (assets) && restored.tracks[1].slots[0].clip.file.isAChildOf (assets),
+           "repeated undo resolves restored clips to their newly collected media");
+    check (first.getParentDirectory().deleteRecursively() && arrangement.deleteFile() && slot.deleteFile(),
+           "remove generated old sources after restored media has been collected");
+    registerConstant (buffers, engine, restored.tracks[0].clips[0].file, arrangementLevel, 48000);
+    registerConstant (buffers, engine, restored.tracks[1].slots[0].clip.file, slotLevel);
+    dispatchGraphChanges (session);
+    ok (session.play(), "play arrangement restored from relocated undo history");
+    player.process (1024);
+    level (player.process (8192), 0, 8192, arrangementLevel, "restored arrangement reads retained media");
+    ok (session.setTrackMute (0, true), "isolate restored slot playback");
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::none), "immediate restored slot launch");
+    ok (session.launchSlot (1, 0), "play slot restored from relocated undo history");
+    dispatchGraphChanges (session); player.process (1024);
+    level (player.process (8192), 0, 8192, slotLevel, "restored slot reads retained media");
+    session.stop();
+}
 void audioTests (const juce::File& root, const juce::File& first, const juce::File& second)
 {
     MemoryBuffers buffers; // Outlive the session and every graph reader.
@@ -550,6 +622,7 @@ int runLauncherTests (const juce::File& requestedDirectory)
         const auto first = constantFile (root, "first", 0.12f), second = constantFile (root, "second", 0.28f);
         structureTests (root, first);
         saveAsAudioTests (root);
+        saveAsRemovedClipHistoryTests (root);
         audioTests (root, first, second);
         const auto longArrangement = constantFile (root, "long-arrangement", 0.12f, 96000);
         ownershipTests (longArrangement, second);

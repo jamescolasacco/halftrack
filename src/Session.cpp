@@ -793,8 +793,15 @@ Result Session::loadProject (const File& file)
                         + external->getLoadError());
     for (auto* t : te::getAudioTracks (*candidate))
         for (auto* c : allTrackClips (*t))
-            if (c->usesSourceFile() && ! c->getSourceFileReference().getFile().existsAsFile())
-                return Result::fail ("Missing audio file: " + c->getSourceFileReference().getFile().getFullPathName());
+            if (c->usesSourceFile())
+            {
+                auto& reference = c->getSourceFileReference();
+                const auto resolved = reference.getFile();
+                if (! resolved.existsAsFile()) return Result::fail ("Missing audio file: " + resolved.getFullPathName());
+                // In-memory undo can retain detached clip trees across Save As.
+                // Anchor their media before edits; only the saved copy is relative.
+                reference.source.setValue (resolved.getFullPathName(), nullptr);
+            }
     endEditGesture(); closePluginEditors(); stop(); impl->meters.clear();
     impl->projectFile = file;
     impl->pristineNewDocument = false;
@@ -856,21 +863,13 @@ Result Session::saveProject (const File& destination)
     juce::TemporaryFile temp (file);
     if (! document.writeTo (temp.getFile()) || ! temp.overwriteTargetFileWithTemporary())
         return Result::fail ("Could not write the project file.");
-    const bool directoryChanged = impl->editLocation().getParentDirectory() != file.getParentDirectory();
     impl->projectFile = file;
     impl->edit->editFileRetriever = [this] { return impl->editLocation(); };
     for (auto& [clip, source] : sources)
-    {
-        auto& reference = clip->getSourceFileReference();
-        const auto relativePath = te::SourceFileReference::findPathFromFile (*impl->edit, source, true);
-        const bool sameText = reference.source.get() == relativePath;
-        // Relocation is save bookkeeping. Keep native source notifications
-        // without recording an edit that would discard the user's pending redo.
-        reference.source.setValue (relativePath, nullptr);
-        // A same-name Save As can keep identical relative text in a new folder.
-        // The no-op property assignment then needs the ordinary media refresh.
-        if (directoryChanged && sameText) clip->sourceMediaChanged();
-    }
+        // Keep running and undo-retained sources independent of the project
+        // directory. The written copy above remains relative and portable.
+        // Native listeners refresh playback, but relocation adds no undo action.
+        clip->getSourceFileReference().source.setValue (source.getFullPathName(), nullptr);
     impl->edit->resetChangedStatus();
     impl->explicitChanges = false;
     sendChangeMessage();
