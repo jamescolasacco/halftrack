@@ -1,4 +1,5 @@
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "PluginScanProbe.h"
 
 // Deterministic external plug-in fixture: no I/O, allocation, or locking in processBlock.
 class TestGain final : public juce::AudioProcessor
@@ -7,6 +8,7 @@ public:
     TestGain() : AudioProcessor (BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
                                                    .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
     {
+        halftrack::scan_test::onFixtureConstruction();
         addParameter (gain = new juce::AudioParameterFloat ({"gain", 1}, "Gain", 0.0f, 1.0f, 0.5f));
     }
     const juce::String getName() const override { return "Halftrack Test Gain"; }
