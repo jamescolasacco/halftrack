@@ -78,6 +78,21 @@ Each row below is **NOT RUN** for the candidate build until executed and recorde
 | UI-32 | Edit slot notes, return to Session, delete the track, undo/redo, add another track, then delete/undo a scene containing a clip | Editor/selection references remain valid; no stale clip is edited and the application remains responsive. |
 | UI-33 | While Session clips are active, choose Export Arrangement as WAV; compare the export with arrangement content and inspect playback afterward | The export contains the arrangement, as the command states. Session performance ownership is restored afterward; do not report this as Session performance capture. |
 
+## Sends and return checks
+
+These additions are **NOT RUN** through native mouse/keyboard delivery. Use a disposable project with drawn synth notes or generated audio; the automated signal/handler tests are separate evidence. This optional routing walkthrough supplements the short core smoke path.
+
+| ID | Action | Expected evidence |
+| --- | --- | --- |
+| UI-34 | Choose Insert Return Track from the Track menu; rename it and select an ordinary audio or MIDI track | The return is visibly identified, its input/recording controls are absent, and the selected source has a Sends control bearing the return's name. New sends start Off. |
+| UI-35 | Play the source, raise its send, then move the source fader while changing the destination return between Post and Pre | Post follows the source fader and pan; Pre retains its separate feed. Muting the source silences its Post feed while Pre remains. Restore conservative listening levels before further tests. |
+| UI-36 | Add an intentionally selected, scanned effect to the return and feed it from two sources | Both sources reach that one effect. Bypassing/removing it affects the shared return; it does not replace source processing. Record the actual plug-in tested. |
+| UI-37 | Solo a source, then a return; separately mute the return | Source solo retains return output. Return solo exposes the incoming send mix while other dry outputs are silent. Return mute silences its output. Combined source/return solos follow the documented working default. |
+| UI-38 | Drag one send through several values, release, then Undo and Redo; separately change Pre/Post, rename and delete/restore the return | Each edit restores its prior state, and the send still targets the same return after rename or prior-track deletion. A deleted return leaves no orphaned audible feed. |
+| UI-39 | Switch Arrangement/Session, resize to 1100x720, and select audio, MIDI and return tracks | Sends remain reachable without covering devices. Returns expose their destination mode and do not offer playable clips or recording inputs. A clip drop on a return preserves the project and reports the unsupported destination. |
+| UI-40 | Save with a send at 0 dB and another lower, then reopen and relocate the project plus Assets folder | Routing destinations, levels, Pre/Post, mixer state and media survive. Playback matches the saved mix. |
+| UI-41 | Open a return effect's editor, delete the return, then Undo/Redo | The editor closes before its processor is removed. The restored return opens the actual editor again and remains connected to the intended sources. |
+
 ## Intentional hardware checks
 
 Run these only with an intentionally supplied generated source and selected hardware. Do not use ambient microphone input. Initial status for every platform is **NOT MEASURED** unless a specific report says otherwise.

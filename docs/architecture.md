@@ -80,4 +80,59 @@ A device-free scanner engine discovers the AUv2 identifier through the real chil
 
 Editor ownership stays on the message thread. The Session command reports a loading/error state instead of opening a blank window. The native window factory also requires a ready processor. Halftrack hosts either its custom editor or JUCE's generic parameter editor, notifies the processor via `editorBeingDeleted` before content destruction, and closes the editor before the engine retires its processor.
 
-The pinned asynchronous lifecycle patch clears failed loading state and refuses to initialize a detached plug-in through the edit's UndoManager. If undo/redo reattaches that cached object, its existing track hook resumes initialization. This preserves redo history and prevents late creation from reopening removed editors. The nine-scenario regression also checks attached completion against unrelated redo history. Current evidence is for message-thread completion; worker completion remains a separate hardening task. Exact pins and teardown evidence appear in [dependencies](dependencies.md#tracktion-asynchronous-plug-in-lifecycle-patch).
+The pinned asynchronous lifecycle patch clears failed loading state and refuses to initialize a detached plug-in through the edit's UndoManager. If undo/redo reattaches that cached object, its existing track hook resumes initialization. This preserves redo history and prevents late creation from reopening removed editors. The original nine scenarios also check attached completion against unrelated redo history. Four further deterministic worker scenarios queue the returned processor and error through the JUCE message manager before checking the weak target or touching edit state. Success/failure, undo before delivery and Session destruction before delivery now pass locally; these original fixtures do not establish arbitrary vendor compatibility. Exact pins and teardown evidence appear in [dependencies](dependencies.md#tracktion-asynchronous-plug-in-lifecycle-patch).
+
+## Sends and returns facade
+
+All methods below run on the message thread. `Session::SendMode` is `pre` or `post`.
+`addReturnTrack(String name = {})` creates a return at unity gain, center pan and Post;
+new projects have no returns. `setTrackSendGain(int sourceTrackIndex, const String&
+returnTrackId, float decibels)` accepts finite -100 through 0 dB, with -100 meaning
+exact Off. `setReturnSendMode(const String& returnTrackId, SendMode)` changes the tap
+for every source feeding that return. Destination identity is the native stable
+track ID; renaming and list position never retarget a send.
+
+`TrackInfo::isReturn` identifies returns without changing existing track indices.
+`TrackInfo::sendMode` describes a return's destination-wide tap. Ordinary tracks
+report `TrackInfo::sends` in return-track order, each `SendInfo` containing
+`returnTrackId` and `gainDb`; an absent native send is reported as Off. Returns
+report no outgoing sends. Existing track gain, pan, mute, solo, rename, plug-in and
+remove methods apply to returns. Recording, input assignment and clip operations
+reject returns; scene launches and launcher stop-all skip them.
+
+A return is a native AudioTrack with `halftrackReturn`, `halftrackReturnBus` and
+`halftrackReturnSendMode` properties and one first-position AuxReturnPlugin. Its
+signal order is return input, external effects, track mixer, meter. Ordinary
+tracks use instrument, external effects, Pre sends, track mixer, Post sends,
+meter. Each lazily created native AuxSendPlugin retains its own ID and records
+`halftrackSendReturnID` plus the matching native bus. Surviving bus identities do
+not change when another return is removed. Return deletion also deletes its sends
+in the same engine undo transaction; mode changes move existing sends around the
+mixer, preserving identity and gain. Gesture boundaries group level edits. `cmake/PatchEditSort.cmake` exposes narrowly scoped native pending-sort delivery; Session drains root/subtrack TrackLists and track/slot ClipOwners before a new transaction, after mutations and before a gesture closes. This retains native undo actions inside the initiating edit, including when an export later dispatches the message loop. No general message pumping is added.
+
+Pre taps follow source effects and precede source volume, pan and explicit mute;
+Post taps follow those controls. The source remains dry-muted in either case.
+Return solo retains incoming feeds, and ordinary-track solo retains its return
+effects. For combined solos, a feed is selected when no track is soloed, its
+source is soloed, or its return is soloed; explicit source mute then suppresses
+Post feeds only. Every return output stays audible when any ordinary track is soloed, preserving existing effect tails even without a current feed.
+This combined-solo rule is a documented Halftrack default, not measured reference
+parity. Return mute silences that return's output. Return-origin sends, feedback,
+return-to-return routes and alternate hardware outputs are not exposed.
+
+The native engine processes muted source content so Pre sends and return solo
+remain audible; this costs CPU for muted instruments and effects. Derived send
+enabled states and return solo-isolation states are recomputed on the message
+thread after routing, mute/solo, load and undo/redo, using non-undoable native state
+writes and supported graph rebuilding. They do not change the user's send level
+or run model traversal in the audio callback. Engine callbacks retain the
+separately documented dependency real-time limitations.
+
+Version-1 projects persist the native route tree. Canonical nonzero route/slot identities, track identity collisions, bus, gain,
+mode, plug-in order, return clip restrictions, input aliases and unsupported
+main-output/virtual-input back-routing are checked before
+constructing a candidate Edit. Invalid loads preserve the active edit and undo
+history. The standalone send/return acceptance suite uses original generated PCM
+and plug-ins to verify full-window finite output, independent mix/pan formulas,
+undo, portable reopening, malformed routing, and compensated aux paths. Runtime
+verification results are recorded in progress when that suite has run.
