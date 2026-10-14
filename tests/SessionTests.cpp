@@ -93,6 +93,11 @@ juce::AudioBuffer<float> read (const juce::File& file)
              "48 kHz stereo export retains exactly one second");
     juce::AudioBuffer<float> buffer (2, static_cast<int> (reader->lengthInSamples));
     require (reader->read (&buffer, 0, buffer.getNumSamples(), 0, true, true), "decode export samples");
+    bool finite = true;
+    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            finite = finite && std::isfinite (buffer.getSample (channel, sample));
+    require (finite, "all decoded samples are finite, including silent margins");
     return buffer;
 }
 void compare (const juce::AudioBuffer<float>& actual, const juce::AudioBuffer<float>& original,
@@ -100,16 +105,23 @@ void compare (const juce::AudioBuffer<float>& actual, const juce::AudioBuffer<fl
 {
     double squaredError = 0;
     float maxError = 0;
-    // Exclude startup/dezippering ramps; each render is a fresh graph.
+    require (actual.getNumChannels() == original.getNumChannels()
+             && actual.getNumSamples() == original.getNumSamples(), label + " retains the reference dimensions");
+    bool finite = true;
+    // Validate every value. Only gain error excludes startup/dezippering ramps;
+    // each render is a fresh graph. Boundary alignment has its own latency suite.
     for (int channel = 0; channel < 2; ++channel)
-        for (int sample = 4096; sample < original.getNumSamples() - 1024; ++sample)
+        for (int sample = 0; sample < original.getNumSamples(); ++sample)
         {
             const auto expected = original.getSample (channel, sample) * (channel == 0 ? leftGain : rightGain);
-            auto error = std::abs (actual.getSample (channel, sample) - expected);
+            const auto value = actual.getSample (channel, sample);
+            finite = finite && std::isfinite (expected) && std::isfinite (value);
+            if (sample < 4096 || sample >= original.getNumSamples() - 1024) continue;
+            auto error = std::abs (value - expected);
             squaredError += error * error;
             maxError = juce::jmax (maxError, error);
         }
-    require (maxError < 0.0001f, label + " PCM max error " + juce::String (maxError, 8)
+    require (finite && std::isfinite (squaredError) && maxError < 0.0001f, label + " PCM max error " + juce::String (maxError, 8)
              + ", squared error " + juce::String (squaredError, 8));
 }
 

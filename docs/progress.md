@@ -1,11 +1,14 @@
 # Halftrack progress
 
-Updated 2026-10-13. Current milestone: preview handed off; renewed implementation and local reverse-engineering research authorized. The numbered roadmap supplied later is not an active phase restriction.
+Updated 2026-10-13. Active work continues beyond the delivered preview: native Session launching, complete-window plug-in compensation, and resumable local reference analysis. The numbered roadmap is not an active restriction. Current source is published through `195bcd0`; its three-platform CI is pending.
 
 ## Working and evidenced
 
 - Repository/folder named Halftrack, original SVG identity, AGPL-3.0-only source, pinned C++20/JUCE 8/Tracktion build.
 - Native audio arrangement, generated-source waveforms, playback, mixer gain/pan/mute/solo, input assignment/monitoring, recording, owned media, atomic XML projects, VST3 hosting, offline WAV export.
+- MIDI tracks, stable-ID piano-roll editing, a sixteen-voice subtractive synth, tempo, undo/redo and portable project reopening have automated coverage.
+- Session audio/MIDI slots, scenes, beat/bar launch boundaries, exclusive switching, Stop/Return and graph-rebuild ownership pass local rendered-signal tests. Native UI handlers and malformed-slot project rejection pass. Empty-slot takeover now passes arrangement-only, source-free and rebuild/cancellation cases.
+- Export latency now preserves active clip edges and very short files. The real 127-sample VST3 oracle passes 17 full-window comparisons, including 64-frame clips and five chained delays; ten edge exports also independently decode bit-identically to their dry reference.
 - Initial combined local Mac acceptance suite passed in 15.47 seconds after MIDI/FIFO, editor-handler and export-guard integration. Includes synthetic recording, controlled VST3 state, portable project/media, rendered mixer samples, cancellation preserving an existing destination, tail duration, gesture undo, startup dirty-state regression.
 - Earlier GUI check: four generated stems imported, playback position/meters advanced, CoreAudio output setup visible, Fit and unsaved Discard worked. No microphone was captured.
 
@@ -18,7 +21,7 @@ Updated 2026-10-13. Current milestone: preview handed off; renewed implementatio
 
 ## Missing, not stubbed controls
 
-Session launch grid/scenes, full MIDI expression, automation, advanced routing/racks, full native effect/instrument inventory, CLAP hosting, full stretch/warp editor, hardware stress tests, crash recovery, and cross-platform GUI certification are not complete. No completion claim is based on a control being drawn. Existing unsupported controls are omitted rather than wired to fake processing.
+Additional Session launch modes, follow actions, Session recording, full MIDI expression, automation, sends/returns and advanced routing/racks, full native effect/instrument inventory, CLAP hosting, full stretch/warp editor, hardware stress tests, crash recovery, and cross-platform GUI certification are not complete. No completion claim is based on a control being drawn. Existing unsupported controls are omitted rather than wired to fake processing.
 
 ## Known issues / verification remaining
 
@@ -26,7 +29,7 @@ Session launch grid/scenes, full MIDI expression, automation, advanced routing/r
 - Whole-host strict callback safety is not met: the dependency has locks and recording fallback allocations; see docs/realtime-safety.md.
 - The earlier recording loss is fixed and verified locally and in all three platform CI jobs. Earlier ac20d09 is a historical package containing the discovered defect; use the final refreshed draft.
 - No measured physical input latency, acoustic loopback, deadline stress, or arbitrary plug-in real-time safety evidence.
-- Existing PCM tests exclude opening/closing ramp regions; they do not prove complete-file numerical identity or nonlinear processor parity.
+- The new latency oracle includes opening/closing clip samples. Older mixer tests use settling margins; nonlinear processor parity and whole-product numerical identity remain unproved.
 
 ## Ownership log
 
@@ -113,3 +116,21 @@ UI documentation ownership extension: root authorized the UI agent to append Ses
 Launcher timing ownership extension: root authorized the engine agent to add a separately pin-checked `cmake/PatchClipLauncher.cmake` touching the native track ownership state and switching node. Synthetic audio exposed arrangement leaking back after launch until message-thread publication. The fix must latch audio ownership at the scheduled boundary, preserve it after Stop, and make explicit Return immune to stale callback writes. Root owns the CMake include and dependency/package documentation; this agent owns the narrow patch and regression.
 
 Root has engine-authorized ownership of the narrow raw launcher-shape validation in `Session::loadProject` and independent malformed-slot regressions in `tests/PersistenceTests.cpp`. This validation occurs before engine object creation; engine retains scheduling and native patch ownership.
+
+Export boundary ownership: root owns `tests/LatencyTests.cpp`, the new pin-checked `cmake/PatchRenderLatency.cmake`, and its CMake wiring. Strengthening the existing real VST3 test exposed lost opening samples. The independent reviewer identified ignored audio-view offsets and incorrect short-block trimming in the pinned offline renderer. Engine-owned Session changes are not needed for this correction.
+
+Launcher documentation ownership extension: root authorized the UI agent to reconcile `docs/dependencies.md`, `docs/realtime-safety.md`, `docs/feature-parity.md`, and `docs/preview-verification.md` after commits 8606b05, 0f9e217, and 16cb96b. The update records the three-file launcher patch and locally passing Session/UI subset while keeping current CI, the unresolved latency-edge test, and unperformed manual/hardware checks distinct. Source, architecture, and other progress content remain with their owners.
+
+Empty-slot takeover ownership: root authorized the engine agent to extend `Session`, `tests/LauncherTests.cpp`, the launcher architecture section, and the separately pinned launcher patch (including a narrow `EditNodeBuilder.cpp` hunk). Launching an empty slot or scene cell must silence arrangement audio at the common launch boundary and retain session ownership until Return. A per-track native launch handle schedules that silent takeover; no hidden clip or arrangement mutation is introduced. Root retains CMake/Main, export-latency work, shared build ownership, and final dependency documentation.
+
+Export correction verification: root commit `195bcd0` fixes both native offline-render slice defects. The first red run failed in 8.79 s; fixing only the view offset resolved the 48000-frame cases but left the 64-frame test red (14.14 s). Both fixes pass the full focused latency suite in 17.40 s. Independent 24-bit WAV decoding confirms all ten edge exports match their respective dry graphs exactly. Tooling discovery ran 28 tests (26 passed, 2 optional Ghidra integrations skipped); the owned callback guard passed 9 self-tests and 17 source bodies. Full integration awaits the empty-slot follow-up; no new whole-host or hardware safety claim is made.
+
+Scanner safety ownership: root authorized the independent QA agent to add `cmake/PatchPluginScanner.cmake`, `tests/PluginScanTests.cpp`, and a narrow construction-only probe in the original gain fixture. The public seam is the native known-plug-in scanner with a real child process; tests cover discovery, crash/cancel/restart, and process identity without audio-device or microphone access. Root retains Main/CMake wiring, Session, shared build coordination, and final documentation integration. The patch will synchronize replies and connection flags and reject child-launch failure instead of scanning inside the host. AUv3 discovery remains excluded by the current UI and is not covered by this isolation claim.
+
+Audio-oracle hardening ownership: root owns the narrow `tests/SessionTests.cpp` comparison change following independent review. Decoded audio now rejects nonfinite samples across the whole file; the older steady-gain comparison validates dimensions and finite values even in its settling margins. This does not change application DSP or claim those margins match a reference envelope.
+
+Asynchronous editor ownership extension: root authorized the UI agent to add `tests/PluginEditorTests.cpp` and the exact-pin `cmake/PatchAsyncPlugin.cmake`, then change only `PluginWindow`, `UIBehaviour::createPluginWindow`, and `Session::showPluginEditor` after the engine releases Session.cpp. The test seam uses an original synthetic asynchronous plug-in format and covers loading/failure, actual editor content, and removal/track deletion/undo/project replacement. Root owns Main/CMake wiring and build coordination; launcher and persistence source remain outside this edit.
+
+Integrated empty-slot/export checkpoint: the complete four-test native suite passes in **69.62 seconds** (latency 15.57 s, UI 0.83 s, launcher 3.59 s, session 49.61 s), including root's finite-sample oracle checks. Engine commit `b24cb42` owns silent empty targets through source insertion, graph rebuilds and all-scenes deletion; explicit Return restores arrangement playback. Root reconciled architecture, research contract and manual UI-26 expectations after engine released the shared documentation. Those manual checks remain NOT RUN. The new scanner and asynchronous-editor regressions are separate work in progress.
+
+Reference interaction check: the installed application reopened, but macOS refused terminal Accessibility access (osascript error -25211). No reference project was edited or recording captured. Automated firsthand interaction remains unverified in this environment; this does not block independent implementation or offline tests.
