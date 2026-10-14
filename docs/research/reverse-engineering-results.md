@@ -2,6 +2,8 @@
 
 Recorded 2026-10-13. This is a reproducible starting point for binary-assisted research, not a reconstructed application or an exact-clone claim. Tool and skill selection is explained in the [toolchain report](reverse-engineering-toolchain.md), [vetted skill report](reverse-engineering-skills.md), and [behavioral measurement report](behavioral-parity-measurement.md). The [local runbook](reverse-engineering-runbook.md) records reproducible commands and interpretation checks.
 
+Latest 2026-10-14 continuation: **392,910 / 392,926** main ARM64 declared entries have verified outputs; seven failures and nine timeouts remain. The [residual-recovery report](residual-extraction-recovery.md) records the additional 64 recoveries, instruction-model tests and retained errors. Earlier checkpoints below remain historical evidence. Additional native components are tracked in [their separate audit](additional-component-audit.md).
+
 ## Reference identity and independent inventory
 
 Installed reference: Ableton Live 12 Suite, version **12.2.1**, build **2025-06-05_c0d59beb04**. Main executable size: **300,162,224 bytes**. SHA-256 before and after analysis: `b16188a466a26e6b9174a8819411d47c1255fd122242258a88a23dba2f096f2d`. The installed executable was not modified.
@@ -104,7 +106,7 @@ At the same thirty-second budget and modeled-body hash, one entry changed from t
 The verified throw import was then marked non-returning in the copy. At the original twenty-second budget, a separate explicit retry of **148** prior decompiler-stage failures/timeouts finished with **65 completed / 63 failed / 20 timed out**. Three preparation/data candidates remain excluded from this retry and remain unsuccessful in the full inventory. A separate continuation selected the remaining 33,823 previously unattempted entries and sixteen later baseline timeouts, totaling 33,839 addresses. Its completed outcome and subsequent retry appear below; original failures and all per-step manifests are preserved. No extracted implementation enters Halftrack, and these recovery counts do not represent completed DAW features.
 
 
-### Final bounded-pass verification, 2026-10-14
+### Earlier bounded-pass verification, 2026-10-14
 
 All **392,926** declared ARM64 entries have now been attempted. The independent read-only verifier checked **392,846 completed files totaling 868,144,041 bytes**, with zero missing, empty or hash-mismatched outputs. Combined address coverage is **392,846 completed / 66 failed / 14 timed out / zero interrupted / zero unattempted**. Retries recovered 87 of the frozen baseline's unsuccessful entries. The installed universal executable and isolated input still match their original SHA-256 values.
 

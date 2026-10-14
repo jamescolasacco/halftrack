@@ -16,13 +16,13 @@ Every listed ARM64 and x86-64 slice was copied by verified universal-container b
 
 | Component | ARM64 completed / declared | x86-64 completed / declared |
 | --- | ---: | ---: |
-| Amplifier | 1454 | 1453 |
-| Analog | 991 | 987 |
-| Cabinet | 1328 | 1309 |
-| Collision | 824 | 820 |
-| Corpus | 534 | 534 |
-| Electric | 656 | 652 |
-| Tension | 941 | 937 |
+| Amplifier | 1454 / 1454 | 1453 / 1453 |
+| Analog | 991 / 991 | 987 / 987 |
+| Cabinet | 1328 / 1328 | 1309 / 1309 |
+| Collision | 824 / 824 | 820 / 820 |
+| Corpus | 534 / 534 | 534 / 534 |
+| Electric | 656 / 656 | 652 / 652 |
+| Tension | 941 / 941 | 937 / 937 |
 
 All **13,420** declared entries across the fourteen slices now have verified extraction output; none remain failed, timed out or unattempted in this device set. The chosen successful outputs total **58,749,683 bytes**. The compact index of per-component verifier hashes has SHA-256 `ce7231ef6da14e9926bc69724a89bfe4e420db411ae52cab971b52c75d774662`. The source binary, modeled instruction body and output each have distinct fingerprints in the retained evidence.
 
@@ -34,6 +34,18 @@ A separate bounded auto-analysis model of the Analog ARM64 slice resolved its ou
 
 Halftrack source `ea24869` now implements actual sine, white-noise and adjustable pulse synthesis with UI, validation, native undo, persistence and complete offline audio tests. Its [oscillator contract](synth-oscillator-contract.md) distinguishes publicly described waveform behavior from explicit Halftrack defaults. It does not claim translation of the complete reference device. All eight local Mac suites pass in 133.15 seconds, and [CI 38518528688](https://github.com/jamescolasacco/halftrack/actions/runs/38518528688) passes on macOS, Windows and Linux.
 
+## Native scanner component
+
+The independent combined audit verifies **36,590 unique outputs out of 36,599 declared ARM64 entries**, retaining seven failures and two timeouts, with none interrupted or unattempted. The first pass produced 36,582 outputs. A 120-second retry recovered one timeout. A subsequent isolated metadata correction recovered eight entries from the original unresolved selection, including that prior recovery; the combined gain is eight, not nine.
+
+The metadata pass independently checked three exception/abort import bindings, two non-returning exception helpers and two exact direct tail branches before annotation. It used a distinct copied project and the fixture-validated instruction models described in [main residual recovery](residual-extraction-recovery.md). Combined metadata/tool changes support this pass's aggregate result; they do not isolate every individual cause. The installed scanner and its isolated slice retain their original hashes. No scanner target code was executed.
+
+The verifier checked **36,591 completed files across the three overlapping runs**, totaling **87,777,589 bytes**; the duplicate successful address counts once in coverage. The seven retained failures comprise three preparation/decoding failures, three dynamic-variable hash errors and one memory-range error. Two entries still time out. The Intel scanner slice has been inventoried but has not had an equivalent extraction pass.
+
+ARM64 input SHA-256: `489d53c5763e334c3d27b9a776b97c5404dd23545d25a4a997e4175df62fc3f7`. Combined verification SHA-256: `2940b9bd56c15cf71417b34394328fb6ee763e6ba6fdbf7f274c542c614c8b67`.
+
+Halftrack already uses its own tested separate-process scanner integration. This analysis does not replace it with reconstructed reference code or establish compatibility with every vendor plug-in.
+
 ## Remaining work
 
-The native plug-in scanner is a separate 36,599-entry ARM64 pass in progress, with no final verified total yet. Other helpers, framework slices, the unsupported legacy candidate, scripts and embedded archives remain outside completed decompilation coverage. Main-program residual recovery is tracked separately in [the main research results](reverse-engineering-results.md). Full device graphs, modulation, filters, parameter mappings and paired reference renders remain necessary before any sound-equivalence claim. The existing Accessibility denial still prevents automated first-hand reference interaction; this static pass does not resolve it.
+The scanner has nine unresolved ARM64 entries and an unprocessed Intel slice. Other helpers, framework slices, the unsupported legacy candidate, scripts and embedded archives remain outside completed decompilation coverage. Main-program residual recovery is tracked separately in [the main research results](reverse-engineering-results.md). Full device graphs, modulation, filters, parameter mappings and paired reference renders remain necessary before any sound-equivalence claim. The existing Accessibility denial still prevents automated first-hand reference interaction; this static pass does not resolve it.

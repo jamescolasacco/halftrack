@@ -1,6 +1,6 @@
 # Halftrack feature-parity ledger
 
-Capability planning inventory, revised 2026-10-13. These are proposed behavior tests, not completed parity claims. See [specification policy](research/workflows.md).
+Capability planning inventory, revised 2026-10-14. These are proposed behavior tests, not completed parity claims. See [specification policy](research/workflows.md).
 
 **This is a planned capability inventory, not a claim that every reference DAW function has been examined.** Entries began as **NOT IMPLEMENTED / UNVERIFIED**. The preview and Session rows below now record narrowly scoped evidence; unverified rows retain their initial status. No completion is inferred from a screenshot, a control, a class name, a build, or another contributor's in-progress code.
 
@@ -23,6 +23,8 @@ A verification record should name the row ID, reference version, Halftrack commi
 There are **170 behavior/scope rows** and **105 device/content rows** in this initial ledger. These are backlog entries, not a completed-feature count.
 
 ## Current Session subset
+
+The built-in instrument at `ea24869` adds sine, deterministic white noise and adjustable pulse width alongside the existing saw. Native controls, invalid-command preservation, project round trips, undo/redo and independent complete-buffer/harmonic tests pass all eight Mac suites in 133.15 seconds and [all three CI platforms](https://github.com/jamescolasacco/halftrack/actions/runs/38518528688). See the [oscillator contract](research/synth-oscillator-contract.md). Dual oscillators, full modulation, complete instrument-device reconstruction and measured reference sound matching remain absent or unverified.
 
 Grouped piano-roll editing and the validating note-batch facade at `13406de` pass all eight local suites in 133.69 seconds. Shift selection/marquee, Select All/Escape, common group movement/resize, set-value velocity, group deletion, stable-ID pruning and one-step undo/redo have handler/model coverage, including 512 notes and rejection of infeasible loaded groups. This remains one-clip editing with Halftrack's current drawing convention, not full MIDI-editor parity; the published grouped-note checkpoint `9b59843` passes all three CI platforms.
 
@@ -282,7 +284,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | --- | --- | --- | --- |
 | QA-001 | Realtime thread discipline | Instrument callbacks for allocation, locking, I/O, unbounded work, and missed deadlines under representative load. | NOT IMPLEMENTED / UNVERIFIED |
 | QA-002 | Long-running transport | Run an extended scripted session with edits/recording; measure dropouts, drift, memory growth, and file-handle leaks. | NOT IMPLEMENTED / UNVERIFIED |
-| QA-003 | Deterministic engine fixtures | Render generated impulses, sine waves, noise, and MIDI patterns; compare declared numerical tolerances across platforms. | NOT IMPLEMENTED / UNVERIFIED |
+| QA-003 | Deterministic engine fixtures | Independent mixer, synth sine/noise/pulse, MIDI and plug-in-delay fixtures pass macOS, Windows and Linux CI at `ea24869`; see the oscillator and preview verification records. Cross-platform captured-buffer equivalence and paired reference renders remain unverified. | PARTIAL — independent fixtures in three-platform CI |
 | QA-004 | Independent decoder validation | Read exported files independently; verify metadata, sample count, channels, peak level, and absence of unintended silence. | NOT IMPLEMENTED / UNVERIFIED |
 | QA-005 | Audio-thread/UI separation | Stress browser search, repaint, window resize, and file dialogs while recording without losing callback deadlines. | NOT IMPLEMENTED / UNVERIFIED |
 | QA-006 | Large sessions | Scale tracks, clips, automation, and media deliberately; record load/save/render times and peak memory. | NOT IMPLEMENTED / UNVERIFIED |
