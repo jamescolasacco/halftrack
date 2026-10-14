@@ -9,6 +9,7 @@ namespace halftrack
 int runPersistenceTests (const juce::File&);
 int runRecordingTests (const juce::File&);
 int runLatencyTests (const juce::File&);
+int runLauncherTests (const juce::File&);
 #if HALFTRACK_TESTS_ENABLED
 int runRealtimeTests();
 #endif
@@ -27,6 +28,24 @@ public:
         auto args = juce::StringArray::fromTokens (commandLine, true);
         args.removeEmptyStrings();
         for (auto& arg : args) arg = arg.unquoted();
+        #if HALFTRACK_TESTS_ENABLED
+        if (args.contains ("--self-test-ui"))
+        {
+            setApplicationReturnValue (MainComponent::runInteractionTests());
+            quit();
+            return;
+        }
+        #endif
+        if (args.contains ("--self-test-launcher"))
+        {
+            const int i = args.indexOf ("--self-test-launcher");
+            const auto destination = i + 1 < args.size()
+                ? juce::File (args[i + 1])
+                : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-tests");
+            setApplicationReturnValue (runLauncherTests (destination));
+            quit();
+            return;
+        }
         if (args.contains ("--self-test-latency"))
         {
             const int i = args.indexOf ("--self-test-latency");
@@ -58,7 +77,6 @@ public:
             if (result == 0) result = runPersistenceTests (destination);
             #if HALFTRACK_TESTS_ENABLED
             if (result == 0) result = runRealtimeTests();
-            if (result == 0) result = MainComponent::runInteractionTests();
             #endif
             setApplicationReturnValue (result);
             quit();

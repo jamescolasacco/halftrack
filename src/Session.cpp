@@ -49,6 +49,35 @@ Result useTrackMixer (te::AudioTrack& track)
     return Result::ok();
 }
 
+// Arrangement and launcher clips share source ownership, but not playback placement.
+juce::Array<te::Clip*> allTrackClips (te::AudioTrack& track)
+{
+    auto result = track.getClips();
+    for (auto* slot : track.getClipSlotList().getClipSlots())
+        if (auto* clip = slot->getClip()) result.add (clip);
+    return result;
+}
+
+Session::ClipInfo describeClip (te::Clip& clip)
+{
+    Session::ClipInfo result;
+    const auto position = clip.getPosition();
+    result.id = clip.itemID.toString(); result.name = clip.getName();
+    result.start = position.time.getStart().inSeconds(); result.length = position.time.getLength().inSeconds();
+    result.sourceOffset = position.offset.inSeconds();
+    if (clip.usesSourceFile()) result.file = clip.getSourceFileReference().getFile();
+    if (auto* midi = dynamic_cast<te::MidiClip*> (&clip))
+    {
+        result.isMidi = true;
+        const auto beats = clip.edit.tempoSequence.toBeats (position.time);
+        result.startBeat = beats.getStart().inBeats(); result.lengthBeats = beats.getLength().inBeats();
+        for (auto* note : midi->getSequence().getNotes())
+            result.notes.push_back ({ note->state.getProperty (midiNoteIDProperty).toString(), note->getNoteNumber(),
+                                     note->getStartBeat().inBeats(), note->getLengthBeats().inBeats(), note->getVelocity() / 127.0f });
+    }
+    return result;
+}
+
 class Behaviour final : public te::EngineBehaviour
 {
 public:
@@ -228,8 +257,54 @@ struct Session::Impl
     te::MidiClip* midiClip (const String& id) const
     {
         for (auto* t : te::getAudioTracks (*edit))
-            for (auto* c : t->getClips()) if (c->itemID.toString() == id) return dynamic_cast<te::MidiClip*> (c);
+            for (auto* c : allTrackClips (*t)) if (c->itemID.toString() == id) return dynamic_cast<te::MidiClip*> (c);
         return nullptr;
+    }
+    te::ClipSlot* slot (int trackIndex, int sceneIndex) const
+    {
+        if (! juce::isPositiveAndBelow (sceneIndex, edit->getSceneList().getNumScenes())) return nullptr;
+        if (auto* t = track (trackIndex)) return t->getClipSlotList().getClipSlots()[sceneIndex];
+        return nullptr;
+    }
+    void cancelLaunches()
+    {
+        for (auto* t : te::getAudioTracks (*edit))
+            for (auto* slot : t->getClipSlotList().getClipSlots())
+                if (auto* c = slot->getClip()) if (auto h = c->getLaunchHandle()) h->stop (std::nullopt);
+    }
+    std::optional<te::MonotonicBeat> launchBoundary() const
+    {
+        auto& transport = edit->getTransport();
+        if (! transport.isPlaying() || edit->getLaunchQuantisation().type == te::LaunchQType::none) return {};
+        if (auto* context = transport.getCurrentPlaybackContext())
+            if (auto sync = context->getSyncPoint())
+            {
+                auto& quantisation = edit->getLaunchQuantisation();
+                auto next = quantisation.getNext (sync->beat);
+                auto distance = next - sync->beat;
+                if (transport.looping)
+                {
+                    const auto loop = edit->tempoSequence.toBeats (transport.getLoopRange());
+                    if (loop.contains (sync->beat) && next >= loop.getEnd())
+                    {
+                        auto wrapped = quantisation.getNext (loop.getStart());
+                        if (! loop.contains (wrapped)) wrapped = loop.getStart();
+                        distance = loop.getEnd() - sync->beat + (wrapped - loop.getStart());
+                    }
+                }
+                return te::MonotonicBeat { sync->monotonicBeat.v + distance };
+            }
+        return {};
+    }
+    void queueTrack (te::AudioTrack& track, te::Clip* selected, std::optional<te::MonotonicBeat> boundary)
+    {
+        for (auto* slot : track.getClipSlotList().getClipSlots())
+            if (auto* c = slot->getClip())
+                if (auto h = c->getLaunchHandle())
+                {
+                    if (c == selected) h->play (boundary);
+                    else h->stop (boundary);
+                }
     }
     static SubtractiveSynthPlugin* synth (te::AudioTrack& track)
     {
@@ -352,6 +427,11 @@ Session::Snapshot Session::snapshot() const
     s.loopStart = transport.getLoopRange().getStart().inSeconds();
     s.loopEnd = transport.getLoopRange().getEnd().inSeconds();
     s.cpu = impl->engine.getDeviceManager().getCpuUsage();
+    for (auto* scene : e.getSceneList().getScenes())
+        s.scenes.push_back ({ scene->state.getProperty ("halftrackSceneID").toString(), scene->name.get() });
+    const auto quantisation = e.getLaunchQuantisation().type.get();
+    s.launchQuantisation = quantisation == te::LaunchQType::none ? LaunchQuantisation::none
+        : quantisation == te::LaunchQType::quarter ? LaunchQuantisation::beat : LaunchQuantisation::bar;
     int index = 0;
     for (auto* t : te::getAudioTracks (e))
     {
@@ -372,24 +452,32 @@ Session::Snapshot Session::snapshot() const
             auto& m = impl->meter (info.id, level->measurer);
             info.peakL = m.read (0); info.peakR = m.read (1);
         }
-        for (auto* c : t->getClips())
+        for (auto* c : t->getClips()) info.clips.push_back (describeClip (*c));
+        info.launcherActive = t->playSlotClips.get() || (t->launcherOwnership.load (std::memory_order_acquire) & 1) != 0;
+        for (auto* slot : t->getClipSlotList().getClipSlots())
         {
-            auto pos = c->getPosition();
-            ClipInfo clipInfo;
-            clipInfo.id = c->itemID.toString(); clipInfo.name = c->getName();
-            clipInfo.start = pos.time.getStart().inSeconds(); clipInfo.length = pos.time.getLength().inSeconds();
-            clipInfo.sourceOffset = pos.offset.inSeconds();
-            if (c->usesSourceFile()) clipInfo.file = c->getSourceFileReference().getFile();
-            if (auto* midi = dynamic_cast<te::MidiClip*> (c))
+            SlotInfo slotInfo;
+            slotInfo.id = slot->itemID.toString();
+            if (auto* c = slot->getClip())
             {
-                clipInfo.isMidi = true;
-                const auto beats = e.tempoSequence.toBeats (pos.time);
-                clipInfo.startBeat = beats.getStart().inBeats(); clipInfo.lengthBeats = beats.getLength().inBeats();
-                for (auto* note : midi->getSequence().getNotes())
-                    clipInfo.notes.push_back ({ note->state.getProperty (midiNoteIDProperty).toString(), note->getNoteNumber(),
-                                               note->getStartBeat().inBeats(), note->getLengthBeats().inBeats(), note->getVelocity() / 127.0f });
+                slotInfo.hasClip = true; slotInfo.clip = describeClip (*c);
+                if (auto h = c->getLaunchHandle())
+                {
+                    slotInfo.playing = s.playing && h->getPlayingStatus() == te::LaunchHandle::PlayState::playing;
+                    slotInfo.queued = h->getQueuedStatus() == te::LaunchHandle::QueueState::playQueued;
+                    slotInfo.stopQueued = h->getQueuedStatus() == te::LaunchHandle::QueueState::stopQueued;
+                    if (slotInfo.playing)
+                        if (auto played = h->getPlayedRange())
+                        {
+                            const auto loop = c->getLoopRangeBeats();
+                            slotInfo.playPositionBeats = played->getLength().inBeats();
+                            if (loop.getLength().inBeats() > 0)
+                                slotInfo.playPositionBeats = loop.getStart().inBeats()
+                                    + std::fmod (slotInfo.playPositionBeats, loop.getLength().inBeats());
+                        }
+                }
             }
-            info.clips.push_back (std::move (clipInfo));
+            info.slots.push_back (std::move (slotInfo));
         }
         for (auto* p : impl->plugins (index++)) info.plugins.push_back ({ p->itemID.toString(), p->getName(), p->isEnabled() });
         s.tracks.push_back (std::move (info));
@@ -420,6 +508,12 @@ Result Session::newProject()
     impl->edit->getTransport().setLoopRange ({ te::TimePosition::fromSeconds (0), te::TimePosition::fromSeconds (8) });
     for (auto* t : te::getAudioTracks (*impl->edit)) impl->edit->deleteTrack (t);
     addAudioTrack ("Audio 1"); addAudioTrack ("Audio 2");
+    impl->edit->getSceneList().ensureNumberOfScenes (8);
+    for (auto* scene : impl->edit->getSceneList().getScenes())
+    {
+        scene->state.setProperty ("halftrackSceneID", juce::Uuid().toString(), nullptr);
+        scene->name = "Scene " + String (scene->getIndex() + 1);
+    }
     impl->prepareEdit();
     impl->pristineNewDocument = true;
     return Result::ok();
@@ -434,6 +528,34 @@ Result Session::loadProject (const File& file)
     auto* editXml = xml->getChildByName ("EDIT");
     if (! editXml) return Result::fail ("The project has no session data.");
     auto state = juce::ValueTree::fromXml (*editXml);
+    // Reject malformed launcher ownership before native constructors can build
+    // hidden clips or assert on a slot containing more than one clip.
+    int savedSceneCount = 0;
+    for (const auto& child : state.getChildWithName (te::IDs::SCENES))
+        if (child.hasType (te::IDs::SCENE)) ++savedSceneCount;
+    if (savedSceneCount > 256) return Result::fail ("This project exceeds the supported scene count.");
+    const auto validateSlots = [&] (auto&& self, const juce::ValueTree& node) -> Result
+    {
+        if (node.hasType (te::IDs::CLIPSLOTS))
+        {
+            int rowCount = 0;
+            for (const auto& slot : node)
+                if (slot.hasType (te::IDs::CLIPSLOT))
+                {
+                    ++rowCount;
+                    int clipCount = 0;
+                    for (const auto& clip : slot)
+                        if (te::Clip::isClipState (clip) && ++clipCount > 1)
+                            return Result::fail ("A session slot cannot contain more than one clip.");
+                }
+            if (rowCount > savedSceneCount)
+                return Result::fail ("This project has clip slots without matching scenes.");
+        }
+        for (const auto& child : node)
+            if (auto result = self (self, child); result.failed()) return result;
+        return Result::ok();
+    };
+    if (auto result = validateSlots (validateSlots, state); result.failed()) return result;
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
     auto options = te::Edit::Options { impl->engine, state, id };
@@ -449,13 +571,21 @@ Result Session::loadProject (const File& file)
                         + ". Open Scan / Manage Plug-ins and scan its installed format, then reopen this project. "
                         + external->getLoadError());
     for (auto* t : te::getAudioTracks (*candidate))
-        for (auto* c : t->getClips())
+        for (auto* c : allTrackClips (*t))
             if (c->usesSourceFile() && ! c->getSourceFileReference().getFile().existsAsFile())
                 return Result::fail ("Missing audio file: " + c->getSourceFileReference().getFile().getFullPathName());
     endEditGesture(); closePluginEditors(); stop(); impl->meters.clear();
     impl->projectFile = file;
     impl->pristineNewDocument = false;
     impl->edit = std::move (candidate);
+    for (auto* t : te::getAudioTracks (*impl->edit))
+    {
+        t->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
+        t->playSlotClips = false;
+    }
+    for (auto* scene : impl->edit->getSceneList().getScenes())
+        if (! scene->state.hasProperty ("halftrackSceneID"))
+            scene->state.setProperty ("halftrackSceneID", juce::Uuid().toString(), nullptr);
     impl->prepareEdit();
     impl->refreshInputs();
     for (auto* t : te::getAudioTracks (*impl->edit))
@@ -481,7 +611,7 @@ Result Session::saveProject (const File& destination)
     std::map<String, File> copied;
     std::vector<std::pair<te::Clip*, File>> sources;
     for (auto* t : te::getAudioTracks (*impl->edit))
-        for (auto* c : t->getClips())
+        for (auto* c : allTrackClips (*t))
         {
             if (! c->usesSourceFile()) continue;
             auto original = c->getSourceFileReference().getFile();
@@ -528,6 +658,7 @@ Result Session::addAudioTrack (String name)
     t->setColour (juce::Colour (colours[count % 6]));
     if (auto result = useTrackMixer (*t); result.failed()) return result;
     t->getVolumePlugin()->setVolumeDb (0);
+    t->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
     impl->changed();
     return Result::ok();
 }
@@ -547,6 +678,7 @@ Result Session::addMidiTrack (String name)
     auto synth = impl->edit->getPluginCache().createNewPlugin (SubtractiveSynthPlugin::xmlTypeName, {});
     if (! synth) return Result::fail ("Could not create the built-in synthesizer.");
     track->pluginList.insertPlugin (synth, 0, nullptr);
+    track->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
     impl->changed(); return Result::ok();
 }
 Result Session::addMidiClip (const String& trackId, double start, double length)
@@ -563,6 +695,158 @@ Result Session::addMidiClip (const String& trackId, double start, double length)
     clip->setSyncType (te::Clip::syncBarsBeats);
     impl->changed(); return Result::ok();
 }
+Result Session::addScene (String name)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing scenes.");
+    auto& list = impl->edit->getSceneList();
+    const auto count = list.getNumScenes();
+    if (count >= 256) return Result::fail ("This project has reached the scene limit.");
+    impl->transaction ("Add scene");
+    list.ensureNumberOfScenes (count + 1);
+    auto* scene = list.getScenes()[count];
+    scene->state.setProperty ("halftrackSceneID", juce::Uuid().toString(), &impl->edit->getUndoManager());
+    scene->name = name.trim().isEmpty() ? "Scene " + String (count + 1) : name.trim();
+    impl->changed(); return Result::ok();
+}
+Result Session::removeScene (int index)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing scenes.");
+    auto& list = impl->edit->getSceneList();
+    if (! juce::isPositiveAndBelow (index, list.getNumScenes())) return Result::fail ("Scene not found.");
+    impl->transaction ("Remove scene");
+    list.deleteScene (*list.getScenes()[index]);
+    impl->changed(); return Result::ok();
+}
+Result Session::renameScene (int index, const String& name)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto& list = impl->edit->getSceneList();
+    if (! juce::isPositiveAndBelow (index, list.getNumScenes())) return Result::fail ("Scene not found.");
+    if (name.trim().isEmpty()) return Result::fail ("Enter a scene name.");
+    impl->transaction ("Rename scene"); list.getScenes()[index]->name = name.trim();
+    impl->changed(); return Result::ok();
+}
+Result Session::importAudioToSlot (const File& source, int trackIndex, int sceneIndex)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing slots.");
+    auto* slot = impl->slot (trackIndex, sceneIndex);
+    if (! slot) return Result::fail ("Slot not found.");
+    if (slot->getClip()) return Result::fail ("Clear this slot before importing another clip.");
+    if (static_cast<bool> (slot->track.state.getProperty (midiTrackProperty))) return Result::fail ("Import audio onto an audio track.");
+    te::AudioFile audio (impl->engine, source);
+    if (! audio.isValid() || audio.getLength() <= 0) return Result::fail ("This audio file could not be read.");
+    auto assets = impl->assets(); auto result = assets.createDirectory(); if (result.failed()) return result;
+    auto file = source.isAChildOf (assets) ? source : assets.getNonexistentChildFile (source.getFileNameWithoutExtension(), source.getFileExtension(), true);
+    if (file != source && ! source.copyFileTo (file)) return Result::fail ("Could not copy the imported audio.");
+    impl->transaction ("Import session clip");
+    const te::TimeRange range { te::TimePosition::fromSeconds (0), te::TimePosition::fromSeconds (audio.getLength()) };
+    auto clip = te::insertWaveClip (*slot, source.getFileNameWithoutExtension(), file, { range, {} }, te::DeleteExistingClips::no);
+    if (! clip) return Result::fail ("Could not create the audio clip.");
+    clip->getSourceFileReference().setToFile (file, te::SourceFileReference::PathStyle::alwaysAbsolute, false);
+    clip->setAutoTempo (true); clip->setAutoPitch (false); clip->setUsesProxy (false);
+    clip->setLoopRange (range);
+    clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
+    impl->changed(); return Result::ok();
+}
+Result Session::addMidiClipToSlot (const String& trackId, int sceneIndex, double length)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing slots.");
+    auto* track = impl->track (trackId);
+    if (! track || ! static_cast<bool> (track->state.getProperty (midiTrackProperty))) return Result::fail ("Select a MIDI track first.");
+    if (! juce::isPositiveAndBelow (sceneIndex, impl->edit->getSceneList().getNumScenes())) return Result::fail ("Scene not found.");
+    auto* slot = track->getClipSlotList().getClipSlots()[sceneIndex];
+    if (! slot) return Result::fail ("Slot not found.");
+    if (slot->getClip()) return Result::fail ("Clear this slot before creating another clip.");
+    if (! std::isfinite (length) || length <= 0 || length > 1000000) return Result::fail ("Enter a positive clip length in beats.");
+    impl->transaction ("Add session MIDI clip");
+    const te::BeatRange beats { te::BeatPosition::fromBeats (0), te::BeatPosition::fromBeats (length) };
+    auto clip = te::insertMIDIClip (*slot, "MIDI clip", impl->edit->tempoSequence.toTime (beats));
+    if (! clip) return Result::fail ("Could not create the MIDI clip.");
+    clip->setSyncType (te::Clip::syncBarsBeats); clip->setLoopRangeBeats (beats);
+    impl->changed(); return Result::ok();
+}
+Result Session::clearSlot (int trackIndex, int sceneIndex)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing slots.");
+    auto* slot = impl->slot (trackIndex, sceneIndex);
+    if (! slot) return Result::fail ("Slot not found.");
+    if (auto* clip = slot->getClip())
+    {
+        impl->transaction ("Clear session clip"); clip->removeFromParent(); impl->changed();
+    }
+    return Result::ok();
+}
+Result Session::setLaunchQuantisation (LaunchQuantisation quantisation)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    te::LaunchQType type;
+    switch (quantisation)
+    {
+        case LaunchQuantisation::none: type = te::LaunchQType::none; break;
+        case LaunchQuantisation::beat: type = te::LaunchQType::quarter; break;
+        case LaunchQuantisation::bar: type = te::LaunchQType::bar; break;
+        default: return Result::fail ("Unknown launch quantisation.");
+    }
+    impl->transaction ("Launch quantisation"); impl->edit->getLaunchQuantisation().type = type;
+    impl->changed(); return Result::ok();
+}
+Result Session::launchSlot (int trackIndex, int sceneIndex)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* slot = impl->slot (trackIndex, sceneIndex);
+    if (! slot) return Result::fail ("Slot not found.");
+    if (! slot->getClip()) return stopLauncherTrack (trackIndex);
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio output in Audio Settings.");
+    impl->edit->dispatchPendingUpdatesSynchronously();
+    impl->edit->getTransport().ensureContextAllocated();
+    impl->queueTrack (*impl->track (trackIndex), slot->getClip(), impl->launchBoundary());
+    if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().play (false);
+    sendChangeMessage(); return Result::ok();
+}
+Result Session::launchScene (int sceneIndex)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! juce::isPositiveAndBelow (sceneIndex, impl->edit->getSceneList().getNumScenes())) return Result::fail ("Scene not found.");
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio output in Audio Settings.");
+    impl->edit->dispatchPendingUpdatesSynchronously();
+    impl->edit->getTransport().ensureContextAllocated();
+    const auto boundary = impl->launchBoundary();
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        impl->queueTrack (*track, track->getClipSlotList().getClipSlots()[sceneIndex]->getClip(), boundary);
+    if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().play (false);
+    sendChangeMessage(); return Result::ok();
+}
+Result Session::stopLauncherTrack (int trackIndex)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* track = impl->track (trackIndex); if (! track) return Result::fail ("Track not found.");
+    impl->queueTrack (*track, nullptr, impl->launchBoundary());
+    sendChangeMessage(); return Result::ok();
+}
+Result Session::stopAllLauncherClips()
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    const auto boundary = impl->launchBoundary();
+    for (auto* track : te::getAudioTracks (*impl->edit)) impl->queueTrack (*track, nullptr, boundary);
+    sendChangeMessage(); return Result::ok();
+}
+Result Session::returnToArrangement()
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    impl->cancelLaunches();
+    for (auto* track : te::getAudioTracks (*impl->edit))
+    {
+        track->playSlotClips = false;
+        track->releaseLauncherOwnership();
+    }
+    sendChangeMessage(); return Result::ok();
+}
+
 Result Session::addMidiNote (const String& clipId, int pitch, double start, double length, float velocity)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -754,6 +1038,7 @@ Result Session::play()
 void Session::stop()
 {
     if (impl->exporting) return;
+    impl->cancelLaunches();
     impl->edit->getTransport().stop (false, false); sendChangeMessage();
 }
 Result Session::record()
@@ -771,7 +1056,11 @@ Result Session::record()
 void Session::seek (double seconds)
 {
     if (impl->exporting) return;
-    if (std::isfinite (seconds)) impl->edit->getTransport().setPosition (te::TimePosition::fromSeconds (juce::jmax (0.0, seconds)));
+    if (std::isfinite (seconds))
+    {
+        impl->cancelLaunches();
+        impl->edit->getTransport().setPosition (te::TimePosition::fromSeconds (juce::jmax (0.0, seconds)));
+    }
 }
 void Session::setTempo (double bpm)
 {
@@ -848,6 +1137,8 @@ Result Session::exportWav (const File& file, double rate, int bits, double tailS
     p.bitDepth = bits; p.sampleRateForAudio = rate; p.blockSizeForAudio = 512;
     p.time = { te::TimePosition::fromSeconds (0), te::TimePosition::fromSeconds (end) };
     p.tracksToDo = te::toBitSet (te::getAllTracks (*impl->edit));
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        for (auto* clip : track->getClips()) p.allowedClips.add (clip);
     p.usePlugins = true; p.useMasterPlugins = true; p.canRenderInMono = false;
     p.checkNodesForAudio = false; p.ditheringEnabled = false;
     auto& ui = static_cast<UIBehaviour&> (impl->engine.getUIBehaviour());

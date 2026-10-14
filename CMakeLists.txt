@@ -28,6 +28,8 @@ FetchContent_Declare(tracktion
 FetchContent_MakeAvailable(tracktion)
 include(cmake/PatchTracktion.cmake)
 halftrack_patch_tracktion("${tracktion_SOURCE_DIR}")
+include(cmake/PatchClipLauncher.cmake)
+halftrack_patch_clip_launcher("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"
@@ -40,7 +42,7 @@ juce_add_gui_app(Halftrack
     PLUGINHOST_AU TRUE)
 
 juce_add_binary_data(HalftrackAssets SOURCES assets/halftrack-mark.svg)
-target_sources(Halftrack PRIVATE src/Main.cpp src/Session.cpp src/SubtractiveSynth.cpp src/MainComponent.cpp tests/SessionTests.cpp tests/MidiTests.cpp tests/PersistenceTests.cpp tests/LatencyTests.cpp)
+target_sources(Halftrack PRIVATE src/Main.cpp src/Session.cpp src/SubtractiveSynth.cpp src/MainComponent.cpp tests/SessionTests.cpp tests/MidiTests.cpp tests/PersistenceTests.cpp tests/LatencyTests.cpp tests/LauncherTests.cpp)
 target_include_directories(Halftrack PRIVATE src)
 target_compile_definitions(Halftrack PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
@@ -97,6 +99,11 @@ if(BUILD_TESTING)
     add_test(NAME latency-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-latency ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(latency-acceptance PROPERTIES TIMEOUT 90
         ENVIRONMENT "HALFTRACK_TEST_LATENCY_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestLatency_VST3>/../..")
+    add_test(NAME ui-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-ui)
+    set_tests_properties(ui-acceptance PROPERTIES TIMEOUT 90
+        ENVIRONMENT "HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY=${CMAKE_BINARY_DIR}/test-artifacts/ui-snapshots")
+    add_test(NAME launcher-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-launcher ${CMAKE_BINARY_DIR}/test-artifacts)
+    set_tests_properties(launcher-acceptance PROPERTIES TIMEOUT 120)
     add_test(NAME session-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(session-acceptance PROPERTIES TIMEOUT 180
         ENVIRONMENT "HALFTRACK_TEST_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_VST3>/../..")

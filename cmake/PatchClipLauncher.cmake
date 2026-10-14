@@ -1,0 +1,241 @@
+# Native launcher ownership fix for Tracktion 07e2d674884293f1a6c8f35fb8d1b9f469ffa41f.
+# Preserve dependency notices; apply identically to fetched and local sources.
+function(halftrack_patch_clip_launcher source_dir)
+    set(source "${source_dir}/modules/tracktion_engine/model/tracks/tracktion_AudioTrack.h")
+    file(SHA256 "${source}" source_hash)
+    if(NOT source_hash STREQUAL "f02cd152ab14ced230c3102a5a8aff6c98615a0ecdf139c33db85dd1982398e2")
+        if(NOT source_hash STREQUAL "8f7ae3dd2f45939efb36fd15f5fd1c64f82d0ae6d543dab7e003a9419b54b8c5")
+            message(FATAL_ERROR "Halftrack launcher patch requires the pinned source: ${source}; unexpected SHA256 ${source_hash}.")
+        endif()
+        file(READ "${source}" content)
+        set(before [=[    juce::CachedValue<AtomicWrapper<bool>> playSlotClips;]=])
+        set(after [=[    juce::CachedValue<AtomicWrapper<bool>> playSlotClips;
+
+    // Halftrack: audio ownership must not wait for the message-thread timer.
+    // Bit 0 owns the track; the remaining bits invalidate stale audio claims
+    // when a message-thread Return command races a processing block.
+    static_assert (std::atomic<uint64_t>::is_always_lock_free);
+    std::atomic<uint64_t> launcherOwnership { 0 };
+    void releaseLauncherOwnership()
+    {
+        auto previous = launcherOwnership.load (std::memory_order_acquire);
+        while (! launcherOwnership.compare_exchange_weak (previous, (previous + 2) & ~uint64_t (1),
+                                                            std::memory_order_acq_rel)) {}
+    }]=])
+        string(REPLACE "${before}" "${after}" content "${content}")
+        file(CONFIGURE OUTPUT "${source}" CONTENT "${content}" @ONLY NEWLINE_STYLE LF)
+        file(SHA256 "${source}" patched_hash)
+        if(NOT patched_hash STREQUAL "f02cd152ab14ced230c3102a5a8aff6c98615a0ecdf139c33db85dd1982398e2")
+            message(FATAL_ERROR "Halftrack launcher patch produced unexpected SHA256 ${patched_hash}: ${source}.")
+        endif()
+    endif()
+    set(source "${source_dir}/modules/tracktion_engine/model/tracks/tracktion_AudioTrack.cpp")
+    file(SHA256 "${source}" source_hash)
+    if(NOT source_hash STREQUAL "b5565cf52845479493ece086382d21c678b2f17ae93526f6ebf756169e03cdcc")
+        if(NOT source_hash STREQUAL "de63d10123c0f286e8811a8f8a8d166b373a1be741cde8a0a34599e707d9c861")
+            message(FATAL_ERROR "Halftrack launcher patch requires the pinned source: ${source}; unexpected SHA256 ${source_hash}.")
+        endif()
+        file(READ "${source}" content)
+        set(before [=[            if (! playSlotClips.get())
+                for (auto cs : getClipSlotList().getClipSlots())
+                    if (auto c = cs->getClip())
+                        if (auto lh = c->getLaunchHandle())
+                            lh->stop ({});]=])
+        set(after [=[            if (! playSlotClips.get())
+            {
+                for (auto cs : getClipSlotList().getClipSlots())
+                    if (auto c = cs->getClip())
+                        if (auto lh = c->getLaunchHandle())
+                            lh->stop ({});
+                releaseLauncherOwnership();
+            }]=])
+        string(REPLACE "${before}" "${after}" content "${content}")
+        file(CONFIGURE OUTPUT "${source}" CONTENT "${content}" @ONLY NEWLINE_STYLE LF)
+        file(SHA256 "${source}" patched_hash)
+        if(NOT patched_hash STREQUAL "b5565cf52845479493ece086382d21c678b2f17ae93526f6ebf756169e03cdcc")
+            message(FATAL_ERROR "Halftrack launcher patch produced unexpected SHA256 ${patched_hash}: ${source}.")
+        endif()
+    endif()
+    set(source "${source_dir}/modules/tracktion_engine/playback/graph/tracktion_ArrangerLauncherSwitchingNode.cpp")
+    file(SHA256 "${source}" source_hash)
+    if(NOT source_hash STREQUAL "565b43eb8aef36972755c7b509bc9e6419d04e19ba7071fbd0c62581879c55f1")
+        if(NOT source_hash STREQUAL "3afeace9d9eff030b8cb83b70850c6cc9c8c575f2c07c05115807f47407231fa")
+            message(FATAL_ERROR "Halftrack launcher patch requires the pinned source: ${source}; unexpected SHA256 ${source_hash}.")
+        endif()
+        file(READ "${source}" content)
+        set(before [=[    const auto playArranger = ! track->playSlotClips.get();]=])
+        set(after [=[    const auto ownership = track->launcherOwnership.load (std::memory_order_acquire);
+    const auto playArranger = ! track->playSlotClips.get() && (ownership & 1) == 0;]=])
+        string(REPLACE "${before}" "${after}" content "${content}")
+        set(before [=[    processLauncher (pc, slotStatus);
+
+     if (playArranger)]=])
+        set(after [=[    processLauncher (pc, slotStatus);
+
+    // Claim only after the native scheduler actually starts a clip. The old
+    // ownership value preserves the arrangement before a boundary in this block.
+    // A racing Return changes the generation, so this claim cannot undo it.
+    if (slotStatus.beatsUntilQueuedStartTrimmedToBlock)
+        for (auto& node : launcherNodes)
+            if (node->getLaunchHandle().getPlayingStatus() == LaunchHandle::PlayState::playing)
+            {
+                auto expected = ownership;
+                track->launcherOwnership.compare_exchange_strong (expected, ownership | 1,
+                                                                    std::memory_order_acq_rel);
+                break;
+            }
+
+    if (playArranger)]=])
+        string(REPLACE "${before}" "${after}" content "${content}")
+        set(before [=[    for (auto& n : launcherNodesCopy)
+    {
+        if (auto lh = n->getLaunchHandleIfNotUnique())
+        {
+            if (lh->getPlayingStatus() == LaunchHandle::PlayState::playing)
+            {
+                track->playSlotClips = true;
+                return;
+            }
+        }
+    }]=])
+        set(after [=[    // Publish even if a short clip has already stopped. Audio ownership is
+    // retained until an explicit Return, independently of message-loop timing.
+    if ((track->launcherOwnership.load (std::memory_order_acquire) & 1) != 0)
+        track->playSlotClips = true;]=])
+        string(REPLACE "${before}" "${after}" content "${content}")
+        set(before [=[        track->playSlotClips = false;
+        return;]=])
+        set(after [=[        track->playSlotClips = false;
+        for (auto slot : track->getClipSlotList().getClipSlots())
+            if (auto clip = slot->getClip())
+                if (auto handle = clip->getLaunchHandle())
+                    handle->stop ({});
+        track->releaseLauncherOwnership();
+        return;]=])
+        string(REPLACE "${before}" "${after}" content "${content}")
+        set(before [=[            if (queuedPos && blockRange.contains (queuedPos->v))
+                status.beatsUntilQueuedStartTrimmedToBlock = queuedPos->v - blockRange.getStart();]=])
+        set(after [=[            if (queuedPos && queuedPos->v < blockRange.getEnd())
+                status.beatsUntilQueuedStartTrimmedToBlock = std::max (0_bd, queuedPos->v - blockRange.getStart());]=])
+        string(REPLACE "${before}" "${after}" content "${content}")
+        set(before [=[    if (slotStatus.beatsUntilQueuedStartTrimmedToBlock)
+    {
+        // Arranger about to stop so only use some of the buffer and trigger fade out
+        if (numSourceChannels > 0)
+        {
+            const auto endFrame = beatToSamplePosition (slotStatus.beatsUntilQueuedStartTrimmedToBlock,
+                                                        editBeatRange.getLength(), numFrames);
+
+            auto destSubView = destAudioView.getFirstChannels (numSourceChannels).getStart (endFrame);
+            auto sourceSubView = sourceBuffers.audio.getStart (endFrame);
+            arrangerSampleFader->trigger (10);
+
+            if (sourceSubView.getNumFrames() > 0)
+            {
+                arrangerSampleFader->push (sourceSubView);
+
+                choc::buffer::add (destSubView, sourceSubView);
+                launcherSampleFader->applyAt (destAudioView,  endFrame, SampleFader::FadeType::fadeOut);
+            }
+
+            const auto endTime = TimePosition::fromSamples (endFrame, getSampleRate());
+
+            if (sourceBuffers.midi.isNotEmpty())
+            {
+                pc.buffers.midi.isAllNotesOff = sourceBuffers.midi.isAllNotesOff;
+
+                for (auto& m : sourceBuffers.midi)
+                {
+                    if (m.getTimeStamp() > endTime.inSeconds())
+                        continue;
+
+                    pc.buffers.midi.add (m);
+
+                    if (m.isNoteOn())
+                        arrangerActiveNoteList->startNote (m.getChannel(), m.getNoteNumber());
+                    else if (m.isNoteOff())
+                        arrangerActiveNoteList->clearNote (m.getChannel(), m.getNoteNumber());
+                }
+            }
+
+            MidiNodeHelpers::createNoteOffs (*arrangerActiveNoteList,
+                                             pc.buffers.midi,
+                                             midiSourceID,
+                                             endTime.inSeconds(),
+                                             getPlayHead().isPlaying());
+        }
+    }
+]=])
+        set(after [=[    if (slotStatus.beatsUntilQueuedStartTrimmedToBlock)
+    {
+        // Arranger about to stop so only use some of the buffer and trigger fade out
+        const auto endFrame = beatToSamplePosition (slotStatus.beatsUntilQueuedStartTrimmedToBlock,
+                                                    editBeatRange.getLength(), numFrames);
+        if (numSourceChannels > 0)
+        {
+            auto destSubView = destAudioView.getFirstChannels (numSourceChannels).getStart (endFrame);
+            auto sourceSubView = sourceBuffers.audio.getStart (endFrame);
+            arrangerSampleFader->trigger (10);
+
+            if (sourceSubView.getNumFrames() > 0)
+            {
+                arrangerSampleFader->push (sourceSubView);
+
+                choc::buffer::add (destSubView, sourceSubView);
+                launcherSampleFader->applyAt (destAudioView,  endFrame, SampleFader::FadeType::fadeOut);
+            }
+        }
+
+        const auto endTime = TimePosition::fromSamples (endFrame, getSampleRate());
+
+        if (sourceBuffers.midi.isNotEmpty())
+        {
+            pc.buffers.midi.isAllNotesOff = sourceBuffers.midi.isAllNotesOff;
+
+            for (auto& m : sourceBuffers.midi)
+            {
+                if (m.getTimeStamp() > endTime.inSeconds())
+                    continue;
+
+                pc.buffers.midi.add (m);
+
+                if (m.isNoteOn())
+                    arrangerActiveNoteList->startNote (m.getChannel(), m.getNoteNumber());
+                else if (m.isNoteOff())
+                    arrangerActiveNoteList->clearNote (m.getChannel(), m.getNoteNumber());
+            }
+        }
+
+        MidiNodeHelpers::createNoteOffs (*arrangerActiveNoteList,
+                                         pc.buffers.midi,
+                                         midiSourceID,
+                                         endTime.inSeconds(),
+                                         getPlayHead().isPlaying());
+    }
+]=])
+        string(REPLACE "${before}" "${after}" content "${content}")
+        set(before [=[    if (playArranger)
+        processArranger (pc, slotStatus);
+}]=])
+        set(after [=[    if (playArranger)
+        processArranger (pc, slotStatus);
+
+    // Merged sources can append an old arrangement note-off after a new slot
+    // note-on at the same sample. Sort without allocation and release old notes
+    // first; keep equal-time controller ordering stable within its class.
+    choc::sorting::stable_sort (pc.buffers.midi.begin(), pc.buffers.midi.end(),
+        [] (const juce::MidiMessage& a, const juce::MidiMessage& b)
+        {
+            if (a.getTimeStamp() < b.getTimeStamp()) return true;
+            if (b.getTimeStamp() < a.getTimeStamp()) return false;
+            return a.isNoteOff() && ! b.isNoteOff();
+        });
+}]=])
+        string(REPLACE "${before}" "${after}" content "${content}")
+        file(CONFIGURE OUTPUT "${source}" CONTENT "${content}" @ONLY NEWLINE_STYLE LF)
+        file(SHA256 "${source}" patched_hash)
+        if(NOT patched_hash STREQUAL "565b43eb8aef36972755c7b509bc9e6419d04e19ba7071fbd0c62581879c55f1")
+            message(FATAL_ERROR "Halftrack launcher patch produced unexpected SHA256 ${patched_hash}: ${source}.")
+        endif()
+    endif()
+endfunction()

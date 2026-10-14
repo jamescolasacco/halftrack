@@ -11,6 +11,7 @@ namespace halftrack
 class Session final : public juce::ChangeBroadcaster
 {
 public:
+    enum class LaunchQuantisation { none, beat, bar };
     enum class MonitorMode { off, automatic, on };
     struct SynthSettings
     {
@@ -34,6 +35,14 @@ public:
         double startBeat = 0, lengthBeats = 0;
         std::vector<MidiNoteInfo> notes;
     };
+    struct SceneInfo { juce::String id, name; };
+    struct SlotInfo
+    {
+        juce::String id;
+        bool hasClip = false, playing = false, queued = false, stopQueued = false;
+        ClipInfo clip;
+        double playPositionBeats = -1;
+    };
     struct PluginInfo { juce::String id, name; bool enabled = true; };
     struct TrackInfo
     {
@@ -46,6 +55,8 @@ public:
         juce::String inputName;
         std::vector<ClipInfo> clips;
         std::vector<PluginInfo> plugins;
+        std::vector<SlotInfo> slots;
+        bool launcherActive = false;
     };
     struct Snapshot
     {
@@ -55,6 +66,8 @@ public:
         double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
         float masterPeakL = 0, masterPeakR = 0;
         std::vector<TrackInfo> tracks;
+        std::vector<SceneInfo> scenes;
+        LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
     };
 
     explicit Session (bool enableAudioDevices = true, std::unique_ptr<juce::AudioIODeviceType> customDeviceType = {});
@@ -66,6 +79,18 @@ public:
     juce::Result addAudioTrack (juce::String name = {});
     juce::Result addMidiTrack (juce::String name = {});
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
+    juce::Result addScene (juce::String name = {});
+    juce::Result removeScene (int sceneIndex);
+    juce::Result renameScene (int sceneIndex, const juce::String& name);
+    juce::Result importAudioToSlot (const juce::File&, int trackIndex, int sceneIndex);
+    juce::Result addMidiClipToSlot (const juce::String& trackId, int sceneIndex, double lengthBeats = 4);
+    juce::Result clearSlot (int trackIndex, int sceneIndex);
+    juce::Result launchSlot (int trackIndex, int sceneIndex);
+    juce::Result launchScene (int sceneIndex);
+    juce::Result stopLauncherTrack (int trackIndex);
+    juce::Result stopAllLauncherClips();
+    juce::Result returnToArrangement();
+    juce::Result setLaunchQuantisation (LaunchQuantisation);
     juce::Result addMidiNote (const juce::String& clipId, int pitch, double startBeat, double lengthBeats, float velocity);
     juce::Result updateMidiNote (const juce::String& clipId, const juce::String& noteId,
                                  int pitch, double startBeat, double lengthBeats, float velocity);
