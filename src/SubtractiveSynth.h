@@ -17,6 +17,7 @@ public:
     void setSettings (const Session::SynthSettings&) noexcept;
     void noteOn (int channel, int pitch, float velocity) noexcept;
     void noteOff (int channel, int pitch) noexcept;
+    void pitchWheel (int channel, int value) noexcept;
     void controlChange (int channel, int controller, int value) noexcept;
     void render (float* left, float* right, int samples) noexcept;
     int activeVoices() const noexcept;
@@ -34,6 +35,7 @@ private:
     std::array<Voice, 16> voices {};
     std::array<double, 128> frequencies {};
     std::array<bool, 16> sustainPedal {};
+    std::array<double, 16> pitchRatios {}; // prepare/reset centers every channel.
     Session::SynthSettings settings;
     double sampleRate = 48000, a1 = 0, a2 = 0, a3 = 0;
     float attackStep = 1, decayStep = 1;

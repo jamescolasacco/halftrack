@@ -33,3 +33,8 @@ The current editor draws on ordinary empty-space clicks. Keep that behavior whil
 ## Note clipboard defaults
 
 Copy/Cut/Paste/Duplicate act on the selected notes only. Keep a typed in-application clipboard across clip changes, preserving relative timing, pitch, length and velocity. Use a visible insertion cursor set from the ruler and moved by arrows when the selection is empty; a new clip starts at beat zero. A successful paste advances the cursor to the pasted group's end. Duplicate places the copied group after its selected extent, using the current grid. Reject a whole group that does not fit rather than truncating notes, overwriting unrelated notes or extending the clip silently. Insertions receive fresh stable identities and form one undo step. These are explicit working defaults, not measured reference equivalence. System clipboard interchange, time-span editing and automatic clip extension remain separate work.
+
+
+## Built-in instrument pitch-wheel default
+
+The instrument has no specified bend-range control. Use a fixed range of two semitones down/up, center 8192, minimum 0 and maximum 16383. Normalize each side separately so both endpoints reach exactly two semitones. Bend is transient per-channel controller state, applies to existing and subsequent voices without restarting their envelopes or phases, and retains original note identity for note-off. CC121 centers that channel; CC120/123 preserve the wheel, while full host reset clears it. Ignore invalid channels/values. Range editing, RPNs, MPE, aftertouch, controller lanes and external MIDI-device UI remain separate work. These are explicit Halftrack defaults, not measured reference-instrument equivalence.

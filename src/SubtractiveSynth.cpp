@@ -16,6 +16,7 @@ void SubtractiveSynthDSP::reset() noexcept
 {
     voices = {};
     sustainPedal = {};
+    pitchRatios.fill (1.0);
     nextAge = 0;
 }
 void SubtractiveSynthDSP::setSettings (const Session::SynthSettings& next) noexcept
@@ -57,7 +58,8 @@ void SubtractiveSynthDSP::noteOn (int channel, int pitch, float velocity) noexce
     }
     *chosen = {};
     chosen->channel = channel; chosen->pitch = pitch; chosen->keyDown = true;
-    chosen->increment = std::min (0.45, frequencies[static_cast<size_t> (pitch)] / sampleRate);
+    chosen->increment = std::min (0.45, frequencies[static_cast<size_t> (pitch)]
+                                      * pitchRatios[static_cast<size_t> (channel - 1)] / sampleRate);
     chosen->velocity = std::clamp (velocity, 0.0f, 1.0f);
     chosen->stage = 1; chosen->age = ++nextAge;
 }
@@ -76,6 +78,17 @@ void SubtractiveSynthDSP::noteOff (int channel, int pitch) noexcept
             if (! sustainPedal[static_cast<size_t> (channel - 1)]) release (voice);
         }
 }
+void SubtractiveSynthDSP::pitchWheel (int channel, int value) noexcept
+{
+    if (channel < 1 || channel > 16 || value < 0 || value > 16383) return;
+    // Fixed +/- two-semitone range, with each endpoint represented exactly.
+    const double semitones = 2.0 * (value - 8192) / (value < 8192 ? 8192.0 : 8191.0);
+    const double ratio = std::exp2 (semitones / 12.0);
+    pitchRatios[static_cast<size_t> (channel - 1)] = ratio;
+    for (auto& voice : voices)
+        if (voice.stage != 0 && voice.channel == channel)
+            voice.increment = std::min (0.45, frequencies[static_cast<size_t> (voice.pitch)] * ratio / sampleRate);
+}
 void SubtractiveSynthDSP::controlChange (int channel, int controller, int value) noexcept
 {
     if (channel < 1 || channel > 16) return;
@@ -88,6 +101,7 @@ void SubtractiveSynthDSP::controlChange (int channel, int controller, int value)
                 if (voice.channel == channel && voice.stage != 0 && voice.stage != 4 && ! voice.keyDown)
                     release (voice);
         pedal = down;
+        if (controller == 121) pitchWheel (channel, 8192);
     }
     else if (controller == 120)
     {
@@ -282,6 +296,7 @@ void SubtractiveSynthPlugin::applyToBuffer (const tracktion::PluginRenderContext
             position = eventSample;
             if (message.isNoteOn()) synth.noteOn (message.getChannel(), message.getNoteNumber(), message.getFloatVelocity());
             else if (message.isNoteOff()) synth.noteOff (message.getChannel(), message.getNoteNumber());
+            else if (message.isPitchWheel()) synth.pitchWheel (message.getChannel(), message.getPitchWheelValue());
             else if (message.isController()) synth.controlChange (message.getChannel(), message.getControllerNumber(), message.getControllerValue());
         }
     }

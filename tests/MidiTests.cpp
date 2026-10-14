@@ -324,6 +324,238 @@ void controllerReleaseTests()
     check (actual.activeVoices() == 0, "All Sound Off kills the final channel immediately");
 }
 
+void pitchWheelStateTests()
+{
+    SubtractiveSynthDSP actual, reference;
+    auto prepare = [&]
+    {
+        actual.prepare (48000); reference.prepare (48000);
+        actual.setSettings (flatSettings()); reference.setSettings (flatSettings());
+    };
+    auto compare = [&] (int samples, const juce::String& label)
+    {
+        std::array<float, 1024> left {}, right {}, expected {};
+        actual.render (left.data(), right.data(), samples);
+        reference.render (expected.data(), nullptr, samples);
+        bool matches = left == right;
+        for (int i = 0; i < samples; ++i)
+            matches = matches && std::isfinite (left[static_cast<size_t> (i)])
+                      && std::abs (left[static_cast<size_t> (i)] - expected[static_cast<size_t> (i)]) < 1.0e-6f;
+        check (matches, label);
+    };
+    for (const int channel : { 1, 16 })
+        for (const auto [wheel, pitch] : { std::pair { 0, 67 }, { 4096, 68 }, { 8192, 69 }, { 16383, 71 } })
+        {
+            prepare();
+            actual.pitchWheel (channel, wheel);
+            actual.noteOn (channel, 69, 0.75f); reference.noteOn (channel, pitch, 0.75f);
+            const int other = channel == 1 ? 16 : 1;
+            actual.noteOn (other, 60, 0.5f); reference.noteOn (other, 60, 0.5f);
+            compare (1024, "per-channel wheel tunes future notes while leaving the other channel unchanged");
+            actual.noteOff (channel, 69); reference.noteOff (channel, pitch);
+            compare (1024, "bent note retains its original note-off identity and ordinary release");
+            check (actual.activeVoices() == 1, "bent note-off leaves only the other channel active");
+        }
+
+    // Round trips with no intervening samples must preserve every voice's
+    // phase, filter and envelope, including held, pedal-held and releasing notes.
+    prepare();
+    for (auto* synth : { &actual, &reference })
+    {
+        synth->noteOn (1, 60, 0.5f); synth->noteOn (1, 64, 0.5f); synth->noteOn (16, 67, 0.5f);
+        synth->controlChange (1, 64, 127);
+    }
+    compare (79, "bend continuity fixture warms matching nonzero voice state");
+    for (auto* synth : { &actual, &reference })
+    {
+        synth->noteOff (1, 60); synth->noteOff (16, 67);
+    }
+    actual.pitchWheel (1, 0); actual.pitchWheel (16, 16383);
+    actual.pitchWheel (1, 8192); actual.pitchWheel (16, 8192);
+    compare (113, "wheel round trips preserve held, sustained and releasing voice histories");
+    for (const auto [channel, value] : { std::pair { 0, 0 }, { 17, 16383 }, { 1, -1 }, { 16, 16384 } })
+        actual.pitchWheel (channel, value);
+    compare (113, "invalid wheel channels and values leave sounding voices unchanged");
+
+    // Compare reset behavior to the explicit equivalent controller operations.
+    for (auto* synth : { &actual, &reference })
+    {
+        synth->pitchWheel (1, 16383); synth->pitchWheel (16, 0);
+        synth->noteOn (16, 69, 0.5f);
+    }
+    compare (79, "controller reset fixture has distinct wheel states on both endpoint channels");
+    actual.controlChange (1, 121, 0);
+    reference.pitchWheel (1, 8192); reference.controlChange (1, 64, 0);
+    compare (137, "Reset All Controllers centers only its channel and releases its pedal-held notes");
+    actual.controlChange (1, 121, 0);
+    compare (1024, "repeated reset preserves ongoing envelope timing and the other channel's bend");
+    actual.noteOn (1, 72, 0.5f); reference.noteOn (1, 72, 0.5f);
+    compare (79, "subsequent notes use the centered wheel after controller reset");
+
+    for (const int controller : { 120, 123 })
+    {
+        prepare(); actual.pitchWheel (1, 16383);
+        actual.noteOn (1, 60, 1); actual.controlChange (1, controller, 0);
+        // This note has never sounded, so All Notes Off has a zero envelope.
+        std::array<float, 1> discard {}; actual.render (discard.data(), nullptr, 1);
+        actual.noteOn (1, 69, 1); reference.noteOn (1, 71, 1);
+        compare (1024, "sound-off and notes-off preserve the channel's wheel for subsequent notes");
+    }
+    actual.controlChange (1, 64, 127); actual.reset(); reference.reset();
+    actual.noteOn (1, 69, 1); reference.noteOn (1, 69, 1);
+    compare (79, "full host reset clears voices and centers pitch wheel");
+    actual.noteOff (1, 69); reference.noteOff (1, 69);
+    compare (1024, "full host reset clears sustain as well as pitch wheel");
+    check (actual.activeVoices() == 0, "reset instrument releases to silence");
+
+    for (const int state : { 0, 1, 2 })
+    {
+        SubtractiveSynthDSP bent;
+        bent.prepare (48000);
+        auto settings = flatSettings(); settings.releaseSeconds = 2;
+        bent.setSettings (settings); bent.noteOn (16, 69, 1);
+        std::array<float, 48000> audio {};
+        bent.render (audio.data(), nullptr, 97);
+        if (state == 1) bent.controlChange (16, 64, 127);
+        if (state != 0) bent.noteOff (16, 69);
+        bent.pitchWheel (16, 16383); audio.fill (0);
+        bent.render (audio.data(), nullptr, static_cast<int> (audio.size()));
+        int crossings = 0;
+        for (size_t i = 24001; i < audio.size(); ++i)
+            if (audio[i - 1] <= 0 && audio[i] > 0) ++crossings;
+        check (crossings >= 246 && crossings <= 248,
+               "wheel retunes an already sounding held/sustained/releasing A4 voice to B4");
+    }
+    actual.prepare (8000); actual.setSettings (flatSettings()); actual.pitchWheel (16, 16383);
+    actual.noteOn (16, 127, 1);
+    std::array<float, 1024> high {};
+    actual.render (high.data(), nullptr, static_cast<int> (high.size()));
+    check (std::all_of (high.begin(), high.end(), [] (float v) { return std::isfinite (v) && std::abs (v) <= 2; }),
+           "upper pitch bend at the lowest supported sample rate remains finite and bounded");
+}
+
+void pitchWheelCallbackTests()
+{
+    Session session (false);
+    ok (session.addMidiTrack ("Pitch-wheel fixture"), "create pitch-wheel callback instrument without audio devices");
+    SubtractiveSynthPlugin* plugin = nullptr;
+    for (auto* engine : tracktion::Engine::getEngines())
+        if (&engine->getDeviceManager().deviceManager == &session.audioDeviceManager())
+            for (auto* edit : engine->getActiveEdits().getEdits())
+                for (auto* track : tracktion::getAudioTracks (*edit))
+                    for (auto* candidate : track->pluginList.getPlugins())
+                        if (auto* synth = dynamic_cast<SubtractiveSynthPlugin*> (candidate)) plugin = synth;
+    check (plugin != nullptr, "find the real built-in synth for callback renders");
+    plugin->setSettings (flatSettings());
+    plugin->prepareForOfflineRender();
+    plugin->baseClassInitialise ({ {}, 48000, 512 });
+    struct Deinitialise
+    {
+        SubtractiveSynthPlugin& synth;
+        ~Deinitialise() { synth.baseClassDeinitialise(); }
+    } deinitialise { *plugin };
+
+    for (const auto [wheel, pitch] : { std::pair { 8192, 69 }, { 16383, 71 }, { 0, 67 } })
+    {
+        plugin->reset();
+        juce::AudioBuffer<float> output (2, 528);
+        for (int channel = 0; channel < 2; ++channel)
+            for (int sample = 0; sample < 528; ++sample) output.setSample (channel, sample, 0.25f);
+        tracktion::MidiMessageArray midi;
+        midi.addMidiMessage (juce::MidiMessage::pitchWheel (16, wheel), 0.0, {});
+        midi.addMidiMessage (juce::MidiMessage::noteOn (16, 69, 1.0f), 0.0, {});
+        plugin->applyToBuffer ({ &output, 8, 512, &midi, 0.0,
+                                { {}, tracktion::TimePosition::fromSeconds (512 / 48000.0) },
+                                true, false, true, false });
+        SubtractiveSynthDSP reference;
+        reference.prepare (48000); reference.setSettings (flatSettings()); reference.noteOn (16, pitch, 1);
+        std::array<float, 512> expected {};
+        reference.render (expected.data(), nullptr, 512);
+        bool matches = true, boundsPreserved = true;
+        for (int channel = 0; channel < 2; ++channel)
+            for (int sample = 0; sample < 528; ++sample)
+            {
+                const float actual = output.getSample (channel, sample);
+                if (sample >= 8 && sample < 520)
+                    matches = matches && std::isfinite (actual)
+                              && std::abs (actual - expected[static_cast<size_t> (sample - 8)]) < 1.0e-6f;
+                else boundsPreserved = boundsPreserved && actual == 0.25f;
+            }
+        check (matches, "real MIDI callback wheel " + juce::String (wheel) + " matches the full unbent reference-note buffer");
+        check (boundsPreserved, "synth callback preserves samples outside its destination range");
+    }
+    struct Event { int sample; juce::MidiMessage message; };
+    const std::array<Event, 10> events {{
+        { 0, juce::MidiMessage::pitchWheel (1, 16383) },
+        { 0, juce::MidiMessage::noteOn (1, 69, 1.0f) },
+        { 117, juce::MidiMessage::pitchWheel (1, 0) },
+        { 211, juce::MidiMessage::noteOn (16, 64, 1.0f) },
+        { 255, juce::MidiMessage::pitchWheel (16, 16383) },
+        { 511, juce::MidiMessage::controllerEvent (1, 121, 0) },
+        { 640, juce::MidiMessage::noteOff (1, 69) },
+        { 1024, juce::MidiMessage::pitchWheel (16, 0) },
+        { 1300, juce::MidiMessage::noteOff (16, 64) },
+        { 1500, juce::MidiMessage::pitchWheel (16, 8192) }
+    }};
+    std::array<float, 2048> expected {};
+    SubtractiveSynthDSP reference;
+    reference.prepare (48000); reference.setSettings (flatSettings());
+    int position = 0;
+    for (const auto& event : events)
+    {
+        reference.render (expected.data() + position, nullptr, event.sample - position);
+        position = event.sample;
+        const auto& message = event.message;
+        if (message.isNoteOn()) reference.noteOn (message.getChannel(), message.getNoteNumber(), message.getFloatVelocity());
+        else if (message.isNoteOff()) reference.noteOff (message.getChannel(), message.getNoteNumber());
+        else if (message.isPitchWheel()) reference.pitchWheel (message.getChannel(), message.getPitchWheelValue());
+        else if (message.isController()) reference.controlChange (message.getChannel(), message.getControllerNumber(), message.getControllerValue());
+    }
+    reference.render (expected.data() + position, nullptr, static_cast<int> (expected.size()) - position);
+    for (const int blockSize : { 1, 31, 128, 512, 2048 })
+    {
+        plugin->reset();
+        size_t nextEvent = 0;
+        bool matches = true, boundsPreserved = true;
+        for (int start = 0; start < 2048; start += blockSize)
+        {
+            const int count = std::min (blockSize, 2048 - start);
+            juce::AudioBuffer<float> output (2, count + 16);
+            for (int channel = 0; channel < 2; ++channel)
+                for (int i = 0; i < count + 16; ++i) output.setSample (channel, i, 0.25f);
+            tracktion::MidiMessageArray midi;
+            constexpr double offset = 8 / 48000.0;
+            // Last-quarter-sample events round onto a boundary, including the
+            // end of a block. They must affect the next sample, not be lost.
+            while (nextEvent < events.size())
+            {
+                const auto& event = events[nextEvent];
+                const double arrival = event.sample == 0 ? 0.0 : event.sample - 0.25;
+                if (arrival >= start + count) break;
+                midi.addMidiMessage (event.message, (arrival - start) / 48000.0 - offset, {});
+                ++nextEvent;
+            }
+            plugin->applyToBuffer ({ &output, 8, count, &midi, offset,
+                                    { tracktion::TimePosition::fromSeconds (start / 48000.0),
+                                      tracktion::TimePosition::fromSeconds ((start + count) / 48000.0) },
+                                    true, false, true, false });
+            for (int channel = 0; channel < 2; ++channel)
+                for (int i = 0; i < count + 16; ++i)
+                {
+                    const float actual = output.getSample (channel, i);
+                    if (i >= 8 && i < count + 8)
+                        matches = matches && std::isfinite (actual)
+                                  && std::abs (actual - expected[static_cast<size_t> (start + i - 8)]) < 1.0e-6f;
+                    else boundsPreserved = boundsPreserved && actual == 0.25f;
+                }
+        }
+        check (matches && nextEvent == events.size(),
+               "timestamped bend/note/reset sequence matches complete stereo PCM at block size " + juce::String (blockSize));
+        check (boundsPreserved, "timestamped callback preserves destination range boundaries");
+    }
+
+}
+
 void coreTests()
 {
     // Independent reference: bilinear-transform second-order analog low-pass,
@@ -388,6 +620,8 @@ int runMidiTests (const juce::File& requestedDirectory)
 {
     try
     {
+        pitchWheelCallbackTests();
+        pitchWheelStateTests();
         controllerReleaseTests();
         coreTests();
         auto directory = requestedDirectory.getChildFile ("midi-" + juce::Uuid().toString());

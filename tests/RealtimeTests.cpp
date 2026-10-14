@@ -146,10 +146,14 @@ int runRealtimeTests()
                 settings.waveform = pass % 2;
                 settings.cutoffHz = 100.0f + pass * 400.0f;
                 synth.setSettings (settings);
+                synth.pitchWheel (1, pass % 2 == 0 ? 0 : 16383);
+                synth.pitchWheel (16, 4096);
                 for (int note = 0; note < 24; ++note) synth.noteOn (1, 48 + note, 0.7f);
+                synth.noteOn (16, 69, 0.7f);
                 synth.controlChange (1, 64, 127);
                 for (const int samples : sizes)
                 {
+                    synth.pitchWheel (1, samples * 15);
                     left.fill (0); right.fill (0);
                     synth.render (left.data(), right.data(), samples);
                     for (int sample = 0; sample < samples; ++sample)
@@ -158,7 +162,10 @@ int runRealtimeTests()
                 }
                 synth.controlChange (1, 123, 0);
                 for (int note = 0; note < 24; ++note) synth.noteOff (1, 48 + note);
+                synth.pitchWheel (1, 16383);
                 synth.controlChange (1, 121, 0);
+                synth.noteOff (16, 69);
+                synth.pitchWheel (16, 0);
                 synth.controlChange (1, 64, 0);
                 synth.render (left.data(), nullptr, 1024);
                 synth.controlChange (1, 120, 0);
