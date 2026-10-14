@@ -88,6 +88,23 @@ GHIDRA_HOME=/path/to/ghidra JAVA_HOME=/path/to/jdk \
 
 Without Ghidra on macOS, the native integration fixture explicitly skips while all pure coverage/provenance tests still run on macOS, Windows and Linux. Generated fixture pseudocode and proprietary target output remain outside public source.
 
+
+## Read-only verification across retries
+
+Keep the original pass and every retry selection immutable. A retry uses a separately named output directory and an inventory explicitly containing only its selected addresses; do not change the original denominator. With the same architecture and program hash, verify one or more indexed snapshots without acquiring the analysis-project lock:
+
+```sh
+python3 scripts/verify_decompile_coverage.py \
+  --inventory /path/to/full-inventory.json --architecture arm64 \
+  --run /path/to/baseline /path/to/full-inventory.json \
+  --run /path/to/retry /path/to/retry-selection.json \
+  --report /path/to/new-local-verification.json
+```
+
+Supply runs in intended evidence order. The verifier checks the exact selection and recorded program identities, validates indexed address order, freezes each read-only database snapshot, closes it, and hashes every completed output. Missing, empty, altered, misnamed or symlinked outputs fail verification. It does not ingest active journals; unindexed batch IDs are retained in the report. Separate runs have separate snapshot timestamps, not a claimed simultaneous whole-system snapshot.
+
+A completed address counts once even if multiple runs produced outputs, and every such output must still pass its hash check. For addresses without any verified success, the latest attempted status wins; an unattempted selection cannot erase a prior result. Per-run outcome counts and frozen-row hashes preserve the underlying evidence. New reports never overwrite old ones. Keep reports private alongside the source artifacts; they contain local paths and analysis identities. Pure synthetic tests cover overlapping retries, stale failures, corrupt provenance/output, interrupted and unindexed work, symlink rejection where permitted, and a concurrent writer during file hashing.
+
 ## Interpretation and implementation
 
 Pseudocode can have incorrect types, incomplete indirect-call targets, merged/tail-shared code and compiler artifacts. Manifest body ranges and their hashes describe Ghidra's current function model, not a proven complete set of reachable instructions. In the retained no-analysis pass, indirect branch targets fell outside that model even though they appeared in the decompiler output; the whole-program hash remains the complete input identity. Keep byte addresses and hashes when refining a hypothesis. Corroborate important observations with an independent disassembly or controlled runtime/render experiment. Do not publish raw target code or treat it as original Halftrack source.

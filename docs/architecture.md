@@ -172,3 +172,10 @@ flowchart LR
 ## CLAP adapter decision
 
 CLAP remains unimplemented. The [pinned-source investigation](research/clap-hosting-path.md) found that the suggested JUCE extension library creates plug-ins but does not host them. The planned native-format adapter must register with both the parent engine manager and the separate scanner-child manager; parent-only registration silently misses child discovery. Preserve full module/descriptor identity and use the existing external-processor path. No dependency or advertised capability is added by this decision. Lifecycle, real-time communication, state, native editor, event timing and latency acceptance requirements are documented in the report before implementation.
+
+
+## Analysis evidence verification
+
+`scripts/verify_decompile_coverage.py` is separate from the application and never opens the analysis project or executes a target. It accepts the full declared-start inventory and ordered coverage/selection pairs. Each run must match its exact immutable selection hash, recorded program hash and architecture; its database address order must match that selection, which must be a subset of the full inventory. Each read-only transaction freezes indexed rows and closes before file hashing, allowing the coordinator to continue without holding a reader throughout the audit. A hash of the frozen rows identifies each snapshot; unindexed batches remain explicitly excluded.
+
+Every completed file is checked for a canonical name, regular nonsymlink path, nonzero size and recorded SHA-256, including duplicate successes across runs. Combined coverage counts each declared address once: any verified completion wins; otherwise the last attempted outcome in the supplied run order applies. Unattempted later selections do not erase earlier evidence. Per-run counts and identities remain available, so a later failure cannot hide behind aggregate success. Reports are create-only local artifacts. This establishes indexed extraction integrity, not valid semantic boundaries, recovered original source or measured product equivalence.
