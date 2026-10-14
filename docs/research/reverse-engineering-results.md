@@ -43,6 +43,16 @@ Local evidence, deliberately excluded from Git:
 - `artifacts/reverse-engineering/ghidra-projects/reference_12_2_1_arm64`: persistent analysis project.
 - `.deps/reverse-tools/`: verified tool distribution and local build/cache.
 
+## Inventory-wide sweep in progress
+
+The continued task adds an original durable coordinator (`scripts/bulk_decompile.py`) and bounded Ghidra exporter (`scripts/ghidra/BulkDecompileBatch.java`). Commits `39a6bf5`, `5317560` and `25f0e53` add coverage bookkeeping, overlap recovery and original synthetic regression fixtures. The optional native suite passed eight tests in 18.512 seconds, including a real interruption/resume, a predecoded entry and a shared-tail arithmetic fixture. Pure test discovery is now part of all three CI platforms; Ghidra-dependent integration remains opt-in on macOS.
+
+The initial conservative preparation pass is retained separately: 3,271 completed outputs, 362 preparation failures and one interrupted entry. Most sampled failures were declared starts inside a provisional containing function. Letting Ghidra reconcile those entries recovered all 21 such failures in the corrected 128-entry pilot. Its remaining entry did not decode as ARM64 instructions in either Ghidra or independent LLVM inspection; it stays an explicit failure. A declared function-start table is not proof that every listed location is a valid semantic function.
+
+The corrected full ARM64 sweep (`bulk-pass2`) is running in batches of 1,024, with a 4 GiB Java heap, two analysis CPUs, 10/20-second preparation/decompilation limits and a 600-second batch ceiling. Broad automatic analysis remains disabled. At **2026-10-13 23:44:50 UTC**, an independent read-only database snapshot contained **11,389 completed outputs, three decode failures and 381,534 unattempted entries**. All 11,389 completed files were present, nonempty and matched their recorded SHA-256. The active batch was excluded from that snapshot. These counts are a dated checkpoint, not a whole-program completion claim; current local progress is in the append-only sweep log and coverage database.
+
+The private `coverage-check-*.json` records retain that independent verification. Pass folders, request hashes and per-address journals distinguish failures, timeouts, interruptions and entries never attempted. No output count establishes recovered source semantics, full function boundaries, a completed device or a matching application. The [runbook](reverse-engineering-runbook.md#resumable-inventory-sweep) documents continuation and evidence checks.
+
 ## Original implementation corrections resulting from research
 
 Commit `c805766` gives new audio and MIDI tracks a normalized sinusoidal pan law: unity at center and approximately +3.0103 dB in the retained channel at an extreme. This corrects the previous approximately +6.02 dB behavior identified against the public specification. A distinct serialized mixer type preserves old project sound; old tracks are not silently migrated. Mute and solo now create engine undo actions.
