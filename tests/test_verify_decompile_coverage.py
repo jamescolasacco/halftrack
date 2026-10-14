@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Original synthetic fixtures for read-only multi-pass extraction accounting."""
+from contextlib import closing
 import hashlib
 import importlib.util
 import json
@@ -117,7 +118,7 @@ class VerificationTests(unittest.TestCase):
         code.write_bytes(b'')
         with self.assertRaisesRegex(ValueError, 'Empty'):
             verify.audit(self.inventory, 'arm64', [run])
-        with sqlite3.connect(run[0] / 'coverage.sqlite3') as db:
+        with closing(sqlite3.connect(run[0] / 'coverage.sqlite3')) as db, db:
             detail = json.loads(db.execute('SELECT detail FROM functions').fetchone()[0])
             detail['output_file'] = '../../external.c'
             db.execute('UPDATE functions SET detail=?', (json.dumps(detail),))
@@ -139,7 +140,7 @@ class VerificationTests(unittest.TestCase):
 
     def test_active_journal_is_excluded_and_interrupted_remains_distinct(self):
         run = self.run_fixture('base', self.addresses, ['completed', 'failed', 'interrupted', 'unattempted'])
-        with sqlite3.connect(run[0] / 'coverage.sqlite3') as db:
+        with closing(sqlite3.connect(run[0] / 'coverage.sqlite3')) as db, db:
             db.execute('INSERT INTO batches VALUES(2,"running")')
         pending = run[0] / 'batches/00000002'
         pending.mkdir()
@@ -156,7 +157,7 @@ class VerificationTests(unittest.TestCase):
         def digest_with_concurrent_commit(path):
             nonlocal changed
             if Path(path).suffix == '.c' and not changed:
-                with sqlite3.connect(run[0] / 'coverage.sqlite3', timeout=0.1) as db:
+                with closing(sqlite3.connect(run[0] / 'coverage.sqlite3', timeout=0.1)) as db, db:
                     db.execute('UPDATE functions SET status="failed",attempts=1,batch=1,detail=? WHERE ordinal=1',
                                (json.dumps({'status': 'failed', 'address': '0x2000'}),))
                 changed = True
@@ -200,7 +201,7 @@ class VerificationTests(unittest.TestCase):
 
     def test_corrupt_database_inventory_is_rejected(self):
         run = self.run_fixture('base', self.addresses, ['unattempted'] * 4)
-        with sqlite3.connect(run[0] / 'coverage.sqlite3') as db:
+        with closing(sqlite3.connect(run[0] / 'coverage.sqlite3')) as db, db:
             db.execute('UPDATE functions SET address="0x9999" WHERE ordinal=0')
         with self.assertRaisesRegex(ValueError, 'database inventory'):
             verify.audit(self.inventory, 'arm64', [run])
