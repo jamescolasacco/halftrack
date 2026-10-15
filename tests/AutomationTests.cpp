@@ -227,6 +227,24 @@ void playbackModeRegressions (const juce::File& root)
     ok (s.setTrackAutomation (id, Target::pan, pan), "one-point pan before duplication");
     ok (s.play(), "play single-point automation"); player.process (4096);
     juce::MessageManager::getInstance()->runDispatchLoopUntil (30); s.stop();
+    ok (s.saveProject (root.getChildFile ("automation-single-point-history.halftrack")), "save played single-point values before track removal");
+    auto* activeEdit = engine->getActiveEdits().getEdits()[0];
+    const auto mixerID = te::getAudioTracks (*activeEdit)[0]->getVolumePlugin()->itemID;
+    ok (s.removeTrack (0), "remove played and saved single-point track");
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (100); player.process (4096);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (1200);
+    check (activeEdit->getPluginCache().getPluginFor (mixerID) == nullptr, "native cache has released the removed mixer before Undo");
+    s.undo();
+    std::cout << "Restored single-point volume=" << lane(s,Target::volume).points[0].value
+              << " pan=" << lane(s,Target::pan).points[0].value << std::endl;
+    check (equal (lane (s,Target::volume),volume) && equal (lane(s,Target::pan),pan),
+        "undo track removal reconstructs original single-point envelopes");
+    s.redo(); check(s.snapshot().tracks.size()==1,"redo removes the restored automated track");
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (100); player.process (4096);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (1200);
+    check (activeEdit->getPluginCache().getPluginFor (mixerID) == nullptr, "redo removal releases the reconstructed mixer as well");
+    s.undo(); check(equal(lane(s,Target::volume),volume) && equal(lane(s,Target::pan),pan),
+        "second undo reconstructs single-point curves consistently");
     juce::String copied; ok (s.duplicateTrack (id, copied), "duplicate a played single-point track");
     const bool initialCopy = equal (lane (s, Target::volume, 1), volume) && equal (lane (s, Target::pan, 1), pan);
     s.undo(); check (s.snapshot().tracks.size() == 2, "single-point duplication is one undo transaction");
