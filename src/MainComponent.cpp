@@ -1571,11 +1571,12 @@ private:
         }
         void sceneMenu (int scene)
         {
-            juce::PopupMenu menu; menu.addItem (1, "Launch Scene"); menu.addItem (2, "Rename Scene..."); menu.addItem (3, "Delete Scene");
+            juce::PopupMenu menu; menu.addItem (1, "Launch Scene"); menu.addItem (2, "Rename Scene..."); menu.addItem (3, "Delete Scene");menu.addItem(4,"Duplicate Scene");
             const auto id = owner.state.scenes[(size_t) scene].id; auto safe = juce::Component::SafePointer<Impl> (&owner);
             menu.showMenuAsync (juce::PopupMenu::Options(), [safe, id] (int choice)
             {
                 if (safe == nullptr) return; const auto index = safe->launcherIndices ({}, id).second; if (index < 0) return;
+                if(choice==4){safe->duplicateSceneFromUI(id);return;}
                 if (choice == 1) safe->report (safe->session.launchScene (index)); if (choice == 2) safe->renameSceneDialog (index); if (choice == 3) safe->report (safe->session.removeScene (index)); safe->refresh();
             });
         }
@@ -2690,6 +2691,17 @@ private:
             safe->report(safe->session.renameClip(id,safeDialog->getTextEditorContents("name")));safe->refresh();
         }),true);
     }
+    void duplicateSceneFromUI(const juce::String& id)
+    {
+        juce::String created;const auto result=session.duplicateScene(id,created);report(result);refresh();
+        if(result.wasOk())
+        {
+            const auto index=launcherIndices({},created).second;
+            selectedSceneId=created;
+            if(selectedTrack>=0)selectLauncherSlot(selectedTrack,index);
+            launcher.scrollSelectionIntoView();refresh();
+        }
+    }
     void renameSceneDialog (int scene)
     {
         if (scene < 0 || scene >= (int) state.scenes.size()) return;
@@ -3012,6 +3024,7 @@ private:
         {
             const bool sceneSelected = selectedSceneIndex() >= 0;
             popup.addItem (50, "Insert Scene"); popup.addItem (51, "Rename Selected Scene...", sceneSelected); popup.addItem (52, "Delete Selected Scene", sceneSelected);
+            popup.addItem(56,"Duplicate Selected Scene",sceneSelected&&!state.recording&&state.scenes.size()<256);
             popup.addSeparator(); popup.addItem (53, "Launch Selected Scene", sceneSelected); popup.addItem (54, "Stop All Session Clips"); popup.addItem (55, "Return to Arrangement");
         }
         return popup;
@@ -3050,6 +3063,7 @@ private:
             case 45: showSessionView(); break;
             case 50: addSceneFromUI(); break;
             case 51: renameSceneDialog (selectedSceneIndex()); break;
+            case 56: if(selectedSceneIndex()>=0)duplicateSceneFromUI(selectedSceneId); break;
             case 52: report (session.removeScene (selectedSceneIndex())); break;
             case 53: report (session.launchScene (selectedSceneIndex())); break;
             case 54: report (session.stopAllLauncherClips()); break;
@@ -4971,6 +4985,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(state.tracks[2].slots[0].clip.name==beforeCancel,"cancelling the rename dialog does not change the project");
     renameClipDialog(slotSplit);check(session.clearSlot(2,0).wasOk()&&session.addMidiClipToSlot(splitTrack,0,16).wasOk(),"replace slot while its rename dialog is open");refresh();finishRename("Stale name",1);
     check(state.tracks[2].slots[0].clip.id!=slotSplit&&state.tracks[2].slots[0].clip.name!="Stale name","stale rename dialog cannot retarget a new clip");
+    check(session.importAudioToSlot(audioFixture,0,0).wasOk(),"add audio beside scene MIDI");refresh();showSessionView();selectLauncherSlot(2,0);
+    const auto copiedSceneSource=state.scenes[0].id;const auto originalSceneCount=state.scenes.size();menuItemSelected(56,4);
+    const auto newSceneId=selectedSceneId;check(state.scenes.size()==originalSceneCount+1&&selectedSceneIndex()==1&&newSceneId!=copiedSceneSource&&state.tracks[0].slots[1].hasClip&&state.tracks[2].slots[1].hasClip,"Session menu duplicates and selects the complete next scene");
+    session.undo();refresh();check(state.scenes.size()==originalSceneCount,"scene-copy menu action undoes once");session.redo();refresh();check(state.scenes[1].id==newSceneId,"scene-copy menu redo retains identity");
+    check(session.removeScene(0).wasOk(),"remove captured scene before delayed copy");refresh();const auto countAfterRemoval=state.scenes.size();duplicateSceneFromUI(copiedSceneSource);
+    check(state.scenes.size()==countAfterRemoval&&state.scenes[0].id==newSceneId,"stale scene-copy target does not duplicate the replacement row");
+    check(session.addReturnTrack("Scene selection return").wasOk(),"add return for scene selection");refresh();selectTrack((int)state.tracks.size()-1);
+    const auto selectedReturn=currentTrack()->id;selectedSceneId=newSceneId;menuItemSelected(56,4);
+    check(selectedSceneIndex()==1&&selectedSceneId!=newSceneId&&currentTrack()->id==selectedReturn,"scene duplication selects its new row even with a return track selected");
+    session.undo();refresh();
+
 
 
 

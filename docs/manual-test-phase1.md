@@ -267,3 +267,8 @@ Native input/listening check: **NOT RUN** until performed. Draw two long overlap
 ## Rename clips (about 30 seconds)
 
 Native input check: **NOT RUN** until performed. Select an audio or MIDI clip in Arrangement and press **Cmd/Ctrl+R**, or choose **Rename clip…** from its context menu. Enter a name, confirm, then undo/redo. Repeat with a Session slot and cancel once. Save/reopen and confirm both names persist. The audio source filename must stay unchanged.
+
+
+### Copy a Session scene
+
+Put an audio clip and a MIDI clip in one scene, rename a clip, and deactivate another clip in that row. Launch the scene. Use its context menu **Duplicate Scene** (or **Session → Duplicate Selected Scene**): the copy appears immediately below and becomes selected, while the original keeps playing. Launch the copy and verify its sound and inactive clip match. Edit a copied note and confirm the original is unchanged. Undo/redo the copy as one step; save and reopen to retain both rows without starting playback.

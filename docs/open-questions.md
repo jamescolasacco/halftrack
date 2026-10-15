@@ -128,3 +128,6 @@ Default: split crossing notes at the piano-roll marker, using the current select
 ### Clip names and media
 
 Default: clip names are trimmed, nonblank display labels. Renaming never changes an audio filename or moves source media, even if a native engine preference requests it. Audio and MIDI clips in both views use the same stable-ID command; cancelling or confirming a stale dialog leaves any replacement clip untouched.
+
+
+Scene-copy default: insert immediately after the source and append ` copy` to its name. Duplicate audio/MIDI clip state with fresh scene/slot/clip/note IDs, share immutable media, and leave the current performance running without launching the copy. Empty rows are valid; the existing 256-scene limit applies. Copying frozen/populated return tracks or additional clip types awaits an explicit supported model.

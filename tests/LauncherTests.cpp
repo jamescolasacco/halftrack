@@ -612,6 +612,50 @@ void midiTests()
     check (magnitude (stopped, 3000, 21000) < 0.00001f, "MIDI stop has no stuck voice");
     session.stop();
 }
+void sceneCopyTests(const juce::File& root,const juce::File& source)
+{
+    MemoryBuffers memory;Session s(false);auto& engine=engineFor(s);te::test_utilities::EnginePlayer player(engine,parameters());
+    ok(s.importAudioToSlot(source,0,0),"prepare scene audio");ok(s.importAudioToSlot(source,1,0),"prepare disabled scene audio");
+    // Activation can prepare native readers even before transport starts. Register
+    // synchronous generated sources before that preparation, not after it.
+    for(int i=0;i<2;++i)registerConstant(memory,engine,s.snapshot().tracks[(size_t)i].slots[0].clip.file,.12f);
+    ok(s.addMidiTrack("Scene instrument"),"prepare scene MIDI track");const auto track=s.snapshot().tracks[2].id;
+    ok(s.addMidiClipToSlot(track,0,4),"prepare scene MIDI clip");const auto midi=s.snapshot().tracks[2].slots[0].clip.id;
+    ok(s.addMidiNote(midi,60,0,1,.8f),"draw original scene note");ok(s.addReturnTrack("Scene return"),"prepare return row alignment");
+    ok(s.renameScene(0,"Verse"),"name original scene");const auto sourceId=s.snapshot().scenes[0].id;
+    const auto audio=s.snapshot().tracks[0].slots[0].clip.id;auto settings=s.snapshot().tracks[0].slots[0].clip.audio;settings.gainDb=-6;
+    ok(s.setAudioClipSettings(audio,settings),"set source clip gain");ok(s.renameClip(audio,"Drums"),"name source clip");
+    ok(s.setClipActive(s.snapshot().tracks[1].slots[0].clip.id,false),"disable second source clip");
+    ok(s.setTrackPan(0,-1),"isolate audio left");ok(s.setTrackPan(2,1),"isolate synth right");
+    ok(s.setLaunchQuantisation(Session::LaunchQuantisation::none),"set immediate scene launch");ok(s.launchScene(0),"play source scene");dispatchGraphChanges(s);player.process(1024);
+    const float expected=.12f*std::sqrt(2.0f)*std::pow(10.0f,-6.0f/20.0f);level(player.process(1024),0,1024,expected,"source audio before duplication");
+    const auto original=s.snapshot();juce::String newId="preserved";ok(s.duplicateScene(sourceId,newId),"duplicate playing scene after original");dispatchGraphChanges(s);
+    const auto copied=s.snapshot();check(copied.scenes.size()==9&&copied.scenes[0].id==sourceId&&copied.scenes[1].id==newId&&newId!=sourceId&&copied.scenes[1].name=="Verse copy","scene copy gets new identity and next-row placement");
+    for(size_t i=0;i<copied.tracks.size();++i)
+    {
+        const auto& old=original.tracks[i].slots[0];const auto& from=copied.tracks[i].slots[0];const auto& to=copied.tracks[i].slots[1];
+        check(copied.tracks[i].slots.size()==9&&from.id==old.id&&to.id!=old.id&&to.hasClip==old.hasClip&&!to.playing&&!to.queued,"scene duplicates slots without retargeting or launching");
+        for(size_t row=1;row<original.scenes.size();++row)check(copied.tracks[i].slots[row+1].id==original.tracks[i].slots[row].id,"later slot identities remain ordered");
+        if(old.hasClip)check(to.clip.id!=old.clip.id&&from.clip.id==old.clip.id&&to.clip.name==old.clip.name&&to.clip.active==old.clip.active&&to.clip.length==old.clip.length&&to.clip.file==old.clip.file&&to.clip.audio==old.clip.audio,"copied clip retains state/media with independent identity");
+    }
+    const auto duplicateMidi=copied.tracks[2].slots[1].clip;check(duplicateMidi.notes.size()==1&&duplicateMidi.notes[0].id!=original.tracks[2].slots[0].clip.notes[0].id&&duplicateMidi.notes[0].pitch==60,"scene copy renews note identity");
+    check(copied.tracks[0].slots[0].playing&&copied.tracks[2].slots[0].playing,"duplicate retains the existing live performance");
+    auto running=player.process(4096);level(running,512,3500,expected,"duplication preserves running source audio");
+    s.undo();check(s.snapshot().scenes.size()==8&&s.snapshot().scenes[0].id==sourceId,"one undo removes the entire scene copy");s.redo();check(s.snapshot().scenes[1].id==newId&&s.snapshot().tracks[2].slots[1].clip.notes[0].id==duplicateMidi.notes[0].id,"redo restores exact copied identities");
+    ok(s.launchScene(1),"launch duplicated scene");dispatchGraphChanges(s);auto launched=player.process(12000);level(launched,512,11000,expected,"duplicated scene plays matching audio");check(launched.getMagnitude(1,0,12000)>.01,"duplicated scene plays its copied MIDI");
+    auto note=duplicateMidi.notes[0];ok(s.updateMidiNote(duplicateMidi.id,note.id,72,note.startBeat,note.lengthBeats,note.velocity),"edit only copied scene note");check(s.snapshot().tracks[2].slots[0].clip.notes[0].pitch==60,"original MIDI remains independent");s.undo();
+    s.stop();const auto project=root.getChildFile("scene-copy.halftrack");ok(s.saveProject(project),"collect copied scene project");ok(s.loadProject(project),"reopen copied scene");
+    check(s.snapshot().scenes[1].id==newId&&s.snapshot().tracks[2].slots[1].clip.notes[0].id==duplicateMidi.notes[0].id&&!s.snapshot().tracks[0].slots[1].playing,"copy persists without auto-launch on reopen");
+    ok(s.removeScene(0),"remove original scene");check(s.snapshot().scenes[0].id==newId&&s.snapshot().tracks[0].slots[0].clip.file.existsAsFile(),"copy survives original scene deletion");s.undo();
+    juce::String rejected="preserved";check(s.duplicateScene("missing",rejected).failed()&&rejected=="preserved"&&s.canRedo(),"invalid scene preserves project, output and redo");
+    juce::String empty;ok(s.duplicateScene(s.snapshot().scenes.back().id,empty),"duplicate empty last scene");check(s.snapshot().scenes.back().id==empty,"last-row duplicate appends safely");
+    for(const auto& t:s.snapshot().tracks)check(!t.slots.back().hasClip,"empty rows stay empty on every track and return");
+    const auto initialCount=s.snapshot().scenes.size();
+    for(size_t i=initialCount;i<256;++i)if(s.addScene().failed())throw std::runtime_error("cannot prepare scene ceiling");
+    ok(s.renameScene(0,"At limit"),"prepare scene-limit redo");s.undo();
+    check(s.snapshot().scenes.size()==256&&s.duplicateScene(sourceId,rejected).failed()&&rejected=="preserved"&&s.canRedo(),"scene ceiling rejects copy without changing output or redo");
+    s.redo();check(s.snapshot().scenes[0].name=="At limit"&&s.snapshot().scenes.size()==256,"rejected copy preserves usable rename history");
+}
 }
 int runLauncherTests (const juce::File& requestedDirectory)
 {
@@ -621,6 +665,7 @@ int runLauncherTests (const juce::File& requestedDirectory)
         ok (root.createDirectory(), "create isolated test artifacts");
         const auto first = constantFile (root, "first", 0.12f), second = constantFile (root, "second", 0.28f);
         structureTests (root, first);
+        sceneCopyTests(root,first);
         saveAsAudioTests (root);
         saveAsRemovedClipHistoryTests (root);
         audioTests (root, first, second);

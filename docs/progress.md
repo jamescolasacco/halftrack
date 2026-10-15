@@ -513,3 +513,16 @@ Clip naming ownership: root owns stable-ID display-name edits for audio/MIDI cli
 Note-splitting package `d7329ce` verifies all 106 owned files and 5,969 dependency files; the fresh extracted app passes note-tools, activation and production UI tests. Clip naming builds and is now checking the real modal callbacks, preservation of generated source bytes, all clip contexts, no-op/history and portable Unicode names. No new DSP path is added.
 
 Clip naming verification passes the expanded clip model/playback/persistence suite in **11.75 s**, actual modal UI handlers in **4.77 s**, and combined session/MIDI/export regressions in **61.27 s**. Both views and media types preserve source path/bytes and musical identity. The previous full 22-suite result applies to note splitting; these focused suites validate the subsequent display-name-only feature. Cross-platform verification and final combined packaging follow.
+
+Session scene duplication ownership: root owns stable-ID scene copying into the following row, native clip/slot/note identity renewal, original context/Session-menu controls and generated playback/persistence/UI tests. Duplication preserves clip names, activation, looping and media references, leaves input assignments and current launch ownership alone, and never auto-launches the new scene. Recording/export and the existing 256-scene ceiling reject before mutation. No other agent is editing these areas.
+
+Tap-tempo/activation source `853f431` now passes clean builds, tests and packaging on all three platforms in CI 38718039217. The separate note-split and clip-name commits are published together at `d48a802` and are under [CI 38720910857](https://github.com/jamescolasacco/halftrack/actions/runs/38720910857). The `d48a802` package verifies exact source/binary inputs and its fresh extracted naming, splitting, activation and UI suites pass. Scene duplication is subsequent work and is not included in that package.
+
+
+Scene-copy focused playback verification passes in **5.47 s** after correcting the fixture setup: generated synchronous sources must register before clip activation can prepare a native reader. A retained pre-copy signal assertion distinguishes fixture failure from interruption by the copy. The new scene retains independent IDs/settings, the original keeps sounding, copied MIDI/audio play, undo/redo and portable reopen pass. The 256-scene and reentrant export cases are included in the subsequent combined run.
+
+
+Scene-copy combined verification: all **22 Mac acceptance suites pass in 318.79 s**, including the 256-scene ceiling, complete row history and reentrant export rejection. Review then found a UI-only edge case with a selected return track: the new scene ID must be selected before the return's clip-selection guard. That correction has an explicit native interaction check and receives a final UI/launcher run before packaging. No owned audio callback or dependency patch changed.
+
+
+Final scene-copy source passes production UI in **6.96 s** and launcher/model/native-audio checks in **5.28 s** (12.24 s together). The selected-return regression passes. All remaining behavior was covered by the 318.79 s full run; subsequent model edits only expanded formatting/comments. Ready for a source-inclusive package.

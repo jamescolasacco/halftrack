@@ -140,6 +140,7 @@ public:
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
     juce::Result addScene (juce::String name = {});
     juce::Result removeScene (int sceneIndex);
+    juce::Result duplicateScene (const juce::String& sceneId, juce::String& duplicatedSceneId);
     juce::Result renameScene (int sceneIndex, const juce::String& name);
     juce::Result importAudioToSlot (const juce::File&, int trackIndex, int sceneIndex);
     juce::Result addMidiClipToSlot (const juce::String& trackId, int sceneIndex, double lengthBeats = 4);

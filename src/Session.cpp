@@ -1483,6 +1483,65 @@ Result Session::removeScene (int index)
     list.deleteScene (*list.getScenes()[index]);
     impl->changed(); return Result::ok();
 }
+Result Session::duplicateScene (const String& id, String& duplicatedId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing scenes.");
+    auto& list = impl->edit->getSceneList();
+    int index = -1;
+    for (int i = 0; i < list.getNumScenes(); ++i)
+        if (list.getScenes()[i]->state.getProperty ("halftrackSceneID").toString() == id)
+        {
+            if (index >= 0) return Result::fail ("Scene identity is ambiguous.");
+            index = i;
+        }
+    if (index < 0) return Result::fail ("Scene not found.");
+    if (list.getNumScenes() >= 256) return Result::fail ("This project has reached the scene limit.");
+
+    struct Copy { te::AudioTrack* track; te::ClipCopy clip; };
+    std::vector<Copy> clips;
+    std::vector<std::pair<te::AudioTrack*, te::Clip*>> sources;
+    for (auto* track : te::getAudioTracks (*impl->edit))
+    {
+        auto* slot = track->getClipSlotList().getClipSlots()[index];
+        if (! slot) return Result::fail ("The scene contains an incomplete slot row.");
+        if (auto* clip = slot->getClip())
+        {
+            if (isReturn (*track) || track->isFrozen (te::Track::anyFreeze)
+                || (! dynamic_cast<te::WaveAudioClip*> (clip) && ! dynamic_cast<te::MidiClip*> (clip)))
+                return Result::fail ("Duplicate audio/MIDI scenes on unfrozen ordinary tracks.");
+            sources.emplace_back (track, clip);
+        }
+    }
+    // Prepare independent state only after validating every populated source.
+    for (const auto& source : sources)
+    {
+        auto copy = te::ClipCopy::fromClip (*source.second).withNewItemID (*impl->edit);
+        renewMidiNoteIDs (copy.getState());
+        clips.push_back ({ source.first, std::move (copy) });
+    }
+    auto sceneState = list.getScenes()[index]->state.createCopy();
+    const auto newId = juce::Uuid().toString();
+    sceneState.setProperty ("halftrackSceneID", newId, nullptr);
+    sceneState.setProperty (te::IDs::name, list.getScenes()[index]->name.get() + " copy", nullptr);
+    impl->transaction ("Duplicate scene");
+    auto* undo = &impl->edit->getUndoManager();
+    auto* scene = list.insertScene (index + 1);
+    scene->state.copyPropertiesFrom (sceneState, undo);
+    for (const auto& copy : clips)
+    {
+        auto* slot = copy.track->getClipSlotList().getClipSlots()[index + 1];
+        if (! te::insertClipCopy (*slot, copy.clip))
+        {
+            list.deleteScene (*scene);
+            impl->changed();
+            return Result::fail ("A scene clip could not be copied.");
+        }
+    }
+    duplicatedId = newId;
+    impl->changed();
+    return Result::ok();
+}
 Result Session::renameScene (int index, const String& name)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

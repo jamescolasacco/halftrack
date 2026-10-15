@@ -923,17 +923,17 @@ int runMidiTests (const juce::File& requestedDirectory)
         {
             eventDispatched = true;
             busyDuringDispatch = session.isExporting() && ! session.canUndo() && ! session.canRedo();
-            juce::StringArray inserted { "export-preserved" };
-            const std::array<juce::Result, 17> attempts {
+            juce::StringArray inserted { "export-preserved" };juce::String sceneOutput="export-preserved";
+            const std::array<juce::Result, 18> attempts {
                 session.newProject(), session.loadProject (project), session.saveProject (rejectedSave),
                 session.removeTrack (2), session.addMidiNote (clipId, 60, 0, 1, 1),
                 session.setSynthSettings (trackId, flatSettings()), session.setTrackGain (2, -20),
                 session.addAudioTrack ("Reentrant track"), session.removeClip (2, 0),
                 session.exportWav (nestedOutput), session.updateMidiNotes (clipId, restored.clips[0].notes),
                 session.addMidiNotes (clipId, restored.clips[0].notes, inserted), session.removeMidiNotes (clipId, { noteId }),
-                session.tapTempo (1.0), session.setClipActive (clipId, false), session.splitMidiNotes (clipId, { noteId }, .5, inserted), session.renameClip (clipId, "Export mutation")
+                session.tapTempo (1.0), session.setClipActive (clipId, false), session.splitMidiNotes (clipId, { noteId }, .5, inserted), session.renameClip (clipId, "Export mutation"), session.duplicateScene (session.snapshot().scenes[0].id, sceneOutput)
             };
-            mutationsRejected = inserted == juce::StringArray { "export-preserved" } && std::all_of (attempts.begin(), attempts.end(), [] (const auto& result)
+            mutationsRejected = sceneOutput=="export-preserved" && inserted == juce::StringArray { "export-preserved" } && std::all_of (attempts.begin(), attempts.end(), [] (const auto& result)
             {
                 return result.failed() && result.getErrorMessage() == "Finish or cancel the current export first.";
             });

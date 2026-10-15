@@ -32,6 +32,8 @@ The new original Utility, refined using traced filter topology and a normalized 
 
 ## Current Session subset
 
+Scene duplication now has stable-ID UI/model integration with independent audio/MIDI copies, retained clip settings, undo/redo and generated native-driver playback tests. This deepens SES-001; it does not add a completed parity row. Scene follow actions and performance-to-Arrangement capture remain unfinished. See [architecture](architecture.md#session-scene-duplication).
+
 The built-in instrument at `ea24869` adds sine, deterministic white noise and adjustable pulse width alongside the existing saw. Native controls, invalid-command preservation, project round trips, undo/redo and independent complete-buffer/harmonic tests pass all eight Mac suites in 133.15 seconds and [all three CI platforms](https://github.com/jamescolasacco/halftrack/actions/runs/38518528688). See the [oscillator contract](research/synth-oscillator-contract.md). Dual oscillators, full modulation, complete instrument-device reconstruction and measured reference sound matching remain absent or unverified.
 
 Grouped piano-roll editing and the validating note-batch facade at `13406de` pass all eight local suites in 133.69 seconds. Shift selection/marquee, Select All/Escape, common group movement/resize, set-value velocity, group deletion, stable-ID pruning and one-step undo/redo have handler/model coverage, including 512 notes and rejection of infeasible loaded groups. This remains one-clip editing with Halftrack's current drawing convention, not full MIDI-editor parity; the published grouped-note checkpoint `9b59843` passes all three CI platforms.
