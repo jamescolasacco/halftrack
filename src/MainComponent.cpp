@@ -3512,7 +3512,7 @@ private:
         auto types = session.knownPlugins().getTypes();
         juce::PopupMenu popup;
         popup.addItem (100001, "Utility  (Built-in)");
-        for (int i = 0; i <= static_cast<int> (Session::EffectKind::bitcrusher); ++i) popup.addItem (100002+i, juce::String (effectName (static_cast<Session::EffectKind> (i))) + "  (Built-in)");
+        for (int i = 0; i <= static_cast<int> (Session::EffectKind::gate); ++i) popup.addItem (100002+i, juce::String (effectName (static_cast<Session::EffectKind> (i))) + "  (Built-in)");
         popup.addSeparator();
         for (int i = 0; i < types.size(); ++i) popup.addItem (i + 1, types[i].name + "  (" + types[i].pluginFormatName + ")");
         popup.addSeparator(); popup.addItem (100000, "Scan / Manage Plug-ins...");
@@ -3522,7 +3522,7 @@ private:
         {
             if (safe == nullptr) return;
             if (choice == 100001) { safe->report (safe->session.addUtility (track)); safe->refresh(); }
-            else if (choice >= 100002 && choice <= 100002 + static_cast<int> (Session::EffectKind::bitcrusher)) { safe->report (safe->session.addNativeEffect (track, static_cast<Session::EffectKind> (choice-100002))); safe->refresh(); }
+            else if (choice >= 100002 && choice <= 100002 + static_cast<int> (Session::EffectKind::gate)) { safe->report (safe->session.addNativeEffect (track, static_cast<Session::EffectKind> (choice-100002))); safe->refresh(); }
             else if (choice == 100000) safe->showPlugins();
             else if (choice > 0 && choice <= types.size()) { safe->report (safe->session.addPlugin (track, types[choice - 1])); safe->refresh(); }
         });

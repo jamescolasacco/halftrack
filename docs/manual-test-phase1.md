@@ -301,3 +301,7 @@ Physical listening/native-dialog check: **NOT RUN** until performed. Pan differe
 ## Bitcrusher (about one minute)
 
 On a playing audio or MIDI track, open Add Device and choose Bitcrusher. Open its editor, reduce Bit depth and raise Hold interval: the sound should become coarser and held in larger steps. Set Dry / Wet to 0% to hear the unchanged dry signal; raise it again and try Input drive and Output separately. Undo a knob drag once, then redo. Save/reopen and check all five controls. Export the mix and check the effect remains audible; bypassing the device should restore the dry sound.
+
+## Noise gate (about one minute)
+
+Add Noise Gate to a playing track. Raise Threshold until quieter parts close, then adjust Floor, Attack, Hold and Release. Hysteresis should prevent rapid closing while levels sit just below the opening threshold. Duck should reduce louder passages instead. Set Dry / Wet to 0% for the dry signal, then undo/redo the change and save/reopen to check the controls. Bypass should restore the source.

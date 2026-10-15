@@ -49,7 +49,7 @@ public:
         bool bassMono = false, bassAudition = false, mute = false, dcFilter = false;
         bool operator== (const UtilitySettings&) const = default;
     };
-    enum class EffectKind { equalizer, compressor, delay, reverb, bitcrusher };
+    enum class EffectKind { equalizer, compressor, delay, reverb, bitcrusher, gate };
     struct EffectSettings
     {
         EffectKind kind = EffectKind::equalizer;

@@ -202,10 +202,58 @@ void bitcrusherTests()
     bool same = true; for (int n = 0; n < mono.getNumSamples(); ++n) same = same && mono.getSample (0, n) == stereo.getSample (0, n);
     check (same, "mono callback produces the same independent left-channel samples");
 }
+void gateTests()
+{
+    auto settings = defaultEffectSettings (Kind::gate);
+    settings.values[0] = -12; settings.values[1] = 6;
+    settings.values[2] = .5f; settings.values[3] = .25f; settings.values[4] = .5f;
+    juce::AudioBuffer<float> source (2, 18);
+    constexpr std::array<double, 18> opening { 0, 0, 0, 0, .25, .5, .75, 1, 1, 1, 1, 1, 1, 1, .75, .5, .25, 0 };
+    for (int n = 0; n < 18; ++n)
+    { source.setSample (0, n, n < 4 ? .2f : n < 8 ? .5f : n < 12 ? .2f : .05f); source.setSample (1, n, -.025f); }
+    const auto output = run (source, settings, 8000); double error = 0;
+    for (int c = 0; c < 2; ++c) for (int n = 0; n < 18; ++n)
+        error = std::max (error, std::abs (output.getSample (c, n) - source.getSample (c, n) * opening[n]));
+    check (error < 2e-8, "hand-calculated gate attack, hysteresis, exact hold frames and release apply identically to both channels");
+    source.setSample (0, 15, .5f); const auto retriggered = run (source, settings, 8000);
+    check (retriggered.getSample (0, 15) == .5f && retriggered.getSample (1, 15) == -.025f,
+        "reopening during release continues from current gain without restarting the envelope");
+    for (const double rate : { 8000.0, 44100.0, 48000.0, 96000.0 })
+    {
+        settings = defaultEffectSettings (Kind::gate); settings.values[0] = -12; settings.values[2] = 10;
+        settings.values[3] = 0; settings.values[4] = 20;
+        const int attackFrames = (int) std::ceil (rate * .01), releaseFrames = (int) std::ceil (rate * .02);
+        juce::AudioBuffer<float> step (2, attackFrames + releaseFrames + 3);
+        for (int n = 0; n < step.getNumSamples(); ++n)
+        { step.setSample (0, n, .01f); step.setSample (1, n, n < attackFrames ? -.5f : -.01f); }
+        const auto out = run (step, settings, rate); error = 0;
+        for (int n = 0; n < out.getNumSamples(); ++n)
+        {
+            const double gain = n < attackFrames ? (n+1.0)/attackFrames : std::max (0.0, 1-(n-attackFrames+1.0)/releaseFrames);
+            for (int c = 0; c < 2; ++c) error = std::max (error, std::abs (out.getSample (c, n) - step.getSample (c, n) * gain));
+        }
+        check (error < 4e-8, "independent closed-form envelope and right-channel detection at " + juce::String (rate) + " Hz");
+    }
+    settings = defaultEffectSettings (Kind::gate); settings.values[0] = -12;
+    settings.values[2] = settings.values[3] = settings.values[4] = 0;
+    settings.values[5] = -20; settings.values[7] = .25f;
+    juce::AudioBuffer<float> alternating (2, 100);
+    for (int n = 0; n < 100; ++n) { alternating.setSample (0, n, n % 2 ? .5f : .1f); alternating.setSample (1, n, -.01f); }
+    for (const bool duck : { false, true })
+    {
+        settings.values[6] = duck ? 1.0f : 0.0f; const auto out = run (alternating, settings); error = 0;
+        for (int n = 0; n < 100; ++n)
+        {
+            const bool open = n % 2 != 0; const double gain = .75 + .25 * ((open != duck) ? 1 : .1);
+            for (int c = 0; c < 2; ++c) error = std::max (error, std::abs (out.getSample (c, n) - alternating.getSample (c, n) * gain));
+        }
+        check (error < 2e-8, "zero-time gate/duck switching retains the chosen floor and parallel dry path");
+    }
+}
 void lifecycleTests()
 {
     auto input=signal(14000);
-    for(int kind=0;kind<=static_cast<int>(Kind::bitcrusher);++kind)
+    for(int kind=0;kind<=static_cast<int>(Kind::gate);++kind)
     {
         auto s=defaultEffectSettings(static_cast<Kind>(kind));if(kind==0){s.values[2]=8;s.values[1]=400;}
         const auto expected=run(input,s);auto split=input;NativeEffectDSP dsp;dsp.prepare(48000,s.kind);dsp.configure(s);
@@ -213,7 +261,7 @@ void lifecycleTests()
         check(difference(split,expected)==0,"block partition invariance for "+juce::String(effectName(s.kind)));
         dsp.reset();split=input;dsp.processSamples(split.getWritePointer(0),split.getWritePointer(1),split.getNumSamples());check(difference(split,expected)==0,"reset restores deterministic output");
         auto bad=input;bad.setSample(0,0,std::numeric_limits<float>::quiet_NaN());bad.setSample(1,10,std::numeric_limits<float>::infinity());check(difference(run(bad,s),run(bad,s))==0,"nonfinite input does not poison state");
-        s.values[kind==0?33:kind==1?6:kind==2?3:kind==3?5:4]=0;check(difference(run(input,s),input)==0,"zero wet is exact dry signal");
+        s.values[kind==0?33:kind==1?6:kind==2?3:kind==3?5:kind==4?4:7]=0;check(difference(run(input,s),input)==0,"zero wet is exact dry signal");
     }
 }
 void writeAudio(const juce::File& file,const juce::AudioBuffer<float>& audio)
@@ -232,7 +280,7 @@ juce::ValueTree effectState(juce::ValueTree root)
 void projectTests(const juce::File& root)
 {
     const auto input=signal(20000);const auto file=root.getChildFile("source.wav");writeAudio(file,input);
-    for(int type=0;type<=static_cast<int>(Kind::bitcrusher);++type)
+    for(int type=0;type<=static_cast<int>(Kind::gate);++type)
     {
         const auto kind=static_cast<Kind>(type);Session s(false);ok(s.importAudio(file,0),"import effect fixture");ok(s.addNativeEffect(0,kind),"insert "+juce::String(effectName(kind)));
         const auto id=s.snapshot().tracks[0].plugins[0].id;auto settings=defaultEffectSettings(kind);
@@ -302,13 +350,13 @@ void projectTests(const juce::File& root)
     auto first=chain.snapshot().tracks[0].plugins[0];auto gain=first.effect;gain.values[32]=12;ok(chain.setNativeEffectSettings(first.id,gain),"set pre-compression gain");
     const auto one=root.getChildFile("gain-first.wav"),two=root.getChildFile("gain-last.wav");ok(chain.exportWav(one),"render gain before compressor");ok(chain.movePlugin(0,0,1),"move actual effect order");ok(chain.exportWav(two),"render gain after compressor");check(difference(readAudio(one),readAudio(two))>.01,"order changes nonlinear output");chain.undo();ok(chain.exportWav(two),"undo device order");check(difference(readAudio(one),readAudio(two))==0,"undo order restores bit-identical output");
     Session midi(false);ok(midi.addMidiTrack("Effect instrument"),"add MIDI track");const auto tracks=midi.snapshot().tracks;const int track=(int)tracks.size()-1;ok(midi.addMidiClip(tracks.back().id,0,1),"add MIDI fixture");const auto clip=midi.snapshot().tracks.back().clips[0].id;ok(midi.addMidiNote(clip,60,0,1,.6f),"add generated note");
-    for(int k=0;k<=static_cast<int>(Kind::bitcrusher);++k)ok(midi.addNativeEffect(track,static_cast<Kind>(k)),"insert device after instrument");const auto result=root.getChildFile("midi-effects.wav");ok(midi.exportWav(result,48000,24,1),"render instrument through all native devices and tail");auto rendered=readAudio(result);check(rendered.getMagnitude(0,rendered.getNumSamples())>.001,"instrument chain remains audible");
-    ok(midi.addReturnTrack("Effect return"),"create return");const int ret=(int)midi.snapshot().tracks.size()-1;for(int k=0;k<=static_cast<int>(Kind::bitcrusher);++k)ok(midi.addNativeEffect(ret,static_cast<Kind>(k)),"insert device after return input");
+    for(int k=0;k<=static_cast<int>(Kind::gate);++k)ok(midi.addNativeEffect(track,static_cast<Kind>(k)),"insert device after instrument");const auto result=root.getChildFile("midi-effects.wav");ok(midi.exportWav(result,48000,24,1),"render instrument through all native devices and tail");auto rendered=readAudio(result);check(rendered.getMagnitude(0,rendered.getNumSamples())>.001,"instrument chain remains audible");
+    ok(midi.addReturnTrack("Effect return"),"create return");const int ret=(int)midi.snapshot().tracks.size()-1;for(int k=0;k<=static_cast<int>(Kind::gate);++k)ok(midi.addNativeEffect(ret,static_cast<Kind>(k)),"insert device after return input");
 }
 }
 int runNativeEffectsTests(const juce::File& artifacts)
 {
-    try {const auto root=artifacts.getChildFile("effects-"+juce::Uuid().toString());ok(root.createDirectory(),"create fixtures");equalizerTests();compressorTests();delayTests();syncedDelayTests();reverbTests();bitcrusherTests();lifecycleTests();projectTests(root);runNativeEffectEditorTests(root);std::cout<<"Native effects passed: "<<root.getFullPathName()<<std::endl;return 0;}
+    try {const auto root=artifacts.getChildFile("effects-"+juce::Uuid().toString());ok(root.createDirectory(),"create fixtures");equalizerTests();compressorTests();delayTests();syncedDelayTests();reverbTests();bitcrusherTests();gateTests();lifecycleTests();projectTests(root);runNativeEffectEditorTests(root);std::cout<<"Native effects passed: "<<root.getFullPathName()<<std::endl;return 0;}
     catch(const std::exception& e){std::cerr<<"FAIL native effects: "<<e.what()<<std::endl;return 1;}
 }
 }

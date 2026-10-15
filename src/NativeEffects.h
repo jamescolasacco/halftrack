@@ -51,6 +51,10 @@ private:
     std::array<double, 8> roomTone {}, roomFeedback {};
     double crusherLevels = 128, crusherDrive = 1, crusherCountdown = 0;
     std::array<double, 2> crusherHeld {};
+    double gateThreshold = 0, gateCloseThreshold = 0, gateFloor = 0, gateEnvelope = 0;
+    double gateAttackStep = 1, gateReleaseStep = 1;
+    int gateHoldSamples = 0, gateHoldRemaining = 0;
+    bool gateOpen = false;
     int ramp = 0;
     bool processed = false;
 };
@@ -80,7 +84,7 @@ public:
     void deinitialise() override {}
     void reset() override;
     void applyToBuffer (const tracktion::PluginRenderContext&) override;
-    bool noTail() override { return kind == Session::EffectKind::compressor; }
+    bool noTail() override { return kind == Session::EffectKind::compressor || kind == Session::EffectKind::gate; }
     double getTailLength() const override
     { return kind == Session::EffectKind::delay ? 1800.0 : kind == Session::EffectKind::reverb ? 20.25 : kind == Session::EffectKind::equalizer ? 10.0 : kind == Session::EffectKind::bitcrusher ? .008 : 0.0; }
     bool takesMidiInput() override { return false; }

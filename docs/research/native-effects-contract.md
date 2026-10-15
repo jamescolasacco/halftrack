@@ -1,6 +1,6 @@
 # Native effects implementation contract
 
-Halftrack now implements an eight-band equalizer, compressor, stereo delay, room reverb and bitcrusher as original native devices. They insert on audio tracks, after MIDI instruments, or after return inputs; device order, bypass, removal, parameter gestures and saved state use the engine undo system. All parameters have named XML properties. Invalid state is rejected before replacing the active project.
+Halftrack now implements an eight-band equalizer, compressor, stereo delay, room reverb, bitcrusher and noise gate as original native devices. They insert on audio tracks, after MIDI instruments, or after return inputs; device order, bypass, removal, parameter gestures and saved state use the engine undo system. All parameters have named XML properties. Invalid state is rejected before replacing the active project.
 
 The reference manual identifies independently enabled filter bands, dynamics controls, feedback delay with stereo routing, and algorithmic reverberation as relevant workflows. These implementations cover subsets of those workflows; the manual does not establish their numerical algorithms. [Official audio effects reference](https://www.ableton.com/en/live-manual/12/live-audio-effect-reference/), consulted 2026-10-14. Recovered binary output is not compiled into these effects.
 
@@ -35,6 +35,12 @@ Defaults: 15 ms pre-delay, 2 s decay, size 1, 6 kHz damping, width 1 and 25% wet
 A hard quantizer and sample-and-hold stage offer 1–24 bits, 1–64 samples per capture, 0–36 dB input drive, -24–24 dB wet output and linear dry/wet. Defaults are 8 bits and a four-sample interval, without gain changes. Integer depths use nearest signed PCM-style levels with saturation and ties away from zero; fractional depths continuously vary the step size. At one bit, signed endpoints are -1 and 0. Silence is exactly zero. Fractional hold intervals alternate adjacent sample counts while retaining phase across blocks; channels share capture timing but retain independent samples.
 
 This intentionally aliases during rate reduction. There is no pre/post anti-alias filtering, jitter, DC-shift control, dither or legacy-mode emulation. The implementation is original and has not been measured against the reference processor. Its exact equations, update behavior and bounded tail are in the architecture contract. Hand-calculated signal tables verify the quantizer independently of its implementation.
+
+## Noise gate
+
+A linked peak detector controls a linear attack/hold/release envelope. Separate opening and closing thresholds provide hysteresis; reopening during release resumes from current gain. Floor attenuation, Gate/Duck and parallel mix are adjustable. Zero attack/hold/release times are supported, and the minimum floor setting mutes exactly. Parameters, frame-count rules and default values are documented in the architecture contract.
+
+Hand-calculated sample sequences verify both stereo gains, cold-state and open-state hysteresis, exact hold frames, reopening, floor/mix arithmetic and duck inversion. Closed-form ramps are compared at 8/44.1/48/96 kHz. This original device does not yet include lookahead, external/filtered sidechains or reduction metering, and no reference envelope identity is claimed.
 
 ## Control and verification boundaries
 

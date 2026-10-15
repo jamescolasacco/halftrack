@@ -43,6 +43,15 @@ constexpr EffectParameter crusherFields[] {
     { "driveDb", "Input drive", 0, 36, 0, 0, " dB" },
     { "outputDb", "Output", -24, 24, 0, 0, " dB" },
     { "mix", "Dry / Wet", 0, 1, 1, 0, "" } };
+constexpr EffectParameter gateFields[] {
+    { "thresholdDb", "Threshold", -80, 0, -36, 0, " dB" },
+    { "hysteresisDb", "Hysteresis", 0, 24, 3, 0, " dB" },
+    { "attackMs", "Attack", 0, 1000, 1, 10, " ms" },
+    { "holdMs", "Hold", 0, 1000, 10, 50, " ms" },
+    { "releaseMs", "Release", 0, 3000, 50, 100, " ms" },
+    { "floorDb", "Floor", -100, 0, -100, 0, " dB" },
+    { "invert", "Mode", 0, 1, 0, 0, "", "Gate|Duck" },
+    { "mix", "Dry / Wet", 0, 1, 1, 0, "" } };
 constexpr std::array<double, 11> delayBeats { .25, 1.0/3, .375, .5, 2.0/3, .75, 1, 1.5, 2, 3, 4 };
 constexpr std::array<double, 8> roomSeconds { .0297, .0371, .0411, .0437, .0531, .0617, .0713, .0799 };
 double finiteSample (double v) noexcept { return std::isfinite (v) ? std::clamp (v, -1.0e12, 1.0e12) : 0; }
@@ -50,13 +59,13 @@ double finiteSample (double v) noexcept { return std::isfinite (v) ? std::clamp 
 const char* effectName (Kind kind) noexcept
 {
     switch (kind) { case Kind::equalizer: return "Eight-band EQ"; case Kind::compressor: return "Compressor";
-        case Kind::delay: return "Stereo Delay"; case Kind::reverb: return "Room Reverb"; case Kind::bitcrusher: return "Bitcrusher"; }
+        case Kind::delay: return "Stereo Delay"; case Kind::reverb: return "Room Reverb"; case Kind::bitcrusher: return "Bitcrusher"; case Kind::gate: return "Noise Gate"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
 {
     switch (kind) { case Kind::equalizer: return eqFields; case Kind::compressor: return compressorFields;
-        case Kind::delay: return delayFields; case Kind::reverb: return reverbFields; case Kind::bitcrusher: return crusherFields; }
+        case Kind::delay: return delayFields; case Kind::reverb: return reverbFields; case Kind::bitcrusher: return crusherFields; case Kind::gate: return gateFields; }
     return {};
 }
 Settings defaultEffectSettings (Kind kind) noexcept
@@ -96,6 +105,7 @@ void NativeEffectDSP::reset() noexcept
     for (auto& buffer : delays) std::fill (buffer.begin(), buffer.end(), 0);
     for (auto& buffer : room) std::fill (buffer.begin(), buffer.end(), 0);
     crusherHeld = {}; crusherCountdown = 0;
+    gateEnvelope = 0; gateHoldRemaining = 0; gateOpen = false;
     roomCursor = {}; roomTone = {}; delayTone = {}; cursor = 0; envelope = 0; processed = false; ramp = 0;
     outputGain = gainTarget; wet = wetTarget; delayLeft = delayTargetLeft; delayRight = delayTargetRight;
 }
@@ -170,6 +180,16 @@ void NativeEffectDSP::configure (const Settings& next) noexcept
         crusherDrive = std::pow (10.0, v[2] / 20.0);
         gainTarget = std::pow (10.0, v[3] / 20.0); wetTarget = v[4];
     }
+    if (settings.kind == Kind::gate)
+    {
+        gateThreshold = std::pow (10.0, v[0] / 20.0);
+        gateCloseThreshold = std::pow (10.0, (v[0] - v[1]) / 20.0);
+        gateFloor = v[5] <= -100 ? 0 : std::pow (10.0, v[5] / 20.0);
+        gateAttackStep = 1.0 / std::max (1.0, std::ceil (rate * v[2] * .001));
+        gateReleaseStep = 1.0 / std::max (1.0, std::ceil (rate * v[4] * .001));
+        gateHoldSamples = static_cast<int> (std::ceil (rate * v[3] * .001));
+        gateHoldRemaining = std::min (gateHoldRemaining, gateHoldSamples); wetTarget = v[7];
+    }
     if (! processed) { wet = wetTarget; outputGain = gainTarget; delayLeft = delayTargetLeft; delayRight = delayTargetRight; ramp = 0; }
     else ramp = std::max (1, static_cast<int> (rate * .005));
 }
@@ -225,6 +245,23 @@ void NativeEffectDSP::processSamples (float* left, float* right, int count) noex
                 delays[0][cursor] = finiteSample ((frozen ? 0 : ping ? .5*(l+r) : l) + feedback*(ping ? feedbackR : feedbackL));
                 delays[1][cursor] = finiteSample ((frozen || ping ? 0 : r) + feedback*(ping ? feedbackL : feedbackR));
                 cursor = (cursor+1) % delays[0].size(); break;
+            }
+            case Kind::gate:
+            {
+                const auto detected = std::max (std::abs (l), std::abs (r));
+                if (detected >= gateThreshold || (gateOpen && detected >= gateCloseThreshold))
+                { gateOpen = true; gateHoldRemaining = gateHoldSamples; }
+                else if (gateOpen)
+                {
+                    if (gateHoldRemaining > 0) --gateHoldRemaining;
+                    else gateOpen = false;
+                }
+                gateEnvelope = gateOpen ? std::min (1.0, gateEnvelope + gateAttackStep)
+                    : std::max (0.0, gateEnvelope - gateReleaseStep);
+                const auto opening = v[6] != 0 ? 1.0 - gateEnvelope : gateEnvelope;
+                const auto gain = gateFloor + (1.0 - gateFloor) * opening;
+                outL *= gain; outR *= gain;
+                break;
             }
             case Kind::bitcrusher:
             {
@@ -315,7 +352,7 @@ juce::Result NativeEffectPlugin::validateState (const juce::ValueTree& tree)
             return ! value.empty() && end == value.c_str()+value.size() && std::isfinite (output);
         };
         double type = 0;
-        if (! parse ("effectKind", 0, type) || type < 0 || type > static_cast<int> (Kind::bitcrusher) || std::floor (type) != type)
+        if (! parse ("effectKind", 0, type) || type < 0 || type > static_cast<int> (Kind::gate) || std::floor (type) != type)
             return juce::Result::fail ("The project contains an invalid native effect type.");
         for (const auto& f : effectParameters (static_cast<Kind> (static_cast<int> (type))))
         {

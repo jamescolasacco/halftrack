@@ -395,7 +395,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-017 | Erosion (12.2.1 behavior) | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-018 | External Audio Effect | EXTERNAL | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-019 | Filter Delay | TIME | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-020 | Gate | DYNAMICS | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-020 | Gate | Original Noise Gate: linked peak detection, hysteresis, attack/hold/release, floor, duck and mix; independent envelopes, export, state/history/editor and callback tests pass locally. Sidechains, lookahead, metering and numerical reference parity remain missing or unverified. | PARTIAL — original native dynamics device |
 | AFX-021 | Glue Compressor | DYNAMICS | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-022 | Grain Delay | TIME | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-023 | Hybrid Reverb | REVERB | NOT IMPLEMENTED / UNVERIFIED |
