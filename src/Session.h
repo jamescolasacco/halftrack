@@ -62,7 +62,7 @@ public:
         double start = 0, length = 0, sourceOffset = 0;
         juce::File file;
         bool isMidi = false, isAudio = false, canEditAudioRange = false, canEditAudioFades = false;
-        bool reversed = false, canReverse = false, canEditMidiClip = false;
+        bool reversed = false, canReverse = false, canEditMidiClip = false, active = true;
         double sourceLength = 0;
         AudioClipSettings audio;
         double startBeat = 0, lengthBeats = 0;
@@ -181,6 +181,7 @@ public:
     juce::Result moveAudioClip (const juce::String& clipId, const juce::String& destinationTrackId, double startSeconds);
     juce::Result moveClip (int trackIndex, int clipIndex, double startSeconds);
     juce::Result removeClip (int trackIndex, int clipIndex);
+    juce::Result setClipActive (const juce::String& clipId, bool active);
     juce::Result renameTrack (int trackIndex, const juce::String&);
     juce::Result setMasterGain (float decibels);
     juce::Result setTrackGain (int trackIndex, float decibels);

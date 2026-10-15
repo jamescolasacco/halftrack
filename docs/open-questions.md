@@ -113,3 +113,8 @@ Default: use the native master-volume stage and fader law, from silence (-100 dB
 ### Tap tempo
 
 Default: update after the second tap, average at most four recent intervals, ignore taps faster than the supported maximum, and restart after a pause over three seconds. Do not auto-start playback. Each resulting tempo change undoes once; tapping the same tempo and the first anchor do not dirty the document. Normal tempo edits, history and project replacement clear the transient estimate. No claimed match to an undocumented reference tap algorithm.
+
+
+### Clip activation while playing
+
+Default: deactivate a whole audio/MIDI clip without removing its contents or Session ownership. Send note release through the engine; existing synth/effect tails may decay. Re-enabling allows future Session events without relaunch; full held-note/controller chasing and reference-exact transition timing remain unverified. Frozen tracks must be unfrozen first. Unmodified 0 acts on whole clips in Arrangement/Session only; note activation is separate work.

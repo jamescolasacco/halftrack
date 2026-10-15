@@ -318,6 +318,11 @@ Result validateProjectTempo (const juce::ValueTree& state)
 }
 Result validateAudioClips (const juce::ValueTree& state)
 {
+    if ((state.hasType(te::IDs::AUDIOCLIP) || state.hasType(te::IDs::MIDICLIP)) && state.hasProperty(te::IDs::mute))
+    {
+        const auto value=state[te::IDs::mute].toString().trim();
+        if (value!="0" && value!="1") return Result::fail("The project contains invalid clip activation.");
+    }
     if (state.hasType (te::IDs::AUDIOCLIP))
     {
         const auto parse = [&state] (const juce::Identifier& key, double fallback, double& result)
@@ -383,7 +388,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
 {
     Session::ClipInfo result;
     const auto position = clip.getPosition();
-    result.id = clip.itemID.toString(); result.name = clip.getName();
+    result.id = clip.itemID.toString(); result.name = clip.getName(); result.active = !clip.isMuted();
     result.start = position.time.getStart().inSeconds(); result.length = position.time.getLength().inSeconds();
     result.sourceOffset = position.offset.inSeconds();
     if (clip.usesSourceFile()) result.file = clip.getSourceFileReference().getFile();
@@ -780,6 +785,25 @@ struct Session::Impl
             destination->state.setProperty (te::IDs::soloIsolate, anySourceSolo, nullptr);
         }
         edit->updateMuteSoloStatuses();
+    }
+    using ClipActivationStates=std::vector<std::pair<juce::String,bool>>;
+    ClipActivationStates clipActivationStates() const
+    {
+        ClipActivationStates states;
+        for(auto* track:te::getAudioTracks(*edit)) for(auto* clip:allTrackClips(*track))
+            states.emplace_back(clip->itemID.toString(),!clip->isMuted());
+        return states;
+    }
+    void refreshClipActivation(const ClipActivationStates& before)
+    {
+        const auto after=clipActivationStates();
+        if(before==after) return;
+        for(const auto& state:after)
+        {
+            const auto previous=std::find_if(before.begin(),before.end(),[&](const auto& old){return old.first==state.first;});
+            if(previous!=before.end() && previous->second!=state.second)
+            {edit->restartPlayback();return;}
+        }
     }
     void refreshParameterValues()
     {
@@ -2101,6 +2125,25 @@ Result Session::removeClip (int t, int c)
     auto* clip = impl->clip (t, c); if (! clip) return Result::fail ("Clip not found.");
     impl->transaction ("Remove clip"); clip->removeFromParent(); impl->changed(); return Result::ok();
 }
+Result Session::setClipActive(const String& id,bool active)
+{
+    if (impl->exporting) return Result::fail("Finish or cancel the current export first.");
+    te::Clip* found=nullptr;
+    for (auto* track:te::getAudioTracks(*impl->edit)) for (auto* clip:allTrackClips(*track))
+        if (clip->itemID.toString()==id && (dynamic_cast<te::WaveAudioClip*>(clip) || dynamic_cast<te::MidiClip*>(clip)))
+        {
+            if (found) return Result::fail("Clip identity is ambiguous.");
+            found=clip;
+        }
+    if (!found) return Result::fail("Clip not found.");
+    if (found->isMuted()==!active) return Result::ok();
+    if(found->getClipTrack()->isFrozen(te::Track::anyFreeze)) return Result::fail("Unfreeze the track before changing clip activation.");
+    impl->transaction(active?"Activate clip":"Deactivate clip");found->setMuted(!active);
+    // Prepared stretch buffers can retain the previous gain. Rebuild through
+    // the native message-thread graph path before the next playback block.
+    impl->edit->restartPlayback();impl->edit->dispatchPendingUpdatesSynchronously();
+    impl->changed();return Result::ok();
+}
 Result Session::renameTrack (int index, const String& name)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -2453,17 +2496,17 @@ void Session::endEditGesture()
 void Session::undo()
 {
     if (impl->exporting || impl->edit->getTransport().isRecording()) return;
-    const auto monitored=impl->monitoredMidiTracks();
+    const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates();
     impl->resetTapTempo();
-    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshParameterValues();
+    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshClipActivation(clips); impl->refreshParameterValues();
     impl->releaseStoppedMidiInputs(monitored);sendChangeMessage();
 }
 void Session::redo()
 {
     if (impl->exporting || impl->edit->getTransport().isRecording()) return;
-    const auto monitored=impl->monitoredMidiTracks();
+    const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates();
     impl->resetTapTempo();
-    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshParameterValues();
+    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshClipActivation(clips); impl->refreshParameterValues();
     impl->releaseStoppedMidiInputs(monitored);sendChangeMessage();
 }
 bool Session::canUndo() const { return ! impl->exporting && ! impl->edit->getTransport().isRecording() && impl->edit->getUndoManager().canUndo(); }

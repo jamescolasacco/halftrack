@@ -148,3 +148,17 @@ The behavior header and manager input hashes already include the scanner and rec
 Both patches validate exact input/output, accept repeated application, reject unknown source without mutation and preserve dependency notices. Fresh/repeat/unknown-source fixtures pass. Source-inclusive packages carry the actual patched dependency. Generated metronome/MIDI-input tests exercise immediate Arm → Record and negative-time conversion; these tests do not certify physical device timing or whole-engine callback safety.
 
 `cmake/PatchWaveInputStart.cmake` patches `modules/tracktion_engine/playback/devices/tracktion_WaveInputDevice.cpp` to defer the first recorded block while a queued transport position is still pending. Input consumption precedes graph seek application; without the guard, capture can accept an old-position block, prematurely clear its first-callback adjustment, and retain extra samples through count-in. Original SHA256 `d08f647d63c6d478dff1bbe93e26477a5e807e47ccc4590a9433dc08f61d10c2`; patched SHA256 `3547f2134733cde3032237fbac4852e217067b4dbb9642235128843738f34ac1`. Exact fresh/repeated application and unknown-source no-mutation checks pass. It adds an atomic pending-position read and branch, with no new callback allocations, locks or I/O.
+
+
+## Clip activation playback patch
+
+`cmake/PatchClipActivation.cmake` follows the existing startup-gain patch and validates all four pinned inputs/transforms before writing. Wave readers previously reused audio prepared at the old mute level. Including mute in their preparation hash prevents this on graph replacement. The seconds-based MIDI node now preserves its MIDI source ID and atomic mute-transition flag across replacement and resets that flag on reactivation. The looping MIDI node sends its existing note-offs when inherited notes remain active, even if its constructor already sees mute enabled. This keeps the existing per-clip MIDI source and native tail handling; it adds no global processor reset.
+
+| Native source | Input SHA256 | Output SHA256 |
+| --- | --- | --- |
+| `tracktion_WaveNode.cpp` (after startup gain) | `b7c3e5191bb380770db9b6e5aa8da5a3fd2131aee102d28485be669c807c9d76` | `a723324379bc424d352772f91f538f6a457a9559caa34fd80b9699484e3f7fc2` |
+| `tracktion_LoopingMidiNode.cpp` | `5bfeb512499f922cbe1acb464366c37a55faec511b4b5ce959b6fd4e8ce17a95` | `e7ceddf6d9d00adf8035070f911d0e4c69f5b8f9daf62ee70e125d4825ad8820` |
+| `tracktion_MidiNode.h` | `1be178ac571b28ba4c85f15db946c37cfb16209a05c0efcc1061e790fc94aa09` | `0e3af9e8d1c1ba7aca706181876b8f6ccce5d31910f8d9048f63aaaae7a417e4` |
+| `tracktion_MidiNode.cpp` | `161f6183ef28aa1c64f6862d7be299b8ce17b413a7b67c759f9112abeb16b5e8` | `208a3f2a6fd88470544538a01fc03a0b447296ce55022be1b0ece89ca4244e98` |
+
+Source-inclusive packages retain all modified dependency sources and GPL notices. Playback/undo and full-render comparisons are exercised in `clip-activation-acceptance`. The extra active-note check is bounded and MIDI transition state is atomic on supported targets; this does not certify existing native MIDI buffer allocation, graph synchronization, plug-ins or hardware deadlines.

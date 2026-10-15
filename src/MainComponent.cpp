@@ -440,6 +440,18 @@ public:
             }
             if (code == ',') { showAudioSettings(); return true; }
         }
+        if (code=='0' && !cmd && !shift && !key.getModifiers().isAltDown() && !showPiano)
+        {
+            for(auto* focused=juce::Component::getCurrentlyFocusedComponent();focused;focused=focused->getParentComponent())
+                if(dynamic_cast<juce::TextEditor*>(focused))return false;
+            if(showSession)
+            {
+                if(const auto* slot=selectedSlot();slot && slot->hasClip){setClipActiveFromUI(slot->clip.id,!slot->clip.active);return true;}
+            }
+            else if(const auto* track=currentTrack();track && juce::isPositiveAndBelow(selectedClip,(int)track->clips.size()))
+            {const auto& clip=track->clips[(size_t)selectedClip];setClipActiveFromUI(clip.id,!clip.active);return true;}
+            return false;
+        }
         if (code == juce::KeyPress::tabKey) { if (showSession) showArrangementView(); else showSessionView(); return true; }
         if (code == juce::KeyPress::spaceKey) { togglePlay(); return true; }
         if (code == juce::KeyPress::escapeKey) { session.stop(); session.seek (0); refresh(); return true; }
@@ -775,11 +787,12 @@ private:
                     const bool selected = t == owner.selectedTrack && c == owner.selectedClip;
                     auto colour = track.colour;
                     if (colour.isTransparent()) colour = juce::Colour (0xff76b5bf);
-                    g.setColour (colour.withAlpha (track.mute ? 0.24f : 0.72f)); g.fillRect (bounds);
+                    if (!clip.active) colour=muted;
+                    g.setColour (colour.withAlpha (track.mute || !clip.active ? 0.24f : 0.72f)); g.fillRect (bounds);
                     g.setColour (selected ? orange : colour.brighter (0.1f));
                     g.fillRect (bounds.withHeight (20));
                     g.setColour (juce::Colour (0xff182025)); g.setFont (font (11.0f, true));
-                    g.drawText (clip.name, bounds.withHeight (20).reduced (6, 0), juce::Justification::centredLeft, true);
+                    g.drawText ((clip.active?juce::String():juce::String("OFF  /  "))+clip.name, bounds.withHeight (20).reduced (6, 0), juce::Justification::centredLeft, true);
                     auto wave = bounds.withTrimmedTop (24).reduced (2, 4);
                     g.setColour (juce::Colour (0xff14252b).withAlpha (track.mute ? 0.4f : 0.9f));
                     if (clip.isMidi && clip.lengthBeats > 0)
@@ -1071,6 +1084,8 @@ private:
             const auto* track = owner.currentTrack();
             const auto* clip = track && juce::isPositiveAndBelow(owner.selectedClip,(int)track->clips.size()) ? &track->clips[(size_t)owner.selectedClip] : nullptr;
             const auto id = clip ? clip->id : juce::String();
+            const bool activate=clip && !clip->active;
+            if (clip) popup.addItem(8,activate?"Activate clip":"Deactivate clip");
             if (clip && clip->isAudio)
             {
                 popup.addItem (2, "Gain, fades and range...");
@@ -1091,10 +1106,11 @@ private:
             auto safe = juce::Component::SafePointer<Impl> (&owner);
             const auto trackId = track ? track->id : juce::String();
             const auto position = owner.state.position;
-            popup.showMenuAsync (juce::PopupMenu::Options(), [safe, id, trackId, position, midi] (int choice)
+            popup.showMenuAsync (juce::PopupMenu::Options(), [safe, id, trackId, position, midi, activate] (int choice)
             {
                 if (safe == nullptr) return;
                 if (choice == 1) safe->deleteClipById(id);
+                else if (choice == 8) safe->setClipActiveFromUI(id,activate);
                 else if (choice == 7) {if(midi)safe->pasteMidi(trackId,position);else safe->pasteAudio(trackId,position);}
                 else if (choice > 1) {if(midi)safe->midiClipCommand(choice,id);else safe->audioClipCommand(choice,id);}
             });
@@ -1375,7 +1391,7 @@ private:
                     const auto* slot = slotAt (t, scene);
                     const bool filled = slot != nullptr && slot->hasClip;
                     const bool selected = t == owner.selectedTrack && owner.state.scenes[(size_t) scene].id == owner.selectedSceneId;
-                    g.setColour (filled ? track.colour.withAlpha (0.30f) : scene % 2 == 0 ? panel : juce::Colour (0xff303438)); g.fillRect (bounds.reduced (1));
+                    g.setColour (filled ? (slot->clip.active?track.colour:muted).withAlpha (slot->clip.active?0.30f:0.12f) : scene % 2 == 0 ? panel : juce::Colour (0xff303438)); g.fillRect (bounds.reduced (1));
                     const bool queued = slot != nullptr && (slot->queued || slot->stopQueued);
                     const auto stateColour = queued ? orange.withAlpha (owner.ticks % 16 < 8 ? 1.0f : 0.45f) : slot != nullptr && slot->playing ? green : muted;
                     g.setColour (stateColour);
@@ -1383,7 +1399,7 @@ private:
                     else g.fillRect (bounds.getX() + 10, bounds.getY() + 11, 7, 7);
                     if (filled)
                     {
-                        g.setColour (ink); g.setFont (font (11.0f)); g.drawText (slot->clip.name, bounds.withTrimmedLeft (29).withTrimmedRight (7), juce::Justification::centredLeft, true);
+                        g.setColour (ink); g.setFont (font (11.0f)); g.drawText ((slot->clip.active?juce::String():juce::String("OFF / "))+slot->clip.name, bounds.withTrimmedLeft (29).withTrimmedRight (7), juce::Justification::centredLeft, true);
                         if (slot->playing) { g.setColour (green); g.fillRect (bounds.getX() + 1, bounds.getBottom() - 3, bounds.getWidth() - 2, 2); }
                     }
                     g.setColour (selected ? orange : line); g.drawRect (bounds, selected ? 2 : 1);
@@ -1524,11 +1540,14 @@ private:
             if (slot->hasClip) { menu.addItem (1, "Launch Clip"); if (slot->clip.isMidi) menu.addItem (2, "Edit MIDI Notes"); if (slot->clip.isAudio) menu.addItem (7, "Audio clip gain..."); menu.addItem (3, "Clear Clip"); }
             else menu.addItem (owner.state.tracks[(size_t) track].isMidi ? 4 : 5, owner.state.tracks[(size_t) track].isMidi ? "Create MIDI Clip" : "Import Audio Here...");
             menu.addSeparator(); menu.addItem (6, "Stop Track Clips");
+            const auto clipId=slot->hasClip?slot->clip.id:juce::String();const bool activate=slot->hasClip && !slot->clip.active;
+            if(slot->hasClip)menu.addItem(8,activate?"Activate clip":"Deactivate clip");
             const auto trackId = owner.state.tracks[(size_t) track].id, sceneId = owner.state.scenes[(size_t) scene].id;
             auto safe = juce::Component::SafePointer<Impl> (&owner);
-            menu.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId, sceneId] (int choice)
+            menu.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId, sceneId, clipId, activate] (int choice)
             {
                 if (safe == nullptr || choice == 0) return;
+                if(choice==8){safe->setClipActiveFromUI(clipId,activate);return;}
                 const auto indices = safe->launcherIndices (trackId, sceneId); if (indices.first < 0 || indices.second < 0) return;
                 safe->selectLauncherSlot (indices.first, indices.second);
                 if (choice == 1) safe->report (safe->session.launchSlot (indices.first, indices.second));
@@ -2872,6 +2891,8 @@ private:
         const auto result = session.addReturnTrack(); report (result); refresh();
         if (result.wasOk()) { selectTrack ((int) state.tracks.size() - 1); showPiano = false; resized(); }
     }
+    void setClipActiveFromUI(const juce::String& id,bool active)
+    {report(session.setClipActive(id,active));refresh();}
     void deleteSelectedClip()
     {
         if (selectedTrack >= 0 && selectedClip >= 0) { report (session.removeClip (selectedTrack, selectedClip)); selectedClip = -1; refresh(); }
@@ -4824,6 +4845,44 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     applyMetronomeMenu(22);applyMetronomeMenu(1);applyMetronomeMenu(2);
     check(state.metronome.gain==.4f&&!state.metronome.accent&&state.metronome.recordingOnly,"native click menu controls update model");
     tempo.setText("999",juce::sendNotificationSync);check(state.tempo==999&&tempo.getText()=="999.00","native tempo editor reaches exact supported maximum");
+    check(session.newProject().wasOk()&&session.importAudio(audioFixture,0).wasOk()&&session.addMidiTrack("Activation").wasOk(),"prepare clip activation controls");refresh();
+    const auto activationAudio=state.tracks[0].clips[0].id,activationTrack=state.tracks[2].id;
+    check(session.addMidiClip(activationTrack,0,4).wasOk(),"prepare activation MIDI clip");refresh();const auto activationMidi=state.tracks[2].clips[0].id;
+    showArrangementView();selectArrangementClip(activationAudio);
+    check(canvas.keyPressed(juce::KeyPress('0'))&&!state.tracks[0].clips[0].active,"Arrangement 0 deactivates the selected audio clip");
+    session.undo();refresh();check(state.tracks[0].clips[0].active,"clip activation shortcut undoes once");session.redo();refresh();
+    selectArrangementClip(activationMidi);check(canvas.keyPressed(juce::KeyPress('0'))&&!currentMidiClip()->active,"Arrangement 0 also deactivates MIDI");
+    setClipActiveFromUI(activationAudio,true);check(state.tracks[0].clips[0].active&&!currentMidiClip()->active,"context action uses captured identity rather than the current selection");
+    {
+        juce::TextEditor editor;juce::DocumentWindow focusWindow("Halftrack activation shortcut test",panel,juce::DocumentWindow::closeButton);
+        focusWindow.setUsingNativeTitleBar(true);focusWindow.setContentNonOwned(&editor,false);focusWindow.centreWithSize(300,70);focusWindow.setVisible(true);
+        juce::Process::makeForegroundProcess();focusWindow.toFront(true);
+        for(int attempt=0;attempt<20&&!editor.hasKeyboardFocus(true);++attempt)
+        {editor.grabKeyboardFocus();juce::MessageManager::getInstance()->runDispatchLoopUntil(10);}
+        check(editor.hasKeyboardFocus(true)&&!canvas.keyPressed(juce::KeyPress('0'))&&!currentMidiClip()->active,"typing zero in a text editor does not toggle a clip");
+        editor.giveAwayKeyboardFocus();focusWindow.clearContentComponent();
+    }
+    check(session.importAudioToSlot(audioFixture,0,0).wasOk()&&session.addMidiClipToSlot(activationTrack,0,4).wasOk(),"prepare Session activation controls");
+    refresh();showSessionView();selectLauncherSlot(0,0);
+    check(launcher.keyPressed(juce::KeyPress('0'))&&!selectedSlot()->clip.active,"Session 0 deactivates an audio slot");
+    selectLauncherSlot(2,0);check(launcher.keyPressed(juce::KeyPress('0'))&&!selectedSlot()->clip.active,"Session 0 deactivates a MIDI slot");
+    session.undo();refresh();check(selectedSlot()->clip.active,"Session activation undoes once");session.redo();refresh();
+    if(const auto* configured=std::getenv("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+    {
+        const juce::File directory(juce::String::fromUTF8(configured));
+        if(directory.createDirectory().wasOk())if(auto* host=getParentComponent())
+        {
+            const auto old=host->getBounds();host->setSize(1100,720);refresh();
+            juce::PNGImageFormat png;auto image=host->createComponentSnapshot(host->getLocalBounds(),true,1.0f);
+            {auto output=directory.getChildFile("inactive-session-1100x720.png").createOutputStream();check(output&&png.writeImageToStream(image,*output),"capture inactive Session presentation");}
+            showArrangementView();setClipActiveFromUI(activationAudio,false);image=host->createComponentSnapshot(host->getLocalBounds(),true,1.0f);
+            {auto output=directory.getChildFile("inactive-arrangement-1100x720.png").createOutputStream();check(output&&png.writeImageToStream(image,*output),"capture inactive Arrangement presentation");}
+            host->setBounds(old);
+        }
+    }
+    check(session.removeClip(0,0).wasOk()&&session.importAudio(audioFixture,0).wasOk(),"replace the clip after its context action was captured");refresh();
+    setClipActiveFromUI(activationAudio,false);check(state.tracks[0].clips[0].active&&state.tracks[0].clips[0].id!=activationAudio,"stale context identity cannot deactivate a replacement clip");
+
 
 }
 

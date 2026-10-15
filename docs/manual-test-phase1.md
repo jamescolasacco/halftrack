@@ -252,3 +252,8 @@ Optional monitoring release check (about one minute; physical test **NOT RUN**):
 ## Tap tempo (about 30 seconds)
 
 Physical rhythmic input check: **NOT RUN** until performed. Click transport **Tap** to a steady beat. The first click leaves BPM unchanged; subsequent clicks update it. Tap a new rhythm after a pause over three seconds. Undo/redo a tempo change, save/reopen, and confirm only the BPM persists. The control should work while stopped without starting playback.
+
+
+## Clip activation (about one minute)
+
+Native input/listening check: **NOT RUN** until performed. Select an audio clip in Arrangement, press **0**, and confirm its label shows **OFF /**, playback is silent after any effect tail, and the clip stays in place. Toggle again and repeat with a held MIDI note. Undo/redo while playing; each change should take one step and other tracks should continue. Repeat in Session using the context menu: a disabled clip retains its slot and launch ownership, and re-enabling resumes future events. Save/reopen the disabled state. Typing 0 into a number or name field must not disable a clip.

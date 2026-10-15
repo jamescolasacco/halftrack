@@ -2,7 +2,8 @@
 function(halftrack_patch_clip_gain source_dir)
     set(source "${source_dir}/modules/tracktion_engine/playback/graph/tracktion_WaveNode.cpp")
     file(SHA256 "${source}" source_hash)
-    if(source_hash STREQUAL "b7c3e5191bb380770db9b6e5aa8da5a3fd2131aee102d28485be669c807c9d76")
+    if(source_hash STREQUAL "b7c3e5191bb380770db9b6e5aa8da5a3fd2131aee102d28485be669c807c9d76"
+       OR source_hash STREQUAL "a723324379bc424d352772f91f538f6a457a9559caa34fd80b9699484e3f7fc2")
         return()
     endif()
     if(NOT source_hash STREQUAL "1b92d35da33ca2495f3a2627f4a985c54c651285370e63f036491de953cdd980")
