@@ -230,19 +230,36 @@ void playbackModeRegressions (const juce::File& root)
     ok (s.saveProject (root.getChildFile ("automation-single-point-history.halftrack")), "save played single-point values before track removal");
     auto* activeEdit = engine->getActiveEdits().getEdits()[0];
     const auto mixerID = te::getAudioTracks (*activeEdit)[0]->getVolumePlugin()->itemID;
+    const auto retireRemovedMixer = [&] (const juce::String& message)
+    {
+        // EnginePlayer has no continuously running audio callback. One block
+        // after a fixed delay can precede an asynchronous graph replacement,
+        // leaving the old mixer referenced indefinitely while only UI events run.
+        // The supported context teardown synchronously releases its graph nodes;
+        // cache eviction itself remains the native reference-counted timer path.
+        activeEdit->dispatchPendingUpdatesSynchronously();
+        auto& transport = activeEdit->getTransport();
+        transport.freePlaybackContext();
+        check (! transport.isPlayContextActive(), "retire hosted playback graph before waiting for mixer destruction");
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + 5000.0;
+        while (activeEdit->getPluginCache().getPluginFor (mixerID) != nullptr
+               && juce::Time::getMillisecondCounterHiRes() < deadline)
+            if (! juce::MessageManager::getInstance()->runDispatchLoopUntil (10)) break;
+        check (activeEdit->getPluginCache().getPluginFor (mixerID) == nullptr, message);
+        // Undo must still reconstruct/initialise the saved one-point curves with
+        // an allocated hosted playback context, as the original regression did.
+        transport.ensureContextAllocated();
+        check (transport.isPlayContextActive(), "restore hosted playback context before native Undo reconstruction");
+    };
     ok (s.removeTrack (0), "remove played and saved single-point track");
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (100); player.process (4096);
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (1200);
-    check (activeEdit->getPluginCache().getPluginFor (mixerID) == nullptr, "native cache has released the removed mixer before Undo");
+    retireRemovedMixer ("native cache has released the removed mixer before Undo");
     s.undo();
     std::cout << "Restored single-point volume=" << lane(s,Target::volume).points[0].value
               << " pan=" << lane(s,Target::pan).points[0].value << std::endl;
     check (equal (lane (s,Target::volume),volume) && equal (lane(s,Target::pan),pan),
         "undo track removal reconstructs original single-point envelopes");
     s.redo(); check(s.snapshot().tracks.size()==1,"redo removes the restored automated track");
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (100); player.process (4096);
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (1200);
-    check (activeEdit->getPluginCache().getPluginFor (mixerID) == nullptr, "redo removal releases the reconstructed mixer as well");
+    retireRemovedMixer ("redo removal releases the reconstructed mixer as well");
     s.undo(); check(equal(lane(s,Target::volume),volume) && equal(lane(s,Target::pan),pan),
         "second undo reconstructs single-point curves consistently");
     juce::String copied; ok (s.duplicateTrack (id, copied), "duplicate a played single-point track");
