@@ -2800,6 +2800,7 @@ private:
             popup.addItem (1, "New Project"); popup.addItem (2, "Open Project..."); popup.addSeparator();
             popup.addItem (3, "Save Project"); popup.addItem (4, "Save Project As..."); popup.addSeparator();
             popup.addItem (5, "Import Audio...", currentTrack() == nullptr || ! currentTrack()->isReturn); popup.addItem (6, "Export Arrangement as WAV...", ! state.tracks.empty()); popup.addSeparator();
+            popup.addItem (9, "Import MIDI File..."); popup.addItem (10, "Export Selected MIDI Clip...", currentMidiClip() != nullptr); popup.addSeparator();
             popup.addItem (7, "Audio Setup..."); popup.addItem (8, "Manage Plug-ins...");
         }
         else if (index == 1)
@@ -2839,6 +2840,8 @@ private:
             case 6: exportDialog(); break;
             case 7: showAudioSettings(); break;
             case 8: showPlugins(); break;
+            case 9: importMidiDialog(); break;
+            case 10: exportMidiDialog(); break;
             case 20: session.undo(); break;
             case 21: session.redo(); break;
             case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); break;
@@ -2901,6 +2904,44 @@ private:
                     safe->report (safe->session.loadProject (fc.getResult())); safe->resetView();
                 });
         });
+    }
+    void importMidiSelection (const juce::File& file,double startBeat)
+    {
+        std::vector<juce::String> ids;const auto result=session.importMidiFile(file,startBeat,ids);
+        report(result,"Imported "+juce::String((int)ids.size())+" MIDI tracks at the project tempo.");refresh();
+        if(result.failed()||ids.empty())return;
+        for(int t=0;t<(int)state.tracks.size();++t)for(int c=0;c<(int)state.tracks[(size_t)t].clips.size();++c)
+            if(state.tracks[(size_t)t].clips[(size_t)c].id==ids.front())
+            {
+                selectTrack(t);selectedClip=c;selectedLauncherClipId.clear();showSession=false;showPiano=true;
+                resized();pianoRoll.fit();refresh();return;
+            }
+    }
+    void importMidiDialog()
+    {
+        const auto current=session.snapshot();const auto startBeat=current.position*current.tempo/60;
+        chooser=std::make_unique<juce::FileChooser>("Import MIDI File",browserFolder,"*.mid;*.midi");
+        auto safe=juce::Component::SafePointer<Impl>(this);
+        chooser->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
+            [safe,startBeat](const juce::FileChooser& fc)
+            {if(safe!=nullptr&&fc.getResult()!=juce::File())safe->importMidiSelection(fc.getResult(),startBeat);});
+    }
+    void exportMidiSelection (const juce::String& id,const juce::File& file)
+    {report(session.exportMidiClip(id,file),"MIDI clip exported.");refresh();}
+    void exportMidiDialog()
+    {
+        const auto* clip=currentMidiClip();if(!clip)return;
+        const auto id=clip->id;
+        const auto destination=juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+            .getChildFile(juce::File::createLegalFileName(clip->name)+".mid");
+        chooser=std::make_unique<juce::FileChooser>("Export Selected MIDI Clip",destination,"*.mid");
+        auto safe=juce::Component::SafePointer<Impl>(this);
+        chooser->launchAsync(juce::FileBrowserComponent::saveMode|juce::FileBrowserComponent::canSelectFiles|juce::FileBrowserComponent::warnAboutOverwriting,
+            [safe,id](const juce::FileChooser& fc)
+            {
+                // Honor the exact destination whose overwrite choice the chooser presented.
+                if(safe!=nullptr&&fc.getResult()!=juce::File())safe->exportMidiSelection(id,fc.getResult());
+            });
     }
     void importDialog()
     {
@@ -4455,6 +4496,30 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         auto stream=output.createOutputStream();juce::PNGImageFormat png;
         check(stream&&stream->setPosition(0)&&stream->truncate().wasOk()&&png.writeImageToStream(createComponentSnapshot(getLocalBounds()),*stream),"render actual locator ruler and controls");
     }
+    check(session.newProject().wasOk(),"prepare MIDI interchange UI fixture");refresh();
+    const auto midiMenuEnabled=[&](int id)
+    {
+        const auto fileMenu=getMenuForIndex(0,{});juce::PopupMenu::MenuItemIterator items(fileMenu);
+        while(items.next())if(items.getItem().itemID==id)return items.getItem().isEnabled;
+        throw std::runtime_error("Expected MIDI menu item is missing");
+    };
+    check(midiMenuEnabled(9)&&!midiMenuEnabled(10),"MIDI import is enabled and export requires a selected MIDI clip");
+    juce::TemporaryFile midiInput(".mid"),midiOutput(".mid");
+    {juce::MidiMessageSequence notes;auto on=juce::MidiMessage::noteOn(3,62,(juce::uint8)90);on.setTimeStamp(240);notes.addEvent(on);
+    auto off=juce::MidiMessage::noteOff(3,62);off.setTimeStamp(720);notes.addEvent(off);juce::MidiFile file;file.setTicksPerQuarterNote(960);file.addTrack(notes);
+    auto stream=midiInput.getFile().createOutputStream();check(stream&&file.writeTo(*stream,0),"write MIDI UI fixture");}
+    importMidiSelection(midiInput.getFile(),4);
+    check(showPiano&&currentMidiClip()!=nullptr&&currentMidiClip()->startBeat==4&&currentMidiClip()->notes.size()==1
+        &&currentMidiClip()->notes[0].pitch==62,"production import completion selects new notes in piano roll at captured beat");
+    check(midiMenuEnabled(10),"MIDI export becomes enabled for the imported selection");
+    const auto importedMidiId=currentMidiClip()->id;exportMidiSelection(importedMidiId,midiOutput.getFile());
+    {juce::FileInputStream input(midiOutput.getFile());juce::MidiFile file;
+    check(input.openedOk()&&file.readFrom(input)&&file.getTimeFormat()==9600,"production export completion writes a real MIDI file");}
+    session.undo();refresh();check(state.tracks.size()==2,"native import completion groups all musical edits in one undo");
+    check(midiOutput.getFile().replaceWithText("preserve existing file"),"prepare stale MIDI export destination");
+    exportMidiSelection(importedMidiId,midiOutput.getFile());
+    check(midiOutput.getFile().loadFileAsString()=="preserve existing file"&&session.canRedo(),"stale MIDI chooser identity cannot export a replacement clip or overwrite destination");
+
 }
 
 int MainComponent::runInteractionTests()

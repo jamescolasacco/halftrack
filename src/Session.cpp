@@ -5,6 +5,7 @@
 #include "NativeEffects.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
+#include <array>
 #include <set>
 #include <cstdlib>
 
@@ -1129,6 +1130,159 @@ Result Session::setReturnSendMode (const String& destinationID, SendMode mode)
             source->pluginList.insertPlugin (keepAlive, mixer + (mode == SendMode::post ? 1 : 0), nullptr);
         }
     impl->refreshRouting(); impl->changed(); return Result::ok();
+}
+Result Session::importMidiFile (const File& file, double startBeat, std::vector<String>& importedIds)
+{
+    if (impl->exporting || impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording or finish exporting before importing MIDI.");
+    if (! std::isfinite (startBeat) || startBeat < 0 || startBeat >= 1000000) return Result::fail ("Choose a valid MIDI insertion position.");
+    if (! file.existsAsFile() || file.getSize() > 16*1024*1024) return Result::fail ("Choose a readable MIDI file no larger than 16 MiB.");
+    juce::FileInputStream input (file); juce::MidiFile midi; int type = -1;
+    if (! input.openedOk() || ! midi.readFrom (input,false,&type) || (type != 0 && type != 1) || midi.getTimeFormat() <= 0)
+        return Result::fail ("Import requires a type 0 or type 1 MIDI file with ticks-per-quarter timing.");
+    struct Part { String name; double length; std::unique_ptr<te::MidiList> list; };
+    std::vector<Part> parts; int eventCount = 0;
+    const auto ppq = (double)midi.getTimeFormat();
+    for (int trackIndex = 0; trackIndex < midi.getNumTracks(); ++trackIndex)
+    {
+        auto sequence = *midi.getTrack (trackIndex);
+        eventCount += sequence.getNumEvents();
+        if (eventCount > 100000) return Result::fail ("This MIDI file exceeds 100,000 events.");
+        std::array<std::array<int,128>,16> active;
+        for (auto& channel : active) channel.fill (-1);
+        std::set<int> channels; bool sysex = false;
+        String name; double length = 1.0/960;
+        for (int i = 0; i < sequence.getNumEvents(); ++i)
+        {
+            auto& message = sequence.getEventPointer (i)->message;
+            const auto beat = message.getTimeStamp()/ppq;
+            if (! std::isfinite (beat) || beat < 0 || beat > 1000000-startBeat)
+                return Result::fail ("A MIDI event is outside the supported timeline.");
+            message.setTimeStamp (beat); length = std::max (length,beat);
+            if (message.isTrackNameEvent()) name = message.getTextFromTextMetaEvent().trim().substring (0,128);
+            if (message.isMetaEvent()) continue;
+            if (message.isSysEx()) { sysex = true; continue; }
+            const auto channel = message.getChannel();
+            if (channel < 1 || channel > 16 || ! (message.isNoteOnOrOff() || message.isController() || message.isProgramChange()
+                || message.isPitchWheel() || message.isAftertouch() || message.isChannelPressure()))
+                return Result::fail ("The MIDI file contains an unsupported system event.");
+            channels.insert (channel);
+            if (message.isNoteOnOrOff())
+            {
+                auto& held = active[(size_t)channel-1][(size_t)message.getNoteNumber()];
+                if (message.isNoteOn())
+                {
+                    if (held >= 0) return Result::fail ("Overlapping notes of the same pitch and channel must be resolved before import.");
+                    held = i;
+                }
+                else
+                {
+                    if (held < 0 || beat <= sequence.getEventPointer (held)->message.getTimeStamp())
+                        return Result::fail ("Every imported note needs one later matching note-off.");
+                    held = -1;
+                }
+            }
+        }
+        for (const auto& channel : active) for (int held : channel)
+            if (held >= 0) return Result::fail ("The MIDI file has a note without a matching note-off.");
+        if (channels.empty() && sysex) channels.insert (1);
+        if (parts.size()+channels.size() > 64) return Result::fail ("The MIDI file would create more than 64 tracks.");
+        if (name.isEmpty()) name = file.getFileNameWithoutExtension().substring (0,96)+" / "+String(trackIndex+1);
+        if (impl->edit->tempoSequence.toTime (te::BeatPosition::fromBeats(startBeat+length)).inSeconds() > te::Edit::maximumLength)
+            return Result::fail ("The imported MIDI clips would exceed the 48-hour timeline.");
+        sequence.updateMatchedPairs();
+        for (int channel : channels)
+        {
+            auto list = std::make_unique<te::MidiList>(); list->setMidiChannel (te::MidiChannel(channel));
+            juce::MidiMessageSequence filtered;
+            for (int i = 0; i < sequence.getNumEvents(); ++i)
+            {
+                const auto& message = sequence.getEventPointer(i)->message;
+                if (message.isForChannel(channel) || (message.isSysEx() && channel == *channels.begin())) filtered.addEvent(message);
+            }
+            filtered.updateMatchedPairs(); list->importMidiSequence(filtered,nullptr,{},nullptr);
+            std::map<std::pair<double,int>,int> releases;
+            for (int i=0;i<filtered.getNumEvents();++i)
+                if (auto* event=filtered.getEventPointer(i);event->message.isNoteOn() && event->noteOffObject)
+                    releases[{event->message.getTimeStamp(),event->message.getNoteNumber()}]=event->noteOffObject->message.getVelocity();
+            for (auto* note : list->getNotes())
+            {
+                note->setNoteOffVelocity(releases.at({note->getStartBeat().inBeats(),note->getNoteNumber()}),nullptr);
+                note->state.setProperty(midiNoteIDProperty,juce::Uuid().toString(),nullptr);
+            }
+            parts.push_back ({name+" / Ch "+String(channel),length,std::move(list)});
+        }
+    }
+    if (parts.empty()) return Result::fail ("The file contains no supported MIDI performance events.");
+    beginEditGesture ("Import MIDI file"); std::vector<String> created;
+    for (const auto& part : parts)
+    {
+        const auto count = te::getAudioTracks(*impl->edit).size();
+        auto result = addMidiTrack(part.name);
+        if (result.failed()) { endEditGesture(); undo(); return result; }
+        auto* track = impl->track(count);
+        result = addMidiClip(track->itemID.toString(),startBeat,part.length);
+        if (result.failed()) { endEditGesture(); undo(); return result; }
+        auto* clip = dynamic_cast<te::MidiClip*>(track->getClips().getLast());
+        clip->setName(part.name);clip->getSequence().copyFrom(*part.list,&impl->edit->getUndoManager());
+        created.push_back(clip->itemID.toString());
+    }
+    endEditGesture();impl->changed();importedIds=std::move(created);return Result::ok();
+}
+Result Session::exportMidiClip (const String& id, const File& destination)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* clip=impl->midiClip(id);if(!clip)return Result::fail("Select a MIDI clip to export.");
+    if(destination.isDirectory())return Result::fail("Choose a MIDI file destination, not a directory.");
+    juce::MidiMessageSequence sequence;const int channel=clip->getMidiChannel().getChannelNumber();
+    if(channel<1||channel>16)return Result::fail("The clip has an invalid MIDI channel.");
+    const auto add=[&](juce::MidiMessage message,double beat)
+    {message.setTimeStamp(std::round(beat*9600));sequence.addEvent(message);};
+    add(juce::MidiMessage::textMetaEvent(3,clip->getName()),0);
+    add(juce::MidiMessage::tempoMetaEvent((int)std::round(60000000.0/snapshot().tempo)),0);
+    double end=clip->getLengthInBeats().inBeats();
+    for(auto* event:clip->getSequence().getSysexEvents())
+    {
+        const auto beat=event->getBeatPosition().inBeats();
+        if(!std::isfinite(beat)||beat<0||beat>1000000)return Result::fail("The clip contains an invalid SysEx time.");
+        add(event->getMessage(),beat);end=std::max(end,beat);
+    }
+    // At shared ticks, initialize SysEx/controllers before triggering notes.
+    for(auto* event:clip->getSequence().getControllerEvents())
+    {
+        const auto type=event->getType(),value=event->getControllerValue(),data=event->getMetadata();
+        const auto beat=event->getBeatPosition().inBeats();
+        if(!std::isfinite(beat)||beat<0||beat>1000000||value<0||value>16383
+            ||(type==te::MidiControllerEvent::aftertouchType&&(data<0||data>127)))
+            return Result::fail("The clip contains invalid MIDI controller data.");
+        if(type>=0&&type<128)add(juce::MidiMessage::controllerEvent(channel,type,value>>7),beat);
+        else if(type==te::MidiControllerEvent::programChangeType)add(juce::MidiMessage::programChange(channel,value>>7),beat);
+        else if(type==te::MidiControllerEvent::pitchWheelType)add(juce::MidiMessage::pitchWheel(channel,value),beat);
+        else if(type==te::MidiControllerEvent::aftertouchType)add(juce::MidiMessage::aftertouchChange(channel,data,value>>7),beat);
+        else if(type==te::MidiControllerEvent::channelPressureType)add(juce::MidiMessage::channelPressureChange(channel,value>>7),beat);
+        else return Result::fail("The clip contains an unsupported MIDI controller event.");
+        end=std::max(end,beat);
+    }
+    for(auto* note:clip->getSequence().getNotes())
+    {
+        if(note->isMute())continue;
+        const auto start=note->getStartBeat().inBeats(),finish=start+note->getLengthBeats().inBeats();
+        if(!std::isfinite(start)||!std::isfinite(finish)||start<0||finish<=start||finish>1000000
+            ||note->getNoteNumber()<0||note->getNoteNumber()>127||note->getVelocity()<1||note->getVelocity()>127
+            ||note->getNoteOffVelocity()<0||note->getNoteOffVelocity()>127)
+            return Result::fail("The clip contains an invalid MIDI note range.");
+        add(juce::MidiMessage::noteOn(channel,note->getNoteNumber(),(juce::uint8)note->getVelocity()),start);
+        add(juce::MidiMessage::noteOff(channel,note->getNoteNumber(),(juce::uint8)note->getNoteOffVelocity()),std::max(finish,start+1.0/9600));
+        end=std::max(end,std::max(finish,start+1.0/9600));
+    }
+    if(!std::isfinite(end)||end<0||end*9600>268435455)return Result::fail("The clip exceeds the supported MIDI export duration at 9600 ticks per quarter.");
+    add(juce::MidiMessage::endOfTrack(),end);
+    juce::MidiFile output;output.setTicksPerQuarterNote(9600);output.addTrack(sequence);
+    auto result=destination.getParentDirectory().createDirectory();if(result.failed())return result;
+    juce::TemporaryFile temporary(destination);
+    {auto stream=temporary.getFile().createOutputStream();if(!stream||!output.writeTo(*stream,0))return Result::fail("Could not write the MIDI file.");
+     stream->flush();if(stream->getStatus().failed())return stream->getStatus();}
+    if(!temporary.overwriteTargetFileWithTemporary())return Result::fail("Could not replace the MIDI destination.");
+    return Result::ok();
 }
 Result Session::addMidiClip (const String& trackId, double start, double length)
 {

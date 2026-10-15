@@ -197,3 +197,8 @@ Native input/audio walkthrough: NOT RUN until performed. In Arrangement, place t
 ## Audio reversal (about one minute)
 
 Native input/listening check: NOT RUN until performed. Import a disposable recording into Arrangement and use its editor to expose an interior source region, with gain and fades. Enable **Reverse audio**, then immediately export: the same region should play backwards with unchanged placement and envelope. Undo once and export again; redo and export immediately. Duplicate the reversed clip, then save/reopen and listen. Switching reversal off restores the forward region and enables trimming/slipping/splitting/copying again. Unsupported clips disable the toggle. The waveform should display the reversed source region; original media files must remain untouched.
+
+
+## MIDI file interchange (about two minutes)
+
+Native chooser/input/listening walkthrough: NOT RUN until performed. Choose **File → Import MIDI File...** with a type 0/1 note file. Each source-track/channel part should get a new MIDI track at the captured playhead beat, and the first clip should open in the piano roll. Playback follows the project tempo. Edit a note, then choose **File → Export Selected MIDI Clip...** and reopen the resulting file in a disposable project. Note timing/velocity and supported controller events should survive. Undo import once to remove all imported parts; redo and save/reopen to restore them. Export itself must add no document undo step. A file with missing note-offs, SMPTE timing or type 2 should report an error without changing the project. The initial importer does not apply file tempo/meter maps or resolve overlapping same-pitch/channel notes.

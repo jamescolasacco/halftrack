@@ -124,6 +124,8 @@ public:
     juce::Result addReturnTrack (juce::String name = {});
     juce::Result setTrackSendGain (int sourceTrackIndex, const juce::String& returnTrackId, float decibels);
     juce::Result setReturnSendMode (const juce::String& returnTrackId, SendMode);
+    juce::Result importMidiFile (const juce::File&, double startBeat, std::vector<juce::String>& clipIds);
+    juce::Result exportMidiClip (const juce::String& clipId, const juce::File&);
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
     juce::Result addScene (juce::String name = {});
     juce::Result removeScene (int sceneIndex);
