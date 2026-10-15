@@ -192,3 +192,8 @@ NOT RUN through native input until performed: drag an Arrangement audio clip by 
 ## Named song sections (about one minute)
 
 Native input/audio walkthrough: NOT RUN until performed. In Arrangement, place the playhead and choose **Add locator**. Create two more; click their flags and use Previous/Next to jump between sections without wrapping. Double-click a flag to edit its name and position. Drag it on the grid, then hold Alt for a free position; each complete drag undoes once. Press Delete with the locator selected, undo, and save/reopen to recover the same named positions. Resize the window: the locator buttons must remain in the track header. A marker beyond the end of all clips must not add silence to an export. Shift-drag on the upper ruler still edits the loop range.
+
+
+## Audio reversal (about one minute)
+
+Native input/listening check: NOT RUN until performed. Import a disposable recording into Arrangement and use its editor to expose an interior source region, with gain and fades. Enable **Reverse audio**, then immediately export: the same region should play backwards with unchanged placement and envelope. Undo once and export again; redo and export immediately. Duplicate the reversed clip, then save/reopen and listen. Switching reversal off restores the forward region and enables trimming/slipping/splitting/copying again. Unsupported clips disable the toggle. The waveform should display the reversed source region; original media files must remain untouched.

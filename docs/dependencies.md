@@ -106,3 +106,8 @@ The scanner helper additionally accepts its preceding exact `a4498068deaeec17081
 ## Tracktion clip-startup gain patch
 
 `cmake/PatchClipGain.cmake` initializes the resampler level before the stretch-reader constructor primes buffered source audio. Without it, a saved attenuated Session clip could briefly begin at unity gain. The existing per-block gain and playback pipeline remain in place. Exact pinned source checks, generated playback regression and limitations are documented in the [audio-editing contract](research/audio-clip-editing-contract.md#startup-gain-regression). The dependency retains its license and notices, and source-inclusive packages contain the modified source.
+
+
+## Tracktion reverse-channel startup patch
+
+`cmake/PatchReverseChannels.cmake` supplies immutable source channel metadata while a reversed playback file is still being rendered. This prevents an immediate export or redo from constructing a zero-channel graph and silently writing zeros. Original input SHA256: `e87f781fd11f8f90236b416bd762577105439ef11eb13f63f1d9770b7ac49826`; patched output: `1902c1ad6fd72e5a62c9f83778bf190d239e7e8ae8f77229d66ff8ba6de2df57`. The patch validates exact inputs/outputs, accepts repeat application, rejects unknown sources, and preserves dependency notices. Source-inclusive distributions contain the actual patched file. Immediate reverse/undo/redo full-buffer exports and an odd-frame source spanning native reverse-worker blocks are covered by `audio-clips-acceptance`.

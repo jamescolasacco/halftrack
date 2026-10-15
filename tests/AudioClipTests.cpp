@@ -42,6 +42,65 @@ juce::AudioBuffer<float> expected(const juce::AudioBuffer<float>& source,const S
     }
     return result;
 }
+void reversalTests(const juce::File& root,const juce::File& sourceFile,const juce::AudioBuffer<float>& source)
+{
+    Session s(false);ok(s.importAudio(sourceFile,0),"import reversal fixture");
+    const auto id=s.snapshot().tracks[0].clips[0].id;
+    ok(s.setAudioClipRange(id,.125,.5,.125),"expose an interior source region for reversal");
+    Session::AudioClipSettings settings{-6,.05,.075,Session::FadeCurve::convex,Session::FadeCurve::concave};
+    ok(s.setAudioClipSettings(id,settings),"set retained reversal gain and fades");
+    const auto originalFile=s.snapshot().tracks[0].clips[0].file;
+    juce::MemoryBlock bytes;check(originalFile.loadFileAsData(bytes),"retain project source bytes");
+    juce::AudioBuffer<float> backwards(2,24000);
+    for(int c=0;c<2;++c)for(int n=0;n<24000;++n)backwards.setSample(c,n,source.getSample(c,29999-n));
+    const auto reversed=expected(backwards,settings,0,24000,6000);
+    const auto forward=expected(source,settings,6000,24000,6000);
+    const auto render=root.getChildFile("reversed.wav");
+    ok(s.setAudioClipReversed(id,true),"reverse current source region");
+    auto clip=s.snapshot().tracks[0].clips[0];
+    check(clip.reversed&&clip.canReverse&&!clip.canEditAudioRange&&clip.start==.125&&clip.length==.5
+        &&clip.sourceOffset==.375&&clip.audio==settings&&clip.file==originalFile,"reversal retains placement, processing and immutable source while mirroring offset");
+    ok(s.exportWav(render),"immediately export while reverse playback file is being prepared");compare(read(render),reversed,"every reversed sample and retained fade");
+    s.undo();clip=s.snapshot().tracks[0].clips[0];
+    check(!clip.reversed&&clip.sourceOffset==.125&&clip.audio==settings&&s.canRedo(),"one undo restores direction and offset");
+    ok(s.exportWav(render),"export reversal undo");compare(read(render),forward,"undo returns exact forward source region");
+    check(s.setAudioClipReversed("missing",true).failed()&&s.canRedo(),"missing reversal target preserves redo");
+    s.redo();ok(s.exportWav(render),"export reversal redo");compare(read(render),reversed,"redo restores complete reversed audio");
+    juce::String unchanged="keep";
+    check(s.setAudioClipRange(id,.125,.5,.125).failed()&&s.splitAudioClip(id,.3,unchanged).failed()
+        &&s.copyAudioClip(id).failed()&&unchanged=="keep","forward-only range and clipboard operations reject reversed clips");
+    const auto project=root.getChildFile("Reversal portable").getChildFile("song.halftrack");
+    ok(s.saveProject(project),"save reversed original media and native metadata");ok(s.loadProject(project),"reopen reversed clip");
+    ok(s.setAudioClipReversed(id,true),"identical reverse request is a no-op");
+    check(!s.snapshot().dirty&&!s.canUndo()&&s.snapshot().tracks[0].clips[0].reversed,"no-op after reopen keeps project and history clean");
+    ok(s.exportWav(render),"render reopened reversal");compare(read(render),reversed,"saved project retains reversed region");
+    ok(s.setAudioClipReversed(id,false),"toggle back to original direction");
+    check(s.snapshot().tracks[0].clips[0].sourceOffset==.125,"two reversals restore the exposed forward region");
+    ok(s.exportWav(render),"render two reversals");compare(read(render),forward,"double reversal restores all samples");s.undo();
+    juce::String duplicated;ok(s.duplicateAudioClip(id,duplicated),"duplicate reversed clip with fresh identity");
+    juce::AudioBuffer<float> doubled(2,54000);doubled.clear();
+    for(int c=0;c<2;++c){doubled.copyFrom(c,0,reversed,c,0,30000);doubled.copyFrom(c,30000,reversed,c,6000,24000);}
+    ok(s.exportWav(render),"export duplicated reversed clip");compare(read(render),doubled,"duplicate retains reversed media region and fades");s.undo();
+    juce::MemoryBlock finalBytes;check(originalFile.loadFileAsData(finalBytes)&&bytes==finalBytes,"reverse never changes original project media bytes");
+    ok(s.importAudioToSlot(sourceFile,0,0),"prepare unsupported Session reversal target");
+    const auto slot=s.snapshot().tracks[0].slots[0].clip;
+    check(!slot.canReverse&&s.setAudioClipReversed(slot.id,true).failed(),"Session clips reject unsupported reversal");
+    Session longClip(false);juce::AudioBuffer<float> oddSource(2,65537),oddReversed(2,65537);
+    for(int c=0;c<2;++c)for(int n=0;n<65537;++n)
+    {
+        const auto value=(float)((n*(17+c*4))%257-128)/2048;
+        oddSource.setSample(c,n,value);oddReversed.setSample(c,65536-n,value);
+    }
+    const auto oddFile=root.getChildFile("odd-length-source.wav");
+    {juce::WavAudioFormat wav;std::unique_ptr<juce::OutputStream> stream(oddFile.createOutputStream());
+    auto writer=wav.createWriterFor(stream,juce::AudioFormatWriterOptions().withSampleRate(48000).withNumChannels(2).withBitsPerSample(24));
+    check(writer&&writer->writeFromAudioSampleBuffer(oddSource,0,65537),"write source spanning reverse worker blocks with an odd remainder");}
+    ok(longClip.importAudio(oddFile,0),"import long odd-frame reverse source");
+    const auto oddId=longClip.snapshot().tracks[0].clips[0].id;
+    ok(longClip.setAudioClipReversed(oddId,true),"reverse whole odd-length source");
+    ok(longClip.exportWav(render),"immediately export reversed worker block boundary");compare(read(render),oddReversed,"all source frames reverse once across block boundary");
+
+}
 void movementTests(const juce::File& root,const juce::File& sourceFile,const juce::AudioBuffer<float>& source)
 {
     Session session(false);ok(session.importAudio(sourceFile,0),"import cross-track move source");
@@ -163,6 +222,7 @@ int runAudioClipTests(const juce::File& artifacts)
         for(int n=0;n<48000;++n)for(int c=0;c<2;++c)source.setSample(c,n,(float)((n*(37+c*12))%193-96)/1024);
         {juce::WavAudioFormat wav;std::unique_ptr<juce::OutputStream>stream(file.createOutputStream());auto writer=wav.createWriterFor(stream,juce::AudioFormatWriterOptions().withSampleRate(48000).withNumChannels(2).withBitsPerSample(24));check(writer&&writer->writeFromAudioSampleBuffer(source,0,48000),"write original signal");}
         juce::MemoryBlock originalBytes;check(file.loadFileAsData(originalBytes),"read original source bytes");source=read(file);
+        reversalTests(root,file,source);
         Session s(false);ok(s.importAudio(file,0),"import immutable source");const auto id=s.snapshot().tracks[0].clips[0].id;
         ok(s.saveProject(project),"save baseline");ok(s.loadProject(project),"reopen clean baseline");
         auto defaults=s.snapshot().tracks[0].clips[0].audio;ok(s.setAudioClipSettings(id,defaults),"identical settings no-op");check(!s.snapshot().dirty&&!s.canUndo(),"identical settings preserve clean history");
@@ -184,7 +244,7 @@ int runAudioClipTests(const juce::File& artifacts)
             if(bad==2)invalid.fadeInSeconds=-1;if(bad==3)invalid.fadeOutSeconds=1;if(bad==4)invalid.fadeInCurve=(Session::FadeCurve)0;if(bad==5)invalid.fadeOutSeconds=std::numeric_limits<double>::infinity();
             check(s.setAudioClipSettings(id,invalid).failed()&&s.canRedo()&&s.snapshot().tracks[0].clips[0].audio==settings,"invalid settings preserve audio state and redo");
         }
-        for(const auto& key:juce::StringArray{"gain","fadeIn","fadeOut","fadeInType","fadeOutType"})
+        for(const auto& key:juce::StringArray{"gain","fadeIn","fadeOut","fadeInType","fadeOutType","isReversed"})
         {
             auto xml=juce::XmlDocument::parse(project);auto tree=juce::ValueTree::fromXml(*xml);auto clip=audioState(tree);check(clip.isValid(),"find saved audio state");clip.setProperty(key,"nan",nullptr);
             const auto malformed=root.getChildFile("malformed.halftrack");check(tree.createXml()->writeTo(malformed),"write invalid saved state");
@@ -247,7 +307,8 @@ int runAudioClipTests(const juce::File& artifacts)
         ok(s.loadProject(warpedFile),"load native warp metadata");
         const auto warpedId=s.snapshot().tracks[0].clips[0].id;juce::String untouched="keep";
         check(!s.snapshot().tracks[0].clips[0].canEditAudioRange&&s.setAudioClipRange(warpedId,0,.25,0).failed()
-            &&s.splitAudioClip(warpedId,.125,untouched).failed()&&untouched=="keep"&&!s.canUndo(),"warped range operations preserve state and history");
+            &&s.splitAudioClip(warpedId,.125,untouched).failed()&&!s.snapshot().tracks[0].clips[0].canReverse
+            &&s.setAudioClipReversed(warpedId,true).failed()&&untouched=="keep"&&!s.canUndo(),"warped range operations preserve state and history");
         juce::MemoryBlock finalBytes;check(file.loadFileAsData(finalBytes)&&finalBytes==originalBytes,"all edits leave source file bytes unchanged");
         movementTests(root,file,source);
         clipboardTests(root,file,source);

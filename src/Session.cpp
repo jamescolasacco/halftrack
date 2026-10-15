@@ -230,6 +230,13 @@ bool canEditAudioRange (const te::WaveAudioClip& clip)
     return clip.getClipSlot() == nullptr && ! clip.isLooping() && ! clip.getAutoTempo() && ! clip.getWarpTime()
         && ! clip.getIsReversed() && clip.getSpeedRatio() == 1 && ! clip.isGrouped();
 }
+bool canReverseAudio (te::WaveAudioClip& clip)
+{
+    return clip.getClipSlot() == nullptr && ! clip.isLooping() && ! clip.getAutoTempo() && ! clip.getWarpTime()
+        && ! clip.getAutoPitch() && clip.getPitchChange() == 0 && clip.getSpeedRatio() == 1 && ! clip.isGrouped()
+        && clip.getNumTakes (true) <= 1 && ! clip.isCurrentTakeComp() && clip.getClipEffects() == nullptr
+        && ! clip.isUsingARA() && ! clip.getClipTrack()->isFrozen (te::Track::anyFreeze);
+}
 Result validateAudioClips (const juce::ValueTree& state)
 {
     if (state.hasType (te::IDs::AUDIOCLIP))
@@ -241,16 +248,17 @@ Result validateAudioClips (const juce::ValueTree& state)
             result = std::strtod (value.c_str(), &end);
             return ! value.empty() && end == value.c_str()+value.size() && std::isfinite (result);
         };
-        double gain = 0, in = 0, out = 0, length = 0, inType = 1, outType = 1;
+        double gain = 0, in = 0, out = 0, length = 0, inType = 1, outType = 1, reversed = 0;
         if (! parse (te::IDs::gain, 0, gain) || ! parse (te::IDs::fadeIn, 0, in)
             || ! parse (te::IDs::fadeOut, 0, out) || ! parse (te::IDs::length, 0, length)
             || ! parse (te::IDs::fadeInType, 1, inType) || ! parse (te::IDs::fadeOutType, 1, outType)
+            || ! parse (te::IDs::isReversed, 0, reversed) || (reversed != 0 && reversed != 1)
             || gain < -100 || gain > 24 || length < 0 || inType < 1 || inType > 4 || outType < 1 || outType > 4
             || std::floor (inType) != inType || std::floor (outType) != outType
             || ! validAudioSettings ({ static_cast<float> (gain), in, out,
                 static_cast<Session::FadeCurve> (static_cast<int> (inType)),
                 static_cast<Session::FadeCurve> (static_cast<int> (outType)) }, length))
-            return Result::fail ("The project contains invalid audio clip gain or fades.");
+            return Result::fail ("The project contains invalid audio clip gain, fades or direction.");
     }
     for (const auto& child : state) if (auto r = validateAudioClips (child); r.failed()) return r;
     return Result::ok();
@@ -305,6 +313,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
         result.isAudio = true; result.audio = audioSettings (*audio);
         result.sourceLength = audio->getSourceLength().inSeconds(); result.canEditAudioRange = canEditAudioRange (*audio);
         result.canEditAudioFades = audio->getClipSlot() == nullptr;
+        result.reversed = audio->getIsReversed(); result.canReverse = canReverseAudio (*audio);
     }
     if (auto* midi = dynamic_cast<te::MidiClip*> (&clip))
     {
@@ -1533,6 +1542,23 @@ Result Session::setAudioClipSettings (const String& id, const AudioClipSettings&
     clip->setFadeInType (static_cast<te::AudioFadeCurve::Type> (settings.fadeInCurve));
     clip->setFadeOutType (static_cast<te::AudioFadeCurve::Type> (settings.fadeOutCurve));
     impl->changed(); return Result::ok();
+}
+Result Session::setAudioClipReversed (const String& id, bool reversed)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before reversing clips.");
+    auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
+    if (! canReverseAudio (*clip)) return Result::fail ("Reverse requires a single-source, unwarped, unlooped Arrangement clip at its original speed and pitch.");
+    const te::AudioFile source (impl->engine,clip->getOriginalFile());
+    const auto position = clip->getPosition();
+    if (! source.isValid() || position.offset.inSeconds() < 0
+        || position.offset.inSeconds()+position.getLength().inSeconds() > source.getLength()+1e-9)
+        return Result::fail ("The source must be readable and contain the complete clip region.");
+    if (clip->getIsReversed() == reversed) return Result::ok();
+    impl->transaction ("Reverse audio clip");
+    // The native setter mirrors the source offset and loop metadata inside this
+    // same undo transaction. Reversed playback is generated off the audio thread.
+    clip->setIsReversed (reversed); impl->changed(); return Result::ok();
 }
 Result Session::setAudioClipRange (const String& id, double start, double length, double offset)
 {

@@ -45,6 +45,8 @@ include(cmake/PatchEditSort.cmake)
 halftrack_patch_edit_sort("${tracktion_SOURCE_DIR}")
 include(cmake/PatchClipGain.cmake)
 halftrack_patch_clip_gain("${tracktion_SOURCE_DIR}")
+include(cmake/PatchReverseChannels.cmake)
+halftrack_patch_reverse_channels("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"

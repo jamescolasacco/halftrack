@@ -140,7 +140,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
-| WRP-001 | Unwarped audio | Verify sample-rate conversion policy, start offset, pitch, reverse, looping, gain, and end-of-file handling. | PARTIAL — gain/offset/duration/full-buffer tests at 48 kHz; pitch/reverse and broader conversion unverified |
+| WRP-001 | Unwarped audio | Verify sample-rate conversion policy, start offset, pitch, reverse, looping, gain, and end-of-file handling. | PARTIAL — gain/offset/duration/reversal, immediate export/undo/redo and full-buffer tests at 48 kHz; pitch, looping controls and broader conversion unverified |
 | WRP-002 | Transient and tempo analysis | Use original percussive and sustained fixtures; record detection accuracy and provide editable results. | NOT IMPLEMENTED / UNVERIFIED |
 | WRP-003 | Warp-marker editing | Add/move/remove/reset markers; test segment continuity, undo, and save/reopen. | NOT IMPLEMENTED / UNVERIFIED |
 | WRP-004 | Rhythmic stretching | Compare timing and transient preservation for a Beats-like mode over several tempo ratios. | NOT IMPLEMENTED / UNVERIFIED |

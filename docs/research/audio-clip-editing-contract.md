@@ -30,7 +30,7 @@ Production component-handler checks exercise grouped gain drag, full range submi
 
 ## Remaining boundaries
 
-Linked/automatic crossfades, consolidation, multi-clip/time-range clipboard, Session edge-fade toggle, warp marker editing, native pitch/reverse controls and arbitrary tempo-map comparisons are unfinished. Current range controls do not alter warp or loop geometry. No paired reference render, subjective listening study or physical-interface latency measurement is claimed.
+Linked/automatic crossfades, consolidation, multi-clip/time-range clipboard, Session edge-fade toggle, warp marker editing, native pitch controls and arbitrary tempo-map comparisons are unfinished. Current range controls do not alter warp or loop geometry. No paired reference render, subjective listening study or physical-interface latency measurement is claimed.
 
 ## Direct Arrangement gestures
 
@@ -43,3 +43,12 @@ Cmd/Ctrl+E splits selected Arrangement audio at the playhead; Cmd/Ctrl+D duplica
 Cmd/Ctrl+C/X/V now supports one single-source Arrangement audio clip across audio tracks and project switches. Copy retains independent media before Cut removes the source; Paste collects a new file into the destination project, remaps native IDs and inserts without overwriting overlaps. Copy creates no undo action. Failed Cut preserves the existing clipboard. Multi-take comping and warped/looped/grouped clips are rejected for this clipboard path. State and every-sample render tests cover retained fades/gain/offsets, original media removal, destination save/reopen and one-step cut/paste undo.
 
 Selected clip edges now trim directly; Alt bypasses the existing grid and Shift+Alt-body drag slips the source without moving timeline bounds. Source boundaries and retained fades constrain the range. Cross-track audio body dragging retains identity and media while changing its native owner and start in one undo transaction. Destination volume applies through the normal mixer; an independent full-file PCM oracle verifies the moved excerpt and gain. MIDI/return/frozen targets and timeline overflow reject before mutation. UI tests cover multi-event gestures, repeated ownership resolution, keyboard focus, and replacements at stale indices.
+
+
+## Audio reversal
+
+The Reverse audio control acts on a currently exposed, unlooped, unwarped single-source Arrangement region at normal speed/pitch. It retains gain/fades, timeline start and duration; native source offset mirrors so the same audible region plays backwards. Undo restores direction and offset in one step. Source media stays byte-identical; only cached playback is reversed. Save/reopen and duplicate retain direction. Session, grouped, frozen, comped, warped and clip-effect/ARA cases remain outside this control; users switch reversal off before forward-only range/split/clipboard operations.
+
+Generated tests compare every 48 kHz stereo sample for an interior region with gain and fades, immediate export, undo, immediate redo, save/reopen, two reversals and duplication. A separate 65,537-frame source verifies both native reverse-worker block boundaries and an odd remainder. No waiting delay is inserted before export. Malformed serialized direction is rejected. Editor-handler tests exercise the actual toggle, range capability changes and undo; the 620×480 editor was visually inspected.
+
+The initial immediate-export test produced all-zero output. A two-second diagnostic wait made the first render correct but immediate redo failed again. Inspection isolated the native graph's channel configuration capture before reversed-cache metadata existed. The [reverse-channel patch](../dependencies.md#tracktion-reverse-channel-startup-patch) supplies original metadata while the cache is pending, fixing the regression without sleeps. The diagnostic wait was removed; no paired reference output or hardware playback claim follows from these generated tests.

@@ -61,6 +61,7 @@ public:
         double start = 0, length = 0, sourceOffset = 0;
         juce::File file;
         bool isMidi = false, isAudio = false, canEditAudioRange = false, canEditAudioFades = false;
+        bool reversed = false, canReverse = false;
         double sourceLength = 0;
         AudioClipSettings audio;
         double startBeat = 0, lengthBeats = 0;
@@ -149,6 +150,7 @@ public:
     juce::Result removeTrack (int trackIndex);
     juce::Result importAudio (const juce::File&, int trackIndex = -1, double startSeconds = 0);
     juce::Result setAudioClipSettings (const juce::String& clipId, const AudioClipSettings&);
+    juce::Result setAudioClipReversed (const juce::String& clipId, bool reversed);
     juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
     juce::Result splitAudioClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
     juce::Result duplicateAudioClip (const juce::String& clipId, juce::String& duplicateId);

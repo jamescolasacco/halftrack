@@ -758,7 +758,16 @@ private:
                         const auto visible = wave.getIntersection (juce::Rectangle<float> (0, wave.getY(), (float) tw, wave.getHeight()));
                         const auto startSeconds = juce::jmax (0.0, (visible.getX() - wave.getX()) / owner.pixelsPerSecond);
                         const auto endSeconds = juce::jmin (clip.length, startSeconds + visible.getWidth() / owner.pixelsPerSecond);
-                        thumbnail->drawChannels (g, visible.toNearestInt(), clip.sourceOffset + startSeconds, clip.sourceOffset + endSeconds, 0.9f);
+                        if (clip.reversed)
+                        {
+                            // Read the same immutable source interval and mirror its display.
+                            g.saveState();
+                            g.addTransform (juce::AffineTransform (-1,0,visible.getX()+visible.getRight(),0,1,0));
+                            thumbnail->drawChannels (g, visible.toNearestInt(), clip.sourceLength-clip.sourceOffset-endSeconds,
+                                clip.sourceLength-clip.sourceOffset-startSeconds,0.9f);
+                            g.restoreState();
+                        }
+                        else thumbnail->drawChannels (g, visible.toNearestInt(), clip.sourceOffset + startSeconds, clip.sourceOffset + endSeconds, 0.9f);
                     }
                     if (selected && clip.isAudio && clip.canEditAudioFades && bounds.getWidth() >= 20)
                     {

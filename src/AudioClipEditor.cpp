@@ -17,6 +17,8 @@ public:
     AudioClipEditor (Session& s, juce::String id) : session (s), clipId (std::move (id))
     {
         look.setColour(juce::Label::textColourId,juce::Colour(0xffeee8df));
+        look.setColour(juce::ToggleButton::textColourId,juce::Colour(0xffeee8df));
+        look.setColour(juce::ToggleButton::tickColourId,juce::Colour(0xffe49a58));
         look.setColour(juce::Slider::thumbColourId,juce::Colour(0xffe49a58));
         look.setColour(juce::Slider::trackColourId,juce::Colour(0xffe49a58));
         look.setColour(juce::Slider::textBoxTextColourId,juce::Colour(0xffeee8df));
@@ -87,7 +89,13 @@ public:
             const auto result = session.setAudioClipRange (clipId, v[0], v[1], v[2]);
             showResult (result); if (result.wasOk()) rangeDirty = false; sync();
         };
-        addAndMakeVisible (apply); addAndMakeVisible (error);
+        reverse.setName ("reverseAudioClip"); reverse.setButtonText ("Reverse audio");
+        reverse.onClick = [this]
+        {
+            if (const auto clip = findClip()) showResult (session.setAudioClipReversed (clipId, ! clip->reversed));
+            sync();
+        };
+        addAndMakeVisible (reverse); addAndMakeVisible (apply); addAndMakeVisible (error);
         error.setColour (juce::Label::textColourId, juce::Colour (0xfff4ab84));
         session.addChangeListener (this); setSize (620, 480); sync();
     }
@@ -104,7 +112,7 @@ public:
             rangeLabels[(size_t)i].setBounds (24+i*(fieldWidth+12), 315, fieldWidth, 22);
             range[(size_t)i].setBounds (24+i*(fieldWidth+12), 339, fieldWidth, 27);
         }
-        apply.setBounds (24, 380, 150, 28); error.setBounds (24, 418, width, 48);
+        apply.setBounds (24, 380, 150, 28); reverse.setBounds (196,380,180,28); error.setBounds (24, 418, width, 48);
     }
     void paint (juce::Graphics& g) override
     {
@@ -133,7 +141,7 @@ public:
             g.setColour(juce::Colour(0xffe49a58));g.strokePath(envelope,juce::PathStrokeType(1.8f));
             g.setFont(juce::FontOptions(11.0f));g.setColour(juce::Colour(0xffbbbcb8));
             g.drawText("Fade envelope  /  "+juce::String(clip->length,4)+" s",24,140,getWidth()-48,18,juce::Justification::centredRight);
-            g.drawText(clip->canEditAudioRange ? "Non-destructive range / source audio stays unchanged" : "Range editing is available for unwarped arrangement clips",24,288,getWidth()-48,20,juce::Justification::centredLeft);
+            g.drawText(clip->canEditAudioRange ? "Non-destructive range / source audio stays unchanged" : (clip->reversed ? "Switch off Reverse audio to edit the source range." : "Range editing is available for unwarped arrangement clips"),24,288,getWidth()-48,20,juce::Justification::centredLeft);
         }
         else if (clip)
         {
@@ -156,6 +164,8 @@ private:
     void sync()
     {
         const auto clip = findClip(); const bool enabled = clip.has_value() && ! session.isExporting();
+        reverse.setEnabled (enabled && clip->canReverse);
+        reverse.setToggleState (clip && clip->reversed, juce::dontSendNotification);
         for(auto& slider:sliders)slider.setEnabled(enabled);
         for(auto& curve:curves)curve.setEnabled(enabled);
         if (clip && ! clip->canEditAudioFades)
@@ -177,7 +187,7 @@ private:
     void finishGesture(){if(dragging){dragging=false;session.endEditGesture();}}
     void changeListenerCallback(juce::ChangeBroadcaster*) override {sync();}
     Session& session;juce::String clipId;std::array<juce::Slider,3>sliders;std::array<juce::Label,3>labels,rangeLabels;
-    std::array<juce::ComboBox,2>curves;std::array<juce::TextEditor,3>range;juce::TextButton apply{"Apply range"};juce::Label error;
+    std::array<juce::ComboBox,2>curves;std::array<juce::TextEditor,3>range;juce::TextButton apply{"Apply range"};juce::ToggleButton reverse;juce::Label error;
     juce::LookAndFeel_V4 look;
     bool dragging=false,rangeDirty=false;
 };
@@ -188,11 +198,12 @@ int runAudioClipEditorTests(const juce::File& source,const juce::File& artifacts
 {
     auto check=[](bool v,const char* text){if(!v)throw std::runtime_error(text);std::cout<<"PASS audio editor: "<<text<<std::endl;};
     Session s(false);check(s.importAudio(source,0).wasOk(),"import editor fixture");const auto id=s.snapshot().tracks[0].clips[0].id;
-    auto editor=makeAudioClipEditor(s,id);juce::Slider* gain=nullptr;juce::TextButton* apply=nullptr;std::array<juce::TextEditor*,3>range{};
+    auto editor=makeAudioClipEditor(s,id);juce::ToggleButton* reverse=nullptr;juce::Slider* gain=nullptr;juce::TextButton* apply=nullptr;std::array<juce::TextEditor*,3>range{};
     for(auto* child:editor->getChildren())
     {
         if(auto* control=dynamic_cast<juce::Slider*>(child);control&&control->getName()=="clipGain")gain=control;
-        if(auto* control=dynamic_cast<juce::TextButton*>(child))apply=control;
+        if(auto* control=dynamic_cast<juce::TextButton*>(child);control&&control->getName()=="applyClipRange")apply=control;
+        if(auto* control=dynamic_cast<juce::ToggleButton*>(child);control&&control->getName()=="reverseAudioClip")reverse=control;
         if(auto* control=dynamic_cast<juce::TextEditor*>(child))
         {if(control->getName()=="Start (s)")range[0]=control;else if(control->getName()=="Length (s)")range[1]=control;else if(control->getName()=="Source offset (s)")range[2]=control;}
     }
@@ -202,7 +213,10 @@ int runAudioClipEditorTests(const juce::File& source,const juce::File& artifacts
     range[0]->setText("0.25");range[1]->setText("0.5");range[2]->setText("0.125");apply->onClick();
     auto clip=s.snapshot().tracks[0].clips[0];check(clip.start==.25&&clip.length==.5&&clip.sourceOffset==.125,"apply submits complete range");
     s.undo();check(s.snapshot().tracks[0].clips[0].length==1,"range edit undoes once");
-    s.removeClip(0,0);s.dispatchPendingMessages();check(!gain->isEnabled()&&!apply->isEnabled(),"removed clip disables stale controls");
+    check(reverse&&reverse->isEnabled(),"reverse control exists and accepts ordinary audio");reverse->onClick();
+    check(s.snapshot().tracks[0].clips[0].reversed&&reverse->getToggleState()&&!apply->isEnabled(),"reverse button changes real direction and disables forward-only range");
+    s.undo();s.dispatchPendingMessages();check(!reverse->getToggleState()&&apply->isEnabled(),"undo updates reverse and range controls");
+    s.removeClip(0,0);s.dispatchPendingMessages();check(!gain->isEnabled()&&!apply->isEnabled()&&!reverse->isEnabled(),"removed clip disables stale controls");
     s.undo();s.dispatchPendingMessages();check(gain->isEnabled(),"undo restores stable clip identity");
     auto shown=s.snapshot().tracks[0].clips[0].audio;shown.fadeInSeconds=.15;shown.fadeOutSeconds=.25;shown.gainDb=-6;
     shown.fadeOutCurve=Session::FadeCurve::convex;check(s.setAudioClipSettings(id,shown).wasOk(),"configure actual preview envelope");s.dispatchPendingMessages();

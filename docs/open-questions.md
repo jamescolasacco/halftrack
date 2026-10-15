@@ -67,3 +67,7 @@ Default: a typed, application-local clipboard holds one unwarped, unlooped, ungr
 ### Arrangement locators
 
 Default: named point locators use the engine's marker track and absolute timeline seconds; changing project tempo does not move them. Each native marker has a 1 ms storage extent, but appears as a point and never extends an audio export. Add at playhead, click to seek, edit name/position, drag with grid snapping (Alt bypasses), and navigate previous/next without wrap. Each mutation uses the engine undo manager. Locator edits may be made during playback/recording, but not during export. Region markers, beat-locked locators and locator-triggered scene launches remain separate work.
+
+### Audio reversal
+
+Default: reverse the currently exposed source region of a single-source, normal-speed, unlooped Arrangement clip while retaining timeline placement, duration, gain and fades. One undo restores direction and source offset. The engine reverses its cached playback file; source media stays unchanged and projects retain the original source plus native direction metadata. Warped, pitched, looping, Session, grouped, frozen, comped and clip-effect/ARA sources are not accepted by this initial control. Reverse can be toggled back before trimming, slipping, splitting or copying a reversed clip.
