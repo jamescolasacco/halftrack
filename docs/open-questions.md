@@ -152,3 +152,5 @@ Bitcrusher defaults: implement deterministic hard quantization and sample holdin
 Noise Gate default: linked peak detection with linear, frame-counted attack/hold/release and separate close threshold. Use exact silence at -100 dB Floor and invert the opening envelope in Duck mode. Sidechains, lookahead and envelope displays require separate behavior/tests.
 
 Peak Limiter default: fixed one-millisecond lookahead rounded up to whole frames, linked stereo sample peaks, immediate attenuation and one-pole release. Expose gain, ceiling and release only; native plugin bypass handles the unprocessed path. True-peak/oversampling, adaptive release and selectable lookahead remain separate work.
+
+Pending device insertion belongs to the project instance and track that opened the menu. Track reordering/selection changes retain that target; successful New/Load invalidates it even if saved track IDs repeat. Save As and failed loads retain the instance. The transient generation token is not a project-schema field.

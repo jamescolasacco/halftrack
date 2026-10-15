@@ -2,6 +2,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -131,6 +132,7 @@ public:
     {
         juce::String name;
         juce::File projectFile;
+        uint64_t projectGeneration = 0; // Transient identity; changes only on successful New/Load.
         bool dirty = false, playing = false, recording = false, looping = false;
         double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
         float masterPeakL = 0, masterPeakR = 0, masterGainDb = 0;

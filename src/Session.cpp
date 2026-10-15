@@ -977,6 +977,7 @@ struct Session::Impl
     Session& owner;
     te::Engine engine;
     bool useDevices;
+    uint64_t projectGeneration = 0;
     bool explicitChanges = false, pristineNewDocument = false, exporting = false;
     double lastTap=-1;
     std::array<double,4> tapIntervals {};
@@ -1000,6 +1001,7 @@ Session::Snapshot Session::snapshot() const
     auto& e = *impl->edit;
     auto& transport = e.getTransport();
     s.projectFile = impl->projectFile;
+    s.projectGeneration = impl->projectGeneration;
     s.name = s.projectFile == File() ? "Untitled" : s.projectFile.getFileNameWithoutExtension();
     s.dirty = impl->explicitChanges || (! impl->pristineNewDocument && e.hasChangedSinceSaved());
     s.playing = transport.isPlaying(); s.recording = transport.isRecording();
@@ -1111,6 +1113,7 @@ Result Session::newProject()
     options.numAudioTracks = 0; options.defaultMasterVolumedB = 0;
     options.editFileRetriever = [this] { return impl->editLocation(); };
     impl->edit = std::make_unique<te::Edit> (std::move (options));
+    ++impl->projectGeneration;
     impl->edit->getMasterVolumePlugin()->setVolumeDb (0);
     impl->edit->tempoSequence.getTempo (0)->setBpm (120);
     impl->edit->clickTrackGain = .6f; impl->edit->clickTrackEmphasiseBars = true;
@@ -1206,6 +1209,7 @@ Result Session::loadProject (const File& file)
     impl->projectFile = file;
     impl->pristineNewDocument = false;
     impl->edit = std::move (candidate);
+    ++impl->projectGeneration;
     for (auto* t : te::getAudioTracks (*impl->edit))
     {
         t->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());

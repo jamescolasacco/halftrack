@@ -3508,7 +3508,7 @@ private:
     }
     void addPluginMenu()
     {
-        if (selectedTrack < 0) return;
+        if (selectedTrack < 0 || selectedTrack >= static_cast<int> (state.tracks.size())) return;
         auto types = session.knownPlugins().getTypes();
         juce::PopupMenu popup;
         popup.addItem (100001, "Utility  (Built-in)");
@@ -3517,15 +3517,31 @@ private:
         for (int i = 0; i < types.size(); ++i) popup.addItem (i + 1, types[i].name + "  (" + types[i].pluginFormatName + ")");
         popup.addSeparator(); popup.addItem (100000, "Scan / Manage Plug-ins...");
         auto safe = juce::Component::SafePointer<Impl> (this);
-        const auto track = selectedTrack;
-        popup.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&deviceChain), [safe, types, track] (int choice)
+        const auto track = state.tracks[static_cast<size_t> (selectedTrack)].id;
+        const auto generation = state.projectGeneration;
+        popup.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&deviceChain), [safe, types, track, generation] (int choice)
         {
             if (safe == nullptr) return;
-            if (choice == 100001) { safe->report (safe->session.addUtility (track)); safe->refresh(); }
-            else if (choice >= 100002 && choice <= 100002 + static_cast<int> (Session::EffectKind::limiter)) { safe->report (safe->session.addNativeEffect (track, static_cast<Session::EffectKind> (choice-100002))); safe->refresh(); }
-            else if (choice == 100000) safe->showPlugins();
-            else if (choice > 0 && choice <= types.size()) { safe->report (safe->session.addPlugin (track, types[choice - 1])); safe->refresh(); }
+            safe->insertDeviceSelection (generation, track, choice, types);
         });
+    }
+    void insertDeviceSelection (uint64_t generation, const juce::String& trackId, int choice, const juce::Array<juce::PluginDescription>& types)
+    {
+        if (choice == 100000) { showPlugins(); return; }
+        const bool native = choice >= 100001 && choice <= 100002 + static_cast<int> (Session::EffectKind::limiter);
+        if (! native && (choice <= 0 || choice > types.size())) return;
+        const auto current = session.snapshot();
+        if (current.projectGeneration != generation)
+        { report (juce::Result::fail ("That project's device menu is no longer current.")); refresh(); return; }
+        const auto found = std::find_if (current.tracks.begin(), current.tracks.end(),
+            [&] (const auto& item) { return item.id == trackId; });
+        if (found == current.tracks.end())
+        { report (juce::Result::fail ("The selected track is no longer available.")); refresh(); return; }
+        const int track = static_cast<int> (found - current.tracks.begin());
+        if (choice == 100001) { report (session.addUtility (track)); refresh(); }
+        else if (choice >= 100002 && choice <= 100002 + static_cast<int> (Session::EffectKind::limiter))
+        { report (session.addNativeEffect (track, static_cast<Session::EffectKind> (choice-100002))); refresh(); }
+        else if (choice > 0 && choice <= types.size()) { report (session.addPlugin (track, types[choice-1])); refresh(); }
     }
     void startBrowserScan()
     {
@@ -5236,6 +5252,43 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (session.clearSlot (0, 0).wasOk() && session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "replace follow target while its dialog is open"); refresh();
     finishFollowDialog ((int) Session::FollowAction::next, "1", 1);
     check (selectedSlot()->clip.id != followClipId && selectedSlot()->clip.follow.action == Session::FollowAction::off, "stale follow dialog cannot change replacement clip");
+    check (session.newProject().wasOk(), "prepare pending device menu"); refresh(); selectTrack (0);
+    const auto pendingDeviceTrackId = state.tracks[0].id;
+    const auto pendingDeviceGeneration = state.projectGeneration;
+    const auto pendingDeviceTrack = state.tracks[static_cast<size_t> (selectedTrack)].id;
+    check (session.moveTrack (pendingDeviceTrackId, 1).wasOk(), "reorder target while device menu is pending"); refresh();
+    insertDeviceSelection (pendingDeviceGeneration, pendingDeviceTrack, 100002 + static_cast<int> (Session::EffectKind::bitcrusher), {});
+    refresh();
+    check (state.tracks[1].id == pendingDeviceTrackId && state.tracks[1].plugins.size() == 1
+        && state.tracks[1].plugins[0].effect.kind == Session::EffectKind::bitcrusher && state.tracks[0].plugins.empty(),
+        "pending device menu inserts on the original track after reordering");
+    session.undo(); refresh(); check (state.tracks[1].id == pendingDeviceTrackId && state.tracks[1].plugins.empty(), "one undo removes the delayed insertion without undoing track order");
+    session.redo(); refresh();
+    insertDeviceSelection (pendingDeviceGeneration, pendingDeviceTrack, 100001, {}); refresh();
+    check (state.tracks[1].plugins.size() == 2 && state.tracks[1].plugins.back().isUtility && state.tracks[0].plugins.empty(),
+        "pending Utility selection uses the same stable track resolution");
+    check (session.removeTrack (1).wasOk() && session.addAudioTrack ("Replacement").wasOk(), "replace the pending target's former row"); refresh();
+    insertDeviceSelection (pendingDeviceGeneration, pendingDeviceTrack, 100002 + static_cast<int> (Session::EffectKind::limiter), {}); refresh();
+    check (state.tracks[1].id != pendingDeviceTrackId && state.tracks[1].plugins.empty(), "stale device menu cannot insert into a replacement track");
+    check (session.newProject().wasOk(), "replace the project before resolving an old menu"); refresh();
+    insertDeviceSelection (pendingDeviceGeneration, pendingDeviceTrack, 100002 + static_cast<int> (Session::EffectKind::gate), {}); refresh();
+    check (!state.dirty && !session.canUndo() && !session.canRedo() && state.tracks[0].plugins.empty() && state.tracks[1].plugins.empty(),
+        "missing device-menu target preserves a clean replacement project and its history");
+    check (state.projectGeneration != pendingDeviceGeneration, "New changes transient project identity even if track IDs repeat");
+    const auto savedGeneration = state.projectGeneration; const auto savedTrackId = state.tracks[0].id;
+    juce::TemporaryFile menuProject (".halftrack");
+    check (session.saveProject (menuProject.getFile()).wasOk() && session.snapshot().projectGeneration == savedGeneration,
+        "Save As preserves the active project instance");
+    check (session.loadProject (audioFixture).failed() && session.snapshot().projectGeneration == savedGeneration,
+        "rejected load preserves the active project instance");
+    check (session.loadProject (menuProject.getFile()).wasOk(), "reopen identical track IDs in a replacement edit"); refresh();
+    check (state.tracks[0].id == savedTrackId && state.projectGeneration != savedGeneration,
+        "successful load changes project instance while preserving saved track identity");
+    insertDeviceSelection (savedGeneration, savedTrackId, 100001, {}); refresh();
+    check (!state.dirty && !session.canUndo() && state.tracks[0].plugins.empty(), "old menu cannot modify a reopened project with identical track IDs");
+    insertDeviceSelection (state.projectGeneration, savedTrackId, 100002 + static_cast<int> (Session::EffectKind::gate), {}); refresh();
+    check (state.tracks[0].plugins.size() == 1 && state.tracks[0].plugins[0].effect.kind == Session::EffectKind::gate,
+        "fresh menu still inserts after a project replacement");
 
 
 
