@@ -63,10 +63,40 @@ struct VirtualController
     {
         // Activate the rebuilt monitoring graph before delivering a controller event.
         pumpSyntheticTestDevice (session, 4);
+        struct DeliveryProbe final : te::InputDeviceInstance::Consumer
+        {
+            int noteOns = 0;
+            void handleIncomingMidiMessage (const juce::MidiMessage& message, te::MPESourceID) override
+            { if (message.isNoteOn()) ++noteOns; }
+        } probe;
+        std::vector<juce::WeakReference<te::InputDeviceInstance>> observed;
+        auto& engine = dynamic_cast<te::DeviceManager::TracktionEngineAudioDeviceManager&> (session.audioDeviceManager()).engine;
+        int targets = 0, monitoring = 0;
+        for (auto* edit : engine.getActiveEdits().getEdits())
+            for (auto* input : edit->getAllInputDevices())
+                if (&input->getInputDevice() == midi.get())
+                {
+                    observed.emplace_back (input); input->addConsumer (&probe);
+                    for (auto id : input->getTargets())
+                    {
+                        ++targets;
+                        if (auto* track = te::findTrackForID (*edit, id); track && input->isLivePlayEnabled (*track)) ++monitoring;
+                    }
+                }
         sendNow (juce::MidiMessage::noteOn (1, 69, (juce::uint8) 96));
         const float peak = pumpSyntheticTestDevice (session, 20);
         sendNow (juce::MidiMessage::noteOff (1, 69));
         pumpSyntheticTestDevice (session, 30);
+        int retained = 0;
+        for (auto input : observed) if (input) { ++retained; input->removeConsumer (&probe); }
+        std::cout << "MIDI probe: peak=" << peak << " enabled=" << midi->isEnabled()
+            << " native-mode=" << (int) midi->getMonitorMode() << " instances=" << observed.size()
+            << " retained=" << retained << " targets=" << targets << " monitoring=" << monitoring
+            << " delivered-note-ons=" << probe.noteOns;
+        for (const auto& track : session.snapshot().tracks)
+            if (track.isMidi) std::cout << " [mode=" << (int) track.monitor << " arm=" << track.armed
+                << " input=" << (track.inputName == name) << " mute=" << track.mute << " gain=" << track.gainDb << "]";
+        std::cout << std::endl;
         return peak;
     }
 };
@@ -108,6 +138,14 @@ void immediateMonitoringTransitions()
             f.controller.sendNow (juce::MidiMessage::noteOn (1, 69, (juce::uint8) 96));
         }
         if (cycle == 1 || cycle == 2) { juce::Thread::sleep (160); juce::Time::getMillisecondCounter(); }
+        if (cycle == 3)
+        {
+            pumpSyntheticTestDevice (f.session, 4);
+            auto& engine = dynamic_cast<te::DeviceManager::TracktionEngineAudioDeviceManager&> (f.session.audioDeviceManager()).engine;
+            for (int rebuild = 0; rebuild < 3; ++rebuild)
+                for (auto* edit : engine.getActiveEdits().getEdits())
+                { edit->restartPlayback(); edit->dispatchPendingUpdatesSynchronously(); }
+        }
         f.controller.sendNow (juce::MidiMessage::noteOn (1, 72, (juce::uint8) 96));
         const auto peak = pumpSyntheticTestDevice (f.session, 20);
         check (peak > .001f, "first key after enabling monitoring is audible; peak=" + juce::String (peak, 9));
@@ -148,11 +186,13 @@ void selectionAndMonitoring()
     check (f.note() < 1e-7f, "Auto suppresses an unarmed track");
     ok (session.setTrackArmed(2,true), "arm MIDI track");
     check (f.note() > .001f, "Auto monitors the armed MIDI track");
-    session.undo();check(!session.snapshot().tracks[2].armed && f.note()<1e-7f,"record-arm undo also disables Auto monitoring");
-    session.redo();check(session.snapshot().tracks[2].armed && f.note()>.001f,"record-arm redo restores Auto monitoring");
+    session.undo(); check (!session.snapshot().tracks[2].armed, "record-arm undo restores model state");
+    check (f.note() < 1e-7f, "record-arm undo also disables Auto monitoring");
+    session.redo(); check (session.snapshot().tracks[2].armed, "record-arm redo restores model state");
+    check (f.note() > .001f, "record-arm redo restores Auto monitoring");
     ok(session.setTrackMonitor(2,Session::MonitorMode::off),"disable monitored MIDI");
-    session.undo();check(session.snapshot().tracks[2].monitor==Session::MonitorMode::automatic && f.note()>.001f,
-        "monitor undo restores both model and actual MIDI routing");
+    session.undo(); check (session.snapshot().tracks[2].monitor == Session::MonitorMode::automatic, "monitor undo restores model state");
+    check (f.note() > .001f, "monitor undo restores actual MIDI routing");
     juce::MessageManager::getInstance()->runDispatchLoopUntil(1200);
     check(session.canRedo(),"monitor redo remains available after idle timers");
     session.redo();check(session.snapshot().tracks[2].monitor==Session::MonitorMode::off,"monitor redo restores model mode");

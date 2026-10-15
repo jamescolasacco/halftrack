@@ -596,3 +596,9 @@ The companion audio fixture requires its own collected-file reader registration;
 
 
 Final deterministic follow-action suite passes in **5.50 s**, including running edits/undo/redo, cancellation by Off, an independently audible companion track, fractional replay phase, sparse-slot navigation/end stops/cycling, bar-queued initial launch, 60/120/240 BPM MIDI voice transitions, one-step and branched history, scene copies, portable reload, invalid-state preservation and export rejection. Production UI passes **6.11 s**; launcher and Session regression suites pass **5.54 s** and **61.24 s** on this production source. No new DSP or dependency patch is needed. Weighted/random and scene-level follow behavior remain missing.
+
+
+Monitoring diagnostic ownership: root adds generated-input observations that distinguish restored model state, native route enablement, device-instance delivery and actual audio after undo/redo. A slower 35-ms dispatch run of the published `121cd89` package still passes, so host delay alone has not reproduced the remaining Mac CI symptom. A graph-replacement-before-key case will test the gap between preparation and callback ownership without changing existing audible/silent requirements. No production fix is inferred from the diagnostic observations.
+
+
+Test-only monitoring diagnostics and the replacement-graph first-key case pass in **19.19 s** locally. The slower 35-ms dispatch run of the published package also passes. The underlying CI-only history failure remains unresolved; the next run now distinguishes model restoration, input-route enablement, consumer delivery, instance replacement and output. No speculative production change is made from the unconfirmed graph-lifetime hypothesis.
