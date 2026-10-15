@@ -1,6 +1,6 @@
 # Recorded implementation coverage
 
-Current implementation checkpoint: native Peak Limiter, 2026-10-15. **37 of 246 tracked active feature areas have partial implementation evidence: 15.0%.** None of these broad rows establishes complete measured reference parity.
+Current implementation checkpoint: track volume and pan automation, 2026-10-15. **38 of 246 tracked active feature areas have partial implementation evidence: 15.4%.** None of these broad rows establishes complete measured reference parity.
 
 This is recorded partial coverage, not percentage finished, remaining engineering time, or a weighted feature score. The initial inventory is not exhaustive, some existing behavior is recorded only in preview rows, and items vary greatly in size. Static decompiler coverage uses a different denominator and must never be reported as application completion.
 
@@ -8,7 +8,7 @@ This is recorded partial coverage, not percentage finished, remaining engineerin
 
 The [capability ledger](feature-parity.md) has 275 identified rows. Excluding PRE preview-check rows, OUT scope/watchlist rows, EXT programmable-environment rows and rows explicitly OUT OF SCOPE leaves 246 active rows. Count each active row whose status contains PARTIAL once. No fractional credit or estimated effort weighting is assigned.
 
-The partial rows are REC-003/005/008, ARR-003/005/006/008/009/011/012, SES-001/002/004/008, WRP-001, MID-001/002/006/012, MIX-001/003/007, PRJ-002/005/006/012, UX-001/002, QA-003 and AFX-009/011/015/020/024/030/032/040. The [progress log](progress.md), ledger and per-feature contracts record what each actually does and what remains missing.
+The partial rows are REC-003/005/008, ARR-003/005/006/008/009/011/012, SES-001/002/004/008, WRP-001, MID-001/002/006/012, MIX-001/003/007/013, PRJ-002/005/006/012, UX-001/002, QA-003 and AFX-009/011/015/020/024/030/032/040. The [progress log](progress.md), ledger and per-feature contracts record what each actually does and what remains missing.
 
 Before audio editing, source `b342496` had 19 partial rows with the same denominator: 7.7%. The six added rows are ARR-003/005/006/008/012 and WRP-001. Their evidence and boundaries are in the [audio-editing contract](research/audio-clip-editing-contract.md). Timeline gestures improve those existing rows without increasing their count.
 
@@ -41,3 +41,5 @@ The original Bitcrusher adds bounded partial coverage for AFX-030: 35/246 (14.2%
 The original Noise Gate adds bounded partial coverage for AFX-020: 36/246 (14.6%). This records tested basic dynamics behavior; it does not certify complete reference parity or weight engineering work by row size.
 
 The original Peak Limiter adds bounded partial coverage for AFX-024: 37/246 (15.0%). Tested sample peaks and native latency compensation do not certify true-peak behavior, complete device parity or overall application completion.
+
+Graphical track volume and pan automation adds bounded partial coverage for MIX-013: 38/246 (15.4%). Generated audio, editing, history and project tests cover these two native mixer targets. This does not establish other targets, capture/override, curved segments or complete reference parity.

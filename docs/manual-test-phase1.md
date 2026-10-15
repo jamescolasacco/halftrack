@@ -309,3 +309,17 @@ Add Noise Gate to a playing track. Raise Threshold until quieter parts close, th
 ## Peak limiter (about one minute)
 
 Add Peak Limiter to a track and open its editor. Raise Input gain and lower Peak ceiling; loud peaks should stay controlled. Adjust Release to hear the gain recover at different speeds. Undo/redo a drag and save/reopen to check all three controls. Export a short clip and confirm its first and last sounds remain present and aligned with an unprocessed companion track. Bypass restores the original unprocessed level.
+
+
+## Track volume and pan automation
+
+These checks are NOT RUN until a person completes them on the candidate build. Use a disposable project and generated audio, or a held chord from the built-in synth. This editor changes mixer envelopes over arrangement time; it does not capture fader gestures or automate third-party devices.
+
+1. Select a sounding track and choose **View → Track Automation**, or the **Automation** button above the device chain. Keep the modeless editor open while starting playback in the main window.
+2. Choose Volume. Click at two different beats and levels; drag one point. The curve and sound should change together. Undo once must reverse the entire drag, and redo must restore it. Confirm that the selected track's manual volume fader is disabled while points exist; pan remains available.
+3. Choose Pan. Draw a left-to-right move and listen with headphones or inspect a stereo export. Switch back to Volume and confirm its points remain. Read off must retain points while using the saved manual setting; it does not discard the curve. Clear restores manual editing, and undo restores the curve.
+4. Change the project tempo; verify that points stay at the same beats. Save, close the editor, reopen the project, and open Automation again. Both lanes, their read settings and rendered behavior should persist.
+5. Reorder or duplicate the track and confirm its curves remain associated with the correct track. While an editor is open, open a new project or reload the saved one. The old editor must stop editing; opening a fresh editor must work.
+6. Resize the editor, zoom/scroll, delete a point, and undo/redo it. Close it while playback continues; the music must continue and the main window must remain usable.
+
+Record native pointer delivery and actual listening separately from automated pointer-handler and offline-render tests. Volume interpolation uses the engine's fader scale; it is not a straight decibel ramp. Automation recording, arbitrary plug-in parameters, master/send envelopes, clip envelopes and curved/weighted shapes remain outside this implementation.

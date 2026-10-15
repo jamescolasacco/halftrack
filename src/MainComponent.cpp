@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "AudioClipEditor.h"
+#include "AutomationEditor.h"
 #include "NativeEffects.h"
 #include "Session.h"
 
@@ -265,6 +266,7 @@ public:
         session.removeChangeListener (this);
         session.knownPlugins().removeChangeListener (this);
         session.closePluginEditors();
+        for (auto& window : automationWindows) if (window != nullptr) delete window.getComponent();
         for (auto& dialog : dialogs) if (dialog != nullptr) delete dialog.getComponent();
         for (auto& alert : alerts) if (alert != nullptr) delete alert.getComponent();
        #if JUCE_MAC
@@ -545,16 +547,24 @@ private:
             };
             arm.setColour (juce::TextButton::buttonOnColourId, red);
             gain.setSliderStyle (juce::Slider::LinearHorizontal);
-            gain.setRange (-60.0, 12.0, 0.1);
+            gain.setName ("Track volume"); gain.setRange (-100.0, 6.0, 0.1);
+            gain.setSkewFactorFromMidPoint (-12);
             gain.setTextBoxStyle (juce::Slider::TextBoxRight, false, 46, 21);
             gain.setDoubleClickReturnValue (true, 0);
-            gain.setTextValueSuffix (" dB");
+            gain.textFromValueFunction = [] (double value) { return value <= -100 ? juce::String ("-inf") : juce::String (value, 1) + " dB"; };
+            gain.valueFromTextFunction = [this] (juce::String text)
+            {
+                text = text.trim(); if (text.endsWithIgnoreCase ("dB")) text = text.dropLastCharacters (2).trim();
+                if (text.equalsIgnoreCase ("-inf")) return -100.0;
+                const auto input = text.toStdString(); char* end = nullptr; const auto value = std::strtod (input.c_str(), &end);
+                return !input.empty() && end == input.c_str() + input.size() && std::isfinite (value) ? value : gain.getValue();
+            };
             gain.setTooltip ("Track volume. Double-click to reset to 0 dB.");
             gain.onDragStart = [this] { owner.session.beginEditGesture ("Track volume"); };
             gain.onDragEnd = [this] { owner.session.endEditGesture(); };
             gain.onValueChange = [this] { owner.report (owner.session.setTrackGain (index, (float) gain.getValue())); };
             pan.setSliderStyle (juce::Slider::LinearHorizontal);
-            pan.setRange (-1.0, 1.0, 0.01);
+            pan.setName ("Track pan"); pan.setRange (-1.0, 1.0, 0.01);
             pan.setTextBoxStyle (juce::Slider::TextBoxRight, false, 34, 21);
             pan.setDoubleClickReturnValue (true, 0);
             pan.textFromValueFunction = [] (double v) { return std::abs (v) < 0.01 ? juce::String ("C") : juce::String ((int) std::round (std::abs (v) * 100.0)) + (v < 0 ? "L" : "R"); };
@@ -590,6 +600,12 @@ private:
             if (! name.isBeingEdited()) name.setText (track.name, juce::dontSendNotification);
             if (! gain.isMouseButtonDown()) gain.setValue (track.gainDb, juce::dontSendNotification);
             if (! pan.isMouseButtonDown()) pan.setValue (track.pan, juce::dontSendNotification);
+            gain.setEnabled (track.volumeAutomation.points.empty() && !owner.session.isExporting());
+            pan.setEnabled (track.panAutomation.points.empty() && !owner.session.isExporting());
+            gain.setTooltip (track.volumeAutomation.points.empty() ? "Track volume. Double-click to reset to 0 dB."
+                : "Volume has automation. Edit or clear its lane in Automation.");
+            pan.setTooltip (track.panAutomation.points.empty() ? "Track pan. Double-click to center."
+                : "Pan has automation. Edit or clear its lane in Automation.");
             mute.setToggleState (track.mute, juce::dontSendNotification);
             solo.setToggleState (track.solo, juce::dontSendNotification);
             arm.setToggleState (track.armed, juce::dontSendNotification);
@@ -2391,10 +2407,13 @@ private:
     public:
         explicit DeviceChain (Impl& o) : owner (o), synthPanel (o), sendsPanel (o)
         {
-            addAndMakeVisible (addButton); addAndMakeVisible (manageButton); addAndMakeVisible (synthClip); addAndMakeVisible (sendsPanel);
+            addAndMakeVisible (addButton); addAndMakeVisible (manageButton); addAndMakeVisible (automationButton); addAndMakeVisible (synthClip); addAndMakeVisible (sendsPanel);
             synthClip.addAndMakeVisible (synthPanel); synthClip.setInterceptsMouseClicks (false, true);
             addButton.onClick = [this] { owner.addPluginMenu(); };
             manageButton.onClick = [this] { owner.showPlugins(); };
+            automationButton.setName ("Track automation");
+            automationButton.setTooltip ("Draw track volume and pan changes across the arrangement.");
+            automationButton.onClick = [this] { owner.showAutomation(); };
             addAndMakeVisible(masterGain);masterGain.setName("Master volume");
             masterGain.setSliderStyle(juce::Slider::LinearVertical);masterGain.setRange(-100,6,.1);masterGain.setSkewFactorFromMidPoint(-12);
             masterGain.setTextBoxStyle(juce::Slider::TextBoxBelow,false,49,20);masterGain.setDoubleClickReturnValue(true,0);
@@ -2416,6 +2435,7 @@ private:
             masterGain.setBounds(getWidth()-98,36,49,getHeight()-46);
             manageButton.setBounds (getWidth() - 212, 8, 94, 24);
             addButton.setBounds (getWidth() - 320, 8, 101, 24);
+            automationButton.setBounds (getWidth() - 427, 8, 100, 24);
             sendsPanel.setBounds (9, 39, 232, getHeight() - 48);
             synthClip.setBounds (chainLeft(), 39, getWidth() - chainLeft() - 114, getHeight() - 48);
             synthPanel.setBounds (5 - offset, 5, 536, getHeight() - 59);
@@ -2427,6 +2447,7 @@ private:
             sendsPanel.sync();
             if(!masterGain.isMouseButtonDown())masterGain.setValue(owner.state.masterGainDb,juce::dontSendNotification);
             masterGain.setEnabled(!owner.session.isExporting());
+            automationButton.setEnabled (track != nullptr && !owner.session.isExporting());
             offset = juce::jlimit (0, juce::jmax (0, total - getWidth() + chainLeft() + 141), offset);
             synthPanel.sync(); resized(); repaint();
         }
@@ -2437,7 +2458,7 @@ private:
             g.setColour (muted); g.setFont (font (10.0f, true));
             const auto* track = owner.currentTrack();
             auto title = track == nullptr ? juce::String ("DEVICE CHAIN") : "DEVICE CHAIN  /  " + track->name.toUpperCase();
-            g.drawText (title, 14, 8, juce::jmax (150, getWidth() - 350), 24, juce::Justification::centredLeft);
+            g.drawText (title, 14, 8, juce::jmax (150, getWidth() - 455), 24, juce::Justification::centredLeft);
             addButton.setEnabled (track != nullptr);
             g.saveState(); g.reduceClipRegion (chainLeft(), 39, getWidth() - chainLeft() - 114, getHeight() - 48);
             if (track == nullptr || (! track->isMidi && track->plugins.empty()))
@@ -2521,7 +2542,7 @@ private:
         }
     private:
         Impl& owner;
-        juce::TextButton addButton { "+ Device" }, manageButton { "Manage..." };
+        juce::TextButton addButton { "+ Device" }, manageButton { "Manage..." }, automationButton { "Automation" };
         SynthPanel synthPanel;
         juce::Slider masterGain;
         juce::Component synthClip;
@@ -2574,6 +2595,7 @@ private:
     juce::ScrollBar horizontalScroll { false };
     std::unique_ptr<juce::FileChooser> chooser;
     std::vector<juce::Component::SafePointer<juce::DialogWindow>> dialogs;
+    std::vector<juce::Component::SafePointer<juce::DocumentWindow>> automationWindows;
     std::vector<juce::Component::SafePointer<juce::AlertWindow>> alerts;
     juce::Rectangle<int> toolbarBounds, browserBounds, sectionBounds;
     std::vector<BrowserItem> browserItems, allBrowserItems;
@@ -3094,7 +3116,7 @@ private:
         }
         else if (index == 3)
         {
-            popup.addItem (45, "Session"); popup.addItem (43, "Arrangement"); popup.addItem (44, "Piano Roll"); popup.addSeparator();
+            popup.addItem (45, "Session"); popup.addItem (43, "Arrangement"); popup.addItem (44, "Piano Roll"); popup.addItem (46, "Track Automation...", currentTrack() != nullptr); popup.addSeparator();
             const bool canZoom = ! showSession || showPiano;
             popup.addItem (40, showPiano ? "Fit Piano Roll" : "Fit Arrangement", canZoom); popup.addItem (41, "Zoom In", canZoom); popup.addItem (42, "Zoom Out", canZoom);
         }
@@ -3152,6 +3174,7 @@ private:
             case 54: report (session.stopAllLauncherClips()); break;
             case 55: report (session.returnToArrangement()); break;
             case 44: openPianoRoll(); break;
+            case 46: showAutomation(); break;
             default: break;
         }
         refresh();
@@ -3493,6 +3516,33 @@ private:
             for (int c=0;c<(int)state.tracks[(size_t)t].clips.size();++c)
                 if (state.tracks[(size_t)t].clips[(size_t)c].id == id)
                 { selectTrack(t);selectedClip=c;selectedLauncherClipId.clear();canvas.repaint();return; }
+    }
+    void showAutomation()
+    {
+        if (session.isExporting()) return;
+        refresh();
+        const auto* track = currentTrack();
+        if (track == nullptr) return;
+        // A modeless window keeps the arrangement transport available while editing.
+        class Window final : public juce::DocumentWindow
+        {
+        public:
+            Window (Session& session, const juce::String& trackId, juce::LookAndFeel& theme, juce::Component& parent)
+                : DocumentWindow ("Halftrack - Track Automation", panel, juce::DocumentWindow::closeButton)
+            {
+                setLookAndFeel (&theme);
+                setUsingNativeTitleBar (true);
+                setResizable (true, false);
+                setResizeLimits (820, 420, 2400, 1600);
+                setContentOwned (new AutomationEditor (session, trackId), true);
+                centreAroundComponent (&parent, 900, 460);
+                setVisible (true);
+            }
+            ~Window() override { clearContentComponent(); setLookAndFeel (nullptr); }
+            void closeButtonPressed() override { delete this; }
+        };
+        std::erase_if (automationWindows, [] (const auto& window) { return window == nullptr; });
+        automationWindows.emplace_back (new Window (session, track->id, theme, *this));
     }
     void showAudioSettings()
     {
@@ -4612,6 +4662,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             editor.grabKeyboardFocus();
             juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
         }
+        if (! editor.hasKeyboardFocus (true))
+        {
+            const auto* focused = juce::Component::getCurrentlyFocusedComponent();
+            std::cerr << "Focus diagnostic: foreground=" << juce::Process::isForegroundProcess()
+                << " activeWindow=" << focusWindow.isActiveWindow()
+                << " editorShowing=" << editor.isShowing() << " editorEnabled=" << editor.isEnabled()
+                << " modalCount=" << juce::Component::getNumCurrentlyModalComponents()
+                << " focused=" << (focused ? focused->getName().toStdString() : "none") << std::endl;
+        }
         check (editor.hasKeyboardFocus (true), "native text entry receives real keyboard focus for shortcut isolation");
         check (! pianoRoll.keyPressed (copyNotes) && ! pianoRoll.keyPressed (cutNotes)
                    && ! pianoRoll.keyPressed (pasteNotes) && ! pianoRoll.keyPressed (duplicateNotes)
@@ -5289,6 +5348,50 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     insertDeviceSelection (state.projectGeneration, savedTrackId, 100002 + static_cast<int> (Session::EffectKind::gate), {}); refresh();
     check (state.tracks[0].plugins.size() == 1 && state.tracks[0].plugins[0].effect.kind == Session::EffectKind::gate,
         "fresh menu still inserts after a project replacement");
+    selectTrack (0); refresh();
+    auto* automationRow = canvas.getChildComponent (0);
+    auto* automatedGain = dynamic_cast<juce::Slider*> (findNamed (*automationRow, "Track volume"));
+    auto* automatedPan = dynamic_cast<juce::Slider*> (findNamed (*automationRow, "Track pan"));
+    check (automatedGain && automatedPan && automatedGain->isEnabled() && automatedPan->isEnabled()
+        && automatedGain->getMaximum() == 6.0 && automatedGain->getMinimum() == -100.0,
+        "manual mixer controls match the native gain range including silence");
+    automatedGain->setValue (-100, juce::sendNotificationSync); refresh();
+    check (state.tracks[0].gainDb <= -100 && automatedGain->getTextFromValue (-100) == "-inf",
+        "manual fader reaches actual silence with a matching readout");
+    automatedGain->setValue (0, juce::sendNotificationSync); refresh();
+    const auto automationTrackId = state.tracks[0].id;
+    check (session.setTrackAutomation (automationTrackId, Session::AutomationTarget::volume,
+        { true, {{0, -18}, {4, 0}} }).wasOk(), "prepare a real automation lane for mixer integration"); refresh();
+    check (!automatedGain->isEnabled() && automatedPan->isEnabled(), "volume automation protects only its matching manual fader");
+    check (session.setTrackAutomation (automationTrackId, Session::AutomationTarget::volume,
+        { false, {{0, -18}, {4, 0}} }).wasOk(), "bypass automation without deleting its points"); refresh();
+    check (!automatedGain->isEnabled(), "bypassed lane remains protected until its points are cleared");
+    check (session.setTrackAutomation (automationTrackId, Session::AutomationTarget::volume, {}).wasOk(),
+        "clear automation from the selected mixer"); refresh();
+    check (automatedGain->isEnabled(), "clearing the lane restores manual volume editing");
+    session.undo(); refresh();
+    check (!automatedGain->isEnabled(), "undo clear restores the matching fader protection");
+    session.redo(); refresh();
+    check (automatedGain->isEnabled(), "redo clear restores manual control");
+    menuItemSelected (46, 3);
+    check (!automationWindows.empty() && automationWindows.back() != nullptr,
+        "View menu opens an automation editor for the selected track");
+    auto* automationWindow = automationWindows.back().getComponent();
+    check (dynamic_cast<AutomationEditor*> (automationWindow->getContentComponent()) != nullptr
+           && !automationWindow->isCurrentlyModal(), "automation editor leaves main transport interactive");
+    automationWindow->closeButtonPressed();
+    check (automationWindows.back() == nullptr, "automation editor close releases its window safely");
+    auto* automationButton = dynamic_cast<juce::Button*> (findNamed (deviceChain, "Track automation"));
+    check (automationButton && automationButton->isEnabled(), "device chain exposes enabled automation control");
+    auto* automationHit = getComponentAt (getLocalPoint (automationButton, automationButton->getLocalBounds().getCentre()));
+    check (automationHit == automationButton || automationButton->isParentOf (automationHit),
+        "automation button receives real pointer hits without a covering component");
+    automationButton->onClick();
+    check (automationWindows.size() == 1 && automationWindows.back() != nullptr,
+        "device chain button opens an editor and removes expired window handles");
+    automationWindows.back()->closeButtonPressed();
+
+
 
 
 

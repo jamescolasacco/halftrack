@@ -196,7 +196,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | MIX-010 | Drum racks | Test pads, choke behavior, chain routing, independent outputs, and extraction without stuck voices. | NOT IMPLEMENTED / UNVERIFIED |
 | MIX-011 | Key/velocity/selector zones | Test overlaps, boundaries, fades, distribution, and modulation of chain selection. | NOT IMPLEMENTED / UNVERIFIED |
 | MIX-012 | Macros and variations | Map ranges, invert mappings, store/recall variations, randomize, automate, and reopen. | NOT IMPLEMENTED / UNVERIFIED |
-| MIX-013 | Automation editing | Create, type, draw, curve, scale, simplify, copy, and delete envelopes with meaningful undo units. | NOT IMPLEMENTED / UNVERIFIED |
+| MIX-013 | Automation editing | Create, type, draw, curve, scale, simplify, copy, and delete envelopes with meaningful undo units. | PARTIAL — graphical track volume/pan point editing, snapping, read bypass, native gesture undo, beat anchoring, duplicate/delete history and portable projects; generated audio/editor tests pass locally. Curved segments, scaling, simplification, clipboard, device/send/master targets and measured reference parity remain missing. |
 | MIX-014 | Automation capture/override | Record from UI/controller, override playback, re-enable it, and resolve Session versus Arrangement ownership. | NOT IMPLEMENTED / UNVERIFIED |
 | MIX-015 | Clip modulation | Test linked/unlinked envelope loops, parameter scaling, automation interaction, and device replacement. | NOT IMPLEMENTED / UNVERIFIED |
 | MIX-016 | Tempo automation | Render tempo steps and curves; verify audio/MIDI scheduling and time-to-sample conversion. | NOT IMPLEMENTED / UNVERIFIED |

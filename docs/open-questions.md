@@ -154,3 +154,6 @@ Noise Gate default: linked peak detection with linear, frame-counted attack/hold
 Peak Limiter default: fixed one-millisecond lookahead rounded up to whole frames, linked stereo sample peaks, immediate attenuation and one-pole release. Expose gain, ceiling and release only; native plugin bypass handles the unprocessed path. True-peak/oversampling, adaptive release and selectable lookahead remain separate work.
 
 Pending device insertion belongs to the project instance and track that opened the menu. Track reordering/selection changes retain that target; successful New/Load invalidates it even if saved track IDs repeat. Save As and failed loads retain the instance. The transient generation token is not a project-schema field.
+
+
+- Initial automation scope: provide editable arrangement-time track volume and pan curves through the native mixer before adding write/touch/latch recording or third-party parameter automation. Default interpolation follows native fader coordinates for volume and linear pan; disabled lanes retain their points, and empty lanes use manual settings. Beat positions follow tempo edits. The UI has its own resizable editor, with a stable project identity. This is a scoped working feature, not a claim of complete automation parity.

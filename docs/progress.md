@@ -1,6 +1,6 @@
 # Halftrack progress
 
-Updated 2026-10-15. The combined mono/normalization export, Bitcrusher, Noise Gate and Peak Limiter implementation passes all **24 local Mac acceptance suites in 381.19 s**. The expanded host test also verifies driven limiter gain reduction and passes the complete native-effect suite in **49.37 s**. Published export checkpoint `62e2fed` passes [macOS, Windows and Linux CI](https://github.com/jamescolasacco/halftrack/actions/runs/38736655759); the three following device commits and asynchronous insertion fix are locally verified and await their cross-platform run. The earlier intermittent Mac MIDI history failure did not recur in the last two CI runs, but its cause is not isolated. Complete DAW parity and reference-exact sound remain unmeasured.
+Updated 2026-10-15. Track volume/pan automation and its original graphical editor now pass focused audio, editing, persistence, tempo and history tests. The combined 26-suite local run is in progress. Its earlier main-window run exposed a macOS focus failure: the test editor is visible and enabled, but the application is not active; the real keyboard-focus assertion remains intact. MIDI consumer-retirement fix `c91a69d` passes clean builds, tests and source-inclusive packaging on all three platforms in [CI 38759969102](https://github.com/jamescolasacco/halftrack/actions/runs/38759969102). The prior complete local device/export run passed 24 suites in 381.19 s. Complete DAW parity and reference-exact sound remain unmeasured.
 
 Static analysis independently verifies **392,921 / 392,926** main-program ARM64 outputs (three preparation failures and two 600-second timeouts remain) and **36,596 / 36,599** scanner outputs (three preparation failures remain). All **13,420** declared entries across seven additional device components and two architectures previously produced verified output. [Residual analysis](research/residual-extraction-recovery.md) and [component coverage](research/additional-component-audit.md) retain unresolved entries and fingerprints. Extraction coverage is not feature completion; Halftrack remains an incomplete DAW with the gaps below.
 
@@ -9,7 +9,8 @@ Scanner follow-up `5580373` passes [clean builds, tests and packaging on all thr
 ## Working and evidenced
 
 - Repository/folder named Halftrack, original SVG identity, AGPL-3.0-only source, pinned C++20/JUCE 8/Tracktion build.
-- Native audio arrangement, generated-source waveforms, playback, mixer gain/pan/mute/solo, input assignment/monitoring, recording, owned media, atomic XML projects, VST3 hosting, offline WAV export.
+- Native audio arrangement, generated-source waveforms, playback, mixer gain/pan/mute/solo, input assignment/monitoring, recording, owned media, atomic XML projects, VST3 hosting, offline WAV/AIFF/FLAC export with mono and peak-normalization options.
+- Track volume/pan automation: graphical and numeric point editing, snapping, native gesture undo, read bypass, retained manual values, tempo remapping, track copying and portable reopen. Focused generated-audio and editor tests pass; complete integration verification is in progress.
 - Eight-band EQ, linked peak/RMS compression, stereo/ping-pong delay with tempo divisions, and an original room reverb: real DSP, native editors, chain order/bypass/remove, project save/reopen, grouped undo, complete-file audio/tail oracles and owned callback guards. Advanced controls and reference sound matching remain incomplete.
 - Eight MIDI note tools: quantize starts/ends, reverse, pitch inversion, legato, halve/double timing and fixed length; selected notes or whole-clip UI operation, atomic bounds rejection, stable selection, undo/redo and project tests.
 - Insertable channel Utility: gain/balance, width/mid-side, channel selection/polarity, mono/bass mono/audition, mute/DC filtering, native editor and device ordering. Complete-file render, project and undo regressions pass locally. Reference numerical identity remains unmeasured.
@@ -31,7 +32,7 @@ Scanner follow-up `5580373` passes [clean builds, tests and packaging on all thr
 
 ## Missing, not stubbed controls
 
-Additional Session launch modes, weighted/random/scene follow actions, Session recording, full MIDI expression, automation, send automation and advanced routing/racks, full native effect/instrument inventory, CLAP hosting, full stretch/warp editor, hardware stress tests, crash recovery, and cross-platform GUI certification are not complete. No completion claim is based on a control being drawn. Existing unsupported controls are omitted rather than wired to fake processing.
+Additional Session launch modes, weighted/random/scene follow actions, Session recording, full MIDI expression, device/master/send automation, automation recording/override, curved envelope editing and advanced routing/racks, full native effect/instrument inventory, CLAP hosting, full stretch/warp editor, hardware stress tests, crash recovery, and cross-platform GUI certification are not complete. No completion claim is based on a control being drawn. Existing unsupported controls are omitted rather than wired to fake processing.
 
 ## Known issues / verification remaining
 
@@ -642,3 +643,25 @@ The device-menu regression failed against the original row-index callback in **9
 The stable-track fix passes reorder/deletion but its new-project test fails in **7.55 s**: native track IDs can recur in a different edit. Root also owns the narrow Session snapshot generation field and successful New/Load increments needed to distinguish project instances. This token is transient, not project content or undo state.
 
 The project-generation/device-menu fix passes production UI and Session acceptance in **71.38 s** (9.96/61.41 s). The final rebuilt UI suite passes in **6.99 s**. The original row-index regression and the separate new-project ID-reuse case both failed before their respective corrections. Reorder, deletion/replacement, identical-ID reload, Save As, rejected load, insertion undo and fresh post-load insertion now pass. No project schema change or extra undo entry is introduced.
+
+MIDI monitoring diagnosis ownership: the MIDI agent owns `tests/MidiInputTests.cpp`, the narrowly scoped pinned MIDI-node patch, and diagnosis documentation. Root retains Session/UI ownership. Latest Mac CI fails a held input after a monitoring transition; delivery probes passed earlier transitions. A controlled replacement-node lifetime regression will establish whether an active-consumer pointer can outlive its node before any production correction. Native builds/tests are serialized with root.
+
+
+Automation integration ownership: root owns MainComponent entry points, CMake/test dispatch, integration checks, architecture/manual documentation and publication. The automation engine agent owns Session.h/.cpp and AutomationTests.cpp; the automation UI agent owns AutomationEditor.h/.cpp and production pointer-event tests. The MIDI agent independently owns the monitoring regression/diagnosis. Native test processes and builds are serialized through root to protect shared test preferences.
+
+Checkpoint `b3a2fcc` passes Linux and Windows CI, but macOS again fails the held-note monitoring case in run `38742088890`. All other 23 Mac suites pass. The monitoring cause remains under investigation; a green local run is not evidence that the intermittent CI failure is resolved.
+
+Automation-editor ownership: UI agent owns new src/AutomationEditor.h/.cpp only, with a graphical volume/pan lane editor and event-driven interaction tests. Root owns MainComponent/CMake integration and final documentation; the engine agent owns the Session automation model. This editor uses stable track IDs and the project-generation token to reject stale gestures.
+
+MIDI consumer lifetime: the new controlled native graph regression fails against the published patch in **3.14 s** because a retired node leaves its identity as the shared input queue owner. Clearing only the retiring owner and atomically claiming a vacancy fixes the established case. The expanded regression and full MIDI monitoring suite pass in **19.49 s** with unchanged thresholds/timeouts. Fresh/repeated/published-upgrade/partial patch fixtures pass, and unknown cpp/header rejection preserves both files. This is a demonstrated lost-key cause; it does not establish that every historical intermittent CI failure has the same cause.
+
+The MIDI input/recording suite also passes in **33.91 s** after the lifetime correction. Native build/test ownership is released to root for automation integration; no concurrent acceptance executable was used.
+
+
+Automation validation: the first run rejected malformed curve values but exposed missing validation of the custom track mixer type. The second run passed the editor in 0.69 s and reproduced single-point track-copy corruption after actual playback. The third run passes native automation (12.41 s), the final editor handlers (0.71 s), tempo (6.51 s), track duplication (6.15 s), and Session (61.40 s). Generated tests cover independent 44.1/48/96 kHz mixer plateaus, a bounded analytic volume ramp, tempo/tap history, retained manual levels, malformed XML/native parameter data, legacy migration, point spacing, and copied one-point envelopes. The initial main-window integration passed in 7.10 s; a later existing native keyboard-focus test failed before automation checks. Its retained diagnostic shows an enabled, visible editor but an inactive application/window, zero modal components and no focused component. Root is investigating launch lifecycle rather than weakening the assertion.
+
+
+Automation lifecycle verification: the strengthened regression dispatches native timers and confirms the removed mixer has actually left the engine plugin cache before undo. Both directions of repeated deletion/history retain curve points and manual levels. The native automation suite passes in **12.09 s**. The same run still fails the separate pre-existing main-window keyboard-focus assertion; deferred startup and normal macOS application launch do not fix it, so those speculative launch changes were reverted.
+
+
+Read-only desktop metadata identifies a visible foreground UserNotificationCenter panel at the macOS modal-panel window level. JUCE activation reads `NSApp.isActive`, consistent with the retained inactive-application diagnostic. No alert content was inspected or system panel dismissed. A rerun after normal panel dismissal is needed to establish causality; the focus assertion is retained and independent CI will exercise it.
