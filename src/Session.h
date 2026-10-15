@@ -66,6 +66,7 @@ public:
         double startBeat = 0, lengthBeats = 0;
         std::vector<MidiNoteInfo> notes;
     };
+    struct LocatorInfo { juce::String id, name; double position = 0; };
     struct SceneInfo { juce::String id, name; };
     struct SlotInfo
     {
@@ -107,6 +108,7 @@ public:
         float masterPeakL = 0, masterPeakR = 0;
         std::vector<TrackInfo> tracks;
         std::vector<SceneInfo> scenes;
+        std::vector<LocatorInfo> locators;
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
     };
 
@@ -172,6 +174,11 @@ public:
     void seek (double seconds);
     void setTempo (double bpm);
     void setLoop (bool enabled, double startSeconds, double endSeconds);
+    juce::Result addLocator (double seconds, const juce::String& name, juce::String& createdId);
+    juce::Result updateLocator (const juce::String& id, const juce::String& name, double seconds);
+    juce::Result removeLocator (const juce::String& id);
+    juce::Result seekLocator (const juce::String& id);
+    juce::Result navigateLocator (bool forward);
     void beginEditGesture (const juce::String& name);
     void endEditGesture();
     void undo();

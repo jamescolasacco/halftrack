@@ -187,3 +187,8 @@ Native input checks are NOT RUN until performed. On a disposable imported clip, 
 ## Cross-track audio dragging
 
 NOT RUN through native input until performed: drag an Arrangement audio clip by its body onto another audio track with a different mixer level. The sound must follow that destination's mixer; gain/fades/source region stay attached to the clip. Undo restores the original owner and timing in one step; redo restores the move. Dragging over MIDI/return rows must not move audio into them. Save and reopen to retain the final track placement.
+
+
+## Named song sections (about one minute)
+
+Native input/audio walkthrough: NOT RUN until performed. In Arrangement, place the playhead and choose **Add locator**. Create two more; click their flags and use Previous/Next to jump between sections without wrapping. Double-click a flag to edit its name and position. Drag it on the grid, then hold Alt for a free position; each complete drag undoes once. Press Delete with the locator selected, undo, and save/reopen to recover the same named positions. Resize the window: the locator buttons must remain in the track header. A marker beyond the end of all clips must not add silence to an export. Shift-drag on the upper ruler still edits the loop range.

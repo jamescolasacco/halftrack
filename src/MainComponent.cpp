@@ -7,6 +7,7 @@
 #include <atomic>
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <cmath>
 #include <map>
@@ -384,6 +385,7 @@ public:
         viewport.setBounds (area);
         canvas.setSize (juce::jmax (1, viewport.getWidth() - 10), juce::jmax (area.getHeight(), (int) state.tracks.size() * trackHeight));
         canvas.resized();
+        ruler.resized(); // Place controls using the final timeline width after window resizing.
         updateScroll();
     }
 
@@ -460,7 +462,7 @@ public:
    #endif
 
 private:
-    static constexpr int browserWidth = 214, trackWidth = 280, trackHeight = 112, rulerHeight = 38,
+    static constexpr int browserWidth = 214, trackWidth = 280, trackHeight = 112, rulerHeight = 60,
                          deviceHeight = 177, statusHeight = 24;
     struct BrowserItem { juce::File file; bool directory = false; };
     struct FolderScan
@@ -1048,64 +1050,183 @@ private:
     class Ruler final : public juce::Component
     {
     public:
-        explicit Ruler (Impl& o) : owner (o) {}
+        explicit Ruler (Impl& o) : owner (o)
+        {
+            setName ("Arrangement ruler and locators"); setWantsKeyboardFocus (true);
+            for (auto* button : { &add, &previous, &next }) { addAndMakeVisible (button); button->setWantsKeyboardFocus (false); }
+            add.setName ("Add locator at playhead"); previous.setName ("Previous locator"); next.setName ("Next locator");
+            add.setTooltip ("Name a song section at the playhead. Double-click a locator to edit it.");
+            previous.setTooltip ("Jump to previous locator"); next.setTooltip ("Jump to next locator");
+            add.onClick = [this] { addAt (owner.session.snapshot().position); };
+            previous.onClick = [this] { navigate (false); }; next.onClick = [this] { navigate (true); };
+        }
+        ~Ruler() override { if (definingLoop || locatorGesture) owner.session.endEditGesture(); }
+        void resized() override
+        {
+            const auto left = owner.canvas.timelineWidth()+12;
+            add.setBounds (left,32,132,22); previous.setBounds (left+142,32,44,22); next.setBounds (left+192,32,44,22);
+        }
+        void sync()
+        {
+            bool exists=false,hasPrevious=false,hasNext=false;
+            for (const auto& marker : owner.state.locators)
+            {
+                exists = exists || marker.id == selected;
+                hasPrevious = hasPrevious || marker.position < owner.state.position-.001;
+                hasNext = hasNext || marker.position > owner.state.position+.001;
+            }
+            if (! exists) selected.clear();
+            const bool enabled = ! owner.session.isExporting();
+            add.setEnabled (enabled); previous.setEnabled (enabled && hasPrevious); next.setEnabled (enabled && hasNext); repaint();
+        }
+        void addAt (double seconds)
+        {
+            juce::String id; const auto result = owner.session.addLocator (seconds,{},id);
+            owner.report (result); if (result.wasOk()) selected=id; owner.refresh();
+        }
+        void navigate (bool forward)
+        {
+            owner.report (owner.session.navigateLocator (forward)); owner.refresh();
+            const auto width = owner.canvas.timelineWidth()/owner.pixelsPerSecond;
+            if (owner.state.position < owner.viewStart || owner.state.position > owner.viewStart+width)
+                owner.viewStart = juce::jmax (0.0,owner.state.position-width*.2);
+            owner.updateScroll(); owner.canvas.repaint(); repaint();
+        }
+        juce::Rectangle<float> locatorBounds (const Session::LocatorInfo& marker) const
+        {
+            const auto x = (float)((marker.position-owner.viewStart)*owner.pixelsPerSecond);
+            float width=130;
+            const auto nextMarker=std::upper_bound (owner.state.locators.begin(),owner.state.locators.end(),marker.position,
+                [] (double time,const Session::LocatorInfo& item) {return time<item.position;});
+            if (nextMarker!=owner.state.locators.end())
+                width=juce::jmin (width,(float)((nextMarker->position-marker.position)*owner.pixelsPerSecond)-3);
+            return {x,36,juce::jmax (12.0f,width),20};
+        }
+        juce::String hitLocator (juce::Point<float> point) const
+        {
+            if (point.x < 0 || point.x >= owner.canvas.timelineWidth()) return {};
+            for (auto it=owner.state.locators.rbegin();it!=owner.state.locators.rend();++it)
+                if (locatorBounds (*it).contains (point)) return it->id;
+            return {};
+        }
         void paint (juce::Graphics& g) override
         {
             g.fillAll (juce::Colour (0xff343a3e));
-            auto width = owner.canvas.timelineWidth();
-            g.saveState(); g.reduceClipRegion (0, 0, width, getHeight());
-            auto x1 = (float) ((owner.state.loopStart - owner.viewStart) * owner.pixelsPerSecond);
-            auto x2 = (float) ((owner.state.loopEnd - owner.viewStart) * owner.pixelsPerSecond);
-            g.setColour (owner.state.looping ? orange : muted.withAlpha (0.55f));
-            g.fillRect (x1, 3.0f, juce::jmax (1.0f, x2 - x1), 3.0f);
-            g.fillRect (x1, 3.0f, 2.0f, 9.0f); g.fillRect (x2 - 2, 3.0f, 2.0f, 9.0f);
-            const auto bar = 240.0 / owner.state.tempo;
-            const auto step = bar * juce::jmax (1.0, std::pow (2.0, std::ceil (std::log2 (48.0 / (bar * owner.pixelsPerSecond)))));
-            const auto end = owner.viewStart + width / owner.pixelsPerSecond;
+            const auto width=owner.canvas.timelineWidth();
+            g.saveState();g.reduceClipRegion (0,0,width,getHeight());
+            const auto x1=(float)((owner.state.loopStart-owner.viewStart)*owner.pixelsPerSecond);
+            const auto x2=(float)((owner.state.loopEnd-owner.viewStart)*owner.pixelsPerSecond);
+            g.setColour (owner.state.looping?orange:muted.withAlpha (.55f));
+            g.fillRect (x1,3.0f,juce::jmax (1.0f,x2-x1),3.0f);g.fillRect (x1,3.0f,2.0f,9.0f);g.fillRect (x2-2,3.0f,2.0f,9.0f);
+            const auto bar=240.0/owner.state.tempo;
+            const auto step=bar*juce::jmax (1.0,std::pow (2.0,std::ceil (std::log2 (48.0/(bar*owner.pixelsPerSecond)))));
+            const auto end=owner.viewStart+width/owner.pixelsPerSecond;
             g.setFont (font (10.5f));
-            for (double t = std::floor (owner.viewStart / step) * step; t <= end; t += step)
+            for (double time=std::floor (owner.viewStart/step)*step;time<=end;time+=step)
             {
-                auto x = (int) std::round ((t - owner.viewStart) * owner.pixelsPerSecond);
-                g.setColour (muted); g.drawText (juce::String ((int) std::round (t / bar) + 1), x + 5, 15, 55, 19, juce::Justification::centredLeft);
-                g.setColour (juce::Colour (0xff575f65)); g.drawVerticalLine (x, 14.0f, (float) getHeight());
+                const int x=(int)std::round ((time-owner.viewStart)*owner.pixelsPerSecond);
+                g.setColour (muted);g.drawText (juce::String ((int)std::round (time/bar)+1),x+5,15,55,19,juce::Justification::centredLeft);
+                g.setColour (juce::Colour (0xff575f65));g.drawVerticalLine (x,14.0f,34.0f);
             }
-            auto px = (float) ((owner.state.position - owner.viewStart) * owner.pixelsPerSecond);
-            juce::Path needle;
-            needle.addTriangle (px - 5.0f, 15.0f, px + 5.0f, 15.0f, px, 23.0f);
-            g.setColour (owner.state.recording ? red : ink); g.fillPath (needle);
-            g.restoreState();
-            g.setColour (raised); g.fillRect (width, 0, getWidth() - width, getHeight());
-            g.setColour (muted); g.setFont (font (10.0f, true));
-            g.drawText ("TRACK / MIXER", width + 12, 0, trackWidth - 24, getHeight(), juce::Justification::centredLeft);
-            g.setColour (line); g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
+            g.setColour (background);g.fillRect (0,35,width,getHeight()-35);
+            for (const auto& marker : owner.state.locators)
+            {
+                const auto bounds=locatorBounds (marker);
+                if (bounds.getRight()<0 || bounds.getX()>=width) continue;
+                g.setColour (marker.id==selected?orange:juce::Colour (0xffa9b8a7));
+                juce::Path flag;flag.addTriangle (bounds.getX(),37,bounds.getX()+8,37,bounds.getX(),45);g.fillPath (flag);
+                g.drawVerticalLine ((int)bounds.getX(),37,56);
+                g.setFont (font (10.0f,marker.id==selected));
+                g.drawText (marker.name,bounds.withTrimmedLeft (11),juce::Justification::centredLeft,true);
+            }
+            const auto px=(float)((owner.state.position-owner.viewStart)*owner.pixelsPerSecond);
+            juce::Path needle;needle.addTriangle (px-5,15,px+5,15,px,23);
+            g.setColour (owner.state.recording?red:ink);g.fillPath (needle);g.restoreState();
+            g.setColour (raised);g.fillRect (width,0,getWidth()-width,getHeight());
+            g.setColour (muted);g.setFont (font (10.0f,true));
+            g.drawText ("TRACK / MIXER",width+12,0,trackWidth-24,29,juce::Justification::centredLeft);
+            g.setColour (line);g.drawHorizontalLine (getHeight()-1,0.0f,(float)getWidth());
         }
         void mouseDown (const juce::MouseEvent& event) override
         {
-            if (event.x >= owner.canvas.timelineWidth()) return;
-            anchor = juce::jmax (0.0, owner.viewStart + event.x / owner.pixelsPerSecond);
-            definingLoop = event.mods.isShiftDown();
-            if (definingLoop) owner.session.beginEditGesture ("Loop range");
-            if (! definingLoop) { owner.session.seek (anchor); owner.refresh(); }
+            if (event.x>=owner.canvas.timelineWidth() || owner.session.isExporting()) return;
+            grabKeyboardFocus(); dragId.clear();
+            anchor=juce::jmax (0.0,owner.viewStart+event.x/owner.pixelsPerSecond);
+            const auto hit=hitLocator (event.position);
+            if (event.mods.isPopupMenu()) { showMenu (hit,anchor);return; }
+            definingLoop=event.mods.isShiftDown();
+            if (definingLoop) {owner.session.beginEditGesture ("Loop range");return;}
+            if (hit.isNotEmpty())
+            {
+                selected=hit;dragId=hit;downX=event.x;
+                for (const auto& marker : owner.state.locators) if (marker.id==hit) original=marker.position;
+                owner.report (owner.session.seekLocator (hit));
+            }
+            else {selected.clear();owner.session.seek (anchor);}
+            owner.refresh();
+        }
+        void mouseDoubleClick (const juce::MouseEvent& event) override
+        {
+            if (event.x>=owner.canvas.timelineWidth() || event.mods.isPopupMenu() || event.mods.isShiftDown()) return;
+            const auto hit=hitLocator (event.position);
+            if (hit.isNotEmpty()) owner.editLocatorDialog (hit);
+            else if (event.y>=35) addAt (juce::jmax (0.0,owner.viewStart+event.x/owner.pixelsPerSecond));
         }
         void mouseDrag (const juce::MouseEvent& event) override
         {
-            if (! definingLoop) return;
-            const auto grid = owner.gridSeconds();
-            const auto cursor = juce::jmax (0.0, owner.viewStart + event.x / owner.pixelsPerSecond);
-            const auto start = std::floor (juce::jmin (anchor, cursor) / grid) * grid;
-            const auto end = juce::jmax (start + grid, std::ceil (juce::jmax (anchor, cursor) / grid) * grid);
-            owner.session.setLoop (true, start, end);
-            owner.refresh();
+            if (owner.session.isExporting()) return;
+            if (definingLoop)
+            {
+                const auto grid=owner.gridSeconds(),cursor=juce::jmax (0.0,owner.viewStart+event.x/owner.pixelsPerSecond);
+                const auto start=std::floor (juce::jmin (anchor,cursor)/grid)*grid;
+                const auto end=juce::jmax (start+grid,std::ceil (juce::jmax (anchor,cursor)/grid)*grid);
+                owner.session.setLoop (true,start,end);owner.refresh();return;
+            }
+            if (dragId.isEmpty() || ! event.mouseWasDraggedSinceMouseDown()) return;
+            for (const auto& marker : owner.session.snapshot().locators) if (marker.id==dragId)
+            {
+                auto time=original+(event.x-downX)/owner.pixelsPerSecond;
+                if (!event.mods.isAltDown())time=std::round (time/owner.gridSeconds())*owner.gridSeconds();
+                time=juce::jlimit (0.0,172800.0-.001,time);
+                if (!locatorGesture){owner.session.beginEditGesture ("Move locator");locatorGesture=true;}
+                owner.report (owner.session.updateLocator (dragId,marker.name,time));owner.refresh();return;
+            }
         }
         void mouseUp (const juce::MouseEvent&) override
         {
-            if (definingLoop) owner.session.endEditGesture();
-            definingLoop = false;
+            if (definingLoop || locatorGesture)owner.session.endEditGesture();
+            definingLoop=false;locatorGesture=false;dragId.clear();
+        }
+        bool keyPressed (const juce::KeyPress& key) override
+        {
+            if (owner.session.isExporting())return true;
+            if ((key.getKeyCode()==juce::KeyPress::deleteKey || key.getKeyCode()==juce::KeyPress::backspaceKey)&&selected.isNotEmpty())
+            {owner.report (owner.session.removeLocator (selected));owner.refresh();return true;}
+            return owner.handleKey (key);
         }
     private:
         Impl& owner;
-        double anchor = 0;
-        bool definingLoop = false;
+        juce::TextButton add {"Add locator"},previous {"<"},next {">"};
+        juce::String selected,dragId;
+        double anchor=0,original=0;int downX=0;
+        bool definingLoop=false,locatorGesture=false;
+        void showMenu (const juce::String& id,double position)
+        {
+            juce::PopupMenu menu;menu.addItem (1,"Add locator here");
+            if (id.isNotEmpty()){menu.addItem (2,"Edit locator...");menu.addItem (3,"Delete locator");}
+            juce::PopupMenu jumps;juce::StringArray ids;
+            for (const auto& marker:owner.state.locators){ids.add(marker.id);jumps.addItem(100+ids.size()-1,marker.name+"  /  "+juce::String(marker.position,3)+" s");}
+            if (!ids.isEmpty())menu.addSubMenu ("Jump to locator",jumps);
+            auto safe=juce::Component::SafePointer<Ruler> (this);
+            menu.showMenuAsync (juce::PopupMenu::Options(),[safe,id,position,ids](int choice)
+            {
+                if(safe==nullptr)return;
+                if(choice==1)safe->addAt(position);
+                if(choice==2)safe->owner.editLocatorDialog(id);
+                if(choice==3){safe->owner.report(safe->owner.session.removeLocator(id));safe->owner.refresh();}
+                if(choice>=100&&choice-100<ids.size()){safe->owner.report(safe->owner.session.seekLocator(ids[choice-100]));safe->owner.refresh();}
+            });
+        }
     };
 
     class LauncherGrid final : public juce::Component, private juce::ScrollBar::Listener
@@ -2391,6 +2512,29 @@ private:
         const auto result = session.addMidiClipToSlot (currentTrack()->id, scene, 4.0); report (result); refresh();
         if (result.wasOk()) { selectLauncherSlot (track, scene); openPianoRoll(); pianoRoll.fit(); }
     }
+    void editLocatorDialog (const juce::String& id)
+    {
+        if (session.isExporting()) return;
+        for (const auto& marker : session.snapshot().locators) if (marker.id==id)
+        {
+            auto* dialog=new juce::AlertWindow ("Edit Locator","Name this song section and set its position in seconds.",juce::MessageBoxIconType::NoIcon);
+            dialog->addTextEditor ("name",marker.name,"Name");dialog->addTextEditor ("position",juce::String(marker.position,6),"Position (s)");
+            dialog->addButton ("Apply",1,juce::KeyPress(juce::KeyPress::returnKey));dialog->addButton ("Cancel",0,juce::KeyPress(juce::KeyPress::escapeKey));
+            dialog->setLookAndFeel (&theme);alerts.emplace_back (dialog);
+            auto safe=juce::Component::SafePointer<Impl>(this);auto safeDialog=juce::Component::SafePointer<juce::AlertWindow>(dialog);
+            dialog->enterModalState (true,juce::ModalCallbackFunction::create ([safe,safeDialog,id](int result)
+            {
+                if(safe==nullptr||safeDialog==nullptr||result!=1)return;
+                const auto text=safeDialog->getTextEditorContents("position").trim().toStdString();char* end=nullptr;
+                const auto time=std::strtod(text.c_str(),&end);
+                if(text.empty()||end!=text.c_str()+text.size()||!std::isfinite(time))
+                    safe->report(juce::Result::fail("Enter a complete numeric locator position."));
+                else safe->report(safe->session.updateLocator(id,safeDialog->getTextEditorContents("name"),time));
+                safe->refresh();
+            }),true);
+            return;
+        }
+    }
     void renameSceneDialog (int scene)
     {
         if (scene < 0 || scene >= (int) state.scenes.size()) return;
@@ -2565,7 +2709,7 @@ private:
         pianoRoll.sync();
         newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
         importButton.setEnabled (currentTrack() == nullptr || ! currentTrack()->isReturn);
-        ruler.repaint(); deviceChain.sync(); repaint();
+        ruler.sync(); deviceChain.sync(); repaint();
         updateScroll();
     }
     void timerCallback() override
@@ -4231,6 +4375,77 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     session.undo();refresh();
     bool restoredSorted=false;for(const auto& clip:state.tracks[0].clips)if(clip.id==sortId)restoredSorted=std::abs(clip.start-.02)<1e-8;
     check(restoredSorted,"sorted trim still restores its whole gesture in one undo");
+
+    check(session.newProject().wasOk(),"prepare locator UI project");showArrangementView();pixelsPerSecond=100;viewStart=0;refresh();
+    auto* addLocatorButton=dynamic_cast<juce::TextButton*>(findNamed(ruler,"Add locator at playhead"));
+    auto* previousLocatorButton=dynamic_cast<juce::TextButton*>(findNamed(ruler,"Previous locator"));
+    auto* nextLocatorButton=dynamic_cast<juce::TextButton*>(findNamed(ruler,"Next locator"));
+    check(addLocatorButton&&previousLocatorButton&&nextLocatorButton,"locator controls have accessible names");
+    const auto originalSize=getBounds();
+    for(const int width:{1100,1440})
+    {
+        setSize(width,720);
+        check(addLocatorButton->getX()>=canvas.timelineWidth()&&nextLocatorButton->getRight()<=ruler.getWidth(),
+            "resizing keeps locator controls inside the track header and clear of the timeline");
+    }
+    setBounds(originalSize);
+    session.seek(1);refresh();addLocatorButton->onClick();
+    check(state.locators.size()==1&&state.locators[0].position==1,"Add locator button uses transport position");
+    const auto firstLocator=state.locators[0].id;ruler.addAt(3);const auto secondLocator=state.locators.back().id;
+    session.seek(0);refresh();nextLocatorButton->onClick();check(state.position==1,"Next locator button seeks first section");
+    nextLocatorButton->onClick();check(state.position==3&&!nextLocatorButton->isEnabled(),"Next reaches last locator and disables at end");
+    previousLocatorButton->onClick();check(state.position==1,"Previous locator button seeks preceding section");
+    const auto locatorEvent=[&](juce::Point<float> at,juce::Point<float> down,bool dragged=false,int modifiers=0)
+    {
+        const auto now=juce::Time::getCurrentTime();
+        return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(),at,
+            juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier|modifiers),1.0f,0,0,0,0,&ruler,&ruler,now,down,now,1,dragged);
+    };
+    const auto markerById=[&](const juce::String& id)
+    {
+        for(const auto& marker:state.locators)if(marker.id==id)return marker;
+        throw std::runtime_error("Expected locator is missing");
+    };
+    auto locatorPoint=ruler.locatorBounds(markerById(firstLocator)).getCentre();
+    check(ruler.hitLocator(locatorPoint)==firstLocator,"locator hit testing resolves stable identity");
+    ruler.mouseDown(locatorEvent(locatorPoint,locatorPoint));
+    ruler.mouseDrag(locatorEvent(locatorPoint+juce::Point<float>(20,0),locatorPoint,true));
+    ruler.mouseDrag(locatorEvent(locatorPoint+juce::Point<float>(40,0),locatorPoint,true));
+    ruler.mouseUp(locatorEvent(locatorPoint+juce::Point<float>(40,0),locatorPoint,true));
+    check(markerById(firstLocator).position==1.375,"locator drag snaps to the existing grid");
+    session.undo();refresh();check(markerById(firstLocator).position==1,"one undo restores entire locator drag");
+    ruler.mouseDown(locatorEvent(locatorPoint,locatorPoint,false,freeRange));
+    ruler.mouseDrag(locatorEvent(locatorPoint+juce::Point<float>(37,0),locatorPoint,true,freeRange));
+    ruler.mouseUp(locatorEvent(locatorPoint+juce::Point<float>(37,0),locatorPoint,true,freeRange));
+    check(std::abs(markerById(firstLocator).position-1.37)<1e-9,"Alt locator drag bypasses snapping");session.undo();refresh();
+    ruler.mouseDoubleClick(locatorEvent(locatorPoint,locatorPoint));
+    check(!alerts.empty()&&alerts.back()!=nullptr,"locator double-click opens the production editor");
+    auto* locatorDialog=alerts.back().getComponent();locatorDialog->getTextEditor("name")->setText("Bridge");
+    locatorDialog->getTextEditor("position")->setText("2.25");locatorDialog->exitModalState(1);
+    for(int attempt=0;attempt<50;++attempt)
+    {
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(10);refresh();
+        if(markerById(firstLocator).name=="Bridge")break;
+    }
+    check(markerById(firstLocator).name=="Bridge"&&markerById(firstLocator).position==2.25,"locator editor applies name and time");
+    session.undo();refresh();check(markerById(firstLocator).position==1&&markerById(firstLocator).name!="Bridge","editor mutation undoes in one step");
+    locatorPoint=ruler.locatorBounds(markerById(firstLocator)).getCentre();ruler.mouseDown(locatorEvent(locatorPoint,locatorPoint));ruler.mouseUp(locatorEvent(locatorPoint,locatorPoint));
+    check(ruler.keyPressed(juce::KeyPress(juce::KeyPress::deleteKey))&&state.locators.size()==1&&state.locators[0].id==secondLocator,
+        "Delete in focused locator ruler removes selected locator only");session.undo();refresh();
+    locatorPoint=ruler.locatorBounds(markerById(firstLocator)).getCentre();ruler.mouseDown(locatorEvent(locatorPoint,locatorPoint));
+    check(session.removeLocator(firstLocator).wasOk(),"delete locator during pending gesture");
+    juce::String replacementLocator;check(session.addLocator(1,"Replacement",replacementLocator).wasOk(),"replace locator at same position");refresh();
+    ruler.mouseDrag(locatorEvent(locatorPoint+juce::Point<float>(50,0),locatorPoint,true));ruler.mouseUp(locatorEvent(locatorPoint+juce::Point<float>(50,0),locatorPoint,true));
+    check(markerById(replacementLocator).position==1,"stale locator drag cannot move replacement");
+    const auto loopFrom=juce::Point<float>(50,20),loopTo=juce::Point<float>(240,20);
+    ruler.mouseDown(locatorEvent(loopFrom,loopFrom,false,shiftModifier));ruler.mouseDrag(locatorEvent(loopTo,loopFrom,true,shiftModifier));ruler.mouseUp(locatorEvent(loopTo,loopFrom,true,shiftModifier));
+    check(state.looping&&state.loopStart==.5&&state.loopEnd==2.5,"Shift-drag loop editing remains available above locators");
+    if(const auto path=juce::SystemStats::getEnvironmentVariable("HALFTRACK_UI_SNAPSHOT",{});path.isNotEmpty())
+    {
+        const juce::File requested(path);const auto output=requested.getSiblingFile(requested.getFileNameWithoutExtension()+"-locators.png");
+        auto stream=output.createOutputStream();juce::PNGImageFormat png;
+        check(stream&&stream->setPosition(0)&&stream->truncate().wasOk()&&png.writeImageToStream(createComponentSnapshot(getLocalBounds()),*stream),"render actual locator ruler and controls");
+    }
 }
 
 int MainComponent::runInteractionTests()

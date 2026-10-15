@@ -63,3 +63,7 @@ Direct fade-duration drags use continuous seconds without grid snapping. They cl
 ### Arrangement audio clipboard and gestures
 
 Default: a typed, application-local clipboard holds one unwarped, unlooped, ungrouped normal-speed Arrangement audio clip. It survives project switches within this running Session; it does not overwrite the system text clipboard. Copy retains an independent media file before Cut can remove the clip; Paste adds a clip on the selected audio track at the playhead and never overwrites overlapping material. Each paste creates new identities. Native state preserves clip properties. Range edges snap to the timeline grid, Alt bypasses snapping, and Shift+Alt-drag in the clip body slips the source while holding the timeline range fixed. Fade lengths must still fit the retained clip. Multi-clip/time-range clipboard and warped range gestures remain separate work.
+
+### Arrangement locators
+
+Default: named point locators use the engine's marker track and absolute timeline seconds; changing project tempo does not move them. Each native marker has a 1 ms storage extent, but appears as a point and never extends an audio export. Add at playhead, click to seek, edit name/position, drag with grid snapping (Alt bypasses), and navigate previous/next without wrap. Each mutation uses the engine undo manager. Locator edits may be made during playback/recording, but not during export. Region markers, beat-locked locators and locator-triggered scene launches remain separate work.

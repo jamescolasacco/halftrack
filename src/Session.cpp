@@ -256,6 +256,42 @@ Result validateAudioClips (const juce::ValueTree& state)
     return Result::ok();
 }
 
+bool validLocator (const String& name, double seconds)
+{
+    return name.trim().isNotEmpty() && name.length() <= 128 && ! name.containsAnyOf ("\r\n\t")
+        && std::isfinite (seconds) && seconds >= 0 && seconds <= te::Edit::maximumLength-.001;
+}
+Result validateLocators (const juce::ValueTree& state)
+{
+    std::map<String,int> clipIds;
+    std::vector<juce::ValueTree> markers;
+    const auto collect = [&] (auto&& self, const juce::ValueTree& node) -> void
+    {
+        if (te::Clip::isClipState (node)) ++clipIds[te::EditItemID::fromID (node).toString()];
+        if (node.hasType (te::IDs::MARKERCLIP)) markers.push_back (node);
+        for (const auto& child : node) self (self, child);
+    };
+    collect (collect, state);
+    if (markers.size() > 4096) return Result::fail ("This project exceeds the supported locator count.");
+    for (const auto& node : markers)
+    {
+        const auto read = [&] (const juce::Identifier& key, double& result)
+        {
+            const auto value = node[key].toString().trim().toStdString(); char* end = nullptr;
+            result = std::strtod (value.c_str(), &end);
+            return ! value.empty() && end == value.c_str()+value.size() && std::isfinite (result);
+        };
+        double start=0,length=0,sync=0;
+        const auto id = te::EditItemID::fromID (node);
+        if (! node.getParent().hasType (te::IDs::MARKERTRACK) || ! id.isValid() || clipIds[id.toString()] != 1
+            || ! read (te::IDs::start,start) || ! read (te::IDs::length,length) || ! read (te::IDs::sync,sync)
+            || sync != te::Clip::syncAbsolute || length < 0 || start+length > te::Edit::maximumLength
+            || ! validLocator (node[te::IDs::name].toString(),start))
+            return Result::fail ("The project contains invalid or ambiguous locator data.");
+    }
+    return Result::ok();
+}
+
 Session::ClipInfo describeClip (te::Clip& clip)
 {
     Session::ClipInfo result;
@@ -491,6 +527,12 @@ struct Session::Impl
             }
         return result;
     }
+    te::MarkerClip* locator (const String& id) const
+    {
+        for (auto* marker : edit->getMarkerManager().getMarkers())
+            if (marker->itemID.toString() == id) return marker;
+        return nullptr;
+    }
     te::MidiClip* midiClip (const String& id) const
     {
         for (auto* t : te::getAudioTracks (*edit))
@@ -721,6 +763,8 @@ Session::Snapshot Session::snapshot() const
     s.loopStart = transport.getLoopRange().getStart().inSeconds();
     s.loopEnd = transport.getLoopRange().getEnd().inSeconds();
     s.cpu = impl->engine.getDeviceManager().getCpuUsage();
+    for (auto* marker : e.getMarkerManager().getMarkers())
+        s.locators.push_back ({ marker->itemID.toString(), marker->getName(), marker->getPosition().getStart().inSeconds() });
     for (auto* scene : e.getSceneList().getScenes())
         s.scenes.push_back ({ scene->state.getProperty ("halftrackSceneID").toString(), scene->name.get() });
     const auto quantisation = e.getLaunchQuantisation().type.get();
@@ -869,6 +913,7 @@ Result Session::loadProject (const File& file)
     if (auto result = UtilityPlugin::validateState (state); result.failed()) return result;
     if (auto result = NativeEffectPlugin::validateState (state); result.failed()) return result;
     if (auto result = validateAudioClips (state); result.failed()) return result;
+    if (auto result = validateLocators (state); result.failed()) return result;
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
     auto options = te::Edit::Options { impl->engine, state, id };
@@ -1777,6 +1822,48 @@ void Session::setLoop (bool enabled, double start, double end)
     t.loopPoint2.setValue (te::TimePosition::fromSeconds (end), undo);
     t.looping.setValue (enabled, undo);
     impl->changed();
+}
+Result Session::addLocator (double seconds, const String& requestedName, String& createdId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto& manager = impl->edit->getMarkerManager();
+    if (manager.getMarkers().size() >= 4096) return Result::fail ("The project already contains 4096 locators.");
+    const auto name = requestedName.trim().isEmpty() ? "Locator " + String (manager.getNextUniqueID()) : requestedName.trim();
+    if (! validLocator (name,seconds)) return Result::fail ("Use a locator name of 1–128 characters and a position inside the 48-hour timeline.");
+    impl->transaction ("Add locator"); impl->edit->ensureMarkerTrack();
+    auto marker = manager.createMarker (-1,te::TimePosition::fromSeconds (seconds),te::TimeDuration::fromSeconds (.001),te::Clip::syncAbsolute,nullptr);
+    if (! marker) return Result::fail ("The locator could not be created.");
+    marker->setName (name); createdId = marker->itemID.toString(); impl->changed(); return Result::ok();
+}
+Result Session::updateLocator (const String& id, const String& requestedName, double seconds)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* marker = impl->locator (id); if (! marker) return Result::fail ("Locator not found.");
+    const auto name = requestedName.trim();
+    if (! validLocator (name,seconds)) return Result::fail ("Use a locator name of 1–128 characters and a position inside the 48-hour timeline.");
+    if (marker->getName() == name && marker->getPosition().getStart().inSeconds() == seconds) return Result::ok();
+    impl->transaction ("Edit locator"); marker->setName (name);
+    marker->setStart (te::TimePosition::fromSeconds (seconds),false,true); impl->changed(); return Result::ok();
+}
+Result Session::removeLocator (const String& id)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* marker = impl->locator (id); if (! marker) return Result::fail ("Locator not found.");
+    impl->transaction ("Delete locator"); marker->removeFromParent(); impl->changed(); return Result::ok();
+}
+Result Session::seekLocator (const String& id)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* marker = impl->locator (id); if (! marker) return Result::fail ("Locator not found.");
+    seek (marker->getPosition().getStart().inSeconds()); return Result::ok();
+}
+Result Session::navigateLocator (bool forward)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto& manager = impl->edit->getMarkerManager(); const auto position = impl->edit->getTransport().getPosition();
+    if (auto* marker = forward ? manager.getNextMarker (position) : manager.getPrevMarker (position))
+        seek (marker->getPosition().getStart().inSeconds());
+    return Result::ok();
 }
 void Session::beginEditGesture (const String& name)
 {

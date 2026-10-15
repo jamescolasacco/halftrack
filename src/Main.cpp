@@ -16,6 +16,7 @@ int runUtilityTests (const juce::File&);
 int runNativeEffectsTests (const juce::File&);
 int runNoteToolsTests (const juce::File&);
 int runAudioClipTests (const juce::File&);
+int runLocatorTests (const juce::File&);
 int runRealtimeTests();
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -62,6 +63,13 @@ public:
             return;
         }
         #endif
+        if (args.contains ("--self-test-locators"))
+        {
+            const int i = args.indexOf ("--self-test-locators");
+            const auto destination = i + 1 < args.size() ? juce::File (args[i + 1])
+                : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-tests");
+            setApplicationReturnValue (runLocatorTests (destination)); quit(); return;
+        }
         if (args.contains ("--self-test-audio-clips"))
         {
             const int i = args.indexOf ("--self-test-audio-clips");
