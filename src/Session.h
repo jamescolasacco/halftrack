@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace halftrack
@@ -18,6 +19,7 @@ public:
     enum class MonitorMode { off, automatic, on };
     enum class SendMode { pre, post };
     enum class ExportFormat { wav, aiff, flac };
+    static constexpr double maximumExportRangeSeconds = 172800;
     struct AudioExportSettings
     {
         ExportFormat format = ExportFormat::wav;
@@ -26,6 +28,8 @@ public:
         double tailSeconds = 0;
         bool mono = false, normalizePeak = false;
         float peakCeilingDb = -1;
+        // Exact [start, end) seconds, rounded to output frames. Requires zero tail.
+        std::optional<juce::Range<double>> timeRange;
     };
     enum class FollowAction { off, stop, replay, previous, next, first, last, cycle };
     struct FollowSettings

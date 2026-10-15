@@ -751,6 +751,111 @@ private:
     te::ThreadPoolJobWithProgress* activeTask = nullptr;
 };
 
+// A selected export renders from time zero before slicing: starting a native
+// render at the selection would cold-start instruments and effect history.
+// Both passes are bounded streaming work, off the message and audio threads.
+class RangeExportTask final : public te::ThreadPoolJobWithProgress
+{
+public:
+    RangeExportTask (File source, File destination, juce::AudioFormat& format,
+                     Session::AudioExportSettings options, juce::int64 first, juce::int64 last)
+        : ThreadPoolJobWithProgress (options.normalizePeak ? "Normalize selected audio" : "Write selected audio"),
+          inputFile (std::move (source)), outputFile (std::move (destination)), outputFormat (format),
+          settings (std::move (options)), firstFrame (first), frameCount (last - first), measuring (settings.normalizePeak) {}
+    float getCurrentTaskProgress() override { return progress.load (std::memory_order_relaxed); }
+    bool canCancel() const override { return true; }
+    juce::Result result = Result::fail ("The selected audio export did not finish.");
+
+    JobStatus runJob() override
+    {
+        if (shouldExit()) return fail ("Export cancelled.");
+        if (! reader)
+        {
+            juce::WavAudioFormat wav;
+            auto stream = inputFile.createInputStream();
+            if (! stream) return fail ("Could not open the floating-point export intermediate.");
+            reader.reset (wav.createReaderFor (stream.release(), true));
+            // The pinned native WAV writer defaults to float for 32-bit output.
+            // Verify that contract here so no integer-clipped intermediate can
+            // silently contaminate normalization or an over-range float export.
+            if (! reader || ! reader->usesFloatingPointData || reader->bitsPerSample != 32
+                || reader->sampleRate != settings.sampleRate || reader->numChannels == 0
+                || reader->numChannels > 64 || reader->lengthInSamples < firstFrame + frameCount)
+                return fail ("Could not read the floating-point export intermediate.");
+            buffer.setSize (static_cast<int> (reader->numChannels), blockFrames);
+            if (settings.mono) mono.setSize (1, blockFrames);
+        }
+        if (! measuring && ! writer)
+        {
+            juce::StringPairArray metadata;
+            te::AudioFileUtils::addBWAVStartToMetadata (metadata, firstFrame);
+            writer.reset (te::AudioFileUtils::createWriterFor (&outputFormat, outputFile,
+                settings.sampleRate, settings.mono ? 1u : reader->numChannels, settings.bitDepth, metadata, 0));
+            if (! writer) return fail ("Could not create the selected audio file.");
+        }
+        const int count = static_cast<int> (std::min<juce::int64> (blockFrames, frameCount - position));
+        if (! reader->read (&buffer, 0, count, firstFrame + position, true, true))
+            return fail ("Could not read the selected audio frames.");
+        auto* selected = &buffer;
+        if (settings.mono)
+        {
+            mono.clear();
+            const float scale = 1.0f / static_cast<float> (buffer.getNumChannels());
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                mono.addFrom (0, 0, buffer, channel, 0, count, scale);
+            selected = &mono;
+        }
+        for (int channel = 0; channel < selected->getNumChannels(); ++channel)
+            for (int n = 0; n < count; ++n)
+                if (! std::isfinite (selected->getSample (channel, n)))
+                    return fail ("The selected mix contains nonfinite audio.");
+        if (measuring) peak = std::max (peak, selected->getMagnitude (0, count));
+        else
+        {
+            selected->applyGain (0, count, gain);
+            if (! writer->writeFromAudioSampleBuffer (*selected, 0, count))
+                return fail ("Could not write the selected audio frames.");
+        }
+        position += count;
+        const double passProgress = static_cast<double> (position) / static_cast<double> (frameCount);
+        progress.store (static_cast<float> (settings.normalizePeak ? (measuring ? 0.5 * passProgress : 0.5 + 0.5 * passProgress) : passProgress), std::memory_order_relaxed);
+        if (position != frameCount) return jobNeedsRunningAgain;
+        if (measuring)
+        {
+            // Match the existing export's conservative sample-peak headroom and
+            // 40 dB boost cap, measured only after selecting/downmixing frames.
+            gain = juce::jlimit (0.0f, 100.0f, juce::Decibels::decibelsToGain (settings.peakCeilingDb)
+                / (peak * 1.005f + 2.0f / 32768.0f));
+            measuring = false; position = 0;
+            return jobNeedsRunningAgain;
+        }
+        // AIFF/FLAC finalize on destruction and do not implement flush(). Verify
+        // the finalized header and frame count before replacing the destination.
+        writer.reset(); reader.reset();
+        auto finishedStream = outputFile.createInputStream();
+        if (! finishedStream) return fail ("Could not reopen the selected audio file.");
+        std::unique_ptr<juce::AudioFormatReader> finished (outputFormat.createReaderFor (finishedStream.release(), true));
+        if (! finished || finished->lengthInSamples != frameCount || finished->sampleRate != settings.sampleRate)
+            return fail ("Could not finish the selected audio file.");
+        result = Result::ok();
+        return jobHasFinished;
+    }
+private:
+    JobStatus fail (const String& message)
+    { writer.reset(); reader.reset(); result = Result::fail (message); return jobHasFinished; }
+    static constexpr int blockFrames = 16384;
+    File inputFile, outputFile;
+    juce::AudioFormat& outputFormat;
+    Session::AudioExportSettings settings;
+    juce::int64 firstFrame, frameCount, position = 0;
+    bool measuring;
+    float peak = 0.0001f, gain = 1;
+    std::atomic<float> progress { 0 };
+    std::unique_ptr<juce::AudioFormatReader> reader;
+    std::unique_ptr<juce::AudioFormatWriter> writer;
+    juce::AudioBuffer<float> buffer, mono;
+};
+
 struct Meter
 {
     explicit Meter (te::LevelMeasurer& m) : measurer (&m) { m.addClient (client); }
@@ -770,6 +875,56 @@ juce::ValueTree findStateWithID (juce::ValueTree tree, const juce::var& id)
     return {};
 }
 }
+
+#if HALFTRACK_TESTS_ENABLED
+// Tests run the private incremental worker directly so cancellation at each
+// conversion phase is deterministic and does not depend on disk/thread timing.
+juce::Result runRangeExportTaskCancellationTests (const juce::File& directory)
+{
+    const auto input = directory.getChildFile ("worker-float-input.wav");
+    const auto destination = directory.getChildFile ("worker-protected.wav");
+    juce::WavAudioFormat wav;
+    {
+        juce::AudioBuffer<float> source (2, 65536);
+        for (int channel = 0; channel < 2; ++channel)
+            juce::FloatVectorOperations::fill (source.getWritePointer (channel), channel == 0 ? .25f : -.125f, source.getNumSamples());
+        auto stream = std::unique_ptr<juce::OutputStream> (input.createOutputStream());
+        auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000)
+            .withNumChannels (2).withBitsPerSample (32).withSampleFormat (juce::AudioFormatWriterOptions::SampleFormat::floatingPoint));
+        if (! writer || ! writer->writeFromAudioSampleBuffer (source, 0, source.getNumSamples()))
+            return Result::fail ("Could not create range worker fixture.");
+    }
+    if (! destination.replaceWithText ("preserve existing destination")) return Result::fail ("Could not create protected worker destination.");
+    {
+        juce::TemporaryFile temporary (destination);
+        RangeExportTask missing (directory.getChildFile ("missing-worker-source.wav"), temporary.getFile(), wav, {}, 0, 65536);
+        if (missing.runJob() != juce::ThreadPoolJob::jobHasFinished || missing.result.wasOk()
+            || temporary.getFile().exists() || destination.loadFileAsString() != "preserve existing destination")
+            return Result::fail ("Missing intermediate did not fail without changing the destination.");
+    }
+    // Cancel during peak measurement, at its boundary, during normalized output,
+    // and during non-normalized output. Every task is still incomplete.
+    for (const int stage : { 0, 1, 2, 3 })
+    {
+        juce::TemporaryFile temporary (destination);
+        Session::AudioExportSettings settings; settings.bitDepth = 24; settings.normalizePeak = stage != 3;
+        RangeExportTask task (input, temporary.getFile(), wav, settings, 0, 65536);
+        const int calls = stage == 0 || stage == 3 ? 1 : stage == 1 ? 4 : 5;
+        for (int i = 0; i < calls; ++i)
+            if (task.runJob() != juce::ThreadPoolJob::jobNeedsRunningAgain)
+                return Result::fail ("Range worker unexpectedly finished before cancellation.");
+        const auto progress = task.getCurrentTaskProgress();
+        if ((stage == 0 && ! (progress > 0 && progress < .5f)) || (stage == 1 && progress != .5f)
+            || (stage == 2 && ! (progress > .5f && progress < 1)) || (stage == 3 && ! (progress > 0 && progress < 1)))
+            return Result::fail ("Cancellation did not reach the expected range worker phase.");
+        task.signalJobShouldExit();
+        if (task.runJob() != juce::ThreadPoolJob::jobHasFinished || task.result.wasOk()
+            || task.getCurrentTaskProgress() != progress || destination.loadFileAsString() != "preserve existing destination")
+            return Result::fail ("Range worker cancellation changed output or continued processing.");
+    }
+    return Result::ok();
+}
+#endif
 
 struct Session::Impl
 {
@@ -3099,13 +3254,28 @@ Result Session::exportAudio (const File& file, const AudioExportSettings& settin
     if (! std::isfinite (tailSeconds) || tailSeconds < 0 || tailSeconds > 60) return Result::fail ("Export tail must be between 0 and 60 seconds.");
     if (! std::isfinite (settings.peakCeilingDb) || settings.peakCeilingDb < -60 || settings.peakCeilingDb > 0)
         return Result::fail ("Choose a peak ceiling from -60 to 0 dB.");
+    static_assert (maximumExportRangeSeconds == te::Edit::maximumLength);
+    juce::int64 firstFrame = 0, lastFrame = 0;
+    if (settings.timeRange)
+    {
+        const double first = settings.timeRange->getStart(), last = settings.timeRange->getEnd();
+        if (! std::isfinite (first) || ! std::isfinite (last) || first < 0 || first >= last
+            || last > maximumExportRangeSeconds)
+            return Result::fail ("Choose an export range within the first 48 hours, with its end after its start.");
+        if (tailSeconds != 0) return Result::fail ("A selected range requires a zero-second export tail.");
+        firstFrame = std::llround (first * rate); lastFrame = std::llround (last * rate);
+        if (static_cast<double> (lastFrame) / rate > maximumExportRangeSeconds)
+            return Result::fail ("The rounded export end exceeds the supported 48-hour timeline.");
+        if (lastFrame <= firstFrame) return Result::fail ("The selected export range must contain at least one output frame.");
+    }
     endEditGesture();
     double end = 0;
     for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* c : t->getClips()) end = juce::jmax (end, c->getPosition().time.getEnd().inSeconds());
     if (end <= 0) return Result::fail ("Add audio or MIDI clips before exporting.");
-    end += tailSeconds;
+    end = settings.timeRange ? static_cast<double> (lastFrame) / rate : end + tailSeconds;
     auto r = file.getParentDirectory().createDirectory(); if (r.failed()) return r;
     juce::TemporaryFile output (file);
+    juce::TemporaryFile prefix (".wav");
     // Native menu callbacks still dispatch during a modal progress window. Hold
     // this guard until the worker and render scopes have completely released the
     // edit; a reentrant New, Undo or Export must never mutate their graph.
@@ -3124,20 +3294,29 @@ Result Session::exportAudio (const File& file, const AudioExportSettings& settin
         }
     }
     te::Renderer::Parameters p (*impl->edit);
-    p.destFile = output.getFile(); p.audioFormat = audioFormat;
-    p.bitDepth = bits; p.sampleRateForAudio = rate; p.blockSizeForAudio = 512;
+    p.destFile = settings.timeRange ? prefix.getFile() : output.getFile();
+    p.audioFormat = settings.timeRange ? formats.getWavFormat() : audioFormat;
+    p.bitDepth = settings.timeRange ? 32 : bits; p.sampleRateForAudio = rate; p.blockSizeForAudio = 512;
     p.time = { te::TimePosition::fromSeconds (0), te::TimePosition::fromSeconds (end) };
     p.tracksToDo = te::toBitSet (te::getAllTracks (*impl->edit));
     for (auto* track : te::getAudioTracks (*impl->edit))
         for (auto* clip : track->getClips()) p.allowedClips.add (clip);
-    p.usePlugins = true; p.useMasterPlugins = true; p.canRenderInMono = settings.mono; p.mustRenderInMono = settings.mono;
-    p.shouldNormalise = settings.normalizePeak; p.normaliseToLevelDb = settings.peakCeilingDb;
+    p.usePlugins = true; p.useMasterPlugins = true; p.canRenderInMono = settings.mono && ! settings.timeRange; p.mustRenderInMono = p.canRenderInMono;
+    p.shouldNormalise = settings.normalizePeak && ! settings.timeRange; p.normaliseToLevelDb = settings.peakCeilingDb;
     p.checkNodesForAudio = false; p.ditheringEnabled = false;
     auto& ui = static_cast<UIBehaviour&> (impl->engine.getUIBehaviour());
     ui.cancelled = false;
     auto rendered = te::Renderer::renderToFile ("Export Halftrack mix", p);
     if (ui.cancelled) return Result::fail ("Export cancelled.");
-    if (! rendered.existsAsFile() || ! output.overwriteTargetFileWithTemporary()) return Result::fail ("The audio export could not be completed.");
+    if (! rendered.existsAsFile()) return Result::fail ("The audio export could not be completed.");
+    if (settings.timeRange)
+    {
+        RangeExportTask task (rendered, output.getFile(), *audioFormat, settings, firstFrame, lastFrame);
+        ui.runTaskWithProgressBar (task);
+        if (ui.cancelled) return Result::fail ("Export cancelled.");
+        if (task.result.failed()) return task.result;
+    }
+    if (! output.overwriteTargetFileWithTemporary()) return Result::fail ("The audio export could not be completed.");
     sendChangeMessage(); return Result::ok();
 }
 
