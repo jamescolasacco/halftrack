@@ -810,10 +810,13 @@ private:
                         for (const auto& note : clip.notes) { low = juce::jmin (low, note.pitch); high = juce::jmax (high, note.pitch); }
                         const auto noteHeight = wave.getHeight() / (float) (high - low + 1);
                         for (const auto& note : clip.notes)
+                        {
+                            g.setColour (juce::Colour (0xff14252b).withAlpha (note.active ? (track.mute ? 0.4f : 0.9f) : 0.25f));
                             g.fillRect (wave.getX() + (float) (note.startBeat / clip.lengthBeats) * wave.getWidth(),
                                         wave.getY() + (high - note.pitch) * noteHeight,
                                         juce::jmax (2.0f, (float) (note.lengthBeats / clip.lengthBeats) * wave.getWidth()),
                                         juce::jmax (2.0f, noteHeight * 0.65f));
+                        }
                     }
                     auto* thumbnail = clip.isMidi ? nullptr : thumbnailFor (clip.file);
                     if (thumbnail != nullptr && thumbnail->getTotalLength() > 0)
@@ -1738,12 +1741,14 @@ private:
             {
                 auto r = noteBounds (note);
                 const bool selected = selectedNoteIds.contains (note.id);
-                g.setColour ((selected ? orange : juce::Colour (0xff8cc4b5)).withAlpha (0.48f + note.velocity * 0.52f)); g.fillRect (r);
-                g.setColour (selected ? ink : juce::Colour (0xff203d36)); g.drawRect (r, 1.0f);
+                const auto noteColour = note.active ? (selected ? orange : juce::Colour (0xff8cc4b5)).withAlpha (0.48f + note.velocity * 0.52f)
+                                                    : juce::Colour (0xff526066);
+                g.setColour (noteColour); g.fillRect (r);
+                g.setColour (selected ? (note.active ? ink : orange) : juce::Colour (0xff203d36)); g.drawRect (r, 1.0f);
                 if (r.getWidth() > 22)
                 {
-                    g.setColour (juce::Colour (0xff21342f)); g.setFont (font (9.0f));
-                    g.drawText (pitchName (note.pitch), r.reduced (4, 0), juce::Justification::centredLeft, true);
+                    g.setColour (note.active ? juce::Colour (0xff21342f) : ink); g.setFont (font (9.0f));
+                    g.drawText ((note.active ? juce::String() : juce::String("OFF / ")) + pitchName (note.pitch), r.reduced (4, 0), juce::Justification::centredLeft, true);
                 }
                 if (selected) { g.setColour (ink); g.fillRect (r.getRight() - 4, r.getY() + 3, 2.0f, r.getHeight() - 6); }
             }
@@ -1911,6 +1916,7 @@ private:
             const auto* clip = owner.currentMidiClip();
             const auto code = key.getKeyCode();
             if (code == juce::KeyPress::escapeKey) { clearSelection(); repaint(); return true; }
+            if (clip != nullptr && code == '0' && !key.getModifiers().isAnyModifierKeyDown()) { toggleSelectedNotes(); return true; }
             if (clip != nullptr && key.getModifiers().isCommandDown())
             {
                 if ((code == 'E' || code == 'e') && !key.getModifiers().isShiftDown()) { splitNotesAtMarker(); return true; }
@@ -2146,6 +2152,19 @@ private:
             {clearSelection();for(const auto& note:inserted)selectedNoteIds.insert(note);selectedNoteId=inserted[0];}
             owner.refresh();
         }
+        void toggleSelectedNotes()
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (!clip) return;
+            const auto clipId = clip->id;
+            const auto selected = selectedNotes();
+            juce::StringArray ids;
+            bool activate = false;
+            for (const auto& note : selected) { ids.add (note.id); activate = activate || !note.active; }
+            endGesture();
+            owner.report (owner.session.setMidiNotesActive (clipId, ids, activate));
+            owner.refresh();
+        }
         void showNoteMenu()
         {
             juce::PopupMenu popup;
@@ -2159,6 +2178,9 @@ private:
             popup.addItem (2, "Copy Notes", hasSelectedNote()); popup.addItem (3, "Cut Notes", hasSelectedNote());
             popup.addItem (4, "Paste Notes at Marker", ! noteClipboard.empty()); popup.addItem (5, "Duplicate Notes");
             popup.addItem (7, "Split Notes at Marker", hasNotes);
+            const auto selected = selectedNotes();
+            const bool activate = std::any_of (selected.begin(), selected.end(), [] (const auto& note) { return !note.active; });
+            popup.addItem (8, activate ? "Activate Selected Notes" : "Deactivate Selected Notes", !selected.empty());
             popup.addSeparator(); popup.addItem (1, "Delete Selected Notes");
             popup.addSeparator(); popup.addItem (6, "Notes clipboard: Halftrack only", false);
             auto safe = juce::Component::SafePointer<PianoRoll> (this);
@@ -2169,6 +2191,7 @@ private:
                 if (result >= 10 && result <= 17) safe->transformSelected (static_cast<Session::NoteTransform> (result-10));
                 if (result == 1) safe->deleteSelectedNote();
                 if (result == 7 && safe->insertionBeat==marker) safe->splitNotesAtMarker();
+                if (result == 8) safe->toggleSelectedNotes();
                 const char command = result == 2 ? 'C' : result == 3 ? 'X' : result == 4 ? 'V' : result == 5 ? 'D' : 0;
                 if (command != 0) safe->keyPressed (juce::KeyPress (command, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0));
             });
@@ -5014,6 +5037,30 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     const auto selectedReturn=currentTrack()->id;selectedSceneId=newSceneId;menuItemSelected(56,4);
     check(selectedSceneIndex()==1&&selectedSceneId!=newSceneId&&currentTrack()->id==selectedReturn,"scene duplication selects its new row even with a return track selected");
     session.undo();refresh();
+    selectLauncherSlot(2,0);openPianoRoll();pianoRoll.fit();const auto activationClip=selectedLauncherClipId;
+    check(session.addMidiNote(activationClip,60,0,1,.8f).wasOk()&&session.addMidiNote(activationClip,67,2,1,.6f).wasOk(),"draw notes for activation controls");refresh();
+    pianoRoll.keyPressed(juce::KeyPress('A',juce::ModifierKeys(juce::ModifierKeys::commandModifier),0));
+    pianoRoll.keyPressed(juce::KeyPress('0'));refresh();
+    check(std::all_of(currentMidiClip()->notes.begin(),currentMidiClip()->notes.end(),[](const auto& n){return !n.active;})&&currentMidiClip()->active,"piano-roll zero deactivates selected notes without disabling the clip");
+    if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+        if (auto* host = getParentComponent())
+        {
+            const juce::File directory (juce::String::fromUTF8 (configured));check(directory.createDirectory().wasOk(),"create note activation snapshot directory");
+            const auto bounds=host->getBounds();host->setSize(1100,720);pianoRoll.fit();refresh();
+            const auto image=host->createComponentSnapshot(host->getLocalBounds(),true,1.0f);
+            auto stream=directory.getChildFile("inactive-notes-1100x720.png").createOutputStream();juce::PNGImageFormat png;
+            check(stream&&stream->setPosition(0)&&stream->truncate().wasOk()&&png.writeImageToStream(image,*stream),"write actual inactive note view");
+            host->setSize(bounds.getWidth(),bounds.getHeight());pianoRoll.fit();refresh();
+        }
+    const auto inactiveIds=currentMidiClip()->notes;
+    pianoRoll.keyPressed(juce::KeyPress('D',juce::ModifierKeys(juce::ModifierKeys::commandModifier),0));refresh();
+    check(currentMidiClip()->notes.size()==inactiveIds.size()*2&&std::all_of(currentMidiClip()->notes.begin(),currentMidiClip()->notes.end(),[](const auto& n){return !n.active;}),"note duplicate preserves inactive state");
+    session.undo();refresh();session.undo();refresh();check(std::all_of(currentMidiClip()->notes.begin(),currentMidiClip()->notes.end(),[](const auto& n){return n.active;}),"one activation undo restores the whole note selection");
+    const auto activationNote=currentMidiClip()->notes.front().id;check(session.setMidiNotesActive(activationClip,{activationNote},false).wasOk(),"prepare mixed note activation");refresh();
+    pianoRoll.keyPressed(juce::KeyPress('A',juce::ModifierKeys(juce::ModifierKeys::commandModifier),0));pianoRoll.keyPressed(juce::KeyPress('0'));refresh();
+    check(std::all_of(currentMidiClip()->notes.begin(),currentMidiClip()->notes.end(),[](const auto& n){return n.active;}),"mixed selection zero activates all selected notes");
+    pianoRoll.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));pianoRoll.keyPressed(juce::KeyPress('0'));refresh();
+    check(std::all_of(currentMidiClip()->notes.begin(),currentMidiClip()->notes.end(),[](const auto& n){return n.active;}),"zero without selected notes makes no note edit");
 
 
 

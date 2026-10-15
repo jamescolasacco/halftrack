@@ -32,6 +32,8 @@ The new original Utility, refined using traced filter topology and a normalized 
 
 ## Current Session subset
 
+Individual MIDI note activation is exposed through selected-note controls, stored native mute state and state-preserving clipboard operations. A reproduced held-note defect led to selecting the native beat sequencer for Arrangement as well as Session; generated tests compare a retained same-clip voice against an independent channel. MID-001 remains partial; controllers/MPE and complete editor parity are not established. See [the activation contract](architecture.md#midi-note-activation).
+
 Scene duplication now has stable-ID UI/model integration with independent audio/MIDI copies, retained clip settings, undo/redo and generated native-driver playback tests. This deepens SES-001; it does not add a completed parity row. Scene follow actions and performance-to-Arrangement capture remain unfinished. See [architecture](architecture.md#session-scene-duplication).
 
 The built-in instrument at `ea24869` adds sine, deterministic white noise and adjustable pulse width alongside the existing saw. Native controls, invalid-command preservation, project round trips, undo/redo and independent complete-buffer/harmonic tests pass all eight Mac suites in 133.15 seconds and [all three CI platforms](https://github.com/jamescolasacco/halftrack/actions/runs/38518528688). See the [oscillator contract](research/synth-oscillator-contract.md). Dual oscillators, full modulation, complete instrument-device reconstruction and measured reference sound matching remain absent or unverified.

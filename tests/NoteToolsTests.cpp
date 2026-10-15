@@ -26,6 +26,124 @@ std::vector<Session::MidiNoteInfo> notesFor(Session& s,const juce::String& id)
     for(const auto& t:s.snapshot().tracks){for(const auto& c:t.clips)if(c.id==id)return c.notes;for(const auto& slot:t.slots)if(slot.clip.id==id)return slot.clip.notes;}
     throw std::runtime_error("Fixture clip missing");
 }
+juce::AudioBuffer<float> activationRender (Session& session, const juce::File& file)
+{
+    ok (session.exportWav (file), "render note activation through the production graph");
+    juce::AudioFormatManager formats; formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    check (reader && reader->sampleRate == 48000 && reader->numChannels == 2 && reader->lengthInSamples == 96000, "note activation retains complete two-second extent");
+    juce::AudioBuffer<float> output (2, 96000);
+    check (reader->read (&output, 0, 96000, 0, true, true), "read every note activation frame");
+    return output;
+}
+void noteActivationTests (const juce::File& root)
+{
+    for (bool slot : {false, true})
+    {
+        Session s (false); ok (s.addMidiTrack ("Note activation"), "create activation instrument");
+        const auto track = s.snapshot().tracks.back().id;
+        ok (slot ? s.addMidiClipToSlot (track, 0, 4) : s.addMidiClip (track, 0, 4), "create note activation clip");
+        const auto clip = slot ? s.snapshot().tracks.back().slots[0].clip.id : s.snapshot().tracks.back().clips[0].id;
+        juce::StringArray ids;
+        ok (s.addMidiNotes (clip, {{"",60,0,3,.8f},{"",64,1,.5,.6f}}, ids), "draw active note pair");
+        const auto original = notesFor (s, clip);
+        ok (s.setMidiNotesActive (clip, {ids[0]}, false), "deactivate only selected note");
+        auto notes = notesFor (s, clip);
+        check (same (notes, original) && !notes[0].active && notes[1].active, "activation retains identity, pitch, geometry, velocity and other notes");
+        s.undo(); check (notesFor(s,clip)[0].active && notesFor(s,clip)[1].active, "one undo restores note activation");
+        s.redo(); check (!notesFor(s,clip)[0].active && notesFor(s,clip)[1].active, "redo restores only selected inactive note");
+        const auto project = root.getChildFile (slot ? "note-state-session.halftrack" : "note-state-arrangement.halftrack");
+        ok (s.saveProject (project), "save mixed note activation"); ok (s.loadProject (project), "reopen note activation");
+        check (!notesFor(s,clip)[0].active && notesFor(s,clip)[1].active, "note activation survives project reopening");
+        ok (s.setMidiNotesActive (clip, {ids[0]}, false), "equal activation is a no-op");
+        ok (s.setMidiNotesActive (clip, {}, true), "empty selection is a no-op");
+        check (!s.snapshot().dirty && !s.canUndo(), "no-op activation preserves clean state");
+        auto changed = notesFor(s,clip)[0]; changed.pitch=61;
+        ok (s.updateMidiNotes (clip,{changed}), "edit inactive note geometry");
+        check (!notesFor(s,clip)[0].active, "ordinary note edits preserve inactive state"); s.undo();
+        for (const auto& invalid : {juce::StringArray{ids[0],"missing"},juce::StringArray{ids[0],ids[0]},juce::StringArray{""}})
+            check (s.setMidiNotesActive(clip,invalid,true).failed() && !notesFor(s,clip)[0].active && s.canRedo(), "invalid selection rejects atomically and preserves redo");
+        check (s.setMidiNotesActive("missing",ids,false).failed() && s.canRedo(), "missing clip preserves undo history");
+        const auto locate = [&] (auto&& self, juce::XmlElement& node) -> juce::XmlElement*
+        {
+            if(node.hasTagName("NOTE")&&node.getStringAttribute("halftrackNoteId")==ids[0])return &node;
+            for(auto* child=node.getFirstChildElement();child;child=child->getNextElement())if(auto* found=self(self,*child))return found;
+            return nullptr;
+        };
+        for(const auto& invalid : juce::StringArray{"2","-1","nan","true","0 trailing",""})
+        {
+            auto xml=juce::XmlDocument::parse(project);auto* note=locate(locate,*xml);check(note!=nullptr,"locate native saved note mute");
+            note->setAttribute("m",invalid);const auto bad=root.getChildFile("invalid-note-activation.halftrack");check(xml->writeTo(bad),"write invalid note activation fixture");
+            check(s.loadProject(bad).failed() && s.canRedo() && !notesFor(s,clip)[0].active,"invalid note mute preserves current document and history");
+        }
+        const auto midi = root.getChildFile("active-only.mid");ok(s.exportMidiClip(clip,midi),"export only active MIDI events");
+        auto input=midi.createInputStream();juce::MidiFile file;check(input && file.readFrom(*input),"decode actual exported MIDI");int noteOns=0;
+        for(int t=0;t<file.getNumTracks();++t)for(int n=0;n<file.getTrack(t)->getNumEvents();++n)
+            if(const auto& message=file.getTrack(t)->getEventPointer(n)->message;message.isNoteOn()){++noteOns;check(message.getNoteNumber()==64,"inactive note is absent from MIDI export");}
+        check(noteOns==1,"MIDI export contains exactly the enabled note");
+        if(!slot)
+        {
+            const auto actual=activationRender(s,root.getChildFile("note-actual.wav"));
+            Session oracle(false);ok(oracle.addMidiTrack("Independent active notes"),"create independent activation oracle");
+            const auto oracleTrack=oracle.snapshot().tracks.back().id;ok(oracle.addMidiClip(oracleTrack,0,4),"create complete oracle duration");
+            ok(oracle.addMidiNote(oracle.snapshot().tracks.back().clips[0].id,64,1,.5,.6f),"draw only the expected active note");
+            const auto expected=activationRender(oracle,root.getChildFile("note-expected.wav"));double error=0;
+            for(int c=0;c<2;++c)for(int n=0;n<96000;++n){const auto sample=actual.getSample(c,n);if(!std::isfinite(sample))throw std::runtime_error("nonfinite note render");error=std::max(error,std::abs(double(sample)-expected.getSample(c,n)));}
+            check(actual.getMagnitude(0,96000)>.01 && error<2e-6,"complete output matches independently drawn enabled notes");
+            ok(s.setMidiNotesActive(clip,ids,false),"disable every note");const auto silence=activationRender(s,root.getChildFile("note-silent.wav"));
+            check(silence.getMagnitude(0,96000)==0&&silence.getMagnitude(1,0,96000)==0,"every frame is silent when all notes are inactive");s.undo();
+        }
+        notes=notesFor(s,clip);for(auto& note:notes)note.startBeat+=.5;
+        juce::StringArray inserted;ok(s.addMidiNotes(clip,notes,inserted),"paste independent notes with their activation state");
+        const auto pasted=notesFor(s,clip);bool retained=false;
+        for(const auto& note:pasted)if(note.id==inserted[0])retained=!note.active&&note.id!=ids[0];
+        check(retained,"note clipboard insertion preserves mute with a new identity");s.undo();
+        juce::StringArray split;ok(s.splitMidiNotes(clip,{ids[0]},1,split),"split inactive note");
+        int inactive=0;for(const auto& note:notesFor(s,clip))if(!note.active)++inactive;
+        check(split.size()==1&&inactive==2,"both halves retain inactive state");
+    }
+}
+void playingNoteActivationTests()
+{
+    namespace te=tracktion::engine;
+    for(bool slot:{false,true})for(bool sibling:{false,true})
+    {
+        Session s(false);auto& engine=dynamic_cast<te::DeviceManager::TracktionEngineAudioDeviceManager&>(s.audioDeviceManager()).engine;
+        te::HostedAudioDeviceInterface::Parameters p;p.sampleRate=48000;p.blockSize=128;p.inputChannels=0;p.outputChannels=2;p.useMidiDevices=false;
+        te::test_utilities::EnginePlayer player(engine,p);juce::String clip;juce::StringArray ids;
+        for(int t=2;t<4;++t)
+        {
+            ok(s.addMidiTrack("Independent voice"),"create note activation playback instrument");auto track=s.snapshot().tracks.back();auto synth=track.synth;
+            synth.attackSeconds=synth.decaySeconds=0;synth.sustain=1;synth.releaseSeconds=.01f;ok(s.setSynthSettings(track.id,synth),"set bounded note release");
+            ok(s.setTrackPan(t,t==2?-1.0f:1.0f),"isolate playback voices by channel");
+            ok(slot?s.addMidiClipToSlot(track.id,0,4):s.addMidiClip(track.id,0,4),"create held note clip");track=s.snapshot().tracks.back();
+            const auto id=slot?track.slots[0].clip.id:track.clips[0].id;juce::StringArray added;ok(s.addMidiNotes(id,{{"",sibling&&t==3?67:60,0,4,1}},added),"draw held voice");
+            if(sibling&&t==2)ok(s.addMidiNote(id,67,0,4,1),"draw unselected held note in the same clip");
+            if(t==2){clip=id;ids=added;}
+        }
+        const auto dispatch=[&]{for(auto* edit:engine.getActiveEdits().getEdits())edit->dispatchPendingUpdatesSynchronously();};
+        ok(s.setLaunchQuantisation(Session::LaunchQuantisation::none),"set immediate note activation launch");
+        ok(slot?s.launchScene(0):s.play(),"start independent held notes");dispatch();const auto before=player.process(12032);
+        check(before.getMagnitude(0,0,12032)>.01&&before.getMagnitude(1,0,12032)>.01,"both held voices are initially audible");
+        ok(s.setMidiNotesActive(clip,ids,false),"deactivate sounding note");dispatch();player.process(2048);const auto after=player.process(4096);
+        const auto verifyRelease=[&](const juce::AudioBuffer<float>& audio)
+        {
+            double error=0;
+            for(int n=0;n<audio.getNumSamples();++n)
+            {
+                const auto left=audio.getSample(0,n),right=audio.getSample(1,n);
+                if(!std::isfinite(left)||!std::isfinite(right))throw std::runtime_error("nonfinite note transition");
+                error=std::max(error,std::abs(double(left)-(sibling?right:0.0)));
+            }
+            check(audio.getMagnitude(1,0,audio.getNumSamples())>.01&&(sibling?error<2e-6:error==0),
+                "only selected held voice releases; remaining note matches independent channel; error="+juce::String(error,12));
+        };
+        verifyRelease(after);
+        s.undo();check(notesFor(s,clip)[0].active,"undo restores active note while playing");dispatch();
+        s.stop();s.seek(0);ok(slot?s.launchScene(0):s.play(),"restart restored notes");dispatch();check(player.process(8192).getMagnitude(0,0,8192)>.01,"restored note plays after undo");
+        s.redo();dispatch();player.process(2048);verifyRelease(player.process(4096));s.stop();
+    }
+}
 void playingSplitTests()
 {
     namespace te=tracktion::engine;
@@ -153,7 +271,7 @@ int runNoteToolsTests (const juce::File& artifacts)
             auto tiny=byId(beforeStretch,0);tiny.startBeat=.1234;tiny.lengthBeats=1.0/960;ok(s.updateMidiNotes(clip,{tiny}),"create minimum-length off-grid note");
             ok(s.transformMidiNotes(clip,{tiny.id},Transform::quantizeEnds,.25),"end quantization preserves positive minimum duration");check(byId(notesFor(s,clip),0).lengthBeats>=1.0/960,"minimum duration is never rounded below model bound");
         }
-        splitTests(root);playingSplitTests();
+        splitTests(root);playingSplitTests();noteActivationTests(root);playingNoteActivationTests();
         std::cout<<"Note tools passed: "<<root.getFullPathName()<<std::endl;return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL note tools: "<<e.what()<<std::endl;return 1;}

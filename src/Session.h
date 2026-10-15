@@ -47,6 +47,7 @@ public:
         int pitch = 60;
         double startBeat = 0, lengthBeats = 1;
         float velocity = 0.8f;
+        bool active = true;
     };
     enum class FadeCurve { linear = 1, convex, concave, sCurve };
     struct AudioClipSettings
@@ -158,6 +159,7 @@ public:
     juce::Result updateMidiNote (const juce::String& clipId, const juce::String& noteId,
                                  int pitch, double startBeat, double lengthBeats, float velocity);
     juce::Result updateMidiNotes (const juce::String& clipId, const std::vector<MidiNoteInfo>& notes);
+    juce::Result setMidiNotesActive (const juce::String& clipId, const juce::StringArray& noteIds, bool active);
     juce::Result splitMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, double splitBeat, juce::StringArray& insertedIds);
     juce::Result transformMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, NoteTransform, double gridBeats);
     juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);

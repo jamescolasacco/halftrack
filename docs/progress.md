@@ -546,3 +546,17 @@ Fresh consumer ownership makes the immediate test pass in 17.23 s. A delayed-fir
 
 
 Input activation verification: generated count-in, MIDI recording/quantization and delayed monitoring pass in **77.72 s**. The final expanded Auto-arm/redo source passes monitoring **18.32 s**, production UI **4.84 s**, launcher **5.45 s** and session/export **61.40 s** (90.01 s together). Fresh/repeated/unknown-source patch fixtures pass, and the owned callback source guard passes nine fixtures across 42 bodies with its existing dependency limitations. The six pre-fix dispatch schedules did not reproduce the intermittent CI symptom; the two new first-key regressions did fail before their respective corrections. Cross-platform rerun remains necessary.
+
+
+MIDI note activation ownership: root owns selected-note activation through native note mute state, snapshot/clipboard preservation, original piano-roll appearance and controls, strict saved-state validation, atomic history, generated render/runtime tests and UI checks. Whole-clip activation remains separate. No other agent is editing these areas.
+
+
+Running note deactivation fails with the target and independent channels both retaining a 0.204093754292 peak. The pinned seconds-based MIDI node removes future note-offs when a note is muted but does not reconcile formerly sounding notes against its replacement sequence. Root is selecting the engine's supported beat-based MIDI sequencer for all owned MIDI clips; this is the existing Session path, with shared active-note state and reconciliation. Configuration must run before graph dispatch for new/imported/restored clips as well as undo/redo. This is a playback-policy change requiring the full timing/render regression suite, not a claimed reference-equivalence improvement.
+
+
+The beat-sequencer policy passes focused clip activation **11.72 s**, tempo **6.45 s**, MIDI files **7.36 s** and note tools **7.30 s** (32.84 s together). The formerly stuck target voice now releases while the independent track stays audible, with no new DSP or native source patch. A same-clip held sibling test additionally compares the remaining voice against an independent channel. The actual inactive-note view at 1100×720 was inspected: slate notes, bright OFF labels and orange selection outlines remain legible. Full combined verification follows.
+
+Published source `96465bd` has a verified Mac package containing 107 owned and 5,969 dependency files; its fresh extracted monitoring, scene and native UI suites pass. Cross-platform CI [38725624663](https://github.com/jamescolasacco/halftrack/actions/runs/38725624663) is running separately from the subsequent note-activation work.
+
+
+Combined note activation and beat-sequencer verification: all **22 Mac acceptance suites pass in 327.67 s**. This includes same-clip/independent-track held voices, exact silent all-inactive renders, complete enabled-note render comparison, note clipboard/splitting, active-state persistence/rejection, controller recording, tempo, latency, Session ordering/copying and reentrant exports. The source callback guard result remains applicable: no owned DSP callback changed. This deepens the MIDI editor subset without increasing whole-feature parity coverage.

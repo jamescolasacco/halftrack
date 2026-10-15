@@ -134,3 +134,6 @@ Scene-copy default: insert immediately after the source and append ` copy` to it
 
 
 Scene-order default: Up/Down moves an existing scene and all its track cells by one row in the UI; the facade also accepts any valid final row index. Movement preserves currently playing and queued clip identities and their launch boundary. Recording/export block structural row edits. No scene drag/drop gesture is claimed yet.
+
+
+Note-activation default: toggle the selected notes only; an empty selection does nothing and a mixed selection activates all selected notes. This preserves the distinction from whole-clip activation. Muted notes retain pitch, timing, velocity, identity and editable appearance; copied notes preserve activation.

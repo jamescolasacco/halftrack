@@ -277,3 +277,8 @@ Put an audio clip and a MIDI clip in one scene, rename a clip, and deactivate an
 ### Reorder Session scenes
 
 With a scene playing, choose **Move Scene Up/Down** in its context menu or **Move Selected Scene Up/Down** in Session. The entire row moves together, its selection and notes remain attached to it, and playback continues. Queue another scene with beat quantization, move it before the boundary, and confirm the queued clip still launches. Undo/redo a move, then save/reopen and verify row order.
+
+
+### Activate and deactivate MIDI notes
+
+Select several piano-roll notes and press **0**, or use **Note tools → Deactivate Selected Notes**. Those notes turn gray and stop triggering while the clip and other notes remain enabled. Press 0 again to restore them, then undo/redo. Duplicate a muted group and verify the copy is also muted. With a mixed selection, 0 activates every selected note. Save/reopen to retain note states.

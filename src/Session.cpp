@@ -323,6 +323,11 @@ Result validateAudioClips (const juce::ValueTree& state)
         const auto value=state[te::IDs::mute].toString().trim();
         if (value!="0" && value!="1") return Result::fail("The project contains invalid clip activation.");
     }
+    if (state.hasType (te::IDs::NOTE) && state.hasProperty (te::IDs::m))
+    {
+        const auto value = state[te::IDs::m].toString().trim();
+        if (value != "0" && value != "1") return Result::fail ("The project contains invalid MIDI note activation.");
+    }
     if (state.hasType (te::IDs::AUDIOCLIP))
     {
         const auto parse = [&state] (const juce::Identifier& key, double fallback, double& result)
@@ -406,7 +411,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
         result.startBeat = beats.getStart().inBeats(); result.lengthBeats = beats.getLength().inBeats();
         for (auto* note : midi->getSequence().getNotes())
             result.notes.push_back ({ note->state.getProperty (midiNoteIDProperty).toString(), note->getNoteNumber(),
-                                     note->getStartBeat().inBeats(), note->getLengthBeats().inBeats(), note->getVelocity() / 127.0f });
+                                     note->getStartBeat().inBeats(), note->getLengthBeats().inBeats(), note->getVelocity() / 127.0f, !note->isMute() });
     }
     return result;
 }
@@ -726,9 +731,18 @@ struct Session::Impl
     }
     File editLocation() const { return projectFile == File() ? scratch.getChildFile ("Untitled.halftrack") : projectFile; }
     File assets() const { auto f = editLocation(); return f.getSiblingFile (f.getFileNameWithoutExtension() + " Assets"); }
+    void configureMidiPlayback()
+    {
+        // The beat sequencer reconciles edited notes against shared active-note
+        // state. The legacy seconds proxy can strand voices after note removal.
+        for (auto* track : te::getAudioTracks (*edit))
+            for (auto* clip : allTrackClips (*track))
+                if (auto* midi = dynamic_cast<te::MidiClip*> (clip)) midi->setUsesProxy (false);
+    }
     void flushStructuralUpdates()
     {
         if (! edit) return;
+        configureMidiPlayback();
         // Native sort actions must remain in the edit that triggered them, not
         // appear later as an unrelated Undo step when export pumps UI events.
         edit->getTrackList().dispatchPendingSort();
@@ -807,6 +821,7 @@ struct Session::Impl
     }
     void refreshParameterValues()
     {
+        configureMidiPlayback();
         for (auto* t : te::getAudioTracks (*edit))
             for (auto* p : t->pluginList.getPlugins())
                 for (auto* parameter : p->getAutomatableParameters()) parameter->updateFromAttachedValue();
@@ -1734,6 +1749,7 @@ Result Session::addMidiNotes (const String& clipId, const std::vector<MidiNoteIn
         // Native addNote synchronously creates an event for its new NOTE state.
         jassert (note != nullptr);
         note->state.setProperty (midiNoteIDProperty, value.id, undo);
+        note->setMute (!value.active, undo);
     }
     insertedIds = std::move (newIds);
     impl->changed(); return Result::ok();
@@ -1784,6 +1800,34 @@ Result Session::updateMidiNotes (const String& clipId, const std::vector<MidiNot
         change.note->setVelocity (change.velocity, undo);
     }
     impl->changed(); return Result::ok();
+}
+Result Session::setMidiNotesActive (const String& clipId, const juce::StringArray& ids, bool active)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* clip = impl->midiClip (clipId);
+    if (!clip) return Result::fail ("MIDI clip not found.");
+    if (clip->getClipTrack()->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze the track before editing notes.");
+    std::map<String, te::MidiNote*> existing;
+    for (auto* note : clip->getSequence().getNotes())
+    {
+        const auto id = note->state.getProperty (midiNoteIDProperty).toString();
+        auto [entry, inserted] = existing.emplace (id, note);
+        if (!inserted) entry->second = nullptr;
+    }
+    std::set<String> requested;
+    std::vector<te::MidiNote*> changes;
+    for (const auto& id : ids)
+    {
+        if (id.isEmpty() || !requested.insert (id).second) return Result::fail ("Each selected note needs a unique identifier.");
+        const auto found = existing.find (id);
+        if (found == existing.end() || !found->second) return Result::fail ("MIDI note not found or its identifier is ambiguous.");
+        if (found->second->isMute() == active) changes.push_back (found->second);
+    }
+    if (changes.empty()) return Result::ok();
+    impl->transaction (active ? "Activate MIDI notes" : "Deactivate MIDI notes");
+    for (auto* note : changes) note->setMute (!active, &impl->edit->getUndoManager());
+    impl->changed();
+    return Result::ok();
 }
 Result Session::splitMidiNotes(const String& clipId,const juce::StringArray& ids,double beat,juce::StringArray& insertedIds)
 {
