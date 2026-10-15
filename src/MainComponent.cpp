@@ -929,7 +929,10 @@ private:
                         else
                             offset = juce::jlimit (0.0, juce::jmax (0.0,clip.sourceLength-length), offset-delta);
                         if (! clipGesture) { owner.session.beginEditGesture (rangeDrag == 3 ? "Slip audio source" : "Trim audio edge"); clipGesture = true; }
-                        owner.report (owner.session.setAudioClipRange (dragClipId,start,length,offset)); owner.refresh(); return;
+                        const auto result = owner.session.setAudioClipRange (dragClipId,start,length,offset);
+                        owner.report (result); owner.refresh();
+                        if (result.wasOk()) owner.selectAudioClip (dragClipId);
+                        return;
                     }
                 return;
             }
@@ -4217,6 +4220,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check(state.tracks[0].clips[0].start==0&&state.tracks[0].clips[0].length==.1&&state.tracks[0].clips[0].sourceOffset==0,
             "stale range and body gestures cannot edit a replacement clip");
     }
+    check(session.newProject().wasOk()&&session.importAudio(audioFixture,0).wasOk()
+        &&session.importAudio(audioFixture,0,.03).wasOk(),"prepare overlapping clips for trim sorting");refresh();
+    const auto sortId=state.tracks[0].clips[0].id;
+    check(session.setAudioClipRange(sortId,.02,.06,.01).wasOk(),"set sortable trim range");refresh();selectedTrack=0;selectedClip=0;
+    rangeDrag(rangePoint(false),80,freeRange);
+    check(selectedClip>=0&&state.tracks[0].clips[(size_t)selectedClip].id==sortId
+        &&std::abs(state.tracks[0].clips[(size_t)selectedClip].start-.04)<1e-8,
+        "trimming past another clip preserves selected identity after native sorting");
+    session.undo();refresh();
+    bool restoredSorted=false;for(const auto& clip:state.tracks[0].clips)if(clip.id==sortId)restoredSorted=std::abs(clip.start-.02)<1e-8;
+    check(restoredSorted,"sorted trim still restores its whole gesture in one undo");
 }
 
 int MainComponent::runInteractionTests()
