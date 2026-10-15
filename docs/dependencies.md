@@ -111,3 +111,13 @@ The scanner helper additionally accepts its preceding exact `a4498068deaeec17081
 ## Tracktion reverse-channel startup patch
 
 `cmake/PatchReverseChannels.cmake` supplies immutable source channel metadata while a reversed playback file is still being rendered. This prevents an immediate export or redo from constructing a zero-channel graph and silently writing zeros. Original input SHA256: `e87f781fd11f8f90236b416bd762577105439ef11eb13f63f1d9770b7ac49826`; patched output: `1902c1ad6fd72e5a62c9f83778bf190d239e7e8ae8f77229d66ff8ba6de2df57`. The patch validates exact inputs/outputs, accepts repeat application, rejects unknown sources, and preserves dependency notices. Source-inclusive distributions contain the actual patched file. Immediate reverse/undo/redo full-buffer exports and an odd-frame source spanning native reverse-worker blocks are covered by `audio-clips-acceptance`.
+
+
+## Tracktion tempo range and precision patch
+
+`cmake/PatchTempoRange.cmake` aligns the pinned engine with Halftrack's 20–999 BPM project range and preserves beat positions for small tempo edits. The native 1 ms clip-remapping guard skipped a 300-to-300.01 BPM update, shifting a nominal beat-1.5 clip to beat 1.50005. The corrected guard is 1e-12 seconds. Conversion, absolute-clip exclusions and native undo remain unchanged. Both files validate before any writes, accept repeat application, and retain upstream notices. Generated fixtures cover fresh/repeated application, an already-patched header with original sequence file, and unknown changes to either file without partial mutation.
+
+| File under `modules/tracktion_engine/model/edit` | Original SHA-256 | Patched SHA-256 |
+| --- | --- | --- |
+| `tracktion_TempoSetting.h` | `5a3e45f0fb9f53846edde6aae349ba38544e0618e45008e4994e2543148dcb56` | `b5efb441105e6edf8e216fea7c039a7b47331030019de10dad6db9aa3185c30d` |
+| `tracktion_TempoSequence.cpp` | `9bad3c89735d810e4fc41d7f6ac77fd422249287d96306525ae79458839fd6ab` | `c24f67e52af42fa46a551d585825063dde663eb17abe0a2e3236bcebf9037f99` |

@@ -184,11 +184,13 @@ public:
         tempo.setEditable (false, true, false);
         tempo.setJustificationType (juce::Justification::centred);
         tempo.setColour (juce::Label::backgroundColourId, background);
-        tempo.setTooltip ("Tempo in beats per minute. Double-click to edit.");
+        tempo.setTooltip ("Tempo: 20–999 beats per minute. Double-click to edit.");
         tempo.onTextChange = [this]
         {
-            const auto value = tempo.getText().getDoubleValue();
-            if (value >= 20.0 && value <= 300.0) session.setTempo (value);
+            const auto text = tempo.getText().trim().toStdString();
+            char* end = nullptr; const double value = std::strtod (text.c_str(), &end);
+            if (! text.empty() && end == text.c_str()+text.size() && std::isfinite (value) && value >= 20.0 && value <= 999.0)
+                session.setTempo (value);
             refresh();
         };
         positionLabel.setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain)));
@@ -4701,6 +4703,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(currentTrack()->isMidi&&currentTrack()->id!=selectedBeforeCopy&&currentTrack()->id!=selectedCopy,"captured header duplicate acts on its original identity after selection changes");
     const auto beforeStaleDuplicate=state.tracks.size();duplicateTrackFromUI("deleted-track");
     check(state.tracks.size()==beforeStaleDuplicate,"stale duplicate action cannot copy a replacement track");
+
+    check(session.newProject().wasOk(),"prepare clean tempo editor fixture");refresh();
+    tempo.setText("500.5",juce::sendNotificationSync);
+    check(state.tempo==500.5&&tempo.getText()=="500.50","native tempo editor accepts and displays values above 300 BPM");
+    session.undo();refresh();check(state.tempo==120&&session.canRedo(),"tempo editor change undoes once");
+    for(const auto& invalid:juce::StringArray{"999.01","19.99","300 trailing","nan","inf",""})
+    {
+        tempo.setText(invalid,juce::sendNotificationSync);
+        check(state.tempo==120&&tempo.getText()=="120.00"&&session.canRedo(),"invalid tempo text restores display without discarding redo");
+    }
+    tempo.setText("999",juce::sendNotificationSync);check(state.tempo==999&&tempo.getText()=="999.00","native tempo editor reaches exact supported maximum");
 
 }
 

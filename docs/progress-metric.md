@@ -1,6 +1,6 @@
 # Recorded implementation coverage
 
-Current implementation checkpoint: MIDI file and clip interchange implementation, 2026-10-15. **27 of 246 tracked active feature areas have partial implementation evidence: 11.0%.** None of these broad rows establishes complete measured reference parity.
+Current implementation checkpoint: MIDI/track editing and global tempo consistency, 2026-10-15. **28 of 246 tracked active feature areas have partial implementation evidence: 11.4%.** None of these broad rows establishes complete measured reference parity.
 
 This is recorded partial coverage, not percentage finished, remaining engineering time, or a weighted feature score. The initial inventory is not exhaustive, some existing behavior is recorded only in preview rows, and items vary greatly in size. Static decompiler coverage uses a different denominator and must never be reported as application completion.
 
@@ -8,7 +8,7 @@ This is recorded partial coverage, not percentage finished, remaining engineerin
 
 The [capability ledger](feature-parity.md) has 275 identified rows. Excluding PRE preview-check rows, OUT scope/watchlist rows, EXT programmable-environment rows and rows explicitly OUT OF SCOPE leaves 246 active rows. Count each active row whose status contains PARTIAL once. No fractional credit or estimated effort weighting is assigned.
 
-The partial rows are ARR-003/005/006/008/009/011/012, SES-001/002/008, WRP-001, MID-001/002/006/012, MIX-003/007, PRJ-002/005, UX-001/002, QA-003 and AFX-009/011/015/032/040. The [progress log](progress.md), ledger and per-feature contracts record what each actually does and what remains missing.
+The partial rows are REC-003, ARR-003/005/006/008/009/011/012, SES-001/002/008, WRP-001, MID-001/002/006/012, MIX-003/007, PRJ-002/005, UX-001/002, QA-003 and AFX-009/011/015/032/040. The [progress log](progress.md), ledger and per-feature contracts record what each actually does and what remains missing.
 
 Before audio editing, source `b342496` had 19 partial rows with the same denominator: 7.7%. The six added rows are ARR-003/005/006/008/012 and WRP-001. Their evidence and boundaries are in the [audio-editing contract](research/audio-clip-editing-contract.md). Timeline gestures improve those existing rows without increasing their count.
 
@@ -19,3 +19,5 @@ Named absolute locators add partial evidence for ARR-009. They bring the count t
 MIDI interchange adds partial evidence for MID-012. Audio reversal deepens WRP-001 without adding a new row. The total is 27/246 (11.0% recorded partial coverage), not a percentage of a completed clone.
 
 Whole MIDI clip Cut/Copy/Paste/Duplicate deepens ARR-005. It adds no new ledger row; partial coverage remains 27/246.
+
+Global 20–999 BPM timing and validated editing add partial evidence for REC-003, bringing recorded partial coverage to 28/246 (11.4%). Track ordering and duplication broaden existing workflows without adding invented ledger rows. This remains unweighted partial coverage, not clone completion.

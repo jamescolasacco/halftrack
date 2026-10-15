@@ -300,3 +300,12 @@ Track-menu Earlier/Later and Arrangement/Session header context menus call this 
 Copies start with Arrangement ownership and no queued/running Session launch. Input assignments live outside the copied track, so the new track is unassigned, unarmed and unmonitored; the source's capture settings are retained. Recording/export, missing sources, return tracks, frozen sources and nested groups reject before copying. Return duplication needs a separate bus-allocation policy and is not part of this operation. The new ID publishes only on success.
 
 Track-menu and header-context Duplicate actions select the created track. Context callbacks retain the original source identity across selection changes. Model tests include copied native and generated VST3 effects, arithmetic full-buffer signal expectations through shared returns, independent synth/note/device edits, portable saves, undo/redo and generated-device input/Session ownership checks.
+
+
+## Global tempo consistency
+
+The supported constant project tempo is 20–999 BPM. `setTempo` rejects nonfinite input, clamps finite programmatic requests to those bounds, and returns without changing dirty state or undo if the effective value is unchanged. The native text editor accepts only a complete finite numeric value within the range; invalid text restores the current value without changing history. Project loading validates each serialized tempo's numeric value before constructing or replacing the edit. Tempo maps remain outside the current editor workflow.
+
+`cmake/PatchTempoRange.cmake` raises the exact pinned engine maximum to 999 and reduces its beat-synchronized clip remapping dead zone from 1 ms to 1e-12 seconds. The larger dead zone left clips off beat after small tempo changes and accumulated drift across repeated edits. The native conversion and undo paths remain in use; absolute clips/locators retain their existing behavior. Both source files are validated before either is written, repeat application is supported, and unknown sources reject without partial writes.
+
+Generated tests check clip beat identity and seconds, independently calculated rendered note onset and duration at 20/120/300/300.01/500.5/999 BPM, 100 consecutive small edits, absolute locator placement, saved high tempos, one-step undo and malformed-project preservation. The synchronized delay suite compares full buffers at the newly supported high project tempos; standalone DSP divisions retain their existing independent impulse tests.

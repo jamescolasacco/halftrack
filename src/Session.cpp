@@ -248,6 +248,19 @@ void renewMidiNoteIDs (juce::ValueTree state, juce::UndoManager* undo = nullptr)
     if (state.hasType (te::IDs::NOTE)) state.setProperty (midiNoteIDProperty,juce::Uuid().toString(),undo);
     for (auto child : state) renewMidiNoteIDs (child,undo);
 }
+Result validateProjectTempo (const juce::ValueTree& state)
+{
+    for (const auto& tempo : state.getChildWithName (te::IDs::TEMPOSEQUENCE))
+        if (tempo.hasType (te::IDs::TEMPO))
+        {
+            const auto text = tempo.getProperty (te::IDs::bpm, 120.0).toString().trim().toStdString();
+            char* end = nullptr; const double value = std::strtod (text.c_str(), &end);
+            if (text.empty() || end != text.c_str()+text.size() || ! std::isfinite (value)
+                || value < te::TempoSetting::minBPM || value > te::TempoSetting::maxBPM)
+                return Result::fail ("Project tempo must be a finite number from 20 to 999 BPM.");
+        }
+    return Result::ok();
+}
 Result validateAudioClips (const juce::ValueTree& state)
 {
     if (state.hasType (te::IDs::AUDIOCLIP))
@@ -930,6 +943,7 @@ Result Session::loadProject (const File& file)
         return Result::ok();
     };
     if (auto result = validateSlots (validateSlots, state); result.failed()) return result;
+    if (auto result = validateProjectTempo (state); result.failed()) return result;
     if (auto result = validateRouting (state); result.failed()) return result;
     if (auto result = UtilityPlugin::validateState (state); result.failed()) return result;
     if (auto result = NativeEffectPlugin::validateState (state); result.failed()) return result;
@@ -2105,7 +2119,10 @@ void Session::setTempo (double bpm)
 {
     if (impl->exporting) return;
     if (! std::isfinite (bpm)) return;
-    impl->transaction ("Tempo"); impl->edit->tempoSequence.getTempo (0)->setBpm (juce::jlimit (20.0, 999.0, bpm)); impl->changed();
+    const auto value = juce::jlimit (te::TempoSetting::minBPM, te::TempoSetting::maxBPM, bpm);
+    auto* tempo = impl->edit->tempoSequence.getTempo (0);
+    if (tempo->getBpm() == value) return;
+    impl->transaction ("Tempo"); tempo->setBpm (value); impl->changed();
 }
 void Session::setLoop (bool enabled, double start, double end)
 {

@@ -47,6 +47,8 @@ include(cmake/PatchClipGain.cmake)
 halftrack_patch_clip_gain("${tracktion_SOURCE_DIR}")
 include(cmake/PatchReverseChannels.cmake)
 halftrack_patch_reverse_channels("${tracktion_SOURCE_DIR}")
+include(cmake/PatchTempoRange.cmake)
+halftrack_patch_tempo_range("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"
@@ -85,7 +87,7 @@ endif()
 include(CTest)
 target_compile_definitions(Halftrack PRIVATE HALFTRACK_TESTS_ENABLED=$<BOOL:${BUILD_TESTING}>)
 if(BUILD_TESTING)
-    target_sources(Halftrack PRIVATE tests/RealtimeTests.cpp tests/PluginScanTests.cpp tests/PluginEditorTests.cpp tests/SendReturnTests.cpp tests/UtilityTests.cpp tests/NativeEffectsTests.cpp tests/NoteToolsTests.cpp tests/AudioClipTests.cpp tests/LocatorTests.cpp tests/MidiFileTests.cpp tests/TrackOrderTests.cpp tests/TrackDuplicateTests.cpp)
+    target_sources(Halftrack PRIVATE tests/RealtimeTests.cpp tests/PluginScanTests.cpp tests/PluginEditorTests.cpp tests/SendReturnTests.cpp tests/UtilityTests.cpp tests/NativeEffectsTests.cpp tests/NoteToolsTests.cpp tests/AudioClipTests.cpp tests/LocatorTests.cpp tests/MidiFileTests.cpp tests/TrackOrderTests.cpp tests/TrackDuplicateTests.cpp tests/TempoTests.cpp)
     set(HALFTRACK_GAIN_TEST_FORMATS VST3)
     if(APPLE)
         list(APPEND HALFTRACK_GAIN_TEST_FORMATS AU)
@@ -124,6 +126,8 @@ if(BUILD_TESTING)
         set_tests_properties(au-acceptance PROPERTIES TIMEOUT 90
             ENVIRONMENT "HALFTRACK_TEST_AU_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_AU>/../..")
     endif()
+    add_test(NAME tempo-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-tempo ${CMAKE_BINARY_DIR}/test-artifacts)
+    set_tests_properties(tempo-acceptance PROPERTIES TIMEOUT 90)
     add_test(NAME track-duplicate-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-track-duplicate ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(track-duplicate-acceptance PROPERTIES TIMEOUT 90
         ENVIRONMENT "HALFTRACK_TEST_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_VST3>/../..")

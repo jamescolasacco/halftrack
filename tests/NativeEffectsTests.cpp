@@ -213,7 +213,7 @@ void projectTests(const juce::File& root)
         Session synced(false);ok(synced.importAudio(file,0),"import tempo-follow source");ok(synced.addNativeEffect(0,Kind::delay),"add tempo-follow delay");
         auto settings=defaultEffectSettings(Kind::delay);settings.values[2]=0;settings.values[3]=1;settings.values[8]=1;settings.values[9]=settings.values[10]=0;
         const auto id=synced.snapshot().tracks[0].plugins[0].id;ok(synced.setNativeEffectSettings(id,settings),"enable synchronized timing");
-        for(float bpm : {120.0f,60.0f,240.0f})
+        for(float bpm : {120.0f,60.0f,240.0f,300.01f,500.5f,999.0f})
         {
             synced.setTempo(bpm);const auto actualSettings=synced.snapshot().tracks[0].plugins[0].effect;
             check(actualSettings.tempoBpm==bpm,"snapshot uses project tempo without a device tempo property");
@@ -221,7 +221,7 @@ void projectTests(const juce::File& root)
             check(difference(readAudio(rendered),run(input,actualSettings))<2e-6,"export refreshes derived tempo before processing");
         }
         const auto project=root.getChildFile("synced-delay.halftrack");ok(synced.saveProject(project),"save synchronized project");ok(synced.loadProject(project),"reopen synchronized project");
-        check(synced.snapshot().tracks[0].plugins[0].effect.tempoBpm==240,"reopened delay derives saved project tempo");
+        check(synced.snapshot().tracks[0].plugins[0].effect.tempoBpm==999,"reopened delay derives saved project tempo");
         settings.tempoBpm=120;ok(synced.setNativeEffectSettings(id,settings),"stale derived tempo cannot override project tempo");
         check(!synced.snapshot().dirty&&!synced.canUndo(),"unchanged device values with stale derived tempo remain a no-op");
     }

@@ -86,7 +86,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | --- | --- | --- | --- |
 | REC-001 | Musical and sample clocks | Define conversion between beats and sample frames; test long sessions and exact loop boundaries. | NOT IMPLEMENTED / UNVERIFIED |
 | REC-002 | Play, stop, continue, locate | Test start from selection, stop/resume, rewind, scrub, and jumps with sounding notes and delayed effects. | NOT IMPLEMENTED / UNVERIFIED |
-| REC-003 | Tempo and signatures | Test manual tempo, tap tempo, nudge, signature changes, tempo ramps, and transitions across clips. | NOT IMPLEMENTED / UNVERIFIED |
+| REC-003 | Tempo and signatures | Test manual tempo, tap tempo, nudge, signature changes, tempo ramps, and transitions across clips. | PARTIAL — constant 20–999 BPM, precise MIDI remapping, rendered onset/duration, synchronized delay, validated persistence and undo; tap/nudge, signatures and tempo maps missing |
 | REC-004 | Loop and punch | Record through repeated loop boundaries and punch regions; inspect placement and partial-buffer boundaries. | NOT IMPLEMENTED / UNVERIFIED |
 | REC-005 | Metronome and count-in | Verify beats, accents, routing, count-in, odd signatures, and start-on-grid behavior against recorded impulses. | NOT IMPLEMENTED / UNVERIFIED |
 | REC-006 | Simultaneous multitrack capture | Record distinct signals to several tracks; verify alignment, channel isolation, file closure, and stop behavior. | NOT IMPLEMENTED / UNVERIFIED |
