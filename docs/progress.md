@@ -453,3 +453,11 @@ Recording quantization ownership: root owns project-level recording grid setting
 
 
 Recording quantization is verified on the final source: all **19 Mac acceptance suites pass in 275.87 s**, including the expanded MIDI-input suite in **29.12 s**, metronome in **25.11 s** and production UI in **4.07 s**. All seven grids retain note duration/velocity and controller timing; the sixteenth-note full PCM render matches independently drawn notes. Existing overdub material, one-take undo/redo, off-grid start/end bounds, project persistence, invalid settings and audio-only loop capture pass. The callback source guard and Python fixture suite pass with their existing documented scope. This deepens REC-008; partial feature-area coverage remains 30/246 (12.2%).
+
+
+Master output ownership: root owns the native master-volume facade and validation, the real vertical master fader beside the existing meters, independent full-mix render/undo/persistence tests, production UI checks and documentation. Recording quantization is committed as `ad3b142`; publication will follow the ongoing metronome platform run so that validation is not canceled. No other agent is editing these areas.
+
+
+Master output focused verification passes its new generated full-mix suite in **7.78 s** and production UI suite in **4.05 s**. Every stereo frame follows independent gain arithmetic at silence, -24, -6, 0 and +6 dB, including return audio. Continuous-drag undo, redo, save/reopen, finite clamping, no-op history and malformed-load preservation pass. The actual 1100-pixel Session image was inspected: the new fader fits beside the master meters. Full combined verification follows the CI issue below; physical listening remains unverified.
+
+Platform regression ownership: root owns the Mac CI monitoring-redo diagnosis and generated-device timing tests. CI 38707016143 passes Windows and Linux, but macOS times out the metronome suite at 90 seconds and fails monitoring redo. Its remaining tests pass; wall times are roughly three times local. The previously recorded local results remain valid but do not establish this revision's cross-platform success. No other agent is editing these areas.

@@ -23,6 +23,7 @@ int runTrackDuplicateTests (const juce::File&);
 int runTempoTests (const juce::File&);
 int runMidiInputTests (const juce::File&);
 int runMetronomeTests (const juce::File&);
+int runMasterVolumeTests (const juce::File&);
 int runRealtimeTests();
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -69,6 +70,13 @@ public:
             return;
         }
         #endif
+        if (args.contains ("--self-test-master-volume"))
+        {
+            const int i=args.indexOf("--self-test-master-volume");
+            const auto destination=i+1<args.size()?juce::File(args[i+1])
+                :juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("halftrack-tests");
+            setApplicationReturnValue(runMasterVolumeTests(destination));quit();return;
+        }
         if (args.contains ("--self-test-metronome"))
         {
             const int i=args.indexOf("--self-test-metronome");

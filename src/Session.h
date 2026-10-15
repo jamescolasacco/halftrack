@@ -114,7 +114,7 @@ public:
         juce::File projectFile;
         bool dirty = false, playing = false, recording = false, looping = false;
         double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
-        float masterPeakL = 0, masterPeakR = 0;
+        float masterPeakL = 0, masterPeakR = 0, masterGainDb = 0;
         std::vector<TrackInfo> tracks;
         std::vector<SceneInfo> scenes;
         std::vector<LocatorInfo> locators;
@@ -182,6 +182,7 @@ public:
     juce::Result moveClip (int trackIndex, int clipIndex, double startSeconds);
     juce::Result removeClip (int trackIndex, int clipIndex);
     juce::Result renameTrack (int trackIndex, const juce::String&);
+    juce::Result setMasterGain (float decibels);
     juce::Result setTrackGain (int trackIndex, float decibels);
     juce::Result setTrackPan (int trackIndex, float pan);
     juce::Result setTrackMute (int trackIndex, bool);

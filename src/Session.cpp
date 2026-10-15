@@ -255,6 +255,24 @@ double recordGrid(Session::RecordQuantisation choice)
     constexpr double grids[]={0,1,.5,1.0/3,.25,1.0/6,.125};
     return grids[juce::jlimit(0,6,static_cast<int>(choice))];
 }
+Result validateMasterVolume(const juce::ValueTree& state)
+{
+    int groups=0;
+    for(const auto& group:state) if(group.hasType(te::IDs::MASTERVOLUME))
+    {
+        if(++groups>1) return Result::fail("Invalid duplicate master volume.");
+        int volumes=0;
+        for(const auto& plugin:group) if(plugin.hasType(te::IDs::PLUGIN))
+        {
+            if(++volumes>1 || plugin.getProperty(te::IDs::type).toString()!="volume") return Result::fail("Invalid master volume processor.");
+            const auto text=plugin.getProperty(te::IDs::volume,te::decibelsToVolumeFaderPosition(0)).toString().trim().toStdString();char* end=nullptr;
+            const auto value=std::strtod(text.c_str(),&end);
+            if(text.empty() || end!=text.c_str()+text.size() || !std::isfinite(value) || value<0 || value>1)
+                return Result::fail("Invalid master volume level.");
+        }
+    }
+    return Result::ok();
+}
 Result validateRecordQuantisation(const juce::ValueTree& state)
 {
     const auto text=state.getProperty(recordQuantisationProperty,0).toString().trim().toStdString();char* end=nullptr;
@@ -840,6 +858,7 @@ Session::Snapshot Session::snapshot() const
     s.position = transport.getPosition().inSeconds();
     s.duration = e.getLength().inSeconds();
     s.tempo = e.tempoSequence.getTempo (0)->getBpm();
+    s.masterGainDb=e.getMasterVolumePlugin()->getVolumeDb();
     s.metronome = {e.clickTrackEnabled.get(),e.clickTrackEmphasiseBars.get(),e.clickTrackRecordingOnly.get(),
         e.getClickTrackVolume(),static_cast<int>(e.state.getProperty(countInProperty,0))};
     s.recordQuantisation=static_cast<RecordQuantisation>(static_cast<int>(e.state.getProperty(recordQuantisationProperty,0)));
@@ -1002,6 +1021,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateProjectTempo (state); result.failed()) return result;
     if (auto result = validateMetronome (state); result.failed()) return result;
     if (auto result = validateRecordQuantisation (state); result.failed()) return result;
+    if (auto result = validateMasterVolume (state); result.failed()) return result;
     if (auto result = validateRouting (state); result.failed()) return result;
     if (auto result = UtilityPlugin::validateState (state); result.failed()) return result;
     if (auto result = NativeEffectPlugin::validateState (state); result.failed()) return result;
@@ -2054,6 +2074,15 @@ Result Session::renameTrack (int index, const String& name)
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (name.trim().isEmpty()) return Result::fail ("Enter a track name.");
     impl->transaction ("Rename track"); t->setName (name.trim()); impl->changed(); return Result::ok();
+}
+Result Session::setMasterGain(float value)
+{
+    if(impl->exporting) return Result::fail("Finish or cancel the current export first.");
+    if(!std::isfinite(value)) return Result::fail("Enter a finite master level.");
+    value=juce::jlimit(-100.0f,6.0f,value);
+    auto master=impl->edit->getMasterVolumePlugin();
+    if(master->getSliderPos()==te::decibelsToVolumeFaderPosition(value)) return Result::ok();
+    impl->transaction("Master volume");master->setVolumeDb(value);impl->changed();return Result::ok();
 }
 Result Session::setTrackGain (int index, float value)
 {

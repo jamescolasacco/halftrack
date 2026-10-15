@@ -239,3 +239,8 @@ Physical listening/controller check: **NOT RUN** until performed. In a disposabl
 ## Recording quantization (about one minute)
 
 Physical controller/input check: **NOT RUN** until performed. Choose **Edit → Recording quantization → 1/16 note**, arm a MIDI track and record a slightly loose phrase. After Stop, note starts should align to sixteenth notes, while held lengths remain unchanged. Overdub onto an earlier deliberately off-grid note: only the new notes should move. Undo once removes the new take, redo restores it. Save/reopen retains the grid. Choose Off for the original unquantized workflow. Snapping clamps at clip edges to preserve note lengths; enabled recording quantization currently rejects loop recording and targets with looped/offset/grouped/multiple-take MIDI clips.
+
+
+## Master volume (about 30 seconds)
+
+Physical listening/input check: **NOT RUN** until performed. Play a phrase with a return send, adjust the bottom-right Master fader and check that the complete mix changes level. Drag to the bottom for silence; double-click to restore 0 dB. Enter -6 dB, then undo/redo. A full drag should undo once. Save/reopen retains the value, and Arrangement export uses the same output level.

@@ -103,3 +103,8 @@ Default: click Off, first-beat accent On, gain 60%, recording-only Off, count-in
 ### Recording quantization
 
 Default: Off. Optional quarter/eighth/sixteenth/thirty-second note grids and eighth/sixteenth triplets snap new recorded note starts to the nearest project beat grid, with exact half-grid ties going forward. Preserve note durations, velocities and controller timestamps. Bound the onset to the captured clip so a note is not moved outside the available source range. Existing overdub notes keep their timing. Apply on Stop within the same take undo transaction; input monitoring remains unquantized. Store the grid per project, reject changes during recording, and use raw native input capture to avoid a second device-specific quantizer. Loop recording and overdubbing into offset/looped clips with recording quantization enabled require separate work; reject those combinations before capture.
+
+
+### Master output defaults
+
+Default: use the native master-volume stage and fader law, from silence (-100 dB) through +6 dB, initially 0 dB. Expose a single stereo output-level fader beside the meters, including typed dB entry and double-click unity. Apply it to playback and export after return contributions. Master pan, master device insertion and separate cue output are future features.

@@ -2315,9 +2315,25 @@ private:
             synthClip.addAndMakeVisible (synthPanel); synthClip.setInterceptsMouseClicks (false, true);
             addButton.onClick = [this] { owner.addPluginMenu(); };
             manageButton.onClick = [this] { owner.showPlugins(); };
+            addAndMakeVisible(masterGain);masterGain.setName("Master volume");
+            masterGain.setSliderStyle(juce::Slider::LinearVertical);masterGain.setRange(-100,6,.1);masterGain.setSkewFactorFromMidPoint(-12);
+            masterGain.setTextBoxStyle(juce::Slider::TextBoxBelow,false,49,20);masterGain.setDoubleClickReturnValue(true,0);
+            masterGain.setTooltip("Master output level. Double-click for 0 dB. The bottom of the fader is silence.");
+            masterGain.textFromValueFunction=[](double value){return value<=-100?juce::String("-inf dB"):juce::String(value,1)+" dB";};
+            masterGain.valueFromTextFunction=[this](juce::String text)
+            {
+                text=text.trim();if(text.endsWithIgnoreCase("dB"))text=text.dropLastCharacters(2).trim();
+                if(text.equalsIgnoreCase("-inf"))return -100.0;
+                const auto value=text.toStdString();char* end=nullptr;const double gain=std::strtod(value.c_str(),&end);
+                return !value.empty()&&end==value.c_str()+value.size()&&std::isfinite(gain)?gain:(double)owner.state.masterGainDb;
+            };
+            masterGain.onDragStart=[this]{owner.session.beginEditGesture("Master volume");};
+            masterGain.onDragEnd=[this]{owner.session.endEditGesture();};
+            masterGain.onValueChange=[this]{owner.report(owner.session.setMasterGain((float)masterGain.getValue()));owner.refresh();};
         }
         void resized() override
         {
+            masterGain.setBounds(getWidth()-98,36,49,getHeight()-46);
             manageButton.setBounds (getWidth() - 212, 8, 94, 24);
             addButton.setBounds (getWidth() - 320, 8, 101, 24);
             sendsPanel.setBounds (9, 39, 232, getHeight() - 48);
@@ -2329,6 +2345,8 @@ private:
             const auto* track = owner.currentTrack();
             const auto total = track != nullptr ? (int) track->plugins.size() * 208 + (track->isMidi ? 554 : 0) : 0;
             sendsPanel.sync();
+            if(!masterGain.isMouseButtonDown())masterGain.setValue(owner.state.masterGainDb,juce::dontSendNotification);
+            masterGain.setEnabled(!owner.session.isExporting());
             offset = juce::jlimit (0, juce::jmax (0, total - getWidth() + chainLeft() + 141), offset);
             synthPanel.sync(); resized(); repaint();
         }
@@ -2425,6 +2443,7 @@ private:
         Impl& owner;
         juce::TextButton addButton { "+ Device" }, manageButton { "Manage..." };
         SynthPanel synthPanel;
+        juce::Slider masterGain;
         juce::Component synthClip;
         SendsPanel sendsPanel;
         int chainLeft() const { return sendsPanel.isVisible() ? 250 : 9; }
@@ -2436,19 +2455,19 @@ private:
             g.setColour (background); g.fillRect (box);
             g.setColour (muted); g.setFont (font (9.5f, true));
             g.drawText ("MASTER", box.removeFromTop (23), juce::Justification::centred);
-            auto meterArea = box.reduced (13, 12);
+            auto meterArea = box.withTrimmedLeft(60).reduced(0,12);
             auto meter = [&] (float peak, int x)
             {
-                auto rect = juce::Rectangle<int> (x, meterArea.getY(), 11, meterArea.getHeight() - 17);
+                auto rect = juce::Rectangle<int> (x, meterArea.getY(), 8, meterArea.getHeight() - 17);
                 g.setColour (line); g.fillRect (rect);
                 const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (peak, -60.0f) + 60.0f) / 60.0f);
                 g.setColour (peak >= 1.0f ? red : green);
                 g.fillRect (rect.removeFromBottom ((int) (rect.getHeight() * fraction)));
             };
-            meter (owner.state.masterPeakL, meterArea.getX() + 6);
-            meter (owner.state.masterPeakR, meterArea.getX() + 23);
+            meter (owner.state.masterPeakL, meterArea.getX() + 2);
+            meter (owner.state.masterPeakR, meterArea.getX() + 16);
             g.setColour (muted); g.setFont (font (9.0f));
-            g.drawText ("L   R", meterArea.withTrimmedTop (meterArea.getHeight() - 15), juce::Justification::centredLeft);
+            g.drawText ("L  R", meterArea.withTrimmedTop (meterArea.getHeight() - 15), juce::Justification::centredLeft);
         }
     };
 
@@ -4775,6 +4794,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         tempo.setText(invalid,juce::sendNotificationSync);
         check(state.tempo==120&&tempo.getText()=="120.00"&&session.canRedo(),"invalid tempo text restores display without discarding redo");
     }
+    auto* master=dynamic_cast<juce::Slider*>(findNamed(*this,"Master volume"));
+    check(master&&master->isVisible(),"master strip exposes a real output fader");
+    master->setValue(-9,juce::sendNotificationSync);refresh();check(std::abs(state.masterGainDb+9)<1e-4,"master fader updates the native output level");
+    master->onDragStart();master->setValue(-3,juce::sendNotificationSync);master->setValue(-6,juce::sendNotificationSync);master->onDragEnd();
+    session.undo();refresh();check(std::abs(state.masterGainDb+9)<1e-4,"a complete master-fader drag undoes once");
+    check(std::abs(master->valueFromTextFunction("invalid")+9)<1e-4&&master->valueFromTextFunction("-inf dB")==-100,"master text rejects invalid values and accepts silence");
+    master->setValue(0,juce::sendNotificationSync);refresh();check(std::abs(state.masterGainDb)<1e-4,"master fader resets to unity");
     menuItemSelected(64,1);check(state.recordQuantisation==Session::RecordQuantisation::sixteenth,"Edit menu sets recording quantization");
     menuItemSelected(20,1);check(state.recordQuantisation==Session::RecordQuantisation::none,"recording quantization menu edit undoes once");
     menuItemSelected(21,1);check(state.recordQuantisation==Session::RecordQuantisation::sixteenth,"recording quantization menu redo restores grid");
