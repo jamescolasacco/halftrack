@@ -1,5 +1,7 @@
 #include "Session.h"
 #include <tracktion_engine/tracktion_engine.h>
+#include <tracktion_graph/tracktion_graph.h>
+#include <tracktion_engine/playback/graph/tracktion_MidiInputDeviceNode.h>
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -120,6 +122,65 @@ struct GeneratedInput
         pumpSyntheticTestDevice (session, 8);
     }
 };
+
+// Exercise graph handoff without timers: an old consumer may retire before the
+// replacement receives its first process call, while controller input continues.
+void replacementConsumerLifetime()
+{
+    GeneratedInput f;
+    auto& engine = dynamic_cast<te::DeviceManager::TracktionEngineAudioDeviceManager&> (f.session.audioDeviceManager()).engine;
+    te::InputDeviceInstance* input = nullptr;
+    for (auto* edit : engine.getActiveEdits().getEdits())
+        for (auto* candidate : edit->getAllInputDevices())
+            if (&candidate->getInputDevice() == f.controller.midi.get()) input = candidate;
+    check (input != nullptr, "replacement fixture has a native input instance");
+    tracktion::graph::PlayHead playHead;
+    tracktion::graph::PlayHeadState playHeadState (playHead);
+    const auto target = input->getTargets()[0];
+    auto makeGraph = [&] (tracktion::graph::NodeGraph* previous)
+    {
+        auto graph = std::make_unique<tracktion::graph::NodeGraph>();
+        auto node = std::make_unique<te::MidiInputDeviceNode> (*input, *f.controller.midi,
+            f.controller.midi->getMPESourceID(), playHeadState, target);
+        graph->sortedNodes.push_back ({node.get(), node->getNodeProperties().nodeID});
+        graph->rootNode = std::move (node);
+        static_cast<te::MidiInputDeviceNode*> (graph->rootNode.get())->prepareToPlay ({48000, 256, *graph, previous});
+        return graph;
+    };
+    auto consume = [&] (tracktion::graph::NodeGraph& graph)
+    {
+        te::MidiMessageArray messages;
+        tracktion::graph::Node::ProcessContext context {256, {0,256}, {{},messages}};
+        static_cast<te::MidiInputDeviceNode*> (graph.rootNode.get())->process (context);
+        int noteOns = 0;
+        for (const auto& message : messages) if (message.isNoteOn()) ++noteOns;
+        return noteOns;
+    };
+    auto oldGraph = makeGraph (nullptr);
+    auto replacement = makeGraph (oldGraph.get());
+    oldGraph.reset();
+    f.controller.sendNow (juce::MidiMessage::noteOn (1, 72, (juce::uint8)96));
+    check (consume (*replacement) == 1, "first key survives retirement before replacement callback");
+    check (consume (*replacement) == 0, "replacement does not repeat the consumed key");
+
+    auto pending = makeGraph (replacement.get());
+    auto newest = makeGraph (pending.get());
+    f.controller.sendNow (juce::MidiMessage::noteOn (16, 69, (juce::uint8)96));
+    replacement.reset();
+    f.controller.sendNow (juce::MidiMessage::noteOn (1, 74, (juce::uint8)96));
+    check (consume (*newest) == 2, "overlapping replacements retain queued and newly arriving keys exactly once");
+    pending.reset(); // Its retirement must not clear the now-active newest owner.
+    f.controller.sendNow (juce::MidiMessage::noteOn (1, 76, (juce::uint8)96));
+    check (consume (*newest) == 1, "retiring an inactive replacement preserves the active consumer");
+
+    auto superseded = makeGraph (newest.get());
+    auto finalGraph = makeGraph (superseded.get());
+    newest.reset();
+    superseded.reset();
+    f.controller.sendNow (juce::MidiMessage::noteOn (1, 77, (juce::uint8)96));
+    check (consume (*finalGraph) == 1, "first key survives several replacements retired before audio activation");
+    check (consume (*finalGraph) == 0, "retired graph queues cannot replay a consumed key");
+}
 
 void immediateMonitoringTransitions()
 {
@@ -540,7 +601,7 @@ void withGeneratedMidiController (Session& session, const std::function<void(con
 }
 int runMidiMonitoringTests()
 {
-    try { immediateMonitoringTransitions(); selectionAndMonitoring(); return 0; }
+    try { replacementConsumerLifetime(); immediateMonitoringTransitions(); selectionAndMonitoring(); return 0; }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI monitoring: "<<e.what()<<std::endl;return 1;}
 }
 int runMidiInputTests(const juce::File& artifacts)

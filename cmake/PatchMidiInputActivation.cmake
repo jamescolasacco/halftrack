@@ -3,7 +3,8 @@
 function(halftrack_patch_midi_input_activation source_dir)
     set(base "${source_dir}/modules/tracktion_engine/playback/graph/tracktion_MidiInputDeviceNode")
     set(original_cpp "f893b43a88aa1897164b1f6fe45516b4e5e7e5db435afd09292da34870f91b16")
-    set(patched_cpp "a1660920bf4c22133e1a5c33264c478ee466cedfccca26edf4be79248aa81c2f")
+    set(patched_cpp "a3e623634363acecd4096d29498b8237af3a468015aeccdf48716d4dab115866")
+    set(receipt_age_cpp "a1660920bf4c22133e1a5c33264c478ee466cedfccca26edf4be79248aa81c2f")
     set(original_h "976acfb6df698e01935bdb3cfad7761da884e07b41875edb325b2ee7a10879a9")
     set(patched_h "82f9fae59e49a0293f5aa0e0ba8926faa359df5d33fafc92226480083fb049e5")
     set(previous_cpp "b417dbcd6f6dafba3078eaa408b0074d0cd6ba50e7e43f123d5a4f283b4af4a2")
@@ -11,13 +12,13 @@ function(halftrack_patch_midi_input_activation source_dir)
     foreach(ext IN ITEMS cpp h)
         file(SHA256 "${base}.${ext}" hash_${ext})
         if(NOT hash_${ext} STREQUAL original_${ext} AND NOT hash_${ext} STREQUAL patched_${ext})
-            if(NOT ext STREQUAL "cpp" OR NOT hash_${ext} STREQUAL previous_cpp)
+            if(NOT ext STREQUAL "cpp" OR (NOT hash_${ext} STREQUAL previous_cpp AND NOT hash_${ext} STREQUAL receipt_age_cpp))
                 message(FATAL_ERROR "Halftrack MIDI input patch requires pinned source: ${ext} SHA256 ${hash_${ext}}.")
             endif()
         endif()
         file(READ "${base}.${ext}" content_${ext})
     endforeach()
-    if(NOT hash_cpp STREQUAL patched_cpp)
+    if(NOT hash_cpp STREQUAL patched_cpp AND NOT hash_cpp STREQUAL receipt_age_cpp)
         # Normalize the earlier published patch before applying this complete patch.
         string(REPLACE "if (state->lastReadTime != 0 && timeNow > state->lastReadTime + maxExpectedMsPerBuffer)" "if (timeNow > state->lastReadTime + maxExpectedMsPerBuffer)" content_cpp "${content_cpp}")
         set(before [=[    if (! state)
@@ -67,6 +68,33 @@ function(halftrack_patch_midi_input_activation source_dir)
                 }
 
                 destMidi.addMidiMessage]=])
+        string(REPLACE "${before}" "${after}" content_cpp "${content_cpp}")
+    endif()
+    if(NOT hash_cpp STREQUAL patched_cpp)
+        set(before [=[    instance.removeConsumer (this);
+}]=])
+        set(after [=[    instance.removeConsumer (this);
+    if (state)
+    {
+        // A replacement may not have processed yet when its previous consumer
+        // is retired. Leave a vacancy that a surviving consumer can claim.
+        auto* expected = this;
+        state->activeNode.compare_exchange_strong (expected, nullptr, std::memory_order_acq_rel);
+    }
+}]=])
+        string(REPLACE "${before}" "${after}" content_cpp "${content_cpp}")
+        set(before [=[    if (state->activeNode.load (std::memory_order_acquire) != this)
+        return;]=])
+        set(after [=[    auto* active = state->activeNode.load (std::memory_order_acquire);
+    if (active == nullptr)
+    {
+        // Input can precede the replacement graph's first audio callback.
+        // Exactly one surviving consumer wins ownership of the shared queue.
+        state->activeNode.compare_exchange_strong (active, this, std::memory_order_acq_rel);
+        active = state->activeNode.load (std::memory_order_acquire);
+    }
+    if (active != this)
+        return;]=])
         string(REPLACE "${before}" "${after}" content_cpp "${content_cpp}")
     endif()
     if(NOT hash_h STREQUAL patched_h)
