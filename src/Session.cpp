@@ -27,6 +27,146 @@ const juce::Identifier returnBusProperty { "halftrackReturnBus" };
 const juce::Identifier returnModeProperty { "halftrackReturnSendMode" };
 const juce::Identifier sendReturnProperty { "halftrackSendReturnID" };
 
+const juce::Identifier manualVolumeProperty { "halftrackManualVolume" };
+const juce::Identifier manualPanProperty { "halftrackManualPan" };
+
+const juce::Identifier& manualAutomationProperty (Session::AutomationTarget target)
+{ return target == Session::AutomationTarget::volume ? manualVolumeProperty : manualPanProperty; }
+te::AutomatableParameter& automationParameter (te::VolumeAndPanPlugin& plugin, Session::AutomationTarget target)
+{ return *(target == Session::AutomationTarget::volume ? plugin.volParam : plugin.panParam); }
+Session::AutomationLane automationLane (te::VolumeAndPanPlugin& plugin, Session::AutomationTarget target)
+{
+    auto& curve = automationParameter (plugin, target).getCurve();
+    Session::AutomationLane lane; lane.enabled = ! curve.bypass.get();
+    for (int i = 0; i < curve.getNumPoints(); ++i)
+    {
+        const auto value = curve.getPointValue (i);
+        lane.points.push_back ({ plugin.edit.tempoSequence.toBeats (curve.getPointTime (i)).inBeats(),
+            target == Session::AutomationTarget::volume ? te::volumeFaderPositionToDB (value) : value });
+    }
+    return lane;
+}
+bool validAutomationLane (Session::AutomationTarget target, const Session::AutomationLane& lane)
+{
+    if (target != Session::AutomationTarget::volume && target != Session::AutomationTarget::pan) return false;
+    if (lane.points.size() > 4096) return false;
+    double previous = -1;
+    for (const auto& point : lane.points)
+    {
+        if (! std::isfinite (point.beat) || point.beat < 0 || point.beat > 1000000 || point.beat <= previous
+            || (previous >= 0 && point.beat - previous < 0.999e-6)
+            || ! std::isfinite (point.value) || point.value < (target == Session::AutomationTarget::volume ? -100.0f : -1.0f)
+            || point.value > (target == Session::AutomationTarget::volume ? 6.0f : 1.0f)) return false;
+        previous = point.beat;
+    }
+    return true;
+}
+bool finiteProperty (const juce::var& property, double lower, double upper)
+{
+    const auto text = property.toString().trim().toStdString(); char* end = nullptr;
+    const double value = std::strtod (text.c_str(), &end);
+    return ! text.empty() && end == text.c_str() + text.size() && std::isfinite (value) && value >= lower && value <= upper;
+}
+bool isTrackMixerState (const juce::ValueTree& state)
+{
+    return state.hasType (te::IDs::PLUGIN) && ! state.getParent().hasType (te::IDs::MASTERVOLUME)
+        && (state[te::IDs::type].toString() == "volume" || state[te::IDs::type].toString() == "halftrack-mixer");
+}
+Result readStoredManualParameters (const juce::ValueTree& state, std::map<String, float>& values)
+{
+    if (! state.hasProperty (te::IDs::parameters)) return Result::ok();
+    const auto* data = state[te::IDs::parameters].getBinaryData();
+    if (! data || data->getSize() > 256) return Result::fail ("Invalid stored mixer parameter data.");
+    juce::MemoryInputStream stream (*data, false);
+    while (! stream.isExhausted())
+    {
+        const auto key = stream.readString();
+        if ((key != "volume" && key != "pan") || stream.getNumBytesRemaining() < 4 || values.contains (key))
+            return Result::fail ("Invalid stored mixer parameter entry.");
+        const float value = stream.readFloat();
+        if (! std::isfinite (value) || value < (key == "volume" ? 0.0f : -1.0f) || value > 1
+            || (key == "volume" && value > 0 && value < std::exp (-106.0f / 20.0f) - 1e-9f))
+            return Result::fail ("Invalid stored manual mixer level.");
+        values.emplace (key, value);
+    }
+    return Result::ok();
+}
+Result validateMixerAutomation (const juce::ValueTree& state)
+{
+    if (isTrackMixerState (state))
+    {
+        std::map<String, float> explicitValues;
+        if (auto result = readStoredManualParameters (state, explicitValues); result.failed()) return result;
+        for (const auto& key : { manualVolumeProperty, manualPanProperty })
+            if (state.hasProperty (key) && (! finiteProperty (state[key], key == manualVolumeProperty ? 0 : -1, 1)
+                || (key == manualVolumeProperty && static_cast<double> (state[key]) > 0
+                    && static_cast<double> (state[key]) < std::exp (-106.0 / 20.0) - 1e-9)))
+                return Result::fail ("Invalid stored manual mixer level.");
+        std::set<String> targets;
+        for (const auto& curve : state)
+        {
+            if (! curve.hasType (te::IDs::AUTOMATIONCURVE)) continue;
+            const auto id = curve[te::IDs::paramID].toString();
+            const bool volume = id == "volume", pan = id == "pan";
+            if ((! volume && ! pan) || ! targets.insert (id).second || curve.getNumChildren() > 4096
+                || ! finiteProperty (curve.getProperty (te::IDs::bypass, 0), 0, 1)
+                || static_cast<double> (curve.getProperty (te::IDs::bypass, 0)) != std::floor (static_cast<double> (curve.getProperty (te::IDs::bypass, 0))))
+                return Result::fail ("Invalid mixer automation lane.");
+            if (curve.getNumChildren() > 0 && ! state.hasProperty (volume ? manualVolumeProperty : manualPanProperty)
+                && ! explicitValues.contains (id))
+            {
+                const auto saved = state.getProperty (volume ? te::IDs::volume : te::IDs::pan, volume ? te::decibelsToVolumeFaderPosition (0) : 0);
+                if (! finiteProperty (saved, volume ? 0 : -1, 1)
+                    || (volume && static_cast<double> (saved) > 0 && static_cast<double> (saved) < std::exp (-106.0 / 20.0) - 1e-9))
+                    return Result::fail ("Invalid legacy mixer automation baseline.");
+            }
+            double previous = -1;
+            for (const auto& point : curve)
+            {
+                if (! point.hasType (te::IDs::POINT) || ! finiteProperty (point[te::IDs::t], 0, 3000000)
+                    || ! finiteProperty (point[te::IDs::v], volume ? 0 : -1, 1)
+                    || ! finiteProperty (point.getProperty (te::IDs::c, 0), 0, 0)
+                    || (volume && static_cast<double> (point[te::IDs::v]) > 0
+                        && static_cast<double> (point[te::IDs::v]) < std::exp (-106.0 / 20.0) - 1e-9)
+                    || static_cast<double> (point[te::IDs::t]) <= previous)
+                    return Result::fail ("Mixer automation needs ordered finite linear points.");
+                previous = static_cast<double> (point[te::IDs::t]);
+            }
+        }
+    }
+    for (const auto& child : state) if (auto result = validateMixerAutomation (child); result.failed()) return result;
+    return Result::ok();
+}
+void restoreManualMixerState (juce::ValueTree state)
+{
+    if (isTrackMixerState (state))
+    {
+        std::map<String, float> explicitValues;
+        if (readStoredManualParameters (state, explicitValues).failed()) return; // Validation precedes staged load.
+        bool owned = false;
+        for (const auto& pair : { std::pair { manualVolumeProperty, te::IDs::volume }, std::pair { manualPanProperty, te::IDs::pan } })
+        {
+            const auto curve = state.getChildWithProperty (te::IDs::paramID, pair.second.toString());
+            if (state.hasProperty (pair.first) || (curve.isValid() && curve.getNumChildren() > 0))
+            {
+                if (! state.hasProperty (pair.first))
+                {
+                    const auto found = explicitValues.find (pair.second.toString());
+                    state.setProperty (pair.first, found != explicitValues.end() ? juce::var (found->second)
+                        : state.getProperty (pair.second, pair.second == te::IDs::volume ? te::decibelsToVolumeFaderPosition (0) : 0), nullptr);
+                }
+                state.setProperty (pair.second, state[pair.first], nullptr); owned = true;
+            }
+        }
+        // Construct parameters from manual values before the native single-point
+        // editing path can confuse those values with envelope edits.
+        if (owned) state.removeProperty (te::IDs::parameters, nullptr);
+        if (state.getChildWithName (te::IDs::AUTOMATIONCURVE).isValid())
+            state.setProperty (te::IDs::remapOnTempoChange, true, nullptr);
+    }
+    for (auto child : state) restoreManualMixerState (child);
+}
+
 bool isReturn (const te::AudioTrack& track) { return track.state.getProperty (returnProperty, false); }
 Session::SendMode sendMode (const te::AudioTrack& track)
 { return static_cast<Session::SendMode> (static_cast<int> (track.state.getProperty (returnModeProperty, 1))); }
@@ -898,7 +1038,22 @@ struct Session::Impl
         configureMidiPlayback();
         for (auto* t : te::getAudioTracks (*edit))
             for (auto* p : t->pluginList.getPlugins())
-                for (auto* parameter : p->getAutomatableParameters()) parameter->updateFromAttachedValue();
+                for (auto* parameter : p->getAutomatableParameters())
+                {
+                    const auto target = parameter->paramID == "volume" ? AutomationTarget::volume : AutomationTarget::pan;
+                    const auto& property = manualAutomationProperty (target);
+                    if (dynamic_cast<te::VolumeAndPanPlugin*> (p) && p->state.hasProperty (property))
+                    {
+                        if (! parameter->hasAutomationPoints())
+                        {
+                            p->state.setProperty (target == AutomationTarget::volume ? te::IDs::volume : te::IDs::pan, p->state[property], nullptr);
+                            parameter->updateFromAttachedValue();
+                        }
+                        parameter->updateStream();
+                        parameter->updateFromAutomationSources (edit->getTransport().getPosition());
+                    }
+                    else parameter->updateFromAttachedValue();
+                }
         for (auto* parameter : edit->getMasterVolumePlugin()->getAutomatableParameters()) parameter->updateFromAttachedValue();
         for (auto* t : te::getAudioTracks (*edit))
             if (auto* device = input (*t))
@@ -915,6 +1070,8 @@ struct Session::Impl
         edit->editFileRetriever = [this] { return editLocation(); };
         flushStructuralUpdates();
         edit->playInStopEnabled = true;
+        edit->getAutomationRecordManager().setReadingAutomation (true);
+        edit->getAutomationRecordManager().setWritingAutomation (false);
         edit->setCountInMode (static_cast<te::Edit::CountIn> (static_cast<int> (edit->state.getProperty(countInProperty,0))));
         refreshRouting();
         if (useDevices) edit->getTransport().ensureContextAllocated();
@@ -1044,7 +1201,12 @@ Session::Snapshot Session::snapshot() const
                 info.sends.push_back ({ id, send ? send->getGainDb() : -100.0f });
             }
         if (auto* synth = Impl::synth (*t)) info.synth = synth->getSettings();
-        if (auto* v = t->getVolumePlugin()) { info.gainDb = v->getVolumeDb(); info.pan = v->getPan(); }
+        if (auto* v = t->getVolumePlugin())
+        {
+            info.gainDb = v->getVolumeDb(); info.pan = v->getPan();
+            info.volumeAutomation = automationLane (*v, AutomationTarget::volume);
+            info.panAutomation = automationLane (*v, AutomationTarget::pan);
+        }
         if (auto* input = impl->input (*t))
         {
             info.inputName = input->getInputDevice().getName();
@@ -1174,12 +1336,14 @@ Result Session::loadProject (const File& file)
     if (auto result = validateMetronome (state); result.failed()) return result;
     if (auto result = validateRecordQuantisation (state); result.failed()) return result;
     if (auto result = validateMasterVolume (state); result.failed()) return result;
+    if (auto result = validateMixerAutomation (state); result.failed()) return result;
     if (auto result = validateRouting (state); result.failed()) return result;
     if (auto result = UtilityPlugin::validateState (state); result.failed()) return result;
     if (auto result = NativeEffectPlugin::validateState (state); result.failed()) return result;
     if (auto result = validateAudioClips (state); result.failed()) return result;
     if (auto result = validateFollowActions (state); result.failed()) return result;
     if (auto result = validateLocators (state); result.failed()) return result;
+    restoreManualMixerState (state);
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
     auto options = te::Edit::Options { impl->engine, state, id };
@@ -1187,6 +1351,11 @@ Result Session::loadProject (const File& file)
     options.editFileRetriever = [file] { return file; };
     auto candidate = te::Edit::createEdit (std::move (options));
     if (! candidate) return Result::fail ("This project could not be loaded.");
+    for (auto* track : te::getAudioTracks (*candidate))
+        if (auto* mixer = track->getVolumePlugin())
+            for (const auto target : { AutomationTarget::volume, AutomationTarget::pan })
+                if (! validAutomationLane (target, automationLane (*mixer, target)))
+                    return Result::fail ("Mixer automation exceeds the supported beat or value range.");
     for (auto* t : te::getAudioTracks (*candidate))
         for (auto* p : t->pluginList.getPlugins())
             if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
@@ -2067,6 +2236,25 @@ Result Session::duplicateTrack (const String& id, String& duplicateId)
     auto* track = dynamic_cast<te::AudioTrack*> (copy.get());
     if (! track) return Result::fail ("Could not duplicate the track.");
     auto* undo = &impl->edit->getUndoManager();
+    // Native construction restores explicit values through the manual setter,
+    // which can rewrite a single-point curve. Restore source points inside this
+    // same duplication transaction, after construction has completed.
+    if (auto* sourceMixer = source->getVolumePlugin())
+        if (auto* copiedMixer = track->getVolumePlugin())
+            for (const auto target : { AutomationTarget::volume, AutomationTarget::pan })
+            {
+                auto& original = automationParameter (*sourceMixer, target).getCurve();
+                if (original.getNumPoints() == 0) continue;
+                auto& parameter = automationParameter (*copiedMixer, target); auto& copiedCurve = parameter.getCurve();
+                copiedCurve.clear (undo);
+                for (int i = 0; i < original.getNumPoints(); ++i)
+                {
+                    const auto point = original.getPoint (i);
+                    copiedCurve.addPoint (point.time, point.value, point.curve, undo);
+                }
+                parameter.updateStream();
+                parameter.updateFromAutomationSources (impl->edit->getTransport().getPosition());
+            }
     renewMidiNoteIDs (track->state, undo);
     track->setName (source->getName() + " copy");
     // Input target assignments live outside this copied track, so the new ID has
@@ -2464,14 +2652,83 @@ Result Session::setTrackGain (int index, float value)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (! std::isfinite (value)) return Result::fail ("Invalid gain.");
-    impl->transaction ("Track gain"); t->getVolumePlugin()->setVolumeDb (juce::jlimit (-100.0f, 12.0f, value)); impl->changed(); return Result::ok();
+    auto* volume = t->getVolumePlugin();
+    if (volume->volParam->hasAutomationPoints()) return Result::fail ("Clear the volume automation lane before changing its manual fader.");
+    value = juce::jlimit (-100.0f, 6.0f, value);
+    if (! volume->state.hasProperty (manualVolumeProperty))
+        volume->state.setProperty (manualVolumeProperty, volume->volParam->getCurrentExplicitValue(), nullptr);
+    impl->transaction ("Track gain"); volume->setVolumeDb (value);
+    volume->state.setProperty (manualVolumeProperty, te::decibelsToVolumeFaderPosition (value), &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
 }
 Result Session::setTrackPan (int index, float value)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (! std::isfinite (value)) return Result::fail ("Invalid pan.");
-    impl->transaction ("Track pan"); t->getVolumePlugin()->setPan (juce::jlimit (-1.0f, 1.0f, value)); impl->changed(); return Result::ok();
+    auto* volume = t->getVolumePlugin();
+    if (volume->panParam->hasAutomationPoints()) return Result::fail ("Clear the pan automation lane before changing its manual fader.");
+    value = juce::jlimit (-1.0f, 1.0f, value);
+    if (! volume->state.hasProperty (manualPanProperty))
+        volume->state.setProperty (manualPanProperty, volume->panParam->getCurrentExplicitValue(), nullptr);
+    impl->transaction ("Track pan"); volume->setPan (value);
+    volume->state.setProperty (manualPanProperty, value, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+float Session::automationValueToProportion (AutomationTarget target, float value)
+{
+    if (! std::isfinite (value)) return 0;
+    return target == AutomationTarget::volume ? te::decibelsToVolumeFaderPosition (juce::jlimit (-100.0f, 6.0f, value))
+        : (juce::jlimit (-1.0f, 1.0f, value) + 1) * .5f;
+}
+float Session::automationProportionToValue (AutomationTarget target, float proportion)
+{
+    if (! std::isfinite (proportion)) proportion = 0;
+    proportion = juce::jlimit (0.0f, 1.0f, proportion);
+    return target == AutomationTarget::volume ? juce::jlimit (-100.0f, 6.0f, te::volumeFaderPositionToDB (proportion))
+        : proportion * 2 - 1;
+}
+Result Session::setTrackAutomation (const String& trackId, AutomationTarget target, const AutomationLane& lane)
+{
+    if (impl->exporting || impl->edit->getTransport().isRecording())
+        return Result::fail ("Stop recording or finish exporting before editing automation.");
+    if (! validAutomationLane (target, lane)) return Result::fail ("Automation requires up to 4096 ordered beat points, volume -100 to +6 dB, or pan -1 to +1.");
+    auto* track = impl->track (trackId);
+    if (! track || ! track->getVolumePlugin()) return Result::fail ("Automation track not found.");
+    if (track->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze the track before editing automation.");
+    double previousTime = -1;
+    for (const auto& point : lane.points)
+    {
+        const double time = impl->edit->tempoSequence.toTime (te::BeatPosition::fromBeats (point.beat)).inSeconds();
+        if (! std::isfinite (time) || time <= previousTime) return Result::fail ("Automation points are too close to represent at the project tempo.");
+        previousTime = time;
+    }
+    auto& plugin = *track->getVolumePlugin(); auto& parameter = automationParameter (plugin, target); auto& curve = parameter.getCurve();
+    const auto nativeValue = [target] (float value) { return target == AutomationTarget::volume ? te::decibelsToVolumeFaderPosition (value) : value; };
+    bool same = lane.enabled == ! curve.bypass.get() && lane.points.size() == static_cast<size_t> (curve.getNumPoints());
+    for (size_t i = 0; same && i < lane.points.size(); ++i)
+        same = std::abs (impl->edit->tempoSequence.toBeats (curve.getPointTime ((int) i)).inBeats() - lane.points[i].beat) < 1e-9
+            && std::abs (curve.getPointValue ((int) i) - nativeValue (lane.points[i].value)) < 1e-6f;
+    if (same) return Result::ok();
+    impl->transaction (target == AutomationTarget::volume ? "Edit volume automation" : "Edit pan automation");
+    auto* undo = &impl->edit->getUndoManager();
+    const auto& property = manualAutomationProperty (target);
+    // This baseline must survive Undo of the first envelope. Native automation
+    // asynchronously overwrites its attached display property during playback.
+    if (! plugin.state.hasProperty (property)) plugin.state.setProperty (property, parameter.getCurrentExplicitValue(), nullptr);
+    plugin.remapOnTempoChange = true;
+    // Keep the native curve container attached across Undo, including empty lanes,
+    // because AutomatableParameter caches that exact tree for its lifetime.
+    if (! curve.state.getParent().isValid()) plugin.state.addChild (curve.state, -1, nullptr);
+    curve.clear (undo);
+    curve.state.setProperty (te::IDs::bypass, ! lane.enabled, undo);
+    for (const auto& point : lane.points)
+        curve.addPoint (te::EditPosition (te::BeatPosition::fromBeats (point.beat)), nativeValue (point.value), 0, undo);
+    if (lane.points.empty()) parameter.setParameter (static_cast<float> (plugin.state[property]), juce::dontSendNotification);
+    parameter.updateStream();
+    parameter.updateFromAutomationSources (impl->edit->getTransport().getPosition());
+    impl->edit->dispatchPendingUpdatesSynchronously();
+    impl->changed(); return Result::ok();
 }
 Result Session::setTrackMute (int index, bool value)
 {

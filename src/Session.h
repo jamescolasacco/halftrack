@@ -58,6 +58,22 @@ public:
         float tempoBpm = 120; // Derived project tempo, never a separate stored device setting.
         bool operator== (const EffectSettings&) const = default;
     };
+    enum class AutomationTarget { volume, pan };
+    struct AutomationPoint
+    {
+        double beat = 0;
+        float value = 0; // Decibels for volume, -1..1 for pan.
+        bool operator== (const AutomationPoint&) const = default;
+    };
+    struct AutomationLane
+    {
+        bool enabled = true;
+        std::vector<AutomationPoint> points;
+        bool operator== (const AutomationLane&) const = default;
+    };
+    // Coordinate mapping matches native interpolation, including the volume fader taper.
+    static float automationValueToProportion (AutomationTarget, float value);
+    static float automationProportionToValue (AutomationTarget, float proportion);
     enum class NoteTransform { quantizeStarts, quantizeEnds, reverse, invertPitch, legato, halfTime, doubleTime, fixedLength };
     struct MidiNoteInfo
     {
@@ -114,6 +130,7 @@ public:
         SendMode sendMode = SendMode::post;
         std::vector<SendInfo> sends;
         SynthSettings synth;
+        AutomationLane volumeAutomation, panAutomation;
         MonitorMode monitor = MonitorMode::off;
         juce::String inputName;
         std::vector<ClipInfo> clips;
@@ -213,6 +230,8 @@ public:
     juce::Result setMasterGain (float decibels);
     juce::Result setTrackGain (int trackIndex, float decibels);
     juce::Result setTrackPan (int trackIndex, float pan);
+    // Atomic, strictly ordered beat points. Empty points restore manual control.
+    juce::Result setTrackAutomation (const juce::String& trackId, AutomationTarget, const AutomationLane&);
     juce::Result setTrackMute (int trackIndex, bool);
     juce::Result setTrackSolo (int trackIndex, bool);
     juce::StringArray inputNames (bool midi = false) const;
