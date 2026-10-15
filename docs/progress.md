@@ -614,3 +614,11 @@ Mono export fails its full-file independent sum oracle in **1.61 s**, with worst
 The export regression now also checks exact cancellation of simultaneous equal/opposite stereo samples after mono downmix. The production dialog was captured and inspected with FLAC, mono and -3 dB normalization selected; all controls and destination buttons fit.
 
 Published `69e0252` passed macOS, Windows and Linux CI including the generated MIDI diagnostics. The preceding intermittent Mac history failure did not recur in this run; a single successful diagnostic run does not isolate its cause, so those regressions remain in place.
+
+Bitcrusher ownership: root owns the appended native effect kind, original quantization/sample-hold DSP, existing device editor/menu integration, parameter persistence and undo, generated signal/real-time tests and documentation. No other agent is editing these areas.
+
+Export checkpoint `62e2fed` passes all **24 local Mac acceptance suites in 351.62 s**. Its source-inclusive package verifies 109 owned and 5,969 dependency files, including the exact mono/latency patch. The published three-platform CI run is pending.
+
+Initial Bitcrusher signal, persistence and production editor tests pass in **25.39 s**, with UI acceptance in **6.20 s**. The source callback audit passes nine guard fixtures and 42 owned callback/helper bodies. An added odd-length source regression is checking that a held sample rings for the remainder of its interval before exact silence.
+
+Final Bitcrusher native-effect suite passes in **24.44 s**, including exact odd-length hold-tail exports. Its initial combined effects/UI/Session run passed in **93.10 s**, covering zero-allocation processing at parameter extrema, persistence, one-step gestures, bypass/removal, MIDI/return inserts and editor lifetime. The actual five-control dark editor was visually inspected. Reference-specific filters/jitter/dither and numerical parity remain unimplemented or unmeasured.

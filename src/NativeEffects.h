@@ -49,6 +49,8 @@ private:
     std::array<std::vector<double>, 8> room;
     std::array<int, 8> roomLength {}, roomCursor {};
     std::array<double, 8> roomTone {}, roomFeedback {};
+    double crusherLevels = 128, crusherDrive = 1, crusherCountdown = 0;
+    std::array<double, 2> crusherHeld {};
     int ramp = 0;
     bool processed = false;
 };
@@ -80,7 +82,7 @@ public:
     void applyToBuffer (const tracktion::PluginRenderContext&) override;
     bool noTail() override { return kind == Session::EffectKind::compressor; }
     double getTailLength() const override
-    { return kind == Session::EffectKind::delay ? 1800.0 : kind == Session::EffectKind::reverb ? 20.25 : kind == Session::EffectKind::equalizer ? 10.0 : 0.0; }
+    { return kind == Session::EffectKind::delay ? 1800.0 : kind == Session::EffectKind::reverb ? 20.25 : kind == Session::EffectKind::equalizer ? 10.0 : kind == Session::EffectKind::bitcrusher ? .008 : 0.0; }
     bool takesMidiInput() override { return false; }
     bool takesAudioInput() override { return true; }
     int getNumOutputChannelsGivenInputs (int) override { return 2; }

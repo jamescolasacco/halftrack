@@ -193,7 +193,7 @@ int runNativeEffectEditorTests (const juce::File& root)
 {
     auto check = [] (bool v, const char* text) { if (! v) throw std::runtime_error (text); std::cout << "PASS effect editor: " << text << std::endl; };
     Session s (false); check (s.addAudioTrack().wasOk(), "create editor track");
-    for (int type = 0; type < 4; ++type)
+    for (int type = 0; type <= static_cast<int> (Session::EffectKind::bitcrusher); ++type)
     {
         const auto kind = static_cast<Session::EffectKind> (type); check (s.addNativeEffect (0, kind).wasOk(), "add editor device");
         const auto info = s.snapshot().tracks[0].plugins.back(); auto editor = makeNativeEffectEditor (s, info.id);

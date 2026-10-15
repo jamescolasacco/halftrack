@@ -37,6 +37,12 @@ constexpr EffectParameter reverbFields[] {
     { "preDelayMs", "Pre-delay", 0, 250, 15, 50, " ms" }, { "decaySeconds", "Decay", 0.1f, 20, 2, 2, " s" },
     { "size", "Room size", 0.25f, 2, 1, 0, "" }, { "dampingHz", "Damping", 500, 20000, 6000, 4000, " Hz" },
     { "width", "Stereo width", 0, 2, 1, 0, "" }, { "mix", "Dry / Wet", 0, 1, 0.25f, 0, "" } };
+constexpr EffectParameter crusherFields[] {
+    { "bits", "Bit depth", 1, 24, 8, 0, " bits" },
+    { "downsample", "Hold interval", 1, 64, 4, 8, " samples" },
+    { "driveDb", "Input drive", 0, 36, 0, 0, " dB" },
+    { "outputDb", "Output", -24, 24, 0, 0, " dB" },
+    { "mix", "Dry / Wet", 0, 1, 1, 0, "" } };
 constexpr std::array<double, 11> delayBeats { .25, 1.0/3, .375, .5, 2.0/3, .75, 1, 1.5, 2, 3, 4 };
 constexpr std::array<double, 8> roomSeconds { .0297, .0371, .0411, .0437, .0531, .0617, .0713, .0799 };
 double finiteSample (double v) noexcept { return std::isfinite (v) ? std::clamp (v, -1.0e12, 1.0e12) : 0; }
@@ -44,13 +50,13 @@ double finiteSample (double v) noexcept { return std::isfinite (v) ? std::clamp 
 const char* effectName (Kind kind) noexcept
 {
     switch (kind) { case Kind::equalizer: return "Eight-band EQ"; case Kind::compressor: return "Compressor";
-        case Kind::delay: return "Stereo Delay"; case Kind::reverb: return "Room Reverb"; }
+        case Kind::delay: return "Stereo Delay"; case Kind::reverb: return "Room Reverb"; case Kind::bitcrusher: return "Bitcrusher"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
 {
     switch (kind) { case Kind::equalizer: return eqFields; case Kind::compressor: return compressorFields;
-        case Kind::delay: return delayFields; case Kind::reverb: return reverbFields; }
+        case Kind::delay: return delayFields; case Kind::reverb: return reverbFields; case Kind::bitcrusher: return crusherFields; }
     return {};
 }
 Settings defaultEffectSettings (Kind kind) noexcept
@@ -89,6 +95,7 @@ void NativeEffectDSP::reset() noexcept
     for (auto& channel : eq) for (auto& band : channel) band.z1 = band.z2 = 0;
     for (auto& buffer : delays) std::fill (buffer.begin(), buffer.end(), 0);
     for (auto& buffer : room) std::fill (buffer.begin(), buffer.end(), 0);
+    crusherHeld = {}; crusherCountdown = 0;
     roomCursor = {}; roomTone = {}; delayTone = {}; cursor = 0; envelope = 0; processed = false; ramp = 0;
     outputGain = gainTarget; wet = wetTarget; delayLeft = delayTargetLeft; delayRight = delayTargetRight;
 }
@@ -157,6 +164,12 @@ void NativeEffectDSP::configure (const Settings& next) noexcept
             if (roomCursor[i] >= roomLength[i]) roomCursor[i] = 0;
         }
     }
+    if (settings.kind == Kind::bitcrusher)
+    {
+        crusherLevels = std::exp2 (v[0] - 1.0);
+        crusherDrive = std::pow (10.0, v[2] / 20.0);
+        gainTarget = std::pow (10.0, v[3] / 20.0); wetTarget = v[4];
+    }
     if (! processed) { wet = wetTarget; outputGain = gainTarget; delayLeft = delayTargetLeft; delayRight = delayTargetRight; ramp = 0; }
     else ramp = std::max (1, static_cast<int> (rate * .005));
 }
@@ -212,6 +225,23 @@ void NativeEffectDSP::processSamples (float* left, float* right, int count) noex
                 delays[0][cursor] = finiteSample ((frozen ? 0 : ping ? .5*(l+r) : l) + feedback*(ping ? feedbackR : feedbackL));
                 delays[1][cursor] = finiteSample ((frozen || ping ? 0 : r) + feedback*(ping ? feedbackL : feedbackR));
                 cursor = (cursor+1) % delays[0].size(); break;
+            }
+            case Kind::bitcrusher:
+            {
+                if (crusherCountdown <= 0)
+                {
+                    // Signed PCM-style nearest quantization with saturation.
+                    const auto quantize = [this] (double sample) noexcept
+                    {
+                        const auto code = std::round (std::clamp (sample * crusherDrive, -1.0, 1.0) * crusherLevels);
+                        return std::clamp (code, -crusherLevels, crusherLevels - 1.0) / crusherLevels;
+                    };
+                    crusherHeld = { quantize (l), quantize (r) };
+                    crusherCountdown += v[1];
+                }
+                --crusherCountdown;
+                outL = crusherHeld[0]; outR = crusherHeld[1];
+                break;
             }
             case Kind::reverb:
             {
@@ -285,7 +315,7 @@ juce::Result NativeEffectPlugin::validateState (const juce::ValueTree& tree)
             return ! value.empty() && end == value.c_str()+value.size() && std::isfinite (output);
         };
         double type = 0;
-        if (! parse ("effectKind", 0, type) || type < 0 || type > 3 || std::floor (type) != type)
+        if (! parse ("effectKind", 0, type) || type < 0 || type > static_cast<int> (Kind::bitcrusher) || std::floor (type) != type)
             return juce::Result::fail ("The project contains an invalid native effect type.");
         for (const auto& f : effectParameters (static_cast<Kind> (static_cast<int> (type))))
         {

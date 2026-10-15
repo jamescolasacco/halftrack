@@ -148,10 +148,64 @@ void reverbTests()
     s.values[4]=1;s.values[1]=.1f;auto shortTail=run(a,s,8000);
     check(shortTail.getRMSLevel(0,4000,4000)<out.getRMSLevel(0,4000,4000)*.01f,"short decay measurably reduces late energy");
 }
+void bitcrusherTests()
+{
+    // Hand-calculated signed four-bit codes, including ties, silence and saturation.
+    constexpr std::array<float, 21> input { -1.25f, -1, -.9375f, -.875f, -.8125f, -.75f,
+        -.1875f, -.125f, -.0625f, -.01f, 0, .01f, .0625f, .125f, .1875f,
+        .75f, .8125f, .875f, .9375f, 1, 1.25f };
+    constexpr std::array<float, 21> quantized { -1, -1, -1, -.875f, -.875f, -.75f,
+        -.25f, -.125f, -.125f, 0, 0, 0, .125f, .125f, .25f,
+        .75f, .875f, .875f, .875f, .875f, .875f };
+    juce::AudioBuffer<float> source (2, 1021);
+    for (int n = 0; n < source.getNumSamples(); ++n)
+    { source.setSample (0, n, input[n % input.size()]); source.setSample (1, n, input[input.size()-1-n % input.size()]); }
+    for (const double rate : { 8000.0, 44100.0, 48000.0, 96000.0, 384000.0 })
+        for (const int interval : { 1, 2, 3, 4, 64 })
+        {
+            auto settings = defaultEffectSettings (Kind::bitcrusher); settings.values[0] = 4; settings.values[1] = (float) interval;
+            const auto out = run (source, settings, rate); bool exact = true;
+            for (int n = 0; n < out.getNumSamples(); ++n)
+            {
+                const auto index = (n / interval * interval) % input.size();
+                exact = exact && out.getSample (0, n) == quantized[index] && out.getSample (1, n) == quantized[input.size()-1-index];
+            }
+            check (exact, "known four-bit stereo codes and held frames at " + juce::String (rate) + " Hz / " + juce::String (interval) + " samples");
+        }
+    auto settings = defaultEffectSettings (Kind::bitcrusher); settings.values[0] = 4; settings.values[1] = 2.5f;
+    const auto fractional = run (source, settings);
+    constexpr int captured[] { 0, 0, 0, 3, 3, 5, 5, 5, 8, 8, 10, 10, 10, 13, 13, 15 };
+    for (int n = 0; n < (int) std::size (captured); ++n)
+        check (fractional.getSample (0, n) == quantized[captured[n]], "fractional sample hold keeps its continuous clock");
+    juce::AudioBuffer<float> constant (2, 1024);
+    juce::FloatVectorOperations::fill (constant.getWritePointer (0), -.5f, 1024);
+    juce::FloatVectorOperations::fill (constant.getWritePointer (1), .5f, 1024);
+    settings.values[2] = 20; settings.values[3] = -20; settings.values[4] = .25f;
+    const auto driven = run (constant, settings); bool mixed = true;
+    for (int n = 0; n < 1024; ++n)
+        mixed = mixed && std::abs (driven.getSample (0, n) + .4) < 2e-8 && std::abs (driven.getSample (1, n) - .396875) < 2e-8;
+    check (mixed, "drive precedes clipping and output gain applies only to the wet path");
+    for (const float bits : { 1.0f, 2.0f, 8.0f, 16.0f, 24.0f })
+    {
+        settings = defaultEffectSettings (Kind::bitcrusher); settings.values[0] = bits; settings.values[1] = 1;
+        juce::AudioBuffer<float> probe (2, 128); probe.clear(); probe.setSample (0, 0, -1); probe.setSample (1, 0, 1);
+        const auto out = run (probe, settings);
+        check (out.getSample (0, 0) == -1 && out.getSample (1, 0) == 1-std::exp2 (1-bits)
+            && out.getMagnitude (1, 127) == 0, "signed bit-depth endpoints and exact digital silence at " + juce::String (bits) + " bits");
+    }
+    settings = defaultEffectSettings (Kind::bitcrusher); settings.values[0] = 4; settings.values[1] = 3;
+    NativeEffectDSP dsp; dsp.prepare (48000, settings.kind); dsp.configure (settings);
+    auto mono = source; dsp.processSamples (mono.getWritePointer (0), nullptr, mono.getNumSamples());
+    const auto stereo = run (source, settings);
+    check (juce::FloatVectorOperations::findMinAndMax (mono.getReadPointer (0), mono.getNumSamples()).getStart() == -1,
+        "mono processing retains its negative endpoint");
+    bool same = true; for (int n = 0; n < mono.getNumSamples(); ++n) same = same && mono.getSample (0, n) == stereo.getSample (0, n);
+    check (same, "mono callback produces the same independent left-channel samples");
+}
 void lifecycleTests()
 {
     auto input=signal(14000);
-    for(int kind=0;kind<4;++kind)
+    for(int kind=0;kind<=static_cast<int>(Kind::bitcrusher);++kind)
     {
         auto s=defaultEffectSettings(static_cast<Kind>(kind));if(kind==0){s.values[2]=8;s.values[1]=400;}
         const auto expected=run(input,s);auto split=input;NativeEffectDSP dsp;dsp.prepare(48000,s.kind);dsp.configure(s);
@@ -159,7 +213,7 @@ void lifecycleTests()
         check(difference(split,expected)==0,"block partition invariance for "+juce::String(effectName(s.kind)));
         dsp.reset();split=input;dsp.processSamples(split.getWritePointer(0),split.getWritePointer(1),split.getNumSamples());check(difference(split,expected)==0,"reset restores deterministic output");
         auto bad=input;bad.setSample(0,0,std::numeric_limits<float>::quiet_NaN());bad.setSample(1,10,std::numeric_limits<float>::infinity());check(difference(run(bad,s),run(bad,s))==0,"nonfinite input does not poison state");
-        s.values[kind==0?33:kind==1?6:kind==2?3:5]=0;check(difference(run(input,s),input)==0,"zero wet is exact dry signal");
+        s.values[kind==0?33:kind==1?6:kind==2?3:kind==3?5:4]=0;check(difference(run(input,s),input)==0,"zero wet is exact dry signal");
     }
 }
 void writeAudio(const juce::File& file,const juce::AudioBuffer<float>& audio)
@@ -178,7 +232,7 @@ juce::ValueTree effectState(juce::ValueTree root)
 void projectTests(const juce::File& root)
 {
     const auto input=signal(20000);const auto file=root.getChildFile("source.wav");writeAudio(file,input);
-    for(int type=0;type<4;++type)
+    for(int type=0;type<=static_cast<int>(Kind::bitcrusher);++type)
     {
         const auto kind=static_cast<Kind>(type);Session s(false);ok(s.importAudio(file,0),"import effect fixture");ok(s.addNativeEffect(0,kind),"insert "+juce::String(effectName(kind)));
         const auto id=s.snapshot().tracks[0].plugins[0].id;auto settings=defaultEffectSettings(kind);
@@ -210,6 +264,25 @@ void projectTests(const juce::File& root)
         ok(s.removePlugin(0,0),"remove effect");s.undo();ok(s.exportWav(render),"render undo removal");check(difference(readAudio(render),expected)<2e-6,"undo removal restores signal and identity");
     }
     {
+        juce::AudioBuffer<float> heldInput (2, 20003);
+        juce::FloatVectorOperations::fill (heldInput.getWritePointer (0), .125f, 20003);
+        juce::FloatVectorOperations::fill (heldInput.getWritePointer (1), -.25f, 20003);
+        const auto heldSource = root.getChildFile ("held-source.wav"); writeAudio (heldSource, heldInput);
+        Session held (false); ok (held.importAudio (heldSource, 0), "import odd-length hold fixture");
+        ok (held.addNativeEffect (0, Kind::bitcrusher), "insert tail-tested bitcrusher");
+        auto settings = defaultEffectSettings (Kind::bitcrusher); settings.values[1] = 64;
+        ok (held.setNativeEffectSettings (held.snapshot().tracks[0].plugins[0].id, settings), "hold 64 frames across source boundary");
+        const auto output = root.getChildFile ("held-tail.wav"); ok (held.exportWav (output, 48000, 24, .01), "render hold tail beyond final source frame");
+        const auto actual = readAudio (output); check (actual.getNumSamples() == 20483, "hold tail retains exact selected export duration");
+        double error = 0;
+        for (int n = 0; n < actual.getNumSamples(); ++n)
+        {
+            error = std::max (error, std::abs (actual.getSample (0, n) - (n < 20032 ? .125 : 0)));
+            error = std::max (error, std::abs (actual.getSample (1, n) - (n < 20032 ? -.25 : 0)));
+        }
+        check (error < 2e-6, "sample hold completes its last captured interval, then returns to exact silence");
+    }
+    {
         Session synced(false);ok(synced.importAudio(file,0),"import tempo-follow source");ok(synced.addNativeEffect(0,Kind::delay),"add tempo-follow delay");
         auto settings=defaultEffectSettings(Kind::delay);settings.values[2]=0;settings.values[3]=1;settings.values[8]=1;settings.values[9]=settings.values[10]=0;
         const auto id=synced.snapshot().tracks[0].plugins[0].id;ok(synced.setNativeEffectSettings(id,settings),"enable synchronized timing");
@@ -229,13 +302,13 @@ void projectTests(const juce::File& root)
     auto first=chain.snapshot().tracks[0].plugins[0];auto gain=first.effect;gain.values[32]=12;ok(chain.setNativeEffectSettings(first.id,gain),"set pre-compression gain");
     const auto one=root.getChildFile("gain-first.wav"),two=root.getChildFile("gain-last.wav");ok(chain.exportWav(one),"render gain before compressor");ok(chain.movePlugin(0,0,1),"move actual effect order");ok(chain.exportWav(two),"render gain after compressor");check(difference(readAudio(one),readAudio(two))>.01,"order changes nonlinear output");chain.undo();ok(chain.exportWav(two),"undo device order");check(difference(readAudio(one),readAudio(two))==0,"undo order restores bit-identical output");
     Session midi(false);ok(midi.addMidiTrack("Effect instrument"),"add MIDI track");const auto tracks=midi.snapshot().tracks;const int track=(int)tracks.size()-1;ok(midi.addMidiClip(tracks.back().id,0,1),"add MIDI fixture");const auto clip=midi.snapshot().tracks.back().clips[0].id;ok(midi.addMidiNote(clip,60,0,1,.6f),"add generated note");
-    for(int k=0;k<4;++k)ok(midi.addNativeEffect(track,static_cast<Kind>(k)),"insert device after instrument");const auto result=root.getChildFile("midi-effects.wav");ok(midi.exportWav(result,48000,24,1),"render instrument through all four devices and tail");auto rendered=readAudio(result);check(rendered.getMagnitude(0,rendered.getNumSamples())>.001,"instrument chain remains audible");
-    ok(midi.addReturnTrack("Effect return"),"create return");const int ret=(int)midi.snapshot().tracks.size()-1;for(int k=0;k<4;++k)ok(midi.addNativeEffect(ret,static_cast<Kind>(k)),"insert device after return input");
+    for(int k=0;k<=static_cast<int>(Kind::bitcrusher);++k)ok(midi.addNativeEffect(track,static_cast<Kind>(k)),"insert device after instrument");const auto result=root.getChildFile("midi-effects.wav");ok(midi.exportWav(result,48000,24,1),"render instrument through all native devices and tail");auto rendered=readAudio(result);check(rendered.getMagnitude(0,rendered.getNumSamples())>.001,"instrument chain remains audible");
+    ok(midi.addReturnTrack("Effect return"),"create return");const int ret=(int)midi.snapshot().tracks.size()-1;for(int k=0;k<=static_cast<int>(Kind::bitcrusher);++k)ok(midi.addNativeEffect(ret,static_cast<Kind>(k)),"insert device after return input");
 }
 }
 int runNativeEffectsTests(const juce::File& artifacts)
 {
-    try {const auto root=artifacts.getChildFile("effects-"+juce::Uuid().toString());ok(root.createDirectory(),"create fixtures");equalizerTests();compressorTests();delayTests();syncedDelayTests();reverbTests();lifecycleTests();projectTests(root);runNativeEffectEditorTests(root);std::cout<<"Native effects passed: "<<root.getFullPathName()<<std::endl;return 0;}
+    try {const auto root=artifacts.getChildFile("effects-"+juce::Uuid().toString());ok(root.createDirectory(),"create fixtures");equalizerTests();compressorTests();delayTests();syncedDelayTests();reverbTests();bitcrusherTests();lifecycleTests();projectTests(root);runNativeEffectEditorTests(root);std::cout<<"Native effects passed: "<<root.getFullPathName()<<std::endl;return 0;}
     catch(const std::exception& e){std::cerr<<"FAIL native effects: "<<e.what()<<std::endl;return 1;}
 }
 }

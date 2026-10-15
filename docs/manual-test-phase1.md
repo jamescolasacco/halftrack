@@ -297,3 +297,7 @@ Physical/native-input listening check: **NOT RUN** until performed. Place three 
 ### Mono and normalized export
 
 Physical listening/native-dialog check: **NOT RUN** until performed. Pan different sources fully left and right. Export Stereo, then Mono: both sources should remain audible in the mono file. Try WAV, AIFF and FLAC. Enable a -3 dB peak ceiling and inspect the exported sample peak; it should be close to and below -3 dB, with the original project faders unchanged. Export a silent mix with normalization enabled and verify silence. Switch normalization Off and verify the original mix level returns. Cancel an export over a disposable existing file and verify preservation. These are sample-peak options; no loudness or true-peak result is implied.
+
+## Bitcrusher (about one minute)
+
+On a playing audio or MIDI track, open Add Device and choose Bitcrusher. Open its editor, reduce Bit depth and raise Hold interval: the sound should become coarser and held in larger steps. Set Dry / Wet to 0% to hear the unchanged dry signal; raise it again and try Input drive and Output separately. Undo a knob drag once, then redo. Save/reopen and check all five controls. Export the mix and check the effect remains audible; bypassing the device should restore the dry sound.

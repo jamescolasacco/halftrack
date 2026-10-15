@@ -198,7 +198,7 @@ void utilityRealtimeTests()
 
 void nativeEffectsRealtimeTests()
 {
-    for (int kind = 0; kind < 4; ++kind)
+    for (int kind = 0; kind <= static_cast<int> (Session::EffectKind::bitcrusher); ++kind)
     {
         NativeEffectDSP dsp; dsp.prepare (48000, static_cast<Session::EffectKind> (kind));
         auto settings = defaultEffectSettings (static_cast<Session::EffectKind> (kind));

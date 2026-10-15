@@ -146,3 +146,5 @@ Follow-action default: Off. The first active configuration uses four project bea
 
 
 Export mix options default to Stereo and normalization Off. Mono means the arithmetic average of the full rendered channels, including both sides of the stereo mix. Peak normalization offers -1/-3/0 dB sample-peak ceilings using the pinned renderer's conservative headroom and 40 dB maximum boost. It does not modify faders. True-peak/LUFS normalization, dither selection and range/stem rendering remain separate features.
+
+Bitcrusher defaults: implement deterministic hard quantization and sample holding before adding filter, jitter or dither modes. Use signed PCM-style clipping/rounding, a shared stereo capture clock and independent channel amplitudes. Fractional depth/interval controls are supported as continuous reductions; no proprietary quantizer algorithm or sound identity is implied.

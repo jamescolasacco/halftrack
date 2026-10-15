@@ -405,7 +405,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-027 | Overdrive | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-028 | Pedal | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-029 | Phaser-Flanger | MODULATION | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-030 | Redux | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-030 | Redux | Original Bitcrusher: signed quantization, fractional sample holding, drive, wet output and mix. Hand-calculated samples, held tail, history/project/editor and allocation tests pass locally. Reference filters, jitter, legacy mode and numerical identity are unverified. | PARTIAL — original native reduction device |
 | AFX-031 | Resonators | RESONANCE | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-032 | Reverb | Original eight-line room with pre-delay, decay, size, damping, width and mix; reflected-impulse and export-tail tests. Proprietary topology and full controls remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated three-platform acceptance |
 | AFX-033 | Roar | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
