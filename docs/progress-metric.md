@@ -1,6 +1,6 @@
 # Recorded implementation coverage
 
-Current implementation checkpoint: MIDI interchange implementation, 2026-10-15. **27 of 246 tracked active feature areas have partial implementation evidence: 11.0%.** None of these broad rows establishes complete measured reference parity.
+Current implementation checkpoint: MIDI file and clip interchange implementation, 2026-10-15. **27 of 246 tracked active feature areas have partial implementation evidence: 11.0%.** None of these broad rows establishes complete measured reference parity.
 
 This is recorded partial coverage, not percentage finished, remaining engineering time, or a weighted feature score. The initial inventory is not exhaustive, some existing behavior is recorded only in preview rows, and items vary greatly in size. Static decompiler coverage uses a different denominator and must never be reported as application completion.
 
@@ -17,3 +17,5 @@ Clipboard, direct range gestures and cross-track movement at `fc70170` deepen th
 Named absolute locators add partial evidence for ARR-009. They bring the count to 26/246; this is documented feature-area coverage, not a finished-clone estimate.
 
 MIDI interchange adds partial evidence for MID-012. Audio reversal deepens WRP-001 without adding a new row. The total is 27/246 (11.0% recorded partial coverage), not a percentage of a completed clone.
+
+Whole MIDI clip Cut/Copy/Paste/Duplicate deepens ARR-005. It adds no new ledger row; partial coverage remains 27/246.

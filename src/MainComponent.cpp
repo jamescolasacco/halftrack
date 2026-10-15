@@ -411,10 +411,13 @@ public:
                     if (dynamic_cast<juce::TextEditor*> (focused)) return false;
                 if (code == 'V')
                 {
-                    if (const auto* track = currentTrack(); track && ! track->isMidi && ! track->isReturn)
-                    { audioClipCommand (7, {}); return true; }
+                    if (const auto* track = currentTrack(); track && ! track->isReturn)
+                    { if(track->isMidi)midiClipCommand(7,{});else audioClipCommand(7,{}); return true; }
                     return false;
                 }
+                if (const auto* track = currentTrack(); track && juce::isPositiveAndBelow(selectedClip,(int)track->clips.size())
+                    && track->clips[(size_t)selectedClip].isMidi && code!='E')
+                {midiClipCommand(code=='D'?4:code=='C'?5:6,track->clips[(size_t)selectedClip].id);return true;}
                 if (const auto* track = currentTrack(); track && juce::isPositiveAndBelow (selectedClip, (int) track->clips.size())
                     && track->clips[(size_t) selectedClip].isAudio)
                 {
@@ -877,16 +880,17 @@ private:
             owner.session.seek (juce::jmax (0.0, owner.viewStart + e.x / owner.pixelsPerSecond));
             owner.refresh();
             if (e.mods.isPopupMenu())
-                if (const auto* target = owner.currentTrack(); target && ! target->isMidi && ! target->isReturn)
+                if (const auto* target = owner.currentTrack(); target && ! target->isReturn)
                 {
                     const auto trackId = target->id;
                     const auto position = owner.state.position;
                     juce::PopupMenu popup;
-                    popup.addItem (7, "Paste audio here", owner.session.hasAudioClipClipboard());
+                    const bool midi=target->isMidi;
+                    popup.addItem (7, midi?"Paste MIDI here":"Paste audio here", midi?owner.session.hasMidiClipClipboard():owner.session.hasAudioClipClipboard());
                     auto safe = juce::Component::SafePointer<Impl> (&owner);
-                    popup.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId, position] (int choice)
+                    popup.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId, position, midi] (int choice)
                     {
-                        if (safe != nullptr && choice == 7) safe->pasteAudio (trackId, position);
+                        if (safe != nullptr && choice == 7) {if(midi)safe->pasteMidi(trackId,position);else safe->pasteAudio(trackId,position);}
                     });
                 }
         }
@@ -942,7 +946,7 @@ private:
                         if (! clipGesture) { owner.session.beginEditGesture (rangeDrag == 3 ? "Slip audio source" : "Trim audio edge"); clipGesture = true; }
                         const auto result = owner.session.setAudioClipRange (dragClipId,start,length,offset);
                         owner.report (result); owner.refresh();
-                        if (result.wasOk()) owner.selectAudioClip (dragClipId);
+                        if (result.wasOk()) owner.selectArrangementClip (dragClipId);
                         return;
                     }
                 return;
@@ -967,7 +971,7 @@ private:
                         const auto result = clip.isAudio ? owner.session.moveAudioClip (dragClipId,current.tracks[(size_t)destination].id,start)
                             : owner.session.moveClip (t,c,start);
                         owner.report (result); owner.refresh();
-                        if (result.wasOk()) owner.selectAudioClip (dragClipId);
+                        if (result.wasOk()) owner.selectArrangementClip (dragClipId);
                         return;
                     }
         }
@@ -1043,15 +1047,22 @@ private:
                 popup.addItem (6, "Cut audio clip", clip->canEditAudioRange);
                 popup.addItem (7, "Paste audio at playhead", owner.session.hasAudioClipClipboard());
             }
+            if(clip&&clip->isMidi)
+            {
+                popup.addItem(4,"Duplicate MIDI after clip",clip->canEditMidiClip);
+                popup.addItem(5,"Copy MIDI clip",clip->canEditMidiClip);popup.addItem(6,"Cut MIDI clip",clip->canEditMidiClip);
+                popup.addItem(7,"Paste MIDI at playhead",owner.session.hasMidiClipClipboard());
+            }
+            const bool midi=clip&&clip->isMidi;
             auto safe = juce::Component::SafePointer<Impl> (&owner);
             const auto trackId = track ? track->id : juce::String();
             const auto position = owner.state.position;
-            popup.showMenuAsync (juce::PopupMenu::Options(), [safe, id, trackId, position] (int choice)
+            popup.showMenuAsync (juce::PopupMenu::Options(), [safe, id, trackId, position, midi] (int choice)
             {
                 if (safe == nullptr) return;
-                if (choice == 1) safe->deleteSelectedClip();
-                else if (choice == 7) safe->pasteAudio (trackId, position);
-                else if (choice > 1) safe->audioClipCommand (choice, id);
+                if (choice == 1) safe->deleteClipById(id);
+                else if (choice == 7) {if(midi)safe->pasteMidi(trackId,position);else safe->pasteAudio(trackId,position);}
+                else if (choice > 1) {if(midi)safe->midiClipCommand(choice,id);else safe->audioClipCommand(choice,id);}
             });
         }
     };
@@ -3085,6 +3096,32 @@ private:
         dialog->setLookAndFeel (&theme);
         dialogs.emplace_back (dialog);
     }
+    void deleteClipById (const juce::String& id)
+    {
+        const auto current=session.snapshot();
+        for(int t=0;t<(int)current.tracks.size();++t)for(int c=0;c<(int)current.tracks[(size_t)t].clips.size();++c)
+            if(current.tracks[(size_t)t].clips[(size_t)c].id==id)
+            {report(session.removeClip(t,c));selectedClip=-1;refresh();return;}
+    }
+    void pasteMidi (const juce::String& trackId,double position)
+    {
+        juce::String id;const auto result=session.pasteMidiClip(trackId,position,id);report(result);refresh();
+        if(result.wasOk())selectArrangementClip(id);
+    }
+    void midiClipCommand (int choice,const juce::String& id)
+    {
+        if(choice==7){if(const auto* track=currentTrack())pasteMidi(track->id,session.snapshot().position);return;}
+        if(choice==5||choice==6)
+        {
+            const auto result=session.copyMidiClip(id,choice==6);if(result.wasOk()&&choice==6)selectedClip=-1;
+            report(result);refresh();return;
+        }
+        if(choice==4)
+        {
+            juce::String created;const auto result=session.duplicateMidiClip(id,created);report(result);refresh();
+            if(result.wasOk())selectArrangementClip(created);
+        }
+    }
     void audioClipCommand (int choice, const juce::String& id)
     {
         if (choice == 2) { showDialog ("Halftrack - Audio Clip", makeAudioClipEditor (session, id), 620, 480); return; }
@@ -3104,16 +3141,16 @@ private:
         const auto result = choice == 3 ? session.splitAudioClip (id, session.snapshot().position, created)
             : session.duplicateAudioClip (id, created);
         report (result); refresh();
-        if (result.wasOk()) selectAudioClip (created);
+        if (result.wasOk()) selectArrangementClip (created);
     }
     void pasteAudio (const juce::String& trackId, double position)
     {
         juce::String created;
         const auto result = session.pasteAudioClip (trackId, position, created);
         report (result); refresh();
-        if (result.wasOk()) selectAudioClip (created);
+        if (result.wasOk()) selectArrangementClip (created);
     }
-    void selectAudioClip (const juce::String& id)
+    void selectArrangementClip (const juce::String& id)
     {
         for (int t=0;t<(int)state.tracks.size();++t)
             for (int c=0;c<(int)state.tracks[(size_t)t].clips.size();++c)
@@ -4519,6 +4556,34 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(midiOutput.getFile().replaceWithText("preserve existing file"),"prepare stale MIDI export destination");
     exportMidiSelection(importedMidiId,midiOutput.getFile());
     check(midiOutput.getFile().loadFileAsString()=="preserve existing file"&&session.canRedo(),"stale MIDI chooser identity cannot export a replacement clip or overwrite destination");
+
+    session.redo();refresh();showArrangementView();selectArrangementClip(importedMidiId);
+    const auto midiSourceNote=currentMidiClip()->notes[0].id;
+    check(canvas.keyPressed(commandKey('C'))&&session.hasMidiClipClipboard(),"Arrangement Cmd/Ctrl+C copies the complete MIDI clip");
+    session.seek(3);refresh();check(canvas.keyPressed(commandKey('V'))&&currentTrack()->clips.size()==2,"Arrangement Cmd/Ctrl+V pastes MIDI at playhead");
+    const auto pastedMidi=currentMidiClip()->id;
+    check(pastedMidi!=importedMidiId&&currentMidiClip()->start==3&&currentMidiClip()->notes[0].id!=midiSourceNote,"whole MIDI paste selects the new clip with independent note identities");
+    session.undo();refresh();check(currentTrack()->clips.size()==1,"one UI undo removes the MIDI paste");session.redo();refresh();selectArrangementClip(pastedMidi);
+    check(canvas.keyPressed(commandKey('D'))&&currentTrack()->clips.size()==3,"Arrangement Cmd/Ctrl+D duplicates the complete MIDI clip");
+    const auto duplicateMidi=currentMidiClip()->id;
+    check(duplicateMidi!=pastedMidi&&std::abs(currentMidiClip()->start-3.375)<1e-9,"MIDI duplicate is selected immediately after its source");
+    check(canvas.keyPressed(commandKey('X'))&&currentTrack()->clips.size()==2&&selectedClip==-1,"Arrangement Cmd/Ctrl+X cuts only the selected MIDI clip");
+    session.undo();refresh();selectArrangementClip(pastedMidi);
+    deleteClipById(importedMidiId);check(currentTrack()->clips.size()==2,"clip menu delete resolves its captured identity after selection changes");
+    bool retainedPasted=false;for(const auto& clip:currentTrack()->clips)retainedPasted=retainedPasted||clip.id==pastedMidi;
+    check(retainedPasted,"context deletion does not redirect to the newly selected clip");
+    deleteClipById(importedMidiId);check(currentTrack()->clips.size()==2,"stale clip menu deletion leaves replacement indices untouched");session.undo();refresh();selectArrangementClip(pastedMidi);
+    {
+        juce::TextEditor editor;juce::DocumentWindow focusWindow("Halftrack MIDI shortcut test",panel,juce::DocumentWindow::closeButton);
+        focusWindow.setUsingNativeTitleBar(true);focusWindow.setContentNonOwned(&editor,false);focusWindow.centreWithSize(300,70);focusWindow.setVisible(true);
+        juce::Process::makeForegroundProcess();focusWindow.toFront(true);
+        for(int attempt=0;attempt<20&&!editor.hasKeyboardFocus(true);++attempt)
+        {editor.grabKeyboardFocus();juce::MessageManager::getInstance()->runDispatchLoopUntil(10);}
+        check(editor.hasKeyboardFocus(true)&&!canvas.keyPressed(commandKey('C'))&&!canvas.keyPressed(commandKey('X'))
+            &&!canvas.keyPressed(commandKey('V'))&&!canvas.keyPressed(commandKey('D'))&&currentTrack()->clips.size()==3,
+            "focused text keeps its own shortcuts while Arrangement MIDI clips are selected");
+        editor.giveAwayKeyboardFocus();focusWindow.clearContentComponent();
+    }
 
 }
 

@@ -2,6 +2,7 @@
 #include <cmath>
 #include <iostream>
 #include <set>
+#include <limits>
 #include <stdexcept>
 namespace halftrack
 {
@@ -38,6 +39,55 @@ juce::AudioBuffer<float> readAudio(const juce::File& file)
     check(reader&&reader->numChannels==2&&reader->sampleRate==48000,"read actual synth render");juce::AudioBuffer<float>result(2,(int)reader->lengthInSamples);
     check(reader->read(&result,0,result.getNumSamples(),0,true,true),"decode complete synth render");return result;
 }
+void clipClipboardTests(const juce::File& root)
+{
+    juce::MidiMessageSequence original;add(original,juce::MidiMessage::noteOn(3,60,(juce::uint8)95),0);
+    add(original,juce::MidiMessage::controllerEvent(3,1,55),.25);const unsigned char payload[]{0x7d,7,8};
+    add(original,juce::MidiMessage::createSysExMessage(payload,3),.5);add(original,juce::MidiMessage::noteOff(3,60,(juce::uint8)33),1);add(original,juce::MidiMessage::endOfTrack(),2);
+    const auto file=root.getChildFile("clipboard-source.mid"),output=root.getChildFile("clipboard-export.mid"),project=root.getChildFile("clipboard.halftrack");
+    write(file,{original},0);Session s(false);std::vector<juce::String>ids;ok(s.importMidiFile(file,2,ids),"import complete clip clipboard source");
+    const auto sourceId=ids.front();ok(s.addMidiTrack("Destination"),"create MIDI paste target");const auto target=s.snapshot().tracks.back().id;
+    ok(s.saveProject(project),"save clean clipboard fixture");ok(s.loadProject(project),"reopen clean clip clipboard fixture");
+    const auto oldNote=s.snapshot().tracks[2].clips[0].notes[0].id;
+    ok(s.copyMidiClip(sourceId),"copy entire MIDI clip");check(s.hasMidiClipClipboard()&&!s.snapshot().dirty&&!s.canUndo(),"whole clip copy creates no document history");
+    juce::String pasted;ok(s.pasteMidiClip(target,3,pasted),"paste MIDI onto another track");
+    auto clip=s.snapshot().tracks.back().clips[0];
+    check(pasted!=sourceId&&clip.startBeat==6&&clip.lengthBeats==2&&clip.notes[0].id!=oldNote,"paste retains beats with fresh clip and note identities");
+    ok(s.exportMidiClip(pasted,output),"inspect complete pasted MIDI state");check(exported(output)==events(original,960),"clip clipboard preserves controller, SysEx and release velocity");
+    s.undo();check(s.snapshot().tracks.back().clips.empty(),"one undo removes the whole pasted clip");s.redo();check(s.snapshot().tracks.back().clips[0].id==pasted,"paste redo restores the same fresh identity");
+    ok(s.copyMidiClip(pasted,true),"cut pasted MIDI clip");check(s.snapshot().tracks.back().clips.empty(),"cut removes one clip");s.undo();
+    check(s.snapshot().tracks.back().clips[0].id==pasted&&s.canRedo(),"cut undo restores identity and content");
+    for(double time:{-1.0,std::numeric_limits<double>::quiet_NaN(),172799.5})
+    {juce::String unchanged="keep";check(s.pasteMidiClip(target,time,unchanged).failed()&&unchanged=="keep"&&s.canRedo(),"invalid MIDI paste preserves redo and output identity");}
+    juce::String unchanged="keep";check(s.pasteMidiClip(s.snapshot().tracks[0].id,0,unchanged).failed()&&s.copyMidiClip("missing").failed()&&s.canRedo(),"wrong track or missing copy source preserves redo and clipboard");
+    ok(s.newProject(),"switch projects with MIDI clip clipboard");s.setTempo(180);ok(s.addMidiTrack("New tempo"),"create new-project MIDI target");
+    ok(s.pasteMidiClip(s.snapshot().tracks.back().id,2,pasted),"paste MIDI across projects at another tempo");clip=s.snapshot().tracks.back().clips[0];
+    check(clip.startBeat==6&&std::abs(clip.lengthBeats-2)<1e-9&&std::abs(clip.length-2.0/3)<1e-9&&clip.notes[0].id!=oldNote,"cross-project paste preserves musical duration rather than old seconds");
+    ok(s.saveProject(project),"save cross-project MIDI clipboard result");ok(s.loadProject(project),"reopen cross-project pasted MIDI");
+    ok(s.exportMidiClip(pasted,output),"export reopened pasted clip");check(exported(output)==events(original,960),"portable MIDI clipboard content survives reopen without source-file dependence");
+    Session oracle(false);oracle.setTempo(180);std::vector<juce::String>oracleIds;ok(oracle.importMidiFile(file,6,oracleIds),"independently import expected destination-tempo performance");
+    const auto a=root.getChildFile("pasted-midi.wav"),b=root.getChildFile("clipboard-oracle.wav");ok(s.exportWav(a),"render copied clip at destination tempo");ok(oracle.exportWav(b),"render independent destination-tempo oracle");
+    const auto actual=readAudio(a),expected=readAudio(b);check(actual.getNumSamples()==expected.getNumSamples(),"cross-project MIDI clipboard render duration");double worst=0;
+    for(int c=0;c<2;++c)for(int n=0;n<actual.getNumSamples();++n)
+    {const auto sample=actual.getSample(c,n);if(!std::isfinite(sample))throw std::runtime_error("nonfinite clipboard sample");worst=std::max(worst,std::abs((double)sample-expected.getSample(c,n)));}
+    check(worst<2e-6,"every pasted MIDI synth sample agrees with destination-tempo oracle");
+    juce::String duplicate;ok(s.duplicateMidiClip(pasted,duplicate),"duplicate MIDI after source");
+    auto clips=s.snapshot().tracks.back().clips;check(clips.size()==2&&clips[1].id==duplicate&&clips[1].id!=pasted
+        &&clips[1].notes[0].id!=clips[0].notes[0].id&&std::abs(clips[1].startBeat-8)<1e-9,"duplicate starts after original with independent note identities");
+    ok(s.exportMidiClip(duplicate,output),"inspect MIDI duplicate content");check(exported(output)==events(original,960),"duplicate keeps complete native events");
+    s.undo();check(s.snapshot().tracks.back().clips.size()==1,"duplicate undoes in one step");s.redo();check(s.snapshot().tracks.back().clips.back().id==duplicate,"duplicate redo keeps stable identity");
+    const auto audio=root.getChildFile("clipboard-type.wav");
+    {juce::WavAudioFormat wav;std::unique_ptr<juce::OutputStream>out(audio.createOutputStream());auto writer=wav.createWriterFor(out,juce::AudioFormatWriterOptions().withSampleRate(48000).withNumChannels(2).withBitsPerSample(24));
+    juce::AudioBuffer<float>buffer(2,480);buffer.clear();check(writer&&writer->writeFromAudioSampleBuffer(buffer,0,480),"write clipboard type fixture");}
+    ok(s.importAudio(audio,0),"import audio clipboard counterpart");const auto audioId=s.snapshot().tracks[0].clips[0].id;
+    ok(s.copyAudioClip(audioId),"audio copy replaces MIDI clip clipboard");check(s.hasAudioClipClipboard()&&!s.hasMidiClipClipboard(),"only most recently copied clip type is active");
+    check(s.copyMidiClip(audioId).failed()&&s.hasAudioClipClipboard(),"failed MIDI copy retains prior audio clipboard");
+    ok(s.duplicateMidiClip(pasted,duplicate),"duplicate without replacing held audio clipboard");check(s.hasAudioClipClipboard()&&!s.hasMidiClipClipboard(),"duplicate leaves the clipboard intact");
+    ok(s.copyMidiClip(pasted),"MIDI copy replaces audio clipboard");check(s.hasMidiClipClipboard()&&!s.hasAudioClipClipboard(),"MIDI replaces the previous clip type");
+    ok(s.addMidiClipToSlot(s.snapshot().tracks.back().id,0,4),"prepare unsupported slot clipboard source");
+    check(s.copyMidiClip(s.snapshot().tracks.back().slots[0].clip.id).failed()&&s.hasMidiClipClipboard(),"Session clip copy rejection preserves the valid Arrangement clipboard");
+}
+
 }
 int runMidiFileTests(const juce::File& artifacts)
 {
@@ -131,6 +181,7 @@ int runMidiFileTests(const juce::File& artifacts)
         const auto actual=readAudio(a),expected=readAudio(b);check(actual.getNumSamples()==expected.getNumSamples(),"MIDI render durations agree");double worst=0,peak=0;
         for(int c=0;c<2;++c)for(int n=0;n<actual.getNumSamples();++n){const auto value=actual.getSample(c,n);if(!std::isfinite(value))throw std::runtime_error("Nonfinite imported sample");worst=std::max(worst,std::abs((double)value-expected.getSample(c,n)));peak=std::max(peak,std::abs((double)value));}
         check(peak>.01&&worst<2e-6,"every imported synth sample matches independently created notes");
+        clipClipboardTests(root);
         std::cout<<"MIDI file tests passed: "<<root.getFullPathName()<<std::endl;return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI files: "<<e.what()<<std::endl;return 1;}

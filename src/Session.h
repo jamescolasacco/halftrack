@@ -61,7 +61,7 @@ public:
         double start = 0, length = 0, sourceOffset = 0;
         juce::File file;
         bool isMidi = false, isAudio = false, canEditAudioRange = false, canEditAudioFades = false;
-        bool reversed = false, canReverse = false;
+        bool reversed = false, canReverse = false, canEditMidiClip = false;
         double sourceLength = 0;
         AudioClipSettings audio;
         double startBeat = 0, lengthBeats = 0;
@@ -157,6 +157,10 @@ public:
     juce::Result splitAudioClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
     juce::Result duplicateAudioClip (const juce::String& clipId, juce::String& duplicateId);
     // Typed application clipboard. Copy retains independent media before Cut removes anything.
+    juce::Result copyMidiClip (const juce::String& clipId, bool cut = false);
+    bool hasMidiClipClipboard() const;
+    juce::Result pasteMidiClip (const juce::String& trackId, double startSeconds, juce::String& pastedId);
+    juce::Result duplicateMidiClip (const juce::String& clipId, juce::String& duplicateId);
     juce::Result copyAudioClip (const juce::String& clipId, bool cut = false);
     bool hasAudioClipClipboard() const;
     juce::Result pasteAudioClip (const juce::String& trackId, double startSeconds, juce::String& pastedId);

@@ -202,3 +202,8 @@ Native input/listening check: NOT RUN until performed. Import a disposable recor
 ## MIDI file interchange (about two minutes)
 
 Native chooser/input/listening walkthrough: NOT RUN until performed. Choose **File → Import MIDI File...** with a type 0/1 note file. Each source-track/channel part should get a new MIDI track at the captured playhead beat, and the first clip should open in the piano roll. Playback follows the project tempo. Edit a note, then choose **File → Export Selected MIDI Clip...** and reopen the resulting file in a disposable project. Note timing/velocity and supported controller events should survive. Undo import once to remove all imported parts; redo and save/reopen to restore them. Export itself must add no document undo step. A file with missing note-offs, SMPTE timing or type 2 should report an error without changing the project. The initial importer does not apply file tempo/meter maps or resolve overlapping same-pitch/channel notes.
+
+
+## Whole MIDI clip clipboard (about one minute)
+
+Native input/listening check: NOT RUN until performed. In Arrangement, select a MIDI clip and use Cmd/Ctrl+C, then place the playhead on another MIDI track and paste with Cmd/Ctrl+V. Paste selects an independently editable clip. Cmd/Ctrl+D duplicates after it; Cmd/Ctrl+X cuts it. Undo/redo each operation once. Copy the clip, create a new project at a different tempo, add a MIDI track and paste: its duration in beats must be unchanged. Save/reopen. Copying an audio clip replaces the whole-clip MIDI clipboard and vice versa; text and piano-roll note commands keep their own scope. A right-click clip deletion must still target the clicked clip if selection changes before the menu action runs.

@@ -238,6 +238,16 @@ bool canReverseAudio (te::WaveAudioClip& clip)
         && clip.getNumTakes (true) <= 1 && ! clip.isCurrentTakeComp() && clip.getClipEffects() == nullptr
         && ! clip.isUsingARA() && ! clip.getClipTrack()->isFrozen (te::Track::anyFreeze);
 }
+bool canCopyMidiClip (const te::MidiClip& clip)
+{
+    return clip.getClipSlot() == nullptr && ! clip.isLooping() && ! clip.isGrouped() && ! clip.hasAnyTakes()
+        && clip.getSpeedRatio() == 1 && clip.getOffsetInBeats().inBeats() == 0;
+}
+void renewMidiNoteIDs (juce::ValueTree state, juce::UndoManager* undo = nullptr)
+{
+    if (state.hasType (te::IDs::NOTE)) state.setProperty (midiNoteIDProperty,juce::Uuid().toString(),undo);
+    for (auto child : state) renewMidiNoteIDs (child,undo);
+}
 Result validateAudioClips (const juce::ValueTree& state)
 {
     if (state.hasType (te::IDs::AUDIOCLIP))
@@ -318,7 +328,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
     }
     if (auto* midi = dynamic_cast<te::MidiClip*> (&clip))
     {
-        result.isMidi = true;
+        result.isMidi = true; result.canEditMidiClip = canCopyMidiClip (*midi);
         const auto beats = clip.edit.tempoSequence.toBeats (position.time);
         result.startBeat = beats.getStart().inBeats(); result.lengthBeats = beats.getLength().inBeats();
         for (auto* note : midi->getSequence().getNotes())
@@ -746,7 +756,8 @@ struct Session::Impl
     bool useDevices;
     bool explicitChanges = false, pristineNewDocument = false, exporting = false;
     File scratch, projectFile;
-    juce::ValueTree audioClipboard;
+    juce::ValueTree audioClipboard, midiClipboard;
+    double midiClipboardBeats = 0;
     std::unique_ptr<juce::TemporaryFile> audioClipboardMedia;
     std::unique_ptr<te::Edit> edit;
     std::unique_ptr<te::Edit::UndoTransactionInhibitor> gesture;
@@ -1760,6 +1771,56 @@ Result Session::duplicateAudioClip (const String& id, String& duplicateId)
     if (! second) return Result::fail ("The audio clip could not be duplicated.");
     second->setStart (end, false, true); duplicateId = second->itemID.toString(); impl->changed(); return Result::ok();
 }
+Result Session::copyMidiClip (const String& id, bool cut)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (cut && impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before cutting clips.");
+    auto* clip=impl->midiClip(id);
+    if (!clip || !canCopyMidiClip(*clip)) return Result::fail("Copy a single-take, unlooped Arrangement MIDI clip with zero source offset.");
+    if(cut && clip->getClipTrack()->isFrozen(te::Track::anyFreeze)) return Result::fail("Unfreeze the source track before cutting clips.");
+    const auto beats=clip->getLengthInBeats().inBeats();
+    if(!std::isfinite(beats)||beats<=0)return Result::fail("The MIDI clip has an invalid beat duration.");
+    auto copied=clip->state.createCopy();
+    if(cut){impl->transaction("Cut MIDI clip");clip->removeFromParent();impl->changed();}
+    impl->midiClipboard=std::move(copied);impl->midiClipboardBeats=beats;
+    impl->audioClipboard={};impl->audioClipboardMedia.reset();return Result::ok();
+}
+bool Session::hasMidiClipClipboard() const {return impl->midiClipboard.isValid();}
+Result Session::pasteMidiClip (const String& trackId, double start, String& pastedId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before pasting clips.");
+    auto* track=impl->track(trackId);
+    if(!track||isReturn(*track)||!static_cast<bool>(track->state.getProperty(midiTrackProperty))||track->isFrozen(te::Track::anyFreeze))
+        return Result::fail("Paste MIDI onto an unfrozen MIDI track.");
+    if(!hasMidiClipClipboard())return Result::fail("Copy a MIDI clip before pasting.");
+    if(!std::isfinite(start)||start<0||start>=te::Edit::maximumLength)return Result::fail("Paste position is outside the supported timeline.");
+    const auto first=impl->edit->tempoSequence.toBeats(te::TimePosition::fromSeconds(start));
+    const auto end=impl->edit->tempoSequence.toTime(first+te::BeatDuration::fromBeats(impl->midiClipboardBeats)).inSeconds();
+    if(end>te::Edit::maximumLength||end<=start)return Result::fail("The complete MIDI clip must fit inside the 48-hour timeline.");
+    auto copy=te::ClipCopy::fromClipboardState(impl->midiClipboard,false).withNewItemID(*impl->edit);
+    auto state=copy.getState();state.setProperty(te::IDs::start,start,nullptr);state.setProperty(te::IDs::length,end-start,nullptr);
+    state.setProperty(te::IDs::offset,0,nullptr);state.setProperty(te::IDs::sync,te::Clip::syncBarsBeats,nullptr);renewMidiNoteIDs(state);
+    impl->transaction("Paste MIDI clip");
+    if(auto* clip=te::insertClipCopy(*track,copy)){pastedId=clip->itemID.toString();impl->changed();return Result::ok();}
+    return Result::fail("The MIDI clip could not be pasted.");
+}
+Result Session::duplicateMidiClip (const String& id, String& duplicateId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before duplicating clips.");
+    auto* clip=impl->midiClip(id);
+    if(!clip||!canCopyMidiClip(*clip)||clip->getClipTrack()->isFrozen(te::Track::anyFreeze))
+        return Result::fail("Duplicate a single-take, unlooped Arrangement MIDI clip on an unfrozen track.");
+    const auto start=clip->getPosition().getEnd();
+    const auto end=impl->edit->tempoSequence.toTime(clip->getEndBeat()+clip->getLengthInBeats());
+    if(end.inSeconds()>te::Edit::maximumLength)return Result::fail("The duplicate would exceed the 48-hour timeline.");
+    auto copy=te::ClipCopy::fromClipboardState(clip->state,false).withNewItemID(*impl->edit);auto state=copy.getState();
+    state.setProperty(te::IDs::start,start.inSeconds(),nullptr);state.setProperty(te::IDs::length,(end-start).inSeconds(),nullptr);renewMidiNoteIDs(state);
+    impl->transaction("Duplicate MIDI clip");
+    if(auto* duplicate=te::insertClipCopy(*clip->getClipTrack(),copy)){duplicateId=duplicate->itemID.toString();impl->changed();return Result::ok();}
+    return Result::fail("The MIDI clip could not be duplicated.");
+}
 Result Session::copyAudioClip (const String& id, bool cut)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -1786,6 +1847,7 @@ Result Session::copyAudioClip (const String& id, bool cut)
         clip->removeFromParent();
         impl->changed();
     }
+    impl->midiClipboard = {}; impl->midiClipboardBeats = 0;
     impl->audioClipboard = std::move (copied);
     impl->audioClipboardMedia = std::move (media);
     return Result::ok();
