@@ -13,6 +13,7 @@
 #include <cmath>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <unordered_set>
 #if HALFTRACK_TESTS_ENABLED
@@ -497,7 +498,9 @@ public:
 
    #if HALFTRACK_TESTS_ENABLED
     void runInteractionChecks (const juce::File& audioFixture);
+    void runExportInteractionChecks (const juce::File& audioFixture);
     bool captureTestErrors = false;
+    std::function<void (const Session::AudioExportSettings&, uint64_t)> testExportDestination;
    #endif
 
 private:
@@ -3335,60 +3338,201 @@ private:
         }
         return {};
     }
-    static Session::AudioExportSettings readAudioExportSettings (juce::AlertWindow& dialog)
+    class AudioExportDialog final : public juce::AlertWindow
+    {
+    public:
+        AudioExportDialog (juce::Component& parent, Theme& look, juce::Range<double> loop)
+            : AlertWindow ("Export Audio", {}, juce::MessageBoxIconType::NoIcon, &parent), capturedLoop (loop)
+        {
+            setLookAndFeel (&look);
+            addComboBox ("range", { "Entire arrangement", "Loop range", "Custom range" }, {});
+            addTextEditor ("range-start", juce::String (loop.getStart(), 6), {});
+            addTextEditor ("range-end", juce::String (loop.getEnd(), 6), {});
+            customStart = getTextEditorContents ("range-start"); customEnd = getTextEditorContents ("range-end");
+            addComboBox ("format", { "WAV", "AIFF", "FLAC (lossless)" }, {});
+            addComboBox ("channels", { "Stereo", "Mono (combine both channels)" }, {});
+            addComboBox ("normalization", { "Off", "Peak ceiling: -1 dB", "Peak ceiling: -3 dB", "Peak ceiling: 0 dB" }, {});
+            addComboBox ("sample-rate", { "44.1 kHz", "48 kHz", "88.2 kHz", "96 kHz", "192 kHz" }, {});
+            getComboBoxComponent ("sample-rate")->setSelectedItemIndex (1, juce::dontSendNotification);
+            addComboBox ("bit-depth", { "16-bit", "24-bit", "32-bit" }, {});
+            getComboBoxComponent ("bit-depth")->setSelectedItemIndex (1, juce::dontSendNotification);
+            addComboBox ("effect-tail", { "0 seconds (none)", "1 second", "2 seconds", "5 seconds", "10 seconds", "30 seconds", "60 seconds" }, {});
+            getComboBoxComponent ("effect-tail")->setSelectedItemIndex (2, juce::dontSendNotification);
+            addButton ("Choose Destination...", 1, juce::KeyPress (juce::KeyPress::returnKey));
+            addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+            error.setName ("Export validation"); error.setColour (juce::Label::textColourId, orange);
+            error.setJustificationType (juce::Justification::centredLeft); addAndMakeVisible (error);
+            const juce::StringArray order { "range", "range-start", "range-end", "format", "channels", "sample-rate", "bit-depth", "normalization", "effect-tail" };
+            const juce::StringArray titles { "Export range", "Start in seconds", "End in seconds", "File format", "Output channels", "Sample rate", "Bit depth", "Normalize exported peak", "Extra reverb and delay tail" };
+            for (int i = 0; i < order.size(); ++i)
+                if (auto* control = controlNamed (order[i])) { control->setExplicitFocusOrder (i + 1); control->setTitle (titles[i]); }
+            getComboBoxComponent ("range")->setDescription ("Export the entire arrangement, captured loop endpoints, or a custom time interval.");
+            getTextEditor ("range-end")->setDescription ("End time, up to 172800 seconds. Selected ranges add no extra tail.");
+            getButton (0)->setExplicitFocusOrder (10); getButton (1)->setExplicitFocusOrder (11);
+            getComboBoxComponent ("range")->onChange = [this] { updateRangeControls(); };
+            getComboBoxComponent ("format")->onChange = [this]
+            {
+                const bool canUse32 = getComboBoxComponent ("format")->getSelectedItemIndex() == 0;
+                auto* depth = getComboBoxComponent ("bit-depth"); depth->setItemEnabled (3, canUse32);
+                if (! canUse32 && depth->getSelectedId() == 3) depth->setSelectedId (2, juce::dontSendNotification);
+            };
+            updateRangeControls (true);
+            centreAroundComponent (&parent, 640, 550); layoutControls();
+        }
+        ~AudioExportDialog() override { setLookAndFeel (nullptr); }
+        void resized() override { layoutControls(); }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (panel); g.setColour (line); g.drawRect (getLocalBounds());
+            g.setColour (orange); g.fillRect (20, 20, 4, 19);
+            g.setColour (ink); g.setFont (font (18, true)); g.drawText ("EXPORT AUDIO", 36, 15, getWidth() - 56, 30, juce::Justification::centredLeft);
+            g.setColour (muted); g.setFont (font (12));
+            g.drawFittedText ("Render the arrangement through its track and master effects.\nExport settings leave the project mix unchanged.", 20, 51, getWidth() - 40, 36, juce::Justification::topLeft, 2);
+            auto label = [&] (const juce::String& name, const juce::String& text)
+            {
+                if (auto* component = controlNamed (name))
+                    g.drawText (text, component->getX(), component->getY() - 20, component->getWidth(), 18, juce::Justification::centredLeft);
+            };
+            label ("range", "Export range"); label ("range-start", "Start (seconds)"); label ("range-end", "End (seconds)");
+            label ("format", "File format"); label ("channels", "Output channels"); label ("sample-rate", "Sample rate");
+            label ("bit-depth", "Bit depth"); label ("normalization", "Normalize exported peak"); label ("effect-tail", "Extra reverb / delay tail");
+            const auto range = getComboBoxComponent ("range")->getSelectedItemIndex();
+            g.drawFittedText (range == 0 ? "Extra tail time is added after the arrangement ends."
+                : range == 1 ? "Uses the loop endpoints captured when this window opened. No extra tail is added."
+                             : "Only the chosen interval is exported. No extra tail is added.",
+                20, 222, getWidth() - 40, 32, juce::Justification::topLeft, 2);
+        }
+        juce::Component* controlNamed (const juce::String& name)
+        {
+            if (auto* combo = getComboBoxComponent (name)) return combo;
+            return getTextEditor (name);
+        }
+        void layoutControls()
+        {
+            const auto width = getWidth(); const int half = (width - 60) / 2;
+            auto place = [&] (const char* name, int column, int y, bool full = false)
+            { if (auto* control = controlNamed (name)) control->setBounds (20 + column * (half + 20), y, full ? width - 40 : half, 28); };
+            place ("range", 0, 120, true); place ("range-start", 0, 182); place ("range-end", 1, 182);
+            place ("format", 0, 278); place ("channels", 1, 278);
+            place ("sample-rate", 0, 338); place ("bit-depth", 1, 338);
+            place ("normalization", 0, 398); place ("effect-tail", 1, 398);
+            error.setBounds (20, 438, width - 40, 49);
+            if (getNumButtons() >= 2)
+            {
+                getButton (0)->setBounds (width - 286, 502, 172, 28); getButton (1)->setBounds (width - 102, 502, 82, 28);
+            }
+        }
+        void updateRangeControls (bool initialise = false)
+        {
+            const auto range = getComboBoxComponent ("range")->getSelectedItemIndex();
+            // AlertWindow queues its initial selection notification before our
+            // callback is assigned. An unchanged selection must preserve errors.
+            if (! initialise && range == previousRange) return;
+            auto* tail = getComboBoxComponent ("effect-tail");
+            if (previousRange == 0 && range != 0) entireTail = tail->getSelectedItemIndex();
+            if (range != 0) tail->setSelectedItemIndex (0, juce::dontSendNotification);
+            else if (previousRange != 0) tail->setSelectedItemIndex (entireTail, juce::dontSendNotification);
+            if (previousRange == 2)
+            { customStart = getTextEditorContents ("range-start"); customEnd = getTextEditorContents ("range-end"); }
+            getTextEditor ("range-start")->setTextToShowWhenEmpty (range == 0 ? "Beginning" : "Start in seconds", muted);
+            getTextEditor ("range-end")->setTextToShowWhenEmpty (range == 0 ? "Last clip end" : "End in seconds", muted);
+            if (range == 0)
+            { getTextEditor ("range-start")->setText ({}, false); getTextEditor ("range-end")->setText ({}, false); }
+            else if (range == 1)
+            {
+                getTextEditor ("range-start")->setText (juce::String (capturedLoop.getStart(), 6), false);
+                getTextEditor ("range-end")->setText (juce::String (capturedLoop.getEnd(), 6), false);
+            }
+            else if (range == 2)
+            {
+                getTextEditor ("range-start")->setText (customStart, false); getTextEditor ("range-end")->setText (customEnd, false);
+            }
+            getTextEditor ("range-start")->setEnabled (range == 2); getTextEditor ("range-end")->setEnabled (range == 2);
+            getComboBoxComponent ("effect-tail")->setEnabled (range == 0);
+            previousRange = range; error.setText ({}, juce::dontSendNotification); repaint();
+        }
+        const juce::Range<double> capturedLoop;
+        juce::Label error;
+        std::optional<Session::AudioExportSettings> accepted;
+    private:
+        juce::String customStart, customEnd;
+        int previousRange = 0, entireTail = 2;
+    };
+    static juce::Result readAudioExportSettings (AudioExportDialog& dialog, Session::AudioExportSettings& settings)
     {
         constexpr double rates[] { 44100, 48000, 88200, 96000, 192000 };
         constexpr int depths[] { 16, 24, 32 };
         constexpr double tails[] { 0, 1, 2, 5, 10, 30, 60 };
-        const auto format = static_cast<Session::ExportFormat> (juce::jlimit (0, 2, dialog.getComboBoxComponent ("format")->getSelectedItemIndex()));
-        const auto rate = rates[juce::jlimit (0, 4, dialog.getComboBoxComponent ("sample-rate")->getSelectedItemIndex())];
-        const auto depth = depths[juce::jlimit (0, 2, dialog.getComboBoxComponent ("bit-depth")->getSelectedItemIndex())];
-        const auto tail = tails[juce::jlimit (0, 6, dialog.getComboBoxComponent ("effect-tail")->getSelectedItemIndex())];
-        Session::AudioExportSettings settings { format, rate, depth, tail };
+        settings = {};
+        settings.format = static_cast<Session::ExportFormat> (juce::jlimit (0, 2, dialog.getComboBoxComponent ("format")->getSelectedItemIndex()));
+        settings.sampleRate = rates[juce::jlimit (0, 4, dialog.getComboBoxComponent ("sample-rate")->getSelectedItemIndex())];
+        settings.bitDepth = depths[juce::jlimit (0, 2, dialog.getComboBoxComponent ("bit-depth")->getSelectedItemIndex())];
+        settings.tailSeconds = tails[juce::jlimit (0, 6, dialog.getComboBoxComponent ("effect-tail")->getSelectedItemIndex())];
         settings.mono = dialog.getComboBoxComponent ("channels")->getSelectedItemIndex() == 1;
         const auto normalization = dialog.getComboBoxComponent ("normalization")->getSelectedItemIndex();
         settings.normalizePeak = normalization > 0;
         settings.peakCeilingDb = normalization == 2 ? -3.0f : normalization == 3 ? 0.0f : -1.0f;
-        return settings;
+        const auto mode = dialog.getComboBoxComponent ("range")->getSelectedItemIndex();
+        if (mode == 0) return juce::Result::ok();
+        auto start = dialog.capturedLoop.getStart(), end = dialog.capturedLoop.getEnd();
+        if (mode == 2)
+        {
+            auto number = [] (juce::String text, double& result)
+            {
+                const auto value = text.trim().toStdString(); char* endOfNumber = nullptr;
+                result = std::strtod (value.c_str(), &endOfNumber);
+                return ! value.empty() && endOfNumber == value.c_str() + value.size() && std::isfinite (result);
+            };
+            if (! number (dialog.getTextEditorContents ("range-start"), start) || ! number (dialog.getTextEditorContents ("range-end"), end))
+                return juce::Result::fail ("Enter complete numeric start and end times in seconds.");
+        }
+        if (! std::isfinite (start) || ! std::isfinite (end) || start < 0 || end <= start || end > Session::maximumExportRangeSeconds)
+            return juce::Result::fail ("Use 0 ≤ start < end ≤ 172800 seconds (48 hours).");
+        if (std::llround (end * settings.sampleRate) <= std::llround (start * settings.sampleRate))
+            return juce::Result::fail ("Choose a range containing at least one frame at the selected sample rate.");
+        settings.timeRange = juce::Range<double> (start, end); settings.tailSeconds = 0;
+        return juce::Result::ok();
+    }
+    bool exportProjectMatches (uint64_t generation)
+    {
+        if (session.snapshot().projectGeneration == generation) return true;
+        status = "Project changed. Reopen Export Audio to export the current project.";
+        statusFrames = 24 * 10; repaint(); return false;
     }
     void exportDialog()
     {
-        auto* alert = new juce::AlertWindow ("Export Audio", "Render the full arrangement through its track and master effects to an audio file. Export options leave the project mix unchanged.", juce::MessageBoxIconType::NoIcon, this);
-        alert->setLookAndFeel (&theme);
-        alert->addComboBox ("format", { "WAV", "AIFF", "FLAC (lossless)" }, "File format");
-        alert->addComboBox ("channels", { "Stereo", "Mono (combine both channels)" }, "Output channels");
-        alert->addComboBox ("normalization", { "Off", "Peak ceiling: -1 dB", "Peak ceiling: -3 dB", "Peak ceiling: 0 dB" }, "Normalize exported peak");
-        alert->addComboBox ("sample-rate", { "44.1 kHz", "48 kHz", "88.2 kHz", "96 kHz", "192 kHz" }, "Sample rate");
-        alert->getComboBoxComponent ("sample-rate")->setSelectedItemIndex (1);
-        alert->addComboBox ("bit-depth", { "16-bit", "24-bit", "32-bit" }, "Bit depth");
-        alert->getComboBoxComponent ("bit-depth")->setSelectedItemIndex (1);
-        alert->addComboBox ("effect-tail", { "0 seconds (none)", "1 second", "2 seconds", "5 seconds", "10 seconds", "30 seconds", "60 seconds" }, "Extra time for reverb / delay tails");
-        alert->getComboBoxComponent ("effect-tail")->setSelectedItemIndex (2);
-        alert->addButton ("Choose Destination...", 1, juce::KeyPress (juce::KeyPress::returnKey));
-        alert->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        if (session.isExporting()) return;
+        const auto current = session.snapshot(); const auto generation = current.projectGeneration;
+        auto* alert = new AudioExportDialog (*this, theme, { current.loopStart, current.loopEnd });
         alerts.emplace_back (alert);
         auto safe = juce::Component::SafePointer<Impl> (this);
-        auto dialog = juce::Component::SafePointer<juce::AlertWindow> (alert);
-        alert->getComboBoxComponent ("format")->onChange = [dialog]
+        auto dialog = juce::Component::SafePointer<AudioExportDialog> (alert);
+        // Replace the native button's exit callback so invalid input never closes
+        // the settings window or advances to a destination chooser. Return uses
+        // this same button callback through AlertWindow::keyPressed.
+        alert->getButton (0)->onClick = [safe, dialog, generation]
         {
-            if (dialog == nullptr) return;
-            const bool canUse32 = dialog->getComboBoxComponent ("format")->getSelectedItemIndex() == 0;
-            auto* depth = dialog->getComboBoxComponent ("bit-depth");
-            depth->setItemEnabled (3, canUse32);
-            if (! canUse32 && depth->getSelectedId() == 3) depth->setSelectedId (2);
+            if (safe == nullptr || dialog == nullptr) return;
+            if (! safe->exportProjectMatches (generation))
+            { dialog->error.setText ("Project changed. Cancel and reopen Export Audio.", juce::dontSendNotification); return; }
+            Session::AudioExportSettings settings;
+            const auto result = readAudioExportSettings (*dialog, settings);
+            if (result.failed()) { dialog->error.setText (result.getErrorMessage(), juce::dontSendNotification); return; }
+            dialog->accepted = settings; dialog->exitModalState (1);
         };
-        alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, dialog] (int result)
+        alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, dialog, generation] (int result)
         {
-            if (result != 1 || safe == nullptr || dialog == nullptr) return;
-            const auto settings = readAudioExportSettings (*dialog);
-            juce::MessageManager::callAsync ([safe, settings]
+            if (result != 1 || safe == nullptr || dialog == nullptr || ! dialog->accepted) return;
+            const auto settings = *dialog->accepted;
+            juce::MessageManager::callAsync ([safe, settings, generation]
             {
-                if (safe != nullptr) safe->chooseExportDestination (settings);
+                if (safe != nullptr && safe->exportProjectMatches (generation)) safe->chooseExportDestination (settings, generation);
             });
         }), true);
     }
-    void performAudioExport (const juce::File& destination, const Session::AudioExportSettings& settings)
+    void performAudioExport (const juce::File& destination, const Session::AudioExportSettings& settings, uint64_t generation)
     {
+        if (! exportProjectMatches (generation)) return;
         auto safe = juce::Component::SafePointer<Impl> (this);
         const auto result = session.exportAudio (destination, settings);
         if (safe == nullptr) return;
@@ -3400,9 +3544,9 @@ private:
         else safe->report (result, exportExtension (settings.format).toUpperCase() + (settings.mono ? " mono" : " stereo") + " exported: " + juce::String (settings.sampleRate / 1000.0, 1) + " kHz / " + juce::String (settings.bitDepth) + "-bit" + (settings.normalizePeak ? ", peak normalized." : "."));
         safe->refresh();
     }
-    void exportAudioSelection (const juce::File& selected, Session::AudioExportSettings settings)
+    void exportAudioSelection (const juce::File& selected, Session::AudioExportSettings settings, uint64_t generation)
     {
-        if (selected == juce::File()) return;
+        if (selected == juce::File() || ! exportProjectMatches (generation)) return;
         const auto destination = selected.withFileExtension (exportExtension (settings.format));
         // The native chooser only confirmed the spelling it returned. Adding the
         // chosen extension can name another existing file, which needs its own choice.
@@ -3414,23 +3558,27 @@ private:
             alert->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
             alerts.emplace_back (alert);
             auto safe = juce::Component::SafePointer<Impl> (this);
-            alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, destination, settings] (int result)
+            alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, destination, settings, generation] (int result)
             {
-                if (result == 1 && safe != nullptr) safe->performAudioExport (destination, settings);
+                if (result == 1 && safe != nullptr) safe->performAudioExport (destination, settings, generation);
             }), true);
             return;
         }
-        performAudioExport (destination, settings);
+        performAudioExport (destination, settings, generation);
     }
-    void chooseExportDestination (Session::AudioExportSettings settings)
+    void chooseExportDestination (Session::AudioExportSettings settings, uint64_t generation)
     {
+        if (! exportProjectMatches (generation)) return;
+       #if HALFTRACK_TESTS_ENABLED
+        if (testExportDestination) { testExportDestination (settings, generation); return; }
+       #endif
         const auto extension = exportExtension (settings.format);
-        chooser = std::make_unique<juce::FileChooser> ("Export Arrangement as " + extension.toUpperCase(), juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (state.name + "." + extension), "*." + extension);
+        chooser = std::make_unique<juce::FileChooser> ("Export Arrangement as " + extension.toUpperCase(), juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (session.snapshot().name + "." + extension), "*." + extension);
         auto safe = juce::Component::SafePointer<Impl> (this);
         chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
-            [safe, settings] (const juce::FileChooser& fc)
+            [safe, settings, generation] (const juce::FileChooser& fc)
             {
-                if (safe != nullptr) safe->exportAudioSelection (fc.getResult(), settings);
+                if (safe != nullptr) safe->exportAudioSelection (fc.getResult(), settings, generation);
             });
     }
     void chooseFolder()
@@ -3788,6 +3936,179 @@ private:
 
 
 #if HALFTRACK_TESTS_ENABLED
+void MainComponent::Impl::runExportInteractionChecks (const juce::File& audioFixture)
+{
+    auto check = [] (bool condition, const char* message)
+    { if (! condition) throw std::runtime_error (message); std::cout << "PASS export UI " << message << std::endl; };
+    auto waitFor = [] (const std::function<bool()>& completed)
+    {
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + 2000;
+        while (! completed() && juce::Time::getMillisecondCounterHiRes() < deadline)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+        return completed();
+    };
+    auto drainQueuedCallbacks = [&]
+    {
+        // exitModalState queues the manager callback first. That callback posts
+        // destination selection. A second queued marker follows both stages.
+        auto reached = std::make_shared<bool> (false);
+        juce::MessageManager::callAsync ([reached]
+        { juce::MessageManager::callAsync ([reached] { *reached = true; }); });
+        check (waitFor ([reached] { return *reached; }), "queued modal and destination callbacks reach the completion barrier");
+    };
+    check (session.newProject().wasOk() && session.importAudio (audioFixture, 0).wasOk(), "prepare real audio export UI fixture"); refresh();
+    session.setLoop (false, .01, .09); refresh();
+    int destinationRequests = 0;
+    std::optional<Session::AudioExportSettings> capturedSettings;
+    uint64_t capturedGeneration = 0;
+    testExportDestination = [&] (const Session::AudioExportSettings& settings, uint64_t generation)
+    { ++destinationRequests; capturedSettings = settings; capturedGeneration = generation; };
+    auto open = [&]
+    {
+        exportDialog(); auto* window = dynamic_cast<AudioExportDialog*> (alerts.back().getComponent());
+        check (window != nullptr, "production export options open");
+        return juce::Component::SafePointer<AudioExportDialog> (window);
+    };
+    auto cancel = [&] (juce::Component::SafePointer<AudioExportDialog> window)
+    { if (window) window->exitModalState (0); drainQueuedCallbacks(); };
+    auto dialog = open();
+    Session::AudioExportSettings settings;
+    check (readAudioExportSettings (*dialog, settings).wasOk() && ! settings.timeRange && settings.tailSeconds == 2
+        && ! settings.mono && ! settings.normalizePeak, "entire arrangement preserves prior stereo and tail defaults");
+    check (dialog->getTextEditorContents ("range-start").isEmpty() && dialog->getTextEditorContents ("range-end").isEmpty()
+        && dialog->getComboBoxComponent ("range")->getTitle() == "Export range",
+        "entire export does not mislabel loop endpoints and keeps accessible control titles");
+    check (dialog->getWidth() == 640 && dialog->getHeight() == 550, "compact export dialog fits a laptop display");
+    for (auto* child : dialog->getChildren())
+        if (dynamic_cast<juce::ComboBox*> (child) || dynamic_cast<juce::TextEditor*> (child) || dynamic_cast<juce::Button*> (child))
+            check (dialog->getLocalBounds().contains (child->getBounds()), "every interactive export control is inside the dialog");
+    auto* format = dialog->getComboBoxComponent ("format"); auto* depth = dialog->getComboBoxComponent ("bit-depth");
+    check (format->getNumItems() == 3 && dialog->getComboBoxComponent ("channels")->getNumItems() == 2
+        && dialog->getComboBoxComponent ("normalization")->getNumItems() == 4, "format, channels and peak options remain available");
+    depth->setSelectedId (3, juce::dontSendNotification); format->setSelectedId (2, juce::sendNotificationSync);
+    check (! depth->isItemEnabled (3) && depth->getSelectedId() == 2, "AIFF changes unsupported 32-bit WAV depth to 24-bit");
+    format->setSelectedId (3, juce::sendNotificationSync); check (! depth->isItemEnabled (3), "FLAC disables unsupported 32-bit output");
+    format->setSelectedId (1, juce::sendNotificationSync); check (depth->isItemEnabled (3), "WAV restores its 32-bit choice");
+    format->setSelectedId (3, juce::sendNotificationSync);
+    dialog->getComboBoxComponent ("channels")->setSelectedItemIndex (1, juce::sendNotificationSync);
+    dialog->getComboBoxComponent ("normalization")->setSelectedItemIndex (2, juce::sendNotificationSync);
+    dialog->getComboBoxComponent ("effect-tail")->setSelectedItemIndex (0, juce::sendNotificationSync);
+    check (readAudioExportSettings (*dialog, settings).wasOk() && settings.format == Session::ExportFormat::flac && settings.mono
+        && settings.normalizePeak && settings.peakCeilingDb == -3 && settings.tailSeconds == 0,
+        "production dialog transfers format, channels, peak and tail settings");
+    const auto entireSettings = settings;
+    dialog->getComboBoxComponent ("effect-tail")->setSelectedItemIndex (2, juce::sendNotificationSync);
+    session.setLoop (false, .02, .08); refresh();
+    auto* range = dialog->getComboBoxComponent ("range"); range->setSelectedItemIndex (1, juce::sendNotificationSync);
+    check (readAudioExportSettings (*dialog, settings).wasOk() && settings.timeRange
+        && settings.timeRange->getStart() == .01 && settings.timeRange->getEnd() == .09 && settings.tailSeconds == 0
+        && ! session.snapshot().looping && ! dialog->getComboBoxComponent ("effect-tail")->isEnabled()
+        && dialog->getComboBoxComponent ("effect-tail")->getSelectedItemIndex() == 0
+        && ! dialog->getTextEditor ("range-start")->isEnabled(), "loop export uses captured endpoints even while looping is off");
+    range->setSelectedItemIndex (2, juce::sendNotificationSync);
+    check (dialog->getTextEditor ("range-start")->isEnabled() && dialog->getTextEditor ("range-end")->isEnabled(), "custom range enables both time fields");
+    dialog->getTextEditor ("range-start")->setText ("0.025", false); dialog->getTextEditor ("range-end")->setText ("0.075", false);
+    range->setSelectedItemIndex (1, juce::sendNotificationSync); range->setSelectedItemIndex (2, juce::sendNotificationSync);
+    check (dialog->getTextEditorContents ("range-start") == "0.025" && dialog->getTextEditorContents ("range-end") == "0.075",
+        "switching through loop range retains custom input");
+    range->setSelectedItemIndex (0, juce::sendNotificationSync);
+    check (readAudioExportSettings (*dialog, settings).wasOk() && ! settings.timeRange && settings.tailSeconds == 2
+        && dialog->getComboBoxComponent ("effect-tail")->isEnabled()
+        && dialog->getComboBoxComponent ("effect-tail")->getSelectedItemIndex() == 2, "entire arrangement restores the selected extra tail");
+    range->setSelectedItemIndex (2, juce::sendNotificationSync);
+    const auto* chooserBeforeInvalid = chooser.get();
+    const std::array<std::pair<const char*, const char*>, 10> invalid {{
+        { "", "1" }, { "nan", "1" }, { "0", "inf" }, { "-1", "1" }, { "2", "1" },
+        { "1", "1" }, { "0", "172801" }, { "1oops", "2" }, { "0", "0.00000001" }, { "0", "1e999" }
+    }};
+    for (const auto& [start, end] : invalid)
+    {
+        dialog->getTextEditor ("range-start")->setText (start, false); dialog->getTextEditor ("range-end")->setText (end, false);
+        dialog->getButton (0)->onClick(); drainQueuedCallbacks();
+        check (dialog && dialog->isCurrentlyModal() && ! dialog->accepted && dialog->error.getText().isNotEmpty()
+            && destinationRequests == 0 && chooser.get() == chooserBeforeInvalid, "invalid custom range remains editable without a destination chooser");
+    }
+    check (static_cast<juce::Component&> (*dialog).keyPressed (juce::KeyPress (juce::KeyPress::returnKey)), "Return invokes the native destination button"); drainQueuedCallbacks();
+    check (dialog && dialog->isCurrentlyModal() && ! dialog->accepted && destinationRequests == 0,
+        "Return cannot bypass range validation or close invalid settings");
+    dialog->getTextEditor ("range-start")->setText ("172799", false); dialog->getTextEditor ("range-end")->setText ("172800", false);
+    check (readAudioExportSettings (*dialog, settings).wasOk() && settings.timeRange->getEnd() == Session::maximumExportRangeSeconds,
+        "custom endpoint reaches the supported 48-hour maximum");
+    dialog->getTextEditor ("range-start")->setText ("0.025", false); dialog->getTextEditor ("range-end")->setText ("0.075", false);
+    check (readAudioExportSettings (*dialog, settings).wasOk(), "corrected range validates without reopening the dialog");
+    dialog->error.setText ({}, juce::dontSendNotification);
+    if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+    {
+        const juce::File directory (juce::String::fromUTF8 (configured)); check (directory.createDirectory().wasOk(), "create export screenshot directory");
+        auto stream = directory.getChildFile ("export-options-dialog.png").createOutputStream(); juce::PNGImageFormat png;
+        check (stream && stream->setPosition (0) && stream->truncate().wasOk()
+            && png.writeImageToStream (dialog->createComponentSnapshot (dialog->getLocalBounds()), *stream), "capture actual compact range export dialog");
+    }
+    const auto generation = session.snapshot().projectGeneration;
+    dialog->getButton (0)->onClick();
+    check (waitFor ([&] { return destinationRequests > 0; }), "destination callback completes after accepting valid settings");
+    check (destinationRequests == 1 && capturedSettings && capturedGeneration == generation
+        && capturedSettings->timeRange && capturedSettings->timeRange->getStart() == .025 && capturedSettings->timeRange->getEnd() == .075
+        && capturedSettings->format == Session::ExportFormat::flac && capturedSettings->sampleRate == 48000 && capturedSettings->bitDepth == 24
+        && capturedSettings->mono && capturedSettings->normalizePeak && capturedSettings->peakCeilingDb == -3 && capturedSettings->tailSeconds == 0,
+        "validated range, format and mix settings survive the asynchronous destination callback");
+    juce::TemporaryFile destination (".flac"); check (destination.getFile().replaceWithText ("keep this existing audio"), "prepare export destination collision");
+    const auto selectedPath = destination.getFile().withFileExtension ("unexpected");
+    exportAudioSelection (selectedPath, *capturedSettings, capturedGeneration);
+    check (alerts.back() && destination.getFile().loadFileAsString() == "keep this existing audio", "extension correction requests permission before replacing another file");
+    alerts.back()->exitModalState (0); drainQueuedCallbacks();
+    check (destination.getFile().loadFileAsString() == "keep this existing audio", "cancelled overwrite preserves destination");
+    auto queuedSettings = *capturedSettings;
+    exportAudioSelection (selectedPath, queuedSettings, capturedGeneration);
+    queuedSettings.timeRange.reset(); queuedSettings.mono = false; queuedSettings.format = Session::ExportFormat::wav;
+    alerts.back()->exitModalState (1); drainQueuedCallbacks();
+    juce::AudioFormatManager formats; formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (destination.getFile()));
+    check (reader && reader->sampleRate == 48000 && reader->bitsPerSample == 24 && reader->lengthInSamples == 2400
+        && reader->numChannels == 1 && ! selectedPath.exists(), "overwrite confirmation retains copied range and writes exactly the selected mono FLAC interval");
+    juce::AudioBuffer<float> audio (1, 2400); check (reader->read (&audio, 0, 2400, 0, true, false), "decode selected-range output");
+    check (audio.getMagnitude (0, 2400) > .69f && audio.getMagnitude (0, 2400) <= std::pow (10.0f, -3.0f / 20),
+        "dialog-selected peak normalization affects the actual selected-range audio");
+    reader.reset();
+    juce::TemporaryFile entireDestination (".flac");
+    exportAudioSelection (entireDestination.getFile(), entireSettings, generation);
+    reader.reset (formats.createReaderFor (entireDestination.getFile()));
+    check (reader && reader->lengthInSamples == 4800 && reader->numChannels == 1 && reader->bitsPerSample == 24,
+        "entire arrangement still exports its complete prior extent"); reader.reset();
+    const auto beforeSaveAs = destinationRequests;
+    dialog = open(); dialog->getComboBoxComponent ("effect-tail")->setSelectedItemIndex (0, juce::dontSendNotification);
+    dialog->getButton (0)->onClick();
+    juce::TemporaryFile saveAs (".halftrack"); check (session.saveProject (saveAs.getFile()).wasOk(), "save the current project while destination dispatch is pending");
+    const bool saveDispatchCompleted = waitFor ([&] { return destinationRequests > beforeSaveAs; });
+    check (saveDispatchCompleted && destinationRequests == beforeSaveAs + 1 && capturedGeneration == generation,
+        "Save As keeps the pending export attached to the same project");
+    const auto beforeStale = destinationRequests;
+    dialog = open(); check (session.newProject().wasOk(), "replace project while export settings remain open"); refresh();
+    dialog->getButton (0)->onClick(); drainQueuedCallbacks();
+    check (dialog != nullptr, "stale export settings remain alive for correction");
+    check (dialog->isCurrentlyModal(), "stale export settings remain modal");
+    check (! dialog->accepted, "stale export settings do not accept a render packet");
+    check (destinationRequests == beforeStale, "stale export settings do not request a destination");
+    check (dialog->error.getText().contains ("Project changed"), "stale export settings explain the changed project"); cancel (dialog);
+    dialog = open(); dialog->getButton (0)->onClick();
+    check (session.newProject().wasOk(), "replace project before queued destination callback"); refresh(); drainQueuedCallbacks();
+    check (destinationRequests == beforeStale, "queued export settings cannot switch to a replacement project");
+    juce::TemporaryFile untouched (".flac"); check (untouched.getFile().replaceWithText ("preserve stale destination"), "prepare stale chooser destination");
+    exportAudioSelection (untouched.getFile(), entireSettings, generation);
+    check (untouched.getFile().loadFileAsString() == "preserve stale destination" && ! session.snapshot().dirty && ! session.canUndo(),
+        "stale chooser selection preserves destination and replacement project history");
+    check (session.importAudio (audioFixture, 0).wasOk(), "prepare stale overwrite export source"); refresh();
+    const auto beforeReplace = session.snapshot().projectGeneration;
+    exportAudioSelection (untouched.getFile().withFileExtension ("unexpected"), entireSettings, beforeReplace);
+    check (alerts.back() != nullptr, "open overwrite confirmation before project replacement");
+    check (session.newProject().wasOk(), "replace project before overwrite confirmation"); refresh();
+    alerts.back()->exitModalState (1); drainQueuedCallbacks();
+    check (untouched.getFile().loadFileAsString() == "preserve stale destination" && ! session.snapshot().dirty && ! session.canUndo(),
+        "stale overwrite confirmation cannot render or replace a file from another project");
+    testExportDestination = {};
+    check (session.newProject().wasOk() && session.importAudio (audioFixture, 0).wasOk(), "restore a populated project after export UI checks"); refresh();
+}
+
 void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
 {
     auto check = [] (bool condition, const juce::String& message)
@@ -5241,54 +5562,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(std::all_of(currentMidiClip()->notes.begin(),currentMidiClip()->notes.end(),[](const auto& n){return n.active;}),"mixed selection zero activates all selected notes");
     pianoRoll.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));pianoRoll.keyPressed(juce::KeyPress('0'));refresh();
     check(std::all_of(currentMidiClip()->notes.begin(),currentMidiClip()->notes.end(),[](const auto& n){return n.active;}),"zero without selected notes makes no note edit");
-    exportDialog();
-    auto exportSettings = alerts.back();
-    check (exportSettings != nullptr, "production audio export settings open");
-    auto* formatChoice = exportSettings->getComboBoxComponent ("format");
-    auto* depthChoice = exportSettings->getComboBoxComponent ("bit-depth");
-    check (formatChoice && depthChoice && formatChoice->getNumItems() == 3, "WAV, AIFF and FLAC are real export choices");
-    check (exportSettings->getComboBoxComponent ("channels")->getNumItems() == 2
-        && exportSettings->getComboBoxComponent ("normalization")->getNumItems() == 4,
-        "production dialog exposes channel and peak options with unchanged stereo defaults");
-    depthChoice->setSelectedId (3, juce::dontSendNotification);
-    formatChoice->setSelectedId (2, juce::sendNotificationSync);
-    check (! depthChoice->isItemEnabled (3) && depthChoice->getSelectedId() == 2, "AIFF selects supported depth when switching from 32-bit WAV");
-    formatChoice->setSelectedId (3, juce::sendNotificationSync);
-    check (! depthChoice->isItemEnabled (3), "FLAC disables unsupported 32-bit output");
-    formatChoice->setSelectedId (1, juce::sendNotificationSync);
-    check (depthChoice->isItemEnabled (3), "WAV restores its 32-bit choice");
-    formatChoice->setSelectedId (3, juce::sendNotificationSync);
-    exportSettings->getComboBoxComponent ("channels")->setSelectedItemIndex (1, juce::sendNotificationSync);
-    exportSettings->getComboBoxComponent ("normalization")->setSelectedItemIndex (2, juce::sendNotificationSync);
-    exportSettings->getComboBoxComponent ("effect-tail")->setSelectedItemIndex (0, juce::sendNotificationSync);
-    const auto selectedExportSettings = readAudioExportSettings (*exportSettings);
-    check (selectedExportSettings.format == Session::ExportFormat::flac && selectedExportSettings.mono
-        && selectedExportSettings.normalizePeak && selectedExportSettings.peakCeilingDb == -3 && selectedExportSettings.tailSeconds == 0,
-        "production dialog transfers format, channels, normalization and tail to the actual renderer settings");
-    if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
-    {
-        const juce::File directory (juce::String::fromUTF8 (configured)); check (directory.createDirectory().wasOk(), "create export dialog snapshot directory");
-        auto stream = directory.getChildFile ("export-options-dialog.png").createOutputStream(); juce::PNGImageFormat png;
-        check (stream && stream->setPosition (0) && stream->truncate().wasOk()
-            && png.writeImageToStream (exportSettings->createComponentSnapshot (exportSettings->getLocalBounds()), *stream), "capture actual export settings dialog");
-    }
-    exportSettings->exitModalState (0); juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-    check (session.newProject().wasOk() && session.importAudio (audioFixture, 0).wasOk(), "prepare real audio export UI fixture"); refresh();
-    juce::TemporaryFile destination (".flac");
-    check (destination.getFile().replaceWithText ("keep this existing audio"), "prepare normalized export destination collision");
-    const auto selectedPath = destination.getFile().withFileExtension ("unexpected");
-    exportAudioSelection (selectedPath, selectedExportSettings);
-    check (alerts.back() != nullptr && destination.getFile().loadFileAsString() == "keep this existing audio", "extension correction requests permission before replacing a different existing file");
-    alerts.back()->exitModalState (0); juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-    check (destination.getFile().loadFileAsString() == "keep this existing audio", "cancelled overwrite preserves destination");
-    exportAudioSelection (selectedPath, selectedExportSettings);
-    alerts.back()->exitModalState (1); juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
-    juce::AudioFormatManager exportedFormats; exportedFormats.registerBasicFormats();
-    std::unique_ptr<juce::AudioFormatReader> exportedReader (exportedFormats.createReaderFor (destination.getFile()));
-    check (exportedReader && exportedReader->sampleRate == 48000 && exportedReader->bitsPerSample == 24
-        && exportedReader->lengthInSamples == 4800 && exportedReader->numChannels == 1 && ! selectedPath.exists(), "confirmed production export writes the normalized FLAC with the requested audio extent");
-    juce::AudioBuffer<float> exportedAudio (1, 4800); check (exportedReader->read (&exportedAudio, 0, 4800, 0, true, false), "decode production mono export");
-    check (exportedAudio.getMagnitude (0, 4800) > .69f && exportedAudio.getMagnitude (0, 4800) <= std::pow (10.0f, -3.0f / 20), "dialog-selected peak normalization changes the actual exported audio");
+    runExportInteractionChecks (audioFixture);
     check (session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "prepare follow-action UI clip"); refresh(); showSessionView(); selectLauncherSlot (0, 0);
     const auto followClipId = selectedSlot()->clip.id;
     menuItemSelected (59, 4); check (alerts.back() != nullptr, "Session menu opens follow-action controls");
@@ -5399,6 +5673,26 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
 
 
 
+}
+
+int MainComponent::runExportInteractionTests()
+{
+    try
+    {
+        juce::TemporaryFile fixture (".wav");
+        {
+            std::unique_ptr<juce::OutputStream> stream = fixture.getFile().createOutputStream(); juce::WavAudioFormat format;
+            auto writer = stream ? format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (1).withBitsPerSample (16)) : nullptr;
+            if (! writer) throw std::runtime_error ("Could not create export UI audio fixture");
+            juce::AudioBuffer<float> audio (1, 4800);
+            for (int i = 0; i < 4800; ++i) audio.setSample (0, i, .1f * std::sin (static_cast<float> (i) * .031f));
+            if (! writer->writeFromAudioSampleBuffer (audio, 0, 4800)) throw std::runtime_error ("Could not write export UI audio fixture");
+        }
+        Session session (false, makeSyntheticTestDeviceType()); MainComponent component (session);
+        component.impl->captureTestErrors = true; component.impl->runExportInteractionChecks (fixture.getFile()); return 0;
+    }
+    catch (const std::exception& error)
+    { std::cerr << "FAIL export UI " << error.what() << std::endl; return 1; }
 }
 
 int MainComponent::runInteractionTests()
