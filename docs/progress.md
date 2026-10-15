@@ -447,3 +447,9 @@ Metronome focused verification passes in **25.48 s**, generated MIDI-input regre
 
 
 Combined metronome checkpoint: all **19 Mac acceptance suites pass in 258.88 s**. The owned callback guard passes nine fixtures over 42 bodies; Python runs 39 tests with 37 passes and two optional integrations skipped. Click/count-in and the three reproduced recording/timing fixes are ready for platform validation and a source-inclusive package. Physical input/output calibration and whole-product parity remain unfinished.
+
+
+Recording quantization ownership: root owns project-level recording grid settings, native-input raw-capture policy, quantizing only newly recorded note starts within the take transaction, Edit-menu controls, generated event/render/persistence/undo tests and documentation. The metronome source `37581fe` is committed/pushed and its source-inclusive package is verified; cross-platform CI 38707016143 is running. No other agent is editing these areas.
+
+
+Recording quantization is verified on the final source: all **19 Mac acceptance suites pass in 275.87 s**, including the expanded MIDI-input suite in **29.12 s**, metronome in **25.11 s** and production UI in **4.07 s**. All seven grids retain note duration/velocity and controller timing; the sixteenth-note full PCM render matches independently drawn notes. Existing overdub material, one-take undo/redo, off-grid start/end bounds, project persistence, invalid settings and audio-only loop capture pass. The callback source guard and Python fixture suite pass with their existing documented scope. This deepens REC-008; partial feature-area coverage remains 30/246 (12.2%).

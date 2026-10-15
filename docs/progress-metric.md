@@ -1,6 +1,6 @@
 # Recorded implementation coverage
 
-Current implementation checkpoint: metronome and count-in, 2026-10-15. **30 of 246 tracked active feature areas have partial implementation evidence: 12.2%.** None of these broad rows establishes complete measured reference parity.
+Current implementation checkpoint: metronome, count-in and recording quantization, 2026-10-15. **30 of 246 tracked active feature areas have partial implementation evidence: 12.2%.** None of these broad rows establishes complete measured reference parity.
 
 This is recorded partial coverage, not percentage finished, remaining engineering time, or a weighted feature score. The initial inventory is not exhaustive, some existing behavior is recorded only in preview rows, and items vary greatly in size. Static decompiler coverage uses a different denominator and must never be reported as application completion.
 
@@ -25,3 +25,5 @@ Global 20–999 BPM timing and validated editing add partial evidence for REC-00
 Controller input, native recording/overdub and event-preserving undo add bounded partial evidence for REC-008: 29/246 (11.8%). This does not establish physical timing, MPE or whole-product completion.
 
 Metronome/count-in adds bounded partial evidence for REC-005: 30/246 (12.2%). Complete generated signal tests do not establish cue routing, odd signatures, physical timing or complete reference parity.
+
+Recording quantization deepens REC-008 without adding a feature-area row; partial coverage remains 30/246.

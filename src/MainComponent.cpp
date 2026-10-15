@@ -2898,6 +2898,10 @@ private:
         else if (index == 1)
         {
             popup.addItem (20, "Undo", session.canUndo()); popup.addItem (21, "Redo", session.canRedo()); popup.addSeparator();
+            juce::PopupMenu recordingGrid;
+            const juce::StringArray grids {"Off","1/4 note","1/8 note","1/8 triplet","1/16 note","1/16 triplet","1/32 note"};
+            for(int i=0;i<grids.size();++i) recordingGrid.addItem(60+i,grids[i],!state.recording,static_cast<int>(state.recordQuantisation)==i);
+            popup.addSubMenu("Recording quantization",recordingGrid);popup.addSeparator();
             popup.addItem (22, showPiano ? "Delete Selected Notes" : showSession ? "Clear Selected Slot" : "Delete Selected Clip", showPiano ? pianoRoll.hasSelectedNote() : showSession ? selectedSlot() != nullptr && selectedSlot()->hasClip : selectedClip >= 0);
         }
         else if (index == 2)
@@ -2926,6 +2930,7 @@ private:
     void menuItemSelected (int id, int) override
     {
         if (session.isExporting()) return;
+        if(id>=60 && id<=66) { report(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>(id-60)));refresh();return; }
         switch (id)
         {
             case 1: ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) { safe->report (safe->session.newProject()); safe->resetView(); } }); break;
@@ -4770,6 +4775,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         tempo.setText(invalid,juce::sendNotificationSync);
         check(state.tempo==120&&tempo.getText()=="120.00"&&session.canRedo(),"invalid tempo text restores display without discarding redo");
     }
+    menuItemSelected(64,1);check(state.recordQuantisation==Session::RecordQuantisation::sixteenth,"Edit menu sets recording quantization");
+    menuItemSelected(20,1);check(state.recordQuantisation==Session::RecordQuantisation::none,"recording quantization menu edit undoes once");
+    menuItemSelected(21,1);check(state.recordQuantisation==Session::RecordQuantisation::sixteenth,"recording quantization menu redo restores grid");
     auto* metronome=dynamic_cast<juce::Button*>(findNamed(*this,"Metronome"));
     check(metronome && metronome->isVisible(),"transport exposes the real metronome toggle");
     metronome->setToggleState(true,juce::dontSendNotification);metronome->onClick();refresh();

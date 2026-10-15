@@ -250,6 +250,110 @@ void countInRecording()
     }
 }
 
+void recordingQuantisation(const juce::File& root)
+{
+    constexpr double grids[]={0,1,.5,1.0/3,.25,1.0/6,.125};
+    constexpr double starts[]={.23,.75,1.78,2.13},lengths[]={.17,.4,.21,.55};
+    for(int choice=0;choice<7;++choice)
+    {
+        GeneratedInput f;auto& session=f.session;const auto mode=static_cast<Session::RecordQuantisation>(choice);
+        check(session.snapshot().recordQuantisation==Session::RecordQuantisation::none,"new projects disable recording quantization");
+        ok(session.setRecordQuantisation(mode),"choose recording grid");
+        if(choice>0)
+        {
+            session.undo();check(session.snapshot().recordQuantisation==Session::RecordQuantisation::none,"recording grid setting undoes once");
+            check(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>(99)).failed()&&session.canRedo(),"invalid recording grid preserves redo");
+            session.redo();check(session.snapshot().recordQuantisation==mode,"recording grid setting redoes exactly");
+        }
+        // A remembered native device quantizer must not quantize this document a second time.
+        f.controller.midi->quantisation.setType("1 beat");
+        ok(session.setTrackArmed(2,true),"arm quantized take");session.seek(0);ok(session.record(),"start take on selected recording grid");
+        check(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>((choice+1)%7)).failed(),"recording grid cannot change during a take");
+        const auto origin=f.devices.getCurrentStreamTime()+256.0/48000;pumpSyntheticTestDevice(session,4);
+        for(int n=0;n<4;++n)
+        {
+            f.send(juce::MidiMessage::noteOn(1,60+n,(juce::uint8)(80+n)),origin+starts[n]*.5);
+            f.send(juce::MidiMessage::noteOff(1,60+n,(juce::uint8)(30+n)),origin+(starts[n]+lengths[n])*.5);
+        }
+        f.send(juce::MidiMessage::controllerEvent(1,11,75),origin+.37*.5);
+        pumpSyntheticTestDevice(session,300);session.stop();const auto state=session.snapshot();
+        check(state.tracks[2].clips.size()==1,"quantized take produces one MIDI clip");const auto clip=state.tracks[2].clips[0];
+        check(clip.notes.size()==4,"recording quantization retains all notes");
+        for(int n=0;n<4;++n)
+        {
+            auto note=std::find_if(clip.notes.begin(),clip.notes.end(),[n](const auto& value){return value.pitch==60+n;});
+            const auto expected=choice==0?starts[n]:std::floor(starts[n]/grids[choice]+.5)*grids[choice];
+            check(note!=clip.notes.end()&&std::abs(clip.startBeat+note->startBeat-expected)<1e-9
+                &&std::abs(note->lengthBeats-lengths[n])<1e-9&&std::abs(note->velocity-(80+n)/127.0)<1e-6,
+                "recorded onset follows independent grid arithmetic while length and velocity are retained");
+        }
+        const auto midiFile=root.getChildFile("quantized-"+juce::String(choice)+".mid");ok(session.exportMidiClip(clip.id,midiFile),"export quantized recorded events");
+        juce::FileInputStream input(midiFile);juce::MidiFile midi;check(midi.readFrom(input),"read quantized event export");
+        bool controller=false;int releases=0;
+        for(int n=0;n<midi.getTrack(0)->getNumEvents();++n)
+        {
+            const auto& message=midi.getTrack(0)->getEventPointer(n)->message;
+            if(message.isController() && message.getControllerNumber()==11)
+                controller=message.getControllerValue()==75&&std::abs(message.getTimeStamp()/midi.getTimeFormat()-.37)<1e-9;
+            if(message.isNoteOff()&&message.getNoteNumber()>=60&&message.getNoteNumber()<64)
+            {
+                check(message.getRawData()[2]==30+message.getNoteNumber()-60,"quantization retains captured release velocity");++releases;
+            }
+        }
+        check(controller&&releases==4,"controller timing remains unquantized");
+        session.undo();check(session.snapshot().tracks[2].clips.empty(),"quantized take is one undo action");session.redo();
+        check(session.snapshot().tracks[2].clips[0].notes[0].id==clip.notes[0].id,"quantized take redo retains identities");
+        if(choice==4)
+        {
+            const auto actualFile=root.getChildFile("quantized.wav"),expectedFile=root.getChildFile("quantized-oracle.wav");
+            ok(session.exportWav(actualFile),"render quantized captured notes");
+            Session oracle(false);ok(oracle.addMidiTrack(),"prepare independent quantized-note oracle");auto track=oracle.snapshot().tracks[2].id;
+            ok(oracle.setSynthSettings(track,state.tracks[2].synth),"match instrument for quantization oracle");ok(oracle.addMidiClip(track,clip.startBeat,clip.lengthBeats),"match recording extent in oracle");
+            const auto id=oracle.snapshot().tracks[2].clips[0].id;
+            for(int n=0;n<4;++n)ok(oracle.addMidiNote(id,60+n,std::floor(starts[n]/.25+.5)*.25-clip.startBeat,lengths[n],(80+n)/127.0f),"draw independently quantized note");
+            ok(oracle.exportWav(expectedFile),"render independent quantized notes");const auto actual=readAudio(actualFile),expected=readAudio(expectedFile);
+            check(actual.getNumSamples()==expected.getNumSamples(),"quantized renders have identical extents");double worst=0;
+            for(int c=0;c<2;++c)for(int n=0;n<actual.getNumSamples();++n)
+            {if(!std::isfinite(actual.getSample(c,n)))throw std::runtime_error("nonfinite quantized render");worst=std::max(worst,std::abs((double)actual.getSample(c,n)-expected.getSample(c,n)));}
+            check(worst<1e-7,"every quantized synth frame matches independently drawn notes");
+        }
+        const auto project=root.getChildFile("quantized-"+juce::String(choice)+".halftrack");ok(session.saveProject(project),"save quantized take and grid");ok(session.loadProject(project),"reopen quantized take and grid");
+        check(session.snapshot().recordQuantisation==mode&&session.snapshot().tracks[2].clips[0].notes.size()==4,"recording grid and quantized notes survive reopen");
+        ok(session.setRecordQuantisation(mode),"unchanged recording grid is a no-op");check(!session.canUndo()&&!session.snapshot().dirty,"unchanged recording grid keeps clean history");
+        if(choice==4)for(const auto& invalid:juce::StringArray{"-1","7","1.5","nan","4 trailing"})
+        {
+            auto xml=juce::XmlDocument::parse(project);xml->getChildByName("EDIT")->setAttribute("halftrackRecordQuantisation",invalid);const auto bad=root.getChildFile("bad-record-grid.halftrack");check(xml->writeTo(bad),"write malformed recording grid fixture");
+            check(session.loadProject(bad).failed()&&session.snapshot().recordQuantisation==mode&&session.snapshot().tracks[2].clips[0].id==clip.id,"invalid grid cannot replace active project");
+        }
+    }
+    GeneratedInput f;auto& session=f.session;const auto track=session.snapshot().tracks[2].id;
+    ok(session.addMidiClip(track,0,4),"prepare overdub target");const auto clipId=session.snapshot().tracks[2].clips[0].id;
+    ok(session.addMidiNote(clipId,48,.137,.28,.6f),"prepare deliberately off-grid existing note");const auto oldNote=session.snapshot().tracks[2].clips[0].notes[0];
+    ok(session.setRecordQuantisation(Session::RecordQuantisation::quarter),"select quarter-note overdub grid");ok(session.setTrackArmed(2,true),"arm quantized overdub");
+    session.setLoop(true,0,2);check(session.record().failed()&&!session.snapshot().recording,"unsupported loop quantization fails before capture");session.setLoop(false,0,2);
+    session.seek(0);ok(session.record(),"record quantized overdub");const auto origin=f.devices.getCurrentStreamTime()+256.0/48000;pumpSyntheticTestDevice(session,4);
+    f.send(juce::MidiMessage::noteOn(1,65,(juce::uint8)100),origin+.375);f.send(juce::MidiMessage::noteOff(1,65),origin+.5);
+    pumpSyntheticTestDevice(session,150);session.stop();const auto notes=session.snapshot().tracks[2].clips[0].notes;
+    check(notes.size()==2,"quantized overdub adds only the new note");
+    const auto old=std::find_if(notes.begin(),notes.end(),[&](const auto& note){return note.id==oldNote.id;});
+    const auto added=std::find_if(notes.begin(),notes.end(),[](const auto& note){return note.pitch==65;});
+    check(old!=notes.end()&&old->startBeat==oldNote.startBeat&&old->lengthBeats==oldNote.lengthBeats,"recording grid leaves existing overdub notes untouched");
+    check(added!=notes.end()&&std::abs(added->startBeat-1)<1e-9&&std::abs(added->lengthBeats-.25)<1e-9,"new overdub note alone is quantized");
+    session.undo();check(session.snapshot().tracks[2].clips[0].notes.size()==1&&session.snapshot().tracks[2].clips[0].notes[0].id==oldNote.id,"undo removes only quantized overdub");
+    GeneratedInput boundary;auto& edge=boundary.session;
+    ok(edge.setRecordQuantisation(Session::RecordQuantisation::quarter),"set boundary recording grid");ok(edge.setTrackArmed(2,true),"arm boundary recording");
+    edge.seek(.1);ok(edge.record(),"record from an off-grid position");const auto edgeOrigin=boundary.devices.getCurrentStreamTime()+256.0/48000;pumpSyntheticTestDevice(edge,4);
+    boundary.send(juce::MidiMessage::noteOn(1,60,(juce::uint8)80),edgeOrigin+.025);boundary.send(juce::MidiMessage::noteOff(1,60),edgeOrigin+.15);
+    boundary.send(juce::MidiMessage::noteOn(1,62,(juce::uint8)80),edgeOrigin+.67);boundary.send(juce::MidiMessage::noteOff(1,62),edgeOrigin+.79);
+    pumpSyntheticTestDevice(edge,150);edge.stop();const auto bounded=edge.snapshot().tracks[2].clips[0];
+    check(bounded.notes.size()==2&&std::abs(bounded.notes[0].startBeat)<1e-9&&std::abs(bounded.notes[0].lengthBeats-.25)<1e-9,"backward snapping stops at the captured clip start without shortening the note");
+    check(std::abs(bounded.notes[1].startBeat+bounded.notes[1].lengthBeats-bounded.lengthBeats)<1e-9&&std::abs(bounded.notes[1].lengthBeats-.24)<1e-9,"forward snapping stops at the captured clip end without shortening the note");
+    ok(edge.setTrackArmed(2,false),"disarm MIDI before audio-only loop check");ok(edge.setTrackInput(0,edge.inputNames()[0]),"assign generated audio for audio-only loop");ok(edge.setTrackArmed(0,true),"arm audio-only loop capture");
+    edge.setLoop(true,0,2);ok(edge.record(),"MIDI recording grid does not block audio-only loop capture");pumpSyntheticTestDevice(edge,8);edge.stop();
+
+
+}
+
 void controllersAndOverdub (const juce::File& root)
 {
     GeneratedInput f; auto& session=f.session;
@@ -323,7 +427,7 @@ int runMidiInputTests(const juce::File& artifacts)
     try
     {
         const auto root=artifacts.getChildFile("midi-input-"+juce::Uuid().toString()); ok(root.createDirectory(),"create isolated fixtures");
-        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); controllersAndOverdub(root);
+        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); recordingQuantisation(root); controllersAndOverdub(root);
         std::cout<<"MIDI input tests passed: "<<root.getFullPathName()<<std::endl; return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI input: "<<e.what()<<std::endl;return 1;}

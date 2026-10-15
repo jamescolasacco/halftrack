@@ -13,6 +13,7 @@ class Session final : public juce::ChangeBroadcaster
 {
 public:
     enum class LaunchQuantisation { none, beat, bar };
+    enum class RecordQuantisation { none, quarter, eighth, eighthTriplet, sixteenth, sixteenthTriplet, thirtysecond };
     enum class MonitorMode { off, automatic, on };
     enum class SendMode { pre, post };
     struct SendInfo { juce::String returnTrackId; float gainDb = -100.0f; };
@@ -119,6 +120,7 @@ public:
         std::vector<LocatorInfo> locators;
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
         MetronomeSettings metronome;
+        RecordQuantisation recordQuantisation = RecordQuantisation::none;
         double countInBeatsRemaining = 0;
     };
 
@@ -194,6 +196,7 @@ public:
     void seek (double seconds);
     void setTempo (double bpm);
     juce::Result setMetronome (const MetronomeSettings&);
+    juce::Result setRecordQuantisation (RecordQuantisation);
     void setLoop (bool enabled, double startSeconds, double endSeconds);
     juce::Result addLocator (double seconds, const juce::String& name, juce::String& createdId);
     juce::Result updateLocator (const juce::String& id, const juce::String& name, double seconds);

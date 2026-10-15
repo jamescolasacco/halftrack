@@ -234,3 +234,8 @@ This path currently records into Arrangement and uses one native clip channel. M
 ## Metronome and count-in (about two minutes)
 
 Physical listening/controller check: **NOT RUN** until performed. In a disposable project, enable transport **Click**, play and change BPM. Use the adjacent **...** menu to change accent, click level and **Only while recording**; that last option should silence ordinary playback. Set **Count-in → 1 bar**, select/arm an intended input, then record from the beginning and later in the timeline. The display should count down before capture. Count-in works with Click switched off. Notes played entirely before capture should be omitted; a note held into capture should begin at its start. Stop during count-in to cancel without an audio clip. Finish a take, then undo/redo it once. Save/reopen and verify click settings, and export a recording: the monitoring click should be absent. Current count-in is 4/4 and uses the main output.
+
+
+## Recording quantization (about one minute)
+
+Physical controller/input check: **NOT RUN** until performed. Choose **Edit → Recording quantization → 1/16 note**, arm a MIDI track and record a slightly loose phrase. After Stop, note starts should align to sixteenth notes, while held lengths remain unchanged. Overdub onto an earlier deliberately off-grid note: only the new notes should move. Undo once removes the new take, redo restores it. Save/reopen retains the grid. Choose Off for the original unquantized workflow. Snapping clamps at clip edges to preserve note lengths; enabled recording quantization currently rejects loop recording and targets with looped/offset/grouped/multiple-take MIDI clips.

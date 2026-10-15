@@ -18,6 +18,7 @@ using juce::File;
 using juce::Result;
 using juce::String;
 const juce::Identifier monitorProperty { "halftrackMonitor" };
+const juce::Identifier recordQuantisationProperty { "halftrackRecordQuantisation" };
 const juce::Identifier countInProperty { "halftrackCountInBars" };
 const juce::Identifier midiTrackProperty { "halftrackMidiTrack" };
 const juce::Identifier midiNoteIDProperty { "halftrackNoteId" };
@@ -248,6 +249,19 @@ void renewMidiNoteIDs (juce::ValueTree state, juce::UndoManager* undo = nullptr)
 {
     if (state.hasType (te::IDs::NOTE)) state.setProperty (midiNoteIDProperty,juce::Uuid().toString(),undo);
     for (auto child : state) renewMidiNoteIDs (child,undo);
+}
+double recordGrid(Session::RecordQuantisation choice)
+{
+    constexpr double grids[]={0,1,.5,1.0/3,.25,1.0/6,.125};
+    return grids[juce::jlimit(0,6,static_cast<int>(choice))];
+}
+Result validateRecordQuantisation(const juce::ValueTree& state)
+{
+    const auto text=state.getProperty(recordQuantisationProperty,0).toString().trim().toStdString();char* end=nullptr;
+    const auto value=std::strtod(text.c_str(),&end);
+    if(text.empty() || end!=text.c_str()+text.size() || !std::isfinite(value) || value<0 || value>6 || std::floor(value)!=value)
+        return Result::fail("Invalid project recording quantization.");
+    return Result::ok();
 }
 Result validateMetronome (const juce::ValueTree& state)
 {
@@ -828,6 +842,7 @@ Session::Snapshot Session::snapshot() const
     s.tempo = e.tempoSequence.getTempo (0)->getBpm();
     s.metronome = {e.clickTrackEnabled.get(),e.clickTrackEmphasiseBars.get(),e.clickTrackRecordingOnly.get(),
         e.getClickTrackVolume(),static_cast<int>(e.state.getProperty(countInProperty,0))};
+    s.recordQuantisation=static_cast<RecordQuantisation>(static_cast<int>(e.state.getProperty(recordQuantisationProperty,0)));
     const auto clickRange=e.getClickTrackRange();
     if(s.recording && s.metronome.countInBars>0 && !clickRange.isEmpty())
         s.countInBeatsRemaining=juce::jlimit(0.0,s.metronome.countInBars*4.0,
@@ -932,6 +947,7 @@ Result Session::newProject()
     impl->edit->tempoSequence.getTempo (0)->setBpm (120);
     impl->edit->clickTrackGain = .6f; impl->edit->clickTrackEmphasiseBars = true;
     impl->edit->state.setProperty(countInProperty,0,nullptr);
+    impl->edit->state.setProperty(recordQuantisationProperty,0,nullptr);
     impl->edit->getTransport().setLoopRange ({ te::TimePosition::fromSeconds (0), te::TimePosition::fromSeconds (8) });
     for (auto* t : te::getAudioTracks (*impl->edit)) impl->edit->deleteTrack (t);
     addAudioTrack ("Audio 1"); addAudioTrack ("Audio 2");
@@ -985,6 +1001,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateSlots (validateSlots, state); result.failed()) return result;
     if (auto result = validateProjectTempo (state); result.failed()) return result;
     if (auto result = validateMetronome (state); result.failed()) return result;
+    if (auto result = validateRecordQuantisation (state); result.failed()) return result;
     if (auto result = validateRouting (state); result.failed()) return result;
     if (auto result = UtilityPlugin::validateState (state); result.failed()) return result;
     if (auto result = NativeEffectPlugin::validateState (state); result.failed()) return result;
@@ -2171,11 +2188,27 @@ void Session::stop()
     impl->edit->getTransport().stop (false, false);
     if (recording)
     {
+        const auto grid=recordGrid(snapshot().recordQuantisation);
         for (auto* track : te::getAudioTracks (*impl->edit)) for (auto* clip : allTrackClips (*track))
             if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
-                for (auto* note : midi->getSequence().getNotes())
+            {
+                const auto range=impl->edit->tempoSequence.toBeats(midi->getPosition().time);
+                const auto notes=midi->getSequence().getNotes(); // Timing changes may reorder native notes.
+                for (auto* note : notes)
                     if (!note->state.hasProperty (midiNoteIDProperty))
-                        note->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), &impl->edit->getUndoManager());
+                    {
+                        auto* undo=&impl->edit->getUndoManager();
+                        if(grid>0)
+                        {
+                            const auto length=note->getLengthBeats().inBeats();
+                            const auto absolute=range.getStart().inBeats()+note->getStartBeat().inBeats();
+                            const auto snapped=std::floor(absolute/grid+.5)*grid-range.getStart().inBeats();
+                            const auto start=juce::jlimit(0.0,std::max(0.0,range.getLength().inBeats()-length),snapped);
+                            note->setStartAndLength(te::BeatPosition::fromBeats(start),note->getLengthBeats(),undo);
+                        }
+                        note->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), undo);
+                    }
+            }
         impl->changed();
     }
     sendChangeMessage();
@@ -2188,10 +2221,23 @@ Result Session::record()
     bool armed = false;
     for (auto* t : te::getAudioTracks (*impl->edit)) if (auto* d = impl->input (*t)) armed |= d->isRecordingEnabled (t->itemID);
     if (! armed) return Result::fail ("Assign an input and arm at least one track before recording.");
+    const auto quantisation=snapshot().recordQuantisation;
+    if(quantisation!=RecordQuantisation::none)
+    {
+        for(auto* track:te::getAudioTracks(*impl->edit)) if(auto* input=impl->input(*track))
+            if(input->getInputDevice().isMidi() && input->isRecordingEnabled(track->itemID))
+            {
+                if(impl->edit->getTransport().looping) return Result::fail("Disable loop recording before using MIDI recording quantization.");
+                for(auto* clip:track->getClips()) if(auto* midi=dynamic_cast<te::MidiClip*>(clip))
+                    if(!canCopyMidiClip(*midi)) return Result::fail("Recording quantization requires unlooped, ungrouped, single-take MIDI clips at normal speed without source offsets.");
+            }
+    }
     auto r = impl->assets().createDirectory(); if (r.failed()) return r;
     for (auto* input : impl->edit->getAllInputDevices()) input->flushRecordingStateUpdates();
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->edit->setCountInMode (static_cast<te::Edit::CountIn> (snapshot().metronome.countInBars));
+    for(auto* input:impl->edit->getAllInputDevices()) if(input->isRecordingActive())
+        if(auto* midi=dynamic_cast<te::MidiInputDevice*>(&input->getInputDevice())) midi->quantisation.setType("(none)");
     impl->edit->setClickTrackRange ({});
     impl->edit->getTransport().record (false);
     if (! impl->edit->getTransport().isRecording()) return Result::fail ("Recording could not start. Check the selected input and device settings.");
@@ -2233,6 +2279,16 @@ Result Session::setMetronome (const MetronomeSettings& settings)
     edit.state.setProperty(countInProperty,settings.countInBars,undo);
     edit.setCountInMode(static_cast<te::Edit::CountIn>(settings.countInBars));
     impl->changed(); return Result::ok();
+}
+Result Session::setRecordQuantisation(RecordQuantisation value)
+{
+    const int choice=static_cast<int>(value);
+    if(choice<0 || choice>6) return Result::fail("Choose a supported recording grid.");
+    if(snapshot().recordQuantisation==value) return Result::ok();
+    if(impl->exporting || impl->edit->getTransport().isRecording()) return Result::fail("Stop recording or finish exporting before changing recording quantization.");
+    impl->transaction("Recording quantization");
+    impl->edit->state.setProperty(recordQuantisationProperty,choice,&impl->edit->getUndoManager());
+    impl->changed();return Result::ok();
 }
 void Session::setLoop (bool enabled, double start, double end)
 {

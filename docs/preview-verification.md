@@ -195,3 +195,10 @@ Mac archive `Halftrack-preview-darwin-arm64-1881625.tar.gz`: 61,981,100 bytes, S
 Source `0ba89608fd8d11e216b1995d3f494f7e6049e064` passes clean builds, all tests and source-inclusive packaging on macOS, Windows and Linux in [CI 38700402521](https://github.com/jamescolasacco/halftrack/actions/runs/38700402521). All 18 local Mac acceptance suites pass in 228.67 s. This adds controller selection, actual monitoring, Arrangement MIDI recording/overdub, captured-event preservation and one-take undo.
 
 Mac archive `Halftrack-preview-darwin-arm64-0ba8960.tar.gz`: 62,021,444 bytes, SHA256 `88fa324e309c3e3019652aae97c454b66f699c861f24dbcc137bae1a3ca6069f`. Executable: 25,448,456 bytes, SHA256 `d2d5164aee96f212d2f058c78ba624156530d54e58b1c69c219b7e2e35452092`. Fresh extraction verifies 99 owned files, 4,424 JUCE files and 1,545 Tracktion files against the exact build inputs, with dependency notices and no proprietary analysis payload. The extracted app passes MIDI-input and production UI suites. Its actual 1100-pixel Session image was inspected. Physical controllers, input timing, MPE and whole-product parity remain unverified or incomplete.
+
+
+## Metronome and count-in package — 2026-10-15
+
+Source `37581feadf66f3f0468f9c94b6e4c58cf787807b` passes all 19 local Mac acceptance suites in 258.88 s. Mac archive `Halftrack-preview-darwin-arm64-37581fe.tar.gz`: 62,065,113 bytes, SHA256 `2be8aa0c66fa2d42abdb366e733670bd006afff7be5bd2c5d40c060176ae91d9`. Executable: 25,539,880 bytes, SHA256 `3c6b298fbed061f9c4088176c72f918ec4f727fb42b7dfa195a1c26b82daa799`.
+
+Fresh extraction verifies all 103 owned files, 4,424 JUCE files and 1,545 Tracktion files against the exact build inputs, including dependency patches and notices. The extracted executable passes its complete metronome, MIDI-input and production UI suites. Generated input/click tests establish the stated clock, capture and edit behavior; physical latency and paired reference parity remain unverified. [Platform CI 38707016143](https://github.com/jamescolasacco/halftrack/actions/runs/38707016143) is pending.
