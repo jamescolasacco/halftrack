@@ -121,7 +121,18 @@ void clipboardTests(const juce::File& root,const juce::File& sourceFile,const ju
     session.redo();check(session.pasteAudioClip(session.snapshot().tracks.back().id,0,unchanged).failed(),"return rejects audio paste");
     // Remove only this test's collected media, then replace the entire project.
     const auto oldMedia=session.snapshot().tracks[0].clips[0].file;
-    ok(session.newProject(),"replace project with clipboard retained");check(oldMedia.deleteFile(),"remove obsolete generated project media");
+    ok(session.newProject(),"replace project with clipboard retained");
+    // The pinned engine purges idle memory-mapped readers on a two-second
+    // cadence. Windows cannot unlink a mapped file, unlike POSIX systems.
+    // Wait for real deletion before testing independence from the old project.
+    const auto deleteDeadline=juce::Time::getMillisecondCounterHiRes()+6000;
+    bool removed=oldMedia.deleteFile();
+    while(!removed&&juce::Time::getMillisecondCounterHiRes()<deleteDeadline)
+    {
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(25);
+        removed=oldMedia.deleteFile();
+    }
+    check(removed&&!oldMedia.existsAsFile(),"remove obsolete generated project media after idle-reader teardown");
     ok(session.pasteAudioClip(session.snapshot().tracks[0].id,.25,pasted),"paste after original project and media are gone");
     const auto crossProject=expected(source,settings,12000,24000,12000);
     ok(session.exportWav(render),"render cross-project paste");compare(read(render),crossProject,"retained clipboard media preserves source samples");
