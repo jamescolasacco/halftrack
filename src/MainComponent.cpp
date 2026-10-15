@@ -679,6 +679,14 @@ private:
             if (fadeHandle (clip, track, true).getDistanceFrom (point) <= 6) return 2;
             return 0;
         }
+        int hitTrim (const Session::ClipInfo& clip, int track, juce::Point<float> point) const
+        {
+            const auto bounds = clipBounds (clip, track);
+            if (! clip.canEditAudioRange || bounds.getWidth() < 20 || ! bounds.contains (point)) return 0;
+            if (point.x-bounds.getX() <= 6) return 1;
+            if (bounds.getRight()-point.x <= 6) return 2;
+            return 0;
+        }
         void paint (juce::Graphics& g) override
         {
             g.fillAll (panel);
@@ -780,6 +788,12 @@ private:
                             g.setColour (orange); g.drawRect (handle.x-4,handle.y-4,8.0f,8.0f,1.5f);
                         }
                     }
+                    if (selected && clip.canEditAudioRange && bounds.getWidth() >= 20)
+                    {
+                        g.setColour (ink);
+                        for (auto x : { bounds.getX()+3, bounds.getRight()-3 })
+                            g.drawLine (x, bounds.getBottom()-16, x, bounds.getBottom()-5, 2.0f);
+                    }
                     g.setColour (selected ? orange : colour.darker (0.45f)); g.drawRect (bounds, selected ? 2.0f : 1.0f);
                 }
                 if (owner.state.recording && track.armed)
@@ -814,7 +828,7 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             if (e.x >= timelineWidth()) return;
-            grabKeyboardFocus(); fadeDrag = 0; fadeClipId.clear();
+            grabKeyboardFocus(); fadeDrag = 0; rangeDrag = 0; dragClipId.clear();
             const auto previousTrack = owner.selectedTrack, previousClip = owner.selectedClip;
             auto track = e.y / trackHeight;
             if (track < 0) return;
@@ -830,14 +844,18 @@ private:
                     {
                         owner.selectedClip = c;
                         draggedClip = c;
-                        draggedTrack = track;
                         originalStart = clips[(size_t) c].start;
                         dragStartX = e.x;
                         if (! e.mods.isPopupMenu())
                         {
                             fadeDrag = track == previousTrack && c == previousClip ? hitFade (clips[(size_t) c],track,e.position) : 0;
-                            fadeClipId = clips[(size_t) c].id;
-                            originalFade = fadeDrag == 2 ? clips[(size_t) c].audio.fadeOutSeconds : clips[(size_t) c].audio.fadeInSeconds;
+                            dragClipId = clips[(size_t) c].id;
+                            originalRange = clips[(size_t) c];
+                            originalFade = fadeDrag == 2 ? originalRange.audio.fadeOutSeconds : originalRange.audio.fadeInSeconds;
+                            if (e.mods.isShiftDown() && e.mods.isAltDown() && originalRange.canEditAudioRange)
+                            { rangeDrag = 3; fadeDrag = 0; }
+                            else if (fadeDrag == 0 && track == previousTrack && c == previousClip)
+                                rangeDrag = hitTrim (originalRange, track, e.position);
                         }
                         if (e.mods.isPopupMenu()) showClipMenu();
                         repaint();
@@ -875,10 +893,11 @@ private:
         void mouseDrag (const juce::MouseEvent& e) override
         {
             if (draggedClip < 0 || e.mods.isPopupMenu() || ! e.mouseWasDraggedSinceMouseDown()) return;
+            const auto current = owner.session.snapshot();
             if (fadeDrag != 0)
             {
-                for (const auto& track : owner.state.tracks) for (const auto& clip : track.clips)
-                    if (clip.id == fadeClipId && clip.isAudio)
+                for (const auto& track : current.tracks) for (const auto& clip : track.clips)
+                    if (clip.id == dragClipId && clip.canEditAudioFades)
                     {
                         auto settings = clip.audio;
                         const auto other = fadeDrag == 1 ? settings.fadeOutSeconds : settings.fadeInSeconds;
@@ -886,20 +905,50 @@ private:
                             originalFade+(e.x-dragStartX)/owner.pixelsPerSecond*(fadeDrag == 1 ? 1 : -1));
                         if (! clipGesture) { owner.session.beginEditGesture ("Adjust clip fade"); clipGesture = true; }
                         if (fadeDrag == 1) settings.fadeInSeconds = value; else settings.fadeOutSeconds = value;
-                        owner.report (owner.session.setAudioClipSettings (fadeClipId,settings)); owner.refresh(); return;
+                        owner.report (owner.session.setAudioClipSettings (dragClipId,settings)); owner.refresh(); return;
                     }
                 return;
             }
-            auto start = juce::jmax (0.0, originalStart + (e.x - dragStartX) / owner.pixelsPerSecond);
-            if (! e.mods.isAltDown()) start = std::round (start / owner.gridSeconds()) * owner.gridSeconds();
-            if (! clipGesture) { owner.session.beginEditGesture ("Move clip"); clipGesture = true; }
-            owner.report (owner.session.moveClip (draggedTrack, draggedClip, start));
-            owner.refresh();
+            if (rangeDrag != 0)
+            {
+                for (const auto& track : current.tracks) for (const auto& clip : track.clips)
+                    if (clip.id == dragClipId && clip.canEditAudioRange)
+                    {
+                        auto start = originalRange.start, length = originalRange.length, offset = originalRange.sourceOffset;
+                        const auto minimum = juce::jmax (.001, clip.audio.fadeInSeconds+clip.audio.fadeOutSeconds);
+                        const auto delta = (e.x-dragStartX)/owner.pixelsPerSecond;
+                        const auto snap = [&] (double value)
+                        { return e.mods.isAltDown() ? value : std::round (value/owner.gridSeconds())*owner.gridSeconds(); };
+                        if (rangeDrag == 1)
+                        {
+                            const auto shift = juce::jlimit (-juce::jmin (start,offset), juce::jmax (0.0,length-minimum), snap (start+delta)-start);
+                            start += shift; offset += shift; length -= shift;
+                        }
+                        else if (rangeDrag == 2)
+                            length = juce::jlimit (minimum, juce::jmax (minimum,clip.sourceLength-offset), snap (start+length+delta)-start);
+                        else
+                            offset = juce::jlimit (0.0, juce::jmax (0.0,clip.sourceLength-length), offset-delta);
+                        if (! clipGesture) { owner.session.beginEditGesture (rangeDrag == 3 ? "Slip audio source" : "Trim audio edge"); clipGesture = true; }
+                        owner.report (owner.session.setAudioClipRange (dragClipId,start,length,offset)); owner.refresh(); return;
+                    }
+                return;
+            }
+            // Resolve the stable identity on every event; sorting, deletion or a
+            // project switch must never redirect a body drag to the old index.
+            for (int t=0; t<(int)current.tracks.size(); ++t)
+                for (int c=0; c<(int)current.tracks[(size_t)t].clips.size(); ++c)
+                    if (current.tracks[(size_t)t].clips[(size_t)c].id == dragClipId)
+                    {
+                        auto start = juce::jmax (0.0, originalStart + (e.x - dragStartX) / owner.pixelsPerSecond);
+                        if (! e.mods.isAltDown()) start = std::round (start / owner.gridSeconds()) * owner.gridSeconds();
+                        if (! clipGesture) { owner.session.beginEditGesture ("Move clip"); clipGesture = true; }
+                        owner.report (owner.session.moveClip (t,c,start)); owner.refresh(); return;
+                    }
         }
         void mouseUp (const juce::MouseEvent&) override
         {
             if (clipGesture) { owner.session.endEditGesture(); clipGesture = false; }
-            draggedClip = -1; fadeDrag = 0; fadeClipId.clear();
+            draggedClip = -1; fadeDrag = 0; rangeDrag = 0; dragClipId.clear();
         }
         void mouseMove (const juce::MouseEvent& e) override
         {
@@ -909,7 +958,8 @@ private:
                 const auto& clips = owner.state.tracks[(size_t) track].clips;
                 for (int c=(int)clips.size()-1; c>=0; --c)
                     if (clipBounds (clips[(size_t)c],track).contains (e.position))
-                    { handle = track == owner.selectedTrack && c == owner.selectedClip && hitFade (clips[(size_t)c],track,e.position) != 0; break; }
+                    { handle = track == owner.selectedTrack && c == owner.selectedClip
+                        && (hitFade (clips[(size_t)c],track,e.position) != 0 || hitTrim (clips[(size_t)c],track,e.position) != 0); break; }
             }
             setMouseCursor (handle ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
         }
@@ -930,10 +980,11 @@ private:
         Impl& owner;
         std::vector<std::unique_ptr<TrackRow>> rows;
         std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbnails;
-        int draggedClip = -1, draggedTrack = -1, dragStartX = 0;
+        int draggedClip = -1, dragStartX = 0;
         double originalStart = 0, originalFade = 0;
-        int fadeDrag = 0;
-        juce::String fadeClipId;
+        int fadeDrag = 0, rangeDrag = 0;
+        Session::ClipInfo originalRange;
+        juce::String dragClipId;
         bool clipGesture = false;
         void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
         juce::AudioThumbnail* thumbnailFor (const juce::File& file)
@@ -4071,6 +4122,74 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             &&!canvas.keyPressed(commandKey('V'))&&state.tracks[0].clips.size()==1,
             "focused text entry keeps its own clipboard and does not trigger audio edits");
         editor.giveAwayKeyboardFocus();focusWindow.clearContentComponent();
+    }
+    const auto rangeId=state.tracks[0].clips[0].id;
+    Session::AudioClipSettings rangeFades;rangeFades.fadeInSeconds=.005;rangeFades.fadeOutSeconds=.005;
+    check(session.setAudioClipSettings(rangeId,rangeFades).wasOk()&&session.setAudioClipRange(rangeId,.02,.06,.01).wasOk(),
+        "prepare nonzero source offset and fades for direct range gestures");refresh();selectedTrack=0;selectedClip=0;
+    const auto rangeEvent=[&](juce::Point<float> at,juce::Point<float> down,bool dragged,int modifiers)
+    {
+        const auto now=juce::Time::getCurrentTime();
+        return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(),at,
+            juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier|modifiers),1.0f,0,0,0,0,&canvas,&canvas,now,down,now,1,dragged);
+    };
+    const auto rangeDrag=[&](juce::Point<float> from,float dx,int modifiers)
+    {
+        auto to=from+juce::Point<float>(dx,0);
+        canvas.mouseDown(rangeEvent(from,from,false,modifiers));
+        canvas.mouseDrag(rangeEvent((from+to)*.5f,from,true,modifiers));
+        canvas.mouseDrag(rangeEvent(to,from,true,modifiers));
+        canvas.mouseUp(rangeEvent(to,from,true,modifiers));
+    };
+    const auto rangePoint=[&](bool right)
+    {
+        const auto bounds=canvas.clipBounds(state.tracks[0].clips[0],0);
+        return juce::Point<float>(right?bounds.getRight()-2:bounds.getX()+2,bounds.getBottom()-8);
+    };
+    const auto rangeIs=[&](double start,double length,double offset)
+    {
+        const auto& clip=state.tracks[0].clips[0];
+        // Native fade getters normalize when subtraction rounds the length a
+        // fraction below the sum; tolerate only floating-point-scale error.
+        return std::abs(clip.start-start)<1e-8&&std::abs(clip.length-length)<1e-8&&std::abs(clip.sourceOffset-offset)<1e-8
+            &&std::abs(clip.audio.fadeInSeconds-rangeFades.fadeInSeconds)<1e-12
+            &&std::abs(clip.audio.fadeOutSeconds-rangeFades.fadeOutSeconds)<1e-12
+            &&clip.audio.gainDb==rangeFades.gainDb&&clip.audio.fadeInCurve==rangeFades.fadeInCurve&&clip.audio.fadeOutCurve==rangeFades.fadeOutCurve;
+    };
+    const int freeRange=juce::ModifierKeys::altModifier,slipRange=freeRange|juce::ModifierKeys::shiftModifier;
+    rangeDrag(rangePoint(false),40,freeRange);
+    check(rangeIs(.03,.05,.02),"left trim moves start and source offset together, retaining end and fades");
+    session.undo();refresh();check(rangeIs(.02,.06,.01),"one undo restores the whole multi-event left trim");
+    session.redo();refresh();check(rangeIs(.03,.05,.02),"redo restores trimmed range");session.undo();refresh();
+    rangeDrag(rangePoint(false),-2000,freeRange);check(rangeIs(.01,.07,0),"left trim extends only to source start");session.undo();refresh();
+    rangeDrag(rangePoint(false),2000,freeRange);check(rangeIs(.07,.01,.06),"left trim cannot remove retained fade durations");session.undo();refresh();
+    rangeDrag(rangePoint(true),-40,freeRange);check(rangeIs(.02,.05,.01),"right trim changes length while retaining start and source offset");
+    session.undo();refresh();check(rangeIs(.02,.06,.01),"right trim undoes as one gesture");
+    rangeDrag(rangePoint(true),2000,freeRange);check(rangeIs(.02,.09,.01),"right trim clamps at source end");session.undo();refresh();
+    rangeDrag(rangePoint(true),-2000,freeRange);check(rangeIs(.02,.01,.01),"right trim preserves both fades at its minimum length");session.undo();refresh();
+    auto audioBodyPoint=canvas.clipBounds(state.tracks[0].clips[0],0).getCentre();
+    rangeDrag(audioBodyPoint,-80,slipRange);check(rangeIs(.02,.06,.03),"Shift+Alt body drag slips source without moving timeline range");
+    session.undo();refresh();check(rangeIs(.02,.06,.01),"source slip undoes in one step");
+    rangeDrag(audioBodyPoint,-2000,slipRange);check(rangeIs(.02,.06,.04),"source slip clamps at last readable region");session.undo();refresh();
+    rangeDrag(audioBodyPoint,2000,slipRange);check(rangeIs(.02,.06,0),"source slip clamps at source start");session.undo();refresh();
+    // Set a grid small enough to expose snapping inside the bounded 100 ms source.
+    session.setTempo(300);
+    check(session.setAudioClipRange(rangeId,.02,.06,.01).wasOk(),"restore absolute range after tempo change");refresh();
+    rangeDrag(rangePoint(false),40,0);
+    check(rangeIs(.05,.03,.04),"edge trim snaps to project grid unless Alt is held");session.undo();refresh();
+    session.setTempo(120);refresh();
+    for(int mode=0;mode<3;++mode)
+    {
+        selectedClip=0;const auto currentId=state.tracks[0].clips[0].id;
+        check(session.setAudioClipSettings(currentId,rangeFades).wasOk()&&session.setAudioClipRange(currentId,.02,.06,.01).wasOk(),"reset stale gesture fixture");refresh();
+        const auto from=mode==0?rangePoint(false):canvas.clipBounds(state.tracks[0].clips[0],0).getCentre();
+        const int modifiers=mode==1?slipRange:freeRange;
+        canvas.mouseDown(rangeEvent(from,from,false,modifiers));
+        check(session.removeClip(0,0).wasOk()&&session.importAudio(audioFixture,0).wasOk(),"replace clip during trim, slip or body drag");refresh();
+        const auto to=from+juce::Point<float>(20,0);
+        canvas.mouseDrag(rangeEvent(to,from,true,modifiers));canvas.mouseUp(rangeEvent(to,from,true,modifiers));
+        check(state.tracks[0].clips[0].start==0&&state.tracks[0].clips[0].length==.1&&state.tracks[0].clips[0].sourceOffset==0,
+            "stale range and body gestures cannot edit a replacement clip");
     }
 }
 

@@ -106,7 +106,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | --- | --- | --- | --- |
 | ARR-001 | Timeline navigation | Test horizontal/vertical zoom, fit, follow, selection, scroll, and navigation while playback continues. | NOT IMPLEMENTED / UNVERIFIED |
 | ARR-002 | Tracks and groups | Create, rename, color, reorder, duplicate, delete, nest, and ungroup tracks with stable references. | NOT IMPLEMENTED / UNVERIFIED |
-| ARR-003 | Move, trim, loop, slip | Exercise clip edges, source offsets, negative/late starts where supported, and repetition without destructive media changes. | PARTIAL — validated numeric trim/slip and move; warp/loop edge editing missing |
+| ARR-003 | Move, trim, loop, slip | Exercise clip edges, source offsets, negative/late starts where supported, and repetition without destructive media changes. | PARTIAL — numeric and direct edge trim/source slip, bounds, snapping, undo, stable-ID move; warp/loop edge editing missing |
 | ARR-004 | Selection and grid | Test single/multiple clips, time ranges, fixed/adaptive/triplet grids, temporary snap override, and keyboard equivalents. | NOT IMPLEMENTED / UNVERIFIED |
 | ARR-005 | Cut, copy, paste, duplicate | Verify cross-track/time moves, copy modifiers, clipboard scope, undo, and automation ownership. | PARTIAL — single-source audio Cut/Copy/Paste across tracks/projects, native duplicate, undo and portable media; multi-clip/time-range clipboard missing |
 | ARR-006 | Split and consolidate | Test edits at start/end/loop boundaries; compare reconstructed audio and handle tails or selection gaps explicitly. | PARTIAL — interior split preserves complete rendered audio; consolidate missing |

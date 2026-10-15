@@ -174,3 +174,12 @@ Native input checks below are NOT RUN until performed. Use generated audio and d
 2. Cmd/Ctrl+X cuts that copy. Undo restores it in one step; undo again removes the preceding paste. Redo both. Copy adds no undo step.
 3. Copy another clip, create a new project, and paste onto its audio track. Save, reopen, then relocate the project together with its Assets directory. Audio remains available. Right-click empty timeline space and choose Paste audio here to place another copy.
 4. In a text field, use C/X/V shortcuts with Cmd/Ctrl. Text editing must not copy, remove or paste audio. In the piano roll, note clipboard shortcuts retain their existing behavior.
+
+## Direct audio trim and source slip additions
+
+Native input checks are NOT RUN until performed. On a disposable imported clip, make a shorter range inside its source using the clip editor, then select it in Arrangement.
+
+1. Drag either left or right edge near its lower white handle. Left changes start and source offset together; right changes length only. Grid snapping applies; Alt allows free timing. Undo and redo each complete drag in one step.
+2. Set both fades and drag an edge inward beyond their combined length. The retained range must still contain both fades. Extend outwards: neither source beginning nor source end can be crossed.
+3. Shift+Alt-drag the body: the waveform moves inside fixed timeline bounds. Play/export to confirm a different source region is heard. Undo restores the original region.
+4. Body dragging still moves the clip. Fade handles still edit fades. Delete and replace a clip during an in-progress gesture in an automated fixture: the replacement must remain untouched.
