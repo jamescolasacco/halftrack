@@ -216,3 +216,10 @@ Fresh extraction verifies all 104 owned files, 4,424 JUCE files and 1,545 Trackt
 Source `853f43178f86ae5394ba71d80c7ca87f66fa8f33` passes all 22 local Mac acceptance suites in 313.23 s. Mac archive `Halftrack-preview-darwin-arm64-853f431.tar.gz`: 62,150,004 bytes, SHA256 `52c2242350e1f544dea0561150aedd2b14c281cd85b99b95462b7175d61fb7ed`. Executable: 25,674,008 bytes, SHA256 `5d8dde7d47807a32bee75167deef98d632904a4ee12d08f9d52c0d3def9dc675`.
 
 Fresh extraction verifies all 106 owned files, 4,424 JUCE files and 1,545 Tracktion files against the exact build inputs, including all activation patches. The extracted app passes its activation, tempo and production UI suites. [Platform CI 38718039217](https://github.com/jamescolasacco/halftrack/actions/runs/38718039217) is pending. This package precedes MIDI note splitting; physical input/listening and complete reference parity remain unverified.
+
+
+## MIDI note splitting — 2026-10-15
+
+Source `d7329ce5c8845126fed84be18cadef5f65b0699b` passes all 22 Mac acceptance suites in 316.68 s, followed by the strengthened UI selection test in 4.81 s. Mac archive `Halftrack-preview-darwin-arm64-d7329ce.tar.gz`: 62,181,711 bytes, SHA256 `199a21c4dce737651c0f41d35ced0514183c30149895d0ed4f7d0a81d0c1e0e2`. Executable: 25,742,056 bytes, SHA256 `22183be19936b6125fb6c9c65194b78029d274906a1dd59769189e092100c6d9`.
+
+Fresh extraction verifies all 106 owned and 5,969 dependency files against their exact build inputs. The extracted executable passes note-tools, clip-activation and production UI suites. This package precedes clip naming. Platform validation will use the next combined editing commit; no reference-exact or physical input claim follows from these checks.

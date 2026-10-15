@@ -440,6 +440,15 @@ public:
             }
             if (code == ',') { showAudioSettings(); return true; }
         }
+        if((code=='R'||code=='r')&&cmd&&!shift&&!showPiano)
+        {
+            for(auto* focused=juce::Component::getCurrentlyFocusedComponent();focused;focused=focused->getParentComponent())
+                if(dynamic_cast<juce::TextEditor*>(focused))return false;
+            if(showSession){if(const auto* slot=selectedSlot();slot&&slot->hasClip){renameClipDialog(slot->clip.id);return true;}}
+            else if(const auto* track=currentTrack();track&&juce::isPositiveAndBelow(selectedClip,(int)track->clips.size()))
+            {renameClipDialog(track->clips[(size_t)selectedClip].id);return true;}
+            return false;
+        }
         if (code=='0' && !cmd && !shift && !key.getModifiers().isAltDown() && !showPiano)
         {
             for(auto* focused=juce::Component::getCurrentlyFocusedComponent();focused;focused=focused->getParentComponent())
@@ -1085,7 +1094,7 @@ private:
             const auto* clip = track && juce::isPositiveAndBelow(owner.selectedClip,(int)track->clips.size()) ? &track->clips[(size_t)owner.selectedClip] : nullptr;
             const auto id = clip ? clip->id : juce::String();
             const bool activate=clip && !clip->active;
-            if (clip) popup.addItem(8,activate?"Activate clip":"Deactivate clip");
+            if (clip) {popup.addItem(8,activate?"Activate clip":"Deactivate clip");popup.addItem(9,"Rename clip...");}
             if (clip && clip->isAudio)
             {
                 popup.addItem (2, "Gain, fades and range...");
@@ -1111,6 +1120,7 @@ private:
                 if (safe == nullptr) return;
                 if (choice == 1) safe->deleteClipById(id);
                 else if (choice == 8) safe->setClipActiveFromUI(id,activate);
+                else if (choice == 9) safe->renameClipDialog(id);
                 else if (choice == 7) {if(midi)safe->pasteMidi(trackId,position);else safe->pasteAudio(trackId,position);}
                 else if (choice > 1) {if(midi)safe->midiClipCommand(choice,id);else safe->audioClipCommand(choice,id);}
             });
@@ -1541,13 +1551,14 @@ private:
             else menu.addItem (owner.state.tracks[(size_t) track].isMidi ? 4 : 5, owner.state.tracks[(size_t) track].isMidi ? "Create MIDI Clip" : "Import Audio Here...");
             menu.addSeparator(); menu.addItem (6, "Stop Track Clips");
             const auto clipId=slot->hasClip?slot->clip.id:juce::String();const bool activate=slot->hasClip && !slot->clip.active;
-            if(slot->hasClip)menu.addItem(8,activate?"Activate clip":"Deactivate clip");
+            if(slot->hasClip){menu.addItem(8,activate?"Activate clip":"Deactivate clip");menu.addItem(9,"Rename clip...");}
             const auto trackId = owner.state.tracks[(size_t) track].id, sceneId = owner.state.scenes[(size_t) scene].id;
             auto safe = juce::Component::SafePointer<Impl> (&owner);
             menu.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId, sceneId, clipId, activate] (int choice)
             {
                 if (safe == nullptr || choice == 0) return;
                 if(choice==8){safe->setClipActiveFromUI(clipId,activate);return;}
+                if(choice==9){safe->renameClipDialog(clipId);return;}
                 const auto indices = safe->launcherIndices (trackId, sceneId); if (indices.first < 0 || indices.second < 0) return;
                 safe->selectLauncherSlot (indices.first, indices.second);
                 if (choice == 1) safe->report (safe->session.launchSlot (indices.first, indices.second));
@@ -2657,6 +2668,27 @@ private:
             }),true);
             return;
         }
+    }
+    void renameClipDialog(const juce::String& id)
+    {
+        if(session.isExporting())return;
+        juce::String name;bool found=false;
+        for(const auto& track:state.tracks)
+        {
+            for(const auto& clip:track.clips)if(clip.id==id){name=clip.name;found=true;}
+            for(const auto& slot:track.slots)if(slot.hasClip&&slot.clip.id==id){name=slot.clip.name;found=true;}
+        }
+        if(!found){report(juce::Result::fail("Clip not found."));return;}
+        auto* dialog=new juce::AlertWindow("Rename clip","Enter a clip name.",juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor("name",name,"Name");
+        dialog->addButton("Rename",1,juce::KeyPress(juce::KeyPress::returnKey));dialog->addButton("Cancel",0,juce::KeyPress(juce::KeyPress::escapeKey));
+        dialog->setLookAndFeel(&theme);alerts.emplace_back(dialog);
+        auto safe=juce::Component::SafePointer<Impl>(this);auto safeDialog=juce::Component::SafePointer<juce::AlertWindow>(dialog);
+        dialog->enterModalState(true,juce::ModalCallbackFunction::create([safe,safeDialog,id](int result)
+        {
+            if(!safe||!safeDialog||result!=1)return;
+            safe->report(safe->session.renameClip(id,safeDialog->getTextEditorContents("name")));safe->refresh();
+        }),true);
     }
     void renameSceneDialog (int scene)
     {
@@ -4921,6 +4953,25 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(session.addMidiClipToSlot(splitTrack,0,16).wasOk(),"prepare Session note split");refresh();const auto slotSplit=state.tracks.back().slots[0].clip.id;
     check(session.addMidiNote(slotSplit,60,0,4,.8f).wasOk(),"draw Session note to split");refresh();showSessionView();selectLauncherSlot(2,0);openPianoRoll();pianoRoll.fit();markerClick(2);pianoRoll.keyPressed(splitKey);
     check(currentMidiClip()->id==slotSplit&&currentMidiClip()->notes.size()==2&&state.tracks[2].clips[0].notes.size()==4,"Session marker splits only the selected slot's notes");
+    showArrangementView();selectArrangementClip(splitClip);
+    check(canvas.keyPressed(commandKey('R'))&&!alerts.empty()&&alerts.back()!=nullptr,"Cmd/Ctrl R opens the selected clip rename dialog");
+    auto finishRename=[&](const juce::String& name,int result)
+    {
+        auto dialog=alerts.back();check(dialog!=nullptr&&dialog->getTextEditor("name")!=nullptr,"rename dialog has a real text editor");
+        dialog->getTextEditor("name")->setText(name);dialog->exitModalState(result);
+        for(int i=0;i<10&&dialog!=nullptr;++i)juce::MessageManager::getInstance()->runDispatchLoopUntil(10);
+        refresh();
+    };
+    showSessionView();selectLauncherSlot(2,0);finishRename("Arrangement phrase",1);
+    check(state.tracks[2].clips[0].name=="Arrangement phrase"&&state.tracks[2].slots[0].clip.name!="Arrangement phrase","rename callback retains the original clip when selection changes");
+    session.undo();refresh();check(state.tracks[2].clips[0].name!="Arrangement phrase","dialog rename undoes in one step");session.redo();refresh();
+    check(launcher.keyPressed(commandKey('R')),"Session rename shortcut opens slot dialog");finishRename("Session phrase",1);
+    check(state.tracks[2].slots[0].clip.name=="Session phrase"&&state.tracks[2].clips[0].name=="Arrangement phrase","Session rename changes only its own slot");
+    const auto beforeCancel=state.tracks[2].slots[0].clip.name;renameClipDialog(slotSplit);finishRename("Cancelled",0);
+    check(state.tracks[2].slots[0].clip.name==beforeCancel,"cancelling the rename dialog does not change the project");
+    renameClipDialog(slotSplit);check(session.clearSlot(2,0).wasOk()&&session.addMidiClipToSlot(splitTrack,0,16).wasOk(),"replace slot while its rename dialog is open");refresh();finishRename("Stale name",1);
+    check(state.tracks[2].slots[0].clip.id!=slotSplit&&state.tracks[2].slots[0].clip.name!="Stale name","stale rename dialog cannot retarget a new clip");
+
 
 
 

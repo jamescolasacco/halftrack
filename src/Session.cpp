@@ -2186,6 +2186,22 @@ Result Session::setClipActive(const String& id,bool active)
     impl->edit->restartPlayback();impl->edit->dispatchPendingUpdatesSynchronously();
     impl->changed();return Result::ok();
 }
+Result Session::renameClip(const String& id,const String& name)
+{
+    if(impl->exporting) return Result::fail("Finish or cancel the current export first.");
+    const auto trimmed=name.trim();if(trimmed.isEmpty())return Result::fail("Enter a clip name.");
+    te::Clip* found=nullptr;
+    for(auto* track:te::getAudioTracks(*impl->edit))for(auto* clip:allTrackClips(*track))
+        if(clip->itemID.toString()==id&&(dynamic_cast<te::WaveAudioClip*>(clip)||dynamic_cast<te::MidiClip*>(clip)))
+        {if(found)return Result::fail("Clip identity is ambiguous.");found=clip;}
+    if(!found)return Result::fail("Clip not found.");
+    if(found->getName()==trimmed)return Result::ok();
+    impl->transaction("Rename clip");
+    // Clip::setName can also rename source media under a native global preference.
+    // This command changes only the project-owned display name.
+    found->state.setProperty(te::IDs::name,trimmed,&impl->edit->getUndoManager());
+    impl->changed();return Result::ok();
+}
 Result Session::renameTrack (int index, const String& name)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

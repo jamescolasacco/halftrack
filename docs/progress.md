@@ -506,3 +506,10 @@ Running note-split tests pass in **3.94 s**, including the existing tools cases:
 Combined MIDI splitting verification: all **22 Mac acceptance suites pass in 316.68 s**, including the inactive-note full-render oracle and reentrant export guard. A final UI-only selection assertion was strengthened to require both new right halves to move, with every original unchanged; production behavior is unchanged. The current feature remains a limited, tested note-splitting workflow; note deactivation, expression-envelope splitting and whole-product parity remain unfinished.
 
 Final split-selection regression passes the production UI suite in **4.81 s**. Root reviewed the command, native transaction boundaries, marker/selection lifetime and test oracle. No owned DSP callback changed in this feature; the existing nine-fixture/42-body source guard result and its dependency limitations still apply.
+
+Clip naming ownership: root owns stable-ID display-name edits for audio/MIDI clips in Arrangement and Session, original native rename dialogs/context/keyboard actions, undo/persistence and media-preservation tests. The native name property is edited directly through its UndoManager so external source-renaming preferences cannot rename media. No other agent is editing these areas.
+
+
+Note-splitting package `d7329ce` verifies all 106 owned files and 5,969 dependency files; the fresh extracted app passes note-tools, activation and production UI tests. Clip naming builds and is now checking the real modal callbacks, preservation of generated source bytes, all clip contexts, no-op/history and portable Unicode names. No new DSP path is added.
+
+Clip naming verification passes the expanded clip model/playback/persistence suite in **11.75 s**, actual modal UI handlers in **4.77 s**, and combined session/MIDI/export regressions in **61.27 s**. Both views and media types preserve source path/bytes and musical identity. The previous full 22-suite result applies to note splitting; these focused suites validate the subsequent display-name-only feature. Cross-platform verification and final combined packaging follow.

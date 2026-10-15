@@ -124,6 +124,34 @@ void playback(const juce::File& source,bool midi,bool slots)
     }
     s.stop();
 }
+void renameCases(const juce::File& root,const juce::File& source)
+{
+    for(bool midi:{false,true})for(bool slot:{false,true})
+    {
+        Session s(false);int index=0;
+        if(midi)
+        {
+            ok(s.addMidiTrack(),"create naming instrument");index=2;const auto track=s.snapshot().tracks[2].id;
+            ok(slot?s.addMidiClipToSlot(track,0,4):s.addMidiClip(track,0,4),"create named MIDI clip");
+        }
+        else ok(slot?s.importAudioToSlot(source,0,0):s.importAudio(source,0),"create named audio clip");
+        const auto current=[&]{const auto track=s.snapshot().tracks[(size_t)index];return slot?track.slots[0].clip:track.clips[0];};
+        const auto id=current().id;if(midi)ok(s.addMidiNote(id,60,0,1,.8f),"draw naming fixture note");
+        const auto original=current();juce::MemoryBlock media;if(!midi)check(original.file.loadFileAsData(media),"read original source bytes");
+        const juce::String name=juce::String::fromUTF8("Verse • 2 / C♯ <take> & bass");
+        ok(s.renameClip(id,"  "+name+"  "),"rename only clip display with trimmed Unicode name");
+        const auto renamed=current();check(renamed.name==name&&renamed.id==original.id&&renamed.start==original.start&&renamed.length==original.length&&renamed.active==original.active&&renamed.file==original.file&&renamed.notes.size()==original.notes.size(),"rename preserves clip identity, musical state and source path");
+        if(midi)check(renamed.notes[0].id==original.notes[0].id&&renamed.notes[0].pitch==60&&renamed.notes[0].lengthBeats==1,"rename preserves native note identity and geometry");
+        else {juce::MemoryBlock after;check(original.file.loadFileAsData(after)&&after==media,"rename never renames or changes source media");}
+        s.undo();check(current().name==original.name&&s.canRedo(),"rename undoes once");
+        for(const auto& invalid:juce::StringArray{"","   ","\t\n"})check(s.renameClip(id,invalid).failed()&&current().name==original.name&&s.canRedo(),"blank names preserve project and redo");
+        check(s.renameClip("missing",name).failed()&&s.canRedo(),"stale clip identity cannot change a replacement");
+        s.redo();check(current().name==name,"rename redo restores Unicode name");
+        const auto file=root.getChildFile("clip-name-"+juce::String(midi?1:0)+juce::String(slot?1:0)+".halftrack");
+        ok(s.saveProject(file),"save clip name");ok(s.loadProject(file),"reopen clip name");check(current().name==name,"XML escapes and restores the exact clip name");
+        ok(s.renameClip(id,"  "+name+"  "),"repeat normalized name");check(!s.snapshot().dirty&&!s.canUndo(),"unchanged name stays clean without undo history");
+    }
+}
 void trackIsolation()
 {
     Session s(false);auto& engine=dynamic_cast<te::DeviceManager::TracktionEngineAudioDeviceManager&>(s.audioDeviceManager()).engine;
@@ -150,7 +178,7 @@ int runClipActivationTests(const juce::File& artifacts)
     {
         const auto root=artifacts.getChildFile("clip-activation-"+juce::Uuid().toString());ok(root.createDirectory(),"create isolated fixtures");const auto source=writeSignal(root);
         offline(root,source,false);offline(root,source,true);
-        playback(source,false,false);playback(source,true,false);playback(source,false,true);playback(source,true,true);trackIsolation();
+        playback(source,false,false);playback(source,true,false);playback(source,false,true);playback(source,true,true);trackIsolation();renameCases(root,source);
         std::cout<<"Clip activation tests passed: "<<root.getFullPathName()<<std::endl;return 0;
     }
     catch(const std::exception& error){std::cerr<<"FAIL clip activation: "<<error.what()<<std::endl;return 1;}

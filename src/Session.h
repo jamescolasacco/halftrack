@@ -183,6 +183,7 @@ public:
     juce::Result moveClip (int trackIndex, int clipIndex, double startSeconds);
     juce::Result removeClip (int trackIndex, int clipIndex);
     juce::Result setClipActive (const juce::String& clipId, bool active);
+    juce::Result renameClip (const juce::String& clipId, const juce::String& name);
     juce::Result renameTrack (int trackIndex, const juce::String&);
     juce::Result setMasterGain (float decibels);
     juce::Result setTrackGain (int trackIndex, float decibels);

@@ -115,7 +115,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | ARR-009 | Locators and loop regions | Create/name/jump/delete locators and edit loop endpoints; test meter changes and playback jumps. | PARTIAL — named absolute locators, seek/navigation, snapped/free drag, native undo/save/load and loop ruler; beat-locked markers, meter-change and reference playback parity unverified |
 | ARR-010 | Freeze and bounce | Specify 12.2.1 freeze/bounce behavior, retained source state, tails, sidechains, output placement, and undo. | NOT IMPLEMENTED / UNVERIFIED |
 | ARR-011 | Session/Arrangement ownership | Native generated output verifies boundary takeover, stop retaining Session silence, delayed UI publication, graph rebuild and explicit Return; handler tests prove view switches do not change ownership. Stale-generation and same-pitch MIDI handoff cases pass. Native manual delivery and hardware timing remain unverified. | PARTIAL — Mac Session subset |
-| ARR-012 | Clip properties | Persist activation, name/color, source bounds, loop bounds, gain, tuning, RAM/interpolation options, and batch edits. | PARTIAL — audio/MIDI activation with running playback, undo and persistence; gain, fades and source bounds persist; broader clip properties missing |
+| ARR-012 | Clip properties | Persist activation, name/color, source bounds, loop bounds, gain, tuning, RAM/interpolation options, and batch edits. | PARTIAL — audio/MIDI display naming and activation with running playback, undo and persistence; gain, fades and source bounds persist; broader clip properties missing |
 
 ## Session performance and launching
 

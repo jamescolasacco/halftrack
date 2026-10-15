@@ -262,3 +262,8 @@ Native input/listening check: **NOT RUN** until performed. Select an audio clip 
 ## Split MIDI notes (about 30 seconds)
 
 Native input/listening check: **NOT RUN** until performed. Draw two long overlapping notes, click the piano ruler halfway through them, and press **Cmd/Ctrl+E**. Both notes should split at the marker; the new right halves should be selected. Undo should rejoin both in one step. Repeat after selecting only one note, and in a Session slot. Listen for the new note onset at the split. The Note tools menu offers the same operation.
+
+
+## Rename clips (about 30 seconds)
+
+Native input check: **NOT RUN** until performed. Select an audio or MIDI clip in Arrangement and press **Cmd/Ctrl+R**, or choose **Rename clip…** from its context menu. Enter a name, confirm, then undo/redo. Repeat with a Session slot and cancel once. Save/reopen and confirm both names persist. The audio source filename must stay unchanged.

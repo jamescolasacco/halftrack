@@ -123,3 +123,8 @@ Default: deactivate a whole audio/MIDI clip without removing its contents or Ses
 ### MIDI note split policy
 
 Default: split crossing notes at the piano-roll marker, using the current selection or all notes when none are selected. Exact note edges do nothing; any sub-1/960-beat fragment rejects the group. Splits retrigger the note and preserve ordinary properties with fresh right-half identities. Per-note expression children are rejected until their envelopes can be cropped and shifted explicitly.
+
+
+### Clip names and media
+
+Default: clip names are trimmed, nonblank display labels. Renaming never changes an audio filename or moves source media, even if a native engine preference requests it. Audio and MIDI clips in both views use the same stable-ID command; cancelling or confirming a stale dialog leaves any replacement clip untouched.
