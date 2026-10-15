@@ -1,0 +1,31 @@
+# Expose a message-thread flush so deferred arm changes cannot restart a newly begun take.
+# Upstream GPL notices remain in the patched dependency source.
+function(halftrack_patch_input_recording_state source_dir)
+    set(source "${source_dir}/modules/tracktion_engine/playback/devices/tracktion_InputDevice.h")
+    set(original "9e3041acdd4712ce40f4b0701b74e43ed83f091d4fc2435422b5eed73e795ad7")
+    set(patched "18cfec9e9fd6c2af4ea15af41e023494d442cf2e586f671d84a0b8d93ebbc7e3")
+    file(SHA256 "${source}" hash)
+    if(hash STREQUAL patched)
+        return()
+    endif()
+    if(NOT hash STREQUAL original)
+        message(FATAL_ERROR "Halftrack input recording state patch requires pinned source; unexpected SHA256 ${hash}.")
+    endif()
+    file(READ "${source}" content)
+    set(before [=[    void setRecordingEnabled (EditItemID, bool);]=])
+    set(after [=[    void setRecordingEnabled (EditItemID, bool);
+
+    /** Flush pending destination/arm changes on the message thread before starting a take. */
+    void flushRecordingStateUpdates() { recordStatusUpdater.handleUpdateNowIfNeeded(); }]=])
+    string(REPLACE "${before}" "${after}" content "${content}")
+    string(SHA256 hash "${content}")
+    if(NOT hash STREQUAL patched)
+        message(FATAL_ERROR "Halftrack input recording state patch produced unexpected SHA256 ${hash}.")
+    endif()
+    string(REGEX REPLACE "\n$" "" configure_content "${content}")
+    file(CONFIGURE OUTPUT "${source}" CONTENT "@configure_content@" @ONLY NEWLINE_STYLE LF)
+    file(SHA256 "${source}" hash)
+    if(NOT hash STREQUAL patched)
+        message(FATAL_ERROR "Halftrack input recording state patch wrote unexpected SHA256 ${hash}.")
+    endif()
+endfunction()

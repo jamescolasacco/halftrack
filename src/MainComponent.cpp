@@ -164,13 +164,13 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &tempo, &loopButton, &positionLabel,
+                 &playButton, &stopButton, &recordButton, &tempo, &loopButton, &clickButton, &clickSettingsButton, &positionLabel,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &ruler, &viewport,
                  &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &deviceChain })
             addAndMakeVisible (child);
 
-        for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &loopButton,
+        for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &loopButton, &clickButton, &clickSettingsButton,
                  &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton, &folderButton,
                  &upButton, &zoomIn, &zoomOut, &fitButton })
         {
@@ -201,13 +201,18 @@ public:
         projectLabel.setJustificationType (juce::Justification::centredRight);
         playButton.setTooltip ("Play / pause  |  Space");
         stopButton.setTooltip ("Stop and return to the beginning  |  Escape");
-        recordButton.setTooltip ("Record into armed audio tracks  |  F9");
+        recordButton.setTooltip ("Record into armed audio or MIDI tracks  |  F9");
         playButton.onClick = [this] { togglePlay(); };
         stopButton.onClick = [this] { session.stop(); session.seek (0); refresh(); };
         recordButton.onClick = [this] { if (state.recording) session.stop(); else report (session.record()); refresh(); };
         loopButton.setClickingTogglesState (true);
         loopButton.setTooltip ("Loop the marked time range. Shift-drag the ruler to change it.  |  Cmd/Ctrl+L");
         loopButton.onClick = [this] { session.setLoop (loopButton.getToggleState(), state.loopStart, state.loopEnd); refresh(); };
+        clickButton.setName("Metronome"); clickSettingsButton.setName("Metronome settings");
+        clickButton.setClickingTogglesState(true); clickButton.setTooltip("Enable the metronome");
+        clickSettingsButton.setTooltip("Count-in, accent, recording-only click and click level");
+        clickButton.onClick=[this] { auto settings=session.snapshot().metronome;settings.enabled=clickButton.getToggleState();report(session.setMetronome(settings));refresh(); };
+        clickSettingsButton.onClick=[this] { showMetronomeMenu(); };
         audioButton.onClick = [this] { showAudioSettings(); };
         audioButton.setTooltip ("Audio devices, input/output channels, sample rate and buffer size");
         addTrackButton.onClick = [this] { showPiano = false; addTrack(); resized(); };
@@ -336,6 +341,8 @@ public:
         positionLabel.setBounds (toolbar.removeFromLeft (121));
         toolbar.removeFromLeft (11);
         loopButton.setBounds (toolbar.removeFromLeft (48));
+        toolbar.removeFromLeft(8); clickButton.setBounds(toolbar.removeFromLeft(48));
+        clickSettingsButton.setBounds(toolbar.removeFromLeft(25));
         audioButton.setBounds (toolbar.removeFromRight (91));
         toolbar.removeFromRight (12);
         projectLabel.setBounds (toolbar);
@@ -2452,7 +2459,7 @@ private:
     juce::AudioFormatManager formats;
     juce::AudioThumbnailCache thumbnailCache { 128 };
     TransportButton playButton { TransportButton::play }, stopButton { TransportButton::stop }, recordButton { TransportButton::record };
-    juce::TextButton loopButton { "Loop" }, audioButton { "Audio Setup" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
+    juce::TextButton loopButton { "Loop" }, clickButton { "Click" }, clickSettingsButton { "..." }, audioButton { "Audio Setup" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
                      sessionTab { "Session" }, arrangementTab { "Arrangement" }, pianoTab { "Piano Roll" }, importButton { "Import Audio" },
                      filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" },
                      zoomIn { "+" }, zoomOut { "-" }, fitButton { "Fit" };
@@ -2485,6 +2492,31 @@ private:
     juce::String selectedSceneId, selectedLauncherClipId;
     double viewStart = 0, pixelsPerSecond = 35, recordingStart = 0;
 
+    void applyMetronomeMenu (int item)
+    {
+        auto settings=session.snapshot().metronome;
+        if(item==1) settings.accent=!settings.accent;
+        else if(item==2) settings.recordingOnly=!settings.recordingOnly;
+        else if(item>=10 && item<=12) settings.countInBars=item-10;
+        else if(item>=21 && item<=25) settings.gain=(item-20)*.2f;
+        else return;
+        report(session.setMetronome(settings));refresh();
+    }
+    void showMetronomeMenu()
+    {
+        const auto settings=session.snapshot().metronome;
+        juce::PopupMenu menu, countIn, level;
+        menu.addItem(1,"Accent first beat",true,settings.accent);
+        menu.addItem(2,"Only while recording",true,settings.recordingOnly);
+        countIn.addItem(10,"None",!state.recording,settings.countInBars==0);
+        countIn.addItem(11,"1 bar",!state.recording,settings.countInBars==1);
+        countIn.addItem(12,"2 bars",!state.recording,settings.countInBars==2);
+        for(int i=1;i<=5;++i)level.addItem(20+i,juce::String(i*20)+"%",true,std::abs(settings.gain-i*.2f)<.001f);
+        menu.addSubMenu("Count-in",countIn);menu.addSubMenu("Click level",level);
+        const auto safe=juce::Component::SafePointer<Impl>(this);
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&clickSettingsButton),[safe](int item)
+            {if(safe) safe->applyMetronomeMenu(item);});
+    }
     void showSessionView()
     {
         showSession = true; showPiano = false;
@@ -2761,12 +2793,15 @@ private:
         playButton.setToggleState (state.playing, juce::dontSendNotification);
         recordButton.setToggleState (state.recording, juce::dontSendNotification);
         loopButton.setToggleState (state.looping, juce::dontSendNotification);
+        clickButton.setToggleState(state.metronome.enabled,juce::dontSendNotification);
         if (! tempo.isBeingEdited()) tempo.setText (juce::String (state.tempo, 2), juce::dontSendNotification);
         const auto beatPosition = juce::jmax (0.0, state.position) * state.tempo / 60.0;
         const auto bar = (int) (beatPosition / 4) + 1;
         const auto beat = (int) beatPosition % 4 + 1;
         const auto sixteenth = (int) (beatPosition * 4) % 4 + 1;
-        positionLabel.setText (juce::String (bar).paddedLeft ('0', 3) + " . " + juce::String (beat) + " . " + juce::String (sixteenth), juce::dontSendNotification);
+        positionLabel.setText (state.countInBeatsRemaining>0
+            ? "Count in " + juce::String((int)std::ceil(state.countInBeatsRemaining))
+            : juce::String (bar).paddedLeft ('0', 3) + " . " + juce::String (beat) + " . " + juce::String (sixteenth), juce::dontSendNotification);
         projectLabel.setText (state.name + (state.dirty ? "  *" : ""), juce::dontSendNotification);
         if (state.tracks.size() != previous.tracks.size()) resized();
         canvas.syncRows();
@@ -4735,6 +4770,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         tempo.setText(invalid,juce::sendNotificationSync);
         check(state.tempo==120&&tempo.getText()=="120.00"&&session.canRedo(),"invalid tempo text restores display without discarding redo");
     }
+    auto* metronome=dynamic_cast<juce::Button*>(findNamed(*this,"Metronome"));
+    check(metronome && metronome->isVisible(),"transport exposes the real metronome toggle");
+    metronome->setToggleState(true,juce::dontSendNotification);metronome->onClick();refresh();
+    check(state.metronome.enabled,"metronome button enables the native click");
+    applyMetronomeMenu(11);check(state.metronome.countInBars==1,"native count-in menu chooses one bar");
+    session.undo();refresh();check(state.metronome.countInBars==0&&state.metronome.enabled,"count-in menu edit undoes independently");
+    applyMetronomeMenu(22);applyMetronomeMenu(1);applyMetronomeMenu(2);
+    check(state.metronome.gain==.4f&&!state.metronome.accent&&state.metronome.recordingOnly,"native click menu controls update model");
     tempo.setText("999",juce::sendNotificationSync);check(state.tempo==999&&tempo.getText()=="999.00","native tempo editor reaches exact supported maximum");
 
 }

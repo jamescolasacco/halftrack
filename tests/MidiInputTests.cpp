@@ -224,6 +224,32 @@ void recordingExits()
     check(session.snapshot().tracks[2].clips.size()==1,"empty MIDI recording creates no blank clip");
 }
 
+void countInRecording()
+{
+    for(double start:{0.0,4.0})
+    {
+    GeneratedInput f;auto& session=f.session;auto click=session.snapshot().metronome;click.countInBars=1;
+    ok(session.setMetronome(click),"select one-bar MIDI count-in");
+    ok(session.setTrackArmed(2,true),"arm count-in MIDI input");session.seek(start);ok(session.record(),"start MIDI count-in recording");
+    const auto origin=f.devices.getCurrentStreamTime()+256.0/48000;pumpSyntheticTestDevice(session,4);
+    f.send(juce::MidiMessage::noteOn(1,60,(juce::uint8)80),origin+1.0);
+    f.send(juce::MidiMessage::noteOff(1,60),origin+1.2);
+    f.send(juce::MidiMessage::noteOn(1,64,(juce::uint8)90),origin+2.1);
+    f.send(juce::MidiMessage::noteOff(1,64),origin+2.4);
+    f.send(juce::MidiMessage::noteOn(1,67,(juce::uint8)100),origin+2.6);
+    f.send(juce::MidiMessage::noteOff(1,67),origin+2.9);
+    pumpSyntheticTestDevice(session,600);session.stop();
+    const auto state=session.snapshot();check(state.tracks[2].clips.size()==1,"MIDI count-in produces one clip");
+    const auto clip=state.tracks[2].clips[0];check(clip.notes.size()==2,"notes fully inside the count-in are omitted");
+    check(clip.notes[0].pitch==64&&std::abs(clip.startBeat+clip.notes[0].startBeat-start*2)<1e-9
+        &&std::abs(clip.notes[0].lengthBeats-.3)<1e-9,"a note crossing punch-in is trimmed to the recording start");
+    check(clip.notes[1].pitch==67&&std::abs(clip.startBeat+clip.notes[1].startBeat-start*2-.7)<1e-9
+        &&std::abs(clip.notes[1].lengthBeats-.6)<1e-9,"post-count-in MIDI keeps exact musical timing");
+    session.undo();check(session.snapshot().tracks[2].clips.empty(),"count-in MIDI take undoes once");session.redo();
+    check(session.snapshot().tracks[2].clips[0].notes[0].id==clip.notes[0].id,"count-in MIDI redo retains editable identities");
+    }
+}
+
 void controllersAndOverdub (const juce::File& root)
 {
     GeneratedInput f; auto& session=f.session;
@@ -297,7 +323,7 @@ int runMidiInputTests(const juce::File& artifacts)
     try
     {
         const auto root=artifacts.getChildFile("midi-input-"+juce::Uuid().toString()); ok(root.createDirectory(),"create isolated fixtures");
-        selectionAndMonitoring(); recording(root); recordingExits(); controllersAndOverdub(root);
+        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); controllersAndOverdub(root);
         std::cout<<"MIDI input tests passed: "<<root.getFullPathName()<<std::endl; return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI input: "<<e.what()<<std::endl;return 1;}

@@ -18,6 +18,7 @@ using juce::File;
 using juce::Result;
 using juce::String;
 const juce::Identifier monitorProperty { "halftrackMonitor" };
+const juce::Identifier countInProperty { "halftrackCountInBars" };
 const juce::Identifier midiTrackProperty { "halftrackMidiTrack" };
 const juce::Identifier midiNoteIDProperty { "halftrackNoteId" };
 const juce::Identifier returnProperty { "halftrackReturn" };
@@ -248,6 +249,28 @@ void renewMidiNoteIDs (juce::ValueTree state, juce::UndoManager* undo = nullptr)
     if (state.hasType (te::IDs::NOTE)) state.setProperty (midiNoteIDProperty,juce::Uuid().toString(),undo);
     for (auto child : state) renewMidiNoteIDs (child,undo);
 }
+Result validateMetronome (const juce::ValueTree& state)
+{
+    const auto read = [](const juce::var& value, double lo, double hi, bool integral)
+    {
+        const auto text=value.toString().trim().toStdString(); char* end=nullptr;
+        const double number=std::strtod(text.c_str(),&end);
+        return !text.empty() && end==text.c_str()+text.size() && std::isfinite(number)
+            && number>=lo && number<=hi && (!integral || std::floor(number)==number);
+    };
+    if(!read(state.getProperty(countInProperty,0),0,2,true)) return Result::fail("Invalid project count-in.");
+    int count=0;
+    for(const auto& node:state) if(node.hasType(te::IDs::CLICKTRACK))
+    {
+        if(++count>1 || !read(node.getProperty(te::IDs::level,.6),.2,1,false)
+            || !read(node.getProperty(te::IDs::active,0),0,1,true)
+            || !read(node.getProperty(te::IDs::emphasiseBars,1),0,1,true)
+            || !read(node.getProperty(te::IDs::onlyRecording,0),0,1,true))
+            return Result::fail("Invalid project metronome settings.");
+    }
+    return Result::ok();
+}
+
 Result validateProjectTempo (const juce::ValueTree& state)
 {
     for (const auto& tempo : state.getChildWithName (te::IDs::TEMPOSEQUENCE))
@@ -736,6 +759,7 @@ struct Session::Impl
             if (auto* device = input (*t))
                 device->getInputDevice().setMonitorMode (static_cast<te::InputDevice::MonitorMode> (
                     juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (monitorProperty, 0)))));
+        edit->setCountInMode (static_cast<te::Edit::CountIn> (static_cast<int> (edit->state.getProperty(countInProperty,0))));
         refreshRouting();
         edit->dispatchPendingUpdatesSynchronously();
     }
@@ -744,6 +768,7 @@ struct Session::Impl
         edit->editFileRetriever = [this] { return editLocation(); };
         flushStructuralUpdates();
         edit->playInStopEnabled = true;
+        edit->setCountInMode (static_cast<te::Edit::CountIn> (static_cast<int> (edit->state.getProperty(countInProperty,0))));
         refreshRouting();
         if (useDevices) edit->getTransport().ensureContextAllocated();
         edit->dispatchPendingUpdatesSynchronously();
@@ -801,6 +826,12 @@ Session::Snapshot Session::snapshot() const
     s.position = transport.getPosition().inSeconds();
     s.duration = e.getLength().inSeconds();
     s.tempo = e.tempoSequence.getTempo (0)->getBpm();
+    s.metronome = {e.clickTrackEnabled.get(),e.clickTrackEmphasiseBars.get(),e.clickTrackRecordingOnly.get(),
+        e.getClickTrackVolume(),static_cast<int>(e.state.getProperty(countInProperty,0))};
+    const auto clickRange=e.getClickTrackRange();
+    if(s.recording && s.metronome.countInBars>0 && !clickRange.isEmpty())
+        s.countInBeatsRemaining=juce::jlimit(0.0,s.metronome.countInBars*4.0,
+            (e.tempoSequence.toBeats(clickRange.getEnd()).inBeats()+.5)-e.tempoSequence.toBeats(transport.getPosition()).inBeats());
     s.loopStart = transport.getLoopRange().getStart().inSeconds();
     s.loopEnd = transport.getLoopRange().getEnd().inSeconds();
     s.cpu = impl->engine.getDeviceManager().getCpuUsage();
@@ -899,6 +930,8 @@ Result Session::newProject()
     impl->edit = std::make_unique<te::Edit> (std::move (options));
     impl->edit->getMasterVolumePlugin()->setVolumeDb (0);
     impl->edit->tempoSequence.getTempo (0)->setBpm (120);
+    impl->edit->clickTrackGain = .6f; impl->edit->clickTrackEmphasiseBars = true;
+    impl->edit->state.setProperty(countInProperty,0,nullptr);
     impl->edit->getTransport().setLoopRange ({ te::TimePosition::fromSeconds (0), te::TimePosition::fromSeconds (8) });
     for (auto* t : te::getAudioTracks (*impl->edit)) impl->edit->deleteTrack (t);
     addAudioTrack ("Audio 1"); addAudioTrack ("Audio 2");
@@ -951,6 +984,7 @@ Result Session::loadProject (const File& file)
     };
     if (auto result = validateSlots (validateSlots, state); result.failed()) return result;
     if (auto result = validateProjectTempo (state); result.failed()) return result;
+    if (auto result = validateMetronome (state); result.failed()) return result;
     if (auto result = validateRouting (state); result.failed()) return result;
     if (auto result = UtilityPlugin::validateState (state); result.failed()) return result;
     if (auto result = NativeEffectPlugin::validateState (state); result.failed()) return result;
@@ -2155,6 +2189,10 @@ Result Session::record()
     for (auto* t : te::getAudioTracks (*impl->edit)) if (auto* d = impl->input (*t)) armed |= d->isRecordingEnabled (t->itemID);
     if (! armed) return Result::fail ("Assign an input and arm at least one track before recording.");
     auto r = impl->assets().createDirectory(); if (r.failed()) return r;
+    for (auto* input : impl->edit->getAllInputDevices()) input->flushRecordingStateUpdates();
+    impl->edit->dispatchPendingUpdatesSynchronously();
+    impl->edit->setCountInMode (static_cast<te::Edit::CountIn> (snapshot().metronome.countInBars));
+    impl->edit->setClickTrackRange ({});
     impl->edit->getTransport().record (false);
     if (! impl->edit->getTransport().isRecording()) return Result::fail ("Recording could not start. Check the selected input and device settings.");
     impl->changed(); return Result::ok();
@@ -2177,6 +2215,24 @@ void Session::setTempo (double bpm)
     auto* tempo = impl->edit->tempoSequence.getTempo (0);
     if (tempo->getBpm() == value) return;
     impl->transaction ("Tempo"); tempo->setBpm (value); impl->changed();
+}
+Result Session::setMetronome (const MetronomeSettings& settings)
+{
+    if(impl->exporting) return Result::fail("Finish or cancel the current export first.");
+    if(!std::isfinite(settings.gain) || settings.gain<.2f || settings.gain>1 || settings.countInBars<0 || settings.countInBars>2)
+        return Result::fail("Metronome level must be 20–100% and count-in zero, one or two bars.");
+    const auto previous=snapshot().metronome;
+    if(previous==settings) return Result::ok();
+    if(impl->edit->getTransport().isRecording() && previous.countInBars!=settings.countInBars)
+        return Result::fail("Stop recording before changing the count-in.");
+    impl->transaction("Metronome"); auto* undo=&impl->edit->getUndoManager(); auto& edit=*impl->edit;
+    edit.clickTrackEnabled.setValue(settings.enabled,undo);
+    edit.clickTrackEmphasiseBars.setValue(settings.accent,undo);
+    edit.clickTrackRecordingOnly.setValue(settings.recordingOnly,undo);
+    edit.clickTrackGain.setValue(settings.gain,undo);
+    edit.state.setProperty(countInProperty,settings.countInBars,undo);
+    edit.setCountInMode(static_cast<te::Edit::CountIn>(settings.countInBars));
+    impl->changed(); return Result::ok();
 }
 void Session::setLoop (bool enabled, double start, double end)
 {

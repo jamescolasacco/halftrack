@@ -1,0 +1,179 @@
+#include "Session.h"
+#include <tracktion_engine/tracktion_engine.h>
+#include <tracktion_graph/tracktion_graph.h>
+#include <cmath>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+
+namespace halftrack
+{
+std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
+float pumpSyntheticTestDevice(Session&,int);
+int64_t syntheticTestSamplePosition(Session&);
+juce::AudioBuffer<float> captureSyntheticTestDevice(Session&,int);
+namespace
+{
+namespace te=tracktion::engine;
+void check(bool value,const juce::String& message)
+{
+    if(!value)throw std::runtime_error(message.toStdString());std::cout<<"PASS metronome: "<<message<<std::endl;
+}
+void ok(const juce::Result& result,const juce::String& message)
+{check(result.wasOk(),message+(result.failed()?": "+result.getErrorMessage():""));}
+void impulse(const juce::File& file,float gain)
+{
+    juce::AudioBuffer<float> audio(1,256);audio.clear();audio.setSample(0,0,gain);
+    juce::WavAudioFormat wav;std::unique_ptr<juce::OutputStream> output(file.createOutputStream());
+    auto writer=wav.createWriterFor(output,juce::AudioFormatWriterOptions().withSampleRate(48000).withNumChannels(1).withBitsPerSample(24));
+    check(writer&&writer->writeFromAudioSampleBuffer(audio,0,256),"write generated click impulse");
+}
+struct Fixture
+{
+    Session session {false,makeSyntheticTestDeviceType()};
+    te::Engine& engine=dynamic_cast<te::DeviceManager::TracktionEngineAudioDeviceManager&>(session.audioDeviceManager()).engine;
+    juce::String oldBig=engine.getPropertyStorage().getProperty(te::SettingID::clickTrackSampleBig).toString(),oldLittle=engine.getPropertyStorage().getProperty(te::SettingID::clickTrackSampleSmall).toString();
+    void setClickFile(bool big,const juce::String& path)
+    {
+        engine.getPropertyStorage().setProperty(big?te::SettingID::clickTrackSampleBig:te::SettingID::clickTrackSampleSmall,path);
+        te::TransportControl::restartAllTransports(engine,false);
+    }
+    explicit Fixture(const juce::File& root)
+    {
+        const auto big=root.getChildFile("big.wav"),little=root.getChildFile("little.wav");impulse(big,.5f);impulse(little,.25f);
+        setClickFile(true,big.getFullPathName());setClickFile(false,little.getFullPathName());
+        pumpSyntheticTestDevice(session,4);
+    }
+    ~Fixture(){session.stop();setClickFile(true,oldBig);setClickFile(false,oldLittle);}
+};
+void compareClicks(const juce::AudioBuffer<float>& audio,double tempo,float gain,bool accent,double loopSeconds=0,int countInBeats=-1,double leadSeconds=0)
+{
+    juce::AudioBuffer<float> expected(2,audio.getNumSamples());expected.clear();
+    const double step=48000*60/tempo;
+    for(int beat=0;beat*step+leadSeconds*48000<audio.getNumSamples();++beat)
+    {
+        if(countInBeats>=0 && beat>=countInBeats)break;
+        const int sample=(int)std::llround(beat*step+leadSeconds*48000);
+        if(sample>=audio.getNumSamples())break;
+        const int musicalBeat=loopSeconds>0?beat%(int)std::llround(loopSeconds*tempo/60):beat;
+        for(int c=0;c<2;++c)expected.setSample(c,sample,(accent && musicalBeat%4==0?.5f:.25f)*gain);
+    }
+    double worst=0;int worstAt=0;
+    for(int c=0;c<2;++c)for(int n=0;n<audio.getNumSamples();++n)
+    {
+        if(!std::isfinite(audio.getSample(c,n)))throw std::runtime_error("Nonfinite click sample");
+        const auto error=std::abs((double)audio.getSample(c,n)-expected.getSample(c,n));
+        if(error>worst){worst=error;worstAt=n;}
+    }
+    check(worst<2e-6,"complete click buffer matches independent beat/accent/gain arithmetic; error="+juce::String(worst,8)+" at "+juce::String(worstAt));
+}
+void playback(const juce::File& root)
+{
+    Fixture f(root);auto& session=f.session;auto settings=session.snapshot().metronome;
+    check(!settings.enabled && settings.accent && settings.gain==.6f && settings.countInBars==0,"new-project click defaults are explicit");
+    ok(session.play(),"play with metronome disabled");check(captureSyntheticTestDevice(session,200).getMagnitude(0,51200)==0,"disabled metronome is silent");session.stop();
+    for(double tempo:{120.0,137.0,187.5,500.0,999.0})
+    {
+        session.setTempo(tempo);settings.enabled=true;settings.accent=true;settings.gain=.6f;ok(session.setMetronome(settings),"enable accented metronome");
+        session.seek(0);ok(session.play(),"start click playback");const auto audio=captureSyntheticTestDevice(session,400);session.stop();
+        compareClicks(audio,tempo,.6f,true);
+    }
+    session.setTempo(120);settings.accent=false;settings.gain=.2f;ok(session.setMetronome(settings),"set unaccented quiet click");
+    session.seek(0);ok(session.play(),"play unaccented click");compareClicks(captureSyntheticTestDevice(session,400),120,.2f,false);session.stop();
+    settings.accent=true;settings.gain=1;ok(session.setMetronome(settings),"set accented unity click");session.setLoop(true,0,1);session.seek(0);ok(session.play(),"play across loop boundaries");
+    compareClicks(captureSyntheticTestDevice(session,400),120,1,true,1);session.stop();session.setLoop(false,0,1);
+    settings.recordingOnly=true;ok(session.setMetronome(settings),"select recording-only click");session.seek(0);ok(session.play(),"play with record-only setting");
+    check(captureSyntheticTestDevice(session,200).getMagnitude(0,51200)==0,"record-only click is silent during ordinary playback");session.stop();
+}
+void exportExcludesClick(const juce::File& root)
+{
+    Fixture f(root);auto& session=f.session;ok(session.importAudio(root.getChildFile("big.wav"),0),"prepare audible export source");
+    auto settings=session.snapshot().metronome;settings.enabled=true;settings.recordingOnly=false;settings.gain=1;
+    ok(session.setMetronome(settings),"enable metronome before export");
+    const auto withClick=root.getChildFile("click-on.wav"),withoutClick=root.getChildFile("click-off.wav");
+    ok(session.exportWav(withClick),"export arrangement with monitoring click enabled");
+    settings.enabled=false;ok(session.setMetronome(settings),"disable metronome");ok(session.exportWav(withoutClick),"export same arrangement without click");
+    juce::AudioFormatManager formats;formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> a(formats.createReaderFor(withClick)),b(formats.createReaderFor(withoutClick));
+    check(a&&b&&a->lengthInSamples==256&&b->lengthInSamples==256&&a->numChannels==2&&b->numChannels==2,"metronome does not extend export duration or channels");
+    juce::AudioBuffer<float> actual(2,256),expected(2,256);check(a->read(&actual,0,256,0,true,true)&&b->read(&expected,0,256,0,true,true),"decode complete click-on/off exports");
+    double worst=0;for(int c=0;c<2;++c)for(int n=0;n<256;++n)worst=std::max(worst,std::abs((double)actual.getSample(c,n)-expected.getSample(c,n)));
+    check(actual.getMagnitude(0,256)>.1 && worst==0,"metronome is excluded from every exported sample");
+}
+
+void persistence(const juce::File& root)
+{
+    Session session(false);const auto project=root.getChildFile("click.halftrack");auto settings=session.snapshot().metronome;
+    settings.enabled=true;settings.accent=false;settings.recordingOnly=true;settings.gain=.4f;settings.countInBars=2;
+    ok(session.setMetronome(settings),"edit all metronome settings in one transaction");session.undo();check(!session.snapshot().metronome.enabled&&session.snapshot().metronome.countInBars==0,"one undo restores all click settings");
+    auto invalid=settings;invalid.gain=std::numeric_limits<float>::quiet_NaN();check(session.setMetronome(invalid).failed()&&session.canRedo(),"nonfinite click level preserves redo");
+    invalid=settings;invalid.countInBars=3;check(session.setMetronome(invalid).failed()&&session.canRedo(),"unsupported count-in preserves redo");
+    session.redo();check(session.snapshot().metronome==settings,"redo restores exact click settings");
+    ok(session.saveProject(project),"save click settings");ok(session.loadProject(project),"reopen click settings");check(session.snapshot().metronome==settings,"all click settings persist");
+    ok(session.setMetronome(settings),"unchanged click settings are a no-op");check(!session.canUndo()&&!session.snapshot().dirty,"unchanged settings leave clean history");
+    for(const auto& value:juce::StringArray{"-1","3","nan","1.5"})
+    {
+        auto xml=juce::XmlDocument::parse(project);xml->getChildByName("EDIT")->setAttribute("halftrackCountInBars",value);
+        const auto bad=root.getChildFile("bad-count-in.halftrack");check(xml->writeTo(bad),"write invalid count-in fixture");
+        check(session.loadProject(bad).failed()&&session.snapshot().metronome==settings,"invalid count-in cannot replace the active project");
+    }
+    auto changed=settings;changed.enabled=false;ok(session.setMetronome(changed),"prepare redo for malformed-load check");session.undo();
+    for(const auto& value:juce::StringArray{"nan","0.1","1.1","0.5 trailing"})
+    {
+        auto xml=juce::XmlDocument::parse(project);auto* edit=xml->getChildByName("EDIT");auto* click=edit->getChildByName("CLICKTRACK");
+        check(click!=nullptr,"saved metronome uses native state");click->setAttribute("level",value);const auto bad=root.getChildFile("bad-click.halftrack");check(xml->writeTo(bad),"write invalid click fixture");
+        check(session.loadProject(bad).failed()&&session.snapshot().metronome==settings&&session.canRedo(),"invalid click project preserves active settings and redo");
+    }
+}
+void countIn(const juce::File& root)
+{
+    for(double start:{0.0,6.0}) for(int bars:{0,1,2})
+    {
+        Fixture f(root);auto& session=f.session;auto settings=session.snapshot().metronome;settings.enabled=bars==0;settings.recordingOnly=bars==0;settings.countInBars=bars;settings.gain=1;
+        ok(session.setMetronome(settings),"select count-in without ongoing metronome");
+        const auto inputs=session.inputNames();check(!inputs.isEmpty(),"generated audio capture input exists");ok(session.setTrackInput(0,inputs[0]),"assign generated count-in recording input");ok(session.setTrackArmed(0,true),"arm count-in recording");
+        session.seek(start);const auto inputStart=syntheticTestSamplePosition(session);ok(session.record(),"record with count-in");
+        check(bars==0?session.snapshot().position==start:std::abs(session.snapshot().position-start+bars*2+.25)<1e-9,"recording starts at the exact native count-in boundary");
+        check(session.snapshot().countInBeatsRemaining==bars*4,"countdown is available at zero and nonzero timeline locations");
+        auto forbidden=settings;forbidden.countInBars=bars==0?1:0;check(session.setMetronome(forbidden).failed(),"active count-in cannot be changed mid-take");
+        const int lead=bars>0?12000:0;
+        const auto audio=captureSyntheticTestDevice(session,(bars*2*48000+lead+24000+255)/256);
+        compareClicks(audio,120,1,true,0,bars>0?bars*4:-1,bars>0?.25:0);session.stop();
+        const auto state=session.snapshot();check(state.tracks[0].clips.size()==1,"count-in produces one completed audio take");
+        check(std::abs(state.tracks[0].clips[0].start-start)<1.0/48000 && state.tracks[0].clips[0].length>.45 && state.tracks[0].clips[0].length<.55,
+            "pre-roll is excluded from recorded take placement and duration; start="+juce::String(state.tracks[0].clips[0].start,9)+" length="+juce::String(state.tracks[0].clips[0].length,9));
+        juce::AudioFormatManager formats;formats.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(state.tracks[0].clips[0].file));
+        check(reader && reader->sampleRate==48000 && reader->numChannels==2 && reader->bitsPerSample>=16,"decode generated count-in take");
+        juce::AudioBuffer<float> recorded(2,(int)reader->lengthInSamples);check(reader->read(&recorded,0,recorded.getNumSamples(),0,true,true),"read entire recorded take");
+        // The queued graph start uses the following input reference block, as MIDI does.
+        const auto firstSample=inputStart+256+bars*2*48000+lead;double worst=0; int worstAt=0;
+        for(int c=0;c<2;++c)for(int n=0;n<recorded.getNumSamples();++n)
+        {
+            const double expected=.2f*std::sin(juce::MathConstants<double>::twoPi*(firstSample+n)*(c==0?440.0:660.0)/48000);
+            const double actual=recorded.getSample(c,n);if(!std::isfinite(actual))throw std::runtime_error("nonfinite recorded sample");
+            const auto error=std::abs(actual-expected);if(error>worst){worst=error;worstAt=n;}
+        }
+        check(worst<std::ldexp(1.0,1-(int)reader->bitsPerSample)+1e-7,"every recorded frame starts at the intended input sample; error="+juce::String(worst,9)+" at "+juce::String(worstAt));
+        session.undo();check(session.snapshot().tracks[0].clips.empty(),"count-in audio take undoes once");session.redo();
+        check(session.snapshot().tracks[0].clips[0].id==state.tracks[0].clips[0].id,"count-in audio redo retains identity");
+        ok(session.newProject(),"prepare canceled count-in");settings.countInBars=1;ok(session.setMetronome(settings),"enable count-in for early stop");
+        ok(session.setTrackInput(0,inputs[0]),"reassign generated capture input");ok(session.setTrackArmed(0,true),"arm early-stop take");
+        ok(session.record(),"begin count-in before early stop");pumpSyntheticTestDevice(session,100);session.stop();
+        check(session.snapshot().tracks[0].clips.empty(),"stopping during count-in creates no audio clip");
+    }
+}
+}
+int runMetronomeTests(const juce::File& artifacts)
+{
+    try
+    {
+        const auto root=artifacts.getChildFile("metronome-"+juce::Uuid().toString());ok(root.createDirectory(),"create isolated metronome fixtures");
+        for(double seconds:{-2.25,-1.0,-.25,0.0,.25,1.0,2.25})
+            check(tracktion::graph::timeToSample(seconds,48000)==std::llround(seconds*48000),"graph sample conversion rounds signed time symmetrically");
+        playback(root);persistence(root);countIn(root);exportExcludesClick(root);
+        std::cout<<"Metronome tests passed: "<<root.getFullPathName()<<std::endl;return 0;
+    }
+    catch(const std::exception& e){std::cerr<<"FAIL metronome: "<<e.what()<<std::endl;return 1;}
+}
+}

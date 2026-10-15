@@ -229,3 +229,8 @@ Status: **NOT RUN with a physical controller**. Generated-controller and product
 6. Record a held note, then click another timeline position. The take should finish before the seek, with the held note ending at recording stop. Input/arm/monitor changes and history are unavailable during a take.
 
 This path currently records into Arrangement and uses one native clip channel. MPE, input channel filters, explicit record quantization, take lanes, physical timing/hot-plug and Session performance capture remain unverified or unfinished.
+
+
+## Metronome and count-in (about two minutes)
+
+Physical listening/controller check: **NOT RUN** until performed. In a disposable project, enable transport **Click**, play and change BPM. Use the adjacent **...** menu to change accent, click level and **Only while recording**; that last option should silence ordinary playback. Set **Count-in → 1 bar**, select/arm an intended input, then record from the beginning and later in the timeline. The display should count down before capture. Count-in works with Click switched off. Notes played entirely before capture should be omitted; a note held into capture should begin at its start. Stop during count-in to cancel without an audio clip. Finish a take, then undo/redo it once. Save/reopen and verify click settings, and export a recording: the monitoring click should be absent. Current count-in is 4/4 and uses the main output.

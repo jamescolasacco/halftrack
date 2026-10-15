@@ -93,3 +93,8 @@ Default: copy one unlooped, ungrouped, single-take Arrangement MIDI clip at norm
 ### Controller recording defaults
 
 Default: one named native audio or MIDI input per track, with exclusive assignment. A newly discovered physical MIDI input opens only after explicit selection; choosing All MIDI Ins explicitly opens the currently available inputs. Saved enablement remains an application preference. Record into Arrangement, unquantized, with native merge overdub into overlapping clips. Keep the current non-MPE single clip-channel behavior and document it. Finish a take on Stop or seek; defer arm, monitoring, input reassignment and history operations until recording stops. Empty MIDI takes add no clip. MIDI channel filtering, duplicate-name disambiguation, record quantization, MPE, replace/take-lane selection and Session capture need separate controls and tests.
+
+
+### Metronome and count-in defaults
+
+Default: click Off, first-beat accent On, gain 60%, recording-only Off, count-in None. Expose zero/one/two 4/4 bars; keep the native half-beat preparation lead before the first count-in beat. Click and count-in use the main output and do not appear in offline exports. A count-in applies when recording begins from stopped; punching Record during playback does not rewind. Click settings belong to the project and undo together. Separate cue outputs, signature changes, subdivisions and custom samples require later controls and tests.

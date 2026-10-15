@@ -38,7 +38,8 @@ public:
     juce::BigInteger getActiveInputChannels() const override { return inputs; }
     int getOutputLatencyInSamples() override { return 0; }
     int getInputLatencyInSamples() override { return 0; }
-    float pump (int blocks, int dispatchMilliseconds = 2)
+    int64_t samplePosition() const { return sample; }
+    float pump (int blocks, int dispatchMilliseconds = 2, juce::AudioBuffer<float>* captured = nullptr)
     {
         float peak = 0;
         for (int block = 0; block < blocks; ++block)
@@ -52,6 +53,7 @@ public:
             out.clear();
             if (callback) callback->audioDeviceIOCallbackWithContext (in.getArrayOfReadPointers(), 2, out.getArrayOfWritePointers(), 2, 256, {});
             peak = juce::jmax (peak, out.getMagnitude (0, 256));
+            if (captured) for(int channel=0;channel<2;++channel) captured->copyFrom(channel,block*256,out,channel,0,256);
             juce::MessageManager::getInstance()->runDispatchLoopUntil (dispatchMilliseconds);
         }
         return peak;
@@ -310,6 +312,20 @@ float pumpSyntheticTestDevice (Session& session, int blocks)
     auto* device = dynamic_cast<SyntheticDevice*> (session.audioDeviceManager().getCurrentAudioDevice());
     if (device == nullptr) throw std::runtime_error ("synthetic test device is not selected");
     return device->pump (blocks);
+}
+
+int64_t syntheticTestSamplePosition(Session& session)
+{
+    auto* device=dynamic_cast<SyntheticDevice*>(session.audioDeviceManager().getCurrentAudioDevice());
+    if(!device) throw std::runtime_error("synthetic test device is not selected");
+    return device->samplePosition();
+}
+
+juce::AudioBuffer<float> captureSyntheticTestDevice (Session& session, int blocks)
+{
+    auto* device=dynamic_cast<SyntheticDevice*>(session.audioDeviceManager().getCurrentAudioDevice());
+    if(!device || blocks<=0) throw std::runtime_error("invalid synthetic capture request");
+    juce::AudioBuffer<float> result(2,blocks*256);result.clear();device->pump(blocks,1,&result);return result;
 }
 
 int runRecordingTests (const juce::File& requestedDirectory)

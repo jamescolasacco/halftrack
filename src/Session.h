@@ -100,6 +100,13 @@ public:
         std::vector<SlotInfo> slots;
         bool launcherActive = false;
     };
+    struct MetronomeSettings
+    {
+        bool enabled = false, accent = true, recordingOnly = false;
+        float gain = .6f;
+        int countInBars = 0; // 0, 1 or 2; current project meter is 4/4.
+        bool operator== (const MetronomeSettings&) const = default;
+    };
     struct Snapshot
     {
         juce::String name;
@@ -111,6 +118,8 @@ public:
         std::vector<SceneInfo> scenes;
         std::vector<LocatorInfo> locators;
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
+        MetronomeSettings metronome;
+        double countInBeatsRemaining = 0;
     };
 
     explicit Session (bool enableAudioDevices = true, std::unique_ptr<juce::AudioIODeviceType> customDeviceType = {});
@@ -184,6 +193,7 @@ public:
     juce::Result record();
     void seek (double seconds);
     void setTempo (double bpm);
+    juce::Result setMetronome (const MetronomeSettings&);
     void setLoop (bool enabled, double startSeconds, double endSeconds);
     juce::Result addLocator (double seconds, const juce::String& name, juce::String& createdId);
     juce::Result updateLocator (const juce::String& id, const juce::String& name, double seconds);
