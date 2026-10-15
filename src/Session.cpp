@@ -817,6 +817,34 @@ struct Session::Impl
                 && instance->getTargets().contains (t.itemID)) return instance;
         return nullptr;
     }
+    juce::StringArray monitoredMidiTracks() const
+    {
+        juce::StringArray result;
+        for (auto* track : te::getAudioTracks(*edit))
+            if (track->state.getProperty(midiTrackProperty,false))
+                if (auto* device=input(*track); device && device->isLivePlayEnabled(*track))
+                    result.add(track->itemID.toString());
+        return result;
+    }
+    void releaseStoppedMidiInputs(const juce::StringArray& previouslyMonitored)
+    {
+        juce::Array<te::AudioTrack*> stopped;
+        for (const auto& id : previouslyMonitored)
+            if (auto* target=track(id))
+                if (auto* device=input(*target); !device || !device->isLivePlayEnabled(*target))
+                    stopped.add(target);
+        if (stopped.isEmpty()) return;
+        // Prepare the replacement graph before queuing releases into it. No
+        // processor is reset from the message thread while audio can use it.
+        for (auto* device : edit->getAllInputDevices()) device->flushRecordingStateUpdates();
+        edit->dispatchPendingUpdatesSynchronously();
+        for (auto* target : stopped)
+            for (int channel=1;channel<=16;++channel)
+            {
+                target->injectLiveMidiMessage(juce::MidiMessage::controllerEvent(channel,64,0),{});
+                target->injectLiveMidiMessage(juce::MidiMessage::allNotesOff(channel),{});
+            }
+    }
     void refreshInputs()
     {
         if (! useDevices) return;
@@ -2136,6 +2164,7 @@ Result Session::setTrackInput (int index, const String& name)
     // Validate the typed name before enabling anything. Re-query instances after
     // enabling because the native device list and playback graph may rebuild.
     if (name.isNotEmpty() && !inputNames (midi).contains (name)) return Result::fail ("That input is not available for this track type.");
+    const auto monitored=impl->monitoredMidiTracks();
     if (midi)
     {
         auto& devices = impl->engine.getDeviceManager();
@@ -2172,7 +2201,7 @@ Result Session::setTrackInput (int index, const String& name)
         selected->setRecordingEnabled (t->itemID, false);
         selected->getInputDevice().setMonitorMode (te::InputDevice::MonitorMode::off);
     }
-    impl->changed(); return Result::ok();
+    impl->releaseStoppedMidiInputs(monitored);impl->changed(); return Result::ok();
 }
 Result Session::setTrackArmed (int index, bool value)
 {
@@ -2184,9 +2213,10 @@ Result Session::setTrackArmed (int index, bool value)
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing record arms.");
     auto* destination = te::getDestination (*input, *t, 0);
     if (!destination) return Result::fail ("Input destination is unavailable.");
+    const auto monitored=impl->monitoredMidiTracks();
     impl->transaction ("Record arm");
     destination->recordEnabled.setValue (value, &impl->edit->getUndoManager());
-    impl->changed(); return Result::ok();
+    impl->releaseStoppedMidiInputs(monitored);impl->changed(); return Result::ok();
 }
 Result Session::setTrackMonitor (int index, MonitorMode mode)
 {
@@ -2196,10 +2226,11 @@ Result Session::setTrackMonitor (int index, MonitorMode mode)
     auto* input = impl->input (*t); if (! input) return Result::fail ("Select an input before enabling monitoring.");
     if (input->getInputDevice().getMonitorMode() == static_cast<te::InputDevice::MonitorMode> (mode)) return Result::ok();
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing monitoring.");
+    const auto monitored=impl->monitoredMidiTracks();
     impl->transaction ("Input monitoring");
     input->getInputDevice().setMonitorMode (static_cast<te::InputDevice::MonitorMode> (mode));
     t->state.setProperty (monitorProperty, static_cast<int> (mode), &impl->edit->getUndoManager());
-    impl->edit->restartPlayback(); impl->changed(); return Result::ok();
+    impl->edit->restartPlayback(); impl->releaseStoppedMidiInputs(monitored);impl->changed(); return Result::ok();
 }
 Result Session::play()
 {
@@ -2393,12 +2424,16 @@ void Session::endEditGesture()
 void Session::undo()
 {
     if (impl->exporting || impl->edit->getTransport().isRecording()) return;
-    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshParameterValues(); sendChangeMessage();
+    const auto monitored=impl->monitoredMidiTracks();
+    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshParameterValues();
+    impl->releaseStoppedMidiInputs(monitored);sendChangeMessage();
 }
 void Session::redo()
 {
     if (impl->exporting || impl->edit->getTransport().isRecording()) return;
-    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshParameterValues(); sendChangeMessage();
+    const auto monitored=impl->monitoredMidiTracks();
+    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshParameterValues();
+    impl->releaseStoppedMidiInputs(monitored);sendChangeMessage();
 }
 bool Session::canUndo() const { return ! impl->exporting && ! impl->edit->getTransport().isRecording() && impl->edit->getUndoManager().canUndo(); }
 bool Session::canRedo() const { return ! impl->exporting && ! impl->edit->getTransport().isRecording() && impl->edit->getUndoManager().canRedo(); }

@@ -1,6 +1,6 @@
 # Recorded implementation coverage
 
-Current implementation checkpoint: metronome, count-in and recording quantization, 2026-10-15. **30 of 246 tracked active feature areas have partial implementation evidence: 12.2%.** None of these broad rows establishes complete measured reference parity.
+Current implementation checkpoint: recording quantization and master output, 2026-10-15. **31 of 246 tracked active feature areas have partial implementation evidence: 12.6%.** None of these broad rows establishes complete measured reference parity.
 
 This is recorded partial coverage, not percentage finished, remaining engineering time, or a weighted feature score. The initial inventory is not exhaustive, some existing behavior is recorded only in preview rows, and items vary greatly in size. Static decompiler coverage uses a different denominator and must never be reported as application completion.
 
@@ -8,7 +8,7 @@ This is recorded partial coverage, not percentage finished, remaining engineerin
 
 The [capability ledger](feature-parity.md) has 275 identified rows. Excluding PRE preview-check rows, OUT scope/watchlist rows, EXT programmable-environment rows and rows explicitly OUT OF SCOPE leaves 246 active rows. Count each active row whose status contains PARTIAL once. No fractional credit or estimated effort weighting is assigned.
 
-The partial rows are REC-003/005/008, ARR-003/005/006/008/009/011/012, SES-001/002/008, WRP-001, MID-001/002/006/012, MIX-003/007, PRJ-002/005, UX-001/002, QA-003 and AFX-009/011/015/032/040. The [progress log](progress.md), ledger and per-feature contracts record what each actually does and what remains missing.
+The partial rows are REC-003/005/008, ARR-003/005/006/008/009/011/012, SES-001/002/008, WRP-001, MID-001/002/006/012, MIX-001/003/007, PRJ-002/005, UX-001/002, QA-003 and AFX-009/011/015/032/040. The [progress log](progress.md), ledger and per-feature contracts record what each actually does and what remains missing.
 
 Before audio editing, source `b342496` had 19 partial rows with the same denominator: 7.7%. The six added rows are ARR-003/005/006/008/012 and WRP-001. Their evidence and boundaries are in the [audio-editing contract](research/audio-clip-editing-contract.md). Timeline gestures improve those existing rows without increasing their count.
 
@@ -27,3 +27,5 @@ Controller input, native recording/overdub and event-preserving undo add bounded
 Metronome/count-in adds bounded partial evidence for REC-005: 30/246 (12.2%). Complete generated signal tests do not establish cue routing, odd signatures, physical timing or complete reference parity.
 
 Recording quantization deepens REC-008 without adding a feature-area row; partial coverage remains 30/246.
+
+Master-output gain adds bounded partial evidence for MIX-001: 31/246 (12.6%). The broad mixer row is not complete; reference fader laws and meter behavior remain unmeasured.

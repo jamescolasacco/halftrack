@@ -112,10 +112,41 @@ void selectionAndMonitoring()
     ok(session.setTrackMonitor(2,Session::MonitorMode::off),"disable monitored MIDI");
     session.undo();check(session.snapshot().tracks[2].monitor==Session::MonitorMode::automatic && f.note()>.001f,
         "monitor undo restores both model and actual MIDI routing");
-    session.redo();check(session.snapshot().tracks[2].monitor==Session::MonitorMode::off && f.note()<1e-7f,
-        "monitor redo restores silent input routing");
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(1200);
+    check(session.canRedo(),"monitor redo remains available after idle timers");
+    session.redo();check(session.snapshot().tracks[2].monitor==Session::MonitorMode::off,"monitor redo restores model mode");
+    const float redoPeak=f.note();check(redoPeak<1e-7f,"monitor redo restores silent input routing; peak="+juce::String(redoPeak,9));
+    ok(session.setTrackMonitor(2,Session::MonitorMode::on),"monitor a held note before disabling input");
+    pumpSyntheticTestDevice(session,4);f.send(juce::MidiMessage::noteOn(1,72,(juce::uint8)96),f.devices.getCurrentStreamTime()+256.0/48000);
+    check(pumpSyntheticTestDevice(session,20)>.001f,"held input note is audible");
+    ok(session.setTrackMonitor(2,Session::MonitorMode::off),"turn monitoring Off while a note is held");
+    pumpSyntheticTestDevice(session,40);check(pumpSyntheticTestDevice(session,20)<1e-7f,"disabling input releases its held notes");
+    auto held=[&](int channel,bool sustain)
+    {
+        pumpSyntheticTestDevice(session,4);
+        const auto now=f.devices.getCurrentStreamTime()+256.0/48000;
+        if(sustain)f.send(juce::MidiMessage::controllerEvent(channel,64,127),now);
+        f.send(juce::MidiMessage::noteOn(channel,72,(juce::uint8)96),now);
+        check(pumpSyntheticTestDevice(session,20)>.001f,"held channel "+juce::String(channel)+" is audible");
+        if(sustain){f.send(juce::MidiMessage::noteOff(channel,72),f.devices.getCurrentStreamTime()+256.0/48000);pumpSyntheticTestDevice(session,30);}
+    };
+    auto released=[&](const juce::String& action)
+    {pumpSyntheticTestDevice(session,40);check(pumpSyntheticTestDevice(session,20)<1e-7f,action+" releases sounding input voices");};
+    session.undo();check(session.snapshot().tracks[2].monitor==Session::MonitorMode::on,"undo reopens monitoring without resurrecting notes");
+    held(16,true);session.redo();released("monitor redo with sustain");
+    ok(session.setTrackMonitor(2,Session::MonitorMode::on),"enable input for undo release");held(1,false);session.undo();released("monitor undo");
+    session.redo();ok(session.setTrackMonitor(2,Session::MonitorMode::automatic),"prepare armed Auto monitoring");held(1,true);
+    ok(session.setTrackArmed(2,false),"disarm sustained Auto input");released("disarming Auto input");
+    session.undo();held(16,false);session.redo();released("record-arm redo");
+    ok(session.setTrackArmed(2,true),"arm Auto input again");held(1,false);session.undo();released("record-arm undo");
+    ok(session.setTrackMonitor(2,Session::MonitorMode::on),"In remains active without arm");held(1,false);
+    ok(session.setTrackGain(2,-3),"change unrelated mixer gain");session.undo();
+    check(pumpSyntheticTestDevice(session,20)>.001f,"unrelated gain undo does not stop monitored notes");
+    ok(session.setTrackMonitor(2,Session::MonitorMode::off),"release unrelated-edit fixture");released("explicit monitor Off");
     ok (session.addMidiTrack(), "create alternate destination");
+    ok(session.setTrackMonitor(2,Session::MonitorMode::on),"monitor before moving input assignment");held(1,true);
     ok (session.setTrackInput(3,f.name), "move exclusive input assignment");
+    released("moving an active input to another track");
     auto state = session.snapshot();
     check (state.tracks[2].inputName.isEmpty() && !state.tracks[2].armed && state.tracks[3].inputName == f.name
         && !state.tracks[3].armed && state.tracks[3].monitor == Session::MonitorMode::off,
@@ -125,6 +156,10 @@ void selectionAndMonitoring()
     check (session.setTrackInput(2,"missing controller").failed() && session.canRedo(), "unavailable input preserves redo");
     session.redo(); ok(session.setTrackInput(3,{}),"disconnect MIDI input");
     check (session.setTrackArmed(3,true).failed(), "disconnected MIDI track cannot arm");
+    while(!session.snapshot().scenes.empty())ok(session.removeScene(0),"remove empty Session scenes");
+    ok(session.setTrackInput(2,f.name),"assign source-free MIDI track");
+    ok(session.setTrackMonitor(2,Session::MonitorMode::on),"monitor with no clips or scenes");held(16,true);
+    ok(session.setTrackMonitor(2,Session::MonitorMode::off),"disable source-free monitoring");released("source-free input Off");
 }
 
 juce::AudioBuffer<float> readAudio (const juce::File& file)
@@ -421,6 +456,11 @@ void withGeneratedMidiController (Session& session, const std::function<void(con
 {
     VirtualController controller(session);
     action(controller.name);
+}
+int runMidiMonitoringTests()
+{
+    try { selectionAndMonitoring(); return 0; }
+    catch(const std::exception& e){std::cerr<<"FAIL MIDI monitoring: "<<e.what()<<std::endl;return 1;}
 }
 int runMidiInputTests(const juce::File& artifacts)
 {

@@ -244,3 +244,6 @@ Physical controller/input check: **NOT RUN** until performed. Choose **Edit → 
 ## Master volume (about 30 seconds)
 
 Physical listening/input check: **NOT RUN** until performed. Play a phrase with a return send, adjust the bottom-right Master fader and check that the complete mix changes level. Drag to the bottom for silence; double-click to restore 0 dB. Enter -6 dB, then undo/redo. A full drag should undo once. Save/reopen retains the value, and Arrangement export uses the same output level.
+
+
+Optional monitoring release check (about one minute; physical test **NOT RUN**): hold a key or sustain a note, then switch monitoring Off. The note should enter its release rather than remain stuck. Repeat by disarming Auto, using undo/redo of those controls, and moving/disconnecting the input. Changing an unrelated volume setting and undoing it should leave a held note sounding.

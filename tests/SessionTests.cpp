@@ -41,6 +41,9 @@ public:
     int64_t samplePosition() const { return sample; }
     float pump (int blocks, int dispatchMilliseconds = 2, juce::AudioBuffer<float>* captured = nullptr)
     {
+        // Test-only stress control: delay message dispatch without changing the generated audio clock.
+        if (const auto value=juce::SystemStats::getEnvironmentVariable("HALFTRACK_TEST_DISPATCH_MS",{}); value.isNotEmpty())
+            dispatchMilliseconds=juce::jlimit(1,100,value.getIntValue());
         float peak = 0;
         for (int block = 0; block < blocks; ++block)
         {

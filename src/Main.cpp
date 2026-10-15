@@ -22,6 +22,7 @@ int runTrackOrderTests (const juce::File&);
 int runTrackDuplicateTests (const juce::File&);
 int runTempoTests (const juce::File&);
 int runMidiInputTests (const juce::File&);
+int runMidiMonitoringTests();
 int runMetronomeTests (const juce::File&);
 int runMasterVolumeTests (const juce::File&);
 int runRealtimeTests();
@@ -83,6 +84,10 @@ public:
             const auto destination=i+1<args.size()?juce::File(args[i+1])
                 :juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("halftrack-tests");
             setApplicationReturnValue(runMetronomeTests(destination));quit();return;
+        }
+        if (args.contains ("--self-test-midi-monitor"))
+        {
+            setApplicationReturnValue(runMidiMonitoringTests());quit();return;
         }
         if (args.contains ("--self-test-midi-input"))
         {
