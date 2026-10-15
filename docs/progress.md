@@ -1,6 +1,6 @@
 # Halftrack progress
 
-Updated 2026-10-15. MIDI note activation and the beat-sequencer playback policy pass all **22 local Mac acceptance suites in 327.67 s** at `fddc35c`. The subsequent input-gap fix passes generated monitoring, recording and count-in tests in **80.20 s**. Published `96465bd` passes Windows/Linux CI but still fails Mac delayed monitoring; the next cross-platform run must verify the new fix. Scene copying/ordering, note splitting, clip naming and activation are implemented and tested. Complete DAW parity and reference-exact sound remain unmeasured.
+Updated 2026-10-15. Published `69e0252` passes all **24 local Mac acceptance suites in 344.04 s** and [all three platform CI jobs](https://github.com/jamescolasacco/halftrack/actions/runs/38733354566). Deterministic Session follow actions, note activation and WAV/AIFF/FLAC are implemented. The subsequent mono/peak-normalization export changes pass focused export, latency and production UI tests in **39.07 s**; full regression verification is running. The intermittent Mac monitoring-history failure from earlier CI runs is not yet claimed fixed. Complete DAW parity and reference-exact sound remain unmeasured.
 
 Static analysis independently verifies **392,921 / 392,926** main-program ARM64 outputs (three preparation failures and two 600-second timeouts remain) and **36,596 / 36,599** scanner outputs (three preparation failures remain). All **13,420** declared entries across seven additional device components and two architectures previously produced verified output. [Residual analysis](research/residual-extraction-recovery.md) and [component coverage](research/additional-component-audit.md) retain unresolved entries and fingerprints. Extraction coverage is not feature completion; Halftrack remains an incomplete DAW with the gaps below.
 
@@ -31,7 +31,7 @@ Scanner follow-up `5580373` passes [clean builds, tests and packaging on all thr
 
 ## Missing, not stubbed controls
 
-Additional Session launch modes, follow actions, Session recording, full MIDI expression, automation, send automation and advanced routing/racks, full native effect/instrument inventory, CLAP hosting, full stretch/warp editor, hardware stress tests, crash recovery, and cross-platform GUI certification are not complete. No completion claim is based on a control being drawn. Existing unsupported controls are omitted rather than wired to fake processing.
+Additional Session launch modes, weighted/random/scene follow actions, Session recording, full MIDI expression, automation, send automation and advanced routing/racks, full native effect/instrument inventory, CLAP hosting, full stretch/warp editor, hardware stress tests, crash recovery, and cross-platform GUI certification are not complete. No completion claim is based on a control being drawn. Existing unsupported controls are omitted rather than wired to fake processing.
 
 ## Known issues / verification remaining
 
@@ -602,3 +602,15 @@ Monitoring diagnostic ownership: root adds generated-input observations that dis
 
 
 Test-only monitoring diagnostics and the replacement-graph first-key case pass in **19.19 s** locally. The slower 35-ms dispatch run of the published package also passes. The underlying CI-only history failure remains unresolved; the next run now distinguishes model restoration, input-route enablement, consumer delivery, instance replacement and output. No speculative production change is made from the unconfirmed graph-lifetime hypothesis.
+
+
+Export mix-options ownership: root owns selectable stereo/mono output and peak normalization through a validated export-settings packet, shared renderer/UI, full-file generated references and cancellation/history regressions. Mono must retain both channels with (left + right) / 2; a writer that only selects the left channel is not sufficient. No other agent is editing these files.
+
+
+Published `69e0252` passes all **24 local Mac acceptance suites in 344.04 s**. Its cross-platform diagnostic run is [38733354566](https://github.com/jamescolasacco/halftrack/actions/runs/38733354566); no outcome is inferred while it runs.
+
+Mono export fails its full-file independent sum oracle in **1.61 s**, with worst error **0.0627172318**. Inspection confirms the pinned renderer maps only graph channel zero to a forced-mono writer. The narrow correction averages graph channels through its existing channel-map path and retains the earlier latency fixes. Pristine, prior-patch upgrade, repeated and unknown-source rejection fixtures pass; current patched source SHA256 is `57e58a225e0f433fb96920f03731ac37abe805205420e49e5c4ef7f0276186a4`. Signal/UI/latency verification follows.
+
+The export regression now also checks exact cancellation of simultaneous equal/opposite stereo samples after mono downmix. The production dialog was captured and inspected with FLAC, mono and -3 dB normalization selected; all controls and destination buttons fit.
+
+Published `69e0252` passed macOS, Windows and Linux CI including the generated MIDI diagnostics. The preceding intermittent Mac history failure did not recur in this run; a single successful diagnostic run does not isolate its cause, so those regressions remain in place.

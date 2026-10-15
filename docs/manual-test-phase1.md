@@ -292,3 +292,8 @@ Physical/native-dialog check: **NOT RUN** until performed. In a disposable arran
 ### Session clip follow actions
 
 Physical/native-input listening check: **NOT RUN** until performed. Place three distinguishable audio or MIDI clips in one Session track, leaving empty rows between them. Right-click the first clip → **Follow action…**, choose Next, and enter four beats. Launch it: the next populated clip should take over after four beats; the transport keeps running. Try Stop, Play Again, First, Last, Previous and Cycle. Next/Previous stop at the ends; Cycle wraps. Change tempo and try fractional beats. With a bar launch grid, launch between bars: the initial clip waits for the bar, then follows after its chosen beats. Keep another track sounding while editing and undoing follow settings. Turn Off to cancel further automatic transitions, duplicate the scene, and save/reopen. Hold a long MIDI note across a transition into an empty MIDI clip and listen for stuck notes.
+
+
+### Mono and normalized export
+
+Physical listening/native-dialog check: **NOT RUN** until performed. Pan different sources fully left and right. Export Stereo, then Mono: both sources should remain audible in the mono file. Try WAV, AIFF and FLAC. Enable a -3 dB peak ceiling and inspect the exported sample peak; it should be close to and below -3 dB, with the original project faders unchanged. Export a silent mix with normalization enabled and verify silence. Switch normalization Off and verify the original mix level returns. Cancel an export over a disposable existing file and verify preservation. These are sample-peak options; no loudness or true-peak result is implied.

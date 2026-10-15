@@ -244,7 +244,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | PRJ-009 | Preview and hot swap | Audition files without altering the mix; swap compatible sources/devices while retaining intended mappings. | NOT IMPLEMENTED / UNVERIFIED |
 | PRJ-010 | Similarity search | Evaluate a Halftrack-owned similarity model against a known library; report relevance and compute cost. | NOT IMPLEMENTED / UNVERIFIED |
 | PRJ-011 | Templates and presets | Save/open reusable track, device, rack, clip, and session defaults in documented Halftrack formats. | NOT IMPLEMENTED / UNVERIFIED |
-| PRJ-012 | Stereo mix render | Verify range, tail, rate, channels, gain, normalization, bit depth, dither, and cancellation. | NOT IMPLEMENTED / UNVERIFIED |
+| PRJ-012 | Stereo mix render | Whole Arrangement WAV/AIFF/FLAC export, explicit tail, rate/depth, stereo or averaging mono, optional bounded sample-peak normalization, cancellation/overwrite preservation and full decoded sample checks. Selected-range export, dither and reference numerical parity remain unverified. | PARTIAL — generated native offline exports |
 | PRJ-013 | Stems and selected tracks | Verify render routing and sends for each export mode; prevent filename collision and accidental overwrite. | NOT IMPLEMENTED / UNVERIFIED |
 | PRJ-014 | Realtime/offline agreement | Compare permitted plug-ins and native devices; document nondeterministic or realtime-only cases. | NOT IMPLEMENTED / UNVERIFIED |
 | PRJ-015 | Video workflow | Define supported import/playback/export formats, frame-rate/timecode behavior, synchronization, and platform differences. | NOT IMPLEMENTED / UNVERIFIED |

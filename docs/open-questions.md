@@ -143,3 +143,6 @@ Audio export defaults: keep the full stereo Arrangement mix and existing WAV def
 
 
 Follow-action default: Off. The first active configuration uses four project beats. Expose one deterministic action per Session clip: Stop, Play Again, Previous, Next, First, Last, or Cycle to Next. Previous/Next stop at the ends; Cycle wraps and all track actions skip empty slots. Off clears the action and timing; choosing an active action again starts with four beats. Weighted/random choices, contiguous-group targeting, loop-linked timing and scene follow actions require their own controls and tests.
+
+
+Export mix options default to Stereo and normalization Off. Mono means the arithmetic average of the full rendered channels, including both sides of the stereo mix. Peak normalization offers -1/-3/0 dB sample-peak ceilings using the pinned renderer's conservative headroom and 40 dB maximum boost. It does not modify faders. True-peak/LUFS normalization, dither selection and range/stem rendering remain separate features.

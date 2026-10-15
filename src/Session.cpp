@@ -2814,6 +2814,14 @@ Result Session::exportWav (const File& file, double rate, int bits, double tailS
 
 Result Session::exportAudio (const File& file, ExportFormat format, double rate, int bits, double tailSeconds)
 {
+    return exportAudio (file, { format, rate, bits, tailSeconds });
+}
+
+Result Session::exportAudio (const File& file, const AudioExportSettings& settings)
+{
+    const auto format = settings.format;
+    const double rate = settings.sampleRate, tailSeconds = settings.tailSeconds;
+    const int bits = settings.bitDepth;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before exporting.");
     if (rate < 8000 || rate > 384000 || ! std::isfinite (rate) || (bits != 16 && bits != 24 && bits != 32)) return Result::fail ("Unsupported export format.");
@@ -2828,6 +2836,8 @@ Result Session::exportAudio (const File& file, ExportFormat format, double rate,
     if (audioFormat == nullptr || ! audioFormat->getPossibleBitDepths().contains (bits))
         return Result::fail ("The selected format does not support this bit depth.");
     if (! std::isfinite (tailSeconds) || tailSeconds < 0 || tailSeconds > 60) return Result::fail ("Export tail must be between 0 and 60 seconds.");
+    if (! std::isfinite (settings.peakCeilingDb) || settings.peakCeilingDb < -60 || settings.peakCeilingDb > 0)
+        return Result::fail ("Choose a peak ceiling from -60 to 0 dB.");
     endEditGesture();
     double end = 0;
     for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* c : t->getClips()) end = juce::jmax (end, c->getPosition().time.getEnd().inSeconds());
@@ -2859,7 +2869,8 @@ Result Session::exportAudio (const File& file, ExportFormat format, double rate,
     p.tracksToDo = te::toBitSet (te::getAllTracks (*impl->edit));
     for (auto* track : te::getAudioTracks (*impl->edit))
         for (auto* clip : track->getClips()) p.allowedClips.add (clip);
-    p.usePlugins = true; p.useMasterPlugins = true; p.canRenderInMono = false;
+    p.usePlugins = true; p.useMasterPlugins = true; p.canRenderInMono = settings.mono; p.mustRenderInMono = settings.mono;
+    p.shouldNormalise = settings.normalizePeak; p.normaliseToLevelDb = settings.peakCeilingDb;
     p.checkNodesForAudio = false; p.ditheringEnabled = false;
     auto& ui = static_cast<UIBehaviour&> (impl->engine.getUIBehaviour());
     ui.cancelled = false;

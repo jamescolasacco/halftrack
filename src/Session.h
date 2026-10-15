@@ -17,6 +17,15 @@ public:
     enum class MonitorMode { off, automatic, on };
     enum class SendMode { pre, post };
     enum class ExportFormat { wav, aiff, flac };
+    struct AudioExportSettings
+    {
+        ExportFormat format = ExportFormat::wav;
+        double sampleRate = 48000;
+        int bitDepth = 24;
+        double tailSeconds = 0;
+        bool mono = false, normalizePeak = false;
+        float peakCeilingDb = -1;
+    };
     enum class FollowAction { off, stop, replay, previous, next, first, last, cycle };
     struct FollowSettings
     {
@@ -228,6 +237,7 @@ public:
     void redo();
     bool canUndo() const;
     bool canRedo() const;
+    juce::Result exportAudio (const juce::File&, const AudioExportSettings&);
     juce::Result exportAudio (const juce::File&, ExportFormat, double sampleRate = 48000, int bitDepth = 24, double tailSeconds = 0);
     juce::Result exportWav (const juce::File&, double sampleRate = 48000, int bitDepth = 24, double tailSeconds = 0);
     // Export pumps native events; edits reject while it owns the render graph.

@@ -3312,11 +3312,29 @@ private:
         }
         return {};
     }
+    static Session::AudioExportSettings readAudioExportSettings (juce::AlertWindow& dialog)
+    {
+        constexpr double rates[] { 44100, 48000, 88200, 96000, 192000 };
+        constexpr int depths[] { 16, 24, 32 };
+        constexpr double tails[] { 0, 1, 2, 5, 10, 30, 60 };
+        const auto format = static_cast<Session::ExportFormat> (juce::jlimit (0, 2, dialog.getComboBoxComponent ("format")->getSelectedItemIndex()));
+        const auto rate = rates[juce::jlimit (0, 4, dialog.getComboBoxComponent ("sample-rate")->getSelectedItemIndex())];
+        const auto depth = depths[juce::jlimit (0, 2, dialog.getComboBoxComponent ("bit-depth")->getSelectedItemIndex())];
+        const auto tail = tails[juce::jlimit (0, 6, dialog.getComboBoxComponent ("effect-tail")->getSelectedItemIndex())];
+        Session::AudioExportSettings settings { format, rate, depth, tail };
+        settings.mono = dialog.getComboBoxComponent ("channels")->getSelectedItemIndex() == 1;
+        const auto normalization = dialog.getComboBoxComponent ("normalization")->getSelectedItemIndex();
+        settings.normalizePeak = normalization > 0;
+        settings.peakCeilingDb = normalization == 2 ? -3.0f : normalization == 3 ? 0.0f : -1.0f;
+        return settings;
+    }
     void exportDialog()
     {
-        auto* alert = new juce::AlertWindow ("Export Audio", "Render the full arrangement through its track and master effects to a stereo audio file.", juce::MessageBoxIconType::NoIcon, this);
+        auto* alert = new juce::AlertWindow ("Export Audio", "Render the full arrangement through its track and master effects to an audio file. Export options leave the project mix unchanged.", juce::MessageBoxIconType::NoIcon, this);
         alert->setLookAndFeel (&theme);
         alert->addComboBox ("format", { "WAV", "AIFF", "FLAC (lossless)" }, "File format");
+        alert->addComboBox ("channels", { "Stereo", "Mono (combine both channels)" }, "Output channels");
+        alert->addComboBox ("normalization", { "Off", "Peak ceiling: -1 dB", "Peak ceiling: -3 dB", "Peak ceiling: 0 dB" }, "Normalize exported peak");
         alert->addComboBox ("sample-rate", { "44.1 kHz", "48 kHz", "88.2 kHz", "96 kHz", "192 kHz" }, "Sample rate");
         alert->getComboBoxComponent ("sample-rate")->setSelectedItemIndex (1);
         alert->addComboBox ("bit-depth", { "16-bit", "24-bit", "32-bit" }, "Bit depth");
@@ -3339,36 +3357,30 @@ private:
         alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, dialog] (int result)
         {
             if (result != 1 || safe == nullptr || dialog == nullptr) return;
-            constexpr double rates[] { 44100, 48000, 88200, 96000, 192000 };
-            constexpr int depths[] { 16, 24, 32 };
-            constexpr double tails[] { 0, 1, 2, 5, 10, 30, 60 };
-            const auto format = static_cast<Session::ExportFormat> (juce::jlimit (0, 2, dialog->getComboBoxComponent ("format")->getSelectedItemIndex()));
-            const auto rate = rates[juce::jlimit (0, 4, dialog->getComboBoxComponent ("sample-rate")->getSelectedItemIndex())];
-            const auto depth = depths[juce::jlimit (0, 2, dialog->getComboBoxComponent ("bit-depth")->getSelectedItemIndex())];
-            const auto tail = tails[juce::jlimit (0, 6, dialog->getComboBoxComponent ("effect-tail")->getSelectedItemIndex())];
-            juce::MessageManager::callAsync ([safe, format, rate, depth, tail]
+            const auto settings = readAudioExportSettings (*dialog);
+            juce::MessageManager::callAsync ([safe, settings]
             {
-                if (safe != nullptr) safe->chooseExportDestination (format, rate, depth, tail);
+                if (safe != nullptr) safe->chooseExportDestination (settings);
             });
         }), true);
     }
-    void performAudioExport (const juce::File& destination, Session::ExportFormat format, double rate, int bits, double tail)
+    void performAudioExport (const juce::File& destination, const Session::AudioExportSettings& settings)
     {
         auto safe = juce::Component::SafePointer<Impl> (this);
-        const auto result = session.exportAudio (destination, format, rate, bits, tail);
+        const auto result = session.exportAudio (destination, settings);
         if (safe == nullptr) return;
         if (result.failed() && result.getErrorMessage() == "Export cancelled.")
         {
             safe->status = "Export cancelled.";
             safe->statusFrames = 24 * 5;
         }
-        else safe->report (result, exportExtension (format).toUpperCase() + " exported: " + juce::String (rate / 1000.0, 1) + " kHz / " + juce::String (bits) + "-bit, " + juce::String (tail, 0) + "s effect tail.");
+        else safe->report (result, exportExtension (settings.format).toUpperCase() + (settings.mono ? " mono" : " stereo") + " exported: " + juce::String (settings.sampleRate / 1000.0, 1) + " kHz / " + juce::String (settings.bitDepth) + "-bit" + (settings.normalizePeak ? ", peak normalized." : "."));
         safe->refresh();
     }
-    void exportAudioSelection (const juce::File& selected, Session::ExportFormat format, double rate, int bits, double tail)
+    void exportAudioSelection (const juce::File& selected, Session::AudioExportSettings settings)
     {
         if (selected == juce::File()) return;
-        const auto destination = selected.withFileExtension (exportExtension (format));
+        const auto destination = selected.withFileExtension (exportExtension (settings.format));
         // The native chooser only confirmed the spelling it returned. Adding the
         // chosen extension can name another existing file, which needs its own choice.
         if (destination != selected && destination.existsAsFile())
@@ -3379,23 +3391,23 @@ private:
             alert->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
             alerts.emplace_back (alert);
             auto safe = juce::Component::SafePointer<Impl> (this);
-            alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, destination, format, rate, bits, tail] (int result)
+            alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, destination, settings] (int result)
             {
-                if (result == 1 && safe != nullptr) safe->performAudioExport (destination, format, rate, bits, tail);
+                if (result == 1 && safe != nullptr) safe->performAudioExport (destination, settings);
             }), true);
             return;
         }
-        performAudioExport (destination, format, rate, bits, tail);
+        performAudioExport (destination, settings);
     }
-    void chooseExportDestination (Session::ExportFormat format, double rate, int bits, double tail)
+    void chooseExportDestination (Session::AudioExportSettings settings)
     {
-        const auto extension = exportExtension (format);
+        const auto extension = exportExtension (settings.format);
         chooser = std::make_unique<juce::FileChooser> ("Export Arrangement as " + extension.toUpperCase(), juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (state.name + "." + extension), "*." + extension);
         auto safe = juce::Component::SafePointer<Impl> (this);
         chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
-            [safe, format, rate, bits, tail] (const juce::FileChooser& fc)
+            [safe, settings] (const juce::FileChooser& fc)
             {
-                if (safe != nullptr) safe->exportAudioSelection (fc.getResult(), format, rate, bits, tail);
+                if (safe != nullptr) safe->exportAudioSelection (fc.getResult(), settings);
             });
     }
     void chooseFolder()
@@ -5160,6 +5172,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     auto* formatChoice = exportSettings->getComboBoxComponent ("format");
     auto* depthChoice = exportSettings->getComboBoxComponent ("bit-depth");
     check (formatChoice && depthChoice && formatChoice->getNumItems() == 3, "WAV, AIFF and FLAC are real export choices");
+    check (exportSettings->getComboBoxComponent ("channels")->getNumItems() == 2
+        && exportSettings->getComboBoxComponent ("normalization")->getNumItems() == 4,
+        "production dialog exposes channel and peak options with unchanged stereo defaults");
     depthChoice->setSelectedId (3, juce::dontSendNotification);
     formatChoice->setSelectedId (2, juce::sendNotificationSync);
     check (! depthChoice->isItemEnabled (3) && depthChoice->getSelectedId() == 2, "AIFF selects supported depth when switching from 32-bit WAV");
@@ -5167,21 +5182,38 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (! depthChoice->isItemEnabled (3), "FLAC disables unsupported 32-bit output");
     formatChoice->setSelectedId (1, juce::sendNotificationSync);
     check (depthChoice->isItemEnabled (3), "WAV restores its 32-bit choice");
+    formatChoice->setSelectedId (3, juce::sendNotificationSync);
+    exportSettings->getComboBoxComponent ("channels")->setSelectedItemIndex (1, juce::sendNotificationSync);
+    exportSettings->getComboBoxComponent ("normalization")->setSelectedItemIndex (2, juce::sendNotificationSync);
+    exportSettings->getComboBoxComponent ("effect-tail")->setSelectedItemIndex (0, juce::sendNotificationSync);
+    const auto selectedExportSettings = readAudioExportSettings (*exportSettings);
+    check (selectedExportSettings.format == Session::ExportFormat::flac && selectedExportSettings.mono
+        && selectedExportSettings.normalizePeak && selectedExportSettings.peakCeilingDb == -3 && selectedExportSettings.tailSeconds == 0,
+        "production dialog transfers format, channels, normalization and tail to the actual renderer settings");
+    if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+    {
+        const juce::File directory (juce::String::fromUTF8 (configured)); check (directory.createDirectory().wasOk(), "create export dialog snapshot directory");
+        auto stream = directory.getChildFile ("export-options-dialog.png").createOutputStream(); juce::PNGImageFormat png;
+        check (stream && stream->setPosition (0) && stream->truncate().wasOk()
+            && png.writeImageToStream (exportSettings->createComponentSnapshot (exportSettings->getLocalBounds()), *stream), "capture actual export settings dialog");
+    }
     exportSettings->exitModalState (0); juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
     check (session.newProject().wasOk() && session.importAudio (audioFixture, 0).wasOk(), "prepare real audio export UI fixture"); refresh();
     juce::TemporaryFile destination (".flac");
     check (destination.getFile().replaceWithText ("keep this existing audio"), "prepare normalized export destination collision");
     const auto selectedPath = destination.getFile().withFileExtension ("unexpected");
-    exportAudioSelection (selectedPath, Session::ExportFormat::flac, 48000, 24, 0);
+    exportAudioSelection (selectedPath, selectedExportSettings);
     check (alerts.back() != nullptr && destination.getFile().loadFileAsString() == "keep this existing audio", "extension correction requests permission before replacing a different existing file");
     alerts.back()->exitModalState (0); juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
     check (destination.getFile().loadFileAsString() == "keep this existing audio", "cancelled overwrite preserves destination");
-    exportAudioSelection (selectedPath, Session::ExportFormat::flac, 48000, 24, 0);
+    exportAudioSelection (selectedPath, selectedExportSettings);
     alerts.back()->exitModalState (1); juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
     juce::AudioFormatManager exportedFormats; exportedFormats.registerBasicFormats();
     std::unique_ptr<juce::AudioFormatReader> exportedReader (exportedFormats.createReaderFor (destination.getFile()));
     check (exportedReader && exportedReader->sampleRate == 48000 && exportedReader->bitsPerSample == 24
-        && exportedReader->lengthInSamples == 4800 && ! selectedPath.exists(), "confirmed production export writes the normalized FLAC with the requested audio extent");
+        && exportedReader->lengthInSamples == 4800 && exportedReader->numChannels == 1 && ! selectedPath.exists(), "confirmed production export writes the normalized FLAC with the requested audio extent");
+    juce::AudioBuffer<float> exportedAudio (1, 4800); check (exportedReader->read (&exportedAudio, 0, 4800, 0, true, false), "decode production mono export");
+    check (exportedAudio.getMagnitude (0, 4800) > .69f && exportedAudio.getMagnitude (0, 4800) <= std::pow (10.0f, -3.0f / 20), "dialog-selected peak normalization changes the actual exported audio");
     check (session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "prepare follow-action UI clip"); refresh(); showSessionView(); selectLauncherSlot (0, 0);
     const auto followClipId = selectedSlot()->clip.id;
     menuItemSelected (59, 4); check (alerts.back() != nullptr, "Session menu opens follow-action controls");
