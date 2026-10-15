@@ -272,3 +272,8 @@ Native input check: **NOT RUN** until performed. Select an audio or MIDI clip in
 ### Copy a Session scene
 
 Put an audio clip and a MIDI clip in one scene, rename a clip, and deactivate another clip in that row. Launch the scene. Use its context menu **Duplicate Scene** (or **Session → Duplicate Selected Scene**): the copy appears immediately below and becomes selected, while the original keeps playing. Launch the copy and verify its sound and inactive clip match. Edit a copied note and confirm the original is unchanged. Undo/redo the copy as one step; save and reopen to retain both rows without starting playback.
+
+
+### Reorder Session scenes
+
+With a scene playing, choose **Move Scene Up/Down** in its context menu or **Move Selected Scene Up/Down** in Session. The entire row moves together, its selection and notes remain attached to it, and playback continues. Queue another scene with beat quantization, move it before the boundary, and confirm the queued clip still launches. Undo/redo a move, then save/reopen and verify row order.

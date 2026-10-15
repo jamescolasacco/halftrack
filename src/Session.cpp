@@ -1542,6 +1542,29 @@ Result Session::duplicateScene (const String& id, String& duplicatedId)
     impl->changed();
     return Result::ok();
 }
+Result Session::moveScene (const String& id, int destination)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing scenes.");
+    auto& list = impl->edit->getSceneList();
+    if (! juce::isPositiveAndBelow (destination, list.getNumScenes())) return Result::fail ("Scene destination is outside the project.");
+    int index = -1;
+    for (int i = 0; i < list.getNumScenes(); ++i)
+        if (list.getScenes()[i]->state.getProperty ("halftrackSceneID").toString() == id)
+        {
+            if (index >= 0) return Result::fail ("Scene identity is ambiguous.");
+            index = i;
+        }
+    if (index < 0) return Result::fail ("Scene not found.");
+    if (index == destination) return Result::ok();
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        if (track->getClipSlotList().getClipSlots().size() != list.getNumScenes())
+            return Result::fail ("The project contains an incomplete scene row.");
+    impl->transaction ("Move scene");
+    list.moveScene (index, destination);
+    impl->changed();
+    return Result::ok();
+}
 Result Session::renameScene (int index, const String& name)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

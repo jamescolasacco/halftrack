@@ -131,3 +131,6 @@ Default: clip names are trimmed, nonblank display labels. Renaming never changes
 
 
 Scene-copy default: insert immediately after the source and append ` copy` to its name. Duplicate audio/MIDI clip state with fresh scene/slot/clip/note IDs, share immutable media, and leave the current performance running without launching the copy. Empty rows are valid; the existing 256-scene limit applies. Copying frozen/populated return tracks or additional clip types awaits an explicit supported model.
+
+
+Scene-order default: Up/Down moves an existing scene and all its track cells by one row in the UI; the facade also accepts any valid final row index. Movement preserves currently playing and queued clip identities and their launch boundary. Recording/export block structural row edits. No scene drag/drop gesture is claimed yet.

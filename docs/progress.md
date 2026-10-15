@@ -526,3 +526,11 @@ Scene-copy combined verification: all **22 Mac acceptance suites pass in 318.79 
 
 
 Final scene-copy source passes production UI in **6.96 s** and launcher/model/native-audio checks in **5.28 s** (12.24 s together). The selected-return regression passes. All remaining behavior was covered by the 318.79 s full run; subsequent model edits only expanded formatting/comments. Ready for a source-inclusive package.
+
+
+Scene ordering ownership: root owns stable-ID row movement through the native SceneList, original Session/context controls, current-selection preservation, generated playing/queued clip tests, history/persistence and export rejection. All track rows, including returns, move together. No other agent is editing these areas.
+
+
+Scene ordering passes production UI **4.93 s**, launcher/native playback **5.46 s**, and session/export **61.33 s**, 71.73 s together. Tests retain playing and queued identities after both directions of movement, measure audio on each side of the pending beat boundary, and preserve every audio/MIDI/return row through history and reopening. Scene-copy package `ee92b48` verifies all source inputs and its freshly extracted launcher/UI suites pass.
+
+The preceding published editing CI `38720910857` passes Windows/Linux but fails Mac's delayed MIDI-monitor test at `held input note is audible`. The earlier normal MIDI-input suite passes in the same job. Root is investigating this independently of scene ordering; no cross-platform success is claimed for `d48a802`.

@@ -402,3 +402,10 @@ Both clip context menus and Cmd/Ctrl+R outside Piano Roll/text editors open the 
 The existing playing/queued handles belong to the original clips and are not transferred. Copying does not launch the new scene, reassign inputs or stop the source. Missing/ambiguous scene IDs, an incomplete slot row, unsupported/frozen populated tracks, recording/export and the 256-scene ceiling reject before mutation and do not change the caller's output ID. UI Session-menu and scene-context actions capture stable identity and select/scroll to the new row on success.
 
 Generated native-driver tests check source sound before and after copying, copied audio/MIDI playback, retained muted clips, row ordering, fresh identities, independent note edits, one-step history, portable reopening, source deletion, empty rows and ceiling rejection. The test sources are registered before any operation that can prepare audio readers, so accelerated callbacks do not depend on asynchronous disk-cache timing.
+
+
+## Session scene ordering
+
+`moveScene(stableSceneId, destinationIndex)` moves an existing scene to a zero-based final row through the engine SceneList. Every track's corresponding slot moves with it, including empty and return rows. Scene/slot/clip/note identities, contents and active launch handles remain unchanged. There is one native undo step; moving to the current row is a clean no-op. Missing/ambiguous IDs, out-of-range destinations, incomplete rows, recording and export reject before mutation.
+
+Session-menu and scene-context Up/Down actions resolve captured identity against current rows. Selection and the open clip editor retain their stable IDs while the view scrolls to the selected scene. Generated native-driver tests move sounding and queued scenes and check actual output across the pending quantization boundary, plus every row's IDs, both move directions, undo/redo, no-ops, failed-command history and save/reopen.

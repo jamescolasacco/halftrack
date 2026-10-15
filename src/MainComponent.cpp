@@ -1572,11 +1572,13 @@ private:
         void sceneMenu (int scene)
         {
             juce::PopupMenu menu; menu.addItem (1, "Launch Scene"); menu.addItem (2, "Rename Scene..."); menu.addItem (3, "Delete Scene");menu.addItem(4,"Duplicate Scene");
+            menu.addSeparator();menu.addItem(5,"Move Scene Up",scene>0&&!owner.state.recording);menu.addItem(6,"Move Scene Down",scene+1<(int)owner.state.scenes.size()&&!owner.state.recording);
             const auto id = owner.state.scenes[(size_t) scene].id; auto safe = juce::Component::SafePointer<Impl> (&owner);
             menu.showMenuAsync (juce::PopupMenu::Options(), [safe, id] (int choice)
             {
                 if (safe == nullptr) return; const auto index = safe->launcherIndices ({}, id).second; if (index < 0) return;
                 if(choice==4){safe->duplicateSceneFromUI(id);return;}
+                if(choice==5||choice==6){safe->moveSceneFromUI(id,choice==5?-1:1);return;}
                 if (choice == 1) safe->report (safe->session.launchScene (index)); if (choice == 2) safe->renameSceneDialog (index); if (choice == 3) safe->report (safe->session.removeScene (index)); safe->refresh();
             });
         }
@@ -2691,6 +2693,15 @@ private:
             safe->report(safe->session.renameClip(id,safeDialog->getTextEditorContents("name")));safe->refresh();
         }),true);
     }
+    void moveSceneFromUI (const juce::String& id, int delta)
+    {
+        const auto stableId = id;
+        refresh();
+        const auto index = launcherIndices ({}, stableId).second;
+        if (index < 0) return;
+        report (session.moveScene (stableId, index + delta));
+        refresh(); launcher.scrollSelectionIntoView();
+    }
     void duplicateSceneFromUI(const juce::String& id)
     {
         juce::String created;const auto result=session.duplicateScene(id,created);report(result);refresh();
@@ -3025,6 +3036,8 @@ private:
             const bool sceneSelected = selectedSceneIndex() >= 0;
             popup.addItem (50, "Insert Scene"); popup.addItem (51, "Rename Selected Scene...", sceneSelected); popup.addItem (52, "Delete Selected Scene", sceneSelected);
             popup.addItem(56,"Duplicate Selected Scene",sceneSelected&&!state.recording&&state.scenes.size()<256);
+            popup.addItem(57,"Move Selected Scene Up",selectedSceneIndex()>0&&!state.recording);
+            popup.addItem(58,"Move Selected Scene Down",sceneSelected&&selectedSceneIndex()+1<(int)state.scenes.size()&&!state.recording);
             popup.addSeparator(); popup.addItem (53, "Launch Selected Scene", sceneSelected); popup.addItem (54, "Stop All Session Clips"); popup.addItem (55, "Return to Arrangement");
         }
         return popup;
@@ -3064,6 +3077,7 @@ private:
             case 50: addSceneFromUI(); break;
             case 51: renameSceneDialog (selectedSceneIndex()); break;
             case 56: if(selectedSceneIndex()>=0)duplicateSceneFromUI(selectedSceneId); break;
+            case 57: case 58: moveSceneFromUI(selectedSceneId,id==57?-1:1); break;
             case 52: report (session.removeScene (selectedSceneIndex())); break;
             case 53: report (session.launchScene (selectedSceneIndex())); break;
             case 54: report (session.stopAllLauncherClips()); break;
@@ -4992,6 +5006,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(session.removeScene(0).wasOk(),"remove captured scene before delayed copy");refresh();const auto countAfterRemoval=state.scenes.size();duplicateSceneFromUI(copiedSceneSource);
     check(state.scenes.size()==countAfterRemoval&&state.scenes[0].id==newSceneId,"stale scene-copy target does not duplicate the replacement row");
     check(session.addReturnTrack("Scene selection return").wasOk(),"add return for scene selection");refresh();selectTrack((int)state.tracks.size()-1);
+    selectLauncherSlot(2,0);const auto movingScene=selectedSceneId;const auto movingSceneClip=selectedLauncherClipId;
+    menuItemSelected(58,4);check(selectedSceneIndex()==1&&selectedSceneId==movingScene&&selectedLauncherClipId==movingSceneClip&&state.tracks[2].slots[1].clip.id==movingSceneClip,"moving a scene keeps its selected MIDI clip");
+    session.undo();refresh();check(selectedSceneIndex()==0&&selectedLauncherClipId==movingSceneClip,"undo follows the same selected scene back to its row");
+    session.redo();refresh();menuItemSelected(57,4);check(selectedSceneIndex()==0&&state.tracks[2].slots[0].clip.id==movingSceneClip,"Move Up restores the selected row and its clips");
+    selectTrack((int)state.tracks.size()-1);
     const auto selectedReturn=currentTrack()->id;selectedSceneId=newSceneId;menuItemSelected(56,4);
     check(selectedSceneIndex()==1&&selectedSceneId!=newSceneId&&currentTrack()->id==selectedReturn,"scene duplication selects its new row even with a return track selected");
     session.undo();refresh();

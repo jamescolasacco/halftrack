@@ -612,6 +612,75 @@ void midiTests()
     check (magnitude (stopped, 3000, 21000) < 0.00001f, "MIDI stop has no stuck voice");
     session.stop();
 }
+void sceneOrderTests (const juce::File& root, const juce::File& first, const juce::File& second)
+{
+    MemoryBuffers memory;
+    Session s (false); auto& engine = engineFor (s);
+    te::test_utilities::EnginePlayer player (engine, parameters());
+    ok (s.importAudioToSlot (first, 0, 0), "prepare first scene for ordering");
+    ok (s.importAudioToSlot (second, 0, 1), "prepare second scene for ordering");
+    registerConstant (memory, engine, s.snapshot().tracks[0].slots[0].clip.file, .12f);
+    registerConstant (memory, engine, s.snapshot().tracks[0].slots[1].clip.file, .28f);
+    ok (s.addMidiTrack ("Ordered MIDI"), "prepare MIDI row ordering");
+    ok (s.addReturnTrack ("Ordered return"), "prepare return row ordering");
+    const auto midiTrack = s.snapshot().tracks[2].id;
+    ok (s.addMidiClipToSlot (midiTrack, 0, 4), "prepare ordered MIDI clip");
+    const auto midiId = s.snapshot().tracks[2].slots[0].clip.id;
+    ok (s.addMidiNote (midiId, 60, 0, 1, .8f), "prepare ordered MIDI note");
+    ok (s.setTrackMute (2, true), "isolate ordered audio measurement");
+    ok (s.renameScene (0, "First"), "name ordered first scene");
+    ok (s.renameScene (1, "Second"), "name ordered second scene");
+    const auto original = s.snapshot();
+    const auto firstId = original.scenes[0].id, secondId = original.scenes[1].id;
+    const auto checkOrder = [&] (const std::vector<int>& order, const juce::String& label)
+    {
+        const auto current = s.snapshot();
+        check (current.scenes.size() == order.size(), label + " scene count");
+        for (size_t row = 0; row < order.size(); ++row)
+        {
+            const auto from = (size_t) order[row];
+            check (current.scenes[row].id == original.scenes[from].id && current.scenes[row].name == original.scenes[from].name, label + " scene identity/name");
+            for (size_t track = 0; track < original.tracks.size(); ++track)
+            {
+                const auto& a = current.tracks[track].slots[row]; const auto& b = original.tracks[track].slots[from];
+                check (a.id == b.id && a.hasClip == b.hasClip && (!a.hasClip || a.clip.id == b.clip.id), label + " complete slot identity");
+                if (a.hasClip && a.clip.isMidi) check (a.clip.notes[0].id == b.clip.notes[0].id, label + " note identity");
+            }
+        }
+    };
+    ok (s.setLaunchQuantisation (Session::LaunchQuantisation::none), "immediate launch before move");
+    ok (s.launchScene (0), "start scene before move"); player.process (1024);
+    level (player.process (1024), 0, 1024, .12f, "scene audible before moving");
+    ok (s.moveScene (firstId, 7), "move playing first scene to last row"); dispatchGraphChanges (s);
+    checkOrder ({1,2,3,4,5,6,7,0}, "move to end");
+    check (s.snapshot().tracks[0].slots[7].playing, "playing handle follows its original clip to the last row");
+    level (player.process (4096), 512, 3500, .12f, "moving a playing scene preserves output");
+    s.undo(); checkOrder ({0,1,2,3,4,5,6,7}, "undo move");
+    level (player.process (4096), 512, 3500, .12f, "undo row movement keeps sound");
+    s.redo(); checkOrder ({1,2,3,4,5,6,7,0}, "redo move");
+    ok (s.setLaunchQuantisation (Session::LaunchQuantisation::beat), "queue with one-beat grid");
+    ok (s.launchScene (0), "queue second scene at its reordered row");
+    check (s.snapshot().tracks[0].slots[0].queued, "second clip is queued before moving");
+    ok (s.moveScene (secondId, 6), "move the queued scene before its launch"); dispatchGraphChanges (s);
+    checkOrder ({2,3,4,5,6,7,1,0}, "move queued scene");
+    check (s.snapshot().tracks[0].slots[6].queued, "queued handle follows its clip identity");
+    const auto switched = player.process (40000);
+    level (switched, 512, 8000, .12f, "source remains audible before queued boundary");
+    level (switched, 26000, 13000, .28f, "queued scene launches after moving");
+    check (s.snapshot().tracks[0].slots[6].playing && !s.snapshot().tracks[0].slots[7].playing, "moved queued clip replaces the original source");
+    s.stop(); const auto project = root.getChildFile ("scene-order.halftrack");
+    ok (s.saveProject (project), "save reordered project"); ok (s.loadProject (project), "reopen reordered project");
+    checkOrder ({2,3,4,5,6,7,1,0}, "persisted ordering");
+    ok (s.moveScene (secondId, 6), "same row is a no-op");
+    check (!s.snapshot().dirty && !s.canUndo(), "same-row move leaves clean document and history");
+    ok (s.moveScene (firstId, 0), "move last scene to first"); s.undo();
+    for (int invalid : {-1, 8}) check (s.moveScene (firstId, invalid).failed() && s.canRedo(), "invalid row preserves redo");
+    check (s.moveScene ("missing", 0).failed() && s.canRedo(), "missing scene preserves redo");
+    s.redo(); checkOrder ({0,2,3,4,5,6,7,1}, "rejected commands retain usable redo");
+    ok (s.removeScene (0), "remove a captured move target");
+    const auto replacement = s.snapshot().scenes[0].id;
+    check (s.moveScene (firstId, 1).failed() && s.snapshot().scenes[0].id == replacement, "stale move cannot target the replacement scene");
+}
 void sceneCopyTests(const juce::File& root,const juce::File& source)
 {
     MemoryBuffers memory;Session s(false);auto& engine=engineFor(s);te::test_utilities::EnginePlayer player(engine,parameters());
@@ -666,6 +735,7 @@ int runLauncherTests (const juce::File& requestedDirectory)
         const auto first = constantFile (root, "first", 0.12f), second = constantFile (root, "second", 0.28f);
         structureTests (root, first);
         sceneCopyTests(root,first);
+        sceneOrderTests(root,first,second);
         saveAsAudioTests (root);
         saveAsRemovedClipHistoryTests (root);
         audioTests (root, first, second);
