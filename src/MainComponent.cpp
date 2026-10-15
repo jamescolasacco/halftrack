@@ -2700,6 +2700,15 @@ private:
         if (beat * pixelsPerSecond >= 6) return beat * 2;
         return beat * 4;
     }
+    void duplicateTrackFromUI (const juce::String& trackId)
+    {
+        juce::String created; const auto result = session.duplicateTrack (trackId, created); report (result); refresh();
+        if (result.wasOk())
+        {
+            const auto index = launcherIndices (created, {}).first;
+            selectTrack (index); selectedClip = -1; selectedLauncherClipId.clear(); showPiano = false; resized();
+        }
+    }
     void reorderTrack (const juce::String& trackId, int direction)
     {
         const auto current = session.snapshot();
@@ -2713,8 +2722,13 @@ private:
         juce::PopupMenu menu;
         menu.addItem (1, horizontal ? "Move track left" : "Move track up", indices.first > 0);
         menu.addItem (2, horizontal ? "Move track right" : "Move track down", indices.first >= 0 && indices.first+1 < (int)state.tracks.size());
+        menu.addSeparator(); menu.addItem (3, "Duplicate track", indices.first >= 0 && !state.tracks[(size_t)indices.first].isReturn);
         menu.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), id] (int result)
-        { if (safe != nullptr && (result == 1 || result == 2)) safe->reorderTrack (id, result == 1 ? -1 : 1); });
+        {
+            if (safe == nullptr) return;
+            if (result == 1 || result == 2) safe->reorderTrack (id, result == 1 ? -1 : 1);
+            else if (result == 3) safe->duplicateTrackFromUI (id);
+        });
     }
     void selectTrack (int track)
     {
@@ -2851,6 +2865,7 @@ private:
         {
             popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (35, "Insert Return Track"); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", currentTrack() != nullptr);
             popup.addSeparator();
+            popup.addItem (38, "Duplicate Selected Track", currentTrack() != nullptr && !currentTrack()->isReturn);
             popup.addItem (36, "Move Selected Track Earlier", selectedTrack > 0);
             popup.addItem (37, "Move Selected Track Later", selectedTrack >= 0 && selectedTrack+1 < (int)state.tracks.size());
             popup.addSeparator(); popup.addItem (32, "Add Plug-in...", currentTrack() != nullptr);
@@ -2894,6 +2909,7 @@ private:
             case 31: if (selectedTrack >= 0) { session.closePluginEditors(); report (session.removeTrack (selectedTrack)); selectedClip = -1; } break;
             case 32: addPluginMenu(); break;
             case 36: case 37: if (const auto* track = currentTrack()) reorderTrack (track->id, id == 36 ? -1 : 1); break;
+            case 38: if (const auto* track = currentTrack()) duplicateTrackFromUI (track->id); break;
             case 40: if (showPiano) pianoRoll.fit(); else fitTimeline(); break;
             case 41: if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); break;
             case 42: if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); break;
@@ -4673,6 +4689,18 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(currentTrack()->id==orderSelected&&state.tracks[2].id==orderReturnId,"captured header command reorders its original track after selection changes");
     const auto beforeStale=state.tracks;check(session.removeTrack(2).wasOk(),"remove context-menu target before completion");refresh();
     reorderTrack(orderReturnId,-1);check(state.tracks.size()==beforeStale.size()-1&&currentTrack()->id==orderSelected,"stale header command cannot reorder replacement index");
+
+    const auto trackCountBeforeCopy=state.tracks.size();const auto selectedBeforeCopy=currentTrack()->id;
+    menuItemSelected(38,2);
+    check(state.tracks.size()==trackCountBeforeCopy+1&&currentTrack()->id!=selectedBeforeCopy&&currentTrack()->isMidi
+        &&currentTrack()->clips.size()==1&&selectedSlot()->hasClip,"Track-menu duplication selects a complete independent MIDI track in Session");
+    const auto selectedCopy=currentTrack()->id;session.undo();refresh();
+    check(state.tracks.size()==trackCountBeforeCopy,"one UI undo removes the whole copied track");session.redo();refresh();
+    const auto copiedIndex=launcherIndices(selectedCopy,{}).first;check(copiedIndex>=0,"UI duplicate redo retains the same track identity");
+    selectTrack(0);duplicateTrackFromUI(selectedBeforeCopy);
+    check(currentTrack()->isMidi&&currentTrack()->id!=selectedBeforeCopy&&currentTrack()->id!=selectedCopy,"captured header duplicate acts on its original identity after selection changes");
+    const auto beforeStaleDuplicate=state.tracks.size();duplicateTrackFromUI("deleted-track");
+    check(state.tracks.size()==beforeStaleDuplicate,"stale duplicate action cannot copy a replacement track");
 
 }
 

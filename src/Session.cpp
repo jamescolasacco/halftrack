@@ -1655,6 +1655,26 @@ Result Session::setSynthSettings (const String& trackId, const SynthSettings& se
         return Result::fail ("Synthesizer settings are outside their supported range.");
     impl->transaction ("Synthesizer settings"); synth->setSettings (settings); impl->changed(); return Result::ok();
 }
+Result Session::duplicateTrack (const String& id, String& duplicateId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before duplicating tracks.");
+    auto* source = impl->track (id);
+    if (! source || isReturn (*source) || source->getParentTrack() != nullptr || source->isFrozen (te::Track::anyFreeze))
+        return Result::fail ("Duplicate an unfrozen top-level audio or MIDI track.");
+    impl->transaction ("Duplicate track");
+    auto copy = impl->edit->copyTrack (te::Track::Ptr (source), te::TrackInsertPoint (*source, false));
+    auto* track = dynamic_cast<te::AudioTrack*> (copy.get());
+    if (! track) return Result::fail ("Could not duplicate the track.");
+    auto* undo = &impl->edit->getUndoManager();
+    renewMidiNoteIDs (track->state, undo);
+    track->setName (source->getName() + " copy");
+    // Input target assignments live outside this copied track, so the new ID has
+    // no input/arm state. Runtime Session ownership must not silence its Arrangement.
+    track->state.setProperty (te::IDs::playSlotClips, false, undo);
+    track->state.setProperty (monitorProperty, static_cast<int> (MonitorMode::off), undo);
+    impl->refreshRouting(); impl->changed(); duplicateId = track->itemID.toString(); return Result::ok();
+}
 Result Session::moveTrack (const String& id, int destinationIndex)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

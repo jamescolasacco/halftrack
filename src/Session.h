@@ -149,6 +149,7 @@ public:
     juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);
     juce::Result removeMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds);
     juce::Result setSynthSettings (const juce::String& trackId, const SynthSettings&);
+    juce::Result duplicateTrack (const juce::String& trackId, juce::String& duplicateId);
     juce::Result moveTrack (const juce::String& trackId, int destinationIndex);
     juce::Result removeTrack (int trackIndex);
     juce::Result importAudio (const juce::File&, int trackIndex = -1, double startSeconds = 0);
