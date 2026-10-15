@@ -2701,9 +2701,24 @@ bool Session::canRedo() const { return ! impl->exporting && ! impl->edit->getTra
 
 Result Session::exportWav (const File& file, double rate, int bits, double tailSeconds)
 {
+    return exportAudio (file, ExportFormat::wav, rate, bits, tailSeconds);
+}
+
+Result Session::exportAudio (const File& file, ExportFormat format, double rate, int bits, double tailSeconds)
+{
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before exporting.");
     if (rate < 8000 || rate > 384000 || ! std::isfinite (rate) || (bits != 16 && bits != 24 && bits != 32)) return Result::fail ("Unsupported export format.");
+    auto& formats = impl->engine.getAudioFileFormatManager();
+    juce::AudioFormat* audioFormat = nullptr;
+    switch (format)
+    {
+        case ExportFormat::wav: audioFormat = formats.getWavFormat(); break;
+        case ExportFormat::aiff: audioFormat = formats.getAiffFormat(); break;
+        case ExportFormat::flac: audioFormat = formats.getFlacFormat(); break;
+    }
+    if (audioFormat == nullptr || ! audioFormat->getPossibleBitDepths().contains (bits))
+        return Result::fail ("The selected format does not support this bit depth.");
     if (! std::isfinite (tailSeconds) || tailSeconds < 0 || tailSeconds > 60) return Result::fail ("Export tail must be between 0 and 60 seconds.");
     endEditGesture();
     double end = 0;
@@ -2730,7 +2745,7 @@ Result Session::exportWav (const File& file, double rate, int bits, double tailS
         }
     }
     te::Renderer::Parameters p (*impl->edit);
-    p.destFile = output.getFile(); p.audioFormat = impl->engine.getAudioFileFormatManager().getWavFormat();
+    p.destFile = output.getFile(); p.audioFormat = audioFormat;
     p.bitDepth = bits; p.sampleRateForAudio = rate; p.blockSizeForAudio = 512;
     p.time = { te::TimePosition::fromSeconds (0), te::TimePosition::fromSeconds (end) };
     p.tracksToDo = te::toBitSet (te::getAllTracks (*impl->edit));
@@ -2742,7 +2757,7 @@ Result Session::exportWav (const File& file, double rate, int bits, double tailS
     ui.cancelled = false;
     auto rendered = te::Renderer::renderToFile ("Export Halftrack mix", p);
     if (ui.cancelled) return Result::fail ("Export cancelled.");
-    if (! rendered.existsAsFile() || ! output.overwriteTargetFileWithTemporary()) return Result::fail ("The WAV export could not be completed.");
+    if (! rendered.existsAsFile() || ! output.overwriteTargetFileWithTemporary()) return Result::fail ("The audio export could not be completed.");
     sendChangeMessage(); return Result::ok();
 }
 

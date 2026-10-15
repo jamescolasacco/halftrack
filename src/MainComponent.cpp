@@ -3026,7 +3026,7 @@ private:
         {
             popup.addItem (1, "New Project"); popup.addItem (2, "Open Project..."); popup.addSeparator();
             popup.addItem (3, "Save Project"); popup.addItem (4, "Save Project As..."); popup.addSeparator();
-            popup.addItem (5, "Import Audio...", currentTrack() == nullptr || ! currentTrack()->isReturn); popup.addItem (6, "Export Arrangement as WAV...", ! state.tracks.empty()); popup.addSeparator();
+            popup.addItem (5, "Import Audio...", currentTrack() == nullptr || ! currentTrack()->isReturn); popup.addItem (6, "Export Arrangement Audio...", ! state.tracks.empty()); popup.addSeparator();
             popup.addItem (9, "Import MIDI File..."); popup.addItem (10, "Export Selected MIDI Clip...", currentMidiClip() != nullptr); popup.addSeparator();
             popup.addItem (7, "Audio Setup..."); popup.addItem (8, "Manage Plug-ins...");
         }
@@ -3256,10 +3256,21 @@ private:
             statusFrames = 24 * 6;
         }
     }
+    static juce::String exportExtension (Session::ExportFormat format)
+    {
+        switch (format)
+        {
+            case Session::ExportFormat::wav: return "wav";
+            case Session::ExportFormat::aiff: return "aiff";
+            case Session::ExportFormat::flac: return "flac";
+        }
+        return {};
+    }
     void exportDialog()
     {
-        auto* alert = new juce::AlertWindow ("Export Audio", "Render the full arrangement through its track and master effects to a stereo WAV file.", juce::MessageBoxIconType::NoIcon, this);
+        auto* alert = new juce::AlertWindow ("Export Audio", "Render the full arrangement through its track and master effects to a stereo audio file.", juce::MessageBoxIconType::NoIcon, this);
         alert->setLookAndFeel (&theme);
+        alert->addComboBox ("format", { "WAV", "AIFF", "FLAC (lossless)" }, "File format");
         alert->addComboBox ("sample-rate", { "44.1 kHz", "48 kHz", "88.2 kHz", "96 kHz", "192 kHz" }, "Sample rate");
         alert->getComboBoxComponent ("sample-rate")->setSelectedItemIndex (1);
         alert->addComboBox ("bit-depth", { "16-bit", "24-bit", "32-bit" }, "Bit depth");
@@ -3271,38 +3282,74 @@ private:
         alerts.emplace_back (alert);
         auto safe = juce::Component::SafePointer<Impl> (this);
         auto dialog = juce::Component::SafePointer<juce::AlertWindow> (alert);
+        alert->getComboBoxComponent ("format")->onChange = [dialog]
+        {
+            if (dialog == nullptr) return;
+            const bool canUse32 = dialog->getComboBoxComponent ("format")->getSelectedItemIndex() == 0;
+            auto* depth = dialog->getComboBoxComponent ("bit-depth");
+            depth->setItemEnabled (3, canUse32);
+            if (! canUse32 && depth->getSelectedId() == 3) depth->setSelectedId (2);
+        };
         alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, dialog] (int result)
         {
             if (result != 1 || safe == nullptr || dialog == nullptr) return;
             constexpr double rates[] { 44100, 48000, 88200, 96000, 192000 };
             constexpr int depths[] { 16, 24, 32 };
             constexpr double tails[] { 0, 1, 2, 5, 10, 30, 60 };
-            auto rate = rates[juce::jlimit (0, 4, dialog->getComboBoxComponent ("sample-rate")->getSelectedItemIndex())];
-            auto depth = depths[juce::jlimit (0, 2, dialog->getComboBoxComponent ("bit-depth")->getSelectedItemIndex())];
-            auto tail = tails[juce::jlimit (0, 6, dialog->getComboBoxComponent ("effect-tail")->getSelectedItemIndex())];
-            juce::MessageManager::callAsync ([safe, rate, depth, tail]
+            const auto format = static_cast<Session::ExportFormat> (juce::jlimit (0, 2, dialog->getComboBoxComponent ("format")->getSelectedItemIndex()));
+            const auto rate = rates[juce::jlimit (0, 4, dialog->getComboBoxComponent ("sample-rate")->getSelectedItemIndex())];
+            const auto depth = depths[juce::jlimit (0, 2, dialog->getComboBoxComponent ("bit-depth")->getSelectedItemIndex())];
+            const auto tail = tails[juce::jlimit (0, 6, dialog->getComboBoxComponent ("effect-tail")->getSelectedItemIndex())];
+            juce::MessageManager::callAsync ([safe, format, rate, depth, tail]
             {
-                if (safe != nullptr) safe->chooseExportDestination (rate, depth, tail);
+                if (safe != nullptr) safe->chooseExportDestination (format, rate, depth, tail);
             });
         }), true);
     }
-    void chooseExportDestination (double sampleRate, int bitDepth, double tailSeconds)
+    void performAudioExport (const juce::File& destination, Session::ExportFormat format, double rate, int bits, double tail)
     {
-        chooser = std::make_unique<juce::FileChooser> ("Export Arrangement as WAV", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (state.name + ".wav"), "*.wav");
+        auto safe = juce::Component::SafePointer<Impl> (this);
+        const auto result = session.exportAudio (destination, format, rate, bits, tail);
+        if (safe == nullptr) return;
+        if (result.failed() && result.getErrorMessage() == "Export cancelled.")
+        {
+            safe->status = "Export cancelled.";
+            safe->statusFrames = 24 * 5;
+        }
+        else safe->report (result, exportExtension (format).toUpperCase() + " exported: " + juce::String (rate / 1000.0, 1) + " kHz / " + juce::String (bits) + "-bit, " + juce::String (tail, 0) + "s effect tail.");
+        safe->refresh();
+    }
+    void exportAudioSelection (const juce::File& selected, Session::ExportFormat format, double rate, int bits, double tail)
+    {
+        if (selected == juce::File()) return;
+        const auto destination = selected.withFileExtension (exportExtension (format));
+        // The native chooser only confirmed the spelling it returned. Adding the
+        // chosen extension can name another existing file, which needs its own choice.
+        if (destination != selected && destination.existsAsFile())
+        {
+            auto* alert = new juce::AlertWindow ("Replace Existing Audio?", "The selected format uses " + destination.getFileName() + ". Replace the existing file?", juce::MessageBoxIconType::WarningIcon, this);
+            alert->setLookAndFeel (&theme);
+            alert->addButton ("Replace", 1);
+            alert->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+            alerts.emplace_back (alert);
+            auto safe = juce::Component::SafePointer<Impl> (this);
+            alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, destination, format, rate, bits, tail] (int result)
+            {
+                if (result == 1 && safe != nullptr) safe->performAudioExport (destination, format, rate, bits, tail);
+            }), true);
+            return;
+        }
+        performAudioExport (destination, format, rate, bits, tail);
+    }
+    void chooseExportDestination (Session::ExportFormat format, double rate, int bits, double tail)
+    {
+        const auto extension = exportExtension (format);
+        chooser = std::make_unique<juce::FileChooser> ("Export Arrangement as " + extension.toUpperCase(), juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (state.name + "." + extension), "*." + extension);
         auto safe = juce::Component::SafePointer<Impl> (this);
         chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
-            [safe, sampleRate, bitDepth, tailSeconds] (const juce::FileChooser& fc)
+            [safe, format, rate, bits, tail] (const juce::FileChooser& fc)
             {
-                if (safe == nullptr || fc.getResult() == juce::File()) return;
-                auto result = safe->session.exportWav (fc.getResult().withFileExtension ("wav"), sampleRate, bitDepth, tailSeconds);
-                if (safe == nullptr) return;
-                if (result.failed() && result.getErrorMessage() == "Export cancelled.")
-                {
-                    safe->status = "Export cancelled.";
-                    safe->statusFrames = 24 * 5;
-                }
-                else safe->report (result, "WAV exported: " + juce::String (sampleRate / 1000.0, 1) + " kHz / " + juce::String (bitDepth) + "-bit, " + juce::String (tailSeconds, 0) + "s effect tail.");
-                safe->refresh();
+                if (safe != nullptr) safe->exportAudioSelection (fc.getResult(), format, rate, bits, tail);
             });
     }
     void chooseFolder()
@@ -5061,6 +5108,35 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(std::all_of(currentMidiClip()->notes.begin(),currentMidiClip()->notes.end(),[](const auto& n){return n.active;}),"mixed selection zero activates all selected notes");
     pianoRoll.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey));pianoRoll.keyPressed(juce::KeyPress('0'));refresh();
     check(std::all_of(currentMidiClip()->notes.begin(),currentMidiClip()->notes.end(),[](const auto& n){return n.active;}),"zero without selected notes makes no note edit");
+    exportDialog();
+    auto exportSettings = alerts.back();
+    check (exportSettings != nullptr, "production audio export settings open");
+    auto* formatChoice = exportSettings->getComboBoxComponent ("format");
+    auto* depthChoice = exportSettings->getComboBoxComponent ("bit-depth");
+    check (formatChoice && depthChoice && formatChoice->getNumItems() == 3, "WAV, AIFF and FLAC are real export choices");
+    depthChoice->setSelectedId (3, juce::dontSendNotification);
+    formatChoice->setSelectedId (2, juce::sendNotificationSync);
+    check (! depthChoice->isItemEnabled (3) && depthChoice->getSelectedId() == 2, "AIFF selects supported depth when switching from 32-bit WAV");
+    formatChoice->setSelectedId (3, juce::sendNotificationSync);
+    check (! depthChoice->isItemEnabled (3), "FLAC disables unsupported 32-bit output");
+    formatChoice->setSelectedId (1, juce::sendNotificationSync);
+    check (depthChoice->isItemEnabled (3), "WAV restores its 32-bit choice");
+    exportSettings->exitModalState (0); juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+    check (session.newProject().wasOk() && session.importAudio (audioFixture, 0).wasOk(), "prepare real audio export UI fixture"); refresh();
+    juce::TemporaryFile destination (".flac");
+    check (destination.getFile().replaceWithText ("keep this existing audio"), "prepare normalized export destination collision");
+    const auto selectedPath = destination.getFile().withFileExtension ("unexpected");
+    exportAudioSelection (selectedPath, Session::ExportFormat::flac, 48000, 24, 0);
+    check (alerts.back() != nullptr && destination.getFile().loadFileAsString() == "keep this existing audio", "extension correction requests permission before replacing a different existing file");
+    alerts.back()->exitModalState (0); juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+    check (destination.getFile().loadFileAsString() == "keep this existing audio", "cancelled overwrite preserves destination");
+    exportAudioSelection (selectedPath, Session::ExportFormat::flac, 48000, 24, 0);
+    alerts.back()->exitModalState (1); juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
+    juce::AudioFormatManager exportedFormats; exportedFormats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> exportedReader (exportedFormats.createReaderFor (destination.getFile()));
+    check (exportedReader && exportedReader->sampleRate == 48000 && exportedReader->bitsPerSample == 24
+        && exportedReader->lengthInSamples == 4800 && ! selectedPath.exists(), "confirmed production export writes the normalized FLAC with the requested audio extent");
+
 
 
 

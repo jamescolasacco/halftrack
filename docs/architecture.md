@@ -431,3 +431,12 @@ All owned MIDI clips now use the engine's beat sequencer through `MidiClip::setU
 
 
 Note deactivation retains controller events and downstream instrument/effect behavior. The generated held-note comparisons use a short release with no sustain pedal; arbitrary third-party instrument sustain/MPE behavior and reference-exact transition timing are not established.
+
+
+## Lossless audio export containers
+
+`Session::exportAudio(file, ExportFormat, sampleRate, bitDepth, tailSeconds)` renders the same stereo Arrangement mix through tracks, returns and master processing into WAV, AIFF or FLAC. `exportWav` delegates to it for existing callers. WAV allows 16/24/32 bits; the pinned AIFF and FLAC writers allow 16/24. Unsupported enums/depths, nonfinite/out-of-range rates and invalid tails reject before filesystem work. The format enum controls the container independently of the destination spelling. UI defaults remain WAV, 48 kHz, 24-bit and a two-second effect tail. Switching from 32-bit WAV to AIFF/FLAC selects 24-bit and disables 32-bit.
+
+All containers use the same render guard, cancellation, latency correction, owned-DSP preparation and temporary-file atomic replacement. They do not alter project state or undo history. Format conversion does not introduce normalization or dither. The save chooser uses the selected format extension; if correcting the returned filename targets a different existing file, the UI requires an explicit Replace choice for that actual destination. Cancellation preserves existing data.
+
+Generated tests decode every frame for all seven format/depth combinations against independently calculated source × master gain, with quantization bounds at 16-bit and an exact silent tail. Resampled 24-bit AIFF/FLAC are compared against decoded WAV, alongside real container signatures, metadata, invalid-input rejection, cancellation and reentrant edit/export rejection. Native UI tests exercise supported choices and both cancellation and acceptance of a corrected-extension overwrite. Physical listening and arbitrary third-party writer/plugin behavior remain separate checks.

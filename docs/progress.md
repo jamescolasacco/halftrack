@@ -571,3 +571,11 @@ Published `96465bd` CI `38725624663` completes with Windows/Linux passing and Ma
 
 
 The input-gap correction passes generated count-in **27.57 s**, MIDI input/recording **33.76 s** and delayed monitoring **18.86 s** (80.20 s total), retaining the fresh-key and old-key silence assertions and existing Auto/history/routing checks. No owned DSP callback changed. The exact-source patch preflight/upgrade fixtures pass. Cross-platform validation is next.
+
+
+Audio export ownership: root owns WAV/AIFF/FLAC selection through the shared renderer, original export dialog, supported depth validation, generated decoded-sample/cancellation tests and UI overwrite-destination protection. No other agent is editing these files. The output remains the Arrangement mix; Session performance capture is separate.
+
+
+Lossless export validation: every supported WAV/AIFF/FLAC depth passes complete decoded-sample comparison, actual container headers, exact rate/channel/duration, silent tails, invalid format/depth/rate rejection, cancellation preserving existing files, reentrant protection and undo/redo. The dedicated suite passes in **9.69 s**. Native UI choices/normalized-name overwrite pass in **6.09 s**, latency in **16.44 s**, and Session/mixer/recording/project regressions in **61.42 s**. The initial test decoder incorrectly selected codecs by the intentionally generic fixture filename; decoding its stream retained all original assertions and verified the actual container. No production behavior was weakened to satisfy it.
+
+Published `121cd89` has an exact verified source-inclusive Mac package; its fresh extracted MIDI monitoring suite passes. Cross-platform run [38728613399](https://github.com/jamescolasacco/halftrack/actions/runs/38728613399) remains in progress. The following full local suite will cover the combined note activation, input correction and new export formats.

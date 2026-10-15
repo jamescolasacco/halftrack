@@ -16,6 +16,7 @@ public:
     enum class RecordQuantisation { none, quarter, eighth, eighthTriplet, sixteenth, sixteenthTriplet, thirtysecond };
     enum class MonitorMode { off, automatic, on };
     enum class SendMode { pre, post };
+    enum class ExportFormat { wav, aiff, flac };
     struct SendInfo { juce::String returnTrackId; float gainDb = -100.0f; };
     struct SynthSettings
     {
@@ -218,6 +219,7 @@ public:
     void redo();
     bool canUndo() const;
     bool canRedo() const;
+    juce::Result exportAudio (const juce::File&, ExportFormat, double sampleRate = 48000, int bitDepth = 24, double tailSeconds = 0);
     juce::Result exportWav (const juce::File&, double sampleRate = 48000, int bitDepth = 24, double tailSeconds = 0);
     // Export pumps native events; edits reject while it owns the render graph.
     bool isExporting() const;

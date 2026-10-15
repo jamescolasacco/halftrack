@@ -25,6 +25,7 @@ int runMidiInputTests (const juce::File&);
 int runMidiMonitoringTests();
 int runMetronomeTests (const juce::File&);
 int runMasterVolumeTests (const juce::File&);
+int runAudioExportTests (const juce::File&);
 int runClipActivationTests (const juce::File&);
 int runRealtimeTests();
 int runPluginScanTests (const juce::File&);
@@ -85,6 +86,13 @@ public:
             const auto destination=i+1<args.size()?juce::File(args[i+1])
                 :juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("halftrack-tests");
             setApplicationReturnValue(runMasterVolumeTests(destination));quit();return;
+        }
+        if (args.contains ("--self-test-audio-export"))
+        {
+            const int i = args.indexOf ("--self-test-audio-export");
+            const auto destination = i + 1 < args.size() ? juce::File (args[i + 1])
+                : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-tests");
+            setApplicationReturnValue (runAudioExportTests (destination)); quit(); return;
         }
         if (args.contains ("--self-test-metronome"))
         {

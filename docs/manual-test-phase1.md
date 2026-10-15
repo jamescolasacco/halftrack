@@ -76,7 +76,7 @@ Each row below is **NOT RUN** for the candidate build until executed and recorde
 | UI-30 | Scroll a grid with more tracks/scenes than fit, use arrow keys to move slot selection, and resize to 1100x720; operate the column volume/pan/mute/solo controls | Scene launches remain aligned with rows, mixer controls with tracks, and keyboard selection scrolls into view. Selected-track devices and the piano editor follow the chosen clip. |
 | UI-31 | Save a mixed arrangement/Session project, close and reopen it, then relocate its project plus sibling Assets directory | Scenes, slots, notes, source media, quantization, and mixer values persist. The reopened project does not resume a stale performance launch automatically; explicit launch still works. |
 | UI-32 | Edit slot notes, return to Session, delete the track, undo/redo, add another track, then delete/undo a scene containing a clip | Editor/selection references remain valid; no stale clip is edited and the application remains responsive. |
-| UI-33 | While Session clips are active, choose Export Arrangement as WAV; compare the export with arrangement content and inspect playback afterward | The export contains the arrangement, as the command states. Session performance ownership is restored afterward; do not report this as Session performance capture. |
+| UI-33 | While Session clips are active, choose Export Arrangement Audio; compare the export with arrangement content and inspect playback afterward | The export contains the arrangement, as the command states. Session performance ownership is restored afterward; do not report this as Session performance capture. |
 
 ## Sends and return checks
 
@@ -282,3 +282,8 @@ With a scene playing, choose **Move Scene Up/Down** in its context menu or **Mov
 ### Activate and deactivate MIDI notes
 
 Select several piano-roll notes and press **0**, or use **Note tools → Deactivate Selected Notes**. Those notes turn gray and stop triggering while the clip and other notes remain enabled. Press 0 again to restore them, then undo/redo. Duplicate a muted group and verify the copy is also muted. With a mixed selection, 0 activates every selected note. Save/reopen to retain note states.
+
+
+### WAV, AIFF and FLAC export
+
+Physical/native-dialog check: **NOT RUN** until performed. In a disposable arrangement, choose **File → Export Arrangement Audio**. Export WAV, AIFF and FLAC at 48 kHz / 24-bit with the same tail; open them in an audio editor and compare duration, channels and sound. Try 16-bit and 44.1 kHz. Choose 32-bit WAV, then switch to AIFF/FLAC: depth changes to 24-bit and 32-bit is unavailable. Cancel an export over an existing disposable file and verify its original bytes remain. Enter a different extension whose corrected filename already exists: cancel the explicit Replace prompt, then repeat and accept it. The output should use the selected container and corrected filename. MIDI notes, clip names and undo history must remain intact.

@@ -137,3 +137,6 @@ Scene-order default: Up/Down moves an existing scene and all its track cells by 
 
 
 Note-activation default: toggle the selected notes only; an empty selection does nothing and a mixed selection activates all selected notes. This preserves the distinction from whole-clip activation. Muted notes retain pitch, timing, velocity, identity and editable appearance; copied notes preserve activation.
+
+
+Audio export defaults: keep the full stereo Arrangement mix and existing WAV defaults; add lossless AIFF/FLAC with the pinned writers' supported 16/24-bit depths. WAV retains 32-bit. FLAC uses the renderer's default compression setting. Normalization, configurable dither, range/stem export and lossy encoders remain separate features. Never silently down-convert a requested model depth; the UI explicitly selects 24-bit when changing away from 32-bit WAV.
