@@ -1,6 +1,6 @@
 # Halftrack progress
 
-Updated 2026-10-15. The shared source now includes MIDI controller capture, metronome/count-in, recording quantization and master output gain, alongside the existing editing, instruments, effects, routing, project and export subsets. Source `0ba8960` passes builds, tests and packaging on all three platforms in [CI 38700402521](https://github.com/jamescolasacco/halftrack/actions/runs/38700402521). The following metronome run passes Windows/Linux but exposed a Mac monitoring failure and test timeout. The current monitoring-release fix passes targeted local regressions; fresh full-suite and platform verification are pending. Complete DAW parity and reference-exact sound remain unmeasured.
+Updated 2026-10-15. MIDI note activation and the beat-sequencer playback policy pass all **22 local Mac acceptance suites in 327.67 s** at `fddc35c`. The subsequent input-gap fix passes generated monitoring, recording and count-in tests in **80.20 s**. Published `96465bd` passes Windows/Linux CI but still fails Mac delayed monitoring; the next cross-platform run must verify the new fix. Scene copying/ordering, note splitting, clip naming and activation are implemented and tested. Complete DAW parity and reference-exact sound remain unmeasured.
 
 Static analysis independently verifies **392,921 / 392,926** main-program ARM64 outputs (three preparation failures and two 600-second timeouts remain) and **36,596 / 36,599** scanner outputs (three preparation failures remain). All **13,420** declared entries across seven additional device components and two architectures previously produced verified output. [Residual analysis](research/residual-extraction-recovery.md) and [component coverage](research/additional-component-audit.md) retain unresolved entries and fingerprints. Extraction coverage is not feature completion; Halftrack remains an incomplete DAW with the gaps below.
 
@@ -560,3 +560,14 @@ Published source `96465bd` has a verified Mac package containing 107 owned and 5
 
 
 Combined note activation and beat-sequencer verification: all **22 Mac acceptance suites pass in 327.67 s**. This includes same-clip/independent-track held voices, exact silent all-inactive renders, complete enabled-note render comparison, note clipboard/splitting, active-state persistence/rejection, controller recording, tempo, latency, Session ordering/copying and reentrant exports. The source callback guard result remains applicable: no owned DSP callback changed. This deepens the MIDI editor subset without increasing whole-feature parity coverage.
+
+
+Input-gap ownership: root extends the first-key regression to an already-running generated device paused between callbacks, with a fresh key arriving after the gap and a separate old queued key. This probes the original Mac CI failure's post-warmup shape while retaining all existing assertions; it will establish whether the stale-input policy distinguishes old queued events from freshly received ones. No physical hardware is used.
+
+
+The established-input gap regression fails in **2.76 s**, at the new key's zero output. The native guard clears the entire queue based on the previous callback age. The correction retains recent arrivals while filtering old queued input, with a preallocated receipt-time array and bounded per-event arithmetic. Exact-source fixtures cover pristine, repeated, published and partially patched inputs plus unknown cpp/header rejection before either write. Pinned/final cpp SHA256: `f893b43a88aa1897164b1f6fe45516b4e5e7e5db435afd09292da34870f91b16` → `a1660920bf4c22133e1a5c33264c478ee466cedfccca26edf4be79248aa81c2f`; header: `976acfb6df698e01935bdb3cfad7761da884e07b41875edb325b2ee7a10879a9` → `82f9fae59e49a0293f5aa0e0ba8926faa359df5d33fafc92226480083fb049e5`.
+
+Published `96465bd` CI `38725624663` completes with Windows/Linux passing and Mac failing delayed monitoring at `record-arm redo restores Auto monitoring`; the other 21 Mac suites pass. This input-gap correction now has its own deterministic pre-fix failure, but cross-platform success remains unverified until the next run.
+
+
+The input-gap correction passes generated count-in **27.57 s**, MIDI input/recording **33.76 s** and delayed monitoring **18.86 s** (80.20 s total), retaining the fresh-key and old-key silence assertions and existing Auto/history/routing checks. No owned DSP callback changed. The exact-source patch preflight/upgrade fixtures pass. Cross-platform validation is next.

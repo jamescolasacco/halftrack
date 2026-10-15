@@ -98,13 +98,25 @@ void immediateMonitoringTransitions()
     {
         ok (f.session.setTrackMonitor (2, Session::MonitorMode::on), "enable immediate monitoring");
         // A key can arrive before the next desktop event-loop iteration. Do not
-        // warm the graph with silent callbacks before sending this event.
+        // warm the graph in the immediate/first-callback cases. Cycle 2 instead
+        // queues an old key, stalls an established stream, then sends a fresh key.
         // A prepared device may also wait before its very first callback. This
         // event is new even when the graph itself is older than the stale window.
-        if (cycle == 1) { juce::Thread::sleep (160); juce::Time::getMillisecondCounter(); }
+        if (cycle == 2)
+        {
+            pumpSyntheticTestDevice (f.session, 4);
+            f.controller.sendNow (juce::MidiMessage::noteOn (1, 69, (juce::uint8) 96));
+        }
+        if (cycle == 1 || cycle == 2) { juce::Thread::sleep (160); juce::Time::getMillisecondCounter(); }
         f.controller.sendNow (juce::MidiMessage::noteOn (1, 72, (juce::uint8) 96));
         const auto peak = pumpSyntheticTestDevice (f.session, 20);
         check (peak > .001f, "first key after enabling monitoring is audible; peak=" + juce::String (peak, 9));
+        if (cycle == 2)
+        {
+            f.controller.sendNow (juce::MidiMessage::noteOff (1, 72));
+            pumpSyntheticTestDevice (f.session, 40);
+            check (pumpSyntheticTestDevice (f.session, 20) < 1e-7f, "old queued key is not replayed with the fresh key after a device gap");
+        }
         ok (f.session.setTrackMonitor (2, Session::MonitorMode::off), "disable immediate monitoring");
         pumpSyntheticTestDevice (f.session, 40);
         check (pumpSyntheticTestDevice (f.session, 20) < 1e-7f, "immediate monitor disable releases held input");
