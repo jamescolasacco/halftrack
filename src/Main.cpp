@@ -18,6 +18,7 @@ int runNoteToolsTests (const juce::File&);
 int runAudioClipTests (const juce::File&);
 int runLocatorTests (const juce::File&);
 int runMidiFileTests (const juce::File&);
+int runTrackOrderTests (const juce::File&);
 int runRealtimeTests();
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -64,6 +65,13 @@ public:
             return;
         }
         #endif
+        if (args.contains ("--self-test-track-order"))
+        {
+            const int i = args.indexOf ("--self-test-track-order");
+            const auto destination = i + 1 < args.size() ? juce::File (args[i + 1])
+                : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-tests");
+            setApplicationReturnValue (runTrackOrderTests (destination)); quit(); return;
+        }
         if (args.contains ("--self-test-midi-files"))
         {
             const int i = args.indexOf ("--self-test-midi-files");

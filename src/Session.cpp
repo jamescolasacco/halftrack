@@ -1655,6 +1655,23 @@ Result Session::setSynthSettings (const String& trackId, const SynthSettings& se
         return Result::fail ("Synthesizer settings are outside their supported range.");
     impl->transaction ("Synthesizer settings"); synth->setSettings (settings); impl->changed(); return Result::ok();
 }
+Result Session::moveTrack (const String& id, int destinationIndex)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before reordering tracks.");
+    const auto tracks = te::getAudioTracks (*impl->edit);
+    auto* source = impl->track (id);
+    if (! source || ! juce::isPositiveAndBelow (destinationIndex, tracks.size()))
+        return Result::fail ("Track or destination position not found.");
+    auto* target = tracks[destinationIndex];
+    if (source->getParentTrack() != nullptr || target->getParentTrack() != nullptr)
+        return Result::fail ("Track ordering currently supports top-level tracks.");
+    const int sourceIndex = tracks.indexOf (source);
+    if (sourceIndex == destinationIndex) return Result::ok();
+    impl->transaction ("Reorder track");
+    impl->edit->moveTrack (te::Track::Ptr (source), te::TrackInsertPoint (*target, destinationIndex < sourceIndex));
+    impl->changed(); return Result::ok();
+}
 Result Session::removeTrack (int index)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

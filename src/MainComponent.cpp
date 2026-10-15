@@ -480,7 +480,7 @@ private:
     class TrackRow final : public juce::Component
     {
     public:
-        TrackRow (Impl& o, int i, bool verticalLayout = false) : owner (o), index (i), columnLayout (verticalLayout)
+        TrackRow (Impl& o, int i, bool verticalLayout = false) : owner (o), index (i), trackId (o.state.tracks[(size_t)i].id), columnLayout (verticalLayout)
         {
             for (auto* c : std::initializer_list<juce::Component*> { &name, &mute, &solo, &arm, &gain, &pan, &input, &monitor, &sendMode }) addAndMakeVisible (c);
             name.setName ("Track name");
@@ -540,8 +540,11 @@ private:
             input.setTooltip ("Choose an audio input before arming. In this preview, each input is assigned to one track; choosing it here moves its previous assignment.");
             addMouseListener (this, true);
         }
-        void sync (const Session::TrackInfo& track)
+        const juce::String& getTrackId() const { return trackId; }
+        void sync (const Session::TrackInfo& track, int position)
         {
+            jassert (trackId == track.id);
+            index = position;
             colour = track.colour;
             midi = track.isMidi; returnTrack = track.isReturn;
             input.setVisible (! midi && ! returnTrack); monitor.setVisible (! midi && ! returnTrack); arm.setVisible (! midi && ! returnTrack);
@@ -621,10 +624,16 @@ private:
             monitor.setBounds (201, 79, getWidth() - 209, 23);
             sendMode.setBounds (143, 79, getWidth() - 151, 23);
         }
-        void mouseDown (const juce::MouseEvent&) override { owner.selectTrack (index); }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            owner.selectTrack (index);
+            if (e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name))
+                if (const auto* track = owner.currentTrack()) owner.showTrackOrderMenu (track->id, columnLayout);
+        }
     private:
         Impl& owner;
         int index;
+        juce::String trackId;
         juce::Colour colour;
         float peakL = 0, peakR = 0;
         bool midi = false, columnLayout = false, returnTrack = false;
@@ -634,6 +643,32 @@ private:
         juce::ComboBox input, monitor, sendMode;
         juce::StringArray inputNames;
     };
+
+    bool syncTrackRows (juce::Component& parent, std::vector<std::unique_ptr<TrackRow>>& rows, bool vertical)
+    {
+        bool reordered = rows.size() != state.tracks.size();
+        if (reordered) rows.clear();
+        for (size_t i = 0; i < state.tracks.size(); ++i)
+        {
+            const auto& track = state.tracks[i];
+            if (i >= rows.size())
+            {
+                auto row = std::make_unique<TrackRow> (*this, (int)i, vertical);
+                parent.addAndMakeVisible (*row); rows.push_back (std::move (row));
+            }
+            if (rows[i]->getTrackId() != track.id)
+            {
+                auto found = std::find_if (rows.begin()+static_cast<std::ptrdiff_t>(i+1), rows.end(),
+                    [&] (const auto& row) { return row->getTrackId() == track.id; });
+                if (found != rows.end()) std::iter_swap (rows.begin()+static_cast<std::ptrdiff_t>(i), found);
+                else { rows[i] = std::make_unique<TrackRow> (*this, (int)i, vertical); parent.addAndMakeVisible (*rows[i]); }
+                reordered = true;
+            }
+            rows[i]->sync (track, (int)i);
+        }
+        if (reordered) for (auto& row : rows) row->toFront (false);
+        return reordered;
+    }
 
     class Canvas final : public juce::Component, private juce::ChangeListener
     {
@@ -646,18 +681,7 @@ private:
         }
         void syncRows()
         {
-            if ((int) rows.size() != (int) owner.state.tracks.size())
-            {
-                rows.clear();
-                for (int i = 0; i < (int) owner.state.tracks.size(); ++i)
-                {
-                    auto row = std::make_unique<TrackRow> (owner, i);
-                    addAndMakeVisible (*row);
-                    rows.push_back (std::move (row));
-                }
-                resized();
-            }
-            for (size_t i = 0; i < rows.size(); ++i) rows[i]->sync (owner.state.tracks[i]);
+            if (owner.syncTrackRows (*this, rows, false)) resized();
             repaint();
         }
         int timelineWidth() const { return getWidth() - trackWidth; }
@@ -1277,15 +1301,7 @@ private:
         ~LauncherGrid() override { horizontal.removeListener (this); vertical.removeListener (this); }
         void sync()
         {
-            if (rows.size() != owner.state.tracks.size())
-            {
-                rows.clear();
-                for (int i = 0; i < (int) owner.state.tracks.size(); ++i)
-                {
-                    auto row = std::make_unique<TrackRow> (owner, i, true); mixers.addAndMakeVisible (*row); rows.push_back (std::move (row));
-                }
-            }
-            for (size_t i = 0; i < rows.size(); ++i) rows[i]->sync (owner.state.tracks[i]);
+            owner.syncTrackRows (mixers, rows, true);
             quantisation.setSelectedId (owner.state.launchQuantisation == Session::LaunchQuantisation::none ? 1 : owner.state.launchQuantisation == Session::LaunchQuantisation::beat ? 2 : 3, juce::dontSendNotification);
             const bool overridden = std::any_of (owner.state.tracks.begin(), owner.state.tracks.end(), [] (const auto& track) { return track.launcherActive; });
             arrangement.setEnabled (overridden); arrangement.setToggleState (overridden, juce::dontSendNotification);
@@ -2684,6 +2700,22 @@ private:
         if (beat * pixelsPerSecond >= 6) return beat * 2;
         return beat * 4;
     }
+    void reorderTrack (const juce::String& trackId, int direction)
+    {
+        const auto current = session.snapshot();
+        for (int i = 0; i < (int)current.tracks.size(); ++i)
+            if (current.tracks[(size_t)i].id == trackId)
+            { report (session.moveTrack (trackId, i+direction)); refresh(); return; }
+    }
+    void showTrackOrderMenu (const juce::String& id, bool horizontal)
+    {
+        const auto indices = launcherIndices (id, {});
+        juce::PopupMenu menu;
+        menu.addItem (1, horizontal ? "Move track left" : "Move track up", indices.first > 0);
+        menu.addItem (2, horizontal ? "Move track right" : "Move track down", indices.first >= 0 && indices.first+1 < (int)state.tracks.size());
+        menu.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), id] (int result)
+        { if (safe != nullptr && (result == 1 || result == 2)) safe->reorderTrack (id, result == 1 ? -1 : 1); });
+    }
     void selectTrack (int track)
     {
         if (selectedTrack != track) { selectedClip = -1; selectedLauncherClipId.clear(); }
@@ -2818,6 +2850,9 @@ private:
         else if (index == 2)
         {
             popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (35, "Insert Return Track"); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", currentTrack() != nullptr);
+            popup.addSeparator();
+            popup.addItem (36, "Move Selected Track Earlier", selectedTrack > 0);
+            popup.addItem (37, "Move Selected Track Later", selectedTrack >= 0 && selectedTrack+1 < (int)state.tracks.size());
             popup.addSeparator(); popup.addItem (32, "Add Plug-in...", currentTrack() != nullptr);
         }
         else if (index == 3)
@@ -2858,6 +2893,7 @@ private:
             case 34: if (showSession) createLauncherMidiClip(); else createMidiClip (state.position); break;
             case 31: if (selectedTrack >= 0) { session.closePluginEditors(); report (session.removeTrack (selectedTrack)); selectedClip = -1; } break;
             case 32: addPluginMenu(); break;
+            case 36: case 37: if (const auto* track = currentTrack()) reorderTrack (track->id, id == 36 ? -1 : 1); break;
             case 40: if (showPiano) pianoRoll.fit(); else fitTimeline(); break;
             case 41: if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); break;
             case 42: if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); break;
@@ -4606,6 +4642,37 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     const auto replacementMidi=state.tracks[2].clips[0].id;
     canvas.mouseDrag(rangeEvent(midiTo,midiFrom,true,freeRange));canvas.mouseUp(rangeEvent(midiTo,midiFrom,true,freeRange));
     check(state.tracks[2].clips[0].id==replacementMidi&&state.tracks[2].clips[0].start==1&&state.tracks[3].clips.empty(),"stale MIDI body drag cannot move its replacement");
+
+    check(session.newProject().wasOk()&&session.addMidiTrack("Ordered MIDI").wasOk()&&session.addReturnTrack("Ordered return").wasOk(),"prepare track-order UI fixture");
+    refresh();showArrangementView();const auto orderMidiId=state.tracks[2].id,orderReturnId=state.tracks[3].id;
+    check(session.addMidiClip(orderMidiId,0,4).wasOk()&&session.addMidiClipToSlot(orderMidiId,0,4).wasOk(),"prepare Arrangement and Session selection identities");
+    refresh();selectArrangementClip(state.tracks[2].clips[0].id);const auto orderClipId=currentMidiClip()->id;
+    const auto findRow=[&](juce::Component& parent,const juce::String& id)
+    {
+        std::function<TrackRow*(juce::Component&)> search=[&](juce::Component& node)->TrackRow*
+        {if(auto* row=dynamic_cast<TrackRow*>(&node);row&&row->getTrackId()==id)return row;for(auto* child:node.getChildren())if(auto* row=search(*child))return row;return nullptr;};
+        return search(parent);
+    };
+    auto* arrangementOrderRow=findRow(canvas,orderMidiId);auto* sessionOrderRow=findRow(launcher,orderMidiId);
+    check(arrangementOrderRow&&sessionOrderRow,"both views own the MIDI track's controls");
+    auto* orderingName=dynamic_cast<juce::Label*>(findNamed(*arrangementOrderRow,"Track name"));
+    check(orderingName!=nullptr,"find actual rename control before reordering");orderingName->showEditor();
+    auto* orderingEditor=orderingName->getCurrentTextEditor();check(orderingEditor!=nullptr,"open actual track rename editor");orderingEditor->setText("Renamed after move");
+    menuItemSelected(36,2);
+    check(selectedTrack==1&&currentTrack()->id==orderMidiId&&currentMidiClip()->id==orderClipId
+        &&findRow(canvas,orderMidiId)==arrangementOrderRow&&findRow(launcher,orderMidiId)==sessionOrderRow
+        &&orderingName->getCurrentTextEditor()==orderingEditor,"track menu moves both views while preserving active editor and selected clip");
+    orderingName->hideEditor(false);refresh();
+    check(currentTrack()->name=="Renamed after move"&&state.tracks[2].name!="Renamed after move","rename completion still edits the moved identity");
+    session.undo();refresh();session.undo();refresh();
+    check(selectedTrack==2&&currentTrack()->id==orderMidiId&&currentMidiClip()->id==orderClipId,"undo order preserves selection identity");
+    session.redo();refresh();check(selectedTrack==1&&currentTrack()->id==orderMidiId,"redo order follows selected identity");
+    showSessionView();selectLauncherSlot(1,0);const auto orderedSlot=selectedSlot()->id;
+    menuItemSelected(37,2);check(selectedTrack==2&&currentTrack()->id==orderMidiId&&selectedSlot()->id==orderedSlot,"Session ordering preserves selected slot identity");
+    const auto orderSelected=currentTrack()->id;reorderTrack(orderReturnId,-1);
+    check(currentTrack()->id==orderSelected&&state.tracks[2].id==orderReturnId,"captured header command reorders its original track after selection changes");
+    const auto beforeStale=state.tracks;check(session.removeTrack(2).wasOk(),"remove context-menu target before completion");refresh();
+    reorderTrack(orderReturnId,-1);check(state.tracks.size()==beforeStale.size()-1&&currentTrack()->id==orderSelected,"stale header command cannot reorder replacement index");
 
 }
 

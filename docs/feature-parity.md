@@ -529,3 +529,5 @@ Device profiles need per-parameter cases before a device can be marked VERIFIED.
 The first preview was delivered and the owner explicitly authorized continued development. No preview approval gate remains; every new capability still needs its own implementation and verification evidence.
 
 Audio clip gain/fades, non-destructive range, split and duplicate have original implementations and known-output tests; see the [audio-editing contract](research/audio-clip-editing-contract.md). These six additional PARTIAL ledger rows do not assert complete feature or numerical reference parity.
+
+Shared top-level audio/MIDI/return track ordering is implemented through native undo, with retained track/clip/slot/device/send identities, shared Arrangement/Session controls, stable selection and full-buffer dry-plus-return tests. Nested groups and drag reordering are not implemented. This broadens the working preview without inventing another whole-product completion percentage.
