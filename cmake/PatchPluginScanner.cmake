@@ -13,7 +13,8 @@ function(halftrack_patch_plugin_scanner source_dir)
         set(source "${source_dir}/${relative_${index}}")
         file(SHA256 "${source}" source_hash)
         set(needs_patch_${index} FALSE)
-        if(source_hash STREQUAL "${patched_${index}}")
+        if(source_hash STREQUAL "${patched_${index}}"
+           OR (index EQUAL 1 AND source_hash STREQUAL "fe49e3934dc91d709c99293a2a8c5dbc7f582c10bcd389a2d9aeb15fec8305cf"))
             continue()
         endif()
         if(NOT source_hash STREQUAL "${original_${index}}"

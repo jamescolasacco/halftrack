@@ -215,3 +215,17 @@ Optional track order check (about 30 seconds; native input not yet verified): se
 Optional track duplication check (about 45 seconds; native input not yet verified): right-click an audio or MIDI track header and choose Duplicate track. Confirm its clips, devices and Session slots appear on a new adjacent track. Edit the duplicate's notes or device settings and confirm the original stays unchanged. Undo the edit, then undo once more to remove the whole duplicate. A duplicate of an armed audio track should have no input assignment or record arm.
 
 Optional tempo check (about 30 seconds; native input not yet verified): double-click BPM, enter 500.5, then 999. Draw/play a short MIDI phrase and verify the faster tempo. Undo once to restore the previous value. Entering “300 trailing” or a value over 999 should restore the current display. Save/reopen should retain the chosen valid tempo.
+
+
+## MIDI controller recording (about three minutes)
+
+Status: **NOT RUN with a physical controller**. Generated-controller and production component-handler tests are separate evidence. Use a disposable project and a controller you intend to enable.
+
+1. Add a MIDI track. Choose its controller from the input menu; it should assign on the first selection and remain disarmed. Choosing All MIDI Ins intentionally enables all currently available inputs.
+2. Select In and play a few keys while stopped. Select Off and repeat; the input should be silent. Select Auto; it should sound only with the track armed.
+3. Start recording, play separated notes and a sustain-pedal phrase, then Stop. Open the resulting Arrangement MIDI clip and move/resize a recorded note. Undo that edit, then undo the take and redo it.
+4. Return to the same section, record more notes and Stop. The overdub should join the overlapping clip. One Undo should remove only the added take.
+5. Save, close and reopen. Notes should remain editable. The track should reopen unarmed with monitoring Off. Export the selected MIDI clip and the Arrangement WAV if desired.
+6. Record a held note, then click another timeline position. The take should finish before the seek, with the held note ending at recording stop. Input/arm/monitor changes and history are unavailable during a take.
+
+This path currently records into Arrangement and uses one native clip channel. MPE, input channel filters, explicit record quantization, take lanes, physical timing/hot-plug and Session performance capture remain unverified or unfinished.

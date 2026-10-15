@@ -357,6 +357,8 @@ public:
     explicit Behaviour (bool devices) : useDevices (devices) {}
     bool autoInitialiseDeviceManager() override { return useDevices; }
     bool shouldOpenAudioInputByDefault() override { return false; }
+    bool usePhysicalMidiDevices() override { return useDevices; }
+    bool shouldOpenMidiInputByDefault() override { return false; }
     bool addSystemAudioIODeviceTypes() override { return useDevices; }
     bool canScanPluginsOutOfProcess() override { return useDevices; }
     // Pre sends and soloed returns still need content from a dry-muted source.
@@ -730,6 +732,10 @@ struct Session::Impl
             for (auto* p : t->pluginList.getPlugins())
                 for (auto* parameter : p->getAutomatableParameters()) parameter->updateFromAttachedValue();
         for (auto* parameter : edit->getMasterVolumePlugin()->getAutomatableParameters()) parameter->updateFromAttachedValue();
+        for (auto* t : te::getAudioTracks (*edit))
+            if (auto* device = input (*t))
+                device->getInputDevice().setMonitorMode (static_cast<te::InputDevice::MonitorMode> (
+                    juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (monitorProperty, 0)))));
         refreshRouting();
         edit->dispatchPendingUpdatesSynchronously();
     }
@@ -748,8 +754,9 @@ struct Session::Impl
     }
     te::InputDeviceInstance* input (te::AudioTrack& t) const
     {
+        const bool midi = t.state.getProperty (midiTrackProperty, false);
         for (auto* instance : edit->getAllInputDevices())
-            if (instance->getInputDevice().getDeviceType() == te::InputDevice::waveDevice
+            if (instance->getInputDevice().isMidi() == midi && !instance->getInputDevice().isTrackDevice()
                 && instance->getTargets().contains (t.itemID)) return instance;
         return nullptr;
     }
@@ -993,6 +1000,7 @@ Result Session::loadProject (const File& file)
         {
             input->setRecordingEnabled (t->itemID, false);
             input->getInputDevice().setMonitorMode (te::InputDevice::MonitorMode::off);
+            t->state.setProperty (monitorProperty, static_cast<int> (MonitorMode::off), nullptr);
         }
     impl->edit->resetChangedStatus();
     return Result::ok();
@@ -2027,10 +2035,15 @@ Result Session::setTrackSolo (int index, bool value)
     impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 
-juce::StringArray Session::inputNames() const
+juce::StringArray Session::inputNames (bool midi) const
 {
     juce::StringArray names;
-    for (auto* d : impl->engine.getDeviceManager().getWaveInputDevices()) names.add (d->getName());
+    if (midi)
+    {
+        for (auto device : impl->engine.getDeviceManager().getMidiInDevices())
+            if (!device->isTrackDevice()) names.add (device->getName());
+    }
+    else for (auto* device : impl->engine.getDeviceManager().getWaveInputDevices()) names.add (device->getName());
     return names;
 }
 Result Session::setTrackInput (int index, const String& name)
@@ -2039,20 +2052,37 @@ Result Session::setTrackInput (int index, const String& name)
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (isReturn (*t)) return Result::fail ("Return tracks cannot receive recording inputs.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing inputs.");
-    // Enabling a device rebuilds the engine's device list, invalidating its pointers.
-    // Do so only for the input explicitly selected by the user, then re-query it.
-    for (auto* device : impl->engine.getDeviceManager().getWaveInputDevices())
+    const bool midi = t->state.getProperty (midiTrackProperty, false);
+    // Validate the typed name before enabling anything. Re-query instances after
+    // enabling because the native device list and playback graph may rebuild.
+    if (name.isNotEmpty() && !inputNames (midi).contains (name)) return Result::fail ("That input is not available for this track type.");
+    if (midi)
+    {
+        auto& devices = impl->engine.getDeviceManager();
+        bool changed = false;
+        for (auto device : devices.getMidiInDevices())
+            if (!device->isTrackDevice() && device->getName() == name)
+            {
+                if (auto* aggregate = dynamic_cast<te::VirtualMidiInputDevice*> (device.get()))
+                    if (aggregate->useAllInputs)
+                        for (auto source : devices.getMidiInDevices())
+                            if (source->getDeviceType() == te::InputDevice::physicalMidiDevice && !source->isEnabled())
+                            { source->setEnabled (true); changed = true; }
+                if (!device->isEnabled()) { device->setEnabled (true); changed = true; }
+                break;
+            }
+        if (changed) devices.rescanMidiDeviceListSynchronously();
+    }
+    else for (auto* device : impl->engine.getDeviceManager().getWaveInputDevices())
         if (device->getName() == name)
-        {
-            if (! device->isEnabled()) device->setEnabled (true);
-            break;
-        }
-    impl->refreshInputs();
+        { if (!device->isEnabled()) device->setEnabled (true); break; }
+    impl->engine.getDeviceManager().dispatchPendingUpdates(); impl->refreshInputs();
     te::InputDeviceInstance* selected = nullptr;
     for (auto* d : impl->edit->getAllInputDevices())
-        if (d->getInputDevice().getDeviceType() == te::InputDevice::waveDevice && d->getInputDevice().getName() == name) selected = d;
-    if (name.isNotEmpty() && selected == nullptr) return Result::fail ("Enable this input in Audio Settings first.");
+        if (d->getInputDevice().isMidi() == midi && !d->getInputDevice().isTrackDevice() && d->getInputDevice().getName() == name) selected = d;
+    if (name.isNotEmpty() && selected == nullptr) return Result::fail ("The selected input could not be opened.");
     impl->transaction ("Assign input");
+    t->state.setProperty (monitorProperty, static_cast<int> (MonitorMode::off), &impl->edit->getUndoManager());
     for (auto* d : impl->edit->getAllInputDevices())
         if (d->getTargets().contains (t->itemID)) { [[maybe_unused]] auto r = d->removeTarget (t->itemID, &impl->edit->getUndoManager()); }
     if (selected)
@@ -2069,15 +2099,24 @@ Result Session::setTrackArmed (int index, bool value)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (isReturn (*t)) return Result::fail ("Return tracks cannot receive recording inputs.");
-    auto* input = impl->input (*t); if (! input) return Result::fail ("Select an audio input before arming this track.");
-    input->setRecordingEnabled (t->itemID, value); impl->changed(); return Result::ok();
+    auto* input = impl->input (*t); if (! input) return Result::fail ("Select an input before arming this track.");
+    if (input->isRecordingEnabled (t->itemID) == value) return Result::ok();
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing record arms.");
+    auto* destination = te::getDestination (*input, *t, 0);
+    if (!destination) return Result::fail ("Input destination is unavailable.");
+    impl->transaction ("Record arm");
+    destination->recordEnabled.setValue (value, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
 }
 Result Session::setTrackMonitor (int index, MonitorMode mode)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (isReturn (*t)) return Result::fail ("Return tracks cannot receive recording inputs.");
-    auto* input = impl->input (*t); if (! input) return Result::fail ("Select an audio input before enabling monitoring.");
+    auto* input = impl->input (*t); if (! input) return Result::fail ("Select an input before enabling monitoring.");
+    if (input->getInputDevice().getMonitorMode() == static_cast<te::InputDevice::MonitorMode> (mode)) return Result::ok();
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing monitoring.");
+    impl->transaction ("Input monitoring");
     input->getInputDevice().setMonitorMode (static_cast<te::InputDevice::MonitorMode> (mode));
     t->state.setProperty (monitorProperty, static_cast<int> (mode), &impl->edit->getUndoManager());
     impl->edit->restartPlayback(); impl->changed(); return Result::ok();
@@ -2091,19 +2130,33 @@ Result Session::play()
 void Session::stop()
 {
     if (impl->exporting) return;
+    const bool recording = impl->edit->getTransport().isRecording();
+    if (recording) { endEditGesture(); impl->transaction ("Record take"); }
+    te::Edit::UndoTransactionInhibitor stopping (*impl->edit);
     impl->cancelLaunches();
-    impl->edit->getTransport().stop (false, false); sendChangeMessage();
+    impl->edit->getTransport().stop (false, false);
+    if (recording)
+    {
+        for (auto* track : te::getAudioTracks (*impl->edit)) for (auto* clip : allTrackClips (*track))
+            if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
+                for (auto* note : midi->getSequence().getNotes())
+                    if (!note->state.hasProperty (midiNoteIDProperty))
+                        note->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), &impl->edit->getUndoManager());
+        impl->changed();
+    }
+    sendChangeMessage();
 }
 Result Session::record()
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::ok();
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio device in Audio Settings.");
     bool armed = false;
     for (auto* t : te::getAudioTracks (*impl->edit)) if (auto* d = impl->input (*t)) armed |= d->isRecordingEnabled (t->itemID);
     if (! armed) return Result::fail ("Assign an input and arm at least one track before recording.");
     auto r = impl->assets().createDirectory(); if (r.failed()) return r;
     impl->edit->getTransport().record (false);
-    if (! impl->edit->getTransport().isRecording()) return Result::fail ("Recording could not start. Check the audio input and microphone permission.");
+    if (! impl->edit->getTransport().isRecording()) return Result::fail ("Recording could not start. Check the selected input and device settings.");
     impl->changed(); return Result::ok();
 }
 void Session::seek (double seconds)
@@ -2111,6 +2164,7 @@ void Session::seek (double seconds)
     if (impl->exporting) return;
     if (std::isfinite (seconds))
     {
+        if (impl->edit->getTransport().isRecording()) stop();
         impl->cancelLaunches();
         impl->edit->getTransport().setPosition (te::TimePosition::fromSeconds (juce::jmax (0.0, seconds)));
     }
@@ -2197,16 +2251,16 @@ void Session::endEditGesture()
 }
 void Session::undo()
 {
-    if (impl->exporting) return;
+    if (impl->exporting || impl->edit->getTransport().isRecording()) return;
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshParameterValues(); sendChangeMessage();
 }
 void Session::redo()
 {
-    if (impl->exporting) return;
+    if (impl->exporting || impl->edit->getTransport().isRecording()) return;
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshParameterValues(); sendChangeMessage();
 }
-bool Session::canUndo() const { return ! impl->exporting && impl->edit->getUndoManager().canUndo(); }
-bool Session::canRedo() const { return ! impl->exporting && impl->edit->getUndoManager().canRedo(); }
+bool Session::canUndo() const { return ! impl->exporting && ! impl->edit->getTransport().isRecording() && impl->edit->getUndoManager().canUndo(); }
+bool Session::canRedo() const { return ! impl->exporting && ! impl->edit->getTransport().isRecording() && impl->edit->getUndoManager().canRedo(); }
 
 Result Session::exportWav (const File& file, double rate, int bits, double tailSeconds)
 {

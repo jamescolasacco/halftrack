@@ -121,3 +121,19 @@ The scanner helper additionally accepts its preceding exact `a4498068deaeec17081
 | --- | --- | --- |
 | `tracktion_TempoSetting.h` | `5a3e45f0fb9f53846edde6aae349ba38544e0618e45008e4994e2543148dcb56` | `b5efb441105e6edf8e216fea7c039a7b47331030019de10dad6db9aa3185c30d` |
 | `tracktion_TempoSequence.cpp` | `9bad3c89735d810e4fc41d7f6ac77fd422249287d96306525ae79458839fd6ab` | `c24f67e52af42fa46a551d585825063dde663eb17abe0a2e3236bcebf9037f99` |
+
+
+## Tracktion MIDI recording and device policy patches
+
+`cmake/PatchMidiReleaseVelocity.cmake` preserves matched note-off velocity when native recording imports a MIDI sequence. The generated controller fixture failed at the note-off byte while seven preceding channel events passed; the patch assigns the native note's existing release property with the same undo manager. `midi/tracktion_MidiList.cpp` changes from SHA256 `161898bf64101cb385b7ef5a99d18bedd8ad5909fa0d422a4ae734ec70fe1a79` to `93b05169b4008e66831d4ee3a9d42d065b32b011cd5f27c1dd04fd0a0854dcbd`.
+
+`cmake/PatchMidiDevices.cmake` adds host policy for physical MIDI discovery/default input enablement, plus synchronous completion of an explicitly selected MIDI device change. Default policy for other hosts retains native behavior. Halftrack excludes hardware discovery in generated-device tests and starts newly discovered production inputs disabled. Native saved preferences still apply. The synchronous rescan uses the existing recording-defer guard. All four inputs are validated before any of these four files is written, and output uses LF on every platform.
+
+| File under `modules/tracktion_engine` | Input SHA256 | Patched SHA256 |
+| --- | --- | --- |
+| `utilities/tracktion_EngineBehaviour.h` | `09b64a7d5a5e58b45370424262f61a562f620affdb9e2b92829666d0a024347d` | `fe49e3934dc91d709c99293a2a8c5dbc7f582c10bcd389a2d9aeb15fec8305cf` |
+| `playback/tracktion_DeviceManager.h` | `7ab4590fa518e44b977617dc003597adf84ade0021e6ce01bcf4ebcb6937af50` | `eaabb54af6e469690fb667efe36b6c88d0f9eefd42c7e8d34ac280271b4f5441` |
+| `playback/tracktion_DeviceManager.cpp` | `04869fc7afd45b70fdadebd891742c57c77101ac58e9227298d3531aafef3d32` | `49374cb08b8752baa385b18806c2824005cd1e0bb67481a373638977b3dbf498` |
+| `playback/devices/tracktion_PhysicalMidiInputDevice.cpp` | `e72a87226f1448aa73fe4eca1cb1cc1ad8245bcccc38f8dd1f362b669ad467d1` | `c4221217f5d2c1dfa57a02268d6a762f6c733ea95a17b9c53371a3c035a5a617` |
+
+The behavior header and manager input hashes already include the scanner and recording-safety patches respectively. Those earlier patch helpers also accept these exact combined outputs for repeated configuration. Fresh/repeated application and each unknown-input no-mutation case pass against isolated pinned sources; unknown release-import source is also rejected without mutation. The GPL notices and full patched sources remain included in packages. No global callback-safety claim follows: the existing native MIDI monitor/capture graph uses locks and dynamic storage.

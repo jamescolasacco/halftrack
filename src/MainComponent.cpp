@@ -25,6 +25,7 @@ namespace halftrack
 #if HALFTRACK_TESTS_ENABLED
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
 float pumpSyntheticTestDevice (Session&, int blocks);
+void withGeneratedMidiController (Session&, const std::function<void(const juce::String&)>&);
 #endif
 namespace
 {
@@ -539,7 +540,7 @@ private:
             };
             monitor.setTooltip ("Input monitoring: Off, Auto while armed, or always In");
             input.onChange = [this] { owner.report (owner.session.setTrackInput (index, input.getSelectedId() == 1 ? juce::String() : input.getText())); };
-            input.setTooltip ("Choose an audio input before arming. In this preview, each input is assigned to one track; choosing it here moves its previous assignment.");
+            input.setTooltip ("Choose an input before arming. Each input is assigned to one track; choosing it here moves its previous assignment.");
             addMouseListener (this, true);
         }
         const juce::String& getTrackId() const { return trackId; }
@@ -549,7 +550,9 @@ private:
             index = position;
             colour = track.colour;
             midi = track.isMidi; returnTrack = track.isReturn;
-            input.setVisible (! midi && ! returnTrack); monitor.setVisible (! midi && ! returnTrack); arm.setVisible (! midi && ! returnTrack);
+            input.setVisible (! returnTrack); monitor.setVisible (! returnTrack); arm.setVisible (! returnTrack);
+            input.setName (midi ? "Track MIDI input" : "Track audio input");
+            arm.setTooltip (midi ? "Arm track for MIDI recording" : "Arm track for audio recording");
             sendMode.setVisible (returnTrack);
             sendMode.setSelectedId (track.sendMode == Session::SendMode::pre ? 1 : 2, juce::dontSendNotification);
             peakL = track.peakL; peakR = track.peakR;
@@ -559,7 +562,7 @@ private:
             mute.setToggleState (track.mute, juce::dontSendNotification);
             solo.setToggleState (track.solo, juce::dontSendNotification);
             arm.setToggleState (track.armed, juce::dontSendNotification);
-            auto names = owner.session.inputNames();
+            auto names = owner.session.inputNames (midi);
             if (names != inputNames)
             {
                 inputNames = names;
@@ -584,7 +587,7 @@ private:
                 g.drawText ("VOL", 9, 67, 29, 20, juce::Justification::centredLeft);
                 g.drawText ("PAN", 9, 97, 29, 20, juce::Justification::centredLeft);
                 if (returnTrack) { g.setColour (orange); g.drawText ("RETURN / SEND INPUT", 9, 126, getWidth() - 18, 22, juce::Justification::centredLeft); }
-                else if (midi) g.drawFittedText ("MIDI / SYNTH", 9, 138, getWidth() - 18, 28, juce::Justification::centred, 1);
+
                 const auto peak = juce::jmax (peakL, peakR);
                 const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (peak, -60.0f) + 60.0f) / 60.0f);
                 g.setColour (background); g.fillRect (9, getHeight() - 7, getWidth() - 18, 3);
@@ -594,10 +597,9 @@ private:
             g.drawText ("VOL", 12, 38, 25, 17, juce::Justification::centredLeft);
             g.drawText ("PAN", 174, 38, 25, 17, juce::Justification::centredLeft);
             if (returnTrack) { g.setColour (orange); g.drawText ("RETURN / SEND INPUT", 12, 78, 129, 23, juce::Justification::centredLeft); }
-            else if (midi) g.drawText ("MIDI  /  HALFTRACK SYNTH", 12, 78, getWidth() - 24, 23, juce::Justification::centredLeft);
             else
             {
-                g.drawText ("IN", 12, 78, 18, 23, juce::Justification::centredLeft);
+                g.drawText (midi ? "M" : "IN", 12, 78, 18, 23, juce::Justification::centredLeft);
                 g.drawText ("MON", 174, 78, 26, 23, juce::Justification::centredLeft);
             }
             auto peak = juce::jmax (peakL, peakR);
@@ -3508,6 +3510,26 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         }
         return nullptr;
     };
+    withGeneratedMidiController(session,[&](const juce::String& controller)
+    {
+        refresh(); auto* row = canvas.getChildComponent(selectedTrack);
+        auto* input = dynamic_cast<juce::ComboBox*>(findNamed(*row,"Track MIDI input"));
+        auto* monitor = dynamic_cast<juce::ComboBox*>(findNamed(*row,"Track monitoring"));
+        auto* arm = dynamic_cast<juce::Button*>(findNamed(*row,"Record arm"));
+        check(input && monitor && arm && input->isVisible() && monitor->isVisible() && arm->isVisible(),
+            "MIDI row exposes controller, monitoring and recording controls");
+        int inputId=0; for(int i=0;i<input->getNumItems();++i)if(input->getItemText(i)==controller)inputId=input->getItemId(i);
+        check(inputId>1,"generated controller appears in the MIDI input chooser");
+        input->setSelectedId(inputId,juce::sendNotificationSync); refresh();
+        check(currentTrack()->inputName==controller && !currentTrack()->armed,"MIDI chooser assigns the real native input without arming");
+        monitor->setSelectedId(2,juce::sendNotificationSync);
+        arm->setToggleState(true,juce::dontSendNotification); arm->onClick(); refresh();
+        check(currentTrack()->armed && currentTrack()->monitor==Session::MonitorMode::automatic,
+            "native MIDI arm and Auto controls update engine capture state");
+        arm->setToggleState(false,juce::dontSendNotification); arm->onClick();
+        input->setSelectedId(1,juce::sendNotificationSync); refresh();
+        check(!currentTrack()->armed && currentTrack()->inputName.isEmpty(),"MIDI input chooser disconnects the controller");
+    });
     auto* cutoff = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "Cutoff"));
     auto* resonance = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "Resonance"));
     auto* release = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "Release"));

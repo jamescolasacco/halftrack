@@ -91,7 +91,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | REC-005 | Metronome and count-in | Verify beats, accents, routing, count-in, odd signatures, and start-on-grid behavior against recorded impulses. | NOT IMPLEMENTED / UNVERIFIED |
 | REC-006 | Simultaneous multitrack capture | Record distinct signals to several tracks; verify alignment, channel isolation, file closure, and stop behavior. | NOT IMPLEMENTED / UNVERIFIED |
 | REC-007 | Recording formats and disk failure | Verify supported bit depths and sample rates; simulate storage failure without corrupting previously committed takes. | NOT IMPLEMENTED / UNVERIFIED |
-| REC-008 | MIDI recording and overdub | Record note, controller, sustain, and expression streams; verify overdub policy and quantization choices. | NOT IMPLEMENTED / UNVERIFIED |
+| REC-008 | MIDI recording and overdub | Record note, controller, sustain, and expression streams; verify overdub policy and quantization choices. | PARTIAL — native single-channel Arrangement capture/merge overdub, release velocity/CC/bend/pressure, monitoring, one-take undo, editable identities and persistence tested with generated inputs; MPE, quantization/take controls and physical timing missing/unverified |
 | REC-009 | MIDI capture and step input | Specify capture-history boundaries and step-entry operations; compare reference workflows using generated MIDI. | NOT IMPLEMENTED / UNVERIFIED |
 | REC-010 | Take lanes and comping | Record several takes, audition lanes, construct a comp, edit transitions, and undo/reopen the result. | NOT IMPLEMENTED / UNVERIFIED |
 | REC-011 | Linked-track edits | Edit grouped microphone takes together; check phase alignment and per-track exceptions. | NOT IMPLEMENTED / UNVERIFIED |

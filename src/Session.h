@@ -175,7 +175,7 @@ public:
     juce::Result setTrackPan (int trackIndex, float pan);
     juce::Result setTrackMute (int trackIndex, bool);
     juce::Result setTrackSolo (int trackIndex, bool);
-    juce::StringArray inputNames() const;
+    juce::StringArray inputNames (bool midi = false) const;
     juce::Result setTrackInput (int trackIndex, const juce::String& inputName);
     juce::Result setTrackArmed (int trackIndex, bool);
     juce::Result setTrackMonitor (int trackIndex, MonitorMode);

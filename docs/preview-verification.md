@@ -181,3 +181,10 @@ Implementation source: `d3581ce4b30af1cad6eb414bd869770b730f8416`. This package 
 - The complete combined local suite passes 14/14 in 185.09 s before the final MIDI order/boundary additions. Those additions pass the MIDI suite in 3.28 s and UI suite in 3.29 s. The source callback guard passes nine fixtures across 42 owned bodies; Python runs 39 tests, 37 passed and two optional integrations skipped.
 
 [CI 38688435182](https://github.com/jamescolasacco/halftrack/actions/runs/38688435182) passes clean builds, tests and source-inclusive packaging for this exact implementation on macOS, Windows and Linux. The preceding locator revision `e011458` passed all three platforms. The separate reversal run was superseded by this combined source; it is not claimed green. Native chooser/mouse/listening walkthroughs, physical interface measurements and paired reference equivalence remain unverified. Full feature parity is unfinished.
+
+
+## Shared MIDI/track editing and precise tempo — 2026-10-15
+
+Source `18816253239a352f804759263adef686fefbba43` passes clean builds, all acceptance tests and source-inclusive packaging on macOS, Windows and Linux in [CI 38695706401](https://github.com/jamescolasacco/halftrack/actions/runs/38695706401). All 17 local Mac suites pass in 215.05 s. This source includes whole MIDI clip clipboard/movement, shared track ordering, independent track duplication and precise 20–999 BPM. It precedes controller recording.
+
+Mac archive `Halftrack-preview-darwin-arm64-1881625.tar.gz`: 61,981,100 bytes, SHA256 `a0ed9467fc9937693022f217fa04f5133c5aff14a8dd82fd99069b73c2121407`. Executable: 25,393,416 bytes, SHA256 `804a8402f41145224c9d564df4db49a274bd311ef1d143b08d64e753dea6a91e`. Fresh extraction verifies all 96 owned files, 4,424 JUCE files and 1,545 Tracktion files against the exact build inputs, including dependency patches and notices. The extracted app passes its tempo, duplication, ordering, MIDI-file, native-effects and UI suites. This establishes package/source identity and the stated generated behavior, not complete reference parity or physical device delivery.
