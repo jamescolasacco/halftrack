@@ -403,15 +403,21 @@ public:
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
             if (code == 'I') { importDialog(); return true; }
             if (code == 'E' && shift) { exportDialog(); return true; }
-            if (! shift && ! showSession && ! showPiano && (code == 'E' || code == 'D'))
+            if (! shift && ! showSession && ! showPiano && (code == 'E' || code == 'D' || code == 'C' || code == 'X' || code == 'V'))
             {
                 for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused != nullptr; focused = focused->getParentComponent())
                     if (dynamic_cast<juce::TextEditor*> (focused)) return false;
+                if (code == 'V')
+                {
+                    if (const auto* track = currentTrack(); track && ! track->isMidi && ! track->isReturn)
+                    { audioClipCommand (7, {}); return true; }
+                    return false;
+                }
                 if (const auto* track = currentTrack(); track && juce::isPositiveAndBelow (selectedClip, (int) track->clips.size())
                     && track->clips[(size_t) selectedClip].isAudio)
                 {
                     const auto id = track->clips[(size_t) selectedClip].id;
-                    audioClipCommand (code == 'E' ? 3 : 4, id); return true;
+                    audioClipCommand (code == 'E' ? 3 : code == 'D' ? 4 : code == 'C' ? 5 : 6, id); return true;
                 }
             }
             if (code == ',') { showAudioSettings(); return true; }
@@ -841,6 +847,19 @@ private:
             draggedClip = -1;
             owner.session.seek (juce::jmax (0.0, owner.viewStart + e.x / owner.pixelsPerSecond));
             owner.refresh();
+            if (e.mods.isPopupMenu())
+                if (const auto* target = owner.currentTrack(); target && ! target->isMidi && ! target->isReturn)
+                {
+                    const auto trackId = target->id;
+                    const auto position = owner.state.position;
+                    juce::PopupMenu popup;
+                    popup.addItem (7, "Paste audio here", owner.session.hasAudioClipClipboard());
+                    auto safe = juce::Component::SafePointer<Impl> (&owner);
+                    popup.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId, position] (int choice)
+                    {
+                        if (safe != nullptr && choice == 7) safe->pasteAudio (trackId, position);
+                    });
+                }
         }
         void mouseDoubleClick (const juce::MouseEvent& e) override
         {
@@ -942,10 +961,21 @@ private:
                 popup.addItem (2, "Gain, fades and range...");
                 popup.addItem (3, "Split at playhead", clip->canEditAudioRange);
                 popup.addItem (4, "Duplicate after clip");
+                popup.addSeparator();
+                popup.addItem (5, "Copy audio clip", clip->canEditAudioRange);
+                popup.addItem (6, "Cut audio clip", clip->canEditAudioRange);
+                popup.addItem (7, "Paste audio at playhead", owner.session.hasAudioClipClipboard());
             }
             auto safe = juce::Component::SafePointer<Impl> (&owner);
-            popup.showMenuAsync (juce::PopupMenu::Options(), [safe, id] (int choice)
-            { if (safe == nullptr) return; if (choice == 1) safe->deleteSelectedClip(); else if (choice > 1) safe->audioClipCommand (choice, id); });
+            const auto trackId = track ? track->id : juce::String();
+            const auto position = owner.state.position;
+            popup.showMenuAsync (juce::PopupMenu::Options(), [safe, id, trackId, position] (int choice)
+            {
+                if (safe == nullptr) return;
+                if (choice == 1) safe->deleteSelectedClip();
+                else if (choice == 7) safe->pasteAudio (trackId, position);
+                else if (choice > 1) safe->audioClipCommand (choice, id);
+            });
         }
     };
 
@@ -2798,13 +2828,36 @@ private:
     void audioClipCommand (int choice, const juce::String& id)
     {
         if (choice == 2) { showDialog ("Halftrack - Audio Clip", makeAudioClipEditor (session, id), 620, 480); return; }
+        if (choice == 5 || choice == 6)
+        {
+            const auto result = session.copyAudioClip (id, choice == 6);
+            if (result.wasOk() && choice == 6) selectedClip = -1;
+            report (result); refresh(); return;
+        }
+        if (choice == 7)
+        {
+            if (const auto* track = currentTrack()) pasteAudio (track->id, session.snapshot().position);
+            return;
+        }
+        if (choice != 3 && choice != 4) return;
         juce::String created;
         const auto result = choice == 3 ? session.splitAudioClip (id, session.snapshot().position, created)
             : session.duplicateAudioClip (id, created);
         report (result); refresh();
-        if (result.wasOk()) for (int t=0;t<(int)state.tracks.size();++t)
+        if (result.wasOk()) selectAudioClip (created);
+    }
+    void pasteAudio (const juce::String& trackId, double position)
+    {
+        juce::String created;
+        const auto result = session.pasteAudioClip (trackId, position, created);
+        report (result); refresh();
+        if (result.wasOk()) selectAudioClip (created);
+    }
+    void selectAudioClip (const juce::String& id)
+    {
+        for (int t=0;t<(int)state.tracks.size();++t)
             for (int c=0;c<(int)state.tracks[(size_t)t].clips.size();++c)
-                if (state.tracks[(size_t)t].clips[(size_t)c].id == created)
+                if (state.tracks[(size_t)t].clips[(size_t)c].id == id)
                 { selectTrack(t);selectedClip=c;selectedLauncherClipId.clear();canvas.repaint();return; }
     }
     void showAudioSettings()
@@ -4000,14 +4053,23 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(canvas.keyPressed(commandKey('E'))&&state.tracks[0].clips.size()==2,"Cmd/Ctrl+E splits selected arrangement audio");
     check(canvas.keyPressed(commandKey('D'))&&state.tracks[0].clips.size()==3,"Cmd/Ctrl+D duplicates selected arrangement audio");
     session.undo();session.undo();refresh();check(state.tracks[0].clips.size()==1,"keyboard split and duplicate undo separately");selectedClip=0;
+    check(canvas.keyPressed(commandKey('C'))&&session.hasAudioClipClipboard(),"Cmd/Ctrl+C copies arrangement audio");
+    session.seek(.25);refresh();check(canvas.keyPressed(commandKey('V'))&&state.tracks[0].clips.size()==2,
+        "Cmd/Ctrl+V pastes arrangement audio at playhead");
+    const auto pastedAudio=state.tracks[0].clips[(size_t)selectedClip];
+    check(pastedAudio.start==.25&&pastedAudio.id!=state.tracks[0].clips[0].id,"paste selects new clip identity and requested position");
+    check(canvas.keyPressed(commandKey('X'))&&state.tracks[0].clips.size()==1&&selectedClip==-1,"Cmd/Ctrl+X cuts audio and clears stale selection");
+    session.undo();refresh();check(state.tracks[0].clips.size()==2,"one undo restores Cut");
+    session.undo();refresh();check(state.tracks[0].clips.size()==1,"second undo removes Paste while Copy added no edit");selectedClip=0;
     {
         juce::TextEditor editor;juce::DocumentWindow focusWindow("Halftrack audio shortcut test",panel,juce::DocumentWindow::closeButton);
         focusWindow.setUsingNativeTitleBar(true);focusWindow.setContentNonOwned(&editor,false);focusWindow.centreWithSize(300,70);focusWindow.setVisible(true);
         juce::Process::makeForegroundProcess();focusWindow.toFront(true);
         for(int attempt=0;attempt<20&&!editor.hasKeyboardFocus(true);++attempt)
         {editor.grabKeyboardFocus();juce::MessageManager::getInstance()->runDispatchLoopUntil(10);}
-        check(editor.hasKeyboardFocus(true)&&!canvas.keyPressed(commandKey('E'))&&!canvas.keyPressed(commandKey('D'))&&state.tracks[0].clips.size()==1,
-            "focused text entry does not trigger audio split or duplicate");
+        check(editor.hasKeyboardFocus(true)&&!canvas.keyPressed(commandKey('E'))&&!canvas.keyPressed(commandKey('D'))&&!canvas.keyPressed(commandKey('C'))&&!canvas.keyPressed(commandKey('X'))
+            &&!canvas.keyPressed(commandKey('V'))&&state.tracks[0].clips.size()==1,
+            "focused text entry keeps its own clipboard and does not trigger audio edits");
         editor.giveAwayKeyboardFocus();focusWindow.clearContentComponent();
     }
 }

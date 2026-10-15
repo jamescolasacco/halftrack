@@ -59,3 +59,7 @@ Expose clip gain (-100 to +24 dB), independent fade durations and four existing 
 Native source inspection confirms the launcher graph omits the Arrangement fade node. Halftrack therefore disables and rejects manual slot fade edits; Session gain has an actual playback test. Arrangement fades and the separate reference Session edge-fade toggle are distinct workflows; that toggle remains unimplemented.
 
 Direct fade-duration drags use continuous seconds without grid snapping. They clamp against the opposite fade instead of modifying it. At less than 20 displayed pixels, use the numeric editor; no ambiguous overlapping hit targets are introduced. This is the simplest explicit interaction default pending user feedback.
+
+### Arrangement audio clipboard and gestures
+
+Default: a typed, application-local clipboard holds one unwarped, unlooped, ungrouped normal-speed Arrangement audio clip. It survives project switches within this running Session; it does not overwrite the system text clipboard. Copy retains an independent media file before Cut can remove the clip; Paste adds a clip on the selected audio track at the playhead and never overwrites overlapping material. Each paste creates new identities. Native state preserves clip properties. Range edges snap to the timeline grid, Alt bypasses snapping, and Shift+Alt-drag in the clip body slips the source while holding the timeline range fixed. Fade lengths must still fit the retained clip. Multi-clip/time-range clipboard and warped range gestures remain separate work.

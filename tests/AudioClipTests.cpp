@@ -42,6 +42,66 @@ juce::AudioBuffer<float> expected(const juce::AudioBuffer<float>& source,const S
     }
     return result;
 }
+void clipboardTests(const juce::File& root,const juce::File& sourceFile,const juce::AudioBuffer<float>& source)
+{
+    Session session(false);
+    const auto project=root.getChildFile("clipboard.halftrack"),render=root.getChildFile("clipboard-render.wav");
+    ok(session.importAudio(sourceFile,0),"import clipboard source");
+    const auto original=session.snapshot().tracks[0].clips[0];
+    Session::AudioClipSettings settings{-6,.1,.05,Session::FadeCurve::concave,Session::FadeCurve::convex};
+    ok(session.setAudioClipSettings(original.id,settings),"set clipboard gain and curves");
+    ok(session.setAudioClipRange(original.id,.125,.5,.25),"set clipboard source range");
+    ok(session.addAudioTrack("Destination"),"create clipboard destination track");
+    ok(session.saveProject(project),"save clipboard baseline");ok(session.loadProject(project),"load clean clipboard baseline");
+    const auto target=session.snapshot().tracks.back().id;
+    juce::String pasted="unchanged";
+    check(!session.hasAudioClipClipboard()&&session.pasteAudioClip(target,1,pasted).failed()&&pasted=="unchanged"&&!session.canUndo(),
+        "empty clipboard fails without editing or publishing an ID");
+    ok(session.copyAudioClip(original.id),"copy native audio state and independent media");
+    check(session.hasAudioClipClipboard()&&!session.snapshot().dirty&&!session.canUndo(),"Copy leaves clean project and undo untouched");
+    ok(session.setAudioClipSettings(original.id,{}),"change original after Copy");
+    ok(session.pasteAudioClip(target,.75,pasted),"paste copied state on another audio track");
+    auto copy=session.snapshot().tracks.back().clips[0];
+    check(copy.id==pasted&&copy.id!=original.id&&copy.start==.75&&copy.length==.5&&copy.sourceOffset==.25&&copy.audio==settings,
+        "Paste preserves the copied snapshot with fresh ID and selected placement");
+    auto oracle=expected(source,settings,12000,24000,36000);
+    const auto first=expected(source,{},12000,24000,6000);
+    for(int c=0;c<2;++c)oracle.addFrom(c,0,first,c,0,first.getNumSamples());
+    ok(session.exportWav(render),"render copied and edited originals");compare(read(render),oracle,"clipboard full-output oracle");
+    session.undo();check(session.snapshot().tracks.back().clips.empty(),"one undo removes just the pasted clip");
+    session.redo();check(session.snapshot().tracks.back().clips[0].id==pasted,"redo restores pasted identity");
+    // A failed Cut must leave the successful copied snapshot available.
+    check(session.copyAudioClip("missing",true).failed()&&session.hasAudioClipClipboard(),"failed Cut keeps prior clipboard");
+    ok(session.copyAudioClip(pasted,true),"Cut retains media before removing clip");
+    check(session.snapshot().tracks.back().clips.empty(),"Cut removes selected source only");
+    session.undo();check(session.snapshot().tracks.back().clips[0].id==pasted,"Cut is one reversible edit");
+    session.redo();check(session.snapshot().tracks.back().clips.empty(),"redo Cut removes the same clip");
+    ok(session.addMidiTrack(),"create invalid MIDI paste target");ok(session.addReturnTrack(),"create invalid return paste target");
+    session.undo(); // preserve a pending Redo while attempting invalid operations.
+    const auto before=session.snapshot();juce::String unchanged="keep";
+    for(double time:{-1.0,1e9,std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity()})
+        check(session.pasteAudioClip(target,time,unchanged).failed()&&session.canRedo()&&unchanged=="keep", "invalid paste position preserves redo and output ID");
+    check(session.pasteAudioClip(before.tracks.back().id,0,unchanged).failed()&&session.pasteAudioClip("missing",0,unchanged).failed()&&session.canRedo(),
+        "invalid track paste preserves redo");
+    session.redo();check(session.pasteAudioClip(session.snapshot().tracks.back().id,0,unchanged).failed(),"return rejects audio paste");
+    // Remove only this test's collected media, then replace the entire project.
+    const auto oldMedia=session.snapshot().tracks[0].clips[0].file;
+    ok(session.newProject(),"replace project with clipboard retained");check(oldMedia.deleteFile(),"remove obsolete generated project media");
+    ok(session.pasteAudioClip(session.snapshot().tracks[0].id,.25,pasted),"paste after original project and media are gone");
+    const auto crossProject=expected(source,settings,12000,24000,12000);
+    ok(session.exportWav(render),"render cross-project paste");compare(read(render),crossProject,"retained clipboard media preserves source samples");
+    const auto saved=root.getChildFile("Clipboard moved").getChildFile("portable.halftrack");
+    ok(session.saveProject(saved),"collect clipboard media on Save As");
+    const auto portableMedia=session.snapshot().tracks[0].clips[0].file;
+    check(portableMedia.isAChildOf(saved.getSiblingFile("portable Assets")),"pasted media belongs to destination assets");
+    ok(session.copyAudioClip(pasted),"replace clipboard without breaking pasted media");
+    ok(session.loadProject(saved),"reopen pasted project");ok(session.exportWav(render),"render portable clipboard project");
+    compare(read(render),crossProject,"save and reopen preserve pasted sound");
+    ok(session.copyAudioClip(pasted,true),"cut reopened clip");
+    ok(session.saveProject(saved),"save cut project with retained undo state");session.undo();
+    check(session.snapshot().tracks[0].clips[0].id==pasted,"undo after saving restores cut clip identity");
+    ok(session.exportWav(render),"render restored Cut after Save");compare(read(render),crossProject,"cut media survives save and undo");
+}
 juce::ValueTree audioState(juce::ValueTree tree)
 {
     if(tree.hasType("AUDIOCLIP"))return tree;for(auto child:tree)if(auto found=audioState(child);found.isValid())return found;return {};
@@ -143,6 +203,7 @@ int runAudioClipTests(const juce::File& artifacts)
         check(!s.snapshot().tracks[0].clips[0].canEditAudioRange&&s.setAudioClipRange(warpedId,0,.25,0).failed()
             &&s.splitAudioClip(warpedId,.125,untouched).failed()&&untouched=="keep"&&!s.canUndo(),"warped range operations preserve state and history");
         juce::MemoryBlock finalBytes;check(file.loadFileAsData(finalBytes)&&finalBytes==originalBytes,"all edits leave source file bytes unchanged");
+        clipboardTests(root,file,source);
         runAudioClipEditorTests(file,root);std::cout<<"Audio clip tests passed: "<<root.getFullPathName()<<std::endl;return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL audio clips: "<<e.what()<<std::endl;return 1;}

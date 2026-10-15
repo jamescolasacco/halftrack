@@ -150,6 +150,10 @@ public:
     juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
     juce::Result splitAudioClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
     juce::Result duplicateAudioClip (const juce::String& clipId, juce::String& duplicateId);
+    // Typed application clipboard. Copy retains independent media before Cut removes anything.
+    juce::Result copyAudioClip (const juce::String& clipId, bool cut = false);
+    bool hasAudioClipClipboard() const;
+    juce::Result pasteAudioClip (const juce::String& trackId, double startSeconds, juce::String& pastedId);
     juce::Result moveClip (int trackIndex, int clipIndex, double startSeconds);
     juce::Result removeClip (int trackIndex, int clipIndex);
     juce::Result renameTrack (int trackIndex, const juce::String&);

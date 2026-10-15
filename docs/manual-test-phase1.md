@@ -165,3 +165,12 @@ Draw or select several notes and open **Note tools**. Try Quantize Starts, Quant
 5. Import audio into a Session slot and use **Audio clip gain...**. Gain should affect launch playback immediately; manual fade/range controls are disabled there.
 
 Native mouse/audio walkthrough: NOT RUN. Generated full-buffer and production-handler tests are separate evidence.
+
+## Arrangement audio clipboard additions
+
+Native input checks below are NOT RUN until performed. Use generated audio and disposable projects.
+
+1. Select an Arrangement audio clip; set gain, fades, source offset and duration in its editor. Copy it with Cmd/Ctrl+C, select another audio track, place the playhead, then Cmd/Ctrl+V. The copied sound/range is retained, the original stays in place, and the new clip is selected.
+2. Cmd/Ctrl+X cuts that copy. Undo restores it in one step; undo again removes the preceding paste. Redo both. Copy adds no undo step.
+3. Copy another clip, create a new project, and paste onto its audio track. Save, reopen, then relocate the project together with its Assets directory. Audio remains available. Right-click empty timeline space and choose Paste audio here to place another copy.
+4. In a text field, use C/X/V shortcuts with Cmd/Ctrl. Text editing must not copy, remove or paste audio. In the piano roll, note clipboard shortcuts retain their existing behavior.

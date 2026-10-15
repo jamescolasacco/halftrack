@@ -694,6 +694,8 @@ struct Session::Impl
     bool useDevices;
     bool explicitChanges = false, pristineNewDocument = false, exporting = false;
     File scratch, projectFile;
+    juce::ValueTree audioClipboard;
+    std::unique_ptr<juce::TemporaryFile> audioClipboardMedia;
     std::unique_ptr<te::Edit> edit;
     std::unique_ptr<te::Edit::UndoTransactionInhibitor> gesture;
     mutable std::map<String, std::unique_ptr<Meter>> meters;
@@ -1530,6 +1532,70 @@ Result Session::duplicateAudioClip (const String& id, String& duplicateId)
     auto second = te::duplicateClip (*clip);
     if (! second) return Result::fail ("The audio clip could not be duplicated.");
     second->setStart (end, false, true); duplicateId = second->itemID.toString(); impl->changed(); return Result::ok();
+}
+Result Session::copyAudioClip (const String& id, bool cut)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (cut && impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before cutting clips.");
+    auto* clip = impl->audioClip (id);
+    if (! clip || ! canEditAudioRange (*clip))
+        return Result::fail ("Copy an unwarped, unlooped arrangement audio clip.");
+    if (clip->getNumTakes (true) > 1 || clip->isCurrentTakeComp())
+        return Result::fail ("Audio clipboard currently supports a single source, without take comping.");
+    // A detached state alone would still depend on the original project's media.
+    // Retain an independent file before publishing the clipboard or removing a clip.
+    const auto source = clip->getSourceFileReference().getFile();
+    if (! source.existsAsFile()) return Result::fail ("The audio clip source is missing.");
+    auto media = std::make_unique<juce::TemporaryFile> (source.getFileExtension());
+    if (! source.copyFileTo (media->getFile())) return Result::fail ("Could not retain audio for the clipboard.");
+    auto copied = clip->state.createCopy();
+    // A one-take clip's selected source is already resolved above. Do not retain
+    // an alternate source reference back into the old project.
+    copied.removeChild (copied.getChildWithName (te::IDs::TAKES), nullptr);
+    copied.setProperty (te::IDs::source, media->getFile().getFullPathName(), nullptr);
+    if (cut)
+    {
+        impl->transaction ("Cut audio clip");
+        clip->removeFromParent();
+        impl->changed();
+    }
+    impl->audioClipboard = std::move (copied);
+    impl->audioClipboardMedia = std::move (media);
+    return Result::ok();
+}
+bool Session::hasAudioClipClipboard() const
+{
+    return impl->audioClipboard.isValid() && impl->audioClipboardMedia
+        && impl->audioClipboardMedia->getFile().existsAsFile();
+}
+Result Session::pasteAudioClip (const String& trackId, double start, String& pastedId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before pasting clips.");
+    auto* track = impl->track (trackId);
+    if (! track || isReturn (*track) || static_cast<bool> (track->state.getProperty (midiTrackProperty)))
+        return Result::fail ("Paste audio onto an audio track.");
+    if (! hasAudioClipClipboard()) return Result::fail ("Copy an audio clip before pasting.");
+    const double length = impl->audioClipboard[te::IDs::length];
+    if (! std::isfinite (start) || start < 0 || start + length > 1e9)
+        return Result::fail ("Paste position is outside the supported timeline.");
+    const auto assets = impl->assets();
+    if (auto r = assets.createDirectory(); r.failed()) return r;
+    const auto source = impl->audioClipboardMedia->getFile();
+    const auto name = File::createLegalFileName (impl->audioClipboard[te::IDs::name].toString());
+    const auto target = assets.getNonexistentChildFile (name.isEmpty() ? "Pasted audio" : name, source.getFileExtension(), true);
+    if (! source.copyFileTo (target)) return Result::fail ("Could not collect clipboard audio into this project.");
+    auto copy = te::ClipCopy::fromClipboardState (impl->audioClipboard, false).withNewItemID (*impl->edit);
+    auto state = copy.getState();
+    state.setProperty (te::IDs::source, target.getFullPathName(), nullptr);
+    state.setProperty (te::IDs::start, start, nullptr);
+    impl->transaction ("Paste audio clip");
+    if (auto* clip = te::insertClipCopy (*track, copy))
+    {
+        pastedId = clip->itemID.toString(); impl->changed(); return Result::ok();
+    }
+    target.deleteFile();
+    return Result::fail ("The audio clip could not be pasted.");
 }
 Result Session::moveClip (int t, int c, double start)
 {
