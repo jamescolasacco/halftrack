@@ -852,18 +852,21 @@ struct Session::Impl
                     result.add(track->itemID.toString());
         return result;
     }
-    void releaseStoppedMidiInputs(const juce::StringArray& previouslyMonitored)
+    void finishInputChange(const juce::StringArray& previouslyMonitored)
     {
         juce::Array<te::AudioTrack*> stopped;
         for (const auto& id : previouslyMonitored)
             if (auto* target=track(id))
                 if (auto* device=input(*target); !device || !device->isLivePlayEnabled(*target))
                     stopped.add(target);
-        if (stopped.isEmpty()) return;
-        // Prepare the replacement graph before queuing releases into it. No
-        // processor is reset from the message thread while audio can use it.
+        // Publish activation as well as deactivation before returning to the UI.
+        // Otherwise the first key can arrive before the replacement input node
+        // has registered its MIDI consumer and is silently dropped.
         for (auto* device : edit->getAllInputDevices()) device->flushRecordingStateUpdates();
         edit->dispatchPendingUpdatesSynchronously();
+        // Release only tracks that actually lost monitoring. No processor is
+        // reset from the message thread while audio can use it.
+        if (stopped.isEmpty()) return;
         for (auto* target : stopped)
             for (int channel=1;channel<=16;++channel)
             {
@@ -2389,7 +2392,7 @@ Result Session::setTrackInput (int index, const String& name)
         selected->setRecordingEnabled (t->itemID, false);
         selected->getInputDevice().setMonitorMode (te::InputDevice::MonitorMode::off);
     }
-    impl->releaseStoppedMidiInputs(monitored);impl->changed(); return Result::ok();
+    impl->finishInputChange(monitored);impl->changed(); return Result::ok();
 }
 Result Session::setTrackArmed (int index, bool value)
 {
@@ -2404,7 +2407,7 @@ Result Session::setTrackArmed (int index, bool value)
     const auto monitored=impl->monitoredMidiTracks();
     impl->transaction ("Record arm");
     destination->recordEnabled.setValue (value, &impl->edit->getUndoManager());
-    impl->releaseStoppedMidiInputs(monitored);impl->changed(); return Result::ok();
+    impl->finishInputChange(monitored);impl->changed(); return Result::ok();
 }
 Result Session::setTrackMonitor (int index, MonitorMode mode)
 {
@@ -2418,7 +2421,7 @@ Result Session::setTrackMonitor (int index, MonitorMode mode)
     impl->transaction ("Input monitoring");
     input->getInputDevice().setMonitorMode (static_cast<te::InputDevice::MonitorMode> (mode));
     t->state.setProperty (monitorProperty, static_cast<int> (mode), &impl->edit->getUndoManager());
-    impl->edit->restartPlayback(); impl->releaseStoppedMidiInputs(monitored);impl->changed(); return Result::ok();
+    impl->edit->restartPlayback(); impl->finishInputChange(monitored);impl->changed(); return Result::ok();
 }
 Result Session::play()
 {
@@ -2639,7 +2642,7 @@ void Session::undo()
     const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates();
     impl->resetTapTempo();
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshClipActivation(clips); impl->refreshParameterValues();
-    impl->releaseStoppedMidiInputs(monitored);sendChangeMessage();
+    impl->finishInputChange(monitored);sendChangeMessage();
 }
 void Session::redo()
 {
@@ -2647,7 +2650,7 @@ void Session::redo()
     const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates();
     impl->resetTapTempo();
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshClipActivation(clips); impl->refreshParameterValues();
-    impl->releaseStoppedMidiInputs(monitored);sendChangeMessage();
+    impl->finishInputChange(monitored);sendChangeMessage();
 }
 bool Session::canUndo() const { return ! impl->exporting && ! impl->edit->getTransport().isRecording() && impl->edit->getUndoManager().canUndo(); }
 bool Session::canRedo() const { return ! impl->exporting && ! impl->edit->getTransport().isRecording() && impl->edit->getUndoManager().canRedo(); }

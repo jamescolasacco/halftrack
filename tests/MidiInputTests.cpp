@@ -91,6 +91,35 @@ struct GeneratedInput
     }
 };
 
+void immediateMonitoringTransitions()
+{
+    GeneratedInput f;
+    for (int cycle = 0; cycle < 4; ++cycle)
+    {
+        ok (f.session.setTrackMonitor (2, Session::MonitorMode::on), "enable immediate monitoring");
+        // A key can arrive before the next desktop event-loop iteration. Do not
+        // warm the graph with silent callbacks before sending this event.
+        // A prepared device may also wait before its very first callback. This
+        // event is new even when the graph itself is older than the stale window.
+        if (cycle == 1) { juce::Thread::sleep (160); juce::Time::getMillisecondCounter(); }
+        f.controller.sendNow (juce::MidiMessage::noteOn (1, 72, (juce::uint8) 96));
+        const auto peak = pumpSyntheticTestDevice (f.session, 20);
+        check (peak > .001f, "first key after enabling monitoring is audible; peak=" + juce::String (peak, 9));
+        ok (f.session.setTrackMonitor (2, Session::MonitorMode::off), "disable immediate monitoring");
+        pumpSyntheticTestDevice (f.session, 40);
+        check (pumpSyntheticTestDevice (f.session, 20) < 1e-7f, "immediate monitor disable releases held input");
+    }
+    ok (f.session.setTrackMonitor (2, Session::MonitorMode::automatic), "prepare immediate Auto input");
+    ok (f.session.setTrackArmed (2, true), "arm Auto input without waiting for timers");
+    f.controller.sendNow (juce::MidiMessage::noteOn (16, 69, (juce::uint8) 96));
+    check (pumpSyntheticTestDevice (f.session, 20) > .001f, "first key after arming Auto monitoring is audible");
+    f.session.undo(); pumpSyntheticTestDevice (f.session, 40);
+    check (pumpSyntheticTestDevice (f.session, 20) < 1e-7f, "immediate Auto arm undo releases its voice");
+    f.session.redo();
+    f.controller.sendNow (juce::MidiMessage::noteOn (16, 69, (juce::uint8) 96));
+    check (pumpSyntheticTestDevice (f.session, 20) > .001f, "first key after Auto arm redo is audible");
+}
+
 void selectionAndMonitoring()
 {
     GeneratedInput f; auto& session = f.session;
@@ -459,7 +488,7 @@ void withGeneratedMidiController (Session& session, const std::function<void(con
 }
 int runMidiMonitoringTests()
 {
-    try { selectionAndMonitoring(); return 0; }
+    try { immediateMonitoringTransitions(); selectionAndMonitoring(); return 0; }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI monitoring: "<<e.what()<<std::endl;return 1;}
 }
 int runMidiInputTests(const juce::File& artifacts)
