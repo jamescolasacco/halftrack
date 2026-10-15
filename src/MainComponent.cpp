@@ -960,16 +960,12 @@ private:
                         auto start = juce::jmax (0.0, originalStart + (e.x - dragStartX) / owner.pixelsPerSecond);
                         if (! e.mods.isAltDown()) start = std::round (start / owner.gridSeconds()) * owner.gridSeconds();
                         const auto& clip = current.tracks[(size_t)t].clips[(size_t)c];
-                        int destination = t;
-                        if (clip.isAudio)
-                        {
-                            destination = e.y < 0 ? -1 : e.y/trackHeight;
-                            if (! juce::isPositiveAndBelow (destination,(int)current.tracks.size())
-                                || current.tracks[(size_t)destination].isMidi || current.tracks[(size_t)destination].isReturn) return;
-                        }
+                        const int destination = e.y < 0 ? -1 : e.y/trackHeight;
+                        if (! juce::isPositiveAndBelow (destination,(int)current.tracks.size())
+                            || current.tracks[(size_t)destination].isMidi != clip.isMidi || current.tracks[(size_t)destination].isReturn) return;
                         if (! clipGesture) { owner.session.beginEditGesture ("Move clip"); clipGesture = true; }
                         const auto result = clip.isAudio ? owner.session.moveAudioClip (dragClipId,current.tracks[(size_t)destination].id,start)
-                            : owner.session.moveClip (t,c,start);
+                            : owner.session.moveMidiClip (dragClipId,current.tracks[(size_t)destination].id,start);
                         owner.report (result); owner.refresh();
                         if (result.wasOk()) owner.selectArrangementClip (dragClipId);
                         return;
@@ -4584,6 +4580,32 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             "focused text keeps its own shortcuts while Arrangement MIDI clips are selected");
         editor.giveAwayKeyboardFocus();focusWindow.clearContentComponent();
     }
+
+    check(session.newProject().wasOk()&&session.addMidiTrack("Move source").wasOk()
+        &&session.addMidiTrack("Move target").wasOk()&&session.addMidiTrack("Further target").wasOk(),"prepare MIDI body-move UI tracks");
+    refresh();showArrangementView();viewStart=0;pixelsPerSecond=100;resized();
+    check(session.addMidiClip(state.tracks[2].id,2,4).wasOk(),"prepare MIDI body-move UI clip");refresh();
+    const auto movingMidi=state.tracks[2].clips[0].id;
+    check(session.addMidiNote(movingMidi,60,0,1,.7f).wasOk(),"prepare movable MIDI note");refresh();selectArrangementClip(movingMidi);
+    const auto movingNote=currentMidiClip()->notes[0].id;
+    const auto midiFrom=canvas.clipBounds(*currentMidiClip(),2).getCentre();
+    const auto midiTo=midiFrom+juce::Point<float>(25,(float)trackHeight);
+    const auto midiFurther=midiFrom+juce::Point<float>(50,2.0f*trackHeight);
+    canvas.mouseDown(rangeEvent(midiFrom,midiFrom,false,freeRange));canvas.mouseDrag(rangeEvent(midiTo,midiFrom,true,freeRange));
+    canvas.mouseDrag(rangeEvent(midiFurther,midiFrom,true,freeRange));canvas.mouseUp(rangeEvent(midiFurther,midiFrom,true,freeRange));
+    check(state.tracks[2].clips.empty()&&state.tracks[3].clips.empty()&&selectedTrack==4&&currentMidiClip()->id==movingMidi
+        &&currentMidiClip()->notes[0].id==movingNote&&currentMidiClip()->start==1.5,"MIDI drag follows stable identity through successive destination tracks");
+    session.undo();refresh();selectArrangementClip(movingMidi);
+    check(selectedTrack==2&&currentMidiClip()->start==1&&state.tracks[4].clips.empty(),"one undo restores MIDI drag owner and position");
+    const auto forbiddenMidi=midiFrom+juce::Point<float>(25,-2.0f*trackHeight);
+    canvas.mouseDown(rangeEvent(midiFrom,midiFrom,false,freeRange));canvas.mouseDrag(rangeEvent(forbiddenMidi,midiFrom,true,freeRange));
+    canvas.mouseUp(rangeEvent(forbiddenMidi,midiFrom,true,freeRange));
+    check(selectedTrack==2&&currentMidiClip()->start==1&&session.canRedo(),"dragging MIDI over an audio row leaves placement and redo intact");
+    canvas.mouseDown(rangeEvent(midiFrom,midiFrom,false,freeRange));
+    check(session.removeClip(2,0).wasOk()&&session.addMidiClip(state.tracks[2].id,2,4).wasOk(),"replace MIDI during a pending body drag");refresh();
+    const auto replacementMidi=state.tracks[2].clips[0].id;
+    canvas.mouseDrag(rangeEvent(midiTo,midiFrom,true,freeRange));canvas.mouseUp(rangeEvent(midiTo,midiFrom,true,freeRange));
+    check(state.tracks[2].clips[0].id==replacementMidi&&state.tracks[2].clips[0].start==1&&state.tracks[3].clips.empty(),"stale MIDI body drag cannot move its replacement");
 
 }
 

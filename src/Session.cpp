@@ -1886,6 +1886,25 @@ Result Session::pasteAudioClip (const String& trackId, double start, String& pas
     target.deleteFile();
     return Result::fail ("The audio clip could not be pasted.");
 }
+Result Session::moveMidiClip (const String& id, const String& destinationId, double start)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before moving MIDI clips.");
+    auto* clip = impl->midiClip (id); auto* destination = impl->track (destinationId);
+    if (! clip || clip->getClipSlot() || clip->isGrouped()) return Result::fail ("Move an ungrouped Arrangement MIDI clip.");
+    if (! destination || isReturn (*destination) || ! static_cast<bool> (destination->state.getProperty (midiTrackProperty)))
+        return Result::fail ("Move MIDI onto a MIDI track.");
+    if (destination->isFrozen (te::Track::anyFreeze) || clip->getClipTrack()->isFrozen (te::Track::anyFreeze))
+        return Result::fail ("Unfreeze the source and destination tracks before moving MIDI.");
+    if (! std::isfinite (start) || start < 0 || start + clip->getPosition().getLength().inSeconds() > te::Edit::maximumLength)
+        return Result::fail ("The complete clip must fit inside the 48-hour timeline.");
+    if (clip->getClipTrack() == destination && clip->getPosition().getStart().inSeconds() == start) return Result::ok();
+    const te::Clip::Ptr retained (clip);
+    impl->transaction ("Move MIDI clip");
+    if (clip->getClipTrack() != destination && ! clip->moveTo (*destination)) return Result::fail ("Could not move the MIDI clip to that track.");
+    clip->setStart (te::TimePosition::fromSeconds (start), false, true);
+    impl->changed(); return Result::ok();
+}
 Result Session::moveAudioClip (const String& id, const String& destinationId, double start)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

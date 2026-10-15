@@ -88,6 +88,56 @@ void clipClipboardTests(const juce::File& root)
     check(s.copyMidiClip(s.snapshot().tracks.back().slots[0].clip.id).failed()&&s.hasMidiClipClipboard(),"Session clip copy rejection preserves the valid Arrangement clipboard");
 }
 
+void clipMovementTests(const juce::File& root)
+{
+    juce::MidiMessageSequence music;
+    add(music,juce::MidiMessage::programChange(3,7),0);
+    add(music,juce::MidiMessage::noteOn(3,57,(juce::uint8)100),.125);
+    add(music,juce::MidiMessage::controllerEvent(3,1,31),.5);
+    add(music,juce::MidiMessage::noteOff(3,57,(juce::uint8)18),1.5);
+    add(music,juce::MidiMessage::endOfTrack(),2);
+    const auto input=root.getChildFile("move-midi.mid"),output=root.getChildFile("moved-events.mid"),project=root.getChildFile("moved-midi.halftrack");
+    write(input,{music},0);Session s(false);std::vector<juce::String>ids;ok(s.importMidiFile(input,2,ids),"import move source");
+    const auto id=ids.front(),source=s.snapshot().tracks[2].id;
+    const auto noteId=s.snapshot().tracks[2].clips[0].notes[0].id;
+    ok(s.addMidiTrack("Destination instrument"),"create MIDI move target");const auto destination=s.snapshot().tracks[3].id;
+    auto patch=s.snapshot().tracks[3].synth;patch.waveform=2;patch.cutoffHz=1700;patch.attackSeconds=.025f;patch.releaseSeconds=.08f;
+    ok(s.setSynthSettings(destination,patch),"set distinct destination instrument");
+    ok(s.setTrackGain(3,-9),"set destination mixer gain");ok(s.setTrackPan(3,-.4f),"set destination mixer pan");
+    ok(s.addReturnTrack(),"prepare forbidden return target");const auto returnId=s.snapshot().tracks.back().id;
+    ok(s.saveProject(project),"save clean MIDI move baseline");ok(s.loadProject(project),"reopen MIDI move baseline");
+    ok(s.moveMidiClip(id,destination,.25),"move MIDI clip between tracks and in time");auto state=s.snapshot();
+    check(state.tracks[2].clips.empty()&&state.tracks[3].clips.size()==1&&state.tracks[3].clips[0].id==id
+        &&state.tracks[3].clips[0].notes[0].id==noteId&&state.tracks[3].clips[0].start==.25&&state.tracks[3].clips[0].lengthBeats==2,
+        "MIDI reparenting retains clip identity, note identity and musical duration");
+    check(state.tracks[2].synth.waveform==0&&state.tracks[3].synth.waveform==2,"moving MIDI leaves instruments on their original tracks");
+    ok(s.exportMidiClip(id,output),"inspect moved native MIDI events");check(exported(output)==events(music,960),"track move preserves event bytes and release velocity");
+    Session oracle(false);std::vector<juce::String>expectedIds;ok(oracle.importMidiFile(input,.5,expectedIds),"independently place expected performance");
+    ok(oracle.setSynthSettings(oracle.snapshot().tracks.back().id,patch),"prepare expected destination instrument");
+    ok(oracle.setTrackGain(2,-9),"prepare expected destination gain");ok(oracle.setTrackPan(2,-.4f),"prepare expected destination pan");
+    const auto a=root.getChildFile("moved-midi.wav"),b=root.getChildFile("moved-midi-oracle.wav");
+    ok(s.exportWav(a),"render MIDI through destination instrument and mixer");ok(oracle.exportWav(b),"render independent destination oracle");
+    const auto actual=readAudio(a),expected=readAudio(b);check(actual.getNumSamples()==expected.getNumSamples(),"moved MIDI render retains expected duration");
+    double worst=0,peak=0;for(int c=0;c<2;++c)for(int n=0;n<actual.getNumSamples();++n)
+    {const auto value=actual.getSample(c,n);if(!std::isfinite(value))throw std::runtime_error("Nonfinite moved MIDI sample");worst=std::max(worst,std::abs((double)value-expected.getSample(c,n)));peak=std::max(peak,std::abs((double)value));}
+    check(peak>.001&&worst<2e-6,"every moved MIDI sample matches the destination instrument and mixer oracle");
+    s.undo();state=s.snapshot();check(state.tracks[2].clips[0].id==id&&state.tracks[2].clips[0].start==1&&state.tracks[3].clips.empty(),"one undo restores MIDI owner and time");
+    for(const auto& target:juce::StringArray{"missing",state.tracks[0].id,returnId})
+        check(s.moveMidiClip(id,target,0).failed()&&s.canRedo(),"invalid MIDI destination preserves redo");
+    for(double time:{-1.0,std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity(),172799.5})
+        check(s.moveMidiClip(id,destination,time).failed()&&s.canRedo(),"invalid MIDI move time preserves redo");
+    check(s.moveMidiClip("missing",destination,0).failed()&&s.canRedo(),"stale MIDI move identity leaves history intact");
+    s.redo();check(s.snapshot().tracks[3].clips[0].id==id,"MIDI move redo restores original identity on destination");
+    ok(s.saveProject(project),"save moved MIDI owner");ok(s.loadProject(project),"reopen moved MIDI owner");
+    ok(s.moveMidiClip(id,destination,.25),"identical MIDI move is a no-op");check(!s.canUndo()&&!s.snapshot().dirty,"identical MIDI move keeps a clean project");
+    ok(s.exportMidiClip(id,output),"inspect reopened moved events");check(exported(output)==events(music,960),"save and reopen retain all moved events");
+    s.beginEditGesture("Move MIDI through tracks");ok(s.moveMidiClip(id,source,.5),"move gesture first owner");ok(s.moveMidiClip(id,destination,.75),"move gesture second owner");s.endEditGesture();
+    s.undo();check(s.snapshot().tracks[3].clips[0].id==id&&s.snapshot().tracks[3].clips[0].start==.25&&s.snapshot().tracks[2].clips.empty(),"one undo restores a multi-owner MIDI gesture");
+    ok(s.moveMidiClip(id,destination,172799),"move MIDI exactly to native timeline end");check(s.snapshot().tracks[3].clips[0].start==172799,"boundary MIDI move is not silently clamped");s.undo();
+    ok(s.addMidiClipToSlot(source,0,4),"prepare unsupported slot move source");
+    check(s.moveMidiClip(s.snapshot().tracks[2].slots[0].clip.id,destination,0).failed(),"Arrangement movement cannot evict a Session MIDI clip");
+}
+
 }
 int runMidiFileTests(const juce::File& artifacts)
 {
@@ -182,6 +232,7 @@ int runMidiFileTests(const juce::File& artifacts)
         for(int c=0;c<2;++c)for(int n=0;n<actual.getNumSamples();++n){const auto value=actual.getSample(c,n);if(!std::isfinite(value))throw std::runtime_error("Nonfinite imported sample");worst=std::max(worst,std::abs((double)value-expected.getSample(c,n)));peak=std::max(peak,std::abs((double)value));}
         check(peak>.01&&worst<2e-6,"every imported synth sample matches independently created notes");
         clipClipboardTests(root);
+        clipMovementTests(root);
         std::cout<<"MIDI file tests passed: "<<root.getFullPathName()<<std::endl;return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI files: "<<e.what()<<std::endl;return 1;}
