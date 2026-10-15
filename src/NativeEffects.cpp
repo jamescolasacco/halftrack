@@ -52,6 +52,10 @@ constexpr EffectParameter gateFields[] {
     { "floorDb", "Floor", -100, 0, -100, 0, " dB" },
     { "invert", "Mode", 0, 1, 0, 0, "", "Gate|Duck" },
     { "mix", "Dry / Wet", 0, 1, 1, 0, "" } };
+constexpr EffectParameter limiterFields[] {
+    { "driveDb", "Input gain", 0, 36, 0, 0, " dB" },
+    { "ceilingDb", "Peak ceiling", -24, 0, -.3f, 0, " dB" },
+    { "releaseMs", "Release", 1, 3000, 100, 100, " ms" } };
 constexpr std::array<double, 11> delayBeats { .25, 1.0/3, .375, .5, 2.0/3, .75, 1, 1.5, 2, 3, 4 };
 constexpr std::array<double, 8> roomSeconds { .0297, .0371, .0411, .0437, .0531, .0617, .0713, .0799 };
 double finiteSample (double v) noexcept { return std::isfinite (v) ? std::clamp (v, -1.0e12, 1.0e12) : 0; }
@@ -59,13 +63,13 @@ double finiteSample (double v) noexcept { return std::isfinite (v) ? std::clamp 
 const char* effectName (Kind kind) noexcept
 {
     switch (kind) { case Kind::equalizer: return "Eight-band EQ"; case Kind::compressor: return "Compressor";
-        case Kind::delay: return "Stereo Delay"; case Kind::reverb: return "Room Reverb"; case Kind::bitcrusher: return "Bitcrusher"; case Kind::gate: return "Noise Gate"; }
+        case Kind::delay: return "Stereo Delay"; case Kind::reverb: return "Room Reverb"; case Kind::bitcrusher: return "Bitcrusher"; case Kind::gate: return "Noise Gate"; case Kind::limiter: return "Peak Limiter"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
 {
     switch (kind) { case Kind::equalizer: return eqFields; case Kind::compressor: return compressorFields;
-        case Kind::delay: return delayFields; case Kind::reverb: return reverbFields; case Kind::bitcrusher: return crusherFields; case Kind::gate: return gateFields; }
+        case Kind::delay: return delayFields; case Kind::reverb: return reverbFields; case Kind::bitcrusher: return crusherFields; case Kind::gate: return gateFields; case Kind::limiter: return limiterFields; }
     return {};
 }
 Settings defaultEffectSettings (Kind kind) noexcept
@@ -93,10 +97,13 @@ void NativeEffectDSP::prepare (double sampleRate, Kind kind)
     rate = std::isfinite (sampleRate) ? std::clamp (sampleRate, 8000.0, 384000.0) : 48000;
     if (settings.kind != kind) settings = defaultEffectSettings (kind);
     const auto delaySize = kind == Kind::delay ? static_cast<size_t> (std::ceil (rate * 12)) + 4
-        : kind == Kind::reverb ? static_cast<size_t> (std::ceil (rate * .25)) + 4 : 0;
+        : kind == Kind::reverb ? static_cast<size_t> (std::ceil (rate * .25)) + 4
+        : kind == Kind::limiter ? static_cast<size_t> (std::ceil (rate * .001)) : 0;
     for (auto& buffer : delays) buffer.assign (delaySize, 0);
     for (size_t i = 0; i < room.size(); ++i)
         room[i].assign (kind == Kind::reverb ? static_cast<size_t> (std::ceil (rate * roomSeconds[i] * 2)) + 1 : 0, 0);
+    limiterPeaks.assign (kind == Kind::limiter ? delaySize + 1 : 0, 0);
+    limiterPeakFrames.assign (limiterPeaks.size(), 0);
     reset(); configure (settings);
 }
 void NativeEffectDSP::reset() noexcept
@@ -106,6 +113,7 @@ void NativeEffectDSP::reset() noexcept
     for (auto& buffer : room) std::fill (buffer.begin(), buffer.end(), 0);
     crusherHeld = {}; crusherCountdown = 0;
     gateEnvelope = 0; gateHoldRemaining = 0; gateOpen = false;
+    limiterFrame = 0; limiterHead = limiterSize = 0; limiterGain = 1;
     roomCursor = {}; roomTone = {}; delayTone = {}; cursor = 0; envelope = 0; processed = false; ramp = 0;
     outputGain = gainTarget; wet = wetTarget; delayLeft = delayTargetLeft; delayRight = delayTargetRight;
 }
@@ -190,6 +198,12 @@ void NativeEffectDSP::configure (const Settings& next) noexcept
         gateHoldSamples = static_cast<int> (std::ceil (rate * v[3] * .001));
         gateHoldRemaining = std::min (gateHoldRemaining, gateHoldSamples); wetTarget = v[7];
     }
+    if (settings.kind == Kind::limiter)
+    {
+        limiterDrive = std::pow (10.0, v[0] / 20.0);
+        limiterCeiling = std::pow (10.0, v[1] / 20.0);
+        limiterRelease = std::exp (-1.0 / (rate * v[2] * .001)); wetTarget = 1;
+    }
     if (! processed) { wet = wetTarget; outputGain = gainTarget; delayLeft = delayTargetLeft; delayRight = delayTargetRight; ramp = 0; }
     else ramp = std::max (1, static_cast<int> (rate * .005));
 }
@@ -245,6 +259,28 @@ void NativeEffectDSP::processSamples (float* left, float* right, int count) noex
                 delays[0][cursor] = finiteSample ((frozen ? 0 : ping ? .5*(l+r) : l) + feedback*(ping ? feedbackR : feedbackL));
                 delays[1][cursor] = finiteSample ((frozen || ping ? 0 : r) + feedback*(ping ? feedbackL : feedbackR));
                 cursor = (cursor+1) % delays[0].size(); break;
+            }
+            case Kind::limiter:
+            {
+                if (delays[0].empty()) break;
+                const auto drivenL = l * limiterDrive, drivenR = r * limiterDrive;
+                const auto peak = std::max (std::abs (drivenL), std::abs (drivenR));
+                const auto capacity = limiterPeaks.size();
+                // A preallocated monotonic deque includes the delayed sample and
+                // all lookahead frames. Each entry is inserted/removed once.
+                while (limiterSize > 0 && limiterFrame - limiterPeakFrames[limiterHead] > delays[0].size())
+                { limiterHead = (limiterHead + 1) % capacity; --limiterSize; }
+                while (limiterSize > 0 && limiterPeaks[(limiterHead + limiterSize - 1) % capacity] <= peak)
+                    --limiterSize;
+                const auto back = (limiterHead + limiterSize) % capacity;
+                limiterPeaks[back] = peak; limiterPeakFrames[back] = limiterFrame; ++limiterSize;
+                const auto maximum = limiterPeaks[limiterHead];
+                const auto bound = maximum > limiterCeiling ? limiterCeiling / maximum : 1.0;
+                limiterGain = std::min (bound, 1.0 + limiterRelease * (limiterGain - 1.0));
+                outL = delays[0][cursor] * limiterGain; outR = delays[1][cursor] * limiterGain;
+                delays[0][cursor] = drivenL; delays[1][cursor] = drivenR;
+                cursor = (cursor + 1) % delays[0].size(); ++limiterFrame;
+                break;
             }
             case Kind::gate:
             {
@@ -352,7 +388,7 @@ juce::Result NativeEffectPlugin::validateState (const juce::ValueTree& tree)
             return ! value.empty() && end == value.c_str()+value.size() && std::isfinite (output);
         };
         double type = 0;
-        if (! parse ("effectKind", 0, type) || type < 0 || type > static_cast<int> (Kind::gate) || std::floor (type) != type)
+        if (! parse ("effectKind", 0, type) || type < 0 || type > static_cast<int> (Kind::limiter) || std::floor (type) != type)
             return juce::Result::fail ("The project contains an invalid native effect type.");
         for (const auto& f : effectParameters (static_cast<Kind> (static_cast<int> (type))))
         {

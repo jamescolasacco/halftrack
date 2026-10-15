@@ -305,3 +305,7 @@ On a playing audio or MIDI track, open Add Device and choose Bitcrusher. Open it
 ## Noise gate (about one minute)
 
 Add Noise Gate to a playing track. Raise Threshold until quieter parts close, then adjust Floor, Attack, Hold and Release. Hysteresis should prevent rapid closing while levels sit just below the opening threshold. Duck should reduce louder passages instead. Set Dry / Wet to 0% for the dry signal, then undo/redo the change and save/reopen to check the controls. Bypass should restore the source.
+
+## Peak limiter (about one minute)
+
+Add Peak Limiter to a track and open its editor. Raise Input gain and lower Peak ceiling; loud peaks should stay controlled. Adjust Release to hear the gain recover at different speeds. Undo/redo a drag and save/reopen to check all three controls. Export a short clip and confirm its first and last sounds remain present and aligned with an unprocessed companion track. Bypass restores the original unprocessed level.

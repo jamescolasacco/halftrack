@@ -399,7 +399,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-021 | Glue Compressor | DYNAMICS | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-022 | Grain Delay | TIME | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-023 | Hybrid Reverb | REVERB | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-024 | Limiter | DYNAMICS | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-024 | Limiter | Original linked-stereo Peak Limiter, fixed lookahead, gain/ceiling/release and native latency reporting. Independent five-rate windows, driven complete exports, short/resampled/serial/parallel/return compensation and state/editor/allocation tests pass locally. True-peak, adaptive release, metering and numerical reference parity remain unverified. | PARTIAL — original native sample-peak device |
 | AFX-025 | Looper | LOOPER | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-026 | Multiband Dynamics | DYNAMICS | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-027 | Overdrive | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |

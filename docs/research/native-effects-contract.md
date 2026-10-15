@@ -1,6 +1,6 @@
 # Native effects implementation contract
 
-Halftrack now implements an eight-band equalizer, compressor, stereo delay, room reverb, bitcrusher and noise gate as original native devices. They insert on audio tracks, after MIDI instruments, or after return inputs; device order, bypass, removal, parameter gestures and saved state use the engine undo system. All parameters have named XML properties. Invalid state is rejected before replacing the active project.
+Halftrack now implements an eight-band equalizer, compressor, stereo delay, room reverb, bitcrusher, noise gate and peak limiter as original native devices. They insert on audio tracks, after MIDI instruments, or after return inputs; device order, bypass, removal, parameter gestures and saved state use the engine undo system. All parameters have named XML properties. Invalid state is rejected before replacing the active project.
 
 The reference manual identifies independently enabled filter bands, dynamics controls, feedback delay with stereo routing, and algorithmic reverberation as relevant workflows. These implementations cover subsets of those workflows; the manual does not establish their numerical algorithms. [Official audio effects reference](https://www.ableton.com/en/live-manual/12/live-audio-effect-reference/), consulted 2026-10-14. Recovered binary output is not compiled into these effects.
 
@@ -41,6 +41,12 @@ This intentionally aliases during rate reduction. There is no pre/post anti-alia
 A linked peak detector controls a linear attack/hold/release envelope. Separate opening and closing thresholds provide hysteresis; reopening during release resumes from current gain. Floor attenuation, Gate/Duck and parallel mix are adjustable. Zero attack/hold/release times are supported, and the minimum floor setting mutes exactly. Parameters, frame-count rules and default values are documented in the architecture contract.
 
 Hand-calculated sample sequences verify both stereo gains, cold-state and open-state hysteresis, exact hold frames, reopening, floor/mix arithmetic and duck inversion. Closed-form ramps are compared at 8/44.1/48/96 kHz. This original device does not yet include lookahead, external/filtered sidechains or reduction metering, and no reference envelope identity is claimed.
+
+## Peak limiter
+
+A linked stereo sample-peak detector uses a fixed one-millisecond lookahead rounded up to whole frames. A preallocated monotonic deque calculates the full delayed-frame/future-window maximum; gain immediately meets the ceiling and returns toward unity with a one-pole release. Input gain, peak ceiling and release are editable. This has intentional latency, reported to the native graph. Plugin bypass provides the unprocessed path; there is no parallel dry knob that would invalidate the ceiling.
+
+An independent brute-force window oracle verifies complete samples at 8/44.1/48/96/384 kHz. Impulses verify exact delay and stereo independence, while graph tests cover compensated edges, clips shorter than lookahead, serial instances, parallel tracks, a delayed return and bypass. This is an original sample-peak algorithm, without oversampling/true-peak protection, automatic release, selectable lookahead, reduction metering or measured reference identity.
 
 ## Control and verification boundaries
 

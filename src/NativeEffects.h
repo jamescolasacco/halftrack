@@ -2,6 +2,7 @@
 #include "Session.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <array>
+#include <cmath>
 #include <atomic>
 #include <span>
 #include <vector>
@@ -55,6 +56,11 @@ private:
     double gateAttackStep = 1, gateReleaseStep = 1;
     int gateHoldSamples = 0, gateHoldRemaining = 0;
     bool gateOpen = false;
+    std::vector<double> limiterPeaks;
+    std::vector<uint64_t> limiterPeakFrames;
+    uint64_t limiterFrame = 0;
+    size_t limiterHead = 0, limiterSize = 0;
+    double limiterGain = 1, limiterCeiling = 1, limiterDrive = 1, limiterRelease = 0;
     int ramp = 0;
     bool processed = false;
 };
@@ -85,8 +91,10 @@ public:
     void reset() override;
     void applyToBuffer (const tracktion::PluginRenderContext&) override;
     bool noTail() override { return kind == Session::EffectKind::compressor || kind == Session::EffectKind::gate; }
+    double getLatencySeconds() override
+    { return kind == Session::EffectKind::limiter ? std::ceil (sampleRate * .001) / sampleRate : 0.0; }
     double getTailLength() const override
-    { return kind == Session::EffectKind::delay ? 1800.0 : kind == Session::EffectKind::reverb ? 20.25 : kind == Session::EffectKind::equalizer ? 10.0 : kind == Session::EffectKind::bitcrusher ? .008 : 0.0; }
+    { return kind == Session::EffectKind::delay ? 1800.0 : kind == Session::EffectKind::reverb ? 20.25 : kind == Session::EffectKind::equalizer ? 10.0 : kind == Session::EffectKind::bitcrusher ? .008 : kind == Session::EffectKind::limiter ? std::ceil (sampleRate * .001) / sampleRate : 0.0; }
     bool takesMidiInput() override { return false; }
     bool takesAudioInput() override { return true; }
     int getNumOutputChannelsGivenInputs (int) override { return 2; }

@@ -150,3 +150,5 @@ Export mix options default to Stereo and normalization Off. Mono means the arith
 Bitcrusher defaults: implement deterministic hard quantization and sample holding before adding filter, jitter or dither modes. Use signed PCM-style clipping/rounding, a shared stereo capture clock and independent channel amplitudes. Fractional depth/interval controls are supported as continuous reductions; no proprietary quantizer algorithm or sound identity is implied.
 
 Noise Gate default: linked peak detection with linear, frame-counted attack/hold/release and separate close threshold. Use exact silence at -100 dB Floor and invert the opening envelope in Duck mode. Sidechains, lookahead and envelope displays require separate behavior/tests.
+
+Peak Limiter default: fixed one-millisecond lookahead rounded up to whole frames, linked stereo sample peaks, immediate attenuation and one-pole release. Expose gain, ceiling and release only; native plugin bypass handles the unprocessed path. True-peak/oversampling, adaptive release and selectable lookahead remain separate work.

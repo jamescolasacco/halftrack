@@ -250,10 +250,54 @@ void gateTests()
         check (error < 2e-8, "zero-time gate/duck switching retains the chosen floor and parallel dry path");
     }
 }
+void limiterTests()
+{
+    for (const double rate : { 8000.0, 44100.0, 48000.0, 96000.0, 384000.0 })
+    {
+        auto settings = defaultEffectSettings (Kind::limiter); settings.values[0] = 20; settings.values[1] = -6; settings.values[2] = 25;
+        const int latency = (int) std::ceil (rate * .001); const int count = latency * 5 + 211;
+        auto source = signal (count); // Independent oracle scans each complete future window.
+        for (int n = count/2; n < count; ++n) { source.setSample (0, n, .001f); source.setSample (1, n, -.002f); }
+        const auto output = run (source, settings, rate); const double ceiling = std::pow (10.0, -6.0 / 20);
+        double previousGain = 1, error = 0; bool belowCeiling = true;
+        const double release = std::exp (-1.0 / (rate * .025));
+        for (int n = 0; n < count; ++n)
+        {
+            double peak = 0;
+            for (int at = std::max (0, n-latency); at <= n; ++at)
+                for (int c = 0; c < 2; ++c) peak = std::max (peak, std::abs (source.getSample (c, at) * 10.0));
+            const double gain = std::min (peak > ceiling ? ceiling/peak : 1.0, 1.0+(previousGain-1.0)*release); previousGain = gain;
+            for (int c = 0; c < 2; ++c)
+            {
+                const double expected = n < latency ? 0 : source.getSample (c, n-latency)*10.0*gain;
+                error = std::max (error, std::abs (output.getSample (c, n)-expected));
+                belowCeiling = belowCeiling && std::abs (output.getSample (c, n)) <= ceiling + 1e-7;
+            }
+        }
+        check (belowCeiling, "every channel/sample remains below the limiter ceiling");
+        check (error < 4e-8, "complete independent lookahead-window oracle at " + juce::String (rate) + " Hz");
+        settings = defaultEffectSettings (Kind::limiter); settings.values[1] = 0;
+        juce::AudioBuffer<float> impulse (2, latency+2); impulse.clear(); impulse.setSample (0, 0, .5f); impulse.setSample (1, 0, -.25f);
+        const auto delayed = run (impulse, settings, rate);
+        bool exact = true; for (int n = 0; n < delayed.getNumSamples(); ++n)
+            exact = exact && delayed.getSample (0, n) == (n == latency ? .5f : 0) && delayed.getSample (1, n) == (n == latency ? -.25f : 0);
+        check (exact, "below-ceiling impulse is delayed exactly once with independent stereo amplitudes");
+    }
+}
+juce::AudioBuffer<float> engineReference (const juce::AudioBuffer<float>& input, const Settings& settings)
+{
+    if (settings.kind != Kind::limiter) return run (input, settings);
+    juce::AudioBuffer<float> padded (2, input.getNumSamples()+48); padded.clear();
+    for (int c = 0; c < 2; ++c) padded.copyFrom (c, 0, input, c, 0, input.getNumSamples());
+    const auto delayed = run (padded, settings);
+    juce::AudioBuffer<float> aligned (2, input.getNumSamples());
+    for (int c = 0; c < 2; ++c) aligned.copyFrom (c, 0, delayed, c, 48, input.getNumSamples());
+    return aligned;
+}
 void lifecycleTests()
 {
     auto input=signal(14000);
-    for(int kind=0;kind<=static_cast<int>(Kind::gate);++kind)
+    for(int kind=0;kind<=static_cast<int>(Kind::limiter);++kind)
     {
         auto s=defaultEffectSettings(static_cast<Kind>(kind));if(kind==0){s.values[2]=8;s.values[1]=400;}
         const auto expected=run(input,s);auto split=input;NativeEffectDSP dsp;dsp.prepare(48000,s.kind);dsp.configure(s);
@@ -261,16 +305,17 @@ void lifecycleTests()
         check(difference(split,expected)==0,"block partition invariance for "+juce::String(effectName(s.kind)));
         dsp.reset();split=input;dsp.processSamples(split.getWritePointer(0),split.getWritePointer(1),split.getNumSamples());check(difference(split,expected)==0,"reset restores deterministic output");
         auto bad=input;bad.setSample(0,0,std::numeric_limits<float>::quiet_NaN());bad.setSample(1,10,std::numeric_limits<float>::infinity());check(difference(run(bad,s),run(bad,s))==0,"nonfinite input does not poison state");
-        s.values[kind==0?33:kind==1?6:kind==2?3:kind==3?5:kind==4?4:7]=0;check(difference(run(input,s),input)==0,"zero wet is exact dry signal");
+        if (s.kind != Kind::limiter)
+        { s.values[kind==0?33:kind==1?6:kind==2?3:kind==3?5:kind==4?4:7]=0;check(difference(run(input,s),input)==0,"zero wet is exact dry signal"); }
     }
 }
 void writeAudio(const juce::File& file,const juce::AudioBuffer<float>& audio)
 {
     juce::WavAudioFormat format;std::unique_ptr<juce::OutputStream>stream(file.createOutputStream());auto writer=format.createWriterFor(stream,juce::AudioFormatWriterOptions().withSampleRate(48000).withNumChannels(2).withBitsPerSample(24));check(writer&&writer->writeFromAudioSampleBuffer(audio,0,audio.getNumSamples()),"write generated audio");
 }
-juce::AudioBuffer<float> readAudio(const juce::File& file)
+juce::AudioBuffer<float> readAudio(const juce::File& file, double rate = 48000)
 {
-    juce::AudioFormatManager f;f.registerBasicFormats();std::unique_ptr<juce::AudioFormatReader>r(f.createReaderFor(file));check(r&&r->sampleRate==48000&&r->numChannels==2,"read rendered stereo audio");juce::AudioBuffer<float>a(2,(int)r->lengthInSamples);check(r->read(&a,0,a.getNumSamples(),0,true,true),"decode all output frames");return a;
+    juce::AudioFormatManager f;f.registerBasicFormats();std::unique_ptr<juce::AudioFormatReader>r(f.createReaderFor(file));check(r&&r->sampleRate==rate&&r->numChannels==2,"read rendered stereo audio");juce::AudioBuffer<float>a(2,(int)r->lengthInSamples);check(r->read(&a,0,a.getNumSamples(),0,true,true),"decode all output frames");return a;
 }
 juce::ValueTree effectState(juce::ValueTree root)
 {
@@ -280,7 +325,7 @@ juce::ValueTree effectState(juce::ValueTree root)
 void projectTests(const juce::File& root)
 {
     const auto input=signal(20000);const auto file=root.getChildFile("source.wav");writeAudio(file,input);
-    for(int type=0;type<=static_cast<int>(Kind::gate);++type)
+    for(int type=0;type<=static_cast<int>(Kind::limiter);++type)
     {
         const auto kind=static_cast<Kind>(type);Session s(false);ok(s.importAudio(file,0),"import effect fixture");ok(s.addNativeEffect(0,kind),"insert "+juce::String(effectName(kind)));
         const auto id=s.snapshot().tracks[0].plugins[0].id;auto settings=defaultEffectSettings(kind);
@@ -295,9 +340,9 @@ void projectTests(const juce::File& root)
         ok(s.saveProject(project),"save all properties");ok(s.loadProject(project),"reopen all properties");check(s.snapshot().tracks[0].plugins[0].effect==settings,"every property round trips exactly");
         auto xml=juce::XmlDocument::parse(project);check(xml!=nullptr,"read disposable project XML");auto tree=juce::ValueTree::fromXml(*xml);effectState(tree).setProperty(fields[0].key,"nan",nullptr);const auto bad=root.getChildFile("bad.halftrack");check(tree.createXml()->writeTo(bad),"write malformed effect fixture");
         ok(s.setNativeEffectSettings(id,defaultEffectSettings(kind)),"make redo checkpoint");s.undo();check(s.loadProject(bad).failed()&&s.canRedo()&&s.snapshot().tracks[0].plugins[0].effect==settings,"malformed load retains current edit and redo");
-        settings=defaultEffectSettings(kind);if(type==0)settings.values[2]=6;if(type==2){settings.values[0]=10;settings.values[1]=17;}
+        settings=defaultEffectSettings(kind);if(type==0)settings.values[2]=6;if(type==2){settings.values[0]=10;settings.values[1]=17;}if(kind==Kind::limiter){settings.values[0]=20;settings.values[1]=-6;}
         ok(s.setNativeEffectSettings(id,settings),"configure audible effect");
-        const auto expected=run(input,settings);const auto render=root.getChildFile("render-"+juce::String(type)+".wav");ok(s.exportWav(render),"render effect through engine");check(difference(readAudio(render),expected)<2e-6,"every exported sample matches the separately exercised processor");
+        const auto expected=engineReference(input,settings);const auto render=root.getChildFile("render-"+juce::String(type)+".wav");ok(s.exportWav(render),"render effect through engine");check(difference(readAudio(render),expected)<2e-6,"every exported sample matches the separately exercised processor");
         if (type == 2 || type == 3)
         {
             juce::AudioBuffer<float> padded (2, input.getNumSamples()+48000); padded.clear();
@@ -330,6 +375,53 @@ void projectTests(const juce::File& root)
         }
         check (error < 2e-6, "sample hold completes its last captured interval, then returns to exact silence");
     }
+    for (const int frames : { 1, 7, 48, 49, 64, 257 })
+    {
+        juce::AudioBuffer<float> edges (2, frames); edges.clear();
+        edges.setSample (0, 0, .25f); edges.setSample (1, frames-1, -.125f);
+        const auto inputFile = root.getChildFile ("limiter-edges-" + juce::String (frames) + ".wav"); writeAudio (inputFile, edges);
+        Session edge (false); ok (edge.importAudio (inputFile, 0), "import edge-latency fixture");
+        const auto dryFile = root.getChildFile ("limiter-dry.wav"), limitedFile = root.getChildFile ("limiter-compensated.wav");
+        for (const double rate : { 44100.0, 48000.0, 96000.0 })
+        {
+            if (rate != 48000 && frames != 64) continue;
+            if (!edge.snapshot().tracks[0].plugins.empty()) ok (edge.removePlugin (0, 0), "remove previous rate's limiter");
+            ok (edge.exportWav (dryFile, rate, 24), "render dry edge reference at requested rate");
+            ok (edge.addNativeEffect (0, Kind::limiter), "insert actual lookahead device");
+            auto settings = defaultEffectSettings (Kind::limiter); settings.values[1] = 0;
+            ok (edge.setNativeEffectSettings (edge.snapshot().tracks[0].plugins[0].id, settings), "leave sub-ceiling edge signal unchanged");
+            ok (edge.exportWav (limitedFile, rate, 24), "render with native lookahead compensation");
+            check (difference (readAudio (limitedFile, rate), readAudio (dryFile, rate)) < 2e-6,
+                "native compensation preserves every frame, including sub-lookahead clips and resampled edges");
+            if (frames == 7 && rate == 48000)
+            {
+                ok (edge.addNativeEffect (0, Kind::limiter), "chain two independent lookahead devices");
+                ok (edge.exportWav (limitedFile), "render seven-frame clip through 96 samples of native latency");
+                check (difference (readAudio (limitedFile), readAudio (dryFile)) < 2e-6, "chained native latency preserves the complete short signal");
+            }
+        }
+    }
+    {
+        juce::AudioBuffer<float> edges (2, 257); edges.clear(); edges.setSample (0, 0, .125f); edges.setSample (1, 256, -.0625f);
+        const auto source = root.getChildFile ("parallel-limiter-source.wav"); writeAudio (source, edges);
+        Session parallel (false); ok (parallel.importAudio (source, 0), "import latency branch");
+        ok (parallel.importAudio (source, 1), "import independently aligned dry branch");
+        const auto dry = root.getChildFile ("parallel-dry.wav"), wet = root.getChildFile ("parallel-limited.wav");
+        ok (parallel.exportWav (dry), "render reference parallel sum");
+        ok (parallel.addNativeEffect (0, Kind::limiter), "limit only one parallel track");
+        ok (parallel.exportWav (wet), "render independently delayed branch");
+        check (difference (readAudio (wet), readAudio (dry)) < 2e-6, "native lookahead keeps the dry and processed tracks sample-aligned");
+        ok (parallel.addReturnTrack ("Limited return"), "add shared return path");
+        const auto returnId = parallel.snapshot().tracks.back().id;
+        ok (parallel.setTrackSendGain (0, returnId, -6), "feed delayed source into shared return");
+        ok (parallel.exportWav (dry), "render reference source and return mix");
+        ok (parallel.addNativeEffect (2, Kind::limiter), "add independent lookahead on return");
+        ok (parallel.exportWav (wet), "render serial and parallel return compensation");
+        check (difference (readAudio (wet), readAudio (dry)) < 2e-6, "return lookahead preserves the complete source/return mix");
+        ok (parallel.setPluginEnabled (0, 0, false), "bypass source limiter while return remains delayed");
+        ok (parallel.exportWav (wet), "render changing branch latency");
+        check (difference (readAudio (wet), readAudio (dry)) < 2e-6, "bypass recalculates native branch latency without shifting the mix");
+    }
     {
         Session synced(false);ok(synced.importAudio(file,0),"import tempo-follow source");ok(synced.addNativeEffect(0,Kind::delay),"add tempo-follow delay");
         auto settings=defaultEffectSettings(Kind::delay);settings.values[2]=0;settings.values[3]=1;settings.values[8]=1;settings.values[9]=settings.values[10]=0;
@@ -350,13 +442,13 @@ void projectTests(const juce::File& root)
     auto first=chain.snapshot().tracks[0].plugins[0];auto gain=first.effect;gain.values[32]=12;ok(chain.setNativeEffectSettings(first.id,gain),"set pre-compression gain");
     const auto one=root.getChildFile("gain-first.wav"),two=root.getChildFile("gain-last.wav");ok(chain.exportWav(one),"render gain before compressor");ok(chain.movePlugin(0,0,1),"move actual effect order");ok(chain.exportWav(two),"render gain after compressor");check(difference(readAudio(one),readAudio(two))>.01,"order changes nonlinear output");chain.undo();ok(chain.exportWav(two),"undo device order");check(difference(readAudio(one),readAudio(two))==0,"undo order restores bit-identical output");
     Session midi(false);ok(midi.addMidiTrack("Effect instrument"),"add MIDI track");const auto tracks=midi.snapshot().tracks;const int track=(int)tracks.size()-1;ok(midi.addMidiClip(tracks.back().id,0,1),"add MIDI fixture");const auto clip=midi.snapshot().tracks.back().clips[0].id;ok(midi.addMidiNote(clip,60,0,1,.6f),"add generated note");
-    for(int k=0;k<=static_cast<int>(Kind::gate);++k)ok(midi.addNativeEffect(track,static_cast<Kind>(k)),"insert device after instrument");const auto result=root.getChildFile("midi-effects.wav");ok(midi.exportWav(result,48000,24,1),"render instrument through all native devices and tail");auto rendered=readAudio(result);check(rendered.getMagnitude(0,rendered.getNumSamples())>.001,"instrument chain remains audible");
-    ok(midi.addReturnTrack("Effect return"),"create return");const int ret=(int)midi.snapshot().tracks.size()-1;for(int k=0;k<=static_cast<int>(Kind::gate);++k)ok(midi.addNativeEffect(ret,static_cast<Kind>(k)),"insert device after return input");
+    for(int k=0;k<=static_cast<int>(Kind::limiter);++k)ok(midi.addNativeEffect(track,static_cast<Kind>(k)),"insert device after instrument");const auto result=root.getChildFile("midi-effects.wav");ok(midi.exportWav(result,48000,24,1),"render instrument through all native devices and tail");auto rendered=readAudio(result);check(rendered.getMagnitude(0,rendered.getNumSamples())>.001,"instrument chain remains audible");
+    ok(midi.addReturnTrack("Effect return"),"create return");const int ret=(int)midi.snapshot().tracks.size()-1;for(int k=0;k<=static_cast<int>(Kind::limiter);++k)ok(midi.addNativeEffect(ret,static_cast<Kind>(k)),"insert device after return input");
 }
 }
 int runNativeEffectsTests(const juce::File& artifacts)
 {
-    try {const auto root=artifacts.getChildFile("effects-"+juce::Uuid().toString());ok(root.createDirectory(),"create fixtures");equalizerTests();compressorTests();delayTests();syncedDelayTests();reverbTests();bitcrusherTests();gateTests();lifecycleTests();projectTests(root);runNativeEffectEditorTests(root);std::cout<<"Native effects passed: "<<root.getFullPathName()<<std::endl;return 0;}
+    try {const auto root=artifacts.getChildFile("effects-"+juce::Uuid().toString());ok(root.createDirectory(),"create fixtures");equalizerTests();compressorTests();delayTests();syncedDelayTests();reverbTests();bitcrusherTests();gateTests();limiterTests();lifecycleTests();projectTests(root);runNativeEffectEditorTests(root);std::cout<<"Native effects passed: "<<root.getFullPathName()<<std::endl;return 0;}
     catch(const std::exception& e){std::cerr<<"FAIL native effects: "<<e.what()<<std::endl;return 1;}
 }
 }

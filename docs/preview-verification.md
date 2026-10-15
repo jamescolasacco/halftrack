@@ -1,5 +1,9 @@
 # Preview verification
 
+## Current export and native-device checkpoint (2026-10-15)
+
+The combined mono/peak-normalization, Bitcrusher, Noise Gate and Peak Limiter implementation passes all 24 local Mac acceptance suites in 381.19 seconds. Independent signal checks, project/history/editor integration, allocation guards and compensated export edges are recorded in the progress log and native effects contract. Actual device-editor snapshots were inspected. The last published export checkpoint `62e2fed` passes all three platforms in [CI 38736655759](https://github.com/jamescolasacco/halftrack/actions/runs/38736655759); newer device commits require their own CI result. Physical hardware, arbitrary commercial plugins and numerical reference parity remain separate checks. Historical evidence below retains its original scope.
+
 Latest application source: `ea24869`, adding sine/noise/pulse-width synthesis, native controls and patch persistence/undo. All eight local Mac suites pass in **133.15 seconds**; [macOS, Windows and Linux CI](https://github.com/jamescolasacco/halftrack/actions/runs/38518528688) also passes clean builds, tests and source-inclusive packaging. The verified Mac archive is `Halftrack-preview-darwin-arm64-ea24869.tar.gz`, SHA-256 `84ae468976c7a731132328beec607c88ead67e2fbf13ae9abb273020db1f0b72`. Its executable and corresponding source match the tested commit. Generated 1100×720 UI rendering was inspected; physical input/audio and reference-instrument equivalence remain unverified. Earlier checkpoints below retain their original scope.
 
 Evidence includes checkpoints through **2026-10-14**. This records the original audio/MIDI preview and subsequent research-driven corrections. It is not a completed DAW or a feature/sound parity certification.
