@@ -1700,6 +1700,48 @@ Result Session::updateMidiNotes (const String& clipId, const std::vector<MidiNot
     }
     impl->changed(); return Result::ok();
 }
+Result Session::splitMidiNotes(const String& clipId,const juce::StringArray& ids,double beat,juce::StringArray& insertedIds)
+{
+    if(impl->exporting) return Result::fail("Finish or cancel the current export first.");
+    auto* clip=impl->midiClip(clipId);if(!clip) return Result::fail("MIDI clip not found.");
+    if(!std::isfinite(beat)||beat<0||beat>clip->getLengthInBeats().inBeats()) return Result::fail("Place the split marker inside the clip.");
+    if(clip->getClipTrack()->isFrozen(te::Track::anyFreeze)) return Result::fail("Unfreeze the track before splitting notes.");
+    std::map<String,te::MidiNote*> existing;
+    for(auto* note:clip->getSequence().getNotes())
+    {
+        const auto id=note->state.getProperty(midiNoteIDProperty).toString();
+        auto [entry,inserted]=existing.emplace(id,note);if(!inserted)entry->second=nullptr;
+    }
+    struct Split {te::MidiNote* note;double start,end;String id;};
+    std::vector<Split> splits;std::set<String> requested;
+    for(const auto& id:ids)
+    {
+        if(id.isEmpty()||!requested.insert(id).second) return Result::fail("Each selected note needs a unique identifier.");
+        const auto entry=existing.find(id);
+        if(entry==existing.end()||!entry->second) return Result::fail("MIDI note not found or its identifier is ambiguous.");
+        auto* note=entry->second;const auto start=note->getStartBeat().inBeats(),end=start+note->getLengthBeats().inBeats();
+        if(beat<=start||beat>=end)continue;
+        if(note->state.getNumChildren()!=0) return Result::fail("Splitting per-note expression is not supported yet.");
+        for(const auto part:std::array<std::pair<double,double>,2>{{{start,beat-start},{beat,end-beat}}})
+            if(auto valid=impl->validateNote(*clip,note->getNoteNumber(),part.first,part.second,note->getVelocity()/127.0f);valid.failed())return valid;
+        splits.push_back({note,start,end,{}});
+    }
+    if(splits.empty()){insertedIds.clear();return Result::ok();}
+    if(splits.size()>static_cast<size_t>(std::max(0,100000-clip->getSequence().getNumNotes())))return Result::fail("The MIDI clip has reached its note limit.");
+    std::set<String> unavailable;
+    for(const auto& entry:existing)unavailable.insert(entry.first);
+    juce::StringArray newIds;
+    for(auto& split:splits){do{split.id=juce::Uuid().toString();}while(!unavailable.insert(split.id).second);newIds.add(split.id);}
+    impl->transaction("Split MIDI notes");auto* undo=&impl->edit->getUndoManager();
+    for(const auto& split:splits)
+    {
+        auto* right=clip->getSequence().addNote(*split.note,undo);
+        right->state.setProperty(midiNoteIDProperty,split.id,undo);
+        right->setStartAndLength(te::BeatPosition::fromBeats(beat),te::BeatDuration::fromBeats(split.end-beat),undo);
+        split.note->setStartAndLength(te::BeatPosition::fromBeats(split.start),te::BeatDuration::fromBeats(beat-split.start),undo);
+    }
+    insertedIds=std::move(newIds);impl->changed();return Result::ok();
+}
 Result Session::transformMidiNotes (const String& clipId, const juce::StringArray& ids, NoteTransform operation, double grid)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

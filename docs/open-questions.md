@@ -118,3 +118,8 @@ Default: update after the second tap, average at most four recent intervals, ign
 ### Clip activation while playing
 
 Default: deactivate a whole audio/MIDI clip without removing its contents or Session ownership. Send note release through the engine; existing synth/effect tails may decay. Re-enabling allows future Session events without relaunch; full held-note/controller chasing and reference-exact transition timing remain unverified. Frozen tracks must be unfrozen first. Unmodified 0 acts on whole clips in Arrangement/Session only; note activation is separate work.
+
+
+### MIDI note split policy
+
+Default: split crossing notes at the piano-roll marker, using the current selection or all notes when none are selected. Exact note edges do nothing; any sub-1/960-beat fragment rejects the group. Splits retrigger the note and preserve ordinary properties with fresh right-half identities. Per-note expression children are rejected until their envelopes can be cropped and shifted explicitly.

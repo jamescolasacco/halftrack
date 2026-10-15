@@ -257,3 +257,8 @@ Physical rhythmic input check: **NOT RUN** until performed. Click transport **Ta
 ## Clip activation (about one minute)
 
 Native input/listening check: **NOT RUN** until performed. Select an audio clip in Arrangement, press **0**, and confirm its label shows **OFF /**, playback is silent after any effect tail, and the clip stays in place. Toggle again and repeat with a held MIDI note. Undo/redo while playing; each change should take one step and other tracks should continue. Repeat in Session using the context menu: a disabled clip retains its slot and launch ownership, and re-enabling resumes future events. Save/reopen the disabled state. Typing 0 into a number or name field must not disable a clip.
+
+
+## Split MIDI notes (about 30 seconds)
+
+Native input/listening check: **NOT RUN** until performed. Draw two long overlapping notes, click the piano ruler halfway through them, and press **Cmd/Ctrl+E**. Both notes should split at the marker; the new right halves should be selected. Undo should rejoin both in one step. Repeat after selecting only one note, and in a Session slot. Listen for the new note onset at the split. The Note tools menu offers the same operation.

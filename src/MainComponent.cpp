@@ -1899,6 +1899,7 @@ private:
             if (code == juce::KeyPress::escapeKey) { clearSelection(); repaint(); return true; }
             if (clip != nullptr && key.getModifiers().isCommandDown())
             {
+                if ((code == 'E' || code == 'e') && !key.getModifiers().isShiftDown()) { splitNotesAtMarker(); return true; }
                 if (code == 'U' || code == 'u')
                 { transformSelected (key.getModifiers().isShiftDown() ? Session::NoteTransform::quantizeEnds : Session::NoteTransform::quantizeStarts); return true; }
                 if (code == 'C' || code == 'c') { copySelectedNotes (false); return true; }
@@ -2120,6 +2121,17 @@ private:
                 operation == Session::NoteTransform::fixedLength ? defaultLength() : snapBeats()));
             owner.refresh();
         }
+        void splitNotesAtMarker()
+        {
+            const auto* clip=owner.currentMidiClip();if(!clip)return;
+            const auto id=clip->id;juce::StringArray selected;
+            for(const auto& note:clip->notes)if(selectedNoteIds.empty()||selectedNoteIds.contains(note.id))selected.add(note.id);
+            endGesture();juce::StringArray inserted;
+            const auto result=owner.session.splitMidiNotes(id,selected,insertionBeat,inserted);owner.report(result);
+            if(result.wasOk()&&!inserted.isEmpty())
+            {clearSelection();for(const auto& note:inserted)selectedNoteIds.insert(note);selectedNoteId=inserted[0];}
+            owner.refresh();
+        }
         void showNoteMenu()
         {
             juce::PopupMenu popup;
@@ -2132,15 +2144,17 @@ private:
             popup.addSeparator();
             popup.addItem (2, "Copy Notes", hasSelectedNote()); popup.addItem (3, "Cut Notes", hasSelectedNote());
             popup.addItem (4, "Paste Notes at Marker", ! noteClipboard.empty()); popup.addItem (5, "Duplicate Notes");
+            popup.addItem (7, "Split Notes at Marker", hasNotes);
             popup.addSeparator(); popup.addItem (1, "Delete Selected Notes");
             popup.addSeparator(); popup.addItem (6, "Notes clipboard: Halftrack only", false);
             auto safe = juce::Component::SafePointer<PianoRoll> (this);
-            const auto clipId = loadedClip; const auto ids = selectedNoteIds;
-            popup.showMenuAsync (juce::PopupMenu::Options(), [safe, clipId, ids] (int result)
+            const auto clipId = loadedClip; const auto ids = selectedNoteIds; const auto marker=insertionBeat;
+            popup.showMenuAsync (juce::PopupMenu::Options(), [safe, clipId, ids, marker] (int result)
             {
                 if (safe == nullptr || safe->loadedClip != clipId || safe->selectedNoteIds != ids) return;
                 if (result >= 10 && result <= 17) safe->transformSelected (static_cast<Session::NoteTransform> (result-10));
                 if (result == 1) safe->deleteSelectedNote();
+                if (result == 7 && safe->insertionBeat==marker) safe->splitNotesAtMarker();
                 const char command = result == 2 ? 'C' : result == 3 ? 'X' : result == 4 ? 'V' : result == 5 ? 'D' : 0;
                 if (command != 0) safe->keyPressed (juce::KeyPress (command, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0));
             });
@@ -4882,6 +4896,32 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     }
     check(session.removeClip(0,0).wasOk()&&session.importAudio(audioFixture,0).wasOk(),"replace the clip after its context action was captured");refresh();
     setClipActiveFromUI(activationAudio,false);check(state.tracks[0].clips[0].active&&state.tracks[0].clips[0].id!=activationAudio,"stale context identity cannot deactivate a replacement clip");
+    check(session.newProject().wasOk()&&session.addMidiTrack("Split notes").wasOk(),"prepare note split UI");refresh();
+    const auto splitTrack=state.tracks.back().id;check(session.addMidiClip(splitTrack,0,16).wasOk(),"prepare marker split clip");refresh();
+    const auto splitClip=state.tracks.back().clips[0].id;juce::StringArray splitSource;
+    check(session.addMidiNotes(splitClip,{{"",60,0,4,.8f},{"",64,1,4,.5f},{"",67,5,1,.7f}},splitSource).wasOk(),"prepare note split phrase");
+    refresh();showArrangementView();selectArrangementClip(splitClip);openPianoRoll();pianoRoll.fit();markerClick(2);
+    const auto splitKey=commandKey('E');check(pianoRoll.keyPressed(splitKey)&&currentMidiClip()->notes.size()==5,"Cmd/Ctrl E splits all crossing notes when none are selected");
+    check(noteById(splitSource[0]).lengthBeats==2&&noteById(splitSource[1]).lengthBeats==1&&noteById(splitSource[2]).lengthBeats==1,"marker split uses clip-relative beats and leaves other notes unchanged");
+    const auto splitBeforePitch=currentMidiClip()->notes;const auto splitIds=noteIds(splitBeforePitch);pianoRoll.keyPressed(juce::KeyPress(juce::KeyPress::upKey));
+    bool rightHalvesMoved=true;int rightCount=0;
+    for(const auto& note:splitBeforePitch)if(!splitSource.contains(note.id)){++rightCount;rightHalvesMoved=rightHalvesMoved&&noteById(note.id).pitch==note.pitch+1;}
+    check(rightHalvesMoved&&rightCount==2&&noteById(splitSource[0]).pitch==60&&noteById(splitSource[1]).pitch==64&&noteById(splitSource[2]).pitch==67,"split selects exactly the new right halves without selecting originals");
+    pianoRoll.keyPressed(undo);pianoRoll.keyPressed(undo);check(currentMidiClip()->notes.size()==3,"one undo rejoins all split notes");
+    pianoRoll.keyPressed(redo);check(noteIds(currentMidiClip()->notes)==splitIds,"split redo retains all note identities");pianoRoll.keyPressed(undo);
+    markerClick(2);groupClick(groupPoint(.5,60));pianoRoll.keyPressed(splitKey);
+    check(currentMidiClip()->notes.size()==4&&noteById(splitSource[1]).lengthBeats==4,"selected-note split leaves the other intersecting note whole");
+    {
+        juce::TextEditor editor;juce::DocumentWindow focusWindow("Halftrack split shortcut test",panel,juce::DocumentWindow::closeButton);
+        focusWindow.setContentNonOwned(&editor,false);focusWindow.setBounds(120,120,260,80);focusWindow.setVisible(true);editor.grabKeyboardFocus();
+        for(int i=0;i<4&&!editor.hasKeyboardFocus(true);++i){juce::MessageManager::getInstance()->runDispatchLoopUntil(10);editor.grabKeyboardFocus();}
+        check(editor.hasKeyboardFocus(true)&&!pianoRoll.keyPressed(splitKey)&&currentMidiClip()->notes.size()==4,"note split shortcut does not consume text editing");
+        editor.giveAwayKeyboardFocus();focusWindow.clearContentComponent();
+    }
+    check(session.addMidiClipToSlot(splitTrack,0,16).wasOk(),"prepare Session note split");refresh();const auto slotSplit=state.tracks.back().slots[0].clip.id;
+    check(session.addMidiNote(slotSplit,60,0,4,.8f).wasOk(),"draw Session note to split");refresh();showSessionView();selectLauncherSlot(2,0);openPianoRoll();pianoRoll.fit();markerClick(2);pianoRoll.keyPressed(splitKey);
+    check(currentMidiClip()->id==slotSplit&&currentMidiClip()->notes.size()==2&&state.tracks[2].clips[0].notes.size()==4,"Session marker splits only the selected slot's notes");
+
 
 
 }
