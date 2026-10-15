@@ -18,6 +18,7 @@ public:
     void requestClose (std::function<void()> onClose);
    #if HALFTRACK_TESTS_ENABLED
     static int runInteractionTests();
+    static int runExportInteractionTests();
    #endif
 
 private:

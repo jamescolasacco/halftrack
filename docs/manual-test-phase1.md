@@ -323,3 +323,12 @@ These checks are NOT RUN until a person completes them on the candidate build. U
 6. Resize the editor, zoom/scroll, delete a point, and undo/redo it. Close it while playback continues; the music must continue and the main window must remain usable.
 
 Record native pointer delivery and actual listening separately from automated pointer-handler and offline-render tests. Volume interpolation uses the engine's fader scale; it is not a straight decibel ramp. Automation recording, arbitrary plug-in parameters, master/send envelopes, clip envelopes and curved/weighted shapes remain outside this implementation.
+
+
+### Export a section of a song
+
+Manual walkthrough: NOT RUN. The following extends the main smoke test.
+
+1. Put a held MIDI note and a delay before the start of a short loop range. In **Export Audio**, select **Loop range**. The range endpoints should match the ruler even when looping is off; extra tail is unavailable for this exact interval. Export and listen for the held note/delay already in progress at the file's start.
+2. Select **Custom range**, enter a start after its end, then choose the destination. The dialog must stay open with an error. Correct the range and export a mono normalized FLAC; check duration and both channels' contribution.
+3. Return to **Entire arrangement** and verify the saved tail choice is available again. Cancel a long export into an existing file; the old file must remain intact and project undo/redo must still work.

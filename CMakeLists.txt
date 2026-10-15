@@ -189,6 +189,9 @@ if(BUILD_TESTING)
     add_test(NAME latency-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-latency ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(latency-acceptance PROPERTIES TIMEOUT 90
         ENVIRONMENT "HALFTRACK_TEST_LATENCY_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestLatency_VST3>/../..")
+    add_test(NAME export-ui-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-export-ui)
+    set_tests_properties(export-ui-acceptance PROPERTIES TIMEOUT 90
+        ENVIRONMENT "HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY=${CMAKE_BINARY_DIR}/test-artifacts/ui-snapshots")
     add_test(NAME ui-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-ui)
     set_tests_properties(ui-acceptance PROPERTIES TIMEOUT 90
         ENVIRONMENT "HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY=${CMAKE_BINARY_DIR}/test-artifacts/ui-snapshots")

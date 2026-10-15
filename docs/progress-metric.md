@@ -43,3 +43,5 @@ The original Noise Gate adds bounded partial coverage for AFX-020: 36/246 (14.6%
 The original Peak Limiter adds bounded partial coverage for AFX-024: 37/246 (15.0%). Tested sample peaks and native latency compensation do not certify true-peak behavior, complete device parity or overall application completion.
 
 Graphical track volume and pan automation adds bounded partial coverage for MIX-013: 38/246 (15.4%). Generated audio, editing, history and project tests cover these two native mixer targets. This does not establish other targets, capture/override, curved segments or complete reference parity.
+
+Exact selected-range export deepens PRJ-012 without adding a row: coverage remains 38/246 (15.4%). Equality to slices of complete Halftrack renders proves the exercised internal history/selection behavior, not matching reference-application audio.

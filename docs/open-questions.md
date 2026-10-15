@@ -157,3 +157,8 @@ Pending device insertion belongs to the project instance and track that opened t
 
 
 - Initial automation scope: provide editable arrangement-time track volume and pan curves through the native mixer before adding write/touch/latch recording or third-party parameter automation. Default interpolation follows native fader coordinates for volume and linear pan; disabled lanes retain their points, and empty lanes use manual settings. Beat positions follow tempo edits. The UI has its own resizable editor, with a stable project identity. This is a scoped working feature, not a claim of complete automation parity.
+
+
+### Selected-range export default
+
+An explicit range exports exactly its chosen seconds, rounded to the nearest output-sample boundaries. Render the arrangement prefix first so held MIDI notes, automation and stateful effects reach the start naturally. Extra tail is unavailable in this initial range mode: select a later endpoint to include the continuing mix. Whole-arrangement export retains its tail options. This avoids silently including later clips as an alleged isolated effect tail. Normalization measures only the exported interval; source project state and history remain unchanged.

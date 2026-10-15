@@ -229,6 +229,12 @@ public:
             quit();
             return;
         }
+        if (args.contains ("--self-test-export-ui"))
+        {
+            setApplicationReturnValue (MainComponent::runExportInteractionTests());
+            quit();
+            return;
+        }
         if (args.contains ("--self-test-ui"))
         {
             setApplicationReturnValue (MainComponent::runInteractionTests());
