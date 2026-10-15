@@ -168,3 +168,16 @@ The final Mac archive `Halftrack-preview-darwin-arm64-fc70170.tar.gz` is 61,839,
 Actual new behavior: independent-media Cut/Copy/Paste across projects, source-preserving edge trim and slip gestures, cross-track movement through the destination mixer, stable identity during sorting, and one-step undo for each gesture. Unsupported warped/grouped/multi-take clipboard cases are rejected. Clipboard file copying is synchronous on the message thread and can pause the UI for large media. No proprietary source or extracted analysis output is packaged.
 
 Cross-platform checkpoint: [38682551893](https://github.com/jamescolasacco/halftrack/actions/runs/38682551893) passes Linux build/tests/packaging and the Mac test step. Windows compiles and passes ten suites, but the new clipboard suite fails immediate removal of a still-mapped obsolete fixture file. A bounded idle-reader teardown correction retains the requirement that the old file actually be deleted before Paste. The corrected fixture passes locally in 14.84 s; its platform rerun is pending. Physical device/listening tests, signing/notarization and complete reference equivalence remain unverified.
+
+
+## Arrangement locators, reversal and MIDI interchange — 2026-10-15
+
+Implementation source: `d3581ce4b30af1cad6eb414bd869770b730f8416`. This package includes the published clipboard, trim/slip and cross-track editing work plus named Arrangement locators, non-destructive audio reversal and Standard MIDI File interchange. The reversal regression is fixed by retaining original channel metadata while native reversed playback is pending; immediate export and redo are tested without sleeps.
+
+- Package: `Halftrack-preview-darwin-arm64-d3581ce.tar.gz` (61,902,513 bytes), SHA256 `5d7e16a92b9bfdc9e84b7bf5b4fda6ed0bb2b32927fe91c82552534c12e40558`.
+- Executable: 25,265,208 bytes, SHA256 `cea83a8affa07744328445ec34bf6e01b242b1a261df635b879187a7e1cfe23b`.
+- Fresh extraction verifies executable identity and all 92 committed source files. All 4,424 JUCE and 1,545 Tracktion source files match the actual patched build inputs; required license notices are present. Generated/private artifacts are excluded from Halftrack's source archive.
+- The extracted app passes its locator, audio-clip, MIDI-file and production UI suites. These tests run the shipped executable.
+- The complete combined local suite passes 14/14 in 185.09 s before the final MIDI order/boundary additions. Those additions pass the MIDI suite in 3.28 s and UI suite in 3.29 s. The source callback guard passes nine fixtures across 42 owned bodies; Python runs 39 tests, 37 passed and two optional integrations skipped.
+
+[CI 38688435182](https://github.com/jamescolasacco/halftrack/actions/runs/38688435182) is validating this exact implementation on macOS, Windows and Linux. The preceding locator revision `e011458` passed all three platforms. The separate reversal run was superseded by this combined source; it is not claimed green. Native chooser/mouse/listening walkthroughs, physical interface measurements and paired reference equivalence remain unverified. Full feature parity is unfinished.
