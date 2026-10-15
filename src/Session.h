@@ -196,6 +196,7 @@ public:
     juce::Result record();
     void seek (double seconds);
     void setTempo (double bpm);
+    juce::Result tapTempo (double monotonicSeconds); // Message-thread tap time, not project time.
     juce::Result setMetronome (const MetronomeSettings&);
     juce::Result setRecordQuantisation (RecordQuantisation);
     void setLoop (bool enabled, double startSeconds, double endSeconds);

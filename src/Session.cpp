@@ -795,8 +795,10 @@ struct Session::Impl
         refreshRouting();
         edit->dispatchPendingUpdatesSynchronously();
     }
+    void resetTapTempo() { lastTap=-1; numTapIntervals=nextTapInterval=0; }
     void prepareEdit()
     {
+        resetTapTempo();
         edit->editFileRetriever = [this] { return editLocation(); };
         flushStructuralUpdates();
         edit->playInStopEnabled = true;
@@ -860,6 +862,9 @@ struct Session::Impl
     te::Engine engine;
     bool useDevices;
     bool explicitChanges = false, pristineNewDocument = false, exporting = false;
+    double lastTap=-1;
+    std::array<double,4> tapIntervals {};
+    int numTapIntervals=0, nextTapInterval=0;
     File scratch, projectFile;
     juce::ValueTree audioClipboard, midiClipboard;
     double midiClipboardBeats = 0;
@@ -2317,10 +2322,34 @@ void Session::setTempo (double bpm)
 {
     if (impl->exporting) return;
     if (! std::isfinite (bpm)) return;
+    impl->resetTapTempo();
     const auto value = juce::jlimit (te::TempoSetting::minBPM, te::TempoSetting::maxBPM, bpm);
     auto* tempo = impl->edit->tempoSequence.getTempo (0);
     if (tempo->getBpm() == value) return;
     impl->transaction ("Tempo"); tempo->setBpm (value); impl->changed();
+}
+Result Session::tapTempo(double seconds)
+{
+    if (impl->exporting) return Result::fail("Finish or cancel the current export first.");
+    if (!std::isfinite(seconds) || seconds<0 || (impl->lastTap>=0 && seconds<impl->lastTap))
+        return Result::fail("Tap timestamps must be finite and monotonic.");
+    const double interval=seconds-impl->lastTap;
+    if (impl->lastTap<0 || interval>60.0/te::TempoSetting::minBPM+1e-9)
+    {
+        impl->resetTapTempo();impl->lastTap=seconds;return Result::ok();
+    }
+    // Ignore switch bounce without advancing the anchor or touching history.
+    if (interval<60.0/te::TempoSetting::maxBPM-1e-9) return Result::ok();
+    impl->lastTap=seconds;
+    impl->tapIntervals[(size_t)impl->nextTapInterval]=interval;
+    impl->nextTapInterval=(impl->nextTapInterval+1)%4;
+    impl->numTapIntervals=std::min(4,impl->numTapIntervals+1);
+    double elapsed=0;
+    for (int i=0;i<impl->numTapIntervals;++i) elapsed+=impl->tapIntervals[(size_t)i];
+    const double bpm=juce::jlimit(te::TempoSetting::minBPM,te::TempoSetting::maxBPM,60.0*impl->numTapIntervals/elapsed);
+    auto* tempo=impl->edit->tempoSequence.getTempo(0);
+    if (std::abs(tempo->getBpm()-bpm)<1e-9) return Result::ok();
+    impl->transaction("Tap tempo");tempo->setBpm(bpm);impl->changed();return Result::ok();
 }
 Result Session::setMetronome (const MetronomeSettings& settings)
 {
@@ -2425,6 +2454,7 @@ void Session::undo()
 {
     if (impl->exporting || impl->edit->getTransport().isRecording()) return;
     const auto monitored=impl->monitoredMidiTracks();
+    impl->resetTapTempo();
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshParameterValues();
     impl->releaseStoppedMidiInputs(monitored);sendChangeMessage();
 }
@@ -2432,6 +2462,7 @@ void Session::redo()
 {
     if (impl->exporting || impl->edit->getTransport().isRecording()) return;
     const auto monitored=impl->monitoredMidiTracks();
+    impl->resetTapTempo();
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshParameterValues();
     impl->releaseStoppedMidiInputs(monitored);sendChangeMessage();
 }

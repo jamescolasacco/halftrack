@@ -164,13 +164,13 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &tempo, &loopButton, &clickButton, &clickSettingsButton, &positionLabel,
+                 &playButton, &stopButton, &recordButton, &tempo, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &ruler, &viewport,
                  &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &deviceChain })
             addAndMakeVisible (child);
 
-        for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &loopButton, &clickButton, &clickSettingsButton,
+        for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
                  &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton, &folderButton,
                  &upButton, &zoomIn, &zoomOut, &fitButton })
         {
@@ -186,6 +186,8 @@ public:
         tempo.setJustificationType (juce::Justification::centred);
         tempo.setColour (juce::Label::backgroundColourId, background);
         tempo.setTooltip ("Tempo: 20–999 beats per minute. Double-click to edit.");
+        tapButton.setName("Tap tempo");tapButton.setTooltip("Tap a steady beat to set tempo. A pause over three seconds starts a new estimate.");
+        tapButton.onClick=[this]{report(session.tapTempo(juce::Time::getMillisecondCounterHiRes()*.001));refresh();};
         tempo.onTextChange = [this]
         {
             const auto text = tempo.getText().trim().toStdString();
@@ -333,7 +335,8 @@ public:
         auto toolbar = toolbarBounds.reduced (12, 10);
         toolbar.removeFromLeft (139);
         tempo.setBounds (toolbar.removeFromLeft (55));
-        toolbar.removeFromLeft (17);
+        toolbar.removeFromLeft (6);tapButton.setBounds(toolbar.removeFromLeft(36));
+        toolbar.removeFromLeft (11);
         playButton.setBounds (toolbar.removeFromLeft (34));
         stopButton.setBounds (toolbar.removeFromLeft (34));
         recordButton.setBounds (toolbar.removeFromLeft (34));
@@ -2478,7 +2481,7 @@ private:
     juce::AudioFormatManager formats;
     juce::AudioThumbnailCache thumbnailCache { 128 };
     TransportButton playButton { TransportButton::play }, stopButton { TransportButton::stop }, recordButton { TransportButton::record };
-    juce::TextButton loopButton { "Loop" }, clickButton { "Click" }, clickSettingsButton { "..." }, audioButton { "Audio Setup" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
+    juce::TextButton tapButton { "Tap" }, loopButton { "Loop" }, clickButton { "Click" }, clickSettingsButton { "..." }, audioButton { "Audio Setup" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
                      sessionTab { "Session" }, arrangementTab { "Arrangement" }, pianoTab { "Piano Roll" }, importButton { "Import Audio" },
                      filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" },
                      zoomIn { "+" }, zoomOut { "-" }, fitButton { "Fit" };
@@ -4786,6 +4789,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(state.tracks.size()==beforeStaleDuplicate,"stale duplicate action cannot copy a replacement track");
 
     check(session.newProject().wasOk(),"prepare clean tempo editor fixture");refresh();
+    auto* tap=dynamic_cast<juce::Button*>(findNamed(*this,"Tap tempo"));
+    check(tap && tap->isVisible(),"transport exposes tap tempo");
+    const double beforeTap=juce::Time::getMillisecondCounterHiRes()*.001;tap->onClick();
+    const double afterTap=juce::Time::getMillisecondCounterHiRes()*.001;
+    check(state.tempo==120 && !session.canUndo(),"first real tap button press anchors without editing");
+    check(session.tapTempo(afterTap+1).wasOk(),"complete native button interval with controlled second tap");refresh();
+    check(state.tempo>=60.0/(afterTap+1-beforeTap)-1e-7 && state.tempo<=60.0+1e-7,"button publishes its monotonic timestamp to the tempo model");
+    session.undo();refresh();check(state.tempo==120,"tap-button tempo change undoes once");
     tempo.setText("500.5",juce::sendNotificationSync);
     check(state.tempo==500.5&&tempo.getText()=="500.50","native tempo editor accepts and displays values above 300 BPM");
     session.undo();refresh();check(state.tempo==120&&session.canRedo(),"tempo editor change undoes once");

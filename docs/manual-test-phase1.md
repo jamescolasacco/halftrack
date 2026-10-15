@@ -247,3 +247,8 @@ Physical listening/input check: **NOT RUN** until performed. Play a phrase with 
 
 
 Optional monitoring release check (about one minute; physical test **NOT RUN**): hold a key or sustain a note, then switch monitoring Off. The note should enter its release rather than remain stuck. Repeat by disarming Auto, using undo/redo of those controls, and moving/disconnecting the input. Changing an unrelated volume setting and undoing it should leave a held note sounding.
+
+
+## Tap tempo (about 30 seconds)
+
+Physical rhythmic input check: **NOT RUN** until performed. Click transport **Tap** to a steady beat. The first click leaves BPM unchanged; subsequent clicks update it. Tap a new rhythm after a pause over three seconds. Undo/redo a tempo change, save/reopen, and confirm only the BPM persists. The control should work while stopped without starting playback.

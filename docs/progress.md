@@ -467,3 +467,9 @@ CI diagnosis checkpoint: delayed-dispatch monitoring passes eight consecutive lo
 
 
 Monitoring release regression: a deterministic held-note test failed before the fix: switching monitoring Off left the instrument sounding. Session now releases sustain and notes through the updated native graph when an input becomes inactive, including Auto disarm, reassignment and undo/redo; unaffected tracks are left alone. The expanded input and delayed-monitor suites pass in **33.37 s** and **12.81 s**, followed by a successful no-clips/no-scenes regression. The earlier full combined build passed all **21 Mac suites in 290.08 s** before this fix; final full verification is running separately. The original intermittent Mac CI symptom is not claimed resolved until the new platform run confirms it. No dependency patch or owned callback change was required.
+
+
+Tap-tempo ownership: root owns a message-thread tap estimator in Session, an actual transport button, deterministic timing/undo/persistence/render tests, UI handler checks and documentation. Published `03316ad` includes recording quantization, master output and monitoring release. Its Mac package verifies 104 owned and 5,969 dependency files against the exact source/binary; CI 38712728155 is running. No other agent is editing these areas.
+
+
+Published monitoring checkpoint `03316ad`: all **21 Mac acceptance suites pass in 300.98 s**. A fresh source-inclusive package verifies 104 owned files and all 5,969 dependency files; its extracted executable passes master-volume, monitoring and production UI suites. Cross-platform CI 38712728155 remains pending. Tap tempo then passes the expanded timing/render suite in **6.70 s** and production UI in **4.04 s**. The actual 1100-pixel Session image was inspected with the Tap button and master fader visible without overlap. Full tap integration checks follow; this deepens REC-003 without adding a new ledger row.

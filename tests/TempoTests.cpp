@@ -70,6 +70,41 @@ int runTempoTests(const juce::File& artifacts)
             check(session.loadProject(broken).failed()&&session.snapshot().tempo==999&&session.canRedo()
                 &&session.snapshot().tracks[2].clips[0].id==clipId,"invalid tempo cannot replace active project or redo");
         }
+        session.setTempo(90);ok(session.saveProject(project),"save tap baseline");ok(session.loadProject(project),"reopen clean tap baseline");
+        ok(session.tapTempo(100),"anchor first tap");check(session.snapshot().tempo==90&&!session.snapshot().dirty&&!session.canUndo(),"first tap does not edit the document");
+        const std::array<double,6> taps {100.5,101.1,101.8,102.6,103.5,104.5};
+        const std::array<double,6> expected {120,120/1.1,180/1.8,240/2.6,240/3.0,240/3.4};
+        for(size_t i=0;i<taps.size();++i)
+        {
+            if(i==5)
+            {
+                ok(session.tapTempo(103.51),"ignore a too-fast double tap");
+                check(session.tapTempo(103.4).failed()&&session.tapTempo(-1).failed()
+                    &&session.tapTempo(std::numeric_limits<double>::quiet_NaN()).failed()
+                    &&session.tapTempo(std::numeric_limits<double>::infinity()).failed(),"invalid tap times are rejected without changing the anchor");
+            }
+            ok(session.tapTempo(taps[i]),"accept steady tap interval");
+            check(std::abs(session.snapshot().tempo-expected[i])<1e-8,"tempo follows independent mean of the latest four intervals");
+        }
+        session.undo();check(std::abs(session.snapshot().tempo-80)<1e-8&&session.canRedo(),"accepted tempo undoes once");
+        ok(session.tapTempo(200),"first tap after undo resets the estimate");check(std::abs(session.snapshot().tempo-80)<1e-8&&session.canRedo(),"anchor preserves redo");
+        session.redo();check(std::abs(session.snapshot().tempo-240/3.4)<1e-8,"redo restores the exact accepted tempo");
+        ok(session.tapTempo(300),"first tap after redo");ok(session.tapTempo(300.5),"second tap after redo");check(std::abs(session.snapshot().tempo-120)<1e-8,"redo does not retain an old tap sequence");
+        ok(session.tapTempo(304),"long pause resets estimate");ok(session.tapTempo(304.75),"tap after pause");check(std::abs(session.snapshot().tempo-80)<1e-8,"pause excludes earlier intervals");
+        session.setTempo(144);ok(session.tapTempo(400),"manual tempo resets tapping");check(session.snapshot().tempo==144,"manual-tempo anchor is unchanged");
+        ok(session.tapTempo(400.4),"tap 150 BPM");check(std::abs(session.snapshot().tempo-150)<1e-8&&!session.snapshot().playing,"tap changes tempo without starting transport");
+        ok(session.exportWav(render),"render beat-synchronized notes after tapping");timing(render,150);
+        ok(session.saveProject(project),"save tapped tempo");ok(session.loadProject(project),"reopen tapped tempo");
+        check(std::abs(session.snapshot().tempo-150)<1e-8,"accepted tempo persists");ok(session.tapTempo(400.6),"reopen clears transient timing");
+        check(!session.snapshot().dirty&&!session.canUndo(),"reopened first tap does not create history");
+        ok(session.newProject(),"new project clears tap timing");ok(session.tapTempo(400.7),"anchor new project");
+        check(session.snapshot().tempo==120&&!session.snapshot().dirty&&!session.canUndo(),"new project's first tap is clean");
+        ok(session.tapTempo(403.7),"tap at minimum supported tempo");check(std::abs(session.snapshot().tempo-20)<1e-8,"three-second interval reaches 20 BPM");
+        session.setTempo(90);ok(session.tapTempo(500),"anchor maximum tempo");ok(session.tapTempo(500+60.0/999),"tap at maximum supported tempo");
+        check(std::abs(session.snapshot().tempo-999)<1e-8,"minimum accepted interval reaches 999 BPM");
+        session.setTempo(120);ok(session.saveProject(project),"save unchanged tap baseline");ok(session.loadProject(project),"reopen unchanged baseline");
+        ok(session.tapTempo(600),"anchor unchanged tempo");ok(session.tapTempo(600.5),"tap existing 120 BPM");ok(session.tapTempo(601),"repeat existing tempo");
+        check(!session.snapshot().dirty&&!session.canUndo(),"unchanged tap estimates do not dirty the project or add history");
         std::cout<<"Tempo tests passed: "<<root.getFullPathName()<<std::endl;return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL tempo: "<<e.what()<<std::endl;return 1;}

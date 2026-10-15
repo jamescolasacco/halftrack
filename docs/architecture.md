@@ -359,3 +359,10 @@ The generated audio device has an optional bounded `HALFTRACK_TEST_DISPATCH_MS` 
 
 
 When a previously monitored MIDI track loses active input through monitor mode, Auto disarming, reassignment or undo/redo, Session flushes pending input/graph updates and injects sustain-off plus All Notes Off for all sixteen channels through the native graph. Instrument release tails remain available; no processor is reset from the message thread. Only tracks crossing from active to inactive receive this release, so unrelated mixer undo does not interrupt notes. This releases that track's MIDI voices rather than claiming per-source/MPE voice isolation. Generated tests cover held/sustained notes, channels 1/16, history, assignment and completely empty tracks. The native injection path retains the dependency's existing synchronization; this does not strengthen the whole-host real-time guarantee.
+
+
+## Tap tempo
+
+`tapTempo(monotonicSeconds)` accepts message-thread clock timestamps. The first tap anchors without editing; later taps estimate tempo from the mean of the latest four accepted intervals. A pause over three seconds starts a new estimate. Intervals faster than 999 BPM are ignored without moving the anchor, while nonfinite, negative or backwards times fail. Accepted estimates stay within 20–999 BPM and use the same native tempo model and beat-synchronized clip remapping. Each changed estimate is a separate undoable tempo edit; unchanged estimates add no history. Manual tempo entry, undo/redo and successful new/load reset the transient estimator. Only the accepted tempo is serialized.
+
+The transport Tap button supplies the monotonic clock and does not start playback. Export rejects taps before modifying estimator or project state. Deterministic timestamps test averaging, outlier bounds, debounce, history and resets; rendered notes verify the actual new beat timing. The UI test invokes the real button callback and bounds its timestamp using the surrounding clock reads. Physical rhythmic input and reference tap-estimator matching remain unverified.

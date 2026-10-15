@@ -108,3 +108,8 @@ Default: Off. Optional quarter/eighth/sixteenth/thirty-second note grids and eig
 ### Master output defaults
 
 Default: use the native master-volume stage and fader law, from silence (-100 dB) through +6 dB, initially 0 dB. Expose a single stereo output-level fader beside the meters, including typed dB entry and double-click unity. Apply it to playback and export after return contributions. Master pan, master device insertion and separate cue output are future features.
+
+
+### Tap tempo
+
+Default: update after the second tap, average at most four recent intervals, ignore taps faster than the supported maximum, and restart after a pause over three seconds. Do not auto-start playback. Each resulting tempo change undoes once; tapping the same tempo and the first anchor do not dirty the document. Normal tempo edits, history and project replacement clear the transient estimate. No claimed match to an undocumented reference tap algorithm.
