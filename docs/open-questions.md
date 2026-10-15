@@ -140,3 +140,6 @@ Note-activation default: toggle the selected notes only; an empty selection does
 
 
 Audio export defaults: keep the full stereo Arrangement mix and existing WAV defaults; add lossless AIFF/FLAC with the pinned writers' supported 16/24-bit depths. WAV retains 32-bit. FLAC uses the renderer's default compression setting. Normalization, configurable dither, range/stem export and lossy encoders remain separate features. Never silently down-convert a requested model depth; the UI explicitly selects 24-bit when changing away from 32-bit WAV.
+
+
+Follow-action default: Off. The first active configuration uses four project beats. Expose one deterministic action per Session clip: Stop, Play Again, Previous, Next, First, Last, or Cycle to Next. Previous/Next stop at the ends; Cycle wraps and all track actions skip empty slots. Off clears the action and timing; choosing an active action again starts with four beats. Weighted/random choices, contiguous-group targeting, loop-linked timing and scene follow actions require their own controls and tests.

@@ -1412,7 +1412,13 @@ private:
                     else g.fillRect (bounds.getX() + 10, bounds.getY() + 11, 7, 7);
                     if (filled)
                     {
-                        g.setColour (ink); g.setFont (font (11.0f)); g.drawText ((slot->clip.active?juce::String():juce::String("OFF / "))+slot->clip.name, bounds.withTrimmedLeft (29).withTrimmedRight (7), juce::Justification::centredLeft, true);
+                        const bool follows = slot->clip.follow.action != Session::FollowAction::off;
+                        g.setColour (ink); g.setFont (font (11.0f)); g.drawText ((slot->clip.active?juce::String():juce::String("OFF / "))+slot->clip.name, bounds.withTrimmedLeft (29).withTrimmedRight (follows ? 44 : 7), juce::Justification::centredLeft, true);
+                        if (follows)
+                        {
+                            g.setColour (orange); g.setFont (font (9.0f));
+                            g.drawText (juce::String (slot->clip.follow.afterBeats, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") + "b >", bounds.withLeft (bounds.getRight() - 43).reduced (3, 0), juce::Justification::centredRight, true);
+                        }
                         if (slot->playing) { g.setColour (green); g.fillRect (bounds.getX() + 1, bounds.getBottom() - 3, bounds.getWidth() - 2, 2); }
                     }
                     g.setColour (selected ? orange : line); g.drawRect (bounds, selected ? 2 : 1);
@@ -1554,7 +1560,7 @@ private:
             else menu.addItem (owner.state.tracks[(size_t) track].isMidi ? 4 : 5, owner.state.tracks[(size_t) track].isMidi ? "Create MIDI Clip" : "Import Audio Here...");
             menu.addSeparator(); menu.addItem (6, "Stop Track Clips");
             const auto clipId=slot->hasClip?slot->clip.id:juce::String();const bool activate=slot->hasClip && !slot->clip.active;
-            if(slot->hasClip){menu.addItem(8,activate?"Activate clip":"Deactivate clip");menu.addItem(9,"Rename clip...");}
+            if(slot->hasClip){menu.addItem(8,activate?"Activate clip":"Deactivate clip");menu.addItem(9,"Rename clip...");menu.addItem(10,"Follow action...",!owner.state.recording);}
             const auto trackId = owner.state.tracks[(size_t) track].id, sceneId = owner.state.scenes[(size_t) scene].id;
             auto safe = juce::Component::SafePointer<Impl> (&owner);
             menu.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId, sceneId, clipId, activate] (int choice)
@@ -1562,6 +1568,7 @@ private:
                 if (safe == nullptr || choice == 0) return;
                 if(choice==8){safe->setClipActiveFromUI(clipId,activate);return;}
                 if(choice==9){safe->renameClipDialog(clipId);return;}
+                if(choice==10){safe->clipFollowDialog(clipId);return;}
                 const auto indices = safe->launcherIndices (trackId, sceneId); if (indices.first < 0 || indices.second < 0) return;
                 safe->selectLauncherSlot (indices.first, indices.second);
                 if (choice == 1) safe->report (safe->session.launchSlot (indices.first, indices.second));
@@ -2695,6 +2702,43 @@ private:
             return;
         }
     }
+    void clipFollowDialog (const juce::String& id)
+    {
+        if (session.isExporting()) return;
+        Session::FollowSettings settings; bool found = false;
+        for (const auto& track : state.tracks)
+            for (const auto& slot : track.slots)
+                if (slot.hasClip && slot.clip.id == id) { settings = slot.clip.follow; found = true; }
+        if (! found) { report (juce::Result::fail ("Session clip not found.")); return; }
+        auto* dialog = new juce::AlertWindow ("Clip Follow Action", "After the chosen beats, change playback on this track. Next and Previous stop at the ends; Cycle wraps. Empty slots are skipped.", juce::MessageBoxIconType::NoIcon, this);
+        dialog->addComboBox ("action", { "Off", "Stop", "Play again", "Previous clip", "Next clip", "First clip", "Last clip", "Cycle to next clip" }, "Action");
+        dialog->getComboBoxComponent ("action")->setSelectedItemIndex ((int) settings.action, juce::dontSendNotification);
+        dialog->addTextEditor ("beats", juce::String (settings.afterBeats > 0 ? settings.afterBeats : 4, 6).trimCharactersAtEnd ("0").trimCharactersAtEnd ("."), "After beats");
+        dialog->getTextEditor ("beats")->setEnabled (settings.action != Session::FollowAction::off);
+        dialog->addButton ("Apply", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
+        auto safe = juce::Component::SafePointer<Impl> (this);
+        auto safeDialog = juce::Component::SafePointer<juce::AlertWindow> (dialog);
+        dialog->getComboBoxComponent ("action")->onChange = [safeDialog]
+        {
+            if (safeDialog) safeDialog->getTextEditor ("beats")->setEnabled (safeDialog->getComboBoxComponent ("action")->getSelectedItemIndex() > 0);
+        };
+        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog, id] (int result)
+        {
+            if (! safe || ! safeDialog || result != 1) return;
+            const auto action = static_cast<Session::FollowAction> (safeDialog->getComboBoxComponent ("action")->getSelectedItemIndex());
+            double beats = 0;
+            if (action != Session::FollowAction::off)
+            {
+                const auto text = safeDialog->getTextEditorContents ("beats").trim().toStdString();
+                char* end = nullptr; beats = std::strtod (text.c_str(), &end);
+                if (text.empty() || end != text.c_str() + text.size() || ! std::isfinite (beats))
+                { safe->report (juce::Result::fail ("Enter a complete numeric beat duration.")); return; }
+            }
+            safe->report (safe->session.setClipFollowAction (id, { action, beats })); safe->refresh();
+        }), true);
+    }
     void renameClipDialog(const juce::String& id)
     {
         if(session.isExporting())return;
@@ -3061,6 +3105,7 @@ private:
             popup.addItem(56,"Duplicate Selected Scene",sceneSelected&&!state.recording&&state.scenes.size()<256);
             popup.addItem(57,"Move Selected Scene Up",selectedSceneIndex()>0&&!state.recording);
             popup.addItem(58,"Move Selected Scene Down",sceneSelected&&selectedSceneIndex()+1<(int)state.scenes.size()&&!state.recording);
+            popup.addItem (59, "Selected Clip Follow Action...", selectedSlot() && selectedSlot()->hasClip && !state.recording);
             popup.addSeparator(); popup.addItem (53, "Launch Selected Scene", sceneSelected); popup.addItem (54, "Stop All Session Clips"); popup.addItem (55, "Return to Arrangement");
         }
         return popup;
@@ -3097,6 +3142,7 @@ private:
             case 42: if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); break;
             case 43: showArrangementView(); break;
             case 45: showSessionView(); break;
+            case 59: if (selectedSlot() && selectedSlot()->hasClip) clipFollowDialog (selectedSlot()->clip.id); break;
             case 50: addSceneFromUI(); break;
             case 51: renameSceneDialog (selectedSceneIndex()); break;
             case 56: if(selectedSceneIndex()>=0)duplicateSceneFromUI(selectedSceneId); break;
@@ -5136,6 +5182,29 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     std::unique_ptr<juce::AudioFormatReader> exportedReader (exportedFormats.createReaderFor (destination.getFile()));
     check (exportedReader && exportedReader->sampleRate == 48000 && exportedReader->bitsPerSample == 24
         && exportedReader->lengthInSamples == 4800 && ! selectedPath.exists(), "confirmed production export writes the normalized FLAC with the requested audio extent");
+    check (session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "prepare follow-action UI clip"); refresh(); showSessionView(); selectLauncherSlot (0, 0);
+    const auto followClipId = selectedSlot()->clip.id;
+    menuItemSelected (59, 4); check (alerts.back() != nullptr, "Session menu opens follow-action controls");
+    const auto finishFollowDialog = [&] (int action, const juce::String& beats, int result)
+    {
+        auto dialog = alerts.back(); check (dialog != nullptr, "follow-action dialog remains valid");
+        dialog->getComboBoxComponent ("action")->setSelectedItemIndex (action, juce::sendNotificationSync);
+        check (dialog->getTextEditor ("beats")->isEnabled() == (action != 0), "Off disables timed follow input");
+        dialog->getTextEditor ("beats")->setText (beats); dialog->exitModalState (result);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (20); refresh();
+    };
+    finishFollowDialog ((int) Session::FollowAction::cycle, "2.5", 1);
+    check (selectedSlot()->clip.follow == Session::FollowSettings { Session::FollowAction::cycle, 2.5 }, "production follow dialog sets actual native beat timing");
+    session.undo(); refresh(); check (selectedSlot()->clip.follow.action == Session::FollowAction::off, "follow settings undo once"); session.redo(); refresh();
+    clipFollowDialog (followClipId); finishFollowDialog ((int) Session::FollowAction::next, "2oops", 1);
+    check (selectedSlot()->clip.follow.action == Session::FollowAction::cycle, "invalid follow timing preserves existing state");
+    clipFollowDialog (followClipId); finishFollowDialog ((int) Session::FollowAction::stop, "1", 0);
+    check (selectedSlot()->clip.follow.action == Session::FollowAction::cycle, "cancelling follow dialog retains settings");
+    clipFollowDialog (followClipId);
+    check (session.clearSlot (0, 0).wasOk() && session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "replace follow target while its dialog is open"); refresh();
+    finishFollowDialog ((int) Session::FollowAction::next, "1", 1);
+    check (selectedSlot()->clip.id != followClipId && selectedSlot()->clip.follow.action == Session::FollowAction::off, "stale follow dialog cannot change replacement clip");
+
 
 
 

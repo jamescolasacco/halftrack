@@ -579,3 +579,20 @@ Audio export ownership: root owns WAV/AIFF/FLAC selection through the shared ren
 Lossless export validation: every supported WAV/AIFF/FLAC depth passes complete decoded-sample comparison, actual container headers, exact rate/channel/duration, silent tails, invalid format/depth/rate rejection, cancellation preserving existing files, reentrant protection and undo/redo. The dedicated suite passes in **9.69 s**. Native UI choices/normalized-name overwrite pass in **6.09 s**, latency in **16.44 s**, and Session/mixer/recording/project regressions in **61.42 s**. The initial test decoder incorrectly selected codecs by the intentionally generic fixture filename; decoding its stream retained all original assertions and verified the actual container. No production behavior was weakened to satisfy it.
 
 Published `121cd89` has an exact verified source-inclusive Mac package; its fresh extracted MIDI monitoring suite passes. Cross-platform run [38728613399](https://github.com/jamescolasacco/halftrack/actions/runs/38728613399) remains in progress. The following full local suite will cover the combined note activation, input correction and new export formats.
+
+
+Session follow-action ownership: root owns deterministic beat-timed audio/MIDI slot transitions, stable-ID model/UI controls, native undo/save validation, generated playback comparisons and current documentation. Stop, replay, previous/next/first/last and cyclic next are the current implementation scope; weighted/random choices and scene-level follow actions remain separate. No other agent is editing these areas.
+
+
+Export checkpoint `a56265b` passes all **23 local Mac acceptance suites in 342.14 s**. Its source-inclusive package verifies 108 owned and 5,969 dependency files. This includes the note-activation playback policy, input-gap correction and all export formats before the following follow-action changes.
+
+
+Initial follow-action tests pass native audio/MIDI transitions and model/history/persistence checks in **4.30 s**, plus production UI in **6.11 s**. Expanded running-history testing initially used an incorrect unity assumption for a fully panned channel: the pinned mixer raises its remaining channel by √2. Its measured error was 0.051776797 from a 0.125 source. The corrected independent arithmetic now checks that pan law before applying follow edits, retaining the strict output tolerances.
+
+Published input correction `121cd89` passes Windows/Linux CI; Mac still fails delayed monitoring at `monitor undo restores both model and actual MIDI routing`. The new immediate-key/gap regressions pass there; the remaining intermittent history failure is not claimed fixed. Root will isolate that path without weakening its audible-output requirement.
+
+
+The companion audio fixture requires its own collected-file reader registration; that is now established and measured before any follow edit. Running history then retains both channels correctly. Tempo timing is tested with held MIDI voices at 60/120/240 BPM: changing tempo on the short audio loop invokes stretching, so a constant-PCM oracle was not a valid isolation of follow timing. Audio transition/sample checks remain at their source tempo, with unchanged tolerances.
+
+
+Final deterministic follow-action suite passes in **5.50 s**, including running edits/undo/redo, cancellation by Off, an independently audible companion track, fractional replay phase, sparse-slot navigation/end stops/cycling, bar-queued initial launch, 60/120/240 BPM MIDI voice transitions, one-step and branched history, scene copies, portable reload, invalid-state preservation and export rejection. Production UI passes **6.11 s**; launcher and Session regression suites pass **5.54 s** and **61.24 s** on this production source. No new DSP or dependency patch is needed. Weighted/random and scene-level follow behavior remain missing.

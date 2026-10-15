@@ -17,6 +17,13 @@ public:
     enum class MonitorMode { off, automatic, on };
     enum class SendMode { pre, post };
     enum class ExportFormat { wav, aiff, flac };
+    enum class FollowAction { off, stop, replay, previous, next, first, last, cycle };
+    struct FollowSettings
+    {
+        FollowAction action = FollowAction::off;
+        double afterBeats = 0;
+        bool operator== (const FollowSettings&) const = default;
+    };
     struct SendInfo { juce::String returnTrackId; float gainDb = -100.0f; };
     struct SynthSettings
     {
@@ -67,6 +74,7 @@ public:
         bool reversed = false, canReverse = false, canEditMidiClip = false, active = true;
         double sourceLength = 0;
         AudioClipSettings audio;
+        FollowSettings follow;
         double startBeat = 0, lengthBeats = 0;
         std::vector<MidiNoteInfo> notes;
     };
@@ -187,6 +195,7 @@ public:
     juce::Result moveAudioClip (const juce::String& clipId, const juce::String& destinationTrackId, double startSeconds);
     juce::Result moveClip (int trackIndex, int clipIndex, double startSeconds);
     juce::Result removeClip (int trackIndex, int clipIndex);
+    juce::Result setClipFollowAction (const juce::String& clipId, const FollowSettings&);
     juce::Result setClipActive (const juce::String& clipId, bool active);
     juce::Result renameClip (const juce::String& clipId, const juce::String& name);
     juce::Result renameTrack (int trackIndex, const juce::String&);

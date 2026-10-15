@@ -287,3 +287,8 @@ Select several piano-roll notes and press **0**, or use **Note tools → Deactiv
 ### WAV, AIFF and FLAC export
 
 Physical/native-dialog check: **NOT RUN** until performed. In a disposable arrangement, choose **File → Export Arrangement Audio**. Export WAV, AIFF and FLAC at 48 kHz / 24-bit with the same tail; open them in an audio editor and compare duration, channels and sound. Try 16-bit and 44.1 kHz. Choose 32-bit WAV, then switch to AIFF/FLAC: depth changes to 24-bit and 32-bit is unavailable. Cancel an export over an existing disposable file and verify its original bytes remain. Enter a different extension whose corrected filename already exists: cancel the explicit Replace prompt, then repeat and accept it. The output should use the selected container and corrected filename. MIDI notes, clip names and undo history must remain intact.
+
+
+### Session clip follow actions
+
+Physical/native-input listening check: **NOT RUN** until performed. Place three distinguishable audio or MIDI clips in one Session track, leaving empty rows between them. Right-click the first clip → **Follow action…**, choose Next, and enter four beats. Launch it: the next populated clip should take over after four beats; the transport keeps running. Try Stop, Play Again, First, Last, Previous and Cycle. Next/Previous stop at the ends; Cycle wraps. Change tempo and try fractional beats. With a bar launch grid, launch between bars: the initial clip waits for the bar, then follows after its chosen beats. Keep another track sounding while editing and undoing follow settings. Turn Off to cancel further automatic transitions, duplicate the scene, and save/reopen. Hold a long MIDI note across a transition into an empty MIDI clip and listen for stuck notes.

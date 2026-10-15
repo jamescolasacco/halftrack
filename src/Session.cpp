@@ -316,6 +316,61 @@ Result validateProjectTempo (const juce::ValueTree& state)
         }
     return Result::ok();
 }
+constexpr std::array<te::FollowAction, 8> nativeFollowActions {
+    te::FollowAction::none, te::FollowAction::globalStop, te::FollowAction::globalPlayAgain,
+    te::FollowAction::trackPrevious, te::FollowAction::trackNext, te::FollowAction::trackFirst,
+    te::FollowAction::trackLast, te::FollowAction::trackRoundRobin
+};
+bool validFollowSettings (const Session::FollowSettings& settings)
+{
+    const auto action = static_cast<int> (settings.action);
+    return action >= 0 && action < (int) nativeFollowActions.size() && std::isfinite (settings.afterBeats)
+        && (settings.action == Session::FollowAction::off ? settings.afterBeats == 0
+            : settings.afterBeats >= 1.0 / 960 && settings.afterBeats <= 4096);
+}
+Session::FollowSettings clipFollowSettings (const juce::ValueTree& state)
+{
+    const auto actions = state.getChildWithName (te::IDs::FOLLOWACTIONS);
+    if (actions.getNumChildren() != 1) return {};
+    const auto native = te::followActionFromString (actions.getChild (0)[te::IDs::type].toString());
+    if (native)
+        for (size_t i = 1; i < nativeFollowActions.size(); ++i)
+            if (*native == nativeFollowActions[i])
+                return { static_cast<Session::FollowAction> (i), static_cast<double> (state.getProperty (te::IDs::followActionBeats, 0.0)) };
+    return {};
+}
+Result validateFollowActions (const juce::ValueTree& state)
+{
+    if (state.hasType (te::IDs::AUDIOCLIP) || state.hasType (te::IDs::MIDICLIP))
+    {
+        int containers = 0;
+        for (const auto& child : state) if (child.hasType (te::IDs::FOLLOWACTIONS)) ++containers;
+        const auto actions = state.getChildWithName (te::IDs::FOLLOWACTIONS);
+        const auto text = state.getProperty (te::IDs::followActionBeats, 0.0).toString().trim().toStdString();
+        char* end = nullptr; const auto beats = std::strtod (text.c_str(), &end);
+        if (containers > 1 || actions.getNumChildren() > 1 || text.empty() || end != text.c_str() + text.size()
+            || ! std::isfinite (beats) || beats < 0 || beats > 4096
+            || state.getProperty (te::IDs::followActionDurationType, "beats").toString() != "beats")
+            return Result::fail ("The project contains unsupported clip follow timing.");
+        if (actions.getNumChildren() == 0)
+        {
+            if (beats != 0) return Result::fail ("Clip follow timing has no action.");
+        }
+        else
+        {
+            const auto settings = clipFollowSettings (state);
+            const auto action = actions.getChild (0);
+            const auto weight = action.getProperty (te::IDs::weight, 1.0).toString().trim().toStdString();
+            char* weightEnd = nullptr; const auto value = std::strtod (weight.c_str(), &weightEnd);
+            if (! action.hasType (te::IDs::ACTION) || settings.action == Session::FollowAction::off
+                || ! validFollowSettings (settings) || weight.empty() || weightEnd != weight.c_str() + weight.size() || value != 1)
+                return Result::fail ("The project contains unsupported clip follow actions.");
+        }
+    }
+    for (const auto& child : state) if (auto result = validateFollowActions (child); result.failed()) return result;
+    return Result::ok();
+}
+
 Result validateAudioClips (const juce::ValueTree& state)
 {
     if ((state.hasType(te::IDs::AUDIOCLIP) || state.hasType(te::IDs::MIDICLIP)) && state.hasProperty(te::IDs::mute))
@@ -396,6 +451,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
     result.id = clip.itemID.toString(); result.name = clip.getName(); result.active = !clip.isMuted();
     result.start = position.time.getStart().inSeconds(); result.length = position.time.getLength().inSeconds();
     result.sourceOffset = position.offset.inSeconds();
+    result.follow = clipFollowSettings (clip.state);
     if (clip.usesSourceFile()) result.file = clip.getSourceFileReference().getFile();
     if (auto* audio = dynamic_cast<te::WaveAudioClip*> (&clip))
     {
@@ -819,6 +875,24 @@ struct Session::Impl
             {edit->restartPlayback();return;}
         }
     }
+    using FollowStates = std::vector<std::pair<juce::String, Session::FollowSettings>>;
+    FollowStates followStates() const
+    {
+        FollowStates states;
+        for (auto* track : te::getAudioTracks (*edit))
+            for (auto* clip : allTrackClips (*track))
+                if (clip->getClipSlot()) states.emplace_back (clip->itemID.toString(), clipFollowSettings (clip->state));
+        return states;
+    }
+    void refreshFollowActions (const FollowStates& before)
+    {
+        for (const auto& current : followStates())
+        {
+            const auto previous = std::find_if (before.begin(), before.end(), [&] (const auto& old) { return old.first == current.first; });
+            if (previous != before.end() && previous->second != current.second)
+            { edit->restartPlayback(); return; }
+        }
+    }
     void refreshParameterValues()
     {
         configureMidiPlayback();
@@ -1101,6 +1175,7 @@ Result Session::loadProject (const File& file)
     if (auto result = UtilityPlugin::validateState (state); result.failed()) return result;
     if (auto result = NativeEffectPlugin::validateState (state); result.failed()) return result;
     if (auto result = validateAudioClips (state); result.failed()) return result;
+    if (auto result = validateFollowActions (state); result.failed()) return result;
     if (auto result = validateLocators (state); result.failed()) return result;
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
@@ -2296,6 +2371,39 @@ Result Session::removeClip (int t, int c)
     auto* clip = impl->clip (t, c); if (! clip) return Result::fail ("Clip not found.");
     impl->transaction ("Remove clip"); clip->removeFromParent(); impl->changed(); return Result::ok();
 }
+Result Session::setClipFollowAction (const String& id, const FollowSettings& settings)
+{
+    if (impl->exporting || impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording or finish exporting before changing clip follow actions.");
+    if (! validFollowSettings (settings)) return Result::fail ("Choose a follow action and a duration from 1/960 to 4096 beats, or Off with zero beats.");
+    te::Clip* found = nullptr;
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        for (auto* clip : allTrackClips (*track))
+            if (clip->itemID.toString() == id)
+            {
+                if (found) return Result::fail ("Clip identity is ambiguous.");
+                found = clip;
+            }
+    if (! found || ! found->getClipSlot() || (! dynamic_cast<te::MidiClip*> (found) && ! dynamic_cast<te::WaveAudioClip*> (found)))
+        return Result::fail ("Select an audio or MIDI clip in Session.");
+    if (found->getClipTrack()->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze the track before changing follow actions.");
+    if (clipFollowSettings (found->state) == settings) return Result::ok();
+    impl->transaction ("Change clip follow action");
+    // The native object caches this container. Retain its empty scaffolding
+    // through history so a later edit cannot target a detached cached tree.
+    found->state.getOrCreateChildWithName (te::IDs::FOLLOWACTIONS, nullptr);
+    auto* actions = found->getFollowActions();
+    found->followActionDurationType = te::Clip::FollowActionDurationType::beats;
+    found->followActionBeats = te::BeatDuration::fromBeats (settings.afterBeats);
+    while (! actions->getActions().empty()) actions->removeAction (*actions->getActions().back());
+    if (settings.action != FollowAction::off)
+    {
+        auto& action = actions->addAction();
+        action.action = nativeFollowActions[(size_t) settings.action];
+        action.weight = 1.0;
+    }
+    impl->edit->restartPlayback(); impl->edit->dispatchPendingUpdatesSynchronously();
+    impl->changed(); return Result::ok();
+}
 Result Session::setClipActive(const String& id,bool active)
 {
     if (impl->exporting) return Result::fail("Finish or cancel the current export first.");
@@ -2683,17 +2791,17 @@ void Session::endEditGesture()
 void Session::undo()
 {
     if (impl->exporting || impl->edit->getTransport().isRecording()) return;
-    const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates();
+    const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
     impl->resetTapTempo();
-    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshClipActivation(clips); impl->refreshParameterValues();
+    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
     impl->finishInputChange(monitored);sendChangeMessage();
 }
 void Session::redo()
 {
     if (impl->exporting || impl->edit->getTransport().isRecording()) return;
-    const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates();
+    const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
     impl->resetTapTempo();
-    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshClipActivation(clips); impl->refreshParameterValues();
+    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
     impl->finishInputChange(monitored);sendChangeMessage();
 }
 bool Session::canUndo() const { return ! impl->exporting && ! impl->edit->getTransport().isRecording() && impl->edit->getUndoManager().canUndo(); }
