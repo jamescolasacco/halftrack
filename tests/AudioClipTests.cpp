@@ -42,6 +42,41 @@ juce::AudioBuffer<float> expected(const juce::AudioBuffer<float>& source,const S
     }
     return result;
 }
+void movementTests(const juce::File& root,const juce::File& sourceFile,const juce::AudioBuffer<float>& source)
+{
+    Session session(false);ok(session.importAudio(sourceFile,0),"import cross-track move source");
+    const auto original=session.snapshot().tracks[0].clips[0];
+    const auto destination=session.snapshot().tracks[1].id;
+    Session::AudioClipSettings settings{-6,.1,.05,Session::FadeCurve::linear,Session::FadeCurve::concave};
+    ok(session.setAudioClipSettings(original.id,settings),"prepare moved envelope");
+    ok(session.setAudioClipRange(original.id,0,.5,.25),"prepare moved source excerpt");
+    ok(session.setTrackGain(1,-6),"set destination mix level");
+    ok(session.moveAudioClip(original.id,destination,.25),"move identity and position onto destination track");
+    auto moved=session.snapshot().tracks[1].clips[0];
+    check(session.snapshot().tracks[0].clips.empty()&&moved.id==original.id&&moved.start==.25&&moved.length==.5
+        &&moved.sourceOffset==.25&&moved.audio==settings&&moved.file==original.file,"move preserves native identity, source, gain and fades");
+    auto mixSettings=settings;mixSettings.gainDb=-12;
+    const auto oracle=expected(source,mixSettings,12000,24000,12000);const auto render=root.getChildFile("track-move.wav");
+    ok(session.exportWav(render),"render cross-track move");compare(read(render),oracle,"moved clip follows destination mixer and source excerpt");
+    session.undo();check(session.snapshot().tracks[1].clips.empty()&&session.snapshot().tracks[0].clips[0].id==original.id
+        &&session.snapshot().tracks[0].clips[0].start==0,"one undo restores original owner and position");
+    check(session.moveAudioClip(original.id,"missing",0).failed()&&session.canRedo(),"invalid move target preserves redo");
+    for(double start:{-1.0,172800.0,std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity()})
+        check(session.moveAudioClip(original.id,destination,start).failed()&&session.canRedo(),"invalid move position rejects before history mutation");
+    session.redo();check(session.snapshot().tracks[1].clips[0].id==original.id,"move redo retains stable clip identity");
+    const auto project=root.getChildFile("moved-track.halftrack");ok(session.saveProject(project),"save moved clip");ok(session.loadProject(project),"load moved clip");
+    ok(session.moveAudioClip(original.id,destination,.25),"identical move no-op");check(!session.canUndo()&&!session.snapshot().dirty,"identical move preserves clean project");
+    ok(session.exportWav(render),"render reopened move");compare(read(render),oracle,"moved clip round trip preserves mix");
+    ok(session.addMidiTrack(),"create invalid MIDI move target");check(session.moveAudioClip(original.id,session.snapshot().tracks.back().id,0).failed(),"audio cannot move into MIDI track");
+    ok(session.addReturnTrack(),"create invalid return move target");check(session.moveAudioClip(original.id,session.snapshot().tracks.back().id,0).failed(),"audio cannot move into return track");
+    ok(session.importAudioToSlot(sourceFile,0,0),"prepare slot movement rejection");
+    check(session.moveAudioClip(session.snapshot().tracks[0].slots[0].clip.id,destination,0).failed(),"Arrangement move cannot evict Session slot clips");
+    ok(session.moveAudioClip(original.id,destination,172799.5),"allow exact native timeline end");
+    check(session.snapshot().tracks[1].clips[0].start==172799.5,"end-boundary move is not silently clamped");
+    juce::String unchanged="keep";check(session.duplicateAudioClip(original.id,unchanged).failed()&&unchanged=="keep","duplicate cannot exceed native timeline end");
+    session.undo();check(session.snapshot().tracks[1].clips[0].start==.25,"undo boundary move restores audible range");
+    check(session.setAudioClipRange(original.id,172800,.5,.25).failed()&&session.canRedo(),"range setter rejects native timeline overflow without losing redo");
+}
 void clipboardTests(const juce::File& root,const juce::File& sourceFile,const juce::AudioBuffer<float>& source)
 {
     Session session(false);
@@ -79,7 +114,7 @@ void clipboardTests(const juce::File& root,const juce::File& sourceFile,const ju
     ok(session.addMidiTrack(),"create invalid MIDI paste target");ok(session.addReturnTrack(),"create invalid return paste target");
     session.undo(); // preserve a pending Redo while attempting invalid operations.
     const auto before=session.snapshot();juce::String unchanged="keep";
-    for(double time:{-1.0,1e9,std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity()})
+    for(double time:{-1.0,172800.0,172799.75,1e9,std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity()})
         check(session.pasteAudioClip(target,time,unchanged).failed()&&session.canRedo()&&unchanged=="keep", "invalid paste position preserves redo and output ID");
     check(session.pasteAudioClip(before.tracks.back().id,0,unchanged).failed()&&session.pasteAudioClip("missing",0,unchanged).failed()&&session.canRedo(),
         "invalid track paste preserves redo");
@@ -203,6 +238,7 @@ int runAudioClipTests(const juce::File& artifacts)
         check(!s.snapshot().tracks[0].clips[0].canEditAudioRange&&s.setAudioClipRange(warpedId,0,.25,0).failed()
             &&s.splitAudioClip(warpedId,.125,untouched).failed()&&untouched=="keep"&&!s.canUndo(),"warped range operations preserve state and history");
         juce::MemoryBlock finalBytes;check(file.loadFileAsData(finalBytes)&&finalBytes==originalBytes,"all edits leave source file bytes unchanged");
+        movementTests(root,file,source);
         clipboardTests(root,file,source);
         runAudioClipEditorTests(file,root);std::cout<<"Audio clip tests passed: "<<root.getFullPathName()<<std::endl;return 0;
     }

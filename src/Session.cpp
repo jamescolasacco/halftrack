@@ -1497,7 +1497,7 @@ Result Session::setAudioClipRange (const String& id, double start, double length
     if (! canEditAudioRange (*clip)) return Result::fail ("Range editing requires an unwarped, unlooped arrangement audio clip.");
     const auto sourceLength = clip->getSourceLength().inSeconds();
     if (! std::isfinite (start) || ! std::isfinite (length) || ! std::isfinite (offset)
-        || start < 0 || start > 1e9 || length < .001 || length > 1e9 || offset < 0
+        || start < 0 || length < .001 || start + length > te::Edit::maximumLength || offset < 0
         || offset + length > sourceLength + 1e-9 || ! validAudioSettings (audioSettings (*clip), length))
         return Result::fail ("The range must fit the source and existing fades, with at least 1 ms of audio.");
     const auto p = clip->getPosition();
@@ -1528,6 +1528,8 @@ Result Session::duplicateAudioClip (const String& id, String& duplicateId)
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
     if (clip->getClipSlot()) return Result::fail ("Duplicate an arrangement audio clip; a Session slot holds one clip.");
     const auto end = clip->getPosition().getEnd();
+    if (end.inSeconds() + clip->getPosition().getLength().inSeconds() > te::Edit::maximumLength)
+        return Result::fail ("The duplicate must fit inside the 48-hour timeline.");
     impl->transaction ("Duplicate audio clip");
     auto second = te::duplicateClip (*clip);
     if (! second) return Result::fail ("The audio clip could not be duplicated.");
@@ -1577,7 +1579,7 @@ Result Session::pasteAudioClip (const String& trackId, double start, String& pas
         return Result::fail ("Paste audio onto an audio track.");
     if (! hasAudioClipClipboard()) return Result::fail ("Copy an audio clip before pasting.");
     const double length = impl->audioClipboard[te::IDs::length];
-    if (! std::isfinite (start) || start < 0 || start + length > 1e9)
+    if (! std::isfinite (start) || start < 0 || start + length > te::Edit::maximumLength)
         return Result::fail ("Paste position is outside the supported timeline.");
     const auto assets = impl->assets();
     if (auto r = assets.createDirectory(); r.failed()) return r;
@@ -1597,11 +1599,31 @@ Result Session::pasteAudioClip (const String& trackId, double start, String& pas
     target.deleteFile();
     return Result::fail ("The audio clip could not be pasted.");
 }
+Result Session::moveAudioClip (const String& id, const String& destinationId, double start)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before moving audio clips.");
+    auto* clip = impl->audioClip (id); auto* destination = impl->track (destinationId);
+    if (! clip || clip->getClipSlot() || clip->isGrouped()) return Result::fail ("Move an ungrouped Arrangement audio clip.");
+    if (! destination || isReturn (*destination) || static_cast<bool> (destination->state.getProperty (midiTrackProperty)))
+        return Result::fail ("Move audio onto an audio track.");
+    if (destination->isFrozen (te::Track::anyFreeze) || clip->getClipTrack()->isFrozen (te::Track::anyFreeze))
+        return Result::fail ("Unfreeze the source and destination tracks before moving audio.");
+    if (! std::isfinite (start) || start < 0 || start + clip->getPosition().getLength().inSeconds() > te::Edit::maximumLength)
+        return Result::fail ("The complete clip must fit inside the 48-hour timeline.");
+    if (clip->getClipTrack() == destination && clip->getPosition().getStart().inSeconds() == start) return Result::ok();
+    const te::Clip::Ptr retained (clip);
+    impl->transaction ("Move audio clip");
+    if (clip->getClipTrack() != destination && ! clip->moveTo (*destination)) return Result::fail ("Could not move the audio clip to that track.");
+    clip->setStart (te::TimePosition::fromSeconds (start), false, true);
+    impl->changed(); return Result::ok();
+}
 Result Session::moveClip (int t, int c, double start)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->clip (t, c); if (! clip) return Result::fail ("Clip not found.");
-    if (! std::isfinite (start) || start < 0) return Result::fail ("Clip start must be zero or greater.");
+    if (! std::isfinite (start) || start < 0 || start + clip->getPosition().getLength().inSeconds() > te::Edit::maximumLength)
+        return Result::fail ("The complete clip must fit inside the 48-hour timeline.");
     impl->transaction ("Move clip"); clip->setStart (te::TimePosition::fromSeconds (start), false, true); impl->changed(); return Result::ok();
 }
 Result Session::removeClip (int t, int c)

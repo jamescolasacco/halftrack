@@ -941,8 +941,20 @@ private:
                     {
                         auto start = juce::jmax (0.0, originalStart + (e.x - dragStartX) / owner.pixelsPerSecond);
                         if (! e.mods.isAltDown()) start = std::round (start / owner.gridSeconds()) * owner.gridSeconds();
+                        const auto& clip = current.tracks[(size_t)t].clips[(size_t)c];
+                        int destination = t;
+                        if (clip.isAudio)
+                        {
+                            destination = e.y < 0 ? -1 : e.y/trackHeight;
+                            if (! juce::isPositiveAndBelow (destination,(int)current.tracks.size())
+                                || current.tracks[(size_t)destination].isMidi || current.tracks[(size_t)destination].isReturn) return;
+                        }
                         if (! clipGesture) { owner.session.beginEditGesture ("Move clip"); clipGesture = true; }
-                        owner.report (owner.session.moveClip (t,c,start)); owner.refresh(); return;
+                        const auto result = clip.isAudio ? owner.session.moveAudioClip (dragClipId,current.tracks[(size_t)destination].id,start)
+                            : owner.session.moveClip (t,c,start);
+                        owner.report (result); owner.refresh();
+                        if (result.wasOk()) owner.selectAudioClip (dragClipId);
+                        return;
                     }
         }
         void mouseUp (const juce::MouseEvent&) override
@@ -4178,6 +4190,20 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     rangeDrag(rangePoint(false),40,0);
     check(rangeIs(.05,.03,.04),"edge trim snaps to project grid unless Alt is held");session.undo();refresh();
     session.setTempo(120);refresh();
+    // Drag the same identity through multiple owners within one gesture.
+    selectedClip=0;refresh();
+    auto movingClip=state.tracks[0].clips[0];const auto moveFrom=canvas.clipBounds(movingClip,0).getCentre();
+    const auto moveTo=moveFrom+juce::Point<float>(40,(float)trackHeight);
+    canvas.mouseDown(rangeEvent(moveFrom,moveFrom,false,freeRange));
+    canvas.mouseDrag(rangeEvent(moveTo,moveFrom,true,freeRange));
+    const auto moveFurther=moveTo+juce::Point<float>(40,0);
+    canvas.mouseDrag(rangeEvent(moveFurther,moveFrom,true,freeRange));canvas.mouseUp(rangeEvent(moveFurther,moveFrom,true,freeRange));
+    check(state.tracks[0].clips.empty()&&state.tracks[1].clips[0].id==movingClip.id
+        &&std::abs(state.tracks[1].clips[0].start-movingClip.start-.02)<1e-8&&selectedTrack==1&&selectedClip==0,
+        "body drag moves audio across tracks and subsequent events keep the same identity selected");
+    session.undo();refresh();check(state.tracks[1].clips.empty()&&state.tracks[0].clips[0].id==movingClip.id
+        &&std::abs(state.tracks[0].clips[0].start-movingClip.start)<1e-8,"one undo restores cross-track body gesture");
+    selectedTrack=0;selectedClip=0;
     for(int mode=0;mode<3;++mode)
     {
         selectedClip=0;const auto currentId=state.tracks[0].clips[0].id;

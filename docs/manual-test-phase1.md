@@ -183,3 +183,7 @@ Native input checks are NOT RUN until performed. On a disposable imported clip, 
 2. Set both fades and drag an edge inward beyond their combined length. The retained range must still contain both fades. Extend outwards: neither source beginning nor source end can be crossed.
 3. Shift+Alt-drag the body: the waveform moves inside fixed timeline bounds. Play/export to confirm a different source region is heard. Undo restores the original region.
 4. Body dragging still moves the clip. Fade handles still edit fades. Delete and replace a clip during an in-progress gesture in an automated fixture: the replacement must remain untouched.
+
+## Cross-track audio dragging
+
+NOT RUN through native input until performed: drag an Arrangement audio clip by its body onto another audio track with a different mixer level. The sound must follow that destination's mixer; gain/fades/source region stay attached to the clip. Undo restores the original owner and timing in one step; redo restores the move. Dragging over MIDI/return rows must not move audio into them. Save and reopen to retain the final track placement.

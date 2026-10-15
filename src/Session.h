@@ -154,6 +154,7 @@ public:
     juce::Result copyAudioClip (const juce::String& clipId, bool cut = false);
     bool hasAudioClipClipboard() const;
     juce::Result pasteAudioClip (const juce::String& trackId, double startSeconds, juce::String& pastedId);
+    juce::Result moveAudioClip (const juce::String& clipId, const juce::String& destinationTrackId, double startSeconds);
     juce::Result moveClip (int trackIndex, int clipIndex, double startSeconds);
     juce::Result removeClip (int trackIndex, int clipIndex);
     juce::Result renameTrack (int trackIndex, const juce::String&);
