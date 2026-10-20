@@ -10,6 +10,12 @@ namespace halftrack
 {
 namespace
 {
+struct FirstCallbackObservation
+{
+    double entryMilliseconds = -1, exitMilliseconds = -1;
+    float peak = 0;
+};
+
 // A deterministic input/output device. It never enumerates or opens system hardware.
 class SyntheticDevice final : public juce::AudioIODevice
 {
@@ -39,7 +45,8 @@ public:
     int getOutputLatencyInSamples() override { return 0; }
     int getInputLatencyInSamples() override { return 0; }
     int64_t samplePosition() const { return sample; }
-    float pump (int blocks, int dispatchMilliseconds = 2, juce::AudioBuffer<float>* captured = nullptr)
+    float pump (int blocks, int dispatchMilliseconds = 2, juce::AudioBuffer<float>* captured = nullptr,
+                FirstCallbackObservation* firstCallback = nullptr)
     {
         // Test-only stress control: delay message dispatch without changing the generated audio clock.
         if (const auto value=juce::SystemStats::getEnvironmentVariable("HALFTRACK_TEST_DISPATCH_MS",{}); value.isNotEmpty())
@@ -54,8 +61,21 @@ public:
                 in.setSample (1, i, 0.2f * std::sin (juce::MathConstants<double>::twoPi * sample * 660.0 / 48000.0));
             }
             out.clear();
-            if (callback) callback->audioDeviceIOCallbackWithContext (in.getArrayOfReadPointers(), 2, out.getArrayOfWritePointers(), 2, 256, {});
-            peak = juce::jmax (peak, out.getMagnitude (0, 256));
+            if (callback)
+            {
+                if (firstCallback != nullptr && block == 0)
+                {
+                    // Opt-in test diagnostics only. The high-resolution clock
+                    // does not refresh the dependency's cached MIDI-age clock.
+                    firstCallback->entryMilliseconds = juce::Time::getMillisecondCounterHiRes();
+                    callback->audioDeviceIOCallbackWithContext (in.getArrayOfReadPointers(), 2, out.getArrayOfWritePointers(), 2, 256, {});
+                    firstCallback->exitMilliseconds = juce::Time::getMillisecondCounterHiRes();
+                }
+                else callback->audioDeviceIOCallbackWithContext (in.getArrayOfReadPointers(), 2, out.getArrayOfWritePointers(), 2, 256, {});
+            }
+            const float blockPeak = out.getMagnitude (0, 256);
+            peak = juce::jmax (peak, blockPeak);
+            if (firstCallback != nullptr && block == 0) firstCallback->peak = blockPeak;
             if (captured) for(int channel=0;channel<2;++channel) captured->copyFrom(channel,block*256,out,channel,0,256);
             juce::MessageManager::getInstance()->runDispatchLoopUntil (dispatchMilliseconds);
         }
@@ -315,6 +335,19 @@ float pumpSyntheticTestDevice (Session& session, int blocks)
     auto* device = dynamic_cast<SyntheticDevice*> (session.audioDeviceManager().getCurrentAudioDevice());
     if (device == nullptr) throw std::runtime_error ("synthetic test device is not selected");
     return device->pump (blocks);
+}
+
+float pumpSyntheticTestDeviceObserved (Session& session, int blocks, double& firstEntryMilliseconds,
+                                       double& firstExitMilliseconds, float& firstPeak)
+{
+    auto* device = dynamic_cast<SyntheticDevice*> (session.audioDeviceManager().getCurrentAudioDevice());
+    if (device == nullptr) throw std::runtime_error ("synthetic test device is not selected");
+    FirstCallbackObservation observation;
+    const float peak = device->pump (blocks, 2, nullptr, &observation);
+    firstEntryMilliseconds = observation.entryMilliseconds;
+    firstExitMilliseconds = observation.exitMilliseconds;
+    firstPeak = observation.peak;
+    return peak;
 }
 
 int64_t syntheticTestSamplePosition(Session& session)

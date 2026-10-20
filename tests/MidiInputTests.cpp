@@ -12,6 +12,8 @@ namespace halftrack
 {
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
 float pumpSyntheticTestDevice (Session&, int blocks);
+float pumpSyntheticTestDeviceObserved (Session&, int blocks, double& firstEntryMilliseconds,
+                                       double& firstExitMilliseconds, float& firstPeak);
 namespace
 {
 namespace te = tracktion::engine;
@@ -267,9 +269,41 @@ void selectionAndMonitoring()
     {
         pumpSyntheticTestDevice(session,4);
         const auto now=f.devices.getCurrentStreamTime()+256.0/48000;
+        struct DeliveryProbe final : te::InputDeviceInstance::Consumer
+        {
+            int noteOns = 0;
+            std::vector<juce::WeakReference<te::InputDeviceInstance>> inputs;
+            ~DeliveryProbe() override { for (auto input : inputs) if (input) input->removeConsumer (this); }
+            void handleIncomingMidiMessage (const juce::MidiMessage& message, te::MPESourceID) override
+            { if (message.isNoteOn()) ++noteOns; }
+        } probe;
+        int targets = 0, monitoring = 0;
+        for (auto* edit : f.devices.engine.getActiveEdits().getEdits())
+            for (auto* input : edit->getAllInputDevices())
+                if (&input->getInputDevice() == f.controller.midi.get())
+                {
+                    probe.inputs.emplace_back (input); input->addConsumer (&probe);
+                    for (auto id : input->getTargets())
+                    {
+                        ++targets;
+                        if (auto* track = te::findTrackForID (*edit, id); track && input->isLivePlayEnabled (*track)) ++monitoring;
+                    }
+                }
         if(sustain)f.send(juce::MidiMessage::controllerEvent(channel,64,127),now);
+        const double sentAt = juce::Time::getMillisecondCounterHiRes();
         f.send(juce::MidiMessage::noteOn(channel,72,(juce::uint8)96),now);
-        check(pumpSyntheticTestDevice(session,20)>.001f,"held channel "+juce::String(channel)+" is audible");
+        double firstEntry = -1, firstExit = -1; float firstPeak = 0;
+        const float peak = pumpSyntheticTestDeviceObserved (session, 20, firstEntry, firstExit, firstPeak);
+        const auto elapsed = juce::Time::getMillisecondCounterHiRes() - sentAt;
+        const auto state = session.snapshot().tracks[2];
+        check(peak>.001f,"held channel "+juce::String(channel)+" is audible; peak="+juce::String(peak,9)
+            +" first-callback-ms="+juce::String(firstEntry < 0 ? -1 : firstEntry - sentAt,2)
+            +" first-callback-duration-ms="+juce::String(firstExit < 0 || firstEntry < 0 ? -1 : firstExit - firstEntry,2)
+            +" first-peak="+juce::String(firstPeak,9)
+            +" dispatch-ms="+juce::String(elapsed,2)+" delivered="+juce::String(probe.noteOns)
+            +" instances="+juce::String((int)probe.inputs.size())+" targets="+juce::String(targets)
+            +" monitoring="+juce::String(monitoring)+" mode="+juce::String((int)state.monitor)
+            +" armed="+juce::String((int)state.armed)+" native-mode="+juce::String((int)f.controller.midi->getMonitorMode()));
         if(sustain){f.send(juce::MidiMessage::noteOff(channel,72),f.devices.getCurrentStreamTime()+256.0/48000);pumpSyntheticTestDevice(session,30);}
     };
     auto released=[&](const juce::String& action)
