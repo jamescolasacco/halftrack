@@ -46,7 +46,7 @@ struct Fixture
     }
     ~Fixture(){session.stop();setClickFile(true,oldBig);setClickFile(false,oldLittle);}
 };
-void compareClicks(const juce::AudioBuffer<float>& audio,double tempo,float gain,bool accent,double loopSeconds=0,int countInBeats=-1,double leadSeconds=0)
+void compareClicks(const juce::AudioBuffer<float>& audio,double tempo,float gain,bool accent,double loopSeconds=0,int countInBeats=-1,double leadSeconds=0,int beatsPerBar=4)
 {
     juce::AudioBuffer<float> expected(2,audio.getNumSamples());expected.clear();
     const double step=48000*60/tempo;
@@ -56,7 +56,7 @@ void compareClicks(const juce::AudioBuffer<float>& audio,double tempo,float gain
         const int sample=(int)std::llround(beat*step+leadSeconds*48000);
         if(sample>=audio.getNumSamples())break;
         const int musicalBeat=loopSeconds>0?beat%(int)std::llround(loopSeconds*tempo/60):beat;
-        for(int c=0;c<2;++c)expected.setSample(c,sample,(accent && musicalBeat%4==0?.5f:.25f)*gain);
+        for(int c=0;c<2;++c)expected.setSample(c,sample,(accent && musicalBeat%beatsPerBar==0?.5f:.25f)*gain);
     }
     double worst=0;int worstAt=0;
     for(int c=0;c<2;++c)for(int n=0;n<audio.getNumSamples();++n)
@@ -78,6 +78,14 @@ void playback(const juce::File& root)
         session.seek(0);ok(session.play(),"start click playback");const auto audio=captureSyntheticTestDevice(session,400);session.stop();
         compareClicks(audio,tempo,.6f,true);
     }
+    // Odd meters accent every bar of quarter-note beats.
+    for(int beats:{3,5})
+    {
+        session.setTempo(120);ok(session.setTimeSignature(beats,4),"choose "+juce::String(beats)+"/4");
+        session.seek(0);ok(session.play(),"play the click in "+juce::String(beats)+"/4");
+        compareClicks(captureSyntheticTestDevice(session,400),120,.6f,true,0,-1,0,beats);session.stop();
+    }
+    ok(session.setTimeSignature(4,4),"return to 4/4");
     session.setTempo(120);settings.accent=false;settings.gain=.2f;ok(session.setMetronome(settings),"set unaccented quiet click");
     session.seek(0);ok(session.play(),"play unaccented click");compareClicks(captureSyntheticTestDevice(session,400),120,.2f,false);session.stop();
     settings.accent=true;settings.gain=1;ok(session.setMetronome(settings),"set accented unity click");session.setLoop(true,0,1);session.seek(0);ok(session.play(),"play across loop boundaries");

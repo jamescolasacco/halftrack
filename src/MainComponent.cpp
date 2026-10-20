@@ -210,7 +210,7 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &tempo, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
+                 &playButton, &stopButton, &recordButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &ruler, &viewport,
                  &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &deviceChain })
@@ -232,6 +232,18 @@ public:
         tempo.setJustificationType (juce::Justification::centred);
         tempo.setColour (juce::Label::backgroundColourId, background);
         tempo.setTooltip ("Tempo: 20–999 beats per minute. Double-click to edit.");
+        meterLabel.setName ("Time signature"); meterLabel.setFont (font (11.0f));
+        meterLabel.setEditable (false, true, false); meterLabel.setJustificationType (juce::Justification::centred);
+        meterLabel.setColour (juce::Label::backgroundColourId, background); meterLabel.setColour (juce::Label::outlineColourId, line);
+        meterLabel.setTooltip ("Time signature, such as 3 / 4 or 6 / 8. Double-click to edit.");
+        meterLabel.onTextChange = [this]
+        {
+            const auto fields = juce::StringArray::fromTokens (meterLabel.getText(), "/", "");
+            if (fields.size() == 2 && fields[0].trim().containsOnly ("0123456789") && fields[1].trim().containsOnly ("0123456789")
+                && fields[0].trim().isNotEmpty() && fields[1].trim().isNotEmpty())
+                report (session.setTimeSignature (fields[0].getIntValue(), fields[1].getIntValue()));
+            refresh();
+        };
         tapButton.setName("Tap tempo");tapButton.setTooltip("Tap a steady beat to set tempo. A pause over three seconds starts a new estimate.");
         tapButton.onClick=[this]{report(session.tapTempo(juce::Time::getMillisecondCounterHiRes()*.001));refresh();};
         tempo.onTextChange = [this]
@@ -270,7 +282,7 @@ public:
         loopStartLabel.setEditable (false, true, false); loopLengthLabel.setEditable (false, true, false);
         loopStartLabel.onTextChange = [this]
         {
-            if (const auto beats = parseMusicalTime (loopStartLabel.getText(), true))
+            if (const auto beats = parseMusicalTime (loopStartLabel.getText(), true, state.timeSignature))
             {
                 const auto start = *beats * 60.0 / state.tempo;
                 session.setLoop (state.looping, start, start + (state.loopEnd - state.loopStart));
@@ -279,7 +291,7 @@ public:
         };
         loopLengthLabel.onTextChange = [this]
         {
-            if (const auto beats = parseMusicalTime (loopLengthLabel.getText(), false); beats && *beats > 0)
+            if (const auto beats = parseMusicalTime (loopLengthLabel.getText(), false, state.timeSignature); beats && *beats > 0)
                 session.setLoop (state.looping, state.loopStart, state.loopStart + *beats * 60.0 / state.tempo);
             refresh();
         };
@@ -375,8 +387,6 @@ public:
         g.setColour (juce::Colour (0xff121212)); g.fillRect (dividerBounds);
         // Control bar: tempo/meter on the left, transport and loop in the centre, status on the right.
         g.setFont (font (11.0f));
-        g.setColour (background); g.fillRect (meterBounds); g.setColour (line); g.drawRect (meterBounds);
-        g.setColour (ink); g.drawText ("4 / 4", meterBounds, juce::Justification::centred);
         g.setColour (muted); g.setFont (font (10.0f));
         g.drawText ("CPU " + juce::String (juce::roundToInt (state.cpu * 100.0)) + "%", cpuBounds, juce::Justification::centredRight);
         g.setFont (font (10.0f, true)); g.setColour (muted);
@@ -423,7 +433,7 @@ public:
         auto bar = toolbarBounds.reduced (8, 7);
         tapButton.setBounds (bar.removeFromLeft (36)); bar.removeFromLeft (3);
         tempo.setBounds (bar.removeFromLeft (58)); bar.removeFromLeft (3);
-        meterBounds = bar.removeFromLeft (40); bar.removeFromLeft (8);
+        meterBounds = bar.removeFromLeft (40); bar.removeFromLeft (8); meterLabel.setBounds (meterBounds);
         clickButton.setBounds (bar.removeFromLeft (46)); clickSettingsButton.setBounds (bar.removeFromLeft (20));
         bar.removeFromLeft (8); quantisation.setBounds (bar.removeFromLeft (64));
         audioButton.setBounds (bar.removeFromRight (52)); bar.removeFromRight (8);
@@ -519,6 +529,7 @@ public:
             if (code == 'T') { if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
             if (code == 'Z') { if (shift) session.redo(); else session.undo(); refresh(); return true; }
             if (code == 'L' && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (79); return true; }
+            if (code == 'J' && ! shift && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (80); return true; }
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
             if (! shift && ! showSession && ! showPiano && timeSelection.active() && (code == 'E' || code == 'D')) { selectionCommand (code == 'E' ? 76 : 77); return true; }
             if (code == 'I' && ! showSession) { menuItemSelected (74, 1); return true; }
@@ -652,6 +663,7 @@ private:
         }
         else if (item == 78) report (session.deleteRange (timeSelection.trackIds, start, end));
         else if (item == 79) session.setLoop (true, start, end);
+        else if (item == 80) { juce::StringArray created; report (session.consolidateRange (timeSelection.trackIds, start, end, created)); }
         refresh();
     }
     const Session::GroupInfo* groupInfo (const juce::String& id) const
@@ -1288,7 +1300,8 @@ private:
             const auto end = owner.viewStart + tw / owner.pixelsPerSecond;
             for (double t = std::floor (owner.viewStart / grid) * grid; t <= end; t += grid)
             {
-                const bool bar = std::abs (t / (beat * 4) - std::round (t / (beat * 4))) < 0.001;
+                const auto barSeconds = beat * owner.state.timeSignature.beatsPerBar();
+                const bool bar = std::abs (t / barSeconds - std::round (t / barSeconds)) < 0.001;
                 g.setColour (bar ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff3a3a3a));
                 g.drawVerticalLine ((int) std::round ((t - owner.viewStart) * owner.pixelsPerSecond), 0.0f, (float) getHeight());
             }
@@ -1773,7 +1786,7 @@ private:
             const auto x2=(float)((owner.state.loopEnd-owner.viewStart)*owner.pixelsPerSecond);
             g.setColour (owner.state.looping?orange:muted.withAlpha (.55f));
             g.fillRect (x1,3.0f,juce::jmax (1.0f,x2-x1),3.0f);g.fillRect (x1,3.0f,2.0f,9.0f);g.fillRect (x2-2,3.0f,2.0f,9.0f);
-            const auto bar=240.0/owner.state.tempo;
+            const auto bar=owner.state.timeSignature.beatsPerBar()*60.0/owner.state.tempo;
             const auto step=bar*juce::jmax (1.0,std::pow (2.0,std::ceil (std::log2 (48.0/(bar*owner.pixelsPerSecond)))));
             const auto end=owner.viewStart+width/owner.pixelsPerSecond;
             g.setFont (font (10.5f));
@@ -2754,7 +2767,8 @@ private:
             for (double beat = std::floor (viewBeat / snapBeats()) * snapBeats(); beat <= viewBeat + grid.getWidth() / pixelsPerBeat; beat += snapBeats())
             {
                 const auto x = (int) std::round (keysWidth + (beat - viewBeat) * pixelsPerBeat);
-                const bool bar = std::abs (beat / 4.0 - std::round (beat / 4.0)) < 0.001;
+                const auto barBeats = owner.state.timeSignature.beatsPerBar();
+                const bool bar = std::abs (beat / barBeats - std::round (beat / barBeats)) < 0.001;
                 g.setColour (bar ? juce::Colour (0xff6e6e6e) : juce::Colour (0xff434343));
                 g.drawVerticalLine (x, (float) gridTop, (float) grid.getBottom());
             }
@@ -2795,8 +2809,9 @@ private:
             g.restoreState();
             g.setColour (raised); g.fillRect (0, headerHeight, getWidth(), rulerHeight);
             g.setColour (muted); g.setFont (font (10.0f));
-            for (double beat = std::floor (viewBeat / 4.0) * 4.0; beat <= viewBeat + grid.getWidth() / pixelsPerBeat; beat += 4.0)
-                g.drawText (juce::String ((int) (beat / 4) + 1), (int) (keysWidth + (beat - viewBeat) * pixelsPerBeat) + 4, headerHeight, 45, rulerHeight, juce::Justification::centredLeft);
+            const auto barBeats = owner.state.timeSignature.beatsPerBar();
+            for (double beat = std::floor (viewBeat / barBeats) * barBeats; beat <= viewBeat + grid.getWidth() / pixelsPerBeat; beat += barBeats)
+                g.drawText (juce::String (juce::roundToInt (beat / barBeats) + 1), (int) (keysWidth + (beat - viewBeat) * pixelsPerBeat) + 4, headerHeight, 45, rulerHeight, juce::Justification::centredLeft);
             g.setColour (line); g.drawHorizontalLine (headerHeight, 0.0f, (float) getWidth());
             if (insertX >= grid.getX() && insertX <= grid.getRight())
             {
@@ -4167,7 +4182,7 @@ private:
                      sessionTab { "Session" }, arrangementTab { "Arrange" }, pianoTab { "Clip" }, importButton { "Import Audio" },
                      filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" },
                      zoomIn { "+" }, zoomOut { "-" }, fitButton { "Fit" };
-    juce::Label tempo, positionLabel, projectLabel, loopStartLabel, loopLengthLabel;
+    juce::Label tempo, meterLabel, positionLabel, projectLabel, loopStartLabel, loopLengthLabel;
     juce::ComboBox quantisation;
     juce::TextButton backToArrangement { "Back to Arrangement" };
     juce::Rectangle<int> meterBounds, cpuBounds;
@@ -4537,7 +4552,8 @@ private:
         if (track == nullptr || ! track->isMidi) return;
         const auto trackId = track->id;
         const auto previousIds = track->clips;
-        const auto startBeat = std::floor (seconds * state.tempo / 60.0 / 4.0) * 4.0;
+        const auto barBeats = state.timeSignature.beatsPerBar();
+        const auto startBeat = std::floor (seconds * state.tempo / 60.0 / barBeats + 1e-9) * barBeats;
         const auto result = session.addMidiClip (trackId, startBeat, 16.0);
         report (result); refresh();
         if (result.failed()) return;
@@ -4560,7 +4576,7 @@ private:
         if (beat * pixelsPerSecond >= 30) return beat / 4;
         if (beat * pixelsPerSecond >= 15) return beat;
         if (beat * pixelsPerSecond >= 6) return beat * 2;
-        return beat * 4;
+        return beat * state.timeSignature.beatsPerBar();
     }
     // Freeze toggles the track's freeze; Flatten replaces a frozen track with its render.
     void freezeTrackFromUI (const juce::String& trackId, bool flatten)
@@ -4614,15 +4630,17 @@ private:
         canvas.repaint(); deviceChain.sync();
         for (int i = 0; i < canvas.getNumChildComponents(); ++i) canvas.getChildComponent (i)->repaint();
     }
-    // Bars.beats.sixteenths in 4/4. Positions count from 1; lengths count from 0.
-    static juce::String formatMusicalTime (double beats, bool position)
+    // Bars.beats.sixteenths, counting beats in the meter's note value (eighths in 6/8). Positions count
+    // from 1; lengths count from 0. Beats here are quarter notes.
+    static juce::String formatMusicalTime (double beats, bool position, Session::TimeSignature meter = {})
     {
         const auto sixteenths = juce::jmax (0LL, (long long) std::floor (beats * 4 + 1.0e-6));
-        const auto bars = sixteenths / 16, beat = (sixteenths / 4) % 4, sixteenth = sixteenths % 4;
+        const long long perBeat = juce::jmax (1, 16 / meter.denominator), perBar = (long long) meter.numerator * 16 / juce::jmin (16, meter.denominator);
+        const auto bars = sixteenths / perBar, beat = (sixteenths % perBar) / perBeat, sixteenth = sixteenths % perBeat;
         const int offset = position ? 1 : 0;
         return juce::String (bars + offset) + ". " + juce::String (beat + offset) + ". " + juce::String (sixteenth + offset);
     }
-    static std::optional<double> parseMusicalTime (const juce::String& text, bool position)
+    static std::optional<double> parseMusicalTime (const juce::String& text, bool position, Session::TimeSignature meter = {})
     {
         auto fields = juce::StringArray::fromTokens (text.trim(), ".", "");
         fields.trim(); fields.removeEmptyStrings();
@@ -4633,9 +4651,9 @@ private:
             if (! fields[i].containsOnly ("0123456789")) return std::nullopt;
             value[(size_t) i] = fields[i].getIntValue();
         }
-        const int offset = position ? 1 : 0;
-        if (value[0] < offset || value[1] < offset || value[2] < offset || value[1] - offset > 3 || value[2] - offset > 3) return std::nullopt;
-        return (value[0] - offset) * 4.0 + (value[1] - offset) + (value[2] - offset) / 4.0;
+        const int offset = position ? 1 : 0, perBeat = juce::jmax (1, 16 / meter.denominator);
+        if (value[0] < offset || value[1] < offset || value[2] < offset || value[1] - offset >= meter.numerator || value[2] - offset >= perBeat) return std::nullopt;
+        return (value[0] - offset) * meter.beatsPerBar() + (value[1] - offset) * 4.0 / meter.denominator + (value[2] - offset) / 4.0;
     }
     void refresh()
     {
@@ -4663,15 +4681,13 @@ private:
             backToArrangement.setEnabled (overridden); backToArrangement.setToggleState (overridden, juce::dontSendNotification);
         }
         if (! tempo.isBeingEdited()) tempo.setText (juce::String (state.tempo, 2), juce::dontSendNotification);
+        if (! meterLabel.isBeingEdited()) meterLabel.setText (juce::String (state.timeSignature.numerator) + " / " + juce::String (state.timeSignature.denominator), juce::dontSendNotification);
         const auto beatPosition = juce::jmax (0.0, state.position) * state.tempo / 60.0;
-        const auto bar = (int) (beatPosition / 4) + 1;
-        const auto beat = (int) beatPosition % 4 + 1;
-        const auto sixteenth = (int) (beatPosition * 4) % 4 + 1;
         positionLabel.setText (state.countInBeatsRemaining>0
             ? "Count in " + juce::String((int)std::ceil(state.countInBeatsRemaining))
-            : juce::String (bar) + ". " + juce::String (beat) + ". " + juce::String (sixteenth), juce::dontSendNotification);
-        if (! loopStartLabel.isBeingEdited()) loopStartLabel.setText (formatMusicalTime (state.loopStart * state.tempo / 60.0, true), juce::dontSendNotification);
-        if (! loopLengthLabel.isBeingEdited()) loopLengthLabel.setText (formatMusicalTime ((state.loopEnd - state.loopStart) * state.tempo / 60.0, false), juce::dontSendNotification);
+            : formatMusicalTime (beatPosition, true, state.timeSignature), juce::dontSendNotification);
+        if (! loopStartLabel.isBeingEdited()) loopStartLabel.setText (formatMusicalTime (state.loopStart * state.tempo / 60.0, true, state.timeSignature), juce::dontSendNotification);
+        if (! loopLengthLabel.isBeingEdited()) loopLengthLabel.setText (formatMusicalTime ((state.loopEnd - state.loopStart) * state.tempo / 60.0, false, state.timeSignature), juce::dontSendNotification);
         projectLabel.setText (state.name + (state.dirty ? "  *" : ""), juce::dontSendNotification);
         if (state.tracks.size() != previous.tracks.size() || lanesHeight != canvas.getHeight() && lanesHeight > viewport.getHeight()) resized();
         for (int i = timeSelection.trackIds.size(); --i >= 0;) if (trackIndex (timeSelection.trackIds[i]) < 0) timeSelection.trackIds.remove (i);
@@ -4790,6 +4806,7 @@ private:
             const bool selection = timeSelection.active() && ! showSession && ! state.recording;
             popup.addItem (76, "Split", selection); popup.addItem (77, "Duplicate Selection", selection);
             popup.addItem (78, "Delete Selection", selection); popup.addItem (79, "Loop Selection", selection);
+            popup.addItem (80, "Consolidate", selection);
             popup.addSeparator();
             const bool range = (selection || state.loopEnd > state.loopStart) && ! state.recording;
             const juce::String source = selection ? "" : " (Loop Range)";
@@ -4846,7 +4863,7 @@ private:
             case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); break;
             case 74: { const auto [a, b] = editRange(); report (session.insertTime (a, b - a)); refresh(); break; }
             case 75: { const auto [a, b] = editRange(); report (session.deleteTime (a, b - a)); timeSelection = {}; refresh(); break; }
-            case 76: case 77: case 78: case 79: selectionCommand (id); break;
+            case 76: case 77: case 78: case 79: case 80: selectionCommand (id); break;
             case 30: showPiano = false; addTrack(); resized(); break;
             case 33: addMidiTrack(); break;
             case 35: addReturnTrack(); break;
@@ -6524,6 +6541,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "the selection's clip is copied after it and the selection moves onto the copy");
         check (handleKey (juce::KeyPress (juce::KeyPress::deleteKey)), "Delete is handled"); refresh();
         check (starts() == before, "Delete removes the material in the selection");
+        timeSelection.start = .5; timeSelection.end = 2.5;
+        check (handleKey (juce::KeyPress ('J', juce::ModifierKeys::commandModifier, 0)), "Cmd/Ctrl+J is handled"); refresh();
+        check (state.tracks[(size_t) t].clips.size() == 1 && std::abs (state.tracks[(size_t) t].clips[0].start - .5) < 1e-6
+               && std::abs (state.tracks[(size_t) t].clips[0].length - 2) < 1e-6, "Cmd/Ctrl+J consolidates the selection into one clip spanning it");
+        session.undo(); refresh();
         session.undo(); session.undo(); refresh();
         check (starts() == before, "undo restores each step");
         timeSelection = {};
@@ -7930,6 +7952,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     applyMetronomeMenu(22);applyMetronomeMenu(1);applyMetronomeMenu(2);
     check(state.metronome.gain==.4f&&!state.metronome.accent&&state.metronome.recordingOnly,"native click menu controls update model");
     tempo.setText("999",juce::sendNotificationSync);check(state.tempo==999&&tempo.getText()=="999.00","native tempo editor reaches exact supported maximum");
+    meterLabel.setText("6/8",juce::sendNotificationSync);
+    check(state.timeSignature==Session::TimeSignature{6,8}&&meterLabel.getText()=="6 / 8","typing 6/8 in the meter field sets the time signature");
+    meterLabel.setText("5/3",juce::sendNotificationSync);
+    check(state.timeSignature==Session::TimeSignature{6,8}&&meterLabel.getText()=="6 / 8","an invalid meter leaves the time signature unchanged");
+    check(formatMusicalTime(4.5,true,{6,8})=="2. 4. 1"&&parseMusicalTime("2.4.1",true,{6,8})==4.5&&! parseMusicalTime("1.7.1",true,{6,8})
+          &&formatMusicalTime(4.5,true)=="2. 1. 3","positions count bars and eighth-note beats in 6/8");
+    meterLabel.setText("4/4",juce::sendNotificationSync);
     check(session.newProject().wasOk()&&session.importAudio(audioFixture,0).wasOk()&&session.addMidiTrack("Activation").wasOk(),"prepare clip activation controls");refresh();
     const auto activationAudio=state.tracks[0].clips[0].id,activationTrack=state.tracks[2].id;
     check(session.addMidiClip(activationTrack,0,4).wasOk(),"prepare activation MIDI clip");refresh();const auto activationMidi=state.tracks[2].clips[0].id;

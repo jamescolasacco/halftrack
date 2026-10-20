@@ -231,8 +231,12 @@ While a Session slot take records, input assignment is refused on every track, a
 
 ### Arrangement selection defaults
 
-Split, Delete Selection and Duplicate Selection act on clips only; automation in the selection stays where it is. Duplicate replaces the material in the time after the selection, and the selection moves onto the copy. Notes crossing a MIDI split become two notes. These are simplest-default choices pending reference measurement.
+Split, Delete Selection, Duplicate Selection and Consolidate act on clips only; automation in the selection stays where it is. Consolidated audio is rendered at the audio device's rate, without the track's devices, and plays unwarped. Duplicate replaces the material in the time after the selection, and the selection moves onto the copy. Notes crossing a MIDI split become two notes. These are simplest-default choices pending reference measurement.
 
 ### Rack defaults
 
 An empty effect rack passes its input and an empty Instrument or Drum Rack is silent. Zone fades are linear: key and velocity fades scale the note's velocity; selector fades scale an Instrument or Audio Effect Rack chain's output and a MIDI Effect Rack chain's velocity. The chain selector moves in whole steps from 0 to 127. Gains ramp over 5 ms. Chain mute and solo act on a chain's output, except in MIDI Effect Racks, where they stop new notes. A choke fades the choked pad's instrument voices over 5 ms, and audio effects after the instrument keep ringing. Chain pan uses the track mixer's law. Macro mappings interpolate in knob position, so a volume mapping follows the fader taper. A macro's first mapping takes the control's current position, and removing a mapping leaves the control where the macro put it. Macro automation applies at block rate. Grouping copies built-in devices into a one-chain rack; third-party plug-ins cannot go in racks yet. Only one-chain Instrument, Audio Effect and MIDI Effect Racks can be ungrouped. Chain Selector MIDI controller filtering, macro variations, randomize, hot-swap, chain colors, Drum Rack pad routing to the project's returns, and extracting chains are not implemented. These are simplest-default choices pending reference measurement.
+
+### Time signature defaults
+
+The project has one meter, and beats are quarter notes at every meter, so the tempo counts quarter notes and 6/8 has three beats per bar. The metronome clicks quarter notes and accents bars. Importing a MIDI file does not change the project meter. These are simplest-default choices pending reference measurement.

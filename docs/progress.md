@@ -918,3 +918,11 @@ Instrument, Audio Effect, MIDI Effect and Drum Racks hold parallel chains of bui
 The new `racks-acceptance` suite renders generated signals against computed sums, zone and fade arithmetic, exact pad samples and choke ramps, checks undo, save/move/reopen and eight malformed files, and audits heap calls in the rack callback. The UI suite drives the rack editor, the Drum Rack pad grid and device grouping. The source guard covers the rack callback and the choke path. Racks (461 checks), UI (728), utility, freeze, instruments and sampler suites and the source guard (206 bodies) pass locally on the Mac.
 
 Freeze and Flatten could leave a stray unnamed undo step, which the engine's undo timer opened after the freeze property changed. Flatten now opens its own transaction first, and Freeze holds an undo-transaction inhibitor while the render updates. See the [rack contract](research/racks-contract.md).
+
+## Consolidate — 2026-10-20
+
+Root owns `consolidateRange` in `src/Session.*`, Cmd/Ctrl+J and the Edit menu item, the consolidation block of `tests/RangeEditTests.cpp` and documentation. Consolidate replaces each selected track's material with one clip spanning the selection. MIDI clips join, and audio clips render (without devices) into a new file in Assets. The range-edit suite checks that a muted track with clip gain, a fade and a gap renders identically after consolidation, and that the MIDI join keeps every note and controller point.
+
+## Time signature — 2026-10-20
+
+Root owns the meter across `src/Session.*`, the control bar, rulers and grids in `src/MainComponent.cpp`, `tests/TimeSignatureTests.cpp`, the meter checks in `tests/MetronomeTests.cpp`, the suite registration and documentation. Projects can be in any meter from 1 to 99 over 1, 2, 4, 8 or 16, with beats kept as quarter notes. Launch quantisation, metronome accents, count-in, rulers, grids, clip creation, position fields and MIDI file export follow the meter. A 3/4 bar-quantized launch lands on sample 72000, and 3/4 and 5/4 clicks match exactly. See [the time signature contract](research/time-signature-contract.md).

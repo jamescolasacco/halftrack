@@ -131,6 +131,61 @@ int runRangeEditTests (const juce::File& artifacts)
         s.undo();
         ok (s.setTrackFrozen (s.snapshot().tracks[0].id, true), "freeze track 1");
         check (s.duplicateRange (ids(), 1, 2).failed() && clips (s, 1).size() == 1, "a frozen track in the selection rejects the edit");
+        // Consolidate, at the test engine's 44.1 kHz so renders compare without resampling.
+        {
+            constexpr double low = 44100;
+            const auto wav44 = root.getChildFile ("source44.wav"), render44 = root.getChildFile ("render44.wav");
+            {
+                juce::AudioBuffer<float> x (2, 3 * 44100);
+                for (int n = 0; n < x.getNumSamples(); ++n) for (int c = 0; c < 2; ++c) x.setSample (c, n, (float) (.3 * std::sin (2 * pi * 233.7 * n / low) + .1 * std::sin (2 * pi * .37 * n / low)));
+                juce::WavAudioFormat format; std::unique_ptr<juce::OutputStream> stream (wav44.createOutputStream());
+                auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (low).withNumChannels (2).withBitsPerSample (32));
+                check (writer && writer->writeFromAudioSampleBuffer (x, 0, x.getNumSamples()), "write a 44.1 kHz source");
+            }
+            const auto read = [&] (Session& session)
+            {
+                ok (session.exportWav (render44, low, 32, 0), "render at 44.1 kHz");
+                juce::AudioFormatManager formats; formats.registerBasicFormats(); std::unique_ptr<juce::AudioFormatReader> r (formats.createReaderFor (render44));
+                juce::AudioBuffer<float> x (2, (int) r->lengthInSamples); r->read (&x, 0, x.getNumSamples(), 0, true, true); return x;
+            };
+            Session c (false);
+            ok (c.importAudio (wav44, 0, 0), "a three-second clip at 0 s"); ok (c.importAudio (wav44, 0, 3.5), "another at 3.5 s");
+            auto first = clips (c, 0)[0]; auto settings = first.audio; settings.gainDb = -6; settings.fadeInSeconds = .2;
+            ok (c.setAudioClipSettings (first.id, settings), "the first clip at -6 dB with a fade-in");
+            ok (c.addMidiTrack ("Keys"), "add a MIDI track"); ok (c.moveTrack (c.snapshot().tracks.back().id, 1), "make it track 2");
+            const auto keys = c.snapshot().tracks[1].id;
+            ok (c.addMidiClip (keys, 0, 2), "a MIDI clip on beats 0 to 2"); ok (c.addMidiClip (keys, 4, 2), "another on beats 4 to 6");
+            const auto a = clips (c, 1)[0].id, b = clips (c, 1)[1].id;
+            ok (c.addMidiNote (a, 60, 1.25, .5, .8f), "a note at beat 1.25"); ok (c.addMidiNote (b, 62, .5, 1, .8f), "a note at beat 4.5");
+            ok (c.setMidiControllerLane (b, 1, { { 0, 50 } }), "a mod wheel point at beat 4");
+            ok (c.setTrackMute (1, true), "silence the MIDI track");
+            ok (c.setTrackMute (0, true), "mute the audio track too; consolidation ignores mute");
+            const auto tracks44 = [&] { const auto snapshot = c.snapshot(); return juce::StringArray { snapshot.tracks[0].id, snapshot.tracks[1].id }; };
+            ok (c.setTrackMute (0, false), "unmute for the reference render");
+            const auto reference = read (c);
+            ok (c.setTrackMute (0, true), "mute the audio track again");
+            juce::StringArray created;
+            check (c.consolidateRange (tracks44(), 7, 7.5, created).failed() && created.isEmpty(), "a selection without clips has nothing to consolidate");
+            ok (c.consolidateRange (tracks44(), .5, 4, created), "consolidate 0.5 s to 4 s on both tracks");
+            auto audio44 = clips (c, 0);
+            check (created.size() == 2 && audio44.size() == 3 && near (audio44[1].start, .5) && near (audio44[1].length, 3.5) && audio44[1].id == created[0]
+                   && audio44[1].file.existsAsFile() && audio44[1].file.getParentDirectory().getFileName().endsWith ("Assets") && near (audio44[2].start, 4),
+                   "the audio becomes one clip spanning the selection, rendered into the project's Assets");
+            {
+                juce::AudioFormatManager formats; formats.registerBasicFormats(); std::unique_ptr<juce::AudioFormatReader> r (formats.createReaderFor (audio44[1].file));
+                check (r != nullptr && r->sampleRate == low && r->lengthInSamples == (juce::int64) (3.5 * low), "the consolidated file holds 3.5 s at 44.1 kHz");
+            }
+            ok (c.setTrackMute (0, false), "unmute to compare");
+            const auto after = read (c);
+            double worst = 0; for (int n = 0; n < reference.getNumSamples(); ++n) worst = std::max (worst, (double) std::abs (after.getSample (0, n) - reference.getSample (0, n)));
+            check (after.getNumSamples() == reference.getNumSamples() && worst < 1e-6, "the consolidated track renders like the original clips, with gain, fade and gap baked in");
+            const auto midi44 = clips (c, 1);
+            check (midi44.size() == 2 && midi44[1].id == created[1] && near (midi44[1].startBeat, 1) && near (midi44[1].lengthBeats, 7)
+                   && same (notes (midi44[1]), { { 60, .25, .5 }, { 62, 3.5, 1 } }) && midi44[1].controllers.size() == 1
+                   && midi44[1].controllers[0].points == std::vector<Point> { { 3, 50 } }, "the MIDI clips join into one clip on beats 1 to 8 with their notes and controller");
+            c.undo(); c.undo();
+            check (clips (c, 0).size() == 2 && clips (c, 1).size() == 2 && clips (c, 1)[1].notes.size() == 1, "undoing the unmute and then the consolidation restores the original clips");
+        }
         std::cout << "Range edit passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL range edit: " << e.what() << std::endl; return 1; }
