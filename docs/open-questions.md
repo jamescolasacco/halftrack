@@ -179,3 +179,7 @@ Volume 0 dB plays the source at unity (the synthesizers keep quarter-scale headr
 ### Time signatures
 
 The project meter is fixed at 4/4. The pinned engine counts beats in the time signature's denominator unit, while Halftrack's model, UI and tests treat a beat as a quarter note. An editable meter therefore needs a beat-unit decision across notes, clips, grids, warping and count-in before it is exposed. The reference application's tempo is assumed to count quarter notes; this is unmeasured.
+
+### Group slot launching
+
+A group slot launches its members' clips in that row on the global grid, and members with an empty slot there stop, as in a scene launch. Per-clip launch modes and grids are not applied through a group slot. Folding hides member columns and their mixer strips in Session view. These are simplest-default choices pending reference measurement.

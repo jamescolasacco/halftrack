@@ -232,7 +232,7 @@ Starts quantize to the nearest grid with ties later; duration stays unchanged an
 
 ## Group tracks
 
-Groups are engine submix folder tracks with Halftrack's constant-power mixer. `Snapshot::groups` and `TrackInfo::groupId` report them without changing track indices; `groupTracks`, `ungroupTracks` and the group mixer commands are documented in the [groups contract](research/groups-contract.md).
+Groups are engine submix folder tracks with Halftrack's constant-power mixer. `Snapshot::groups` and `TrackInfo::groupId` report them without changing track indices; `groupTracks`, `ungroupTracks` and the group mixer commands are documented in the [groups contract](research/groups-contract.md). Group gain and pan record the same undoable manual-level properties as track faders, and the post-undo parameter refresh includes group mixers. `launchGroupSlot(groupId, scene)` queues every member on the global grid like a scene restricted to the group, and `stopGroup` stops the members. The Session grid builds display columns (a group column before its members; folded members hidden) for painting, hit testing, mixer strips and scrolling. The Session mixer shows a column-layout `GroupHeader` for each group.
 
 ## Audio warping
 

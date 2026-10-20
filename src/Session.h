@@ -270,6 +270,9 @@ public:
     juce::Result setGroupMute (const juce::String& groupId, bool);
     juce::Result setGroupSolo (const juce::String& groupId, bool);
     juce::Result setGroupFolded (const juce::String& groupId, bool);
+    // A group's clip slot launches its members' clips in that scene on the global grid; members without one stop.
+    juce::Result launchGroupSlot (const juce::String& groupId, int sceneIndex);
+    juce::Result stopGroup (const juce::String& groupId);
     juce::Result moveTrack (const juce::String& trackId, int destinationIndex);
     juce::Result removeTrack (int trackIndex);
     juce::Result importAudio (const juce::File&, int trackIndex = -1, double startSeconds = 0);

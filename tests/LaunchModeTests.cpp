@@ -245,6 +245,45 @@ void legatoTests (const juce::File& root, bool legato)
     else level (out, 8000, 24000, .1f, "a non-legato clip starts from its beginning");
     session.stop();
 }
+
+void groupSlotTests (const juce::File& root)
+{
+    MemoryBuffers buffers;
+    Session session (false);
+    auto& engine = engineFor (session);
+    te::test_utilities::EnginePlayer player (engine, parameters());
+    // Distinct constant levels make every combination of playing tracks identifiable.
+    const auto a = fixture (root, "member-a", [] (int) { return .1f; }), b = fixture (root, "member-b", [] (int) { return .02f; });
+    const auto a2 = fixture (root, "member-a2", [] (int) { return .2f; }), outside = fixture (root, "outside", [] (int) { return .4f; });
+    ok (session.addAudioTrack ("Outside"), "add an outside track");
+    ok (session.importAudioToSlot (a.file, 0, 0), "first member clip"); ok (session.importAudioToSlot (b.file, 1, 0), "second member clip");
+    ok (session.importAudioToSlot (a2.file, 0, 1), "first member's second-scene clip"); ok (session.importAudioToSlot (outside.file, 2, 0), "outside clip");
+    registerFixture (buffers, engine, slotClip (session, 0, 0).file, a.audio); registerFixture (buffers, engine, slotClip (session, 1, 0).file, b.audio);
+    registerFixture (buffers, engine, slotClip (session, 0, 1).file, a2.audio); registerFixture (buffers, engine, slotClip (session, 2, 0).file, outside.audio);
+    juce::String group;
+    ok (session.groupTracks ({ session.snapshot().tracks[0].id, session.snapshot().tracks[1].id }, group), "group the first two tracks");
+    check (session.launchGroupSlot ("missing", 0).failed() && session.launchGroupSlot (group, 99).failed() && session.stopGroup ("missing").failed(),
+           "unknown groups and scenes are rejected");
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::none), "immediate grid");
+    ok (session.play(), "start the transport"); ok (session.launchSlot (2, 0), "start the outside clip");
+    player.process (4800);
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::beat), "one-beat grid");
+    ok (session.launchGroupSlot (group, 0), "launch the group's first slot"); // 4800 samples in, next beat at 24000.
+    auto out = player.process (24000);
+    level (out, 512, 19000, .4f, "the outside clip plays alone until the boundary");
+    level (out, 19800, 24000, .52f, "both member clips start together on the boundary beside the outside clip");
+    check (slot (session, 0, 0).playing && slot (session, 1, 0).playing && slot (session, 2, 0).playing, "the members and the outside clip all play");
+    ok (session.launchGroupSlot (group, 1), "launch the group's second slot"); // 28800 samples in, next beat at 48000.
+    out = player.process (24000);
+    level (out, 512, 18800, .52f, "the first group row plays until the boundary");
+    level (out, 19800, 24000, .6f, "the second row switches the first member and stops the member without a clip");
+    check (slot (session, 0, 1).playing && ! slot (session, 1, 0).playing && slot (session, 2, 0).playing, "only the group's members change");
+    ok (session.stopGroup (group), "stop the group"); // 52800 samples in, next beat at 72000.
+    out = player.process (24000);
+    level (out, 512, 18800, .6f, "the group plays until its stop boundary");
+    level (out, 19800, 24000, .4f, "stopping the group leaves the outside clip playing");
+    session.stop();
+}
 }
 
 int runLaunchModeTests (const juce::File& artifacts)
@@ -258,6 +297,7 @@ int runLaunchModeTests (const juce::File& artifacts)
         repeatTests (root);
         legatoTests (root, false);
         legatoTests (root, true);
+        groupSlotTests (root);
         std::cout << "Launch modes passed: " << root.getFullPathName() << std::endl;
         return 0;
     }

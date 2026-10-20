@@ -1380,6 +1380,9 @@ struct Session::Impl
         };
         for (auto* track : te::getAudioTracks (*edit))
             for (auto* plugin : track->pluginList.getPlugins()) refresh (*plugin);
+        for (auto* track : te::getAllTracks (*edit))
+            if (auto* folder = dynamic_cast<te::FolderTrack*> (track); folder && folder->isSubmixFolder())
+                for (auto* plugin : folder->pluginList.getPlugins()) refresh (*plugin);
         refresh (*edit->getMasterVolumePlugin());
         for (auto* t : te::getAudioTracks (*edit))
             if (auto* device = input (*t))
@@ -2373,6 +2376,31 @@ Result Session::stopLauncherTrack (int trackIndex)
     impl->queueTrack (*track, nullptr, impl->launchBoundary());
     sendChangeMessage(); return Result::ok();
 }
+Result Session::launchGroupSlot (const String& groupId, int sceneIndex)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* folder = impl->group (groupId);
+    if (! folder) return Result::fail ("Group not found.");
+    if (! juce::isPositiveAndBelow (sceneIndex, impl->edit->getSceneList().getNumScenes())) return Result::fail ("Scene not found.");
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio output in Audio Settings.");
+    impl->edit->dispatchPendingUpdatesSynchronously();
+    impl->edit->getTransport().ensureContextAllocated();
+    const auto boundary = impl->launchBoundary();
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        if (track->getParentFolderTrack() == folder) impl->queueTrack (*track, track->getClipSlotList().getClipSlots()[sceneIndex]->getClip(), boundary);
+    if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().play (false);
+    sendChangeMessage(); return Result::ok();
+}
+Result Session::stopGroup (const String& groupId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* folder = impl->group (groupId);
+    if (! folder) return Result::fail ("Group not found.");
+    const auto boundary = impl->launchBoundary();
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        if (track->getParentFolderTrack() == folder) impl->queueTrack (*track, nullptr, boundary);
+    sendChangeMessage(); return Result::ok();
+}
 Result Session::stopAllLauncherClips()
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -2765,7 +2793,12 @@ Result Session::setGroupGain (const String& groupId, float value)
     if (! volume) return Result::fail ("Group not found.");
     if (! std::isfinite (value)) return Result::fail ("Invalid gain.");
     value = juce::jlimit (-100.0f, 6.0f, value);
-    impl->transaction ("Group gain"); volume->setVolumeDb (value); impl->changed(); return Result::ok();
+    // As on track faders, the undoable manual level is what undo restores to the parameter.
+    if (! volume->state.hasProperty (manualVolumeProperty))
+        volume->state.setProperty (manualVolumeProperty, volume->volParam->getCurrentExplicitValue(), nullptr);
+    impl->transaction ("Group gain"); volume->setVolumeDb (value);
+    volume->state.setProperty (manualVolumeProperty, te::decibelsToVolumeFaderPosition (value), &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
 }
 Result Session::setGroupPan (const String& groupId, float value)
 {
@@ -2773,7 +2806,12 @@ Result Session::setGroupPan (const String& groupId, float value)
     auto* folder = impl->group (groupId); auto* volume = folder ? folder->getVolumePlugin() : nullptr;
     if (! volume) return Result::fail ("Group not found.");
     if (! std::isfinite (value)) return Result::fail ("Invalid pan.");
-    impl->transaction ("Group pan"); volume->setPan (juce::jlimit (-1.0f, 1.0f, value)); impl->changed(); return Result::ok();
+    value = juce::jlimit (-1.0f, 1.0f, value);
+    if (! volume->state.hasProperty (manualPanProperty))
+        volume->state.setProperty (manualPanProperty, volume->panParam->getCurrentExplicitValue(), nullptr);
+    impl->transaction ("Group pan"); volume->setPan (value);
+    volume->state.setProperty (manualPanProperty, value, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
 }
 Result Session::setGroupMute (const String& groupId, bool value)
 {

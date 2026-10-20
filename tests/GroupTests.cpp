@@ -70,7 +70,10 @@ int runGroupTests (const juce::File& artifacts)
         ok (s.setGroupGain (group, -6), "lower the group");
         const auto gain = std::pow (10.0f, -6.0f / 20);
         check (difference (render (s, mix), reference, gain, gain) < 1e-6, "group gain scales the summed members");
+        s.undo(); check (std::abs (s.snapshot().groups[0].gainDb) < 1e-4, "undo restores the group gain");
+        s.redo(); check (std::abs (s.snapshot().groups[0].gainDb + 6) < 1e-4, "redo lowers the group again");
         ok (s.setGroupGain (group, 0), "restore group gain"); ok (s.setGroupPan (group, -1), "pan the group hard left");
+        s.undo(); check (std::abs (s.snapshot().groups[0].pan) < 1e-4, "undo centres the group pan"); s.redo();
         check (difference (render (s, mix), reference, std::sqrt (2.0f), 0) < 1e-5, "the group pan follows the constant-power law with unity centre");
         ok (s.setGroupPan (group, 0), "centre the group");
         ok (s.setGroupMute (group, true), "mute the group");

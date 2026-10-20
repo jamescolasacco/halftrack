@@ -109,7 +109,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
 | ARR-001 | Timeline navigation | Test horizontal/vertical zoom, fit, follow, selection, scroll, and navigation while playback continues. | NOT IMPLEMENTED / UNVERIFIED |
-| ARR-002 | Tracks and groups | PARTIAL — rename, colour, reorder, duplicate and delete tracks; one-level submix groups with gain/pan/mute/solo/fold, ungroup, undo and persistence; nesting and group clip launching missing | PARTIAL |
+| ARR-002 | Tracks and groups | PARTIAL — rename, colour, reorder, duplicate and delete tracks; one-level submix groups with gain/pan/mute/solo/fold, ungroup, undo and persistence; Session group columns with group slot launch/stop and a group mixer strip; nesting missing | PARTIAL |
 | ARR-003 | Move, trim, loop, slip | Exercise clip edges, source offsets, negative/late starts where supported, and repetition without destructive media changes. | PARTIAL — numeric and direct edge trim/source slip, bounds, snapping, undo, stable-ID audio/MIDI cross-track move; warp/loop edge editing missing |
 | ARR-004 | Selection and grid | Test single/multiple clips, time ranges, fixed/adaptive/triplet grids, temporary snap override, and keyboard equivalents. | NOT IMPLEMENTED / UNVERIFIED |
 | ARR-005 | Cut, copy, paste, duplicate | Verify cross-track/time moves, copy modifiers, clipboard scope, undo, and automation ownership. | PARTIAL — audio and MIDI clip Cut/Copy/Paste across tracks/projects, beat-correct MIDI paste, fresh identities, duplicate/undo and portable media; multi-clip/time-range clipboard missing |
