@@ -3737,7 +3737,9 @@ private:
         juce::PopupMenu popup;
         popup.addItem (100001, "Utility  (Built-in)");
         juce::StringArray categories;
-        for (int i = 0; i < Session::effectKindCount; ++i) categories.addIfNotAlreadyThere (effectCategory (static_cast<Session::EffectKind> (i)));
+        const bool midiTrack = state.tracks[static_cast<size_t> (selectedTrack)].isMidi;
+        for (int i = 0; i < Session::effectKindCount; ++i)
+            if (midiTrack || ! effectIsMidi (static_cast<Session::EffectKind> (i))) categories.addIfNotAlreadyThere (effectCategory (static_cast<Session::EffectKind> (i)));
         for (const auto& category : categories)
         {
             juce::PopupMenu group;

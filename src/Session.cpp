@@ -3395,11 +3395,14 @@ Result Session::addNativeEffect (int index, EffectKind kind)
     juce::ValueTree state (te::IDs::PLUGIN);
     state.setProperty (te::IDs::type, NativeEffectPlugin::xmlTypeName, nullptr);
     state.setProperty ("effectKind", static_cast<int> (kind), nullptr);
+    auto* instrument = Impl::synth (*track);
+    if (effectIsMidi (kind) && instrument == nullptr) return Result::fail ("MIDI effects need a MIDI track.");
     auto plugin = impl->edit->getPluginCache().createNewPlugin (state);
     if (! plugin) return Result::fail ("The native effect could not be created.");
     int insertion = track->pluginList.size();
     for (int i = 0; i < track->pluginList.size(); ++i)
-        if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i]))
+        if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i])
+            || (effectIsMidi (kind) && track->pluginList[i] == instrument))
         { insertion = i; break; }
     impl->transaction ("Add " + String (effectName (kind)));
     track->pluginList.insertPlugin (plugin, insertion, nullptr);
@@ -3459,6 +3462,11 @@ Result Session::movePlugin (int t, int p, int destination)
     if (! juce::isPositiveAndBelow (p, list.size()) || ! juce::isPositiveAndBelow (destination, list.size()))
         return Result::fail ("Device position not found.");
     if (p == destination) return Result::ok();
+    // MIDI effects stay ahead of the instrument; audio devices stay after it.
+    const auto midiDevice = [] (te::Plugin* plugin)
+    { auto* effect = dynamic_cast<NativeEffectPlugin*> (plugin); return effect != nullptr && effect->takesMidiInput(); };
+    if (midiDevice (list[p]) != midiDevice (list[destination]))
+        return Result::fail ("MIDI effects stay before the instrument; audio devices stay after it.");
     auto state = list[p]->state; auto parent = state.getParent();
     if (parent != list[destination]->state.getParent()) return Result::fail ("Devices must be on the same track.");
     impl->transaction ("Move device");

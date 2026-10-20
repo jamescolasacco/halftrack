@@ -56,8 +56,10 @@ public:
     };
     // Appended kinds keep their persisted integer value; never reorder.
     enum class EffectKind { equalizer, compressor, delay, reverb, bitcrusher, gate, limiter,
-        saturator, overdrive, autoFilter, autoPan, chorus, phaser, flanger, eqThree, glueCompressor, frequencyShifter };
-    static constexpr int effectKindCount = 17;
+        saturator, overdrive, autoFilter, autoPan, chorus, phaser, flanger, eqThree, glueCompressor, frequencyShifter,
+        // MIDI effects process notes before a MIDI track's instrument.
+        arpeggiator, chord, scale, pitch, velocity, random, noteLength };
+    static constexpr int effectKindCount = 24;
     struct EffectSettings
     {
         EffectKind kind = EffectKind::equalizer;

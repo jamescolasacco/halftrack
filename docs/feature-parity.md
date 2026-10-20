@@ -426,14 +426,14 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 
 | ID | Reference target | Test profile (plus BASE) | Status |
 | --- | --- | --- | --- |
-| MFX-001 | Arpeggiator | MIDI | NOT IMPLEMENTED / UNVERIFIED |
+| MFX-001 | Arpeggiator | PARTIAL — eight styles, 1–4 octaves, nine synced rates, gate, hold, fixed velocity; transport-grid and free timing; engine renders equal written notes. Retrigger/repeats/swing/transpose steps missing | PARTIAL |
 | MFX-002 | CC Control | MIDI | NOT IMPLEMENTED / UNVERIFIED |
-| MFX-003 | Chord | MIDI | NOT IMPLEMENTED / UNVERIFIED |
-| MFX-004 | Note Length | MIDI | NOT IMPLEMENTED / UNVERIFIED |
-| MFX-005 | Pitch | MIDI | NOT IMPLEMENTED / UNVERIFIED |
-| MFX-006 | Random | MIDI | NOT IMPLEMENTED / UNVERIFIED |
-| MFX-007 | Scale | MIDI | NOT IMPLEMENTED / UNVERIFIED |
-| MFX-008 | Velocity | MIDI | NOT IMPLEMENTED / UNVERIFIED |
+| MFX-003 | Chord | PARTIAL — six shifts with per-shift velocity, merged duplicates, shared-tone ownership; render equals written chord | PARTIAL |
+| MFX-004 | Note Length | PARTIAL — time or tempo-division length with gate and note-off trigger; render equals written length. Decay/key-scale options missing | PARTIAL |
+| MFX-005 | Pitch | PARTIAL — ±48 semitones with input range blocking; release identity across parameter changes; render equals transposed note. Random/lowest-fold modes missing | PARTIAL |
+| MFX-006 | Random | PARTIAL — chance, choices, interval, direction, random/alternate with seeded reproducible output | PARTIAL |
+| MFX-007 | Scale | PARTIAL — 12 roots × 13 scales, nearest-degree mapping (ties down), transpose; brute-force verified. Custom maps/fold missing | PARTIAL |
+| MFX-008 | Velocity | PARTIAL — clip/gate/fixed, input/output spans, drive curve, random; relative/release operation missing | PARTIAL |
 
 ### Native instruments
 

@@ -37,7 +37,7 @@ public:
             }
             else
             {
-                auto& control = sliders[i]; control.setName (spec.key); control.setRange (spec.minimum, spec.maximum);
+                auto& control = sliders[i]; control.setName (spec.key); control.setRange (spec.minimum, spec.maximum, spec.integer ? 1.0 : 0.0);
                 if (spec.midpoint > spec.minimum && spec.midpoint < spec.maximum && spec.midpoint != 0)
                     control.setSkewFactorFromMidPoint (spec.midpoint);
                 control.setSliderStyle (kind == Session::EffectKind::equalizer ? juce::Slider::LinearHorizontal : juce::Slider::RotaryHorizontalVerticalDrag);
@@ -50,7 +50,7 @@ public:
                     control.textFromValueFunction = [] (double v) { return juce::String (v*100, 1) + "%"; };
                     control.valueFromTextFunction = [] (const juce::String& t) { return t.getDoubleValue()/100; };
                 }
-                else control.setNumDecimalPlacesToDisplay (unit.contains ("Hz") || unit.contains ("deg") ? 0 : unit.contains ("dB") || unit.contains ("ms") ? 1 : 2);
+                else control.setNumDecimalPlacesToDisplay (spec.integer || unit.contains ("Hz") || unit.contains ("deg") ? 0 : unit.contains ("dB") || unit.contains ("ms") ? 1 : 2);
                 control.updateText(); // The text box predates the formatter; refresh unchanged initial values.
                 control.onDragStart = [this] { session.beginEditGesture ("Adjust " + juce::String (effectName (kind))); dragging = true; };
                 control.onDragEnd = [this] { finishGesture(); };
@@ -162,6 +162,13 @@ public:
             const bool synced = value->values[timing] != 0;
             sliders[timing - 1].setEnabled (enabled && ! synced); choices[timing + 1].setEnabled (enabled && synced);
         }
+        if (value)
+        {
+            const auto& v = value->values;
+            if (kind == Session::EffectKind::arpeggiator) sliders[6].setEnabled (enabled && v[5] != 0);
+            if (kind == Session::EffectKind::velocity) { sliders[6].setEnabled (enabled && v[0] == 2); for (size_t i = 3; i <= 5; ++i) sliders[i].setEnabled (enabled && v[0] != 2); }
+            if (kind == Session::EffectKind::noteLength) { sliders[2].setEnabled (enabled && v[1] == 0); choices[3].setEnabled (enabled && v[1] != 0); }
+        }
         repaint();
     }
 private:
@@ -200,25 +207,35 @@ std::unique_ptr<juce::Component> makeNativeEffectEditor (Session& session, const
 int runNativeEffectEditorTests (const juce::File& root)
 {
     auto check = [] (bool v, const char* text) { if (! v) throw std::runtime_error (text); std::cout << "PASS effect editor: " << text << std::endl; };
-    Session s (false); check (s.addAudioTrack().wasOk(), "create editor track");
+    Session s (false); check (s.addMidiTrack().wasOk(), "create editor track");
+    const int track = (int) s.snapshot().tracks.size() - 1; // New projects begin with two audio tracks.
     for (int type = 0; type < Session::effectKindCount; ++type)
     {
-        const auto kind = static_cast<Session::EffectKind> (type); check (s.addNativeEffect (0, kind).wasOk(), "add editor device");
-        const auto info = s.snapshot().tracks[0].plugins.back(); auto editor = makeNativeEffectEditor (s, info.id);
+        const auto kind = static_cast<Session::EffectKind> (type);
+        const auto before = s.snapshot().tracks[(size_t) track].plugins; check (s.addNativeEffect (track, kind).wasOk(), "add editor device");
+        const auto devices = s.snapshot().tracks[(size_t) track].plugins; int position = 0;
+        while (position < (int) before.size() && devices[(size_t) position].id == before[(size_t) position].id) ++position;
+        const auto info = devices[(size_t) position]; auto editor = makeNativeEffectEditor (s, info.id);
         juce::Slider* slider = nullptr;
         const auto specs = effectParameters (kind); size_t index = 0;
         while (index < specs.size() && specs[index].choices) ++index;
         for (auto* child : editor->getChildren()) if (auto* c = dynamic_cast<juce::Slider*> (child); c && c->getName() == specs[index].key) slider = c;
         check (slider != nullptr, "production control exists");
         slider->onDragStart(); slider->setValue (specs[index].minimum, juce::sendNotificationSync); slider->setValue (specs[index].maximum, juce::sendNotificationSync); slider->onDragEnd();
-        check (s.snapshot().tracks[0].plugins.back().effect.values[index] == specs[index].maximum, "control changes actual engine value");
-        s.undo(); check (s.snapshot().tracks[0].plugins.back().effect == info.effect, "one undo restores full gesture"); s.redo();
+        const auto device = [&]
+        {
+            const auto snapshot = s.snapshot(); // Keep the temporary alive across the loop.
+            for (const auto& p : snapshot.tracks[(size_t) track].plugins) if (p.id == info.id) return p;
+            return Session::PluginInfo {};
+        };
+        check (device().effect.values[index] == specs[index].maximum, "control changes actual engine value");
+        s.undo(); check (device().effect == info.effect, "one undo restores full gesture"); s.redo();
         const auto image = editor->createComponentSnapshot (editor->getLocalBounds()); const auto file = root.getChildFile ("effect-editor-"+juce::String(type)+".png");
         juce::FileOutputStream output (file); juce::PNGImageFormat png; check (png.writeImageToStream (image, output), "write original editor snapshot");
-        check (s.showPluginEditor (0,type).wasOk(), "native editor window opens");
-        check (s.removePlugin (0,type).wasOk(), "remove device with open window");
+        check (s.showPluginEditor (track,position).wasOk(), "native editor window opens");
+        check (s.removePlugin (track,position).wasOk(), "remove device with open window");
         static_cast<NativeEffectEditor*> (editor.get())->synchronise(); check (! slider->isEnabled(), "removed device disables retained editor");
-        s.undo(); check (s.showPluginEditor (0,type).wasOk(), "undo restores reopenable native editor"); s.closePluginEditors();
+        s.undo(); check (s.showPluginEditor (track,position).wasOk(), "undo restores reopenable native editor"); s.closePluginEditors();
     }
     check (s.newProject().wasOk(), "replace project after editor lifecycle checks"); return 0;
 }

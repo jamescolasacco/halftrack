@@ -143,6 +143,51 @@ constexpr EffectParameter shifterFields[] {
     { "mode", "Mode", 0, 1, 0, 0, "", "Shift|Ring" },
     { "wide", "Stereo", 0, 1, 0, 0, "", "Same|Opposite" },
     { "mix", "Dry / Wet", 0, 1, 1, 0, "" } };
+#define STEP_RATES "1/32|1/16 triplet|1/16|1/8 triplet|1/8|1/4 triplet|1/4|1/2|1 bar"
+constexpr EffectParameter arpeggiatorFields[] {
+    { "style", "Style", 0, 7, 0, 0, "", "Up|Down|Up-down|Down-up|Converge|Diverge|As played|Random" },
+    { "rate", "Rate", 0, 8, 2, 0, "", STEP_RATES },
+    { "gate", "Gate", .05f, 2, .5f, 0, "%" },
+    { "octaves", "Octaves", 0, 3, 0, 0, "", "1|2|3|4" },
+    { "hold", "Hold", 0, 1, 0, 0, "", "Off|On" },
+    { "velocityMode", "Velocity", 0, 1, 0, 0, "", "As played|Fixed" },
+    { "fixedVelocity", "Fixed velocity", 1, 127, 100, 0, "", nullptr, true } };
+#define CHORD_SHIFT(N, V) { "shift" #N, "Shift " #N, -36, 36, V, 0, " st", nullptr, true }
+#define CHORD_VELOCITY(N) { "velocity" #N, "Velocity " #N, 0, 1, 1, 0, "%" }
+constexpr EffectParameter chordFields[] { CHORD_SHIFT (1, 4), CHORD_SHIFT (2, 7), CHORD_SHIFT (3, 0), CHORD_SHIFT (4, 0), CHORD_SHIFT (5, 0), CHORD_SHIFT (6, 0),
+    CHORD_VELOCITY (1), CHORD_VELOCITY (2), CHORD_VELOCITY (3), CHORD_VELOCITY (4), CHORD_VELOCITY (5), CHORD_VELOCITY (6) };
+#undef CHORD_SHIFT
+#undef CHORD_VELOCITY
+constexpr EffectParameter scaleFields[] {
+    { "root", "Root", 0, 11, 0, 0, "", "C|C#|D|D#|E|F|F#|G|G#|A|A#|B" },
+    { "scaleType", "Scale", 0, 12, 0, 0, "", "Major|Minor|Dorian|Phrygian|Lydian|Mixolydian|Locrian|Harmonic minor|Melodic minor|Major pentatonic|Minor pentatonic|Blues|Chromatic" },
+    { "transpose", "Transpose", -24, 24, 0, 0, " st", nullptr, true } };
+constexpr EffectParameter pitchFields[] {
+    { "semitones", "Pitch", -48, 48, 0, 0, " st", nullptr, true },
+    { "lowest", "Lowest note", 0, 127, 0, 0, "", nullptr, true },
+    { "highest", "Highest note", 0, 127, 127, 0, "", nullptr, true } };
+constexpr EffectParameter velocityFields[] {
+    { "mode", "Mode", 0, 2, 0, 0, "", "Clip|Gate|Fixed" },
+    { "inLow", "Input lowest", 1, 127, 1, 0, "", nullptr, true },
+    { "inHigh", "Input highest", 1, 127, 127, 0, "", nullptr, true },
+    { "outLow", "Output lowest", 1, 127, 1, 0, "", nullptr, true },
+    { "outHigh", "Output highest", 1, 127, 127, 0, "", nullptr, true },
+    { "drive", "Drive", -1, 1, 0, 0, "%" },
+    { "fixed", "Fixed value", 1, 127, 100, 0, "", nullptr, true },
+    { "random", "Random", 0, 64, 0, 0, "" } };
+constexpr EffectParameter randomFields[] {
+    { "chance", "Chance", 0, 1, .5f, 0, "%" },
+    { "choices", "Choices", 1, 24, 1, 0, "", nullptr, true },
+    { "interval", "Interval", 1, 24, 12, 0, " st", nullptr, true },
+    { "sign", "Direction", 0, 2, 0, 0, "", "Add|Subtract|Both" },
+    { "mode", "Mode", 0, 1, 0, 0, "", "Random|Alternate" } };
+constexpr EffectParameter noteLengthFields[] {
+    { "trigger", "Trigger", 0, 1, 0, 0, "", "Note on|Note off" },
+    { "timing", "Timing", 0, 1, 1, 0, "", "Milliseconds|Project tempo" },
+    { "lengthMs", "Length", 1, 4000, 250, 250, " ms" },
+    { "division", "Division", 0, 8, 4, 0, "", STEP_RATES },
+    { "gate", "Gate", .01f, 2, 1, 0, "%" } };
+#undef STEP_RATES
 #undef LFO_DIVISIONS
 #undef LFO_SHAPES
 constexpr std::array<double, 11> delayBeats { .25, 1.0/3, .375, .5, 2.0/3, .75, 1, 1.5, 2, 3, 4 };
@@ -155,7 +200,9 @@ const char* effectName (Kind kind) noexcept
         case Kind::delay: return "Stereo Delay"; case Kind::reverb: return "Room Reverb"; case Kind::bitcrusher: return "Bitcrusher"; case Kind::gate: return "Noise Gate"; case Kind::limiter: return "Peak Limiter";
         case Kind::saturator: return "Saturator"; case Kind::overdrive: return "Overdrive"; case Kind::autoFilter: return "Auto Filter";
         case Kind::autoPan: return "Auto Pan"; case Kind::chorus: return "Chorus"; case Kind::phaser: return "Phaser"; case Kind::flanger: return "Flanger";
-        case Kind::eqThree: return "Three-band EQ"; case Kind::glueCompressor: return "Bus Compressor"; case Kind::frequencyShifter: return "Frequency Shifter"; }
+        case Kind::eqThree: return "Three-band EQ"; case Kind::glueCompressor: return "Bus Compressor"; case Kind::frequencyShifter: return "Frequency Shifter";
+        case Kind::arpeggiator: return "Arpeggiator"; case Kind::chord: return "Chord"; case Kind::scale: return "Scale"; case Kind::pitch: return "Pitch";
+        case Kind::velocity: return "Velocity"; case Kind::random: return "Random"; case Kind::noteLength: return "Note Length"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
@@ -164,7 +211,9 @@ std::span<const EffectParameter> effectParameters (Kind kind) noexcept
         case Kind::delay: return delayFields; case Kind::reverb: return reverbFields; case Kind::bitcrusher: return crusherFields; case Kind::gate: return gateFields; case Kind::limiter: return limiterFields;
         case Kind::saturator: return saturatorFields; case Kind::overdrive: return overdriveFields; case Kind::autoFilter: return autoFilterFields;
         case Kind::autoPan: return autoPanFields; case Kind::chorus: return chorusFields; case Kind::phaser: return phaserFields; case Kind::flanger: return flangerFields;
-        case Kind::eqThree: return eqThreeFields; case Kind::glueCompressor: return glueFields; case Kind::frequencyShifter: return shifterFields; }
+        case Kind::eqThree: return eqThreeFields; case Kind::glueCompressor: return glueFields; case Kind::frequencyShifter: return shifterFields;
+        case Kind::arpeggiator: return arpeggiatorFields; case Kind::chord: return chordFields; case Kind::scale: return scaleFields; case Kind::pitch: return pitchFields;
+        case Kind::velocity: return velocityFields; case Kind::random: return randomFields; case Kind::noteLength: return noteLengthFields; }
     return {};
 }
 const char* effectCategory (Kind kind) noexcept
@@ -176,10 +225,13 @@ const char* effectCategory (Kind kind) noexcept
         case Kind::delay: case Kind::reverb: return "Delay & Reverb";
         case Kind::bitcrusher: case Kind::saturator: case Kind::overdrive: return "Distortion";
         case Kind::autoPan: case Kind::chorus: case Kind::phaser: case Kind::flanger: case Kind::frequencyShifter: return "Modulation";
+        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return "MIDI Effects";
     }
     return "Effects";
 }
-bool effectUsesTempo (Kind kind) noexcept { return kind == Kind::delay || kind == Kind::autoFilter || kind == Kind::autoPan; }
+bool effectUsesTempo (Kind kind) noexcept
+{ return kind == Kind::delay || kind == Kind::autoFilter || kind == Kind::autoPan || kind == Kind::arpeggiator || kind == Kind::noteLength; }
+bool effectIsMidi (Kind kind) noexcept { return static_cast<int> (kind) >= static_cast<int> (Kind::arpeggiator) && static_cast<int> (kind) < Session::effectKindCount; }
 double effectLatencySeconds (Kind kind, double rate) noexcept
 { return kind == Kind::limiter && rate > 0 ? std::ceil (rate * .001) / rate : 0.0; }
 double effectTailSeconds (Kind kind, double rate) noexcept
@@ -196,6 +248,7 @@ double effectTailSeconds (Kind kind, double rate) noexcept
         case Kind::phaser: return 1.0;
         case Kind::eqThree: case Kind::frequencyShifter: return .1;
         case Kind::compressor: case Kind::gate: case Kind::autoPan: case Kind::glueCompressor: return 0.0;
+        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return 0.0;
     }
     return 0.0;
 }
@@ -220,7 +273,7 @@ bool validEffectSettings (const Settings& s) noexcept
         const auto v = s.values[i];
         if (! std::isfinite (v)) return false;
         if (i >= fields.size()) { if (v != 0) return false; continue; }
-        if (v < fields[i].minimum || v > fields[i].maximum || (fields[i].choices && std::floor (v) != v)) return false;
+        if (v < fields[i].minimum || v > fields[i].maximum || ((fields[i].choices || fields[i].integer) && std::floor (v) != v)) return false;
     }
     return true;
 }
@@ -501,6 +554,7 @@ void NativeEffectDSP::processSamples (float* left, float* right, int count) noex
             case Kind::eqThree: eqThree.tick (outL, outR); break;
             case Kind::glueCompressor: glue.tick (outL, outR); break;
             case Kind::frequencyShifter: shifter.tick (outL, outR); break;
+            default: break; // MIDI kinds have no audio path.
         }
         left[frame] = static_cast<float> (finiteSample (l*(1-wet) + wet*outL*outputGain));
         if (right) right[frame] = static_cast<float> (finiteSample (r*(1-wet) + wet*outR*outputGain));
@@ -567,7 +621,7 @@ juce::Result NativeEffectPlugin::validateState (const juce::ValueTree& tree)
         for (const auto& f : effectParameters (static_cast<Kind> (static_cast<int> (type))))
         {
             double v = 0;
-            if (! parse (f.key, f.initial, v) || v < f.minimum || v > f.maximum || (f.choices && std::floor (v) != v))
+            if (! parse (f.key, f.initial, v) || v < f.minimum || v > f.maximum || ((f.choices || f.integer) && std::floor (v) != v))
                 return juce::Result::fail ("The project contains invalid native effect settings.");
         }
     }
@@ -585,13 +639,54 @@ void NativeEffectPlugin::timerCallback()
 }
 void NativeEffectPlugin::prepareForOfflineRender() { JUCE_ASSERT_MESSAGE_THREAD parameters.resetWhileStopped(); publish(); }
 void NativeEffectPlugin::initialise (const tracktion::PluginInitialisationInfo& info)
-{ sampleRate = info.sampleRate; processor.prepare (sampleRate, kind); }
-void NativeEffectPlugin::reset() { processor.reset(); }
+{
+    sampleRate = info.sampleRate; processor.prepare (sampleRate, kind);
+    midiProcessor.prepare (sampleRate); midiProcessor.configure (pendingSettings);
+    midiScratch.reserve (static_cast<int> (midiOutput.size()) + 256);
+}
+void NativeEffectPlugin::reset() { processor.reset(); midiProcessor.reset(); }
+void NativeEffectPlugin::processMidi (const tracktion::PluginRenderContext& context) noexcept
+{
+    auto* midi = context.bufferForMidiMessages;
+    if (midi == nullptr || context.bufferNumSamples <= 0) return;
+    const auto rate = sampleRate > 0 ? sampleRate : 48000.0;
+    const auto toSample = [&] (const juce::MidiMessage& m)
+    { return std::clamp (static_cast<int> (std::llround ((m.getTimeStamp() + context.midiBufferOffset) * rate)), 0, context.bufferNumSamples - 1); };
+    int inputs = 0, outputs = 0;
+    for (const auto& m : *midi)
+        if (m.isNoteOnOrOff() && inputs < static_cast<int> (midiInput.size()))
+        {
+            const auto* raw = m.getRawData();
+            midiInput[static_cast<size_t> (inputs++)] = { toSample (m), raw[0], raw[1], raw[2], m.mpeSourceID };
+        }
+    if (midi->isAllNotesOff) outputs = midiProcessor.allNotesOff (0, midiOutput.data(), static_cast<int> (midiOutput.size()));
+    // Negative (pre-roll or stopped) positions use the processor's free-running clock.
+    const auto timeline = context.isPlaying || context.isRendering ? context.editTime.getStart().inSeconds() : -1.0;
+    outputs += midiProcessor.process (midiInput.data(), inputs, context.bufferNumSamples, timeline,
+                                      midiOutput.data() + outputs, static_cast<int> (midiOutput.size()) - outputs);
+    // Rebuild in time order: generated notes interleave with retained non-note events.
+    midiScratch.clear(); midiScratch.isAllNotesOff = midi->isAllNotesOff;
+    const auto generated = [&] (const midifx::Event& e)
+    {
+        midiScratch.addMidiMessage (juce::MidiMessage (e.status, e.data1, e.data2), e.sample / rate - context.midiBufferOffset, e.source);
+    };
+    int next = 0;
+    for (auto& m : *midi)
+    {
+        if (m.isNoteOnOrOff()) continue;
+        const auto at = toSample (m);
+        while (next < outputs && midiOutput[static_cast<size_t> (next)].sample <= at) generated (midiOutput[static_cast<size_t> (next++)]);
+        midiScratch.add (std::move (m));
+    }
+    while (next < outputs) generated (midiOutput[static_cast<size_t> (next++)]);
+    midi->swapWith (midiScratch);
+}
 void NativeEffectPlugin::applyToBuffer (const tracktion::PluginRenderContext& context)
 {
     const juce::ScopedNoDenormals noDenormals; Settings next; bool changed = false;
     for (int i = 0; i < 64 && parameters.pop (next); ++i) changed = true;
-    if (changed) processor.configure (next);
+    if (changed) { processor.configure (next); midiProcessor.configure (next); }
+    if (effectIsMidi (kind)) { processMidi (context); return; }
     if (! context.destBuffer || context.bufferNumSamples <= 0 || context.destBuffer->getNumChannels() == 0) return;
     auto* left = context.destBuffer->getWritePointer (0, context.bufferStartSample);
     auto* right = context.destBuffer->getNumChannels() > 1 ? context.destBuffer->getWritePointer (1, context.bufferStartSample) : nullptr;

@@ -221,6 +221,36 @@ void nativeEffectsRealtimeTests()
         noHeapCalls (calls, "native effect parameter extremes, processing and reset allocate/free nothing");
         requireRealtime (finite, "native effect extrema and variable mono/stereo blocks remain finite");
     }
+    for (int kind = static_cast<int> (Session::EffectKind::arpeggiator); kind < Session::effectKindCount; ++kind)
+    {
+        midifx::Processor processor; processor.prepare (48000);
+        auto settings = defaultEffectSettings (static_cast<Session::EffectKind> (kind));
+        const auto fields = effectParameters (settings.kind);
+        std::array<midifx::Event, 256> input {}; std::array<midifx::Event, 2048> output {};
+        int generated = 0; bool ordered = true;
+        const auto calls = allocationAudit::measure ([&]
+        {
+            const auto defaults = settings;
+            for (int pass = 0; pass < 65; ++pass)
+            {
+                // The final pass uses defaults, where every kind must emit notes.
+                for (size_t i = 0; i < fields.size(); ++i) settings.values[i] = pass == 64 ? defaults.values[i] : pass % 2 ? fields[i].minimum : fields[i].maximum;
+                settings.tempoBpm = pass % 2 ? 20.0f : 999.0f;
+                processor.configure (settings);
+                for (int i = 0; i < 256; ++i)
+                    input[(size_t) i] = i % 2 ? midifx::Event::noteOff (i, i % 16, (i * 7) % 128, 0) : midifx::Event::noteOn (i, i % 16, (i * 7) % 128, 1 + i % 127, 0);
+                const auto count = processor.process (input.data(), 256, 512, pass % 3 == 0 ? -1.0 : pass * .01, output.data(), (int) output.size());
+                generated += count;
+                for (int i = 1; i < count; ++i) ordered = ordered && output[(size_t) i].sample >= output[(size_t) i - 1].sample;
+            }
+            generated += processor.allNotesOff (0, output.data(), (int) output.size());
+            processor.reset();
+        });
+        noHeapCalls (calls, "MIDI effect extremes, note floods, timelines and panic allocate/free nothing");
+        const auto text = juce::String (effectName (settings.kind)) + " output stays bounded and time ordered under note floods (generated "
+                          + juce::String (generated) + (ordered ? ", ordered)" : ", unordered)");
+        requireRealtime (generated > 0 && ordered, text.toRawUTF8());
+    }
     EffectParameterQueue queue; auto value = defaultEffectSettings (Session::EffectKind::delay);
     int accepted = 0, received = 0; bool coherent = true;
     const auto calls = allocationAudit::measure ([&]
