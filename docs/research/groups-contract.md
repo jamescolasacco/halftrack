@@ -1,0 +1,9 @@
+# Group tracks contract
+
+Group tracks follow the reference workflow of summing member tracks through a group bus with its own mixer ([mixing: group tracks](https://www.ableton.com/en/live-manual/12/mixing/), consulted 2026-10-20). They are engine submix folder tracks whose volume/pan plugin is replaced by Halftrack's constant-power `halftrack-mixer` (unity centre), plus a level meter.
+
+`groupTracks(trackIds, groupId)` groups top-level audio or MIDI tracks (returns and already-grouped tracks are rejected; duplicates and empty requests fail) into a new group inserted at the first member, keeping members in their existing visual order. Snapshot track order and indices are unchanged: groups are reported separately in `Snapshot::groups` (`GroupInfo` with name, colour, gain, pan, mute, solo, fold state, meter and ordered member IDs) and each member's `TrackInfo::groupId`, so existing index-based track commands keep addressing the same tracks. `ungroupTracks` moves members back to the group's position and removes it. `renameGroup`, `setGroupGain`, `setGroupPan`, `setGroupMute` and `setGroupSolo` are undoable; `setGroupFolded` is saved view state, not a musical undo step.
+
+Evidence (`tests/GroupTests.cpp`, 70 checks): a unity group renders the ungrouped member sum; group gain scales the sum by the dB factor; hard-left group pan gives √2 on the left and silence on the right; group mute silences members without changing their own mute; group solo leaves only members audible; grouped tracks still respond to index-based commands; name, fold and level reopen; ungroup restores order and the original render; undo/redo; returns and nested grouping are rejected; an instrument renders identically through its group.
+
+Not implemented: nested groups, group clip slots and scene launching through group columns, group devices/sends, moving tracks between groups, folding in the arrangement playback lanes, and any comparison with reference group summing.

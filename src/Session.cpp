@@ -21,6 +21,7 @@ const juce::Identifier monitorProperty { "halftrackMonitor" };
 const juce::Identifier recordQuantisationProperty { "halftrackRecordQuantisation" };
 const juce::Identifier countInProperty { "halftrackCountInBars" };
 const juce::Identifier midiTrackProperty { "halftrackMidiTrack" };
+const juce::Identifier groupFoldedProperty { "halftrackGroupFolded" };
 const juce::Identifier midiNoteIDProperty { "halftrackNoteId" };
 const juce::Identifier returnProperty { "halftrackReturn" };
 const juce::Identifier returnBusProperty { "halftrackReturnBus" };
@@ -349,7 +350,8 @@ public:
     }
 };
 
-Result useTrackMixer (te::AudioTrack& track)
+template <typename TrackType>
+Result useTrackMixer (TrackType& track)
 {
     auto* previous = track.getVolumePlugin();
     if (previous == nullptr) return Result::fail ("The track has no mixer.");
@@ -1079,6 +1081,12 @@ struct Session::Impl
                     else h->stop (boundary);
                 }
     }
+    te::FolderTrack* group (const String& id) const
+    {
+        for (auto* track : te::getAllTracks (*edit))
+            if (auto* folder = dynamic_cast<te::FolderTrack*> (track); folder && folder->isSubmixFolder() && folder->itemID.toString() == id) return folder;
+        return nullptr;
+    }
     static SubtractiveSynthPlugin* synth (te::AudioTrack& track)
     {
         for (auto* plugin : track.pluginList.getPlugins())
@@ -1455,6 +1463,7 @@ Session::Snapshot Session::snapshot() const
                 auto* send = findSend (*t, id);
                 info.sends.push_back ({ id, send ? send->getGainDb() : -100.0f });
             }
+        if (auto* parent = t->getParentFolderTrack()) info.groupId = parent->itemID.toString();
         if (auto* synth = Impl::synth (*t)) info.synth = synth->getSettings();
         if (auto* native = Impl::nativeInstrument (*t))
         {
@@ -1514,6 +1523,22 @@ Session::Snapshot Session::snapshot() const
         }
         s.tracks.push_back (std::move (info));
     }
+    for (auto* track : te::getAllTracks (e))
+        if (auto* folder = dynamic_cast<te::FolderTrack*> (track); folder != nullptr && folder->isSubmixFolder())
+        {
+            GroupInfo group;
+            group.id = folder->itemID.toString(); group.name = folder->getName(); group.colour = folder->getColour();
+            group.mute = folder->isMuted (false); group.solo = folder->isSolo (false);
+            group.folded = folder->state.getProperty (groupFoldedProperty, false);
+            if (auto* v = folder->getVolumePlugin()) { group.gainDb = v->getVolumeDb(); group.pan = v->getPan(); }
+            if (auto* level = folder->pluginList.findFirstPluginOfType<te::LevelMeterPlugin>())
+            {
+                auto& m = impl->meter (group.id, level->measurer);
+                group.peakL = m.read (0); group.peakR = m.read (1);
+            }
+            for (auto* member : te::getAudioTracks (e)) if (member->getParentFolderTrack() == folder) group.memberIds.add (member->itemID.toString());
+            s.groups.push_back (std::move (group));
+        }
     if (auto* output = impl->engine.getDeviceManager().getDefaultWaveOutDevice())
     {
         auto& m = impl->meter ("master", output->levelMeasurer);
@@ -2527,6 +2552,95 @@ Result Session::showInstrumentEditor (int trackIndex)
     auto* window = dynamic_cast<PluginWindow*> (native->windowState->pluginWindow.get());
     if (window == nullptr || ! window->isVisible() || window->getContentComponent() == nullptr) return Result::fail ("This instrument has no available editor.");
     return Result::ok();
+}
+Result Session::groupTracks (const juce::StringArray& ids, String& groupId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before grouping tracks.");
+    if (ids.isEmpty()) return Result::fail ("Select at least one track to group.");
+    std::set<String> wanted;
+    for (const auto& id : ids) if (! wanted.insert (id).second) return Result::fail ("Each track can be grouped once.");
+    // Members keep their visual order regardless of the request order.
+    juce::Array<te::AudioTrack*> members;
+    for (auto* track : te::getAudioTracks (*impl->edit)) if (wanted.contains (track->itemID.toString())) members.add (track);
+    if ((size_t) members.size() != wanted.size()) return Result::fail ("Track not found.");
+    for (auto* track : members)
+    {
+        if (isReturn (*track)) return Result::fail ("Return tracks cannot be grouped.");
+        if (track->getParentTrack() != nullptr) return Result::fail ("Grouped tracks cannot be grouped again.");
+    }
+    impl->transaction ("Group tracks");
+    auto folder = impl->edit->insertNewFolderTrack (te::TrackInsertPoint (*members.getFirst(), true), nullptr, true);
+    if (folder == nullptr) return Result::fail ("Could not create the group.");
+    if (auto result = useTrackMixer (*folder); result.failed()) return result;
+    int count = 0; for (auto* track : te::getAllTracks (*impl->edit)) if (auto* f = dynamic_cast<te::FolderTrack*> (track); f && f->isSubmixFolder()) ++count;
+    folder->setName ("Group " + String (count));
+    folder->setColour (members.getFirst()->getColour());
+    te::Track* preceding = nullptr;
+    for (auto* track : members) { impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (folder.get(), preceding)); preceding = track; }
+    groupId = folder->itemID.toString();
+    impl->changed(); return Result::ok();
+}
+Result Session::ungroupTracks (const String& groupId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before ungrouping tracks.");
+    auto* folder = impl->group (groupId); if (! folder) return Result::fail ("Group not found.");
+    juce::Array<te::Track*> members;
+    for (auto* track : te::getAllTracks (*impl->edit)) if (track->getParentTrack() == folder) members.add (track);
+    impl->transaction ("Ungroup tracks");
+    te::Track* preceding = folder;
+    for (auto* track : members)
+    { impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (folder->getParentTrack(), preceding)); preceding = track; }
+    impl->edit->deleteTrack (folder);
+    impl->changed(); return Result::ok();
+}
+Result Session::renameGroup (const String& groupId, const String& name)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* folder = impl->group (groupId); if (! folder) return Result::fail ("Group not found.");
+    if (name.trim().isEmpty()) return Result::fail ("Enter a group name.");
+    if (folder->getName() == name.trim()) return Result::ok();
+    impl->transaction ("Rename group"); folder->setName (name.trim()); impl->changed(); return Result::ok();
+}
+Result Session::setGroupGain (const String& groupId, float value)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* folder = impl->group (groupId); auto* volume = folder ? folder->getVolumePlugin() : nullptr;
+    if (! volume) return Result::fail ("Group not found.");
+    if (! std::isfinite (value)) return Result::fail ("Invalid gain.");
+    value = juce::jlimit (-100.0f, 6.0f, value);
+    impl->transaction ("Group gain"); volume->setVolumeDb (value); impl->changed(); return Result::ok();
+}
+Result Session::setGroupPan (const String& groupId, float value)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* folder = impl->group (groupId); auto* volume = folder ? folder->getVolumePlugin() : nullptr;
+    if (! volume) return Result::fail ("Group not found.");
+    if (! std::isfinite (value)) return Result::fail ("Invalid pan.");
+    impl->transaction ("Group pan"); volume->setPan (juce::jlimit (-1.0f, 1.0f, value)); impl->changed(); return Result::ok();
+}
+Result Session::setGroupMute (const String& groupId, bool value)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* folder = impl->group (groupId); if (! folder) return Result::fail ("Group not found.");
+    impl->transaction ("Group mute");
+    folder->state.setProperty (te::IDs::mute, value, &impl->edit->getUndoManager());
+    impl->refreshRouting(); impl->changed(); return Result::ok();
+}
+Result Session::setGroupSolo (const String& groupId, bool value)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* folder = impl->group (groupId); if (! folder) return Result::fail ("Group not found.");
+    impl->transaction ("Group solo");
+    folder->state.setProperty (te::IDs::solo, value, &impl->edit->getUndoManager());
+    impl->refreshRouting(); impl->changed(); return Result::ok();
+}
+Result Session::setGroupFolded (const String& groupId, bool folded)
+{
+    auto* folder = impl->group (groupId); if (! folder) return Result::fail ("Group not found.");
+    // Folding is view state: saved with the project, not a musical undo step.
+    folder->state.setProperty (groupFoldedProperty, folded, nullptr); impl->changed(); return Result::ok();
 }
 Result Session::duplicateTrack (const String& id, String& duplicateId)
 {

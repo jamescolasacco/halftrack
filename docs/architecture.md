@@ -226,6 +226,10 @@ Native effect kinds 24–27 (Poly Synth, FM Synth, Drum Kit, Wavetable) are inst
 
 Starts quantize to the nearest grid with ties later; duration stays unchanged and the result is constrained to the clip. End quantization preserves starts and the model's 1/960-beat minimum. Reverse reflects complete note intervals inside the selected time extent. Pitch inversion reflects around the selected lowest/highest pitches. Legato extends each note to the next distinct selected onset, or the selected end for the last chord. Half/double time scales starts and durations around the earliest selected onset. Fixed length uses the editor's chosen note length, bounded by the clip end. IDs and velocity remain unchanged. These are documented deterministic defaults, not measured numerical reference parity.
 
+## Group tracks
+
+Groups are engine submix folder tracks with Halftrack's constant-power mixer. `Snapshot::groups` and `TrackInfo::groupId` report them without changing track indices; `groupTracks`, `ungroupTracks` and the group mixer commands are documented in the [groups contract](research/groups-contract.md).
+
 ## Audio warping
 
 `ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).

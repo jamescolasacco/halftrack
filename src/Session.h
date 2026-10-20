@@ -161,6 +161,16 @@ public:
         PluginInfo instrument;           // isNativeEffect when a native instrument replaces the built-in synth.
         std::vector<SlotInfo> slots;
         bool launcherActive = false;
+        juce::String groupId; // Empty for ungrouped tracks.
+    };
+    // A group sums its member tracks through its own mixer, like a bus.
+    struct GroupInfo
+    {
+        juce::String id, name;
+        juce::Colour colour;
+        float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
+        bool mute = false, solo = false, folded = false;
+        juce::StringArray memberIds; // Track order.
     };
     struct MetronomeSettings
     {
@@ -179,6 +189,7 @@ public:
         float masterPeakL = 0, masterPeakR = 0, masterGainDb = 0;
         AutomationLane masterVolumeAutomation;
         std::vector<TrackInfo> tracks;
+        std::vector<GroupInfo> groups;
         std::vector<SceneInfo> scenes;
         std::vector<LocatorInfo> locators;
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
@@ -231,6 +242,15 @@ public:
     juce::Result setTrackInstrument (const juce::String& trackId, std::optional<EffectKind> instrument);
     juce::Result showInstrumentEditor (int trackIndex);
     juce::Result duplicateTrack (const juce::String& trackId, juce::String& duplicateId);
+    // Groups top-level audio/MIDI tracks (not returns) into a new group placed at the first one.
+    juce::Result groupTracks (const juce::StringArray& trackIds, juce::String& groupId);
+    juce::Result ungroupTracks (const juce::String& groupId);
+    juce::Result renameGroup (const juce::String& groupId, const juce::String& name);
+    juce::Result setGroupGain (const juce::String& groupId, float decibels);
+    juce::Result setGroupPan (const juce::String& groupId, float pan);
+    juce::Result setGroupMute (const juce::String& groupId, bool);
+    juce::Result setGroupSolo (const juce::String& groupId, bool);
+    juce::Result setGroupFolded (const juce::String& groupId, bool);
     juce::Result moveTrack (const juce::String& trackId, int destinationIndex);
     juce::Result removeTrack (int trackIndex);
     juce::Result importAudio (const juce::File&, int trackIndex = -1, double startSeconds = 0);

@@ -821,3 +821,7 @@ Integrated checkpoint after the interface stages: all **30 local Mac acceptance 
 
 Audio clip view: double-clicking an audio clip (or opening the clip view on a selected audio clip or Session slot) shows an audio detail panel instead of the note editor: a Clip box (name, start, length, file), a Sample box (Warp switch, Stretch/Efficient mode, editable Seg. BPM with halve/double, clip-gain knob, Reverse when allowed) and the clip's waveform with beat lines when warped. Its controls use `setAudioClipWarp`, `setAudioClipSettings` and `setAudioClipReversed`. The earlier gain/fade/range dialog remains in the clip context menu. Production-handler checks cover opening by double-click, warping onto the project tempo at the estimated source tempo, typed tempo, gain and undo; UI, export dialog, audio clip and warp suites pass.
 
+## Group tracks — 2026-10-20
+
+Root owns the group commands and snapshot fields in `src/Session.*`, `tests/GroupTests.cpp` and documentation. Top-level audio/MIDI tracks can be grouped into engine submix folders with Halftrack's constant-power mixer, reported separately from the unchanged track list. The new `groups-acceptance` suite passes 70 checks covering summing, gain, pan law, mute, solo, history, persistence and validation; see [the groups contract](research/groups-contract.md). Group rows/columns in the interface follow.
+
