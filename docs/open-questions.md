@@ -210,8 +210,25 @@ The crossfader uses the dipless curve (a side stays at 0 dB until the fader cros
 
 ### Time edit defaults
 
-The loop range stands in for an Arrangement time selection. MIDI clips crossing an edit are extended or shortened in place, not split. A note crossing the inserted point keeps its length, and automation is not given boundary points at the cut, so a ramp across deleted time joins its neighbours. Tempo is constant, so tempo events are not moved. These are simplest-default choices pending reference measurement.
+Insert Silence and Delete Time use the Arrangement time selection, or the loop range when nothing is selected. MIDI clips crossing an Insert Silence or Delete Time edit are extended or shortened in place, not split. A note crossing the inserted point keeps its length, and automation is not given boundary points at the cut, so a ramp across deleted time joins its neighbours. Tempo is constant, so tempo events are not moved. These are simplest-default choices pending reference measurement.
+
+### Follow action chance defaults
+
+The follow-action time is one value shared by both actions, and a No action choice is final for that launch (it is not evaluated again on later loops). Random choice uses the engine's unseeded generator, so tests check deterministic chances exactly and an even chance statistically. These are simplest-default choices pending reference measurement.
+
+
+### Track Delay defaults
+
+Track Delay runs from −1000 to +1000 ms in milliseconds only. It applies after the track's devices and before its sends, so pre- and post-fader sends both carry it, and MIDI is not delayed separately because native instruments come before it. A positively delayed track can replay up to the delay time of pre-seek audio after a jump. These are simplest-default choices pending reference measurement.
+
+### MIDI controller lane defaults
+
+Controller lanes are step-wise (a value holds until the next point) rather than ramped envelopes, and drawing writes one point per grid step. Channel mode messages (CC 120–127) are not editable. Deleting time keeps the last value set inside the deleted range at the cut. These are simplest-default choices pending reference measurement.
 
 ### Input changes during Session takes
 
 While a Session slot take records, input assignment is refused on every track, as during Arrangement recording. Enabling a device would discard the take, and replacing or disconnecting the recording track's input would leave the take without the input that stops it. A narrower rule could still allow assigning already-enabled inputs to other tracks; the reference application's behavior is unmeasured. Arming and monitoring stay available during a take. A MIDI device that appears during a take is discovered when the take ends. Audio-device changes in Audio Settings take the same device-list rebuild during any recording, Arrangement or Session. Code inspection shows the rebuild discards the take, but this is unmeasured, and refusing versus deferring those changes is undecided. Other edits refused only during Arrangement recording have not been audited for Session takes. These are undo, removing tracks, and editing scenes or slots.
+
+### Arrangement selection defaults
+
+Split, Delete Selection and Duplicate Selection act on clips only; automation in the selection stays where it is. Duplicate replaces the material in the time after the selection, and the selection moves onto the copy. Notes crossing a MIDI split become two notes. These are simplest-default choices pending reference measurement.

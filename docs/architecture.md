@@ -258,6 +258,19 @@ Tracks carry an undoable `halftrackCrossfade` side (0 none, 1 A, 2 B) and the ed
 
 `setTrackFrozen` writes the engine's `frozenIndividually` track property through the undo manager; the engine's listener renders the freeze (or removes it) synchronously. `Impl::unfrozen` guards device, instrument, clip and note commands on frozen tracks. `flattenTrack` converts the engine's freeze render into a WAV in Assets, unfreezes outside history (the engine cannot render during undo), then in one transaction removes instrument and device plugins and clips, clears MIDI state and inserts the audio clip. Native instruments and the built-in synth report `producesAudioWhenNoAudioInput` so the engine's audio-node check accepts MIDI-only freezes. See the [freeze contract](research/freeze-contract.md).
 
+
+## Track Delay
+
+`TrackDelayPlugin` (in `src/Session.cpp`) sits after a track's devices and before its sends and mixer once a delay is set. Positive delays run through a ring buffer allocated in `initialise`; negative delays are reported as latency, and the engine's delay compensation moves the track earlier. Device insertion keeps new devices ahead of it. See the [track delay contract](research/track-delay-contract.md).
+
+## MIDI controller lanes
+
+`setMidiControllerLane` maps Halftrack lanes onto the engine's MIDI controller events in the clip's sequence (CC values stored as 14-bit, pitch bend offset by 8192) and replaces a lane in one transaction. `describeClip` groups them back into `ClipInfo::controllers`. Insert and Delete Time carry them with notes. The piano roll's `LaneView` edits velocities through `updateMidiNotes` and lanes through `setMidiControllerLane`, previewing locally until release. See the [controller lane contract](research/midi-controllers-contract.md).
+
+## Arrangement time selection
+
+`Impl::timeSelection` holds the selected range and track IDs; the canvas sets it from drags over empty lane space and draws it over the selected lanes. `splitRange`, `deleteRange` and `duplicateRange` validate every edge with `splittableAt`, then cut tracks with `splitTrackAt`, which uses the engine's split for audio and `splitMidiClipAt` for MIDI so both halves keep zero offset. See the [selection contract](research/arrangement-selection-contract.md).
+
 ## Audio warping
 
 `ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).
@@ -500,7 +513,7 @@ Generated tests decode every frame for all seven format/depth combinations again
 
 ## Beat-timed Session follow actions
 
-`FollowSettings` contains a deterministic action and duration in project beats. `setClipFollowAction(stableClipId, settings)` supports Off, Stop, Play Again, Previous, Next, First, Last and Cycle to Next for native Session audio/MIDI clips. Off requires zero beats and clears actions; active choices accept 1/960 through 4096 beats. This first interface has one action per clip. Previous/Next stop at the ends of the track's populated slots; Cycle wraps. Empty slots are skipped. These are documented native-engine semantics, not measured reference parity.
+`FollowSettings` contains a deterministic action and duration in project beats. `setClipFollowAction(stableClipId, settings)` supports Off, Stop, Play Again, Previous, Next, First, Last and Cycle to Next for native Session audio/MIDI clips. Off requires zero beats and clears actions; active choices accept 1/960 through 4096 beats. `FollowSettings::actionB` and `chanceA` add a second action: the native container holds action A weighted by its chance and action B (or no action) weighted by the rest. Loading accepts one unit-weight action or two weights summing to one. Any and Other choose a random populated slot (Other never the playing one). Previous/Next stop at the ends of the track's populated slots; Cycle wraps. Empty slots are skipped. These are documented native-engine semantics, not measured reference parity.
 
 The native slot controller schedules transitions from the actual launch beat, independently of the global launch grid, without a UI timer. Actions use the native `FOLLOWACTIONS/ACTION` state and beat-duration properties. An empty native container remains after undo because the engine caches its object; action/timing changes themselves undo in one transaction. This prevents a later edit after undo from targeting detached cached state. The facade validates all input before changing state, rejects Arrangement/missing/ambiguous/frozen targets and recording/export, and makes equal settings a no-op. Snapshot reads never create native state. Native clip/scene copies retain settings, while relative targets are resolved in their owning track when the graph is prepared.
 

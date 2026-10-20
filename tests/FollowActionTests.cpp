@@ -224,12 +224,87 @@ void midiTransition (double tempo)
     s.stop();
 }
 }
+// Actions A and B with a chance: 0% and 100% are deterministic, 50% must reach both
+// destinations over repeated launches, and Other never replays the same clip.
+void chances (const juce::File& root)
+{
+    const auto destination = [] (Fixture& f)
+    {
+        const auto state = f.session.snapshot();
+        for (int i = 0; i < 3; ++i) if (state.tracks[0].slots[(size_t) Fixture::scenes[(size_t) i]].playing) return i;
+        return -1;
+    };
+    for (const double chance : { 0.0, 1.0 })
+    {
+        Fixture f (root);
+        ok (f.session.setClipFollowAction (f.ids[0], { Action::next, 1, Action::last, chance }), "next as A and last as B");
+        check (f.settings() == Session::FollowSettings { Action::next, 1, Action::last, chance }, "actions A and B and the chance are reported");
+        ok (f.session.launchSlot (0, Fixture::scenes[0]), "launch the first clip");
+        const auto output = f.player.process (48000);
+        const int expected = chance == 1 ? 1 : 2;
+        level (output, 0, 25000, 22000, Fixture::values[(size_t) expected], chance == 1 ? "a 100% chance always plays A" : "a 0% chance always plays B");
+        f.session.stop();
+    }
+    {
+        Fixture f (root);
+        ok (f.session.setClipFollowAction (f.ids[0], { Action::next, 1, Action::last, .5 }), "an even chance between next and last");
+        int nexts = 0, lasts = 0;
+        for (int trial = 0; trial < 24; ++trial)
+        {
+            ok (f.session.launchSlot (0, Fixture::scenes[0]), "relaunch the first clip");
+            f.player.process (36000);
+            const int reached = destination (f); nexts += reached == 1; lasts += reached == 2;
+        }
+        check (nexts > 0 && lasts > 0 && nexts + lasts == 24, "an even chance reaches both destinations (" + juce::String (nexts) + " next, " + juce::String (lasts) + " last)");
+        f.session.stop();
+    }
+    {
+        Fixture f (root);
+        ok (f.session.setClipFollowAction (f.ids[0], { Action::other, 1 }), "Other as the only action");
+        std::array<int, 3> reached {};
+        for (int trial = 0; trial < 12; ++trial)
+        {
+            ok (f.session.launchSlot (0, Fixture::scenes[0]), "relaunch the first clip");
+            f.player.process (36000);
+            if (const int d = destination (f); d >= 0) ++reached[(size_t) d];
+        }
+        check (reached[0] == 0 && reached[1] + reached[2] == 12, "Other always moves to a different clip");
+        f.session.stop();
+    }
+    {
+        Fixture f (root);
+        ok (f.session.setClipFollowAction (f.ids[0], { Action::stop, 1, Action::off, .5 }), "stop or nothing at an even chance");
+        int stopped = 0, kept = 0;
+        for (int trial = 0; trial < 24; ++trial)
+        {
+            ok (f.session.launchSlot (0, Fixture::scenes[0]), "relaunch the first clip");
+            f.player.process (36000);
+            const int d = destination (f); stopped += d < 0; kept += d == 0;
+        }
+        check (stopped > 0 && kept > 0, "No action as B sometimes leaves the clip playing (" + juce::String (stopped) + " stopped, " + juce::String (kept) + " kept)");
+        check (f.session.setClipFollowAction (f.ids[0], { Action::next, 1, Action::last, 1.5 }).failed()
+               && f.session.setClipFollowAction (f.ids[0], { Action::off, 0, Action::next, .5 }).failed(), "chances outside 0-1 and B without A are rejected");
+        const auto project = root.getChildFile ("Chances").getChildFile ("Chances.halftrack");
+        ok (f.session.setClipFollowAction (f.ids[0], { Action::any, 2, Action::previous, .25 }), "Any as A and previous as B");
+        ok (f.session.saveProject (project), "save the chance settings"); ok (f.session.loadProject (project), "reopen them");
+        const auto reopened = f.settings();
+        check (reopened.action == Action::any && reopened.actionB == Action::previous && std::abs (reopened.chanceA - .25) < 1e-9 && reopened.afterBeats == 2,
+               "actions A and B and the chance reopen");
+        auto text = project.loadFileAsString();
+        check (text.contains ("weight=\"0.25\""), "the chance is stored as the actions' weights");
+        const auto broken = project.getSiblingFile ("Broken.halftrack");
+        check (broken.replaceWithText (text.replace ("weight=\"0.25\"", "weight=\"0.9\"")), "write weights that do not sum to one");
+        check (f.session.loadProject (broken).failed() && f.settings() == reopened, "inconsistent chances reject the load and keep the open project");
+        f.session.stop();
+    }
+}
 int runFollowActionTests (const juce::File& artifacts)
 {
     try
     {
         const auto root = artifacts.getChildFile ("follow-actions-" + juce::Uuid().toString()); ok (root.createDirectory(), "create isolated fixtures");
-        transitions (root); runningEditsAndTempo (root); historyAndPersistence (root); for (double tempo : { 60.0, 120.0, 240.0 }) midiTransition (tempo); return 0;
+        transitions (root); runningEditsAndTempo (root); historyAndPersistence (root); for (double tempo : { 60.0, 120.0, 240.0 }) midiTransition (tempo);
+        chances (root); return 0;
     }
     catch (const std::exception& error) { std::cerr << "FAIL follow action: " << error.what() << std::endl; return 1; }
 }

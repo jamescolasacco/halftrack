@@ -32,7 +32,7 @@ public:
         std::optional<juce::Range<double>> timeRange;
         bool stems = false; // Chosen in the export window: render every track to its own file with exportStems.
     };
-    enum class FollowAction { off, stop, replay, previous, next, first, last, cycle };
+    enum class FollowAction { off, stop, replay, previous, next, first, last, cycle, any, other };
     // A track's side of the crossfader; unassigned tracks ignore it.
     enum class CrossfadeAssign { none, a, b };
     // Clip launch behaviour on press/release of its launch button.
@@ -50,6 +50,9 @@ public:
     {
         FollowAction action = FollowAction::off;
         double afterBeats = 0;
+        // Action B plays when action A is not chosen; chanceA is A's probability (0-1). Off as B does nothing.
+        FollowAction actionB = FollowAction::off;
+        double chanceA = 1;
         bool operator== (const FollowSettings&) const = default;
     };
     struct SendInfo { juce::String returnTrackId; float gainDb = -100.0f; };
@@ -149,6 +152,21 @@ public:
         float velocity = 0.8f;
         bool active = true;
     };
+    // MIDI controller lanes in a clip: CC numbers 0-119, plus pitch bend and channel pressure.
+    // Each point's value holds until the next point (step playback).
+    static constexpr int pitchBendLane = 128, channelPressureLane = 129;
+    struct ControllerPoint
+    {
+        double beat = 0; // From the clip start.
+        int value = 0;   // 0-127, or -8192 to 8191 for pitch bend.
+        bool operator== (const ControllerPoint&) const = default;
+    };
+    struct ControllerLane
+    {
+        int controller = 0;
+        std::vector<ControllerPoint> points;
+        bool operator== (const ControllerLane&) const = default;
+    };
     enum class FadeCurve { linear = 1, convex, concave, sCurve };
     // Warped audio follows the project tempo; its length is fixed in beats.
     enum class WarpMode { off, stretch, efficient };
@@ -182,6 +200,7 @@ public:
         LaunchSettings launch;
         double startBeat = 0, lengthBeats = 0;
         std::vector<MidiNoteInfo> notes;
+        std::vector<ControllerLane> controllers; // Lanes with points, by controller number.
     };
     struct LocatorInfo { juce::String id, name; double position = 0; };
     struct SceneInfo { juce::String id, name; };
@@ -225,6 +244,7 @@ public:
         bool mute = false, solo = false, armed = false, isMidi = false, isReturn = false;
         bool frozen = false; // Plays a render of its clips and devices; devices and clips are locked.
         CrossfadeAssign crossfade = CrossfadeAssign::none;
+        double delayMs = 0; // Track Delay: positive plays later, negative earlier.
         SendMode sendMode = SendMode::post;
         std::vector<SendInfo> sends;
         SynthSettings synth;
@@ -319,6 +339,8 @@ public:
     juce::Result splitMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, double splitBeat, juce::StringArray& insertedIds);
     juce::Result transformMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, NoteTransform, double gridBeats);
     juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);
+    // Replaces one controller lane of a MIDI clip in one undo step; no points removes the lane.
+    juce::Result setMidiControllerLane (const juce::String& clipId, int controller, const std::vector<ControllerPoint>& points);
     juce::Result removeMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds);
     juce::Result setSynthSettings (const juce::String& trackId, const SynthSettings&);
     // Replaces a MIDI track's instrument in one undo step; nullopt restores the built-in synth.
@@ -354,6 +376,15 @@ public:
     juce::Result setAudioClipWarp (const juce::String& clipId, const WarpSettings&);
     juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
     juce::Result splitAudioClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
+    // Splits an unlooped Arrangement MIDI clip; notes crossing the split become two notes and each
+    // controller's value at the split starts the right-hand clip.
+    juce::Result splitMidiClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
+    // Arrangement time-selection edits on the given tracks, each one undo step. Split cuts clips at
+    // both edges; Delete removes the material inside; Duplicate copies it to just after the
+    // selection, replacing what was there. Clips crossing an edge must be splittable there.
+    juce::Result splitRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
+    juce::Result deleteRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
+    juce::Result duplicateRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
     // Insert Silence: everything at or after start moves later by length across all tracks, locators
     // and automation; clips crossing start split (audio) or open a gap between their notes (MIDI).
     juce::Result insertTime (double startSeconds, double lengthSeconds);
@@ -378,6 +409,10 @@ public:
     juce::Result renameTrack (int trackIndex, const juce::String&);
     juce::Result setMasterGain (float decibels);
     juce::Result setTrackCrossfade (const juce::String& trackId, CrossfadeAssign);
+    // Track Delay moves a track's output (after its devices, before its sends and mixer) from
+    // -1000 ms to +1000 ms; negative delays use the engine's delay compensation.
+    static constexpr double maximumTrackDelayMs = 1000;
+    juce::Result setTrackDelay (const juce::String& trackId, double milliseconds);
     juce::Result setCrossfader (float position);
     // Dipless crossfader law: a side keeps unity until the fader passes the centre toward the other side.
     static float crossfadeGain (CrossfadeAssign, float position);
