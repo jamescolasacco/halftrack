@@ -215,3 +215,7 @@ The loop range stands in for an Arrangement time selection. MIDI clips crossing 
 ### Follow action chance defaults
 
 The follow-action time is one value shared by both actions, and a No action choice is final for that launch (it is not evaluated again on later loops). Random choice uses the engine's unseeded generator, so tests check deterministic chances exactly and an even chance statistically. These are simplest-default choices pending reference measurement.
+
+### Input changes during Session takes
+
+While a Session slot take records, input assignment is refused on every track, as during Arrangement recording. Enabling a device would discard the take, and replacing or disconnecting the recording track's input would leave the take without the input that stops it. A narrower rule could still allow assigning already-enabled inputs to other tracks; the reference application's behavior is unmeasured. Arming and monitoring stay available during a take. A MIDI device that appears during a take is discovered when the take ends. Audio-device changes in Audio Settings take the same device-list rebuild during any recording, Arrangement or Session. Code inspection shows the rebuild discards the take, but this is unmeasured, and refusing versus deferring those changes is undecided. Other edits refused only during Arrangement recording have not been audited for Session takes. These are undo, removing tracks, and editing scenes or slots.
