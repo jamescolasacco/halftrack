@@ -223,3 +223,7 @@ An empty rack and an empty chain pass their input unchanged. Chain volume and pa
 ### Track Delay defaults
 
 Track Delay runs from −1000 to +1000 ms in milliseconds only. It applies after the track's devices and before its sends, so pre- and post-fader sends both carry it, and MIDI is not delayed separately because native instruments come before it. A positively delayed track can replay up to the delay time of pre-seek audio after a jump. These are simplest-default choices pending reference measurement.
+
+### MIDI controller lane defaults
+
+Controller lanes are step-wise (a value holds until the next point) rather than ramped envelopes, and drawing writes one point per grid step. Channel mode messages (CC 120–127) are not editable. Deleting time keeps the last value set inside the deleted range at the cut. These are simplest-default choices pending reference measurement.

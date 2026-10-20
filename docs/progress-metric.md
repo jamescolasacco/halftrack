@@ -1,6 +1,6 @@
 # Recorded implementation coverage
 
-Current implementation checkpoint: Track Delay, 2026-10-20. **73 of 246 tracked active feature areas have partial implementation evidence: 29.7%.** None of these broad rows establishes complete measured reference parity.
+Current implementation checkpoint: MIDI controller lanes, 2026-10-20. **74 of 246 tracked active feature areas have partial implementation evidence: 30.1%.** None of these broad rows establishes complete measured reference parity.
 
 This is recorded partial coverage, not percentage finished, remaining engineering time, or a weighted feature score. The initial inventory is not exhaustive, some existing behavior is recorded only in preview rows, and items vary greatly in size. Static decompiler coverage uses a different denominator and must never be reported as application completion.
 
@@ -8,7 +8,7 @@ This is recorded partial coverage, not percentage finished, remaining engineerin
 
 The [capability ledger](feature-parity.md) has 275 identified rows. Excluding PRE preview-check rows, OUT scope/watchlist rows, EXT programmable-environment rows and rows explicitly OUT OF SCOPE leaves 246 active rows. Count each active row whose status contains PARTIAL once. No fractional credit or estimated effort weighting is assigned.
 
-The partial rows are REC-003/005/008, ARR-002/003/005/006/007/008/009/010/011/012, SES-001/002/003/004/006/008, WRP-001/002/004/008, MID-001/002/006/012, MIX-001/003/005/007/008/013, PRJ-002/005/006/012/013, UX-001/002, QA-003, AFX-002/003/008/009/011/015/016/020/021/024/027/029/030/032/034/035/040, MFX-001/003/004/005/006/007/008, INS-001/003/009/011/013, RCK-002/003 and MXL-006. The [progress log](progress.md), ledger and per-feature contracts record what each actually does and what remains missing.
+The partial rows are REC-003/005/008, ARR-002/003/005/006/007/008/009/010/011/012, SES-001/002/003/004/006/008, WRP-001/002/004/008, MID-001/002/005/006/012, MIX-001/003/005/007/008/013, PRJ-002/005/006/012/013, UX-001/002, QA-003, AFX-002/003/008/009/011/015/016/020/021/024/027/029/030/032/034/035/040, MFX-001/003/004/005/006/007/008, INS-001/003/009/011/013, RCK-002/003 and MXL-006. The [progress log](progress.md), ledger and per-feature contracts record what each actually does and what remains missing.
 
 Before audio editing, source `b342496` had 19 partial rows with the same denominator: 7.7%. The six added rows are ARR-003/005/006/008/012 and WRP-001. Their evidence and boundaries are in the [audio-editing contract](research/audio-clip-editing-contract.md). Timeline gestures improve those existing rows without increasing their count.
 
@@ -51,3 +51,5 @@ Master-volume automation and corrected single-point hosted playback deepen MIX-0
 A recount of the ledger at the Audio Effect Rack checkpoint finds 72/246 partial rows (29.3%). The rows added after the 38/246 entry above (effects, MIDI effects, instruments, Session launching and recording, groups, freeze, stems and racks) were recorded in the progress log and ledger as they landed, without updating this count. Audio Effect Racks add RCK-003. This remains unweighted partial coverage, not clone completion.
 
 Track Delay adds bounded partial coverage for MIX-008: 73/246 (29.7%). Sample-exact impulse renders do not establish reference ranges, units or placement.
+
+MIDI controller lanes add bounded partial coverage for MID-005: 74/246 (30.1%). Step-wise lanes with measured pitch and sustain renders do not establish ramped envelopes or reference behaviour.

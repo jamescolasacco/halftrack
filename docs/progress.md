@@ -891,3 +891,7 @@ UI change in `src/MainComponent.cpp`, `src/NativeEffectEditor.cpp`, `src/Utility
 ## Track Delay — 2026-10-20
 
 Root owns Track Delay across `src/Session.*`, the Session mixer strip, `tests/TrackDelayTests.cpp`, the suite registration and documentation. Tracks can be delayed or pre-delayed by up to a second. Positive delays use a preallocated ring buffer in a new owned device, which the existing `applyToBuffer` source-guard root covers; negative delays use the engine's delay compensation. The new `track-delay-acceptance` suite locates impulses to the sample. All 40 suites and the source guard (186 bodies) pass locally on the Mac, run directly because of the launch prompt noted above. See [the track delay contract](research/track-delay-contract.md).
+
+## MIDI controller lanes — 2026-10-20
+
+Root owns controller lanes across `src/Session.*`, the piano roll in `src/MainComponent.cpp`, `tests/MidiControllerTests.cpp`, the suite registration and documentation. MIDI clips can hold pitch bend, channel pressure and CC 0–119 lanes, edited in a lane under the notes that also shows and edits note velocities. Time edits, MIDI files, duplicates and reopening keep the lanes. The new `midi-controllers-acceptance` suite measures bent pitch to 0.05 Hz and the sustain pedal's hold and release, and the UI suite covers the lane. See [the controller lane contract](research/midi-controllers-contract.md).

@@ -890,6 +890,18 @@ Session::WarpSettings warpSettings (te::WaveAudioClip& clip)
     if (const auto bpm = clip.getLoopInfo().getBpm (clip.getWaveInfo()); std::isfinite (bpm) && bpm > 0) result.bpm = bpm;
     return result;
 }
+// Engine controller types for Halftrack lanes, and the lane value of a stored event.
+int engineControllerType (int lane)
+{ return lane == Session::pitchBendLane ? te::MidiControllerEvent::pitchWheelType : lane == Session::channelPressureLane ? te::MidiControllerEvent::channelPressureType : lane; }
+int controllerLane (int type)
+{
+    if (type >= 0 && type < 120) return type;
+    if (type == te::MidiControllerEvent::pitchWheelType) return Session::pitchBendLane;
+    if (type == te::MidiControllerEvent::channelPressureType) return Session::channelPressureLane;
+    return -1;
+}
+int laneValue (int lane, int stored) { return lane == Session::pitchBendLane ? stored - 8192 : stored >> 7; }
+int storedValue (int lane, int value) { return lane == Session::pitchBendLane ? value + 8192 : value << 7; }
 Session::ClipInfo describeClip (te::Clip& clip)
 {
     Session::ClipInfo result;
@@ -916,6 +928,18 @@ Session::ClipInfo describeClip (te::Clip& clip)
         for (auto* note : midi->getSequence().getNotes())
             result.notes.push_back ({ note->state.getProperty (midiNoteIDProperty).toString(), note->getNoteNumber(),
                                      note->getStartBeat().inBeats(), note->getLengthBeats().inBeats(), note->getVelocity() / 127.0f, !note->isMute() });
+        std::map<int, Session::ControllerLane> lanes;
+        for (auto* event : midi->getSequence().getControllerEvents())
+            if (const int lane = controllerLane (event->getType()); lane >= 0)
+            {
+                auto& entry = lanes[lane]; entry.controller = lane;
+                entry.points.push_back ({ event->getBeatPosition().inBeats(), laneValue (lane, event->getControllerValue()) });
+            }
+        for (auto& [lane, entry] : lanes)
+        {
+            std::stable_sort (entry.points.begin(), entry.points.end(), [] (const auto& a, const auto& b) { return a.beat < b.beat; });
+            result.controllers.push_back (std::move (entry));
+        }
     }
     return result;
 }
@@ -3283,6 +3307,40 @@ Result Session::transformMidiNotes (const String& clipId, const juce::StringArra
     // Existing batch validation rejects the complete edit before changing any note.
     return updateMidiNotes (clipId, notes);
 }
+Result Session::setMidiControllerLane (const String& clipId, int controller, const std::vector<ControllerPoint>& points)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing controllers.");
+    auto* clip = impl->midiClip (clipId);
+    if (clip == nullptr) return Result::fail ("MIDI clip not found.");
+    if (auto frozen = impl->unfrozen (clip->getClipTrack()); frozen.failed()) return frozen;
+    if (! canCopyMidiClip (*clip)) return Result::fail ("This clip's controllers cannot be edited.");
+    if (! ((controller >= 0 && controller < 120) || controller == pitchBendLane || controller == channelPressureLane))
+        return Result::fail ("Choose a controller from 0 to 119, pitch bend or channel pressure.");
+    const auto length = clip->getLengthInBeats().inBeats();
+    const int low = controller == pitchBendLane ? -8192 : 0, high = controller == pitchBendLane ? 8191 : 127;
+    double previous = -1;
+    if (points.size() > 16384) return Result::fail ("A lane holds at most 16384 points.");
+    for (const auto& point : points)
+    {
+        if (! std::isfinite (point.beat) || point.beat < 0 || point.beat > length + 1e-9 || point.beat <= previous || point.value < low || point.value > high)
+            return Result::fail ("Controller points need increasing beats inside the clip and values from " + String (low) + " to " + String (high) + ".");
+        previous = point.beat;
+    }
+    auto& sequence = clip->getSequence();
+    const int type = engineControllerType (controller);
+    std::vector<ControllerPoint> current;
+    for (auto* event : sequence.getControllerEvents())
+        if (event->getType() == type) current.push_back ({ event->getBeatPosition().inBeats(), laneValue (controller, event->getControllerValue()) });
+    std::stable_sort (current.begin(), current.end(), [] (const auto& a, const auto& b) { return a.beat < b.beat; });
+    if (current == points) return Result::ok();
+    impl->transaction ("Edit controller lane");
+    auto* undo = &impl->edit->getUndoManager();
+    const auto events = sequence.getControllerEvents(); // Removing events changes the live list.
+    for (auto* event : events) if (event->getType() == type) sequence.removeControllerEvent (*event, undo);
+    for (const auto& point : points) sequence.addControllerEvent (te::BeatPosition::fromBeats (point.beat), type, storedValue (controller, point.value), undo);
+    impl->changed(); return Result::ok();
+}
 Result Session::removeMidiNote (const String& clipId, const String& noteId)
 {
     return removeMidiNotes (clipId, { noteId });
@@ -3880,6 +3938,9 @@ Result Session::insertTime (double start, double length)
                 for (auto* note : notes)
                     if (note->getStartBeat().inBeats() >= split.inBeats() - 1e-9)
                         note->setStartAndLength (note->getStartBeat() + deltaBeats, note->getLengthBeats(), undo);
+                const auto events = midi->getSequence().getControllerEvents();
+                for (auto* event : events)
+                    if (event->getBeatPosition().inBeats() >= split.inBeats() - 1e-9) event->setBeatPosition (event->getBeatPosition() + deltaBeats, undo);
             }
             else if (auto* right = track->splitClip (*clip, from)) right->setStart (from + delta, false, true);
         }
@@ -3935,6 +3996,30 @@ Result Session::deleteTime (double start, double length)
                     if (noteStart >= cutEnd) absolute = noteStart - (cutEnd - cut);
                     else if (noteEnd > cut) noteLength = cut - noteStart;
                     note->setStartAndLength (te::BeatPosition::fromBeats ((absolute - newStart).inBeats()), noteLength, undo);
+                }
+                // Controller values set inside the deleted time take effect at the cut, so later notes keep them.
+                std::map<int, te::MidiControllerEvent*> lastInside;
+                const auto events = midi->getSequence().getControllerEvents();
+                for (auto* event : events)
+                {
+                    const auto at = clipStart + toDuration (event->getBeatPosition());
+                    if (at >= cut && at < cutEnd)
+                    {
+                        if (auto& last = lastInside[event->getType()]; last == nullptr || last->getBeatPosition() <= event->getBeatPosition())
+                        { if (last != nullptr) midi->getSequence().removeControllerEvent (*last, undo); last = event; }
+                        else midi->getSequence().removeControllerEvent (*event, undo);
+                        continue;
+                    }
+                    const auto absolute = at >= cutEnd ? at - (cutEnd - cut) : at;
+                    event->setBeatPosition (te::BeatPosition::fromBeats ((absolute - newStart).inBeats()), undo);
+                }
+                for (auto& [type, event] : lastInside)
+                {
+                    bool replaced = false;
+                    for (auto* other : midi->getSequence().getControllerEvents())
+                        replaced = replaced || (other != event && other->getType() == type && std::abs ((other->getBeatPosition() - te::BeatPosition::fromBeats ((cut - newStart).inBeats())).inBeats()) < 1e-9);
+                    if (replaced) midi->getSequence().removeControllerEvent (*event, undo);
+                    else event->setBeatPosition (te::BeatPosition::fromBeats ((cut - newStart).inBeats()), undo);
                 }
                 const auto remaining = p.getLength() - (std::min (p.getEnd(), to) - std::max (p.getStart(), from));
                 if (remaining.inSeconds() < .001) { clip->removeFromParent(); continue; }

@@ -43,6 +43,7 @@ int runCrossfadeTests (const juce::File&);
 int runTimeEditTests (const juce::File&);
 int runRackTests (const juce::File&);
 int runTrackDelayTests (const juce::File&);
+int runMidiControllerTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -202,6 +203,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-groups");
             setApplicationReturnValue (runGroupTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-midi-controllers"))
+        {
+            const int i = args.indexOf ("--self-test-midi-controllers");
+            setApplicationReturnValue (runMidiControllerTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-track-delay"))

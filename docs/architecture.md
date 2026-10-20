@@ -266,6 +266,10 @@ A rack is an engine `RackInstance` on the track's device list plus a Halftrack-m
 
 `TrackDelayPlugin` (in `src/Session.cpp`) sits after a track's devices and before its sends and mixer once a delay is set. Positive delays run through a ring buffer allocated in `initialise`; negative delays are reported as latency, and the engine's delay compensation moves the track earlier. Device insertion keeps new devices ahead of it. See the [track delay contract](research/track-delay-contract.md).
 
+## MIDI controller lanes
+
+`setMidiControllerLane` maps Halftrack lanes onto the engine's MIDI controller events in the clip's sequence (CC values stored as 14-bit, pitch bend offset by 8192) and replaces a lane in one transaction. `describeClip` groups them back into `ClipInfo::controllers`. Insert and Delete Time carry them with notes. The piano roll's `LaneView` edits velocities through `updateMidiNotes` and lanes through `setMidiControllerLane`, previewing locally until release. See the [controller lane contract](research/midi-controllers-contract.md).
+
 ## Audio warping
 
 `ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).

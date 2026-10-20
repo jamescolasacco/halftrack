@@ -112,6 +112,21 @@ public:
         float velocity = 0.8f;
         bool active = true;
     };
+    // MIDI controller lanes in a clip: CC numbers 0-119, plus pitch bend and channel pressure.
+    // Each point's value holds until the next point (step playback).
+    static constexpr int pitchBendLane = 128, channelPressureLane = 129;
+    struct ControllerPoint
+    {
+        double beat = 0; // From the clip start.
+        int value = 0;   // 0-127, or -8192 to 8191 for pitch bend.
+        bool operator== (const ControllerPoint&) const = default;
+    };
+    struct ControllerLane
+    {
+        int controller = 0;
+        std::vector<ControllerPoint> points;
+        bool operator== (const ControllerLane&) const = default;
+    };
     enum class FadeCurve { linear = 1, convex, concave, sCurve };
     // Warped audio follows the project tempo; its length is fixed in beats.
     enum class WarpMode { off, stretch, efficient };
@@ -145,6 +160,7 @@ public:
         LaunchSettings launch;
         double startBeat = 0, lengthBeats = 0;
         std::vector<MidiNoteInfo> notes;
+        std::vector<ControllerLane> controllers; // Lanes with points, by controller number.
     };
     struct LocatorInfo { juce::String id, name; double position = 0; };
     struct SceneInfo { juce::String id, name; };
@@ -298,6 +314,8 @@ public:
     juce::Result splitMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, double splitBeat, juce::StringArray& insertedIds);
     juce::Result transformMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, NoteTransform, double gridBeats);
     juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);
+    // Replaces one controller lane of a MIDI clip in one undo step; no points removes the lane.
+    juce::Result setMidiControllerLane (const juce::String& clipId, int controller, const std::vector<ControllerPoint>& points);
     juce::Result removeMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds);
     juce::Result setSynthSettings (const juce::String& trackId, const SynthSettings&);
     // Replaces a MIDI track's instrument in one undo step; nullopt restores the built-in synth.
