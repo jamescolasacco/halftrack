@@ -212,7 +212,7 @@ public:
                  &playButton, &stopButton, &recordButton, &tempo, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &ruler, &viewport,
-                 &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &deviceChain })
+                 &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &deviceChain })
             addAndMakeVisible (child);
 
         for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
@@ -467,8 +467,12 @@ public:
         browserList.setBounds (browser);
         launcher.setBounds (area);
         launcher.setVisible (showSession);
+        const bool audioClip = showPiano && selectedAudioClip() != nullptr;
         pianoRoll.setBounds (deviceChain.getBounds());
-        pianoRoll.setVisible (showPiano);
+        pianoRoll.setVisible (showPiano && ! audioClip);
+        audioClipView.setBounds (deviceChain.getBounds());
+        audioClipView.setVisible (audioClip);
+        if (audioClip) audioClipView.sync();
         viewport.setVisible (! showSession);
         ruler.setVisible (! showSession);
         horizontalScroll.setVisible (! showSession);
@@ -1137,7 +1141,7 @@ private:
                 else owner.createMidiClip (juce::jmax (0.0, owner.viewStart + e.x / owner.pixelsPerSecond));
             }
             else if (const auto* track = owner.currentTrack(); track && juce::isPositiveAndBelow (owner.selectedClip, (int)track->clips.size()))
-                if (track->clips[(size_t)owner.selectedClip].isAudio) owner.audioClipCommand (2, track->clips[(size_t)owner.selectedClip].id);
+                if (track->clips[(size_t)owner.selectedClip].isAudio) owner.openPianoRoll();
         }
         void mouseDrag (const juce::MouseEvent& e) override
         {
@@ -1771,6 +1775,145 @@ private:
                 if (choice == 1) safe->report (safe->session.launchScene (index)); if (choice == 2) safe->renameSceneDialog (index); if (choice == 3) safe->report (safe->session.removeScene (index)); safe->refresh();
             });
         }
+    };
+
+    // Audio clip detail: Clip and Sample boxes (warp, tempo, gain, reverse) beside the waveform.
+    class AudioClipView final : public juce::Component, private juce::ChangeListener
+    {
+    public:
+        explicit AudioClipView (Impl& o) : owner (o), thumbnail (512, o.formats, o.thumbnailCache)
+        {
+            setName ("Audio clip view");
+            for (auto* c : std::initializer_list<juce::Component*> { &warp, &mode, &bpm, &halve, &twice, &gain, &reverse }) addAndMakeVisible (c);
+            for (auto* b : { &warp, &halve, &twice, &reverse }) { b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); }
+            warp.setName ("Clip warp"); warp.setClickingTogglesState (true); warp.setTooltip ("Warp: follow the project tempo (length fixed in beats)");
+            warp.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); warp.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            warp.onClick = [this] { apply (warp.getToggleState() ? selectedMode() : Session::WarpMode::off, clip.warp.bpm); };
+            mode.setName ("Warp mode"); mode.addItem ("Stretch", 1); mode.addItem ("Efficient", 2);
+            mode.setTooltip ("Stretch quality: Stretch (default) or Efficient (lower CPU)");
+            mode.onChange = [this] { if (clip.warp.mode != Session::WarpMode::off) apply (selectedMode(), clip.warp.bpm); };
+            bpm.setName ("Clip tempo"); bpm.setEditable (false, true, false); bpm.setJustificationType (juce::Justification::centred);
+            bpm.setColour (juce::Label::backgroundColourId, background); bpm.setColour (juce::Label::outlineColourId, line);
+            bpm.setTooltip ("The source's own tempo (Seg. BPM). Double-click to type it.");
+            bpm.onTextChange = [this]
+            {
+                const auto text = bpm.getText().trim().toStdString(); char* end = nullptr; const auto value = std::strtod (text.c_str(), &end);
+                if (! text.empty() && end == text.c_str() + text.size() && std::isfinite (value)) apply (clip.warp.mode, value);
+                else sync();
+            };
+            halve.setTooltip ("Halve the clip tempo (plays twice as long)"); twice.setTooltip ("Double the clip tempo (plays twice as fast)");
+            halve.onClick = [this] { apply (clip.warp.mode, clip.warp.bpm / 2); };
+            twice.onClick = [this] { apply (clip.warp.mode, clip.warp.bpm * 2); };
+            gain.setName ("Clip gain"); gain.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); gain.setRange (-100, 24, .1);
+            gain.setSkewFactorFromMidPoint (-12); gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 56, 14);
+            gain.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack); gain.setDoubleClickReturnValue (true, 0);
+            gain.textFromValueFunction = [] (double v) { return v <= -100 ? juce::String ("-inf dB") : juce::String (v, 1) + " dB"; };
+            gain.onDragStart = [this] { owner.session.beginEditGesture ("Clip gain"); gesture = true; };
+            gain.onDragEnd = [this] { if (gesture) owner.session.endEditGesture(); gesture = false; };
+            gain.onValueChange = [this]
+            {
+                auto settings = clip.audio; settings.gainDb = (float) gain.getValue();
+                if (settings == clip.audio) return;
+                owner.report (owner.session.setAudioClipSettings (clip.id, settings)); owner.refresh();
+            };
+            reverse.setName ("Clip reverse"); reverse.setClickingTogglesState (true);
+            reverse.onClick = [this] { owner.report (owner.session.setAudioClipReversed (clip.id, reverse.getToggleState())); owner.refresh(); };
+            thumbnail.addChangeListener (this);
+        }
+        ~AudioClipView() override { thumbnail.removeChangeListener (this); if (gesture) owner.session.endEditGesture(); }
+        bool sync()
+        {
+            const auto* selected = owner.selectedAudioClip();
+            if (selected == nullptr) return false;
+            clip = *selected;
+            if (clip.file != shownFile) { shownFile = clip.file; thumbnail.setSource (clip.file.existsAsFile() ? new juce::FileInputSource (clip.file) : nullptr); }
+            const bool warped = clip.warp.mode != Session::WarpMode::off;
+            warp.setToggleState (warped, juce::dontSendNotification); warp.setEnabled (clip.canWarp && ! owner.session.isExporting());
+            mode.setSelectedId (clip.warp.mode == Session::WarpMode::efficient ? 2 : 1, juce::dontSendNotification); mode.setEnabled (warped);
+            if (! bpm.isBeingEdited()) bpm.setText (juce::String (clip.warp.bpm, 2), juce::dontSendNotification);
+            for (auto* c : std::initializer_list<juce::Component*> { &bpm, &halve, &twice }) c->setEnabled (clip.canWarp);
+            if (! gain.isMouseButtonDown()) gain.setValue (clip.audio.gainDb, juce::dontSendNotification);
+            gain.updateText();
+            reverse.setToggleState (clip.reversed, juce::dontSendNotification); reverse.setEnabled (clip.canReverse || clip.reversed);
+            repaint(); return true;
+        }
+        void resized() override
+        {
+            auto sample = sampleBox();
+            sample.removeFromTop (24);
+            auto row = sample.removeFromTop (22).reduced (6, 0);
+            warp.setBounds (row.removeFromLeft (52)); row.removeFromLeft (4); mode.setBounds (row);
+            sample.removeFromTop (6);
+            row = sample.removeFromTop (22).reduced (6, 0);
+            twice.setBounds (row.removeFromRight (26)); halve.setBounds (row.removeFromRight (26)); row.removeFromRight (4);
+            bpm.setBounds (row.withTrimmedLeft (54));
+            sample.removeFromTop (6);
+            row = sample.removeFromTop (70).reduced (6, 0);
+            gain.setBounds (row.removeFromLeft (64)); row.removeFromLeft (6);
+            reverse.setBounds (row.withSizeKeepingCentre (row.getWidth(), 22));
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (juce::Colour (0xff262626));
+            for (auto box : { clipBox(), sampleBox() })
+            {
+                g.setColour (juce::Colour (0xff303030)); g.fillRect (box);
+                g.setColour (juce::Colour (0xff4a4a4a)); g.fillRect (box.withHeight (22));
+                g.setColour (line); g.drawRect (box);
+            }
+            g.setColour (ink); g.setFont (font (11.0f, true));
+            g.drawText ("Clip", clipBox().withHeight (22).reduced (6, 0), juce::Justification::centredLeft);
+            g.drawText ("Sample", sampleBox().withHeight (22).reduced (6, 0), juce::Justification::centredLeft);
+            auto details = clipBox().withTrimmedTop (28).reduced (8, 0);
+            g.setFont (font (11.0f));
+            g.setColour (owner.selectedTrackColour()); g.fillRect (details.removeFromTop (20));
+            g.setColour (juce::Colour (0xff141414)); g.drawText (clip.name, details.translated (0, -20).withHeight (20).reduced (5, 0), juce::Justification::centredLeft, true);
+            g.setColour (muted);
+            const auto line1 = "Start  " + juce::String (clip.start, 3) + " s", line2 = "Length  " + juce::String (clip.length, 3) + " s";
+            g.drawText (line1, details.removeFromTop (20).withTrimmedTop (4), juce::Justification::centredLeft);
+            g.drawText (line2, details.removeFromTop (18), juce::Justification::centredLeft);
+            g.drawText (clip.file.getFileName(), details.removeFromTop (18), juce::Justification::centredLeft, true);
+            g.drawText ("Seg. BPM", sampleBox().getX() + 6, bpm.getY(), 52, bpm.getHeight(), juce::Justification::centredLeft);
+            // Waveform of the visible source span, with beat lines when warped.
+            const auto wave = waveBounds();
+            g.setColour (juce::Colour (0xff1c1c1c)); g.fillRect (wave);
+            const auto sourceSpan = clip.warp.mode == Session::WarpMode::off ? clip.length : clip.length * owner.state.tempo / clip.warp.bpm;
+            const auto offset = clip.warp.mode == Session::WarpMode::off ? clip.sourceOffset : clip.sourceOffset * owner.state.tempo / clip.warp.bpm;
+            if (thumbnail.getTotalLength() > 0 && sourceSpan > 0)
+            {
+                g.setColour (owner.selectedTrackColour().withAlpha (0.85f));
+                thumbnail.drawChannels (g, wave.reduced (0, 6), offset, offset + sourceSpan, 0.95f);
+            }
+            if (clip.warp.mode != Session::WarpMode::off && sourceSpan > 0)
+            {
+                const auto beats = sourceSpan * clip.warp.bpm / 60.0;
+                for (int beat = 0; beat <= (int) beats; ++beat)
+                {
+                    const auto x = wave.getX() + (float) (beat / beats) * wave.getWidth();
+                    g.setColour (beat % 4 == 0 ? juce::Colour (0x66ffffff) : juce::Colour (0x22ffffff)); g.drawVerticalLine ((int) x, (float) wave.getY(), (float) wave.getBottom());
+                }
+            }
+            g.setColour (line); g.drawRect (wave);
+        }
+    private:
+        Impl& owner;
+        juce::AudioThumbnail thumbnail;
+        juce::File shownFile;
+        Session::ClipInfo clip;
+        juce::TextButton warp { "WARP" }, halve { ":2" }, twice { "*2" }, reverse { "Reverse" };
+        juce::ComboBox mode;
+        juce::Label bpm;
+        juce::Slider gain;
+        bool gesture = false;
+        juce::Rectangle<int> clipBox() const { return { 6, 6, 170, getHeight() - 12 }; }
+        juce::Rectangle<int> sampleBox() const { return { 182, 6, 200, getHeight() - 12 }; }
+        juce::Rectangle<int> waveBounds() const { return { 390, 6, juce::jmax (40, getWidth() - 396), getHeight() - 12 }; }
+        Session::WarpMode selectedMode() const { return mode.getSelectedId() == 2 ? Session::WarpMode::efficient : Session::WarpMode::stretch; }
+        void apply (Session::WarpMode warpMode, double tempo)
+        {
+            owner.report (owner.session.setAudioClipWarp (clip.id, { warpMode, tempo })); owner.refresh(); sync();
+        }
+        void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
     };
 
     class PianoRoll final : public juce::Component, private juce::ScrollBar::Listener
@@ -2866,6 +3009,7 @@ private:
     Ruler ruler;
     LauncherGrid launcher;
     PianoRoll pianoRoll;
+    AudioClipView audioClipView { *this };
     DeviceChain deviceChain;
     juce::Viewport viewport;
     juce::ScrollBar horizontalScroll { false };
@@ -3159,6 +3303,16 @@ private:
     {
         return selectedTrack >= 0 && selectedTrack < (int) state.tracks.size() ? &state.tracks[(size_t) selectedTrack] : nullptr;
     }
+    // The audio clip an open clip view edits: the selected arrangement clip or Session slot.
+    const Session::ClipInfo* selectedAudioClip() const
+    {
+        const auto* track = currentTrack();
+        if (track == nullptr) return nullptr;
+        if (showSession) { const auto* slot = selectedSlot(); return slot != nullptr && slot->hasClip && slot->clip.isAudio ? &slot->clip : nullptr; }
+        if (selectedClip < 0 || selectedClip >= (int) track->clips.size()) return nullptr;
+        return track->clips[(size_t) selectedClip].isAudio ? &track->clips[(size_t) selectedClip] : nullptr;
+    }
+    juce::Colour selectedTrackColour() const { const auto* track = currentTrack(); return track != nullptr ? track->colour : muted; }
     const Session::ClipInfo* currentMidiClip() const
     {
         const auto* track = currentTrack();
@@ -3320,6 +3474,8 @@ private:
         if (selectedSceneIndex() < 0) selectedSceneId = state.scenes.empty() ? juce::String() : state.scenes.front().id;
         launcher.sync();
         pianoRoll.sync();
+        if (showPiano && (audioClipView.isVisible() != (selectedAudioClip() != nullptr))) resized();
+        if (audioClipView.isVisible()) audioClipView.sync();
         newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
         importButton.setEnabled (currentTrack() == nullptr || ! currentTrack()->isReturn);
         ruler.sync(); deviceChain.sync(); repaint();
@@ -5518,6 +5674,41 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(state.tracks[0].clips.size()==3 && state.tracks[0].clips[(size_t)selectedClip].id!=splitAudio,
         "production duplicate command selects a fresh clip identity");
     session.undo();session.undo();refresh();check(state.tracks[0].clips.size()==1,"two undo steps restore split and duplicate");
+    {
+        // Audio clip view: double-click opens it in the detail area with warp, tempo and gain.
+        showArrangementView(); selectedTrack = 0; selectedClip = 0; refresh();
+        const auto clipPoint = canvas.clipBounds (state.tracks[0].clips[0], 0).getCentre();
+        const auto now = juce::Time::getCurrentTime();
+        canvas.mouseDoubleClick (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), clipPoint, juce::ModifierKeys(), 1.0f, 0, 0, 0, 0,
+                                                   &canvas, &canvas, now, clipPoint, now, 2, false));
+        auto* warpButton = dynamic_cast<juce::Button*> (findNamed (audioClipView, "Clip warp"));
+        auto* tempoLabel = dynamic_cast<juce::Label*> (findNamed (audioClipView, "Clip tempo"));
+        auto* clipGain = dynamic_cast<juce::Slider*> (findNamed (audioClipView, "Clip gain"));
+        check (showPiano && audioClipView.isVisible() && ! pianoRoll.isVisible() && warpButton && tempoLabel && clipGain && ! warpButton->getToggleState(),
+               "double-clicking an audio clip opens the audio clip view instead of the note editor");
+        const auto length = state.tracks[0].clips[0].length, estimate = state.tracks[0].clips[0].warp.bpm;
+        warpButton->setToggleState (true, juce::dontSendNotification); warpButton->onClick();
+        // Warping at the estimated source tempo rescales the clip onto the project tempo.
+        const auto warpedLength = length * estimate / state.tempo;
+        check (state.tracks[0].clips[0].warp.mode == Session::WarpMode::stretch && std::abs (state.tracks[0].clips[0].length - warpedLength) < 1e-6,
+               "the Warp switch warps the clip at its estimated tempo onto the project tempo");
+        tempoLabel->setText (juce::String (estimate / 2), juce::sendNotificationSync);
+        check (std::abs (state.tracks[0].clips[0].warp.bpm - estimate / 2) < 1e-9 && std::abs (state.tracks[0].clips[0].length - warpedLength / 2) < 1e-6,
+               "a slower source tempo makes the warped clip play twice as fast");
+        clipGain->setValue (-6, juce::sendNotificationSync);
+        check (std::abs (state.tracks[0].clips[0].audio.gainDb + 6) < 1e-4, "the clip view gain knob edits clip gain");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("audio-clip-view.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (audioClipView.createComponentSnapshot (audioClipView.getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        for (int step = 0; step < 3; ++step) session.undo();
+        refresh(); closeClipView();
+        check (state.tracks[0].clips[0].warp.mode == Session::WarpMode::off && state.tracks[0].clips[0].audio.gainDb == 0, "undo restores the unwarped clip");
+    }
     const auto beforeDialogs=dialogs.size();audioClipCommand(2,originalAudio);
     check(dialogs.size()==beforeDialogs+1 && dialogs.back()!=nullptr,"production audio editor opens a native dialog");
     session.newProject();session.dispatchPendingMessages();

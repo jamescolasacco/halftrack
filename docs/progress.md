@@ -819,3 +819,5 @@ Stage 6 (clip view): an open clip's editor now appears in the bottom detail area
 
 Integrated checkpoint after the interface stages: all **30 local Mac acceptance suites pass in 520.2 s** (new: native MIDI effects, instruments and warp suites), with the owned source guard covering 175 bodies. Not yet pushed or run on Windows/Linux CI in this session.
 
+Audio clip view: double-clicking an audio clip (or opening the clip view on a selected audio clip or Session slot) shows an audio detail panel instead of the note editor: a Clip box (name, start, length, file), a Sample box (Warp switch, Stretch/Efficient mode, editable Seg. BPM with halve/double, clip-gain knob, Reverse when allowed) and the clip's waveform with beat lines when warped. Its controls use `setAudioClipWarp`, `setAudioClipSettings` and `setAudioClipReversed`. The earlier gain/fade/range dialog remains in the clip context menu. Production-handler checks cover opening by double-click, warping onto the project tempo at the estimated source tempo, typed tempo, gain and undo; UI, export dialog, audio clip and warp suites pass.
+
