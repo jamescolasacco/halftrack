@@ -2029,6 +2029,16 @@ struct Session::Impl
         if (! useDevices) return;
         edit->getTransport().ensureContextAllocated();
     }
+    // Enabling a device rebuilds every context's device list. Tracktion stops the play head
+    // while clearing the old graph but leaves the transport playing, and its timer then stops
+    // the transport and launched clips. Rebuild the graph and resume where the head stopped.
+    void resumePlayback (bool wasPlaying)
+    {
+        if (! wasPlaying || ! edit->getTransport().isPlaying()) return;
+        edit->dispatchPendingUpdatesSynchronously();
+        if (auto* context = edit->getCurrentPlaybackContext(); context && ! context->isPlaying() && ! context->isPlayPending())
+            context->play();
+    }
     Meter& meter (const String& id, te::LevelMeasurer& m) const
     {
         auto& result = meters[id];
@@ -4513,12 +4523,16 @@ Result Session::setTrackInput (int index, const String& name)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (isReturn (*t)) return Result::fail ("Return tracks cannot receive recording inputs.");
-    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing inputs.");
+    // Enabling a device rebuilds the device lists, which discards active takes, and a recording
+    // track must keep the input its Session take stops on. Session takes do not set the transport
+    // recording, so they are checked separately.
+    if (impl->edit->getTransport().isRecording() || ! impl->slotRecordings.empty()) return Result::fail ("Stop recording before changing inputs.");
     const bool midi = t->state.getProperty (midiTrackProperty, false);
     // Validate the typed name before enabling anything. Re-query instances after
     // enabling because the native device list and playback graph may rebuild.
     if (name.isNotEmpty() && !inputNames (midi).contains (name)) return Result::fail ("That input is not available for this track type.");
     const auto monitored=impl->monitoredMidiTracks();
+    const bool playing = impl->edit->getTransport().isPlaying();
     if (midi)
     {
         auto& devices = impl->engine.getDeviceManager();
@@ -4539,7 +4553,7 @@ Result Session::setTrackInput (int index, const String& name)
     else for (auto* device : impl->engine.getDeviceManager().getWaveInputDevices())
         if (device->getName() == name)
         { if (!device->isEnabled()) device->setEnabled (true); break; }
-    impl->engine.getDeviceManager().dispatchPendingUpdates(); impl->refreshInputs();
+    impl->engine.getDeviceManager().dispatchPendingUpdates(); impl->refreshInputs(); impl->resumePlayback (playing);
     te::InputDeviceInstance* selected = nullptr;
     for (auto* d : impl->edit->getAllInputDevices())
         if (d->getInputDevice().isMidi() == midi && !d->getInputDevice().isTrackDevice() && d->getInputDevice().getName() == name) selected = d;

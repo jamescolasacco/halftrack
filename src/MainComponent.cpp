@@ -6809,7 +6809,6 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         // Session recording from the grid: an armed track's empty slot button records, and pressing it again ends the take.
         check (session.setTrackInput (midiTrack, controller).wasOk() && session.setTrackArmed (midiTrack, true).wasOk(), "arm the MIDI track for Session recording");
         refresh();
-        pumpSyntheticTestDevice (session, 8); // Input changes restart playback; let it settle.
         const auto recordPoint = launcher.launchPoint (midiTrack, 1);
         check (! state.tracks[(size_t) midiTrack].slots[1].hasClip, "the second slot is empty");
         launcher.mouseDown (launcherEvent (recordPoint)); launcher.mouseUp (launcherEvent (recordPoint)); refresh();
