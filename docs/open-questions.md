@@ -192,6 +192,26 @@ Takes start on the global launch grid (immediately from a stopped transport) and
 
 Pads are one-shot at unity level and velocity scales linearly; length cuts fade over 5 ms and choke groups release over 5 ms. Sixteen pads cover C1 to D#2 with no bank switching. The kit shares 32 voices with oldest-voice stealing. Browser samples load into the selected pad. These are simplest-default choices pending reference measurement.
 
+### Device automation defaults
+
+Device lanes interpolate linearly in each control's knob position (its editor skew), and integer and choice controls step to the nearest value. Automation is applied at audio-block rate, without per-sample smoothing beyond each processor's own. Third-party plug-in parameters are not exposed. These are simplest-default choices pending reference measurement.
+
+### Freeze defaults
+
+Only Arrangement clips are frozen; Session clips keep playing live. Freeze renders stay in the engine's temporary folder, so a reopened project on another machine plays live. Undoing a Flatten returns to the unfrozen track rather than the frozen state. These are simplest-default choices pending reference measurement.
+
+### Stem export defaults
+
+Member tracks of a group are rendered through their group's mixer, and muted tracks export silent stems. Stems use the export window's format, range, tail and normalization for every file, normalizing each file on its own. Master processing applies to every stem through the shared render path. These are simplest-default choices pending reference measurement.
+
+### Crossfader defaults
+
+The crossfader uses the dipless curve (a side stays at 0 dB until the fader crosses the centre toward the other side) and is not selectable. Groups have no crossfade side. Crossfader moves are ordinary undoable edits and are not automatable yet. These are simplest-default choices pending reference measurement.
+
+### Time edit defaults
+
+The loop range stands in for an Arrangement time selection. MIDI clips crossing an edit are extended or shortened in place, not split. A note crossing the inserted point keeps its length, and automation is not given boundary points at the cut, so a ramp across deleted time joins its neighbours. Tempo is constant, so tempo events are not moved. These are simplest-default choices pending reference measurement.
+
 ### Input changes during Session takes
 
 While a Session slot take records, input assignment is refused on every track, as during Arrangement recording. Enabling a device would discard the take, and replacing or disconnecting the recording track's input would leave the take without the input that stops it. A narrower rule could still allow assigning already-enabled inputs to other tracks; the reference application's behavior is unmeasured. Arming and monitoring stay available during a take. A MIDI device that appears during a take is discovered when the take ends. Audio-device changes in Audio Settings take the same device-list rebuild during any recording, Arrangement or Session. Code inspection shows the rebuild discards the take, but this is unmeasured, and refusing versus deferring those changes is undecided. Other edits refused only during Arrangement recording have not been audited for Session takes. These are undo, removing tracks, and editing scenes or slots.

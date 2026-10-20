@@ -852,6 +852,30 @@ Root owns `recordSlot` and the take lifecycle in `src/Session.*`, the record-slo
 
 Root owns the Drum Sampler across `src/Instruments.*`, `src/NativeEffects.*`, `src/Session.*`, the pad grid UI, tests and documentation. A 16-pad kit plays one sample per pad on C1–D#2, with per-pad tune, length, level, pan and choke groups. `setDrumPadSample` loads and clears pads with undo, and pad samples are collected and resolved with the project. The settings packet grew to 128 values. Sampler, instruments, native effects, MIDI effects, track duplication, Session (allocation audits) and UI suites pass locally on the Mac, and the source guard inspects 183 bodies. See [the sampler contract](research/sampler-contract.md#drum-sampler).
 
+## Device control automation — 2026-10-20
+
+Root owns device automation across `src/NativeEffects.*`, `src/Session.*`, `src/AutomationEditor.*`, `src/NativeEffectEditor.cpp`, tests and documentation. Every native effect, MIDI effect and instrument control can now carry an Arrangement automation lane: `setDeviceAutomation` stores knob positions in an engine curve without touching the manual value, and the device reads it at block rate. The automation editor offers every control after Volume and Pan, in the control's units and choice names, and right-clicking a device control opens its lane. The new `device-automation-acceptance` suite renders a Sampler's automated level (constant, Read off, knob-scale ramp, undo, tempo change, reopen, clear, invalid-file rejection). Automation editor, automation, native effects, instruments, sampler and UI suites pass locally on the Mac, and the source guard inspects 184 bodies.
+
+## Freeze and Flatten — 2026-10-20
+
+Root owns freeze across `src/Session.*`, `src/NativeEffects.h`, `src/SubtractiveSynth.h`, the track menu and arrangement drawing, tests and documentation. Tracks can be frozen (rendered through their devices, then locked), unfrozen and flattened into project audio with undo. Native instruments now declare that they sound without audio input, which the engine's freeze render requires. The new `freeze-acceptance` suite passes, and the full 35-suite run passes locally on the Mac in 140 s. See [the freeze contract](research/freeze-contract.md).
+
+## Stem export — 2026-10-20
+
+Root owns `exportStems` in `src/Session.*`, the export window's Rendered track choice, `tests/StemExportTests.cpp` and documentation. Export Audio can now render All Individual Tracks: one file per track and group (without return effects), per return (with the sends it receives) and the Master mix. Existing files are replaced only after confirmation, and the project is left unchanged. The new `stems-acceptance` suite checks each stem against generated sources exactly. Export UI, audio export, sends, groups and UI suites pass locally on the Mac.
+
+## Session mixer layout — 2026-10-20
+
+UI-only change in `src/MainComponent.cpp`. The Session view now follows the reference layout more closely. The Master column (scene launchers, Stop All Clips) sits directly after the last track column and stays at the right edge only once tracks scroll. A Master strip below it carries the master volume fader and output meter. Every track strip has a send knob per return (labelled A, B, C), and the mixer grows by a row for every three returns. UI checks cover the Master position, the master strip editing the real master level, and a send knob editing the real send level; the UI suite passes locally on the Mac.
+
+## Crossfader — 2026-10-20
+
+Root owns the crossfader across `src/Session.*`, the Session mixer UI, `tests/CrossfadeTests.cpp` and documentation. Tracks can be assigned to side A or B, and a project crossfader on the master strip fades between them on a dipless law. The new `crossfade-acceptance` suite checks renders at centre, fully A, fully B and halfway against the law, plus undo, reopen and invalid-file rejection. The source guard (184 bodies) and the Session (allocation audits), sends, groups, master volume, automation, stems, audio export, utility and UI suites pass locally on the Mac.
+
+## Insert Silence and Delete Time — 2026-10-20
+
+Root owns `insertTime`/`deleteTime` in `src/Session.*`, the Edit menu commands and shortcuts, `tests/TimeEditTests.cpp` and documentation. The Arrangement can insert silence or delete time across all tracks, locators and automation, using the loop range as the time selection. The new `time-edit-acceptance` suite checks clip splitting, MIDI note handling, locators, automation, an exact render resuming the split source, undo and warped-clip rejection. The full 38-suite run passes locally on the Mac in 142 s.
+
 ## Input changes during playback — 2026-10-20
 
 Engine owns the fix in `src/Session.*` and its test in `tests/MidiInputTests.cpp`. Cross-area edit: the Session-recording check in UI-owned `src/MainComponent.cpp` loses its "let it settle" pump, which no longer has a purpose.

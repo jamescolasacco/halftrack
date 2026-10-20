@@ -348,6 +348,27 @@ double effectTailSeconds (Kind kind, double rate) noexcept
     }
     return 0.0;
 }
+float effectValueToProportion (Kind kind, int parameter, float value) noexcept
+{
+    const auto fields = effectParameters (kind);
+    if (parameter < 0 || parameter >= (int) fields.size()) return 0;
+    const auto& f = fields[(size_t) parameter];
+    juce::NormalisableRange<float> range (f.minimum, f.maximum);
+    if (f.midpoint > f.minimum && f.midpoint < f.maximum && f.midpoint != 0) range.setSkewForCentre (f.midpoint);
+    return range.convertTo0to1 (std::clamp (value, f.minimum, f.maximum));
+}
+float effectProportionToValue (Kind kind, int parameter, float proportion) noexcept
+{
+    const auto fields = effectParameters (kind);
+    if (parameter < 0 || parameter >= (int) fields.size()) return 0;
+    const auto& f = fields[(size_t) parameter];
+    juce::NormalisableRange<float> range (f.minimum, f.maximum);
+    if (f.midpoint > f.minimum && f.midpoint < f.maximum && f.midpoint != 0) range.setSkewForCentre (f.midpoint);
+    const auto value = std::clamp (range.convertFrom0to1 (std::clamp (proportion, 0.0f, 1.0f)), f.minimum, f.maximum);
+    return f.integer || f.choices != nullptr ? std::round (value) : value;
+}
+bool effectShowsPercent (const EffectParameter& f) noexcept
+{ return std::string_view (f.unit) == "%" || std::string_view (f.key) == "mix" || std::string_view (f.key) == "feedback"; }
 int effectParameterIndex (Kind kind, const char* key) noexcept
 {
     const auto fields = effectParameters (kind);
@@ -688,7 +709,9 @@ NativeEffectPlugin::NativeEffectPlugin (tracktion::PluginCreationInfo info)
     // Shared tables are built here on the message thread, never during graph preparation.
     if (kind == Kind::wavetableSynth) instruments::prepareWavetables();
     for (int slot = 0; slot < sampleSlotCount (kind); ++slot) loadSample (slot);
-    publish(); startTimerHz (30);
+    for (const auto& field : effectParameters (kind)) controls.push_back (addParam (field.key, field.label, { 0.0f, 1.0f }));
+    audioSettings = readSettings();
+    publish(); refreshAutomation(); startTimerHz (30);
 }
 NativeEffectPlugin::~NativeEffectPlugin() { stopTimer(); }
 juce::String samplerSampleProblem (const juce::File& file)
@@ -809,6 +832,22 @@ juce::Result NativeEffectPlugin::validateState (const juce::ValueTree& tree)
             if (! parse (f.key, f.initial, v) || v < f.minimum || v > f.maximum || ((f.choices || f.integer) && std::floor (v) != v))
                 return juce::Result::fail ("The project contains invalid native effect settings.");
         }
+        // Control automation: a known control, at most 4096 ordered points of knob positions.
+        for (const auto& curve : tree)
+        {
+            if (! curve.hasType (tracktion::IDs::AUTOMATIONCURVE)) continue;
+            if (effectParameterIndex (static_cast<Kind> (static_cast<int> (type)), curve[tracktion::IDs::paramID].toString().toRawUTF8()) < 0 || curve.getNumChildren() > 4096)
+                return juce::Result::fail ("The project contains invalid device automation.");
+            double previous = -1;
+            for (const auto& point : curve)
+            {
+                const auto time = point.getProperty (tracktion::IDs::t, 0.0), value = point.getProperty (tracktion::IDs::v, 0.0);
+                const auto t = static_cast<double> (time), v = static_cast<double> (value);
+                if (! std::isfinite (t) || ! std::isfinite (v) || t < 0 || t < previous || v < 0 || v > 1)
+                    return juce::Result::fail ("The project contains invalid device automation.");
+                previous = t;
+            }
+        }
     }
     for (const auto& child : tree) if (auto result = validateState (child); result.failed()) return result;
     return juce::Result::ok();
@@ -821,7 +860,29 @@ void NativeEffectPlugin::valueTreePropertyChanged (juce::ValueTree& tree, const 
             if (property == sampleSlotProperty (kind, slot)) { loadSample (slot); return; }
     if (tree == state && ! writing) publish();
 }
-void NativeEffectPlugin::publish() { pendingSettings = readSettings(); pending = ! parameters.push (pendingSettings); }
+void NativeEffectPlugin::publish()
+{
+    pendingSettings = readSettings(); pending = ! parameters.push (pendingSettings);
+    // Controls that do not read a curve follow the manual settings.
+    for (size_t i = 0; i < controls.size(); ++i)
+        if (! readsCurve[i].load (std::memory_order_relaxed))
+            if (const auto position = effectValueToProportion (kind, (int) i, pendingSettings.values[i]); controls[i]->getCurrentValue() != position)
+                controls[i]->setParameter (position, juce::dontSendNotification);
+}
+void NativeEffectPlugin::refreshAutomation()
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    const auto settings = readSettings();
+    for (size_t i = 0; i < controls.size(); ++i)
+    {
+        auto& curve = controls[i]->getCurve();
+        const bool reads = ! curve.bypass.get() && curve.getNumPoints() > 0;
+        controls[i]->updateStream();
+        if (reads) controls[i]->updateToFollowCurve (edit.getTransport().getPosition());
+        else controls[i]->setParameter (effectValueToProportion (kind, (int) i, settings.values[i]), juce::dontSendNotification);
+        readsCurve[i].store (reads, std::memory_order_release);
+    }
+}
 void NativeEffectPlugin::timerCallback()
 {
     if (samples.size() > 1) retireSamples();
@@ -832,7 +893,7 @@ void NativeEffectPlugin::timerCallback()
 void NativeEffectPlugin::prepareForOfflineRender() { JUCE_ASSERT_MESSAGE_THREAD parameters.resetWhileStopped(); publish(); }
 void NativeEffectPlugin::initialise (const tracktion::PluginInitialisationInfo& info)
 {
-    sampleRate = info.sampleRate; processor.prepare (sampleRate, kind);
+    sampleRate = info.sampleRate; processor.prepare (sampleRate, kind); audioSettings = pendingSettings;
     midiProcessor.prepare (sampleRate); midiProcessor.configure (pendingSettings);
     if (effectIsInstrument (kind)) { instrument.prepare (sampleRate, kind); instrument.configure (pendingSettings); }
     midiScratch.reserve (static_cast<int> (midiOutput.size()) + 256);
@@ -903,7 +964,19 @@ void NativeEffectPlugin::applyToBuffer (const tracktion::PluginRenderContext& co
 {
     const juce::ScopedNoDenormals noDenormals; Settings next; bool changed = false;
     for (int i = 0; i < 64 && parameters.pop (next); ++i) changed = true;
-    if (changed) { processor.configure (next); midiProcessor.configure (next); if (effectIsInstrument (kind)) instrument.configure (next); }
+    if (changed) audioSettings = next;
+    // Controls whose automation reads this block override their manual settings.
+    bool automatedNow = false;
+    for (size_t i = 0; i < controls.size(); ++i) automatedNow = automatedNow || readsCurve[i].load (std::memory_order_acquire);
+    if (automatedNow)
+    {
+        next = audioSettings;
+        for (size_t i = 0; i < controls.size(); ++i)
+            if (readsCurve[i].load (std::memory_order_acquire)) next.values[i] = effectProportionToValue (kind, (int) i, controls[i]->getCurrentValue());
+    }
+    else next = audioSettings;
+    if (changed || automatedNow || automated) { processor.configure (next); midiProcessor.configure (next); if (effectIsInstrument (kind)) instrument.configure (next); }
+    automated = automatedNow;
     if (kind == Kind::sampler)
     {
         const auto* sample = publishedSamples[0].load (std::memory_order_acquire);

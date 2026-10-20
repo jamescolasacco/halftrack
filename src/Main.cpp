@@ -36,6 +36,11 @@ int runInstrumentsTests (const juce::File&);
 int runWarpTests (const juce::File&);
 int runLaunchModeTests (const juce::File&);
 int runSamplerTests (const juce::File&);
+int runDeviceAutomationTests (const juce::File&);
+int runFreezeTests (const juce::File&);
+int runStemExportTests (const juce::File&);
+int runCrossfadeTests (const juce::File&);
+int runTimeEditTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -195,6 +200,36 @@ public:
         {
             const int i = args.indexOf ("--self-test-groups");
             setApplicationReturnValue (runGroupTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-time-edit"))
+        {
+            const int i = args.indexOf ("--self-test-time-edit");
+            setApplicationReturnValue (runTimeEditTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-crossfade"))
+        {
+            const int i = args.indexOf ("--self-test-crossfade");
+            setApplicationReturnValue (runCrossfadeTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-stems"))
+        {
+            const int i = args.indexOf ("--self-test-stems");
+            setApplicationReturnValue (runStemExportTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-freeze"))
+        {
+            const int i = args.indexOf ("--self-test-freeze");
+            setApplicationReturnValue (runFreezeTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-device-automation"))
+        {
+            const int i = args.indexOf ("--self-test-device-automation");
+            setApplicationReturnValue (runDeviceAutomationTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-sampler"))

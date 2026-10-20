@@ -30,8 +30,11 @@ public:
         float peakCeilingDb = -1;
         // Exact [start, end) seconds, rounded to output frames. Requires zero tail.
         std::optional<juce::Range<double>> timeRange;
+        bool stems = false; // Chosen in the export window: render every track to its own file with exportStems.
     };
     enum class FollowAction { off, stop, replay, previous, next, first, last, cycle };
+    // A track's side of the crossfader; unassigned tracks ignore it.
+    enum class CrossfadeAssign { none, a, b };
     // Clip launch behaviour on press/release of its launch button.
     enum class LaunchMode { trigger, gate, toggle, repeat };
     // Per-clip launch grid; global follows the project setting.
@@ -159,6 +162,9 @@ public:
         EffectSettings effect;
         juce::File sample; // A Sampler instrument's loaded sample, if any.
         std::vector<juce::File> padSamples; // A Drum Sampler's sample per pad (empty files for empty pads).
+        // Arrangement automation of native device controls, in the controls' own units.
+        struct ControlAutomation { int parameter = 0; AutomationLane lane; bool operator== (const ControlAutomation&) const = default; };
+        std::vector<ControlAutomation> automation;
     };
     struct TrackInfo
     {
@@ -166,6 +172,8 @@ public:
         juce::Colour colour;
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
         bool mute = false, solo = false, armed = false, isMidi = false, isReturn = false;
+        bool frozen = false; // Plays a render of its clips and devices; devices and clips are locked.
+        CrossfadeAssign crossfade = CrossfadeAssign::none;
         SendMode sendMode = SendMode::post;
         std::vector<SendInfo> sends;
         SynthSettings synth;
@@ -203,6 +211,7 @@ public:
         bool dirty = false, playing = false, recording = false, looping = false;
         double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
         float masterPeakL = 0, masterPeakR = 0, masterGainDb = 0;
+        float crossfader = 0; // -1 is fully A, +1 fully B.
         AutomationLane masterVolumeAutomation;
         std::vector<TrackInfo> tracks;
         std::vector<GroupInfo> groups;
@@ -269,6 +278,10 @@ public:
     // Loads (or with an empty file clears) a Drum Sampler pad, switching the instrument to a Drum Sampler if needed.
     juce::Result setDrumPadSample (const juce::String& trackId, int pad, const juce::File& sample);
     juce::Result duplicateTrack (const juce::String& trackId, juce::String& duplicateId);
+    // Freeze renders a track's Arrangement clips through its devices and plays the render; one undo step each.
+    juce::Result setTrackFrozen (const juce::String& trackId, bool frozen);
+    // Flatten replaces a frozen track's clips and devices with one audio clip of its render.
+    juce::Result flattenTrack (const juce::String& trackId);
     // Groups top-level audio/MIDI tracks (not returns) into a new group placed at the first one.
     juce::Result groupTracks (const juce::StringArray& trackIds, juce::String& groupId);
     juce::Result ungroupTracks (const juce::String& groupId);
@@ -290,6 +303,11 @@ public:
     juce::Result setAudioClipWarp (const juce::String& clipId, const WarpSettings&);
     juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
     juce::Result splitAudioClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
+    // Insert Silence: everything at or after start moves later by length across all tracks, locators
+    // and automation; clips crossing start split (audio) or open a gap between their notes (MIDI).
+    juce::Result insertTime (double startSeconds, double lengthSeconds);
+    // Delete Time: removes [start, start + length) everywhere and moves later material earlier.
+    juce::Result deleteTime (double startSeconds, double lengthSeconds);
     juce::Result duplicateAudioClip (const juce::String& clipId, juce::String& duplicateId);
     // Typed application clipboard. Copy retains independent media before Cut removes anything.
     juce::Result copyMidiClip (const juce::String& clipId, bool cut = false);
@@ -308,11 +326,20 @@ public:
     juce::Result renameClip (const juce::String& clipId, const juce::String& name);
     juce::Result renameTrack (int trackIndex, const juce::String&);
     juce::Result setMasterGain (float decibels);
+    juce::Result setTrackCrossfade (const juce::String& trackId, CrossfadeAssign);
+    juce::Result setCrossfader (float position);
+    // Dipless crossfader law: a side keeps unity until the fader passes the centre toward the other side.
+    static float crossfadeGain (CrossfadeAssign, float position);
     juce::Result setMasterVolumeAutomation (const AutomationLane&);
     juce::Result setTrackGain (int trackIndex, float decibels);
     juce::Result setTrackPan (int trackIndex, float pan);
     // Atomic, strictly ordered beat points. Empty points restore manual control.
     juce::Result setTrackAutomation (const juce::String& trackId, AutomationTarget, const AutomationLane&);
+    // Automates one native device control (by parameter index) with values in the control's own units.
+    juce::Result setDeviceAutomation (const juce::String& pluginId, int parameter, const AutomationLane&);
+    // Knob-position mapping of a native control, used by automation editors; integer controls round.
+    static float deviceAutomationValueToProportion (EffectKind, int parameter, float value);
+    static float deviceAutomationProportionToValue (EffectKind, int parameter, float proportion);
     juce::Result setTrackMute (int trackIndex, bool);
     juce::Result setTrackSolo (int trackIndex, bool);
     juce::StringArray inputNames (bool midi = false) const;
@@ -342,6 +369,10 @@ public:
     juce::Result exportAudio (const juce::File&, const AudioExportSettings&);
     juce::Result exportAudio (const juce::File&, ExportFormat, double sampleRate = 48000, int bitDepth = 24, double tailSeconds = 0);
     juce::Result exportWav (const juce::File&, double sampleRate = 48000, int bitDepth = 24, double tailSeconds = 0);
+    // Renders every track, group and return on its own (tracks and groups without return effects,
+    // returns with their sends) and the Master mix into "<project> <name>" files in a folder.
+    // Existing files are only replaced with overwrite; nothing changes in the project or its history.
+    juce::Result exportStems (const juce::File& folder, const AudioExportSettings&, juce::StringArray& writtenFiles, bool overwrite = false);
     // Export pumps native events; edits reject while it owns the render graph.
     bool isExporting() const;
     void cancelExport();
