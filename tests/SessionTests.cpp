@@ -108,6 +108,50 @@ void success (const juce::Result& result, const juce::String& message)
 {
     require (result.wasOk(), message + (result.failed() ? ": " + result.getErrorMessage() : ""));
 }
+tracktion::engine::PropertyStorage& settingsOf (Session& session)
+{
+    return dynamic_cast<tracktion::engine::DeviceManager::TracktionEngineAudioDeviceManager&> (session.audioDeviceManager())
+        .engine.getPropertyStorage();
+}
+int activeInputs (Session& session)
+{
+    auto* device = session.audioDeviceManager().getCurrentAudioDevice();
+    return device != nullptr ? device->getActiveInputChannels().countNumberOfSetBits() : -1;
+}
+
+// A second test process saves a one-input device setup, as a measurement once did
+// into the settings file every test process shared. A Session here must not open it.
+void settingsIsolationTests (const juce::File& root)
+{
+    const auto report = root.getChildFile ("settings-probe.txt");
+    juce::ChildProcess probe;
+    // The AppKit flag stops a crash-recovery prompt from blocking the child after an earlier test process was killed.
+    require (probe.start (juce::StringArray { juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFullPathName(),
+                                              "--self-test-settings-probe", report.getFullPathName(),
+                                              "-ApplePersistenceIgnoreState", "YES" }),
+             "start a second test process");
+    const bool finished = probe.waitForProcessToFinish (60000);
+    if (! finished) probe.kill();
+    const auto output = probe.readAllProcessOutput();
+    if (! finished || probe.getExitCode() != 0) std::cerr << output << std::endl;
+    require (finished && probe.getExitCode() == 0, "the second process exits after saving its device setup");
+    const auto lines = juce::StringArray::fromLines (report.loadFileAsString());
+    require (lines.size() == 4 && lines[2] == "1" && lines[3] == "saved",
+             "the second process opened one input and saved that setup to " + lines[1]);
+    const juce::File probeFolder (lines[0]);
+    require (! probeFolder.exists(), "the second process removed its settings folder at exit");
+
+    Session session (false, std::make_unique<SyntheticDeviceType>());
+    auto& storage = settingsOf (session);
+    const auto folder = storage.getAppPrefsFolder();
+    const auto shared = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("Halftrack Tests");
+    require (folder != probeFolder && folder.isAChildOf (juce::File::getSpecialLocation (juce::File::tempDirectory))
+             && storage.getPropertiesFile().getFile().isAChildOf (folder) && storage.getAppCacheFolder() == folder
+             && folder != shared && ! folder.isAChildOf (shared),
+             "this process keeps test settings and temporary files in its own folder " + folder.getFullPathName());
+    require (activeInputs (session) == 2 && session.audioDeviceManager().getAudioDeviceSetup().useDefaultInputChannels,
+             "a Session here opens both generated inputs, not the other process's one-input setup");
+}
 juce::AudioBuffer<float> read (const juce::File& file)
 {
     juce::AudioFormatManager formats;
@@ -384,6 +428,26 @@ juce::AudioBuffer<float> captureSyntheticTestDevice (Session& session, int block
     juce::AudioBuffer<float> result(2,blocks*256);result.clear();device->pump(blocks,1,&result);return result;
 }
 
+int runSettingsIsolationProbe (const juce::File& report)
+{
+    Session session (false, std::make_unique<SyntheticDeviceType>());
+    auto& devices = session.audioDeviceManager();
+    auto& storage = settingsOf (session);
+    auto setup = devices.getAudioDeviceSetup();
+    setup.useDefaultInputChannels = false;
+    setup.inputChannels.clear();
+    setup.inputChannels.setBit (0);
+    const auto error = devices.setAudioDeviceSetup (setup, true);
+    // The engine stores the device setup when it receives this change message.
+    devices.dispatchPendingMessages();
+    auto& settings = storage.getPropertiesFile();
+    const bool saved = error.isEmpty() && settings.saveIfNeeded()
+        && settings.getFile().loadFileAsString().contains ("audioDeviceInChans=\"1\"");
+    const juce::StringArray lines { storage.getAppPrefsFolder().getFullPathName(), settings.getFile().getFullPathName(),
+                                    juce::String (activeInputs (session)), saved ? "saved" : "not saved: " + error };
+    return (report.replaceWithText (lines.joinIntoString ("\n")) && saved) ? 0 : 1;
+}
+
 int runRecordingTests (const juce::File& requestedDirectory)
 {
     try
@@ -406,6 +470,7 @@ int runSessionTests (const juce::File& requestedDirectory)
     {
         const auto root = requestedDirectory.getChildFile ("run-" + juce::Uuid().toString());
         success (root.createDirectory(), "create isolated artifacts");
+        settingsIsolationTests (root);
         panLawTests (root);
         const auto source = root.getChildFile ("fixture.wav");
         juce::AudioBuffer<float> fixture (2, 48000);

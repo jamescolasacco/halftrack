@@ -11,6 +11,7 @@ int runPersistenceTests (const juce::File&);
 int runRecordingTests (const juce::File&);
 int runLatencyTests (const juce::File&);
 int runLauncherTests (const juce::File&);
+int runSettingsIsolationProbe (const juce::File&);
 #if HALFTRACK_TESTS_ENABLED
 int runUtilityTests (const juce::File&);
 int runNativeEffectsTests (const juce::File&);
@@ -336,6 +337,14 @@ public:
                 ? juce::File (args[i + 1])
                 : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-tests");
             setApplicationReturnValue (runLatencyTests (destination));
+            quit();
+            return;
+        }
+        // Child process of the Session suite's settings-isolation check.
+        if (args.contains ("--self-test-settings-probe"))
+        {
+            const int i = args.indexOf ("--self-test-settings-probe");
+            setApplicationReturnValue (i + 1 < args.size() ? runSettingsIsolationProbe (juce::File (args[i + 1])) : 1);
             quit();
             return;
         }
