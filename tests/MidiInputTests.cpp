@@ -184,6 +184,136 @@ void replacementConsumerLifetime()
     check (consume (*finalGraph) == 0, "retired graph queues cannot replay a consumed key");
 }
 
+// Preserve state/release messages in arrival order across a callback gap, while
+// suppressing old attacks. Old retained state must not move a fresh key to the
+// end of its audio block just because its original timestamp is much earlier.
+void interruptedMidiStateOrdering()
+{
+    GeneratedInput f;
+    te::InputDeviceInstance* input = nullptr;
+    for (auto* edit : f.devices.engine.getActiveEdits().getEdits())
+        for (auto* candidate : edit->getAllInputDevices())
+            if (&candidate->getInputDevice() == f.controller.midi.get()) input = candidate;
+    check (input != nullptr, "interrupted-state fixture has a native input instance");
+    tracktion::graph::PlayHead playHead;
+    tracktion::graph::PlayHeadState playHeadState (playHead);
+    tracktion::graph::NodeGraph graph;
+    auto node = std::make_unique<te::MidiInputDeviceNode> (*input, *f.controller.midi,
+        f.controller.midi->getMPESourceID(), playHeadState, input->getTargets()[0]);
+    auto* receiver = node.get();
+    graph.sortedNodes.push_back ({receiver, receiver->getNodeProperties().nodeID});
+    graph.rootNode = std::move (node);
+    receiver->prepareToPlay ({48000, 256, graph, nullptr});
+    playHead.play ({0, 48000}, false);
+    int64_t nextReference = 0;
+    auto consume = [&]
+    {
+        te::MidiMessageArray messages;
+        const juce::Range<int64_t> reference {nextReference, nextReference + 256};
+        nextReference += 256;
+        playHead.setReferenceSampleRange (reference);
+        playHeadState.update (reference);
+        tracktion::graph::Node::ProcessContext context {256, reference, {{},messages}};
+        receiver->process (context);
+        std::vector<juce::MidiMessage> result;
+        for (const auto& message : messages) result.push_back (message);
+        return result;
+    };
+    auto enqueue = [&] (juce::MidiMessage message, double time)
+    {
+        message.setTimeStamp (time);
+        receiver->handleIncomingMidiMessage (message, f.controller.midi->getMPESourceID());
+    };
+    juce::Time::getMillisecondCounter();
+    consume(); // Establish the stream before deliberately interrupting it.
+    const std::vector<juce::MidiMessage> retained {
+        juce::MidiMessage::noteOff (1, 72, (juce::uint8)35),
+        juce::MidiMessage::noteOn (16, 65, (juce::uint8)0),
+        juce::MidiMessage::controllerEvent (1, 64, 127),
+        juce::MidiMessage::controllerEvent (1, 64, 0),
+        juce::MidiMessage::controllerEvent (16, 66, 127),
+        juce::MidiMessage::controllerEvent (16, 66, 0),
+        juce::MidiMessage::controllerEvent (1, 69, 127),
+        juce::MidiMessage::controllerEvent (1, 69, 0),
+        juce::MidiMessage::controllerEvent (1, 120, 0),
+        juce::MidiMessage::controllerEvent (16, 121, 0),
+        juce::MidiMessage::controllerEvent (1, 123, 0),
+        juce::MidiMessage::pitchWheel (16, 11000),
+        juce::MidiMessage::controllerEvent (1, 1, 80),
+        juce::MidiMessage::programChange (16, 5)
+    };
+    const auto origin = f.devices.getCurrentStreamTime();
+    enqueue (juce::MidiMessage::noteOn (1, 60, (juce::uint8)96), origin);
+    for (size_t i = 0; i < retained.size(); ++i)
+        enqueue (retained[i], origin + .001 * (i + 1));
+    const juce::uint8 sysexData[] {0x7d, 0x01, 0x02};
+    for (const auto& message : {juce::MidiMessage::midiClock(), juce::MidiMessage::midiStart(),
+                               juce::MidiMessage::midiStop(), juce::MidiMessage::createSysExMessage (sysexData, 3)})
+        enqueue (message, origin + .02);
+    // Deliberate fault injection exceeds the native 110 ms stale-event window.
+    juce::Thread::sleep (160);
+    juce::Time::getMillisecondCounter();
+    const auto freshKey = juce::MidiMessage::noteOn (1, 77, (juce::uint8)96);
+    const auto freshController = juce::MidiMessage::controllerEvent (1, 1, 90);
+    enqueue (freshKey, origin + 1.0);
+    enqueue (freshController, origin + 1.002);
+    enqueue (juce::MidiMessage::midiClock(), origin + 1.003);
+    const auto actual = consume();
+    check (actual.size() == retained.size() + 3, "interrupted input retains channel state while suppressing stale attacks and system messages");
+    auto sameBytes = [] (const juce::MidiMessage& a, const juce::MidiMessage& b)
+    { return a.getRawDataSize() == b.getRawDataSize() && std::equal (a.getRawData(), a.getRawData() + a.getRawDataSize(), b.getRawData()); };
+    for (size_t i = 0; i < retained.size(); ++i)
+        check (sameBytes (actual[i], retained[i]) && actual[i].getTimeStamp() == 0,
+            "stale state retains bytes, channel, FIFO order and block-start placement at event " + juce::String ((int)i));
+    check (sameBytes (actual[retained.size()], freshKey) && actual[retained.size()].getTimeStamp() == 0,
+        "old retained releases do not delay the first fresh key");
+    check (sameBytes (actual[retained.size() + 1], freshController) && std::abs (actual[retained.size() + 1].getTimeStamp() - .002) < 1e-10,
+        "fresh events retain their relative spacing after old releases");
+    check (actual.back().isMidiClock() && std::abs (actual.back().getTimeStamp() - .003) < 1e-10,
+        "fresh system messages retain their timing");
+    check (consume().empty(), "interrupted state events are consumed exactly once");
+
+}
+
+// A callback interruption must not discard the release of a voice that has
+// already sounded. The rendered audio release/silence oracle is unchanged.
+void interruptedMidiReleases()
+{
+    GeneratedInput f;
+    ok (f.session.setTrackMonitor (2, Session::MonitorMode::on), "enable interrupted-release monitoring");
+    for (int scenario = 0; scenario < 6; ++scenario)
+    {
+        const int channel = scenario % 2 == 0 ? 1 : 16;
+        const bool sustained = scenario == 2 || scenario == 3 || scenario == 5;
+        pumpSyntheticTestDevice (f.session, 4);
+        if (sustained) f.controller.sendNow (juce::MidiMessage::controllerEvent (channel, 64, 127));
+        f.controller.sendNow (juce::MidiMessage::noteOn (channel, 72, (juce::uint8)96));
+        check (pumpSyntheticTestDevice (f.session, 20) > .001f, "interrupted-release fixture sounds a held note " + juce::String (scenario));
+        if (sustained)
+        {
+            f.controller.sendNow (juce::MidiMessage::noteOff (channel, 72));
+            pumpSyntheticTestDevice (f.session, 30);
+            check (pumpSyntheticTestDevice (f.session, 20) > .001f, "pedal retains the released key before interrupted cleanup " + juce::String (scenario));
+        }
+        switch (scenario)
+        {
+            case 0: f.controller.sendNow (juce::MidiMessage::noteOff (channel, 72)); break;
+            case 1: f.controller.sendNow (juce::MidiMessage::noteOn (channel, 72, (juce::uint8)0)); break;
+            case 2: f.controller.sendNow (juce::MidiMessage::controllerEvent (channel, 64, 0)); break;
+            case 3: f.controller.sendNow (juce::MidiMessage::controllerEvent (channel, 121, 0)); break;
+            case 4: f.controller.sendNow (juce::MidiMessage::controllerEvent (channel, 123, 0)); break;
+            case 5: f.controller.sendNow (juce::MidiMessage::controllerEvent (channel, 120, 0)); break;
+        }
+        juce::Thread::sleep (160);
+        juce::Time::getMillisecondCounter();
+        pumpSyntheticTestDevice (f.session, 30);
+        const auto peak = pumpSyntheticTestDevice (f.session, 20);
+        check (peak < 1e-7f, "queued release ends the sounded voice after a callback interruption, case "
+            + juce::String (scenario) + "; peak=" + juce::String (peak, 9));
+        f.controller.sendNow (juce::MidiMessage::controllerEvent (channel, 121, 0));
+    }
+}
+
 void immediateMonitoringTransitions()
 {
     GeneratedInput f;
@@ -635,7 +765,7 @@ void withGeneratedMidiController (Session& session, const std::function<void(con
 }
 int runMidiMonitoringTests()
 {
-    try { replacementConsumerLifetime(); immediateMonitoringTransitions(); selectionAndMonitoring(); return 0; }
+    try { interruptedMidiStateOrdering(); interruptedMidiReleases(); replacementConsumerLifetime(); immediateMonitoringTransitions(); selectionAndMonitoring(); return 0; }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI monitoring: "<<e.what()<<std::endl;return 1;}
 }
 int runMidiInputTests(const juce::File& artifacts)
