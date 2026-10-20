@@ -846,7 +846,7 @@ Root owns `launchGroupSlot`/`stopGroup` in `src/Session.*`, the Session grid col
 
 ## Session recording — 2026-10-20
 
-Root owns `recordSlot` and the take lifecycle in `src/Session.*`, the record-slot UI, tests and documentation. Armed tracks now record MIDI or audio into empty Session slots on the launch grid; the take loops and plays in phase when it ends (see [the Session recording contract](research/session-recording-contract.md)). The MIDI input suite checks exact event offsets from the punch-in and the take lifecycle. The Session suite records generated audio input into a slot, and a UI check records from the grid. MIDI input, MIDI monitoring, Session, launcher, launch modes, follow actions, groups, clip activation and UI suites pass locally on the Mac. Arming or assigning an input restarts playback; a separate task tracks that.
+Root owns `recordSlot` and the take lifecycle in `src/Session.*`, the record-slot UI, tests and documentation. Armed tracks now record MIDI or audio into empty Session slots on the launch grid; the take loops and plays in phase when it ends (see [the Session recording contract](research/session-recording-contract.md)). The MIDI input suite checks exact event offsets from the punch-in and the take lifecycle. The Session suite records generated audio input into a slot, and a UI check records from the grid. MIDI input, MIDI monitoring, Session, launcher, launch modes, follow actions, groups, clip activation and UI suites pass locally on the Mac. Assigning an input stopped playback; this is fixed under [input changes during playback](#input-changes-during-playback--2026-10-20).
 
 ## Drum Sampler — 2026-10-20
 
@@ -879,3 +879,44 @@ Root owns `insertTime`/`deleteTime` in `src/Session.*`, the Edit menu commands a
 ## Follow action B and chance — 2026-10-20
 
 Root owns the change in `src/Session.*`, the follow dialog, `tests/FollowActionTests.cpp`, a hash-gated engine patch and documentation. Session clips now carry action A and action B with a chance of A, matching the reference Launch box. Any and Other are added as actions. The dialog edits both actions and the percentage. Generated-signal tests check 0% and 100% chances, both outcomes at 50%, Other never replaying the same clip, No action continuing play (needing the engine patch), validation, persistence and corrupted-weight rejection.
+
+## Input changes during playback — 2026-10-20
+
+Engine owns the fix in `src/Session.*` and its test in `tests/MidiInputTests.cpp`. Cross-area edit: the Session-recording check in UI-owned `src/MainComponent.cpp` loses its "let it settle" pump, which no longer has a purpose.
+
+Assigning an input, arming and changing monitoring now keep a playing transport and its launched Session clips running, as in the reference. The cause was in `setTrackInput`: enabling a disabled MIDI or audio input rebuilds the engine's device list. That clears the playback graph and stops the node play head, but the transport keeps its playing flag, so the transport timer then stopped playback. Arming and monitoring only rebuild the graph and did not stop it; the stop seen after arming in the UI test came from the earlier assignment. `setTrackInput` now rebuilds the graph and resumes the play head where it stopped.
+
+A new generated-signal test plays a launched clip while it assigns, arms, monitors, disarms and disconnects a disabled controller and a disabled generated audio input. After each change it checks that the transport position advances, the slot still plays and the output is audible. Without the fix both device-enable steps fail with silent output. MIDI input (41 s, 593 checks), MIDI monitoring (13 s, 173), Session (62 s, 1190) and UI (10 s, 643) suites pass locally on the Mac. Device-list rebuilds from other causes, such as MIDI hot-plug or audio-device changes, still stop the transport. Physical devices are unmeasured.
+
+## Session takes and device-list rebuilds — 2026-10-20
+
+Engine owns the guard in `src/Session.*` and its test in `tests/MidiInputTests.cpp`. Cross-area edits for root: the new `cmake/PatchInputTakeRescan.cmake` and its `CMakeLists.txt` line, the downstream hashes accepted by `cmake/PatchTracktion.cmake` and `cmake/PatchMidiDevices.cmake`, and `docs/dependencies.md` and `docs/open-questions.md`.
+
+Assigning a disabled input on any track during a Session slot take lost the take, which a generated-signal run reproduced. Enabling the device rebuilt every playback context's device list. The engine stops all input recordings with their recordings discarded while rebuilding. The slot then stayed marked as recording, and ending the take produced no clip. A MIDI device appearing during the take took the same path. The existing guards did not apply because a Session take never sets the transport recording. `setTrackInput` now refuses while any Session take records, before it enables a device. The refusal also covers the recording track's own input, which its take stops on. A new patch extends the MIDI-discovery deferral to recording inputs, so a device added during a take is discovered after it. Arming and monitoring other tracks stay allowed and keep the take. The policy is recorded in [open questions](open-questions.md#input-changes-during-session-takes).
+
+The new test records a MIDI take and a generated audio take. During the MIDI take it tries to assign a disabled controller and the disabled audio input, and to disconnect the recording track. It also arms and monitors another track. During the audio take it tries to assign a disabled controller. A virtual MIDI device is added during each take. Both takes keep all their material: four keys, and 40,960 samples of the generated input. It failed in three configurations. Without any fix the first refusal check failed. With the guard alone the discovery check failed. With the patch alone the device-enablement check failed. The patch chain was checked on isolated pinned sources: fresh, repeated and unknown-input runs. MIDI input (43 s, 640 checks), MIDI monitoring (14 s, 173), Session (62 s, 1190) and UI (10 s, 643) suites pass locally on the Mac. Audio-device changes during any recording, physical MIDI hot-plug and the other Arrangement-only recording guards are unverified for Session takes.
+
+## Edits during Session takes — 2026-10-20
+
+Engine owns the guards in `src/Session.cpp` and the test in `tests/MidiInputTests.cpp`. Cross-area edits: `newProject` (project lifecycle, root) now ends Session takes through `stop()` before it replaces the edit, as `loadProject` already did. The other cross-area edits are in `docs/architecture.md` and `docs/open-questions.md`.
+
+Session takes leave the transport out of recording, so edits guarded only by `TransportControl::isRecording` were audited against them. A new generated-signal test gives each group of edits a fresh project with a MIDI take from the generated controller. It plays a key before and after the edits and ends the take. On the unfixed code, run with failures logged rather than thrown, these edits lost the take:
+
+- undo;
+- removing the recording track;
+- deleting its scene;
+- audio or stem export;
+- freeze;
+- flattening a frozen recording track.
+
+Creating a MIDI clip in the recording slot, or importing audio into it, was accepted, and the finished take then replaced that clip. After New Project during a take, input assignment stayed refused because the old take was never ended. On the unfixed code, these kept the take: reordering, duplicating, grouping and ungrouping tracks, clearing slots, MIDI import and saving. Removing other tracks and the other scene edits ran there only after the take was lost. Their code is unchanged, and they keep the take in the fixed run.
+
+The fixes:
+
+- Undo and redo, export, stems, freeze and flatten now also refuse during Session takes, through a shared `Impl::anyRecording()`.
+- Removing the recording track, deleting a scene with a recording slot, and adding or importing a clip into that slot are refused for that track, scene or slot only.
+- New Project ends the take.
+
+With the fixes every check passes. The policy is in [open questions](open-questions.md#edits-during-session-takes) and the [Session recording contract](research/session-recording-contract.md).
+
+MIDI input (55 s, 867 checks), MIDI monitoring (13 s, 173), Session (60 s, 1190) and UI (16 s, 668) suites pass locally on the Mac. The full 38-suite CTest run also passes (585 s, alongside another worktree's run). The build used a private copy of the pinned sources. Seeking, arming or monitoring the recording track itself, Arrangement clip and time edits, automation, follow actions and recording settings are not yet audited for Session takes.

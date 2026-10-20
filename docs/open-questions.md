@@ -215,3 +215,13 @@ The loop range stands in for an Arrangement time selection. MIDI clips crossing 
 ### Follow action chance defaults
 
 The follow-action time is one value shared by both actions, and a No action choice is final for that launch (it is not evaluated again on later loops). Random choice uses the engine's unseeded generator, so tests check deterministic chances exactly and an even chance statistically. These are simplest-default choices pending reference measurement.
+
+### Input changes during Session takes
+
+While a Session slot take records, input assignment is refused on every track, as during Arrangement recording. Enabling a device would discard the take, and replacing or disconnecting the recording track's input would leave the take without the input that stops it. A narrower rule could still allow assigning already-enabled inputs to other tracks; the reference application's behavior is unmeasured. Arming and monitoring stay available during a take. A MIDI device that appears during a take is discovered when the take ends. Audio-device changes in Audio Settings take the same device-list rebuild during any recording, Arrangement or Session. Code inspection shows the rebuild discards the take, but this is unmeasured, and refusing versus deferring those changes is undecided. Other edits during a take are covered under [edits during Session takes](#edits-during-session-takes).
+
+### Edits during Session takes
+
+Some edits a take cannot survive are refused while any Session take records, as during Arrangement recording: undo and redo, audio and stem export, freeze and flatten. Rendering frees the playback context, and with it every input recording. Undo can reach the recording track's arm or input, and flattening removes a MIDI track's input. Edits that would delete or replace the recording slot are refused for that slot only: removing the recording track, deleting its scene, and adding or importing a clip into it. Other track, scene and slot edits, MIDI import and saving keep the take and stay available. New Project ends the take in the replaced project, as Open does.
+
+The reference application may handle these differently, and that is unmeasured. For example, it may let a delete or an undo discard the take. Halftrack refuses instead because the engine would otherwise lose the take or leave it without its slot or input. Refusing every edit during a take would be simpler, but it would also block safe edits. Not yet audited for Session takes: seeking, arming, disarming or monitoring the recording track itself, Arrangement clip and time edits, automation, follow actions, count-in and recording quantization.

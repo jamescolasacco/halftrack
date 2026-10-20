@@ -911,12 +911,448 @@ void sessionRecording()
     session.stop();
 }
 
+// Input assignment, arming and monitoring leave a playing transport and its launched Session
+// clip running, also when assigning an input enables its device and rebuilds the device list.
+void inputChangesKeepPlaying()
+{
+    Session session {false, makeSyntheticTestDeviceType()};
+    VirtualController controller {session}; // Disabled until a track selects it.
+    ok (session.addMidiTrack(), "create the launched instrument track");
+    const auto trackId = session.snapshot().tracks[2].id;
+    auto patch = session.snapshot().tracks[2].synth;
+    patch.waveform = 2; patch.attackSeconds = 0; patch.releaseSeconds = .02f; patch.level = .1f;
+    patch.cutoffHz = 20000; patch.resonance = 0;
+    ok (session.setSynthSettings (trackId, patch), "prepare an audible launched instrument");
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::none), "launch without a grid");
+    ok (session.addMidiClipToSlot (trackId, 0, 4), "create the launched Session clip");
+    const auto clipId = session.snapshot().tracks[2].slots[0].clip.id;
+    for (int step = 0; step < 16; ++step)
+        ok (session.addMidiNote (clipId, 60, step * .25, .2, .8f), "add a sixteenth note to the launched clip");
+    // Rebuilds replace Tracktion's wave input objects, so look the generated input up by name.
+    const auto audioInputs = session.inputNames();
+    check (! audioInputs.isEmpty(), "the synthetic device offers a generated audio input");
+    const auto audioInput = [&]
+    {
+        for (auto* device : controller.devices.getWaveInputDevices()) if (device->getName() == audioInputs[0]) return device;
+        throw std::runtime_error ("generated audio input disappeared");
+    };
+    audioInput()->setEnabled (false);
+    pumpSyntheticTestDevice (session, 8); // Apply the device list changes before playing.
+    check (! audioInput()->isEnabled(), "the generated audio input starts disabled");
+    ok (session.launchSlot (2, 0), "launch the Session clip");
+    pumpSyntheticTestDevice (session, 8);
+    check (session.snapshot().playing && session.snapshot().tracks[2].slots[0].playing, "the launched clip plays the transport");
+    const auto keepsPlaying = [&] (const juce::Result& result, const juce::String& change)
+    {
+        ok (result, change);
+        const auto before = session.snapshot().position;
+        const float peak = pumpSyntheticTestDevice (session, 40);
+        const auto state = session.snapshot();
+        check (state.playing && state.position > before && state.tracks[2].slots[0].playing && peak > .001f,
+               change + " keeps the transport and the launched clip playing (peak " + juce::String (peak) + ")");
+    };
+    keepsPlaying (session.setTrackInput (2, controller.name), "assigning the disabled controller");
+    check (controller.midi->isEnabled(), "assigning the controller enabled its device");
+    keepsPlaying (session.setTrackArmed (2, true), "arming the MIDI track");
+    keepsPlaying (session.setTrackMonitor (2, Session::MonitorMode::on), "monitoring the MIDI track");
+    keepsPlaying (session.setTrackMonitor (2, Session::MonitorMode::off), "ending MIDI monitoring");
+    keepsPlaying (session.setTrackArmed (2, false), "disarming the MIDI track");
+    keepsPlaying (session.setTrackInput (2, {}), "disconnecting the controller");
+    keepsPlaying (session.setTrackInput (0, audioInputs[0]), "assigning the disabled audio input");
+    check (audioInput()->isEnabled(), "assigning the audio input enabled its device");
+    keepsPlaying (session.setTrackArmed (0, true), "arming the audio track");
+    keepsPlaying (session.setTrackMonitor (0, Session::MonitorMode::automatic), "auto-monitoring the audio track");
+    keepsPlaying (session.setTrackMonitor (0, Session::MonitorMode::off), "ending audio monitoring");
+    keepsPlaying (session.setTrackArmed (0, false), "disarming the audio track");
+    keepsPlaying (session.setTrackInput (0, {}), "disconnecting the audio input");
+    session.stop();
+}
+
+// Enabling an input device or a change in the MIDI device list rebuilds every playback
+// context's device list, and the engine discards active input recordings while rebuilding.
+// A Session take leaves the transport out of recording, so it is protected separately:
+// input assignment is refused while it records, arming and monitoring another track leave
+// it running, and MIDI discovery waits until it ends.
+void sessionTakesSurviveDeviceChanges()
+{
+    Session session {false, makeSyntheticTestDeviceType()};
+    VirtualController keys {session}, spare {session}, other {session}; // Disabled until a track selects them.
+    ok (session.addMidiTrack(), "create the Session recording MIDI track");
+    ok (session.addMidiTrack(), "create a second MIDI track");
+    ok (session.setTrackInput (2, keys.name), "assign the generated controller to the recording track");
+    ok (session.setTrackInput (3, other.name), "assign another controller to the second MIDI track");
+    ok (session.setTrackArmed (2, true), "arm the Session recording track");
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::none), "record Session takes without a grid");
+    // Rebuilds replace the engine's wave input objects, so look the generated input up by name.
+    const auto audioInputs = session.inputNames();
+    check (! audioInputs.isEmpty(), "the synthetic device offers a generated audio input");
+    const auto audioInput = [&]
+    {
+        for (auto* device : keys.devices.getWaveInputDevices()) if (device->getName() == audioInputs[0]) return device;
+        throw std::runtime_error ("generated audio input disappeared");
+    };
+    audioInput()->setEnabled (false);
+    pumpSyntheticTestDevice (session, 8); // Apply the device list changes before recording.
+    const auto slotState = [&] (int track, int scene) { return session.snapshot().tracks[(size_t) track].slots[(size_t) scene]; };
+    const auto playKey = [&] (int pitch)
+    {
+        keys.sendNow (juce::MidiMessage::noteOn (1, pitch, (juce::uint8) 96)); pumpSyntheticTestDevice (session, 20);
+        keys.sendNow (juce::MidiMessage::noteOff (1, pitch)); pumpSyntheticTestDevice (session, 20);
+    };
+    const auto refused = [&] (const juce::Result& result, const juce::String& change, int track, int scene)
+    {
+        check (result.failed() && slotState (track, scene).recording && session.snapshot().playing,
+               change + " is refused while the Session take records (" + result.getErrorMessage() + ")");
+    };
+    const auto discovered = [&] (const juce::String& name)
+    {
+        const auto inputs = keys.devices.getMidiInDevices();
+        return std::any_of (inputs.begin(), inputs.end(), [&] (const auto& device) { return device->getName() == name; });
+    };
+    // A MIDI device appears while the take records: discovery waits and resumes after the take.
+    const auto plugInDuringTake = [&] (int track, int scene)
+    {
+        const auto name = "Halftrack plugged MIDI " + juce::Uuid().toString();
+        ok (keys.devices.createVirtualMidiDevice (name), "a MIDI device appears during the take");
+        keys.devices.rescanMidiDeviceListSynchronously();
+        pumpSyntheticTestDevice (session, 20); // The engine's own rescan request runs here as well.
+        check (slotState (track, scene).recording && session.snapshot().playing && ! discovered (name),
+               "MIDI discovery waits while the Session take records");
+        return name;
+    };
+    const auto discoveryResumes = [&] (const juce::String& name)
+    {
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + 2000;
+        while (! discovered (name) && juce::Time::getMillisecondCounterHiRes() < deadline) pumpSyntheticTestDevice (session, 4);
+        check (discovered (name), "deferred MIDI discovery resumes after the take ends");
+        for (auto device : keys.devices.getMidiInDevices())
+            if (auto plugged = std::dynamic_pointer_cast<te::VirtualMidiInputDevice> (device); plugged && plugged->getName() == name)
+            { keys.devices.deleteVirtualMidiDevice (*plugged); keys.devices.rescanMidiDeviceListSynchronously(); break; }
+    };
+
+    session.seek (0); ok (session.play(), "start the transport");
+    pumpSyntheticTestDevice (session, 8);
+    ok (session.recordSlot (2, 0), "start a MIDI Session take");
+    pumpSyntheticTestDevice (session, 8);
+    playKey (60);
+    refused (session.setTrackInput (3, spare.name), "assigning a disabled controller to another track", 2, 0);
+    check (! spare.midi->isEnabled() && session.snapshot().tracks[3].inputName == other.name,
+           "the refused controller assignment enabled no device and kept the track's input");
+    refused (session.setTrackInput (0, audioInputs[0]), "assigning a disabled audio input", 2, 0);
+    check (! audioInput()->isEnabled(), "the refused audio assignment left the input disabled");
+    refused (session.setTrackInput (2, {}), "disconnecting the recording track's input", 2, 0);
+    playKey (62);
+    // Arming and monitoring rebuild only the playback graph, which keeps the take.
+    ok (session.setTrackArmed (3, true), "arm another track during the take");
+    ok (session.setTrackMonitor (3, Session::MonitorMode::on), "monitor another track during the take");
+    ok (session.setTrackMonitor (3, Session::MonitorMode::off), "end monitoring during the take");
+    ok (session.setTrackArmed (3, false), "disarm another track during the take");
+    check (slotState (2, 0).recording && session.snapshot().playing, "arming and monitoring keep the take recording");
+    playKey (64);
+    const auto plugged = plugInDuringTake (2, 0);
+    playKey (65);
+    ok (session.recordSlot (2, 0), "end the MIDI take");
+    pumpSyntheticTestDevice (session, 60);
+    const auto take = slotState (2, 0);
+    check (! take.recording && take.hasClip && take.clip.isMidi, "the MIDI take becomes a slot clip");
+    std::vector<int> pitches;
+    for (const auto& note : take.clip.notes) pitches.push_back (note.pitch);
+    check (pitches == std::vector<int> { 60, 62, 64, 65 }, "the MIDI take keeps every key played around the input changes ("
+           + juce::String ((int) pitches.size()) + " notes)");
+    session.stop();
+    discoveryResumes (plugged);
+
+    // An audio take from the generated input survives the same changes.
+    audioInput()->setEnabled (true);
+    pumpSyntheticTestDevice (session, 8);
+    ok (session.setTrackInput (0, audioInputs[0]), "assign the generated audio input");
+    ok (session.setTrackArmed (0, true), "arm the audio track");
+    session.seek (0); ok (session.play(), "restart the transport");
+    pumpSyntheticTestDevice (session, 8);
+    ok (session.recordSlot (0, 1), "start an audio Session take");
+    pumpSyntheticTestDevice (session, 40);
+    refused (session.setTrackInput (3, spare.name), "assigning a disabled controller during an audio take", 0, 1);
+    const auto pluggedDuringAudio = plugInDuringTake (0, 1);
+    pumpSyntheticTestDevice (session, 100);
+    ok (session.recordSlot (0, 1), "end the audio take");
+    pumpSyntheticTestDevice (session, 60);
+    const auto audioTake = slotState (0, 1);
+    check (! audioTake.recording && audioTake.hasClip && audioTake.clip.isAudio && audioTake.clip.file.existsAsFile(),
+           "the audio take becomes a slot clip with its recording");
+    const auto recorded = readAudio (audioTake.clip.file);
+    check (std::abs (recorded.getNumSamples() - 160 * 256) <= 512 && recorded.getMagnitude (0, recorded.getNumSamples()) > .15f,
+           "the audio take holds the generated input from start to end (" + juce::String (recorded.getNumSamples()) + " samples)");
+    session.stop();
+    discoveryResumes (pluggedDuringAudio);
+}
+
+// An armed MIDI track with a generated controller, recording Session takes without a launch grid.
+struct SessionTake
+{
+    Session session {false, makeSyntheticTestDeviceType()};
+    VirtualController keys {session};
+    juce::String trackId;
+    SessionTake()
+    {
+        ok (session.addMidiTrack(), "create the Session recording MIDI track");
+        trackId = session.snapshot().tracks[2].id;
+        ok (session.setTrackInput (2, keys.name), "assign the generated controller to the recording track");
+        ok (session.setTrackArmed (2, true), "arm the Session recording track");
+        ok (session.setLaunchQuantisation (Session::LaunchQuantisation::none), "record Session takes without a grid");
+        pumpSyntheticTestDevice (session, 8);
+    }
+    int track() const
+    {
+        const auto tracks = session.snapshot().tracks;
+        for (size_t i = 0; i < tracks.size(); ++i) if (tracks[i].id == trackId) return (int) i;
+        return -1;
+    }
+    // The scene whose slot on the recording track is recording, wherever edits moved it.
+    int recordingScene() const
+    {
+        const auto index = track();
+        if (index < 0) return -1;
+        const auto slots = session.snapshot().tracks[(size_t) index].slots;
+        for (size_t i = 0; i < slots.size(); ++i) if (slots[i].recording) return (int) i;
+        return -1;
+    }
+    void start (int scene)
+    {
+        session.seek (0); ok (session.play(), "start the transport");
+        pumpSyntheticTestDevice (session, 8);
+        ok (session.recordSlot (track(), scene), "start a MIDI Session take");
+        pumpSyntheticTestDevice (session, 8);
+    }
+    void key (int pitch)
+    {
+        keys.sendNow (juce::MidiMessage::noteOn (1, pitch, (juce::uint8) 96)); pumpSyntheticTestDevice (session, 20);
+        keys.sendNow (juce::MidiMessage::noteOff (1, pitch)); pumpSyntheticTestDevice (session, 20);
+    }
+    // Ends the take from its slot and returns the pitches of the finished slot clip.
+    std::vector<int> finish (const juce::String& edit)
+    {
+        const auto scene = recordingScene();
+        check (scene >= 0, "the Session take still records after " + edit);
+        ok (session.recordSlot (track(), scene), "end the Session take");
+        pumpSyntheticTestDevice (session, 60);
+        const auto slot = session.snapshot().tracks[(size_t) track()].slots[(size_t) scene];
+        check (! slot.recording && slot.hasClip && slot.clip.isMidi, "the take ends as a MIDI slot clip after " + edit);
+        session.stop();
+        std::vector<int> pitches;
+        for (const auto& note : slot.clip.notes) pitches.push_back (note.pitch);
+        return pitches;
+    }
+    // Plays one key before and one after the edit, then ends the take.
+    void survives (int scene, const juce::String& edit, const std::function<void()>& apply)
+    {
+        start (scene); key (60); apply(); key (62);
+        const auto pitches = finish (edit);
+        check (pitches == std::vector<int> { 60, 62 }, edit + " keeps the Session take with both keys ("
+               + juce::String ((int) pitches.size()) + " notes)");
+    }
+    void refused (const juce::Result& result, const juce::String& edit) const
+    {
+        check (result.failed() && recordingScene() >= 0 && session.snapshot().playing,
+               edit + " is refused while the Session take records (" + result.getErrorMessage() + ")");
+    }
+};
+
+// Session takes record through the input devices and leave the transport out of recording, so
+// the edits refused during Arrangement recording are checked against them separately. Each edit
+// either leaves the take recording until it ends with every key, or is refused during the take.
+void editsDuringSessionTakes (const juce::File& root)
+{
+    {
+        // Undo could reach the recording track's arm and input assignment, and its slot would
+        // keep recording with no input to stop the take on.
+        SessionTake t; auto& session = t.session;
+        ok (session.renameScene (7, "Renamed"), "make an edit to redo"); session.undo();
+        check (session.canRedo(), "the rename can be redone before the take");
+        bool couldUndo = true, couldRedo = true;
+        t.survives (0, "undo and redo", [&]
+        {
+            couldUndo = session.canUndo(); couldRedo = session.canRedo();
+            for (int i = 0; i < 3; ++i) session.undo();
+            session.redo();
+        });
+        const auto state = session.snapshot();
+        check (! couldUndo && ! couldRedo, "undo and redo are unavailable while the Session take records");
+        check (state.tracks[2].armed && state.tracks[2].inputName == t.keys.name && state.scenes[7].name == "Scene 8"
+               && state.launchQuantisation == Session::LaunchQuantisation::none,
+               "undo and redo during the take changed no earlier edit");
+        session.undo(); check (! session.snapshot().tracks[2].slots[0].hasClip, "after the take one undo removes it");
+    }
+    {
+        SessionTake t; auto& session = t.session;
+        t.survives (0, "removing another track", [&]
+        {
+            t.refused (session.removeTrack (t.track()), "removing the recording track");
+            ok (session.removeTrack (0), "remove another track during the take");
+        });
+    }
+    {
+        SessionTake t; auto& session = t.session;
+        t.survives (0, "reordering tracks", [&]
+        {
+            ok (session.moveTrack (t.trackId, 0), "move the recording track to the top");
+            ok (session.moveTrack (session.snapshot().tracks[2].id, 1), "move another track past it");
+        });
+        check (t.track() == 0, "the recording track keeps its new position");
+    }
+    {
+        SessionTake t; auto& session = t.session;
+        juce::String copy;
+        t.survives (0, "duplicating the recording track", [&] { ok (session.duplicateTrack (t.trackId, copy), "duplicate the recording track"); });
+        for (const auto& track : session.snapshot().tracks)
+            if (track.id == copy) check (! track.slots[0].hasClip && ! track.slots[0].recording && ! track.armed,
+                                         "the duplicate has an empty, idle copy of the recording slot");
+    }
+    {
+        SessionTake t; auto& session = t.session;
+        juce::String group;
+        t.survives (0, "grouping the recording track", [&]
+        { ok (session.groupTracks ({ t.trackId, session.snapshot().tracks[1].id }, group), "group the recording track"); });
+        check (session.snapshot().tracks[(size_t) t.track()].groupId == group, "the recording track is in the new group");
+        t.survives (1, "ungrouping the recording track", [&] { ok (session.ungroupTracks (group), "ungroup the recording track"); });
+        check (session.snapshot().tracks[(size_t) t.track()].groupId.isEmpty(), "the recording track left the group");
+    }
+    {
+        SessionTake t; auto& session = t.session;
+        juce::String copy;
+        t.survives (2, "scene edits", [&]
+        {
+            t.refused (session.removeScene (2), "deleting the recording scene");
+            ok (session.removeScene (0), "delete an earlier scene during the take");
+            check (t.recordingScene() == 1, "the take follows its scene up a row");
+            ok (session.moveScene (session.snapshot().scenes[1].id, 4), "move the recording scene");
+            check (t.recordingScene() == 4, "the take moves with its scene");
+            ok (session.duplicateScene (session.snapshot().scenes[4].id, copy), "duplicate the recording scene");
+            ok (session.addScene(), "add a scene during the take");
+        });
+        const auto state = session.snapshot();
+        check (state.scenes[5].id == copy && ! state.tracks[(size_t) t.track()].slots[5].hasClip,
+               "the duplicated scene's slot on the recording track stays empty");
+    }
+    {
+        SessionTake t; auto& session = t.session;
+        ok (session.addMidiClipToSlot (t.trackId, 1, 4), "fill another slot on the recording track");
+        const auto other = session.snapshot().tracks[2].slots[1].clip.id;
+        t.survives (0, "slot edits", [&]
+        {
+            t.refused (session.addMidiClipToSlot (t.trackId, 0, 4), "creating a clip in the recording slot");
+            check (session.moveMidiClip (other, t.trackId, 0).failed() && session.copyMidiClip (other, true).failed(),
+                   "slot clips are not moved or cut through the Arrangement clipboard");
+            ok (session.clearSlot (t.track(), 0), "clearing the empty recording slot");
+            ok (session.clearSlot (t.track(), 1), "clear another slot on the recording track");
+        });
+    }
+    {
+        SessionTake t; auto& session = t.session;
+        const auto fixture = root.getChildFile ("take-edit-import.mid");
+        {
+            juce::MidiMessageSequence events;
+            events.addEvent (juce::MidiMessage::noteOn (1, 48, (juce::uint8) 100), 0); events.addEvent (juce::MidiMessage::noteOff (1, 48), 960);
+            events.updateMatchedPairs();
+            juce::MidiFile midi; midi.setTicksPerQuarterNote (960); midi.addTrack (events);
+            auto out = fixture.createOutputStream();
+            check (out != nullptr && midi.writeTo (*out, 1), "write the generated MIDI import fixture");
+        }
+        const auto tracks = session.snapshot().tracks.size();
+        t.survives (0, "importing a MIDI file", [&]
+        {
+            std::vector<juce::String> ids;
+            ok (session.importMidiFile (fixture, 0, ids), "import a MIDI file during the take");
+        });
+        check (session.snapshot().tracks.size() == tracks + 1, "the import added its own track");
+    }
+    {
+        // A save during the take holds the project as it was before the take ends.
+        SessionTake t; auto& session = t.session;
+        const auto file = root.getChildFile ("Saved during a take.halftrack");
+        t.survives (0, "saving", [&] { ok (session.saveProject (file), "save the project during the take"); });
+        check (session.snapshot().dirty, "the finished take is an unsaved change");
+        Session reopened {false, makeSyntheticTestDeviceType()};
+        ok (reopened.loadProject (file), "load the project saved during the take");
+        const auto saved = reopened.snapshot().tracks[2];
+        check (! saved.slots[0].hasClip && ! saved.slots[0].recording, "the project saved during the take reopens with its slot empty and idle");
+    }
+    {
+        // Rendering frees the playback context, which discards every input recording.
+        SessionTake t; auto& session = t.session;
+        ok (session.addMidiClip (t.trackId, 0, 4), "give the recording track an Arrangement clip to render");
+        const auto clipId = session.snapshot().tracks[2].clips[0].id;
+        juce::StringArray stems;
+        t.survives (0, "rendering", [&]
+        {
+            t.refused (session.exportAudio (root.getChildFile ("take-edit-mix.wav"), Session::ExportFormat::wav), "exporting audio");
+            t.refused (session.exportStems (root.getChildFile ("take-edit-stems"), {}, stems), "exporting stems");
+            t.refused (session.setTrackFrozen (t.trackId, true), "freezing a track");
+            ok (session.exportMidiClip (clipId, root.getChildFile ("take-edit-clip.mid")), "export a MIDI clip during the take");
+        });
+        check (! root.getChildFile ("take-edit-mix.wav").exists() && ! root.getChildFile ("take-edit-stems").exists() && stems.isEmpty(),
+               "the refused exports wrote nothing");
+    }
+    {
+        // Flattening a frozen MIDI track removes its input, which the take stops on.
+        SessionTake t; auto& session = t.session;
+        ok (session.addMidiClip (t.trackId, 0, 4), "give the recording track an Arrangement clip to freeze");
+        ok (session.setTrackFrozen (t.trackId, true), "freeze the recording track");
+        t.survives (0, "flattening", [&] { t.refused (session.flattenTrack (t.trackId), "flattening the recording track"); });
+    }
+    {
+        // An audio take refuses an import into its slot, which the finished take would replace.
+        SessionTake t; auto& session = t.session;
+        const auto fixture = root.getChildFile ("take-edit-import.wav");
+        {
+            juce::AudioBuffer<float> audio (2, 4800);
+            for (int i = 0; i < audio.getNumSamples(); ++i) for (int c = 0; c < 2; ++c) audio.setSample (c, i, .25f * std::sin ((float) i * .05f));
+            juce::WavAudioFormat wav; std::unique_ptr<juce::OutputStream> stream (fixture.createOutputStream());
+            auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (2).withBitsPerSample (24));
+            check (writer != nullptr && writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples()), "write the generated audio import fixture");
+        }
+        const auto audioInputs = session.inputNames();
+        check (! audioInputs.isEmpty(), "the synthetic device offers a generated audio input");
+        ok (session.setTrackInput (0, audioInputs[0]), "assign the generated audio input");
+        ok (session.setTrackArmed (0, true), "arm the audio track");
+        session.seek (0); ok (session.play(), "start the transport");
+        pumpSyntheticTestDevice (session, 8);
+        ok (session.recordSlot (0, 0), "start an audio Session take");
+        pumpSyntheticTestDevice (session, 40);
+        const auto refusal = session.importAudioToSlot (fixture, 0, 0);
+        check (refusal.failed() && session.snapshot().tracks[0].slots[0].recording,
+               "importing audio into the recording slot is refused while the take records (" + refusal.getErrorMessage() + ")");
+        ok (session.importAudioToSlot (fixture, 0, 1), "import audio into another slot of the recording track");
+        pumpSyntheticTestDevice (session, 100);
+        ok (session.recordSlot (0, 0), "end the audio take");
+        pumpSyntheticTestDevice (session, 60);
+        const auto take = session.snapshot().tracks[0].slots[0];
+        check (! take.recording && take.hasClip && take.clip.isAudio && take.clip.file.existsAsFile() && take.clip.file != fixture,
+               "the audio take becomes its slot's clip with its own recording");
+        const auto recorded = readAudio (take.clip.file);
+        check (recorded.getNumSamples() > 100 * 256 && recorded.getMagnitude (0, recorded.getNumSamples()) > .15f,
+               "the audio take holds the generated input (" + juce::String (recorded.getNumSamples()) + " samples)");
+        session.stop();
+    }
+    {
+        // A new project ends the take in the replaced project and leaves no recording behind.
+        SessionTake t; auto& session = t.session;
+        t.start (0); t.key (60);
+        ok (session.newProject(), "start a new project during the take");
+        const auto state = session.snapshot();
+        bool recording = false;
+        for (const auto& track : state.tracks) for (const auto& slot : track.slots) recording |= slot.recording;
+        check (! recording && ! state.playing, "the new project has no Session recording");
+        ok (session.addMidiTrack(), "add a MIDI track to the new project");
+        ok (session.setTrackInput (2, t.keys.name), "inputs can be assigned in the new project");
+    }
+}
+
 int runMidiInputTests(const juce::File& artifacts)
 {
     try
     {
         const auto root=artifacts.getChildFile("midi-input-"+juce::Uuid().toString()); ok(root.createDirectory(),"create isolated fixtures");
-        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); recordingQuantisation(root); controllersAndOverdub(root); sessionRecording();
+        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); recordingQuantisation(root); controllersAndOverdub(root); sessionRecording(); inputChangesKeepPlaying(); sessionTakesSurviveDeviceChanges(); editsDuringSessionTakes(root);
         std::cout<<"MIDI input tests passed: "<<root.getFullPathName()<<std::endl; return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI input: "<<e.what()<<std::endl;return 1;}
