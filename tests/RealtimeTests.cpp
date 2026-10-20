@@ -263,6 +263,8 @@ void nativeEffectsRealtimeTests()
         for (int n = 0; n < 4800; ++n) { longSample.left.push_back ((float) std::sin (n * .05)); longSample.right.push_back ((float) std::cos (n * .03)); }
         shortSample.left.assign (3, .5f); shortSample.right.assign (3, -.5f); shortSample.sampleRate = 8000;
         if (sampler) instrument.setSample (&longSample);
+        const bool kit = settings.kind == Session::EffectKind::drumSampler;
+        if (kit) for (int pad = 0; pad < Session::drumPadCount; ++pad) instrument.setPadSample (pad, pad % 2 ? &shortSample : &longSample);
         const auto calls = allocationAudit::measure ([&]
         {
             for (int pass = 0; pass < 24; ++pass)
@@ -270,6 +272,7 @@ void nativeEffectsRealtimeTests()
                 for (size_t i = 0; i < fields.size(); ++i) settings.values[i] = pass % 2 ? fields[i].minimum : fields[i].maximum;
                 instrument.configure (settings);
                 if (sampler) instrument.setSample (pass % 5 == 4 ? &shortSample : pass % 7 == 6 ? nullptr : &longSample);
+                if (kit) instrument.setPadSample (pass % Session::drumPadCount, pass % 3 ? &longSample : pass % 2 ? nullptr : &shortSample);
                 for (int note = 24; note < 108; note += 3) instrument.noteOn (1 + note % 16, note, (float) (note % 7 + 1) / 7);
                 instrument.pitchWheel (1, pass % 2 ? 0 : 16383); instrument.controlChange (1, 64, pass % 2 ? 0 : 127);
                 instrument.render (left.data(), pass % 3 ? right.data() : nullptr, 1 + pass * 21);

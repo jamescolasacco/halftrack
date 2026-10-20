@@ -36,6 +36,11 @@ double effectLatencySeconds (Session::EffectKind, double sampleRate) noexcept;
 int effectParameterIndex (Session::EffectKind, const char* key) noexcept;
 // A Sampler's sample path: absolute in a live edit, project-relative in a saved file.
 inline constexpr const char* samplerSampleProperty = "halftrackSample";
+// A Drum Sampler pad's sample path, pads numbered from zero.
+inline juce::Identifier drumPadSampleProperty (int pad) { return juce::Identifier ("halftrackPad" + juce::String (pad + 1)); }
+// Sample slots an instrument kind holds: one for the Sampler, one per pad for the Drum Sampler.
+int sampleSlotCount (Session::EffectKind) noexcept;
+juce::Identifier sampleSlotProperty (Session::EffectKind, int slot);
 inline constexpr double maximumSampleSeconds = 600;
 // Why a file cannot be a Sampler sample, or empty when it can.
 juce::String samplerSampleProblem (const juce::File&);
@@ -134,9 +139,9 @@ public:
     // Resolves saved Sampler paths against the project directory, rejecting missing or unreadable samples.
     static juce::Result resolveSamples (juce::ValueTree&, const juce::File& projectDirectory);
     void prepareForOfflineRender();
-    juce::File sampleFile() const;
-    // After Save collects the sample, point at the copy without decoding it again or adding history.
-    void relocateSample (const juce::File&);
+    juce::File sampleFile (int slot = 0) const;
+    // After Save collects a sample, point at the copy without decoding it again or adding history.
+    void relocateSample (int slot, const juce::File&);
 private:
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void publish();
@@ -152,12 +157,12 @@ private:
     tracktion::MidiMessageArray midiScratch;
     EffectParameterQueue parameters;
     // Sampler: decoded samples stay alive until the audio thread acknowledges a newer one.
-    void loadSample();
+    void loadSample (int slot);
     void retireSamples();
     std::vector<std::unique_ptr<instruments::SampleData>> samples;
-    std::atomic<const instruments::SampleData*> publishedSample { nullptr }, acknowledgedSample { nullptr };
+    std::array<std::atomic<const instruments::SampleData*>, Session::drumPadCount> publishedSamples {}, acknowledgedSamples {};
     static_assert (std::atomic<const instruments::SampleData*>::is_always_lock_free);
-    juce::File loadedSample;
+    std::array<juce::File, Session::drumPadCount> loadedSamples;
     Session::EffectSettings pendingSettings;
     bool pending = false, writing = false;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NativeEffectPlugin)

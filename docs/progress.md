@@ -847,3 +847,7 @@ Root owns `launchGroupSlot`/`stopGroup` in `src/Session.*`, the Session grid col
 ## Session recording — 2026-10-20
 
 Root owns `recordSlot` and the take lifecycle in `src/Session.*`, the record-slot UI, tests and documentation. Armed tracks now record MIDI or audio into empty Session slots on the launch grid; the take loops and plays in phase when it ends (see [the Session recording contract](research/session-recording-contract.md)). The MIDI input suite checks exact event offsets from the punch-in and the take lifecycle. The Session suite records generated audio input into a slot, and a UI check records from the grid. MIDI input, MIDI monitoring, Session, launcher, launch modes, follow actions, groups, clip activation and UI suites pass locally on the Mac. Arming or assigning an input restarts playback; a separate task tracks that.
+
+## Drum Sampler — 2026-10-20
+
+Root owns the Drum Sampler across `src/Instruments.*`, `src/NativeEffects.*`, `src/Session.*`, the pad grid UI, tests and documentation. A 16-pad kit plays one sample per pad on C1–D#2, with per-pad tune, length, level, pan and choke groups. `setDrumPadSample` loads and clears pads with undo, and pad samples are collected and resolved with the project. The settings packet grew to 128 values. Sampler, instruments, native effects, MIDI effects, track duplication, Session (allocation audits) and UI suites pass locally on the Mac, and the source guard inspects 183 bodies. See [the sampler contract](research/sampler-contract.md#drum-sampler).

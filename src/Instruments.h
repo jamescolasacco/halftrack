@@ -36,6 +36,13 @@ enum : size_t { oscillatorStride = 6, filterType = 12, cutoff, resonance, filter
     ampAttack, ampDecay, ampSustain, ampRelease, lfoRate, lfoPosition, lfoPitch, unison, unisonDetune, glide, voiceMode, velocityAmp, bendRange, volume, count };
 constexpr int tableCount = 4, frames = 16, size = 1024, levels = 10;
 }
+namespace drumSampler
+{
+// Pad p uses indices p * 5 + { tune, length, level, pan, choke }; pad p plays note 36 + p.
+enum : size_t { padStride = 5, tune = 0, length, level, pan, choke, volume = 80, count };
+constexpr double cutFadeMs = 5; // A shortened pad fades out over this time before its cut.
+constexpr int firstNote = 36;
+}
 namespace sampler
 {
 enum : size_t { mode, rootNote, transpose, detune, start, end, loop, loopStart, trigger, filterType, cutoff, resonance,
@@ -86,6 +93,8 @@ public:
     void render (float* left, float* right, int samples) noexcept;
     // Sampler: the sample to play. A different sample silences voices playing the old one.
     void setSample (const SampleData*) noexcept;
+    // Drum Sampler: the sample of one pad. A different sample silences that pad's voices.
+    void setPadSample (int pad, const SampleData*) noexcept;
     int activeVoices() const noexcept;
 private:
     struct Voice
@@ -102,6 +111,7 @@ private:
         std::array<effects::StateVariable, 2> rightFilters {};
         uint32_t noise = 1;
         double time = 0, choke = 1, drumState = 0, drumState2 = 0, position = 0;
+        int pad = -1;
         effects::Biquad drumFilter;
     };
     void start (Voice&, int channel, int note, double velocity, bool retrigger) noexcept;
@@ -113,6 +123,7 @@ private:
     void renderDrum (Voice&, double& left, double& right) noexcept;
     void renderWavetable (Voice&, double& left, double& right) noexcept;
     void renderSampler (Voice&, double& left, double& right) noexcept;
+    void renderDrumSampler (Voice&, double& left, double& right) noexcept;
     bool legatoMode() const noexcept;
     std::pair<double, double> sampleRegion() const noexcept;
     double bend (int channel) const noexcept;
@@ -121,6 +132,9 @@ private:
     Session::EffectKind kind = Session::EffectKind::polySynth;
     Session::EffectSettings settings;
     const SampleData* sample = nullptr;
+    std::array<const SampleData*, Session::drumPadCount> padSamples {};
+    // Hermite read of a sample at a fractional frame; whole frames are exact.
+    static double readSample (const SampleData&, bool right, double position) noexcept;
     double rate = 48000, glideCoefficient = 0, gain = 1;
     uint64_t clock = 0;
     uint32_t lfoSeed = 0x6d2b79f5u;

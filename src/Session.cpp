@@ -1617,6 +1617,8 @@ Session::Snapshot Session::snapshot() const
             info.instrument = { native->itemID.toString(), native->getName(), native->isEnabled() };
             info.instrument.isNativeEffect = true; info.instrument.effect = native->readSettings();
             if (native->getKind() == EffectKind::sampler) info.instrument.sample = native->sampleFile();
+            if (native->getKind() == EffectKind::drumSampler)
+                for (int pad = 0; pad < drumPadCount; ++pad) info.instrument.padSamples.push_back (native->sampleFile (pad));
         }
         if (auto* v = t->getVolumePlugin())
         {
@@ -1869,12 +1871,15 @@ Result Session::saveProject (const File& destination)
             node.setProperty (te::IDs::source, target.getRelativePathFrom (file.getParentDirectory()), nullptr);
             sources.emplace_back (c, target);
         }
-    // Sampler samples are collected the same way and saved relative to the project.
-    std::vector<std::pair<NativeEffectPlugin*, File>> samples;
+    // Sampler and drum pad samples are collected the same way and saved relative to the project.
+    struct CollectedSample { NativeEffectPlugin* native; int slot; File target; };
+    std::vector<CollectedSample> samples;
     for (auto* t : te::getAudioTracks (*impl->edit))
-        if (auto* native = Impl::nativeInstrument (*t); native && native->getKind() == EffectKind::sampler && native->sampleFile() != File())
+        if (auto* native = Impl::nativeInstrument (*t))
+            for (int slot = 0; slot < sampleSlotCount (native->getKind()); ++slot)
         {
-            const auto original = native->sampleFile();
+            const auto original = native->sampleFile (slot);
+            if (original == File()) continue;
             if (! original.existsAsFile()) return Result::fail ("Missing sample: " + original.getFullPathName());
             File target;
             if (original.isAChildOf (assets)) target = original;
@@ -1886,8 +1891,8 @@ Result Session::saveProject (const File& destination)
                 copied[original.getFullPathName()] = target;
             }
             auto node = findStateWithID (state, native->state.getProperty (te::IDs::id));
-            node.setProperty (samplerSampleProperty, target.getRelativePathFrom (file.getParentDirectory()), nullptr);
-            samples.emplace_back (native, target);
+            node.setProperty (sampleSlotProperty (native->getKind(), slot), target.getRelativePathFrom (file.getParentDirectory()), nullptr);
+            samples.push_back ({ native, slot, target });
         }
     juce::XmlElement document ("HALFTRACK");
     document.setAttribute ("version", 1);
@@ -1902,7 +1907,7 @@ Result Session::saveProject (const File& destination)
         // directory. The written copy above remains relative and portable.
         // Native listeners refresh playback, but relocation adds no undo action.
         clip->getSourceFileReference().source.setValue (source.getFullPathName(), nullptr);
-    for (auto& [native, target] : samples) native->relocateSample (target);
+    for (auto& collected : samples) collected.native->relocateSample (collected.slot, collected.target);
     impl->edit->resetChangedStatus();
     impl->explicitChanges = false;
     sendChangeMessage();
@@ -2861,6 +2866,28 @@ Result Session::setInstrumentSample (const String& trackId, const File& sample)
     state.setProperty ("effectKind", static_cast<int> (EffectKind::sampler), nullptr);
     state.setProperty (samplerSampleProperty, sample.getFullPathName(), nullptr);
     return impl->replaceInstrument (*track, state, "Load sample");
+}
+Result Session::setDrumPadSample (const String& trackId, int pad, const File& sample)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* track = impl->track (trackId);
+    if (! track || ! track->state.getProperty (midiTrackProperty, false)) return Result::fail ("Drum Samplers need a MIDI track.");
+    if (pad < 0 || pad >= drumPadCount) return Result::fail ("Drum pads are numbered 1 to 16.");
+    if (sample != File()) if (const auto problem = samplerSampleProblem (sample); problem.isNotEmpty()) return Result::fail (problem);
+    const auto path = sample == File() ? String() : sample.getFullPathName();
+    if (auto* native = Impl::nativeInstrument (*track); native && native->getKind() == EffectKind::drumSampler)
+    {
+        if (native->sampleFile (pad) == sample) return Result::ok();
+        impl->transaction (sample == File() ? "Clear drum pad" : "Load drum pad");
+        native->state.setProperty (drumPadSampleProperty (pad), path, &impl->edit->getUndoManager());
+        impl->changed(); return Result::ok();
+    }
+    if (sample == File()) return Result::fail ("This track has no Drum Sampler.");
+    juce::ValueTree state (te::IDs::PLUGIN);
+    state.setProperty (te::IDs::type, NativeEffectPlugin::xmlTypeName, nullptr);
+    state.setProperty ("effectKind", static_cast<int> (EffectKind::drumSampler), nullptr);
+    state.setProperty (drumPadSampleProperty (pad), path, nullptr);
+    return impl->replaceInstrument (*track, state, "Load drum pad");
 }
 Result Session::showInstrumentEditor (int trackIndex)
 {

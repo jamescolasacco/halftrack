@@ -221,6 +221,129 @@ void engineTests (const juce::File& root)
     check (missing.failed() && missing.getErrorMessage().startsWith ("Missing sample") && s.snapshot().tracks.size() == tracks && s.snapshot().tracks.back().instrument.sample == info.sample,
            "a missing sample rejects loading and keeps the open project");
 }
+
+namespace dp = instruments::drumSampler;
+Session::EffectSettings drums (std::initializer_list<std::pair<const char*, float>> overrides = {})
+{
+    auto s = defaultEffectSettings (Kind::drumSampler);
+    for (const auto& [key, value] : overrides)
+    {
+        const auto index = effectParameterIndex (Kind::drumSampler, key);
+        if (index < 0) throw std::runtime_error (std::string ("unknown drum control ") + key);
+        s.values[(size_t) index] = value;
+    }
+    return s;
+}
+instruments::SampleData shifted (int frames, int shift)
+{
+    instruments::SampleData s;
+    for (int n = 0; n < frames; ++n) { s.left.push_back (sourceLeft (n + shift)); s.right.push_back (sourceRight (n + shift)); }
+    return s;
+}
+juce::AudioBuffer<float> hit (const Session::EffectSettings& s, const std::array<const instruments::SampleData*, 16>& pads, std::vector<Event> events, int frames, int block = 0)
+{
+    instruments::InstrumentDSP dsp; dsp.prepare (rate, Kind::drumSampler); dsp.configure (s);
+    for (int pad = 0; pad < 16; ++pad) dsp.setPadSample (pad, pads[(size_t) pad]);
+    juce::AudioBuffer<float> out (2, frames); out.clear();
+    int position = 0; size_t next = 0;
+    while (position < frames)
+    {
+        while (next < events.size() && events[next].at <= position)
+        { const auto& e = events[next++]; if (e.on) dsp.noteOn (1, e.note, e.velocity); else dsp.noteOff (1, e.note); }
+        auto end = frames;
+        if (next < events.size()) end = std::min (end, events[next].at);
+        if (block > 0) end = std::min (end, position + block - position % block);
+        dsp.render (out.getWritePointer (0, position), out.getWritePointer (1, position), end - position);
+        position = end;
+    }
+    return out;
+}
+void drumTests()
+{
+    const auto kick = shifted (2400, 0), snare = shifted (1200, 500), hat = shifted (600, 900);
+    std::array<const instruments::SampleData*, 16> pads {}; pads[0] = &kick; pads[1] = &snare; pads[2] = &hat; pads[3] = &snare;
+    const auto source = [] (const instruments::SampleData& d, double scale = 1, int offset = 0)
+    { return [&d, scale, offset] (int n) { const auto i = (size_t) ((n - offset) * scale); return std::pair<double, double> { d.left[i], d.right[i] }; }; };
+    auto out = hit (drums(), pads, { { 0, 36, 1 } }, 3000);
+    check (error (out, source (kick), 0, 2400) == 0 && peak (out, 2400, 3000) == 0, "pad 1 (C1) plays its sample exactly, then ends");
+    out = hit (drums(), pads, { { 0, 38, 1 } }, 1000);
+    check (error (out, source (hat), 0, 600) == 0, "pad 3 (D1) plays its own sample");
+    check (peak (hit (drums(), pads, { { 0, 35, 1 }, { 0, 52, 1 }, { 0, 40, 1 } }, 1000), 0, 1000) == 0, "notes outside the pads and empty pads are silent");
+    out = hit (drums(), pads, { { 0, 36, 1 }, { 600, 36, 0, false } }, 2400);
+    check (error (out, source (kick), 0, 2400) == 0, "note-off does not cut a pad");
+    out = hit (drums(), pads, { { 0, 36, .5f } }, 2400);
+    check (error (out, [&] (int n) { return std::pair<double, double> { .5 * kick.left[(size_t) n], .5 * kick.right[(size_t) n] }; }, 0, 2400) < 1e-7, "velocity scales a pad linearly");
+    out = hit (drums ({ { "pad1Tune", 12 } }), pads, { { 0, 36, 1 } }, 1200);
+    check (error (out, source (kick, 2), 0, 1200) == 0, "a pad tuned up an octave reads every second frame");
+    out = hit (drums ({ { "pad1Level", .5f }, { "pad1Pan", 1 } }), pads, { { 0, 36, 1 } }, 2400);
+    check (error (out, [&] (int n) { return std::pair<double, double> { 0.0, .5 * kick.right[(size_t) n] }; }, 0, 2400) < 1e-7, "pad level and hard-right pan shape its output");
+    // Length 0.5 cuts at frame 1200 after a 5 ms fade that starts 240 frames earlier.
+    out = hit (drums ({ { "pad1Length", .5f } }), pads, { { 0, 36, 1 } }, 2400);
+    check (error (out, source (kick), 0, 960) == 0 && peak (out, 1200, 2400) < 1e-3, "a shortened pad plays exactly until its fade and is silent past its cut");
+    // Pads 2 and 4 share choke group 1: striking pad 4 fades pad 2 within its 5 ms fade.
+    const auto both = hit (drums ({ { "pad2Choke", 1 }, { "pad4Choke", 1 } }), pads, { { 0, 37, 1 }, { 300, 39, 1 } }, 1200);
+    check (error (both, [&] (int n) { return std::pair<double, double> { snare.left[(size_t) n - 300], snare.right[(size_t) n - 300] }; }, 300 + 480, 1200) < 1e-3,
+           "a choke group silences the earlier pad and leaves the new one");
+    const auto open = hit (drums ({ { "pad2Choke", 1 }, { "pad4Choke", 2 } }), pads, { { 0, 37, 1 }, { 300, 39, 1 } }, 1200);
+    check (error (open, [&] (int n) { return std::pair<double, double> { snare.left[(size_t) n] + snare.left[(size_t) n - 300], snare.right[(size_t) n] + snare.right[(size_t) n - 300] }; }, 300, 1200) < 1e-6,
+           "pads in different groups sound together");
+    const auto whole = hit (drums ({ { "pad1Tune", 3 }, { "pad2Choke", 1 }, { "pad4Choke", 1 } }), pads, { { 0, 36, 1 }, { 100, 37, .8f }, { 700, 39, 1 } }, 3000);
+    const auto blocks = hit (drums ({ { "pad1Tune", 3 }, { "pad2Choke", 1 }, { "pad4Choke", 1 } }), pads, { { 0, 36, 1 }, { 100, 37, .8f }, { 700, 39, 1 } }, 3000, 29);
+    check (error (blocks, [&] (int n) { return std::pair<double, double> { whole.getSample (0, n), whole.getSample (1, n) }; }, 0, 3000) == 0, "the kit renders identically for any block partition");
+    instruments::InstrumentDSP dsp; dsp.prepare (rate, Kind::drumSampler); dsp.configure (drums());
+    dsp.setPadSample (0, &kick); dsp.setPadSample (1, &snare); dsp.noteOn (1, 36, 1); dsp.noteOn (1, 37, 1);
+    std::vector<float> l (64), r (64); dsp.render (l.data(), r.data(), 64);
+    dsp.setPadSample (0, &hat);
+    check (dsp.activeVoices() == 1, "changing a pad's sample silences only that pad's voices");
+}
+
+void drumEngineTests (const juce::File& root)
+{
+    const auto kick = shifted (6000, 0), snare = shifted (3000, 500);
+    const auto kickFile = root.getChildFile ("Kit").getChildFile ("kick.wav"), snareFile = root.getChildFile ("Kit").getChildFile ("snare.wav");
+    ok (kickFile.getParentDirectory().createDirectory(), "create kit folder");
+    write (kickFile, kick); write (snareFile, snare);
+    Session s (false);
+    ok (s.addMidiTrack ("Drums"), "add drum track");
+    const auto trackId = s.snapshot().tracks.back().id;
+    ok (s.addMidiClip (trackId, 0, 4), "add drum clip");
+    { const auto snap = s.snapshot(); const auto clip = snap.tracks.back().clips[0].id;
+      ok (s.addMidiNote (clip, 36, 0, .25, 1), "kick on beat one"); ok (s.addMidiNote (clip, 37, 1, .25, 1), "snare on beat two"); }
+    check (s.setDrumPadSample (trackId, 16, kickFile).failed() && s.setDrumPadSample (trackId, -1, kickFile).failed(), "pad numbers outside 1 to 16 are rejected");
+    check (s.setDrumPadSample (trackId, 0, juce::File()).failed() && ! instrument (s).isNativeEffect, "clearing a pad needs a Drum Sampler");
+    ok (s.setDrumPadSample (trackId, 0, kickFile), "load the kick onto pad 1");
+    auto info = instrument (s);
+    check (info.effect.kind == Kind::drumSampler && info.padSamples.size() == 16 && info.padSamples[0] == kickFile && info.padSamples[1] == juce::File(),
+           "loading a pad switches the track to a Drum Sampler that reports its pads");
+    ok (s.setDrumPadSample (trackId, 1, snareFile), "load the snare onto pad 2");
+    const auto render = root.getChildFile ("kit.wav");
+    ok (s.exportWav (render, 48000, 32, .5), "render the kit");
+    const auto rendered = read (render);
+    check (error (rendered, [&] (int n) { return std::pair<double, double> { kick.left[(size_t) n], kick.right[(size_t) n] }; }, 0, 6000) < 1e-6
+           && error (rendered, [&] (int n) { return std::pair<double, double> { snare.left[(size_t) n - 24000], snare.right[(size_t) n - 24000] }; }, 24000, 27000) < 1e-6,
+           "the engine plays each pad's sample exactly on its beat");
+    ok (s.setDrumPadSample (trackId, 1, juce::File()), "clear pad 2");
+    ok (s.exportWav (render, 48000, 32, .5), "render without the snare");
+    check (peak (read (render), 24000, 27000) < 1e-6 && instrument (s).padSamples[1] == juce::File(), "a cleared pad is silent");
+    s.undo(); ok (s.exportWav (render, 48000, 32, .5), "render after undoing the clear");
+    check (difference (read (render), rendered) == 0, "undo restores the cleared pad");
+    s.undo(); s.undo();
+    check (! instrument (s).isNativeEffect, "two more undo steps remove the snare and then the Drum Sampler");
+    s.redo(); s.redo();
+    const auto project = root.getChildFile ("Beat").getChildFile ("Beat.halftrack");
+    ok (project.getParentDirectory().createDirectory(), "create beat folder");
+    ok (s.saveProject (project), "save the kit project");
+    info = instrument (s);
+    check (info.padSamples[0].isAChildOf (project.getSiblingFile ("Beat Assets")) && info.padSamples[1].isAChildOf (project.getSiblingFile ("Beat Assets")),
+           "saving collects every pad sample into the project assets");
+    const auto moved = root.getChildFile ("Beat moved");
+    check (project.getParentDirectory().copyDirectoryTo (moved), "copy the kit project folder");
+    ok (s.loadProject (moved.getChildFile ("Beat.halftrack")), "open the moved kit");
+    ok (s.exportWav (render, 48000, 32, .5), "render the moved kit");
+    check (difference (read (render), rendered) == 0 && instrument (s).padSamples[1].isAChildOf (moved), "the moved kit resolves its own pad samples and renders identically");
+    check (instrument (s).padSamples[1].deleteFile(), "remove a collected pad sample");
+    check (s.loadProject (moved.getChildFile ("Beat.halftrack")).failed(), "a missing pad sample rejects loading");
+}
 }
 int runSamplerTests (const juce::File& artifacts)
 {
@@ -229,6 +352,8 @@ int runSamplerTests (const juce::File& artifacts)
         const auto root = artifacts.getChildFile ("sampler-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
         dspTests();
         engineTests (root);
+        drumTests();
+        drumEngineTests (root);
         std::cout << "Sampler passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL sampler: " << e.what() << std::endl; return 1; }

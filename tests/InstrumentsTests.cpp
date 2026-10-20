@@ -290,8 +290,9 @@ void engineTests (const juce::File& root)
     {
         ok (drums.setTrackInstrument (drumId, static_cast<Kind> (kind)), "choose " + juce::String (effectName (static_cast<Kind> (kind))));
         ok (drums.exportWav (beat, 48000, 24, .5), "render with every instrument");
-        // A Sampler without a sample is silent by design; the sampler suite covers loaded playback.
-        if (static_cast<Kind> (kind) == Kind::sampler) check (read (beat).getMagnitude (0, read (beat).getNumSamples()) == 0, "an empty Sampler is silent");
+        // Samplers without samples are silent by design; the sampler suite covers loaded playback.
+        if (static_cast<Kind> (kind) == Kind::sampler || static_cast<Kind> (kind) == Kind::drumSampler)
+            check (read (beat).getMagnitude (0, read (beat).getNumSamples()) == 0, juce::String (effectName (static_cast<Kind> (kind))) + " without samples is silent");
         else check (read (beat).getMagnitude (0, read (beat).getNumSamples()) > .01, juce::String (effectName (static_cast<Kind> (kind))) + " is audible through the engine");
     }
     ok (drums.setTrackInstrument (drumId, std::nullopt), "restore the built-in synth");

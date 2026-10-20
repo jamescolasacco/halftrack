@@ -29,6 +29,7 @@ ROOTS = {
         "InstrumentDSP::configure",
         "InstrumentDSP::reset",
         "InstrumentDSP::setSample",
+        "InstrumentDSP::setPadSample",
     ),
     "src/MidiEffects.cpp": (
         "Processor::process",

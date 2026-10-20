@@ -216,6 +216,7 @@ int InstrumentDSP::voiceLimit() const noexcept
         case Kind::fmSynth: return std::array<int, 4> { 4, 8, 16, 32 } [static_cast<size_t> (v[fm::voices])];
         case Kind::drumKit: return 8;
         case Kind::sampler: return std::array<int, 5> { 1, 4, 8, 16, 32 } [static_cast<size_t> (v[sampler::voices])];
+        case Kind::drumSampler: return maximumVoices;
         case Kind::wavetableSynth: return std::array<int, 5> { 1, 1, 8, 16, 32 } [static_cast<size_t> (v[wavetable::voiceMode])];
         default: return std::array<int, 5> { 1, 1, 8, 16, 32 } [static_cast<size_t> (v[poly::voiceMode])];
     }
@@ -272,11 +273,16 @@ void InstrumentDSP::configure (const Session::EffectSettings& next) noexcept
                 voice.amp.configure (v[sampler::ampAttack], v[sampler::ampDecay], oneShot ? 1.0 : v[sampler::ampSustain], v[sampler::ampRelease], rate);
             }
             break;
+        case Kind::drumSampler:
+            // Pads play their samples at full level; a choke or a shortened length fades them out.
+            volume = v[drumSampler::volume];
+            for (auto& voice : voices) voice.amp.configure (0, 1, 1, drumSampler::cutFadeMs, rate);
+            break;
         default: volume = v[drums::volume]; break;
     }
     glideCoefficient = glideMs > 0 ? std::exp (-1.0 / (glideMs * .001 * rate)) : 0.0;
     // The sampler plays its source at unity; synthesized sources leave headroom.
-    gain = decibels (volume) * (kind == Kind::sampler ? 1.0 : .25);
+    gain = decibels (volume) * (kind == Kind::sampler || kind == Kind::drumSampler ? 1.0 : .25);
 }
 void InstrumentDSP::reset() noexcept
 {
@@ -347,6 +353,23 @@ void InstrumentDSP::noteOn (int channel, int note, float velocity) noexcept
     if (channel < 1 || channel > 16 || note < 0 || note > 127 || ! std::isfinite (velocity)) return;
     const auto level = std::clamp (static_cast<double> (velocity), 0.0, 1.0);
     if (level <= 0) { noteOff (channel, note); return; }
+    if (kind == Kind::drumSampler)
+    {
+        const int pad = note - drumSampler::firstNote;
+        if (pad < 0 || pad >= Session::drumPadCount || padSamples[static_cast<size_t> (pad)] == nullptr) return;
+        const auto& v = settings.values;
+        // A pad in a choke group silences the other pads of that group.
+        if (const auto group = rounded (v[static_cast<size_t> (pad) * drumSampler::padStride + drumSampler::choke]); group > 0)
+            for (auto& other : voices)
+                if (other.active && other.pad >= 0 && other.pad != pad
+                    && rounded (v[static_cast<size_t> (other.pad) * drumSampler::padStride + drumSampler::choke]) == group) release (other);
+        if (auto* voice = allocate())
+        {
+            voice->active = false; voice->pad = pad;
+            start (*voice, channel, note, level, true); voice->position = 0;
+        }
+        return;
+    }
     if (kind == Kind::drumKit)
     {
         const auto found = std::find (drums::notes.begin(), drums::notes.end(), note);
@@ -380,7 +403,7 @@ void InstrumentDSP::noteOn (int channel, int note, float velocity) noexcept
 }
 void InstrumentDSP::noteOff (int channel, int note) noexcept
 {
-    if (channel < 1 || channel > 16 || kind == Kind::drumKit) return;
+    if (channel < 1 || channel > 16 || kind == Kind::drumKit || kind == Kind::drumSampler) return;
     // A triggered one-shot plays to its end regardless of the key.
     if (kind == Kind::sampler && settings.values[sampler::mode] == 1 && settings.values[sampler::trigger] == 0) return;
     if (monophonic())
@@ -652,9 +675,43 @@ void InstrumentDSP::renderVoice (Voice& v, double& left, double& right) noexcept
         case Kind::drumKit: renderDrum (v, left, right); return;
         case Kind::wavetableSynth: renderWavetable (v, left, right); break;
         case Kind::sampler: renderSampler (v, left, right); if (! v.active) return; break;
+        case Kind::drumSampler: renderDrumSampler (v, left, right); if (! v.active) return; break;
         default: renderPoly (v, left, right); break;
     }
     if (! v.amp.active() || (v.amp.stage == Envelope::Stage::sustain && v.amp.sustainLevel <= 0)) v.active = false;
+}
+double InstrumentDSP::readSample (const SampleData& s, bool right, double position) noexcept
+{
+    const auto* data = right ? s.right.data() : s.left.data();
+    const int frames = s.frames();
+    const auto index = static_cast<int> (std::floor (position));
+    const auto t = position - index;
+    const auto at = [data, frames] (int i) { return static_cast<double> (data[std::clamp (i, 0, frames - 1)]); };
+    const auto x0 = at (index - 1), x1 = at (index), x2 = at (index + 1), x3 = at (index + 2);
+    if (t == 0) return x1;
+    const auto c1 = .5 * (x2 - x0), c2 = x0 - 2.5 * x1 + 2 * x2 - .5 * x3, c3 = .5 * (x3 - x0) + 1.5 * (x1 - x2);
+    return ((c3 * t + c2) * t + c1) * t + x1;
+}
+void InstrumentDSP::setPadSample (int pad, const SampleData* next) noexcept
+{
+    if (pad < 0 || pad >= Session::drumPadCount || padSamples[static_cast<size_t> (pad)] == next) return;
+    padSamples[static_cast<size_t> (pad)] = next;
+    for (auto& v : voices) if (v.active && v.pad == pad) v = Voice {};
+}
+void InstrumentDSP::renderDrumSampler (Voice& v, double& left, double& right) noexcept
+{
+    using namespace drumSampler;
+    const auto* s = v.pad >= 0 ? padSamples[static_cast<size_t> (v.pad)] : nullptr;
+    if (s == nullptr || v.position >= s->frames()) { v.active = false; return; }
+    const auto& p = settings.values;
+    const auto base = static_cast<size_t> (v.pad) * padStride;
+    // A shortened pad starts its fade so that it ends at the cut point.
+    if (p[base + length] < 1 && v.amp.stage != Envelope::Stage::release
+        && v.position >= p[base + length] * s->frames() - cutFadeMs * .001 * s->sampleRate) v.amp.release();
+    const auto sumL = readSample (*s, false, v.position), sumR = readSample (*s, true, v.position);
+    v.position += std::exp2 (p[base + tune] / 12.0) * s->sampleRate / rate;
+    const auto level = v.amp.tick() * p[base + drumSampler::level] * v.velocity * gain;
+    left += sumL * level * std::min (1.0, 1.0 - p[base + pan]); right += sumR * level * std::min (1.0, 1.0 + p[base + pan]);
 }
 void InstrumentDSP::setSample (const SampleData* next) noexcept
 {

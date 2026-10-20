@@ -77,3 +77,23 @@ Allocation audits cover parameter extremes and sample switching inside the measu
 - Multisampling and zones (the reference Sampler), and drum racks.
 - Sample-accurate start offset modulation.
 - Any comparison with reference output.
+
+## Drum Sampler
+
+`EffectKind::drumSampler` (kind 29) is a 16-pad kit modelled on the reference Drum Rack's pad workflow ([Drum Racks](https://www.ableton.com/en/live-manual/12/instrument-drum-and-effect-racks/#drum-racks), consulted 2026-10-20). Pads play notes 36 (C1) to 51 and appear in a 4x4 grid with pad 1 at the bottom left. Each pad holds one sample (`halftrackPad1` to `halftrackPad16`, collected and resolved like the Sampler's) and has five controls: tune (±48 st), length (fraction of the sample played), level, pan and choke group (none or 1–4); a kit volume follows. The parameter packet grew from 64 to 128 values to hold the 81 controls.
+
+- A pad plays its sample from the start at `level × velocity × dB(volume)`, one-shot (note-off is ignored) and with the same balance pan and Hermite reads as the Sampler.
+- A length below 1 fades out over 5 ms so that it ends at the cut.
+- Striking a pad in a choke group releases the group's other pads over 5 ms.
+- Notes outside the pads and empty pads are silent. Changing a pad's sample silences only that pad's voices, and the kit shares 32 voices.
+
+`setDrumPadSample(trackId, pad, file)` loads a pad, switching a non-Drum Sampler instrument to a Drum Sampler in the same undo step; an empty file clears a pad. `PluginInfo::padSamples` lists the 16 pad files. The instrument panel replaces the generic controls with the pad grid: dropping a file on a pad loads it, clicking selects it, and the selected pad's Tune, Length, Level, Pan, Choke and Clear controls edit only that pad. Browser samples chosen for a Drum Sampler track load into the selected pad. The audio thread receives pad samples through the same per-slot acknowledged hand-off as the Sampler.
+
+Evidence (`tests/SamplerTests.cpp`):
+
+- DSP: exact pad playback and note mapping, note-off immunity, velocity, tune, level and pan, the length cut, choke groups against independent groups, block independence and per-pad sample changes.
+- Engine: an exact kick-and-snare render on beats one and two, pad clearing and undo, single-step instrument creation, collection of every pad into Assets, relocation with identical renders, and rejection of a missing pad sample.
+
+Allocation audits include pad sample switching, and UI checks cover the grid, drop, pad controls, Clear and undo.
+
+Not implemented: chains with arbitrary devices per pad, pad sends and returns, more than 16 pads, pad auditioning by click, velocity curves, and reference comparison.

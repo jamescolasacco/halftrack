@@ -71,12 +71,13 @@ public:
         // MIDI effects process notes before a MIDI track's instrument.
         arpeggiator, chord, scale, pitch, velocity, random, noteLength,
         // Instruments replace a MIDI track's built-in synthesizer through setTrackInstrument.
-        polySynth, fmSynth, drumKit, wavetableSynth, sampler };
-    static constexpr int effectKindCount = 29;
+        polySynth, fmSynth, drumKit, wavetableSynth, sampler, drumSampler };
+    static constexpr int effectKindCount = 30;
+    static constexpr int drumPadCount = 16; // Drum Sampler pads play notes 36 (C1) to 51.
     struct EffectSettings
     {
         EffectKind kind = EffectKind::equalizer;
-        std::array<float, 64> values {};
+        std::array<float, 128> values {};
         float tempoBpm = 120; // Derived project tempo, never a separate stored device setting.
         bool operator== (const EffectSettings&) const = default;
     };
@@ -157,6 +158,7 @@ public:
         bool isNativeEffect = false;
         EffectSettings effect;
         juce::File sample; // A Sampler instrument's loaded sample, if any.
+        std::vector<juce::File> padSamples; // A Drum Sampler's sample per pad (empty files for empty pads).
     };
     struct TrackInfo
     {
@@ -264,6 +266,8 @@ public:
     juce::Result showInstrumentEditor (int trackIndex);
     // Loads an audio file into the track's Sampler, switching the instrument to a Sampler first if needed (one undo step).
     juce::Result setInstrumentSample (const juce::String& trackId, const juce::File& sample);
+    // Loads (or with an empty file clears) a Drum Sampler pad, switching the instrument to a Drum Sampler if needed.
+    juce::Result setDrumPadSample (const juce::String& trackId, int pad, const juce::File& sample);
     juce::Result duplicateTrack (const juce::String& trackId, juce::String& duplicateId);
     // Groups top-level audio/MIDI tracks (not returns) into a new group placed at the first one.
     juce::Result groupTracks (const juce::StringArray& trackIds, juce::String& groupId);

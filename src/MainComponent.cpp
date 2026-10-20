@@ -3070,6 +3070,118 @@ private:
         void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
     };
 
+    // A Drum Sampler's 4x4 pad grid (pad 1, C1, bottom left) with the selected pad's controls.
+    class DrumPanel final : public juce::Component, public juce::FileDragAndDropTarget
+    {
+    public:
+        static constexpr int padWidth = 56, padHeight = 40, gridWidth = 4 * padWidth, controlsWidth = 300;
+        explicit DrumPanel (Impl& o) : owner (o)
+        {
+            setName ("Drum pads");
+            for (int i = 0; i < 4; ++i)
+            {
+                auto& knob = knobs[(size_t) i]; addAndMakeVisible (knob);
+                knob.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); knob.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 58, 15);
+                knob.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+                knob.onDragStart = [this] { owner.session.beginEditGesture ("Drum pad"); gesture = true; };
+                knob.onDragEnd = [this] { if (gesture) owner.session.endEditGesture(); gesture = false; };
+                knob.onValueChange = [this, i] { change ((size_t) i, (float) knobs[(size_t) i].getValue()); };
+            }
+            knobs[0].setName ("Pad tune"); knobs[0].setRange (-48, 48, .01); knobs[0].setDoubleClickReturnValue (true, 0);
+            knobs[0].textFromValueFunction = [] (double v) { return juce::String (v, 2) + " st"; };
+            knobs[1].setName ("Pad length"); knobs[1].setRange (.01, 1, .001); knobs[1].setDoubleClickReturnValue (true, 1);
+            knobs[1].textFromValueFunction = [] (double v) { return juce::String (v * 100, 1) + "%"; };
+            knobs[2].setName ("Pad level"); knobs[2].setRange (0, 1, .001); knobs[2].setDoubleClickReturnValue (true, 1);
+            knobs[2].textFromValueFunction = [] (double v) { return juce::String (v * 100, 1) + "%"; };
+            knobs[3].setName ("Pad pan"); knobs[3].setRange (-1, 1, .01); knobs[3].setDoubleClickReturnValue (true, 0);
+            knobs[3].textFromValueFunction = [] (double v) { return std::abs (v) < .005 ? juce::String ("C") : juce::String ((int) std::round (std::abs (v) * 100)) + (v < 0 ? "L" : "R"); };
+            for (auto& knob : knobs) knob.updateText();
+            choke.setName ("Pad choke"); choke.setTooltip ("Pads in the same choke group silence each other");
+            for (auto* text : { "No choke", "Choke 1", "Choke 2", "Choke 3", "Choke 4" }) choke.addItem (text, choke.getNumItems() + 1);
+            choke.onChange = [this] { change (instruments::drumSampler::choke, (float) (choke.getSelectedId() - 1)); };
+            clear.setName ("Clear pad"); clear.setTooltip ("Remove this pad's sample");
+            clear.onClick = [this] { if (const auto* track = owner.currentTrack()) { owner.report (owner.session.setDrumPadSample (track->id, selected, {})); owner.refresh(); } };
+            for (auto* c : std::initializer_list<juce::Component*> { &choke, &clear }) addAndMakeVisible (c);
+        }
+        ~DrumPanel() override { if (gesture) owner.session.endEditGesture(); }
+        void show (const Session::PluginInfo& info)
+        {
+            plugin = info;
+            const auto base = (size_t) selected * instruments::drumSampler::padStride;
+            for (size_t i = 0; i < knobs.size(); ++i)
+                if (! knobs[i].isMouseButtonDown()) knobs[i].setValue (plugin.effect.values[base + i], juce::dontSendNotification);
+            for (auto& knob : knobs) knob.updateText();
+            choke.setSelectedId (juce::roundToInt (plugin.effect.values[base + instruments::drumSampler::choke]) + 1, juce::dontSendNotification);
+            clear.setEnabled (padFile (selected) != juce::File() && ! owner.session.isExporting());
+            repaint();
+        }
+        int selectedPad() const noexcept { return owner.selectedDrumPad; }
+        // Pad 1 is bottom left and pads count left to right, bottom to top.
+        juce::Rectangle<int> padBounds (int pad) const { return { 4 + (pad % 4) * padWidth, 4 + (3 - pad / 4) * padHeight, padWidth - 3, padHeight - 3 }; }
+        void resized() override
+        {
+            auto area = getLocalBounds().withTrimmedLeft (gridWidth + 16).reduced (0, 4);
+            auto name = area.removeFromTop (20); juce::ignoreUnused (name);
+            auto row = area.removeFromTop (74);
+            for (auto& knob : knobs) knob.setBounds (row.removeFromLeft (66).withTrimmedTop (14));
+            area.removeFromTop (6);
+            auto buttons = area.removeFromTop (22);
+            choke.setBounds (buttons.removeFromLeft (110)); buttons.removeFromLeft (6); clear.setBounds (buttons.removeFromLeft (70));
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (juce::Colour (0xff1c1c1c)); g.fillRect (getLocalBounds().withWidth (gridWidth + 8));
+            static const char* names[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+            for (int pad = 0; pad < Session::drumPadCount; ++pad)
+            {
+                const auto b = padBounds (pad); const auto file = padFile (pad);
+                const auto note = instruments::drumSampler::firstNote + pad;
+                g.setColour (file != juce::File() ? owner.selectedTrackColour().withMultipliedSaturation (.7f) : juce::Colour (0xff3a3a3a)); g.fillRect (b);
+                if (pad == selected) { g.setColour (orange); g.drawRect (b, 2); }
+                g.setColour (file != juce::File() ? juce::Colour (0xff141414) : muted); g.setFont (font (9.5f, true));
+                g.drawText (juce::String (names[note % 12]) + juce::String (note / 12 - 2), b.reduced (4, 2).removeFromTop (12), juce::Justification::topLeft);
+                g.setFont (font (9.0f));
+                g.drawFittedText (file != juce::File() ? file.getFileNameWithoutExtension() : juce::String ("Drop"), b.reduced (4, 2).withTrimmedTop (12), juce::Justification::centredLeft, 2);
+            }
+            const auto file = padFile (selected);
+            g.setColour (ink); g.setFont (font (10.5f, true));
+            g.drawText ("Pad " + juce::String (selected + 1) + (file != juce::File() ? "  " + file.getFileName() : juce::String ("  (empty)")),
+                        gridWidth + 16, 4, getWidth() - gridWidth - 20, 18, juce::Justification::centredLeft, true);
+            g.setColour (muted); g.setFont (font (9.5f));
+            const char* labels[] { "Tune", "Length", "Level", "Pan" };
+            for (size_t i = 0; i < knobs.size(); ++i) g.drawText (labels[i], knobs[i].getX(), knobs[i].getY() - 14, knobs[i].getWidth(), 13, juce::Justification::centred);
+        }
+        void mouseDown (const juce::MouseEvent& event) override
+        { for (int pad = 0; pad < Session::drumPadCount; ++pad) if (padBounds (pad).contains (event.getPosition())) { selected = pad; show (plugin); return; } }
+        bool isInterestedInFileDrag (const juce::StringArray& files) override { return files.size() == 1 && isAudio (juce::File (files[0])); }
+        void filesDropped (const juce::StringArray& files, int x, int y) override
+        {
+            for (int pad = 0; pad < Session::drumPadCount; ++pad)
+                if (padBounds (pad).contains (x, y))
+                {
+                    selected = pad;
+                    if (const auto* track = owner.currentTrack()) { owner.report (owner.session.setDrumPadSample (track->id, pad, juce::File (files[0]))); owner.refresh(); }
+                    return;
+                }
+        }
+    private:
+        Impl& owner;
+        Session::PluginInfo plugin;
+        int& selected = owner.selectedDrumPad;
+        bool gesture = false;
+        std::array<juce::Slider, 4> knobs;
+        juce::ComboBox choke;
+        juce::TextButton clear { "Clear" };
+        juce::File padFile (int pad) const { return pad < (int) plugin.padSamples.size() ? plugin.padSamples[(size_t) pad] : juce::File(); }
+        void change (size_t control, float value)
+        {
+            auto settings = plugin.effect;
+            settings.values[(size_t) selected * instruments::drumSampler::padStride + control] = value;
+            if (settings == plugin.effect) return;
+            owner.report (owner.session.setNativeEffectSettings (plugin.id, settings)); owner.refresh();
+        }
+    };
+
     class SynthPanel final : public juce::Component
     {
     public:
@@ -3119,6 +3231,7 @@ private:
             edit.onClick = [this] { owner.report (owner.session.showInstrumentEditor (owner.selectedTrack)); };
             addChildComponent (edit);
             addChildComponent (sample);
+            addChildComponent (drumPads);
         }
         void sync()
         {
@@ -3126,7 +3239,8 @@ private:
             if (track == nullptr || ! track->isMidi) { setVisible (false); return; }
             setVisible (true);
             native = track->instrument.isNativeEffect; nativeSettings = track->instrument.effect;
-            if (! native) { nativeEditor.reset(); nativeEditorId.clear(); }
+            // The Drum Sampler's pad grid replaces the generic control layout.
+            if (! native || drumSampler()) { nativeEditor.reset(); nativeEditorId.clear(); }
             else if (nativeEditorId != track->instrument.id)
             {
                 nativeEditor = makeNativeEffectEditor (owner.session, track->instrument.id, true);
@@ -3135,6 +3249,8 @@ private:
             instrument.setSelectedId (native ? 2 + (int) nativeSettings.kind - (int) Session::EffectKind::polySynth : 1, juce::dontSendNotification);
             sample.setVisible (sampler());
             if (sampler()) sample.show (track->instrument);
+            drumPads.setVisible (drumSampler());
+            if (drumSampler()) drumPads.show (track->instrument);
             instrument.setEnabled (! owner.session.isExporting());
             waveform.setVisible (! native); edit.setVisible (native);
             for (auto& control : controls) control.setVisible (! native);
@@ -3144,8 +3260,13 @@ private:
             controls[7].setEnabled (track->synth.waveform == 1);
             resized(); repaint(); // Layout depends on built-in versus native mode, not only size.
         }
-        int preferredWidth() const { return native && nativeEditor ? juce::jmax (330, nativeEditor->getWidth() + 4 + sampleWidth()) : 536; }
+        int preferredWidth() const
+        {
+            if (drumSampler()) return DrumPanel::gridWidth + DrumPanel::controlsWidth + 24;
+            return native && nativeEditor ? juce::jmax (330, nativeEditor->getWidth() + 4 + sampleWidth()) : 536;
+        }
         bool sampler() const { return native && nativeSettings.kind == Session::EffectKind::sampler; }
+        bool drumSampler() const { return native && nativeSettings.kind == Session::EffectKind::drumSampler; }
         int sampleWidth() const { return sampler() ? 250 : 0; }
         void paint (juce::Graphics& g) override
         {
@@ -3165,6 +3286,7 @@ private:
             instrument.setBounds (getWidth() - (native ? 118 : 262), 3, native ? 107 : 138, 20);
             edit.setBounds (getWidth() - 236, 3, 112, 20);
             sample.setBounds (2, 28, sampleWidth() - 4, juce::jmax (40, getHeight() - 30));
+            drumPads.setBounds (2, 28, getWidth() - 4, juce::jmax (40, getHeight() - 30));
             if (nativeEditor) nativeEditor->setTopLeftPosition (2 + sampleWidth(), 28);
             const auto width = (getWidth() - 16) / 8;
             for (int i = 0; i < 8; ++i) controls[(size_t) i].setBounds (8 + i * width, 43, width - 2, getHeight() - 46);
@@ -3178,6 +3300,7 @@ private:
         std::unique_ptr<juce::Component> nativeEditor;
         juce::String nativeEditorId;
         SampleView sample { owner };
+        DrumPanel drumPads { owner };
         std::array<juce::Slider, 8> controls;
         static constexpr const char* names[] { "Cutoff", "Resonance", "Attack", "Decay", "Sustain", "Release", "Level", "Pulse width" };
         void changeParameter (int index, float value)
@@ -3561,6 +3684,7 @@ private:
     PianoRoll pianoRoll;
     AudioClipView audioClipView { *this };
     LaunchBox midiLaunch { *this };
+    int selectedDrumPad = 0; // The Drum Sampler pad that browser samples load into.
     DeviceChain deviceChain;
     juce::Viewport viewport;
     juce::ScrollBar horizontalScroll { false };
@@ -4981,8 +5105,14 @@ private:
         {
             auto item = browserItems[(size_t) row];
             if (item.directory) { browserFolder = item.file; browserSearch.clear(); updateBrowser(); }
-            // A sample chosen for a MIDI track goes into its Sampler.
-            else if (const auto* track = currentTrack(); track != nullptr && track->isMidi) { report (session.setInstrumentSample (track->id, item.file)); refresh(); }
+            // A sample chosen for a MIDI track goes into its Drum Sampler's selected pad, or its Sampler.
+            else if (const auto* track = currentTrack(); track != nullptr && track->isMidi)
+            {
+                if (track->instrument.isNativeEffect && track->instrument.effect.kind == Session::EffectKind::drumSampler)
+                    report (session.setDrumPadSample (track->id, selectedDrumPad, item.file));
+                else report (session.setInstrumentSample (track->id, item.file));
+                refresh();
+            }
             else if (showSession) importLauncherFiles ({ item.file.getFullPathName() }, selectedTrack, selectedSceneIndex());
             else importFiles ({ item.file.getFullPathName() }, selectedTrack, state.position);
         }
@@ -5412,6 +5542,39 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (currentTrack()->instrument.effect.values[instruments::sampler::start] == 0, "one undo step restores the region dragged in one gesture");
         session.undo(); session.undo(); refresh();
         check (! currentTrack()->instrument.isNativeEffect && ! view->isVisible(), "undo removes the sample and the Sampler");
+    }
+    {
+        // Drum Sampler: a 4x4 pad grid takes dropped samples per pad and edits the selected pad.
+        chooser->setSelectedId (2 + (int) Session::EffectKind::drumSampler - (int) Session::EffectKind::polySynth, juce::sendNotificationSync); refresh();
+        auto* pads = dynamic_cast<DrumPanel*> (findNamed (deviceChain, "Drum pads"));
+        check (currentTrack()->instrument.effect.kind == Session::EffectKind::drumSampler && pads != nullptr && pads->isVisible() && findNamed (deviceChain, "opALevel") == nullptr,
+               "choosing Drum Sampler shows the pad grid instead of the generic controls");
+        check (pads->padBounds (0).getY() > pads->padBounds (12).getY() && pads->padBounds (0).getX() < pads->padBounds (3).getX(), "pad 1 sits bottom left and pads rise row by row");
+        const auto second = pads->padBounds (1).getCentre();
+        pads->filesDropped ({ audioFixture.getFullPathName() }, second.x, second.y); refresh();
+        check (currentTrack()->instrument.padSamples.size() == 16 && currentTrack()->instrument.padSamples[1] == audioFixture && pads->selectedPad() == 1,
+               "dropping a file on pad 2 loads it there and selects the pad");
+        auto* tune = dynamic_cast<juce::Slider*> (findNamed (*pads, "Pad tune"));
+        auto* choke = dynamic_cast<juce::ComboBox*> (findNamed (*pads, "Pad choke"));
+        check (tune != nullptr && choke != nullptr, "the selected pad has tune and choke controls");
+        tune->setValue (7, juce::sendNotificationSync); choke->setSelectedId (3, juce::sendNotificationSync); refresh();
+        const auto& values = currentTrack()->instrument.effect.values;
+        check (values[1 * instruments::drumSampler::padStride + instruments::drumSampler::tune] == 7
+               && values[1 * instruments::drumSampler::padStride + instruments::drumSampler::choke] == 2 && values[instruments::drumSampler::tune] == 0,
+               "pad controls edit only the selected pad");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("drum-sampler.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (deviceChain.createComponentSnapshot (deviceChain.getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        dynamic_cast<juce::Button*> (findNamed (*pads, "Clear pad"))->onClick(); refresh();
+        check (currentTrack()->instrument.padSamples[1] == juce::File(), "Clear empties the selected pad");
+        for (int step = 0; step < 5; ++step) session.undo();
+        refresh();
+        check (! currentTrack()->instrument.isNativeEffect && ! pads->isVisible(), "undo returns to the built-in synth");
     }
     {
         const int instrumentTrack = selectedTrack;

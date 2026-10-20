@@ -187,3 +187,7 @@ A group slot launches its members' clips in that row on the global grid, and mem
 ### Session recording defaults
 
 Takes start on the global launch grid (immediately from a stopped transport) and end on it; per-clip grids do not apply to recording. Pressing another filled slot on a recording track ends the take without playing it and launches that slot. Track and global stops and transport stop keep the take silent. An empty MIDI take still creates a clip of its length. Audio takes follow tempo at the tempo they were recorded at. Recording while the transport loops is not handled specially. These are simplest-default choices pending reference measurement.
+
+### Drum Sampler defaults
+
+Pads are one-shot at unity level and velocity scales linearly; length cuts fade over 5 ms and choke groups release over 5 ms. Sixteen pads cover C1 to D#2 with no bank switching. The kit shares 32 voices with oldest-voice stealing. Browser samples load into the selected pad. These are simplest-default choices pending reference measurement.
