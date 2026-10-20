@@ -1347,12 +1347,145 @@ void editsDuringSessionTakes (const juce::File& root)
     }
 }
 
+// The remaining edits refused only during Arrangement recording: seeking, the recording track's
+// own arm, monitoring and instrument, Arrangement clip and time edits, automation, follow actions
+// and the recording settings. Each keeps the take with every key, or ends or refuses it first.
+void playbackAndArrangementEditsDuringSessionTakes (const juce::File& root)
+{
+    {
+        // Seeking moves the play head the take is timed by, so it ends the take where it was and
+        // stops the transport, as it does during Arrangement recording.
+        SessionTake t; auto& session = t.session;
+        t.start (0); t.key (60); t.key (62);
+        session.seek (3);
+        const auto state = session.snapshot();
+        const auto slot = state.tracks[2].slots[0];
+        std::vector<int> pitches;
+        for (const auto& note : slot.clip.notes) pitches.push_back (note.pitch);
+        check (! slot.recording && slot.hasClip && slot.clip.isMidi && pitches == std::vector<int> { 60, 62 },
+               "seeking ends the Session take with the keys played before it (" + juce::String ((int) pitches.size()) + " notes)");
+        check (! state.playing && std::abs (state.position - 3) < 1e-9 && ! slot.playing,
+               "the seek stops the transport at the new position and leaves the take silent");
+        ok (session.setTrackInput (0, session.inputNames()[0]), "no Session take is left recording after the seek");
+    }
+    {
+        // Monitoring the recording track keeps its take; disarming it is refused, because the take
+        // would go on recording a track that shows it is not armed.
+        SessionTake t; auto& session = t.session;
+        const auto heard = [&] (int pitch)
+        {
+            t.keys.sendNow (juce::MidiMessage::noteOn (1, pitch, (juce::uint8) 96)); const auto peak = pumpSyntheticTestDevice (session, 20);
+            t.keys.sendNow (juce::MidiMessage::noteOff (1, pitch)); pumpSyntheticTestDevice (session, 40);
+            return peak;
+        };
+        t.start (0); t.key (60);
+        ok (session.setTrackMonitor (t.track(), Session::MonitorMode::on), "monitor the recording track during its take");
+        const auto monitored = heard (62);
+        check (monitored > .001f, "the recording track's monitored key is heard during the take (peak " + juce::String (monitored) + ")");
+        ok (session.setTrackMonitor (t.track(), Session::MonitorMode::automatic), "auto-monitor the recording track during its take");
+        ok (session.setTrackMonitor (t.track(), Session::MonitorMode::off), "end monitoring of the recording track during its take");
+        t.refused (session.setTrackArmed (t.track(), false), "disarming the recording track");
+        ok (session.setTrackArmed (t.track(), true), "arming the armed recording track again changes nothing");
+        t.key (64);
+        const auto pitches = t.finish ("monitoring the recording track");
+        check (pitches == std::vector<int> { 60, 62, 64 }, "monitoring the recording track keeps the take with every key ("
+               + juce::String ((int) pitches.size()) + " notes)");
+        const auto track = session.snapshot().tracks[2];
+        check (track.armed && track.monitor == Session::MonitorMode::off, "the recording track stays armed with monitoring off");
+        ok (session.setTrackArmed (t.track(), false), "the track can be disarmed once its take ends");
+    }
+    {
+        SessionTake t; auto& session = t.session;
+        t.survives (0, "changing the recording track's instrument", [&]
+        {
+            ok (session.setTrackInstrument (t.trackId, Session::EffectKind::polySynth), "replace the recording track's instrument during the take");
+            check (session.snapshot().tracks[2].instrument.isNativeEffect, "the recording track plays the new instrument");
+            ok (session.setTrackInstrument (t.trackId, std::nullopt), "restore the built-in synthesizer during the take");
+        });
+    }
+    {
+        // Arrangement clip and time edits change no slot, on the recording track or on others.
+        SessionTake t; auto& session = t.session;
+        const auto fixture = root.getChildFile ("take-arrangement-edit.wav");
+        {
+            juce::AudioBuffer<float> audio (2, 96000);
+            for (int i = 0; i < audio.getNumSamples(); ++i) for (int c = 0; c < 2; ++c) audio.setSample (c, i, .25f * std::sin ((float) i * .05f));
+            juce::WavAudioFormat wav; std::unique_ptr<juce::OutputStream> stream (fixture.createOutputStream());
+            auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (2).withBitsPerSample (24));
+            check (writer != nullptr && writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples()), "write the generated Arrangement audio fixture");
+        }
+        ok (session.importAudio (fixture, 0, 4), "import Arrangement audio onto another track");
+        ok (session.addMidiClip (t.trackId, 8, 4), "give the recording track an Arrangement MIDI clip");
+        const auto before = session.snapshot();
+        const auto audioId = before.tracks[0].clips[0].id, midiId = before.tracks[2].clips[0].id;
+        const auto audioTrack = before.tracks[0].id, otherAudioTrack = before.tracks[1].id;
+        t.survives (0, "Arrangement clip and time edits", [&]
+        {
+            juce::String right, duplicate, pasted, midiCopy, midiPasted;
+            ok (session.setAudioClipRange (audioId, 4, 1.5, .25), "trim an Arrangement audio clip during the take");
+            ok (session.setAudioClipReversed (audioId, true), "reverse an Arrangement audio clip during the take");
+            ok (session.setAudioClipReversed (audioId, false), "restore the clip's direction during the take");
+            ok (session.splitAudioClip (audioId, 5, right), "split an Arrangement audio clip during the take");
+            ok (session.duplicateAudioClip (right, duplicate), "duplicate an Arrangement audio clip during the take");
+            ok (session.copyAudioClip (duplicate, true), "cut an Arrangement audio clip during the take");
+            ok (session.pasteAudioClip (audioTrack, 12, pasted), "paste an Arrangement audio clip during the take");
+            ok (session.moveAudioClip (pasted, otherAudioTrack, 14), "move an Arrangement audio clip during the take");
+            ok (session.duplicateMidiClip (midiId, midiCopy), "duplicate the recording track's Arrangement clip during the take");
+            ok (session.copyMidiClip (midiCopy, true), "cut the recording track's Arrangement clip during the take");
+            ok (session.pasteMidiClip (t.trackId, 16, midiPasted), "paste onto the recording track during the take");
+            ok (session.moveMidiClip (midiPasted, t.trackId, 20), "move a clip on the recording track during the take");
+            ok (session.insertTime (6, 2), "insert time during the take");
+            ok (session.deleteTime (6, 2), "delete time during the take");
+        });
+        const auto after = session.snapshot();
+        check (after.tracks[0].clips.size() == 2 && after.tracks[1].clips.size() == 1 && after.tracks[2].clips.size() == 2,
+               "the Arrangement edits made during the take are in place");
+    }
+    {
+        // Track, device and mixer automation.
+        SessionTake t; auto& session = t.session;
+        ok (session.addNativeEffect (2, Session::EffectKind::delay), "give the recording track a native device");
+        const auto device = session.snapshot().tracks[2].plugins[0];
+        const auto value = device.effect.values[0];
+        t.survives (0, "automation edits", [&]
+        {
+            ok (session.setTrackAutomation (t.trackId, Session::AutomationTarget::volume, { true, { { 0, -6 }, { 8, 0 } } }),
+                "automate the recording track's volume during the take");
+            ok (session.setTrackAutomation (t.trackId, Session::AutomationTarget::pan, { true, { { 0, -.5f } } }),
+                "automate the recording track's pan during the take");
+            ok (session.setDeviceAutomation (device.id, 0, { true, { { 0, value }, { 4, value } } }),
+                "automate the recording track's device during the take");
+            ok (session.setMasterVolumeAutomation ({ true, { { 0, -3 } } }), "automate the master volume during the take");
+        });
+        const auto state = session.snapshot();
+        check (state.tracks[2].volumeAutomation.points.size() == 2 && state.tracks[2].plugins[0].automation.size() == 1,
+               "the automation written during the take is in place");
+    }
+    {
+        // Follow actions on the recording track's other clips, count-in and recording quantization.
+        SessionTake t; auto& session = t.session;
+        ok (session.addMidiClipToSlot (t.trackId, 1, 4), "fill another slot on the recording track");
+        const auto clipId = session.snapshot().tracks[2].slots[1].clip.id;
+        Session::MetronomeSettings metronome; metronome.countInBars = 2;
+        t.survives (0, "follow action and recording settings", [&]
+        {
+            ok (session.setClipFollowAction (clipId, { Session::FollowAction::next, 4 }), "set a follow action on the recording track during the take");
+            ok (session.setMetronome (metronome), "change the count-in during the take");
+            ok (session.setRecordQuantisation (Session::RecordQuantisation::quarter), "change recording quantization during the take");
+        });
+        const auto state = session.snapshot();
+        check (state.metronome.countInBars == 2 && state.recordQuantisation == Session::RecordQuantisation::quarter
+               && state.tracks[2].slots[1].clip.follow.action == Session::FollowAction::next,
+               "the settings changed during the take are in place");
+    }
+}
+
 int runMidiInputTests(const juce::File& artifacts)
 {
     try
     {
         const auto root=artifacts.getChildFile("midi-input-"+juce::Uuid().toString()); ok(root.createDirectory(),"create isolated fixtures");
-        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); recordingQuantisation(root); controllersAndOverdub(root); sessionRecording(); inputChangesKeepPlaying(); sessionTakesSurviveDeviceChanges(); editsDuringSessionTakes(root);
+        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); recordingQuantisation(root); controllersAndOverdub(root); sessionRecording(); inputChangesKeepPlaying(); sessionTakesSurviveDeviceChanges(); editsDuringSessionTakes(root); playbackAndArrangementEditsDuringSessionTakes(root);
         std::cout<<"MIDI input tests passed: "<<root.getFullPathName()<<std::endl; return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI input: "<<e.what()<<std::endl;return 1;}

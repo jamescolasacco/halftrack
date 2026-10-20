@@ -19,6 +19,9 @@ Session recording follows the reference workflow of recording into an empty clip
 - Edits that would delete or replace the take's slot are refused for that slot only. The recording track cannot be removed ("End this track's Session recording before removing it."). A scene holding a recording slot cannot be deleted ("End this scene's Session recording before deleting it."). A recording slot accepts no new MIDI clip or imported audio ("End this slot's recording before adding a clip.").
 - Other edits keep the take. These are removing other tracks, and reordering, duplicating, grouping and ungrouping tracks, the recording track included. They also include deleting other scenes, moving, duplicating and adding scenes (the take moves with its slot), clearing slots, MIDI import, MIDI clip export and saving. A project saved during a take holds the state before the take ends. The engine drops the slot's temporary recording destination when the project is loaded.
 - New Project ends takes in the replaced project, as Open does.
+- Seeking, including locator navigation, ends every take where the play head was and stops the transport, as during Arrangement recording. Each take keeps its keys and stays silent.
+- The recording track cannot be disarmed during its take ("End this track's Session recording before disarming it."). Arming, disarming and monitoring other tracks, and monitoring the recording track itself, keep the take.
+- Changing the recording track's instrument keeps the take. Arrangement clip edits (trim, reverse, split, duplicate, cut, copy, paste and move) and Insert or Delete Time keep it too, on any track. So do track, device and master automation, follow actions, count-in and recording quantization. Count-in and recording quantization do not apply to Session takes.
 
 The finished take:
 
@@ -57,6 +60,14 @@ A third MIDI input test, `editsDuringSessionTakes`, gives each group of edits a 
 
 On the unfixed code, reordering, duplicating, grouping and ungrouping tracks, clearing slots, MIDI import and saving kept the take. Removing other tracks and the other scene edits ran there only after the take was lost. Their code is unchanged, and they keep the take in the fixed run. With the fixes every check passes.
 
+A fourth MIDI input test, `playbackAndArrangementEditsDuringSessionTakes`, uses the same fixture for the remaining edits that were refused only during Arrangement recording. It was also first run on the unfixed code with failures logged rather than thrown:
+
+- A seek to 3 s during a take moved the play head while the slot kept recording. Ending the take after one more key gave a 6.34-beat clip, and that key lasted 5.19 beats where it was held for about 0.21 beats.
+- Disarming the recording track was accepted. The slot kept recording on a track that reported itself unarmed, and the take kept both keys.
+- Monitoring the recording track (on, automatic and off), replacing its instrument and restoring the built-in synthesizer kept the take. So did Arrangement audio trim, reverse, split, duplicate, cut, paste and move on other tracks, and MIDI duplicate, cut, paste and move on the recording track, followed by Insert Time and Delete Time. Volume and pan automation on the recording track, a device control on its delay, master volume automation, a follow action on its other slot clip, a two-bar count-in and quarter-note recording quantization all kept it as well.
+
+With the fixes, the seek ends the take with both keys played before it, and the transport is stopped at 3 s. Disarming is refused, the monitored key is heard during the take (peak about 0.11), and the take ends with all three keys. Every edit in the last item keeps both keys, and its own change is in place afterwards.
+
 `tests/SessionTests.cpp` records the synthetic device's generated audio input into a slot: a one-second, two-beat, tempo-following take in the project Assets that contains the signal and plays. A UI check records and ends a take from the grid buttons.
 
 ## Not implemented
@@ -70,4 +81,4 @@ On the unfixed code, reordering, duplicating, grouping and ungrouping tracks, cl
 - Capture MIDI.
 - Any comparison with reference recording timing.
 
-Assigning an input, arming a track or changing monitoring keeps the transport and launched clips playing (see [immediate MIDI input activation](../architecture.md#immediate-midi-input-activation)). That section also explains why input changes are refused while a take records. Audio-device changes during a take and physical MIDI hot-plug are not covered (see [open questions](../open-questions.md#input-changes-during-session-takes)). Some edits that are refused only during Arrangement recording have not been audited for Session takes: seeking, arming or monitoring the recording track itself, Arrangement clip and time edits, automation, follow actions and recording settings (see [open questions](../open-questions.md#edits-during-session-takes)).
+Assigning an input, arming a track or changing monitoring keeps the transport and launched clips playing (see [immediate MIDI input activation](../architecture.md#immediate-midi-input-activation)). That section also explains why input changes are refused while a take records. Audio-device changes during a take and physical MIDI hot-plug are not covered (see [open questions](../open-questions.md#input-changes-during-session-takes)). Loop and tempo changes during a take have not been audited (see [open questions](../open-questions.md#edits-during-session-takes)).

@@ -4080,6 +4080,9 @@ Result Session::setTrackArmed (int index, bool value)
     auto* input = impl->input (*t); if (! input) return Result::fail ("Select an input before arming this track.");
     if (input->isRecordingEnabled (t->itemID) == value) return Result::ok();
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing record arms.");
+    // A take records through its slot's own destination, so disarming would leave it recording on
+    // a track that shows it is not armed.
+    if (impl->trackRecording (t->itemID.toString())) return Result::fail ("End this track's Session recording before disarming it.");
     auto* destination = te::getDestination (*input, *t, 0);
     if (!destination) return Result::fail ("Input destination is unavailable.");
     const auto monitored=impl->monitoredMidiTracks();
@@ -4183,7 +4186,8 @@ void Session::seek (double seconds)
     if (impl->exporting) return;
     if (std::isfinite (seconds))
     {
-        if (impl->edit->getTransport().isRecording()) stop();
+        // Takes are timed by the play head, so any recording ends where it is first.
+        if (impl->anyRecording()) stop();
         impl->cancelLaunches();
         impl->edit->getTransport().setPosition (te::TimePosition::fromSeconds (juce::jmax (0.0, seconds)));
     }

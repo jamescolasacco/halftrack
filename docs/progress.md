@@ -920,3 +920,30 @@ The fixes:
 With the fixes every check passes. The policy is in [open questions](open-questions.md#edits-during-session-takes) and the [Session recording contract](research/session-recording-contract.md).
 
 MIDI input (55 s, 867 checks), MIDI monitoring (13 s, 173), Session (60 s, 1190) and UI (16 s, 668) suites pass locally on the Mac. The full 38-suite CTest run also passes (585 s, alongside another worktree's run). The build used a private copy of the pinned sources. Seeking, arming or monitoring the recording track itself, Arrangement clip and time edits, automation, follow actions and recording settings are not yet audited for Session takes.
+
+## Remaining edits during Session takes — 2026-10-20
+
+Engine owns the changes in `src/Session.cpp` and the test in `tests/MidiInputTests.cpp`. Cross-area edits: `docs/architecture.md` and `docs/open-questions.md`.
+
+This finishes the audit of edits that were refused only while the transport recorded. The new generated-signal test, `playbackAndArrangementEditsDuringSessionTakes`, uses the earlier `SessionTake` fixture: a MIDI take from the generated controller with keys played around the edits. On the unfixed code, run with failures logged rather than thrown, two scenarios failed:
+
+- A seek during the take moved the play head while the slot kept recording. Ending the take after one more key gave a 6.34-beat clip, and that key lasted 5.19 beats where it was held for about 0.21 beats.
+- Disarming the recording track was accepted. The engine kept the take, but the slot recorded on a track that reported itself unarmed.
+
+These kept the take on the unfixed code and need no change:
+
+- monitoring the recording track, and replacing its instrument;
+- Arrangement audio trim, reverse, split, duplicate, cut, paste and move;
+- Arrangement MIDI duplicate, cut, paste and move on the recording track;
+- Insert Time and Delete Time;
+- track volume and pan, device and master automation;
+- a follow action, the count-in and recording quantization.
+
+The fixes:
+
+- `seek`, and locator navigation through it, now ends any recording before moving the play head, through `Impl::anyRecording()`. The take keeps the keys played before the seek, and the transport stops, as during Arrangement recording.
+- `setTrackArmed` refuses to disarm a track whose Session take records.
+
+With the fixes every check passes. The policy is in [open questions](open-questions.md#edits-during-session-takes) and the [Session recording contract](research/session-recording-contract.md). Loop and tempo changes during a take are not yet audited, and reference behavior for seeking or disarming during a take is unmeasured.
+
+MIDI input (61 s, 984 checks), MIDI monitoring (14 s, 173), Session (61 s, 1190) and UI (17 s, 671) suites pass locally on the Mac. The build used a private copy of the pinned sources.
