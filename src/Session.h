@@ -54,7 +54,10 @@ public:
         bool bassMono = false, bassAudition = false, mute = false, dcFilter = false;
         bool operator== (const UtilitySettings&) const = default;
     };
-    enum class EffectKind { equalizer, compressor, delay, reverb, bitcrusher, gate, limiter };
+    // Appended kinds keep their persisted integer value; never reorder.
+    enum class EffectKind { equalizer, compressor, delay, reverb, bitcrusher, gate, limiter,
+        saturator, overdrive, autoFilter, autoPan, chorus, phaser, flanger, eqThree, glueCompressor, frequencyShifter };
+    static constexpr int effectKindCount = 17;
     struct EffectSettings
     {
         EffectKind kind = EffectKind::equalizer;

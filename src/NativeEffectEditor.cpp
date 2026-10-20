@@ -42,15 +42,16 @@ public:
                     control.setSkewFactorFromMidPoint (spec.midpoint);
                 control.setSliderStyle (kind == Session::EffectKind::equalizer ? juce::Slider::LinearHorizontal : juce::Slider::RotaryHorizontalVerticalDrag);
                 control.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 100, 23);
-                control.setTextValueSuffix (spec.unit); control.setDoubleClickReturnValue (true, spec.initial);
                 const auto unit = juce::String (spec.unit);
-                const bool percent = juce::String (spec.key) == "mix" || juce::String (spec.key) == "feedback";
+                const bool percent = unit == "%" || juce::String (spec.key) == "mix" || juce::String (spec.key) == "feedback";
+                control.setTextValueSuffix (percent ? juce::String() : unit); control.setDoubleClickReturnValue (true, spec.initial);
                 if (percent)
                 {
                     control.textFromValueFunction = [] (double v) { return juce::String (v*100, 1) + "%"; };
                     control.valueFromTextFunction = [] (const juce::String& t) { return t.getDoubleValue()/100; };
                 }
-                else control.setNumDecimalPlacesToDisplay (unit.contains ("Hz") ? 0 : unit.contains ("dB") || unit.contains ("ms") ? 1 : 2);
+                else control.setNumDecimalPlacesToDisplay (unit.contains ("Hz") || unit.contains ("deg") ? 0 : unit.contains ("dB") || unit.contains ("ms") ? 1 : 2);
+                control.updateText(); // The text box predates the formatter; refresh unchanged initial values.
                 control.onDragStart = [this] { session.beginEditGesture ("Adjust " + juce::String (effectName (kind))); dragging = true; };
                 control.onDragEnd = [this] { finishGesture(); };
                 control.onValueChange = [this, i] { edit (i, static_cast<float> (sliders[i].getValue())); };
@@ -58,8 +59,9 @@ public:
             }
         }
         error.setColour (juce::Label::textColourId, juce::Colour (0xfff4ab84)); addAndMakeVisible (error);
+        const auto rows = static_cast<int> ((specs.size() + 3) / 4);
         session.addChangeListener (this); setSize (kind == Session::EffectKind::equalizer ? 1000 : 660,
-            kind == Session::EffectKind::equalizer ? 640 : kind == Session::EffectKind::delay ? 540 : 400); synchronise(); startTimerHz (15);
+            kind == Session::EffectKind::equalizer ? 640 : std::max (400, 96 + rows * 145)); synchronise(); startTimerHz (15);
     }
     ~NativeEffectEditor() override
     { stopTimer(); session.removeChangeListener (this); finishGesture(); setLookAndFeel (nullptr); }
@@ -154,6 +156,12 @@ public:
             sliders[2].setEnabled (enabled && value->values[6] == 0);
             sliders[5].setEnabled (enabled && value->values[6] == 0);
         }
+        if (value && (kind == Session::EffectKind::autoFilter || kind == Session::EffectKind::autoPan))
+        {
+            const auto timing = static_cast<size_t> (effectParameterIndex (kind, kind == Session::EffectKind::autoPan ? "sync" : "lfoSync"));
+            const bool synced = value->values[timing] != 0;
+            sliders[timing - 1].setEnabled (enabled && ! synced); choices[timing + 1].setEnabled (enabled && synced);
+        }
         repaint();
     }
 private:
@@ -193,12 +201,13 @@ int runNativeEffectEditorTests (const juce::File& root)
 {
     auto check = [] (bool v, const char* text) { if (! v) throw std::runtime_error (text); std::cout << "PASS effect editor: " << text << std::endl; };
     Session s (false); check (s.addAudioTrack().wasOk(), "create editor track");
-    for (int type = 0; type <= static_cast<int> (Session::EffectKind::limiter); ++type)
+    for (int type = 0; type < Session::effectKindCount; ++type)
     {
         const auto kind = static_cast<Session::EffectKind> (type); check (s.addNativeEffect (0, kind).wasOk(), "add editor device");
         const auto info = s.snapshot().tracks[0].plugins.back(); auto editor = makeNativeEffectEditor (s, info.id);
         juce::Slider* slider = nullptr;
-        const auto specs = effectParameters (kind); size_t index = specs[0].choices ? 1 : 0;
+        const auto specs = effectParameters (kind); size_t index = 0;
+        while (index < specs.size() && specs[index].choices) ++index;
         for (auto* child : editor->getChildren()) if (auto* c = dynamic_cast<juce::Slider*> (child); c && c->getName() == specs[index].key) slider = c;
         check (slider != nullptr, "production control exists");
         slider->onDragStart(); slider->setValue (specs[index].minimum, juce::sendNotificationSync); slider->setValue (specs[index].maximum, juce::sendNotificationSync); slider->onDragEnd();

@@ -1,5 +1,6 @@
 #pragma once
 #include "Session.h"
+#include "EffectProcessors.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <array>
 #include <cmath>
@@ -21,6 +22,13 @@ const char* effectName (Session::EffectKind) noexcept;
 std::span<const EffectParameter> effectParameters (Session::EffectKind) noexcept;
 Session::EffectSettings defaultEffectSettings (Session::EffectKind) noexcept;
 bool validEffectSettings (const Session::EffectSettings&) noexcept;
+// Browser grouping shown in the device menu.
+const char* effectCategory (Session::EffectKind) noexcept;
+bool effectUsesTempo (Session::EffectKind) noexcept;
+double effectTailSeconds (Session::EffectKind, double sampleRate) noexcept;
+double effectLatencySeconds (Session::EffectKind, double sampleRate) noexcept;
+// Index of a named control in the kind's parameter table, or -1.
+int effectParameterIndex (Session::EffectKind, const char* key) noexcept;
 
 class NativeEffectDSP final
 {
@@ -30,6 +38,8 @@ public:
     void configure (const Session::EffectSettings&) noexcept;
     void reset() noexcept;
     void processSamples (float* left, float* right, int samples) noexcept;
+    // Called at a block start while the transport plays or renders.
+    void setTimelinePosition (double seconds) noexcept;
     static std::array<double, 5> eqCoefficients (int type, double frequency, double gain, double q, double sampleRate) noexcept;
 private:
     struct Filter
@@ -61,6 +71,15 @@ private:
     uint64_t limiterFrame = 0;
     size_t limiterHead = 0, limiterSize = 0;
     double limiterGain = 1, limiterCeiling = 1, limiterDrive = 1, limiterRelease = 0;
+    effects::Saturator saturator;
+    effects::Overdrive overdrive;
+    effects::AutoFilter autoFilter;
+    effects::AutoPan autoPan;
+    effects::ModulatedDelay modulatedDelay;
+    effects::Phaser phaser;
+    effects::ThreeBandEq eqThree;
+    effects::GlueCompressor glue;
+    effects::FrequencyShifter shifter;
     int ramp = 0;
     bool processed = false;
 };
@@ -90,11 +109,9 @@ public:
     void deinitialise() override {}
     void reset() override;
     void applyToBuffer (const tracktion::PluginRenderContext&) override;
-    bool noTail() override { return kind == Session::EffectKind::compressor || kind == Session::EffectKind::gate; }
-    double getLatencySeconds() override
-    { return kind == Session::EffectKind::limiter ? std::ceil (sampleRate * .001) / sampleRate : 0.0; }
-    double getTailLength() const override
-    { return kind == Session::EffectKind::delay ? 1800.0 : kind == Session::EffectKind::reverb ? 20.25 : kind == Session::EffectKind::equalizer ? 10.0 : kind == Session::EffectKind::bitcrusher ? .008 : kind == Session::EffectKind::limiter ? std::ceil (sampleRate * .001) / sampleRate : 0.0; }
+    bool noTail() override { return kind == Session::EffectKind::compressor || kind == Session::EffectKind::gate || kind == Session::EffectKind::autoPan || kind == Session::EffectKind::glueCompressor; }
+    double getLatencySeconds() override { return effectLatencySeconds (kind, sampleRate); }
+    double getTailLength() const override { return effectTailSeconds (kind, sampleRate); }
     bool takesMidiInput() override { return false; }
     bool takesAudioInput() override { return true; }
     int getNumOutputChannelsGivenInputs (int) override { return 2; }

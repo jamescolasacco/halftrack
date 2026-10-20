@@ -6,6 +6,7 @@
 #include <stdexcept>
 namespace halftrack
 {
+void runExtendedEffectsTests();
 namespace
 {
 using Kind = Session::EffectKind;
@@ -297,7 +298,7 @@ juce::AudioBuffer<float> engineReference (const juce::AudioBuffer<float>& input,
 void lifecycleTests()
 {
     auto input=signal(14000);
-    for(int kind=0;kind<=static_cast<int>(Kind::limiter);++kind)
+    for(int kind=0;kind<Session::effectKindCount;++kind)
     {
         auto s=defaultEffectSettings(static_cast<Kind>(kind));if(kind==0){s.values[2]=8;s.values[1]=400;}
         const auto expected=run(input,s);auto split=input;NativeEffectDSP dsp;dsp.prepare(48000,s.kind);dsp.configure(s);
@@ -305,8 +306,8 @@ void lifecycleTests()
         check(difference(split,expected)==0,"block partition invariance for "+juce::String(effectName(s.kind)));
         dsp.reset();split=input;dsp.processSamples(split.getWritePointer(0),split.getWritePointer(1),split.getNumSamples());check(difference(split,expected)==0,"reset restores deterministic output");
         auto bad=input;bad.setSample(0,0,std::numeric_limits<float>::quiet_NaN());bad.setSample(1,10,std::numeric_limits<float>::infinity());check(difference(run(bad,s),run(bad,s))==0,"nonfinite input does not poison state");
-        if (s.kind != Kind::limiter)
-        { s.values[kind==0?33:kind==1?6:kind==2?3:kind==3?5:kind==4?4:7]=0;check(difference(run(input,s),input)==0,"zero wet is exact dry signal"); }
+        if (const auto mix = effectParameterIndex (s.kind, "mix"); mix >= 0)
+        { s.values[(size_t) mix]=0;check(difference(run(input,s),input)==0,"zero wet is exact dry signal"); }
     }
 }
 void writeAudio(const juce::File& file,const juce::AudioBuffer<float>& audio)
@@ -325,7 +326,7 @@ juce::ValueTree effectState(juce::ValueTree root)
 void projectTests(const juce::File& root)
 {
     const auto input=signal(20000);const auto file=root.getChildFile("source.wav");writeAudio(file,input);
-    for(int type=0;type<=static_cast<int>(Kind::limiter);++type)
+    for(int type=0;type<Session::effectKindCount;++type)
     {
         const auto kind=static_cast<Kind>(type);Session s(false);ok(s.importAudio(file,0),"import effect fixture");ok(s.addNativeEffect(0,kind),"insert "+juce::String(effectName(kind)));
         const auto id=s.snapshot().tracks[0].plugins[0].id;auto settings=defaultEffectSettings(kind);
@@ -438,17 +439,25 @@ void projectTests(const juce::File& root)
         settings.tempoBpm=120;ok(synced.setNativeEffectSettings(id,settings),"stale derived tempo cannot override project tempo");
         check(!synced.snapshot().dirty&&!synced.canUndo(),"unchanged device values with stale derived tempo remain a no-op");
     }
+    {
+        Session full (false); ok (full.addAudioTrack(), "create device-limit track");
+        int inserted = 0; while (inserted < 100 && full.addNativeEffect (0, Kind::saturator).wasOk()) ++inserted;
+        check (inserted >= 48 && inserted < 64, "device chains hold dozens of devices before the engine limit");
+        const auto devices = full.snapshot().tracks[0].plugins.size(); full.undo(); full.redo();
+        check (full.addNativeEffect (0, Kind::chorus).failed() && full.addUtility (0).failed()
+               && full.snapshot().tracks[0].plugins.size() == devices && ! full.canRedo(), "a full chain rejects devices without a silent partial edit");
+    }
     Session chain(false);ok(chain.importAudio(file,0),"import chain source");ok(chain.addNativeEffect(0,Kind::equalizer),"insert EQ");ok(chain.addNativeEffect(0,Kind::compressor),"insert compressor");
     auto first=chain.snapshot().tracks[0].plugins[0];auto gain=first.effect;gain.values[32]=12;ok(chain.setNativeEffectSettings(first.id,gain),"set pre-compression gain");
     const auto one=root.getChildFile("gain-first.wav"),two=root.getChildFile("gain-last.wav");ok(chain.exportWav(one),"render gain before compressor");ok(chain.movePlugin(0,0,1),"move actual effect order");ok(chain.exportWav(two),"render gain after compressor");check(difference(readAudio(one),readAudio(two))>.01,"order changes nonlinear output");chain.undo();ok(chain.exportWav(two),"undo device order");check(difference(readAudio(one),readAudio(two))==0,"undo order restores bit-identical output");
     Session midi(false);ok(midi.addMidiTrack("Effect instrument"),"add MIDI track");const auto tracks=midi.snapshot().tracks;const int track=(int)tracks.size()-1;ok(midi.addMidiClip(tracks.back().id,0,1),"add MIDI fixture");const auto clip=midi.snapshot().tracks.back().clips[0].id;ok(midi.addMidiNote(clip,60,0,1,.6f),"add generated note");
-    for(int k=0;k<=static_cast<int>(Kind::limiter);++k)ok(midi.addNativeEffect(track,static_cast<Kind>(k)),"insert device after instrument");const auto result=root.getChildFile("midi-effects.wav");ok(midi.exportWav(result,48000,24,1),"render instrument through all native devices and tail");auto rendered=readAudio(result);check(rendered.getMagnitude(0,rendered.getNumSamples())>.001,"instrument chain remains audible");
-    ok(midi.addReturnTrack("Effect return"),"create return");const int ret=(int)midi.snapshot().tracks.size()-1;for(int k=0;k<=static_cast<int>(Kind::limiter);++k)ok(midi.addNativeEffect(ret,static_cast<Kind>(k)),"insert device after return input");
+    for(int k=0;k<Session::effectKindCount;++k)ok(midi.addNativeEffect(track,static_cast<Kind>(k)),"insert device after instrument");const auto result=root.getChildFile("midi-effects.wav");ok(midi.exportWav(result,48000,24,1),"render instrument through all native devices and tail");auto rendered=readAudio(result);check(rendered.getMagnitude(0,rendered.getNumSamples())>.001,"instrument chain remains audible");
+    ok(midi.addReturnTrack("Effect return"),"create return");const int ret=(int)midi.snapshot().tracks.size()-1;for(int k=0;k<Session::effectKindCount;++k)ok(midi.addNativeEffect(ret,static_cast<Kind>(k)),"insert device after return input");
 }
 }
 int runNativeEffectsTests(const juce::File& artifacts)
 {
-    try {const auto root=artifacts.getChildFile("effects-"+juce::Uuid().toString());ok(root.createDirectory(),"create fixtures");equalizerTests();compressorTests();delayTests();syncedDelayTests();reverbTests();bitcrusherTests();gateTests();limiterTests();lifecycleTests();projectTests(root);runNativeEffectEditorTests(root);std::cout<<"Native effects passed: "<<root.getFullPathName()<<std::endl;return 0;}
+    try {const auto root=artifacts.getChildFile("effects-"+juce::Uuid().toString());ok(root.createDirectory(),"create fixtures");equalizerTests();compressorTests();delayTests();syncedDelayTests();reverbTests();bitcrusherTests();gateTests();limiterTests();runExtendedEffectsTests();lifecycleTests();projectTests(root);runNativeEffectEditorTests(root);std::cout<<"Native effects passed: "<<root.getFullPathName()<<std::endl;return 0;}
     catch(const std::exception& e){std::cerr<<"FAIL native effects: "<<e.what()<<std::endl;return 1;}
 }
 }

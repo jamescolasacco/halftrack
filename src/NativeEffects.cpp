@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <string_view>
 
 namespace halftrack
 {
@@ -56,6 +57,94 @@ constexpr EffectParameter limiterFields[] {
     { "driveDb", "Input gain", 0, 36, 0, 0, " dB" },
     { "ceilingDb", "Peak ceiling", -24, 0, -.3f, 0, " dB" },
     { "releaseMs", "Release", 1, 3000, 100, 100, " ms" } };
+#define LFO_DIVISIONS "1/32|1/16|1/8|1/4|1/2|1 bar|2 bars|4 bars|8 bars"
+#define LFO_SHAPES "Sine|Triangle|Saw up|Saw down|Square|Random"
+constexpr EffectParameter saturatorFields[] {
+    { "driveDb", "Drive", -36, 36, 0, 0, " dB" },
+    { "curve", "Curve", 0, 5, 0, 0, "", "Analog clip|Soft sine|Medium curve|Hard curve|Sinoid fold|Digital clip" },
+    { "outputDb", "Output", -36, 36, 0, 0, " dB" },
+    { "dcFilter", "DC filter", 0, 1, 0, 0, "", "Off|On" },
+    { "softClip", "Output clip", 0, 1, 0, 0, "", "Off|Soft" },
+    { "mix", "Dry / Wet", 0, 1, 1, 0, "" } };
+constexpr EffectParameter overdriveFields[] {
+    { "frequencyHz", "Filter frequency", 50, 20000, 1500, 1000, " Hz" },
+    { "widthOctaves", "Bandwidth", .5f, 9, 6, 3, " oct" },
+    { "drive", "Drive", 0, 1, .5f, 0, "%" },
+    { "tone", "Tone", 0, 1, .5f, 0, "%" },
+    { "dynamics", "Dynamics", 0, 1, .5f, 0, "%" },
+    { "mix", "Dry / Wet", 0, 1, 1, 0, "" } };
+constexpr EffectParameter autoFilterFields[] {
+    { "filterType", "Filter", 0, 3, 0, 0, "", "Low pass|High pass|Band pass|Notch" },
+    { "slope", "Slope", 0, 1, 0, 0, "", "12 dB/oct|24 dB/oct" },
+    { "frequencyHz", "Frequency", 20, 20000, 2000, 1000, " Hz" },
+    { "resonance", "Resonance", 0, 1, .2f, 0, "%" },
+    { "lfoAmount", "LFO amount", 0, 1, 0, 0, "%" },
+    { "lfoRateHz", "LFO rate", .01f, 40, 1, 1, " Hz" },
+    { "lfoSync", "LFO timing", 0, 1, 0, 0, "", "Hertz|Project tempo" },
+    { "lfoDivision", "LFO division", 0, 8, 3, 0, "", LFO_DIVISIONS },
+    { "lfoShape", "LFO shape", 0, 5, 0, 0, "", LFO_SHAPES },
+    { "lfoPhaseDeg", "Stereo phase", 0, 360, 0, 180, " deg" },
+    { "envelopeAmount", "Envelope amount", -1, 1, 0, 0, "%" },
+    { "attackMs", "Envelope attack", .1f, 100, 6, 10, " ms" },
+    { "releaseMs", "Envelope release", 1, 2000, 200, 200, " ms" },
+    { "mix", "Dry / Wet", 0, 1, 1, 0, "" } };
+constexpr EffectParameter autoPanFields[] {
+    { "amount", "Amount", 0, 1, .5f, 0, "%" },
+    { "rateHz", "Rate", .01f, 40, 1, 1, " Hz" },
+    { "sync", "Timing", 0, 1, 0, 0, "", "Hertz|Project tempo" },
+    { "division", "Division", 0, 8, 3, 0, "", LFO_DIVISIONS },
+    { "shape", "Shape", 0, 5, 0, 0, "", LFO_SHAPES },
+    { "phaseDeg", "Stereo phase", 0, 360, 180, 180, " deg" },
+    { "offsetDeg", "Offset", 0, 360, 0, 180, " deg" } };
+constexpr EffectParameter chorusFields[] {
+    { "delayMs", "Delay", 1, 30, 7, 7, " ms" },
+    { "depthMs", "Depth", 0, 10, 2, 2, " ms" },
+    { "rateHz", "Rate", .01f, 20, .8f, 1, " Hz" },
+    { "voices", "Voices", 0, 2, 1, 0, "", "One|Two|Three" },
+    { "spreadDeg", "Stereo spread", 0, 180, 90, 90, " deg" },
+    { "feedback", "Feedback", -.95f, .95f, 0, 0, "" },
+    { "mix", "Dry / Wet", 0, 1, .5f, 0, "" } };
+constexpr EffectParameter phaserFields[] {
+    { "stages", "Stages", 0, 5, 1, 0, "", "2|4|6|8|10|12" },
+    { "centerHz", "Center", 50, 10000, 800, 800, " Hz" },
+    { "depth", "Depth", 0, 1, .5f, 0, "%" },
+    { "rateHz", "Rate", .01f, 20, .5f, 1, " Hz" },
+    { "feedback", "Feedback", -.95f, .95f, .4f, 0, "" },
+    { "spreadDeg", "Stereo spread", 0, 180, 90, 90, " deg" },
+    { "mix", "Dry / Wet", 0, 1, .5f, 0, "" } };
+constexpr EffectParameter flangerFields[] {
+    { "delayMs", "Delay", .1f, 20, 2.5f, 3, " ms" },
+    { "depthMs", "Depth", 0, 10, 2, 2, " ms" },
+    { "rateHz", "Rate", .01f, 20, .3f, 1, " Hz" },
+    { "feedback", "Feedback", -.95f, .95f, .5f, 0, "" },
+    { "spreadDeg", "Stereo spread", 0, 180, 90, 90, " deg" },
+    { "mix", "Dry / Wet", 0, 1, .5f, 0, "" } };
+constexpr EffectParameter eqThreeFields[] {
+    { "lowDb", "Low", -70, 6, 0, 0, " dB" },
+    { "midDb", "Mid", -70, 6, 0, 0, " dB" },
+    { "highDb", "High", -70, 6, 0, 0, " dB" },
+    { "lowHz", "Low / mid", 50, 5000, 250, 500, " Hz" },
+    { "highHz", "Mid / high", 200, 18000, 2500, 2500, " Hz" },
+    { "slope", "Slope", 0, 1, 0, 0, "", "24 dB/oct|48 dB/oct" },
+    { "lowOn", "Low band", 0, 1, 1, 0, "", "Off|On" },
+    { "midOn", "Mid band", 0, 1, 1, 0, "", "Off|On" },
+    { "highOn", "High band", 0, 1, 1, 0, "", "Off|On" } };
+constexpr EffectParameter glueFields[] {
+    { "thresholdDb", "Threshold", -40, 0, -10, 0, " dB" },
+    { "ratio", "Ratio", 0, 2, 0, 0, "", "2:1|4:1|10:1" },
+    { "attack", "Attack", 0, 6, 3, 0, "", "0.01 ms|0.1 ms|0.3 ms|1 ms|3 ms|10 ms|30 ms" },
+    { "release", "Release", 0, 6, 2, 0, "", "0.1 s|0.2 s|0.4 s|0.6 s|0.8 s|1.2 s|Auto" },
+    { "makeupDb", "Makeup", 0, 20, 0, 0, " dB" },
+    { "rangeDb", "Range", 0, 70, 70, 0, " dB" },
+    { "softClip", "Soft clip", 0, 1, 0, 0, "", "Off|On" },
+    { "mix", "Dry / Wet", 0, 1, 1, 0, "" } };
+constexpr EffectParameter shifterFields[] {
+    { "shiftHz", "Frequency", -5000, 5000, 100, 0, " Hz" },
+    { "mode", "Mode", 0, 1, 0, 0, "", "Shift|Ring" },
+    { "wide", "Stereo", 0, 1, 0, 0, "", "Same|Opposite" },
+    { "mix", "Dry / Wet", 0, 1, 1, 0, "" } };
+#undef LFO_DIVISIONS
+#undef LFO_SHAPES
 constexpr std::array<double, 11> delayBeats { .25, 1.0/3, .375, .5, 2.0/3, .75, 1, 1.5, 2, 3, 4 };
 constexpr std::array<double, 8> roomSeconds { .0297, .0371, .0411, .0437, .0531, .0617, .0713, .0799 };
 double finiteSample (double v) noexcept { return std::isfinite (v) ? std::clamp (v, -1.0e12, 1.0e12) : 0; }
@@ -63,14 +152,58 @@ double finiteSample (double v) noexcept { return std::isfinite (v) ? std::clamp 
 const char* effectName (Kind kind) noexcept
 {
     switch (kind) { case Kind::equalizer: return "Eight-band EQ"; case Kind::compressor: return "Compressor";
-        case Kind::delay: return "Stereo Delay"; case Kind::reverb: return "Room Reverb"; case Kind::bitcrusher: return "Bitcrusher"; case Kind::gate: return "Noise Gate"; case Kind::limiter: return "Peak Limiter"; }
+        case Kind::delay: return "Stereo Delay"; case Kind::reverb: return "Room Reverb"; case Kind::bitcrusher: return "Bitcrusher"; case Kind::gate: return "Noise Gate"; case Kind::limiter: return "Peak Limiter";
+        case Kind::saturator: return "Saturator"; case Kind::overdrive: return "Overdrive"; case Kind::autoFilter: return "Auto Filter";
+        case Kind::autoPan: return "Auto Pan"; case Kind::chorus: return "Chorus"; case Kind::phaser: return "Phaser"; case Kind::flanger: return "Flanger";
+        case Kind::eqThree: return "Three-band EQ"; case Kind::glueCompressor: return "Bus Compressor"; case Kind::frequencyShifter: return "Frequency Shifter"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
 {
     switch (kind) { case Kind::equalizer: return eqFields; case Kind::compressor: return compressorFields;
-        case Kind::delay: return delayFields; case Kind::reverb: return reverbFields; case Kind::bitcrusher: return crusherFields; case Kind::gate: return gateFields; case Kind::limiter: return limiterFields; }
+        case Kind::delay: return delayFields; case Kind::reverb: return reverbFields; case Kind::bitcrusher: return crusherFields; case Kind::gate: return gateFields; case Kind::limiter: return limiterFields;
+        case Kind::saturator: return saturatorFields; case Kind::overdrive: return overdriveFields; case Kind::autoFilter: return autoFilterFields;
+        case Kind::autoPan: return autoPanFields; case Kind::chorus: return chorusFields; case Kind::phaser: return phaserFields; case Kind::flanger: return flangerFields;
+        case Kind::eqThree: return eqThreeFields; case Kind::glueCompressor: return glueFields; case Kind::frequencyShifter: return shifterFields; }
     return {};
+}
+const char* effectCategory (Kind kind) noexcept
+{
+    switch (kind)
+    {
+        case Kind::compressor: case Kind::gate: case Kind::limiter: case Kind::glueCompressor: return "Dynamics";
+        case Kind::equalizer: case Kind::eqThree: case Kind::autoFilter: return "EQ & Filters";
+        case Kind::delay: case Kind::reverb: return "Delay & Reverb";
+        case Kind::bitcrusher: case Kind::saturator: case Kind::overdrive: return "Distortion";
+        case Kind::autoPan: case Kind::chorus: case Kind::phaser: case Kind::flanger: case Kind::frequencyShifter: return "Modulation";
+    }
+    return "Effects";
+}
+bool effectUsesTempo (Kind kind) noexcept { return kind == Kind::delay || kind == Kind::autoFilter || kind == Kind::autoPan; }
+double effectLatencySeconds (Kind kind, double rate) noexcept
+{ return kind == Kind::limiter && rate > 0 ? std::ceil (rate * .001) / rate : 0.0; }
+double effectTailSeconds (Kind kind, double rate) noexcept
+{
+    switch (kind)
+    {
+        case Kind::delay: return 1800.0;
+        case Kind::reverb: return 20.25;
+        case Kind::equalizer: return 10.0;
+        case Kind::bitcrusher: return .008;
+        case Kind::limiter: return effectLatencySeconds (kind, rate);
+        case Kind::saturator: case Kind::overdrive: case Kind::autoFilter: return .5;
+        case Kind::chorus: case Kind::flanger: return 3.0;
+        case Kind::phaser: return 1.0;
+        case Kind::eqThree: case Kind::frequencyShifter: return .1;
+        case Kind::compressor: case Kind::gate: case Kind::autoPan: case Kind::glueCompressor: return 0.0;
+    }
+    return 0.0;
+}
+int effectParameterIndex (Kind kind, const char* key) noexcept
+{
+    const auto fields = effectParameters (kind);
+    for (size_t i = 0; i < fields.size(); ++i) if (std::string_view (fields[i].key) == key) return static_cast<int> (i);
+    return -1;
 }
 Settings defaultEffectSettings (Kind kind) noexcept
 {
@@ -104,7 +237,10 @@ void NativeEffectDSP::prepare (double sampleRate, Kind kind)
         room[i].assign (kind == Kind::reverb ? static_cast<size_t> (std::ceil (rate * roomSeconds[i] * 2)) + 1 : 0, 0);
     limiterPeaks.assign (kind == Kind::limiter ? delaySize + 1 : 0, 0);
     limiterPeakFrames.assign (limiterPeaks.size(), 0);
-    reset(); configure (settings);
+    modulatedDelay.prepare (rate, kind == Kind::chorus ? 40 : kind == Kind::flanger ? 30 : 0);
+    saturator.prepare (rate); overdrive.prepare (rate); autoFilter.prepare (rate); autoPan.prepare (rate);
+    phaser.prepare (rate); eqThree.prepare (rate); glue.prepare (rate); shifter.prepare (rate);
+    processed = false; reset(); configure (settings);
 }
 void NativeEffectDSP::reset() noexcept
 {
@@ -115,6 +251,8 @@ void NativeEffectDSP::reset() noexcept
     gateEnvelope = 0; gateHoldRemaining = 0; gateOpen = false;
     limiterFrame = 0; limiterHead = limiterSize = 0; limiterGain = 1;
     roomCursor = {}; roomTone = {}; delayTone = {}; cursor = 0; envelope = 0; processed = false; ramp = 0;
+    saturator.reset(); overdrive.reset(); autoFilter.reset(); autoPan.reset(); modulatedDelay.reset();
+    phaser.reset(); eqThree.reset(); glue.reset(); shifter.reset();
     outputGain = gainTarget; wet = wetTarget; delayLeft = delayTargetLeft; delayRight = delayTargetRight;
 }
 std::array<double, 5> NativeEffectDSP::eqCoefficients (int type, double frequency, double gain, double q, double sampleRate) noexcept
@@ -203,6 +341,21 @@ void NativeEffectDSP::configure (const Settings& next) noexcept
         limiterDrive = std::pow (10.0, v[0] / 20.0);
         limiterCeiling = std::pow (10.0, v[1] / 20.0);
         limiterRelease = std::exp (-1.0 / (rate * v[2] * .001)); wetTarget = 1;
+    }
+    const bool immediate = ! processed;
+    switch (settings.kind)
+    {
+        case Kind::saturator: saturator.configure (v.data(), immediate); wetTarget = v[5]; break;
+        case Kind::overdrive: overdrive.configure (v.data(), immediate); wetTarget = v[5]; break;
+        case Kind::autoFilter: autoFilter.configure (v.data(), settings.tempoBpm, immediate); wetTarget = v[13]; break;
+        case Kind::autoPan: autoPan.configure (v.data(), settings.tempoBpm, immediate); wetTarget = 1; break;
+        case Kind::chorus: modulatedDelay.configure (v[0], v[1], v[2], v[5], v[4], static_cast<int> (v[3]) + 1, immediate); wetTarget = v[6]; break;
+        case Kind::phaser: phaser.configure (v.data(), immediate); wetTarget = v[6]; break;
+        case Kind::flanger: modulatedDelay.configure (v[0], v[1], v[2], v[3], v[4], 1, immediate); wetTarget = v[5]; break;
+        case Kind::eqThree: eqThree.configure (v.data(), immediate); wetTarget = 1; break;
+        case Kind::glueCompressor: glue.configure (v.data(), immediate); wetTarget = v[7]; break;
+        case Kind::frequencyShifter: shifter.configure (v.data(), immediate); wetTarget = v[3]; break;
+        default: break;
     }
     if (! processed) { wet = wetTarget; outputGain = gainTarget; delayLeft = delayTargetLeft; delayRight = delayTargetRight; ramp = 0; }
     else ramp = std::max (1, static_cast<int> (rate * .005));
@@ -339,9 +492,30 @@ void NativeEffectDSP::processSamples (float* left, float* right, int count) noex
                 const auto mid = .5*(outL+outR), side = .5*(outL-outR)*v[4]; outL = mid+side; outR = mid-side;
                 break;
             }
+            case Kind::saturator: saturator.tick (outL, outR); break;
+            case Kind::overdrive: overdrive.tick (outL, outR); break;
+            case Kind::autoFilter: autoFilter.tick (outL, outR); break;
+            case Kind::autoPan: autoPan.tick (outL, outR); break;
+            case Kind::chorus: case Kind::flanger: modulatedDelay.tick (outL, outR); break;
+            case Kind::phaser: phaser.tick (outL, outR); break;
+            case Kind::eqThree: eqThree.tick (outL, outR); break;
+            case Kind::glueCompressor: glue.tick (outL, outR); break;
+            case Kind::frequencyShifter: shifter.tick (outL, outR); break;
         }
         left[frame] = static_cast<float> (finiteSample (l*(1-wet) + wet*outL*outputGain));
         if (right) right[frame] = static_cast<float> (finiteSample (r*(1-wet) + wet*outR*outputGain));
+    }
+}
+void NativeEffectDSP::setTimelinePosition (double seconds) noexcept
+{
+    switch (settings.kind)
+    {
+        case Kind::autoFilter: autoFilter.syncTo (seconds); break;
+        case Kind::autoPan: autoPan.syncTo (seconds); break;
+        case Kind::chorus: case Kind::flanger: modulatedDelay.syncTo (seconds); break;
+        case Kind::phaser: phaser.syncTo (seconds); break;
+        case Kind::frequencyShifter: shifter.syncTo (seconds); break;
+        default: break;
     }
 }
 bool EffectParameterQueue::push (const Settings& value) noexcept
@@ -365,7 +539,7 @@ NativeEffectPlugin::~NativeEffectPlugin() { stopTimer(); }
 Settings NativeEffectPlugin::readSettings() const
 {
     auto s = defaultEffectSettings (kind); const auto fields = effectParameters (kind);
-    if (kind == Kind::delay) s.tempoBpm = static_cast<float> (edit.tempoSequence.getTempo (0)->getBpm());
+    if (effectUsesTempo (kind)) s.tempoBpm = static_cast<float> (edit.tempoSequence.getTempo (0)->getBpm());
     for (size_t i = 0; i < fields.size(); ++i) s.values[i] = state.getProperty (fields[i].key, fields[i].initial);
     return validEffectSettings (s) ? s : defaultEffectSettings (kind);
 }
@@ -388,7 +562,7 @@ juce::Result NativeEffectPlugin::validateState (const juce::ValueTree& tree)
             return ! value.empty() && end == value.c_str()+value.size() && std::isfinite (output);
         };
         double type = 0;
-        if (! parse ("effectKind", 0, type) || type < 0 || type > static_cast<int> (Kind::limiter) || std::floor (type) != type)
+        if (! parse ("effectKind", 0, type) || type < 0 || type >= Session::effectKindCount || std::floor (type) != type)
             return juce::Result::fail ("The project contains an invalid native effect type.");
         for (const auto& f : effectParameters (static_cast<Kind> (static_cast<int> (type))))
         {
@@ -405,7 +579,7 @@ void NativeEffectPlugin::valueTreePropertyChanged (juce::ValueTree& tree, const 
 void NativeEffectPlugin::publish() { pendingSettings = readSettings(); pending = ! parameters.push (pendingSettings); }
 void NativeEffectPlugin::timerCallback()
 {
-    if (kind == Kind::delay && static_cast<float> (edit.tempoSequence.getTempo (0)->getBpm()) != pendingSettings.tempoBpm)
+    if (effectUsesTempo (kind) && static_cast<float> (edit.tempoSequence.getTempo (0)->getBpm()) != pendingSettings.tempoBpm)
         publish();
     else if (pending) pending = ! parameters.push (pendingSettings);
 }
@@ -421,6 +595,7 @@ void NativeEffectPlugin::applyToBuffer (const tracktion::PluginRenderContext& co
     if (! context.destBuffer || context.bufferNumSamples <= 0 || context.destBuffer->getNumChannels() == 0) return;
     auto* left = context.destBuffer->getWritePointer (0, context.bufferStartSample);
     auto* right = context.destBuffer->getNumChannels() > 1 ? context.destBuffer->getWritePointer (1, context.bufferStartSample) : nullptr;
+    if (context.isPlaying || context.isRendering) processor.setTimelinePosition (context.editTime.getStart().inSeconds());
     processor.processSamples (left, right, context.bufferNumSamples);
 }
 }

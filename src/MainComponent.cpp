@@ -3736,7 +3736,15 @@ private:
         auto types = session.knownPlugins().getTypes();
         juce::PopupMenu popup;
         popup.addItem (100001, "Utility  (Built-in)");
-        for (int i = 0; i <= static_cast<int> (Session::EffectKind::limiter); ++i) popup.addItem (100002+i, juce::String (effectName (static_cast<Session::EffectKind> (i))) + "  (Built-in)");
+        juce::StringArray categories;
+        for (int i = 0; i < Session::effectKindCount; ++i) categories.addIfNotAlreadyThere (effectCategory (static_cast<Session::EffectKind> (i)));
+        for (const auto& category : categories)
+        {
+            juce::PopupMenu group;
+            for (int i = 0; i < Session::effectKindCount; ++i)
+                if (category == effectCategory (static_cast<Session::EffectKind> (i))) group.addItem (100002+i, effectName (static_cast<Session::EffectKind> (i)));
+            popup.addSubMenu (category + "  (Built-in)", group);
+        }
         popup.addSeparator();
         for (int i = 0; i < types.size(); ++i) popup.addItem (i + 1, types[i].name + "  (" + types[i].pluginFormatName + ")");
         popup.addSeparator(); popup.addItem (100000, "Scan / Manage Plug-ins...");
@@ -3752,7 +3760,7 @@ private:
     void insertDeviceSelection (uint64_t generation, const juce::String& trackId, int choice, const juce::Array<juce::PluginDescription>& types)
     {
         if (choice == 100000) { showPlugins(); return; }
-        const bool native = choice >= 100001 && choice <= 100002 + static_cast<int> (Session::EffectKind::limiter);
+        const bool native = choice >= 100001 && choice < 100002 + Session::effectKindCount;
         if (! native && (choice <= 0 || choice > types.size())) return;
         const auto current = session.snapshot();
         if (current.projectGeneration != generation)
@@ -3763,7 +3771,7 @@ private:
         { report (juce::Result::fail ("The selected track is no longer available.")); refresh(); return; }
         const int track = static_cast<int> (found - current.tracks.begin());
         if (choice == 100001) { report (session.addUtility (track)); refresh(); }
-        else if (choice >= 100002 && choice <= 100002 + static_cast<int> (Session::EffectKind::limiter))
+        else if (choice >= 100002 && choice < 100002 + Session::effectKindCount)
         { report (session.addNativeEffect (track, static_cast<Session::EffectKind> (choice-100002))); refresh(); }
         else if (choice > 0 && choice <= types.size()) { report (session.addPlugin (track, types[choice-1])); refresh(); }
     }

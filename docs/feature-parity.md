@@ -377,13 +377,13 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | ID | Reference target | Test profile (plus BASE) | Status |
 | --- | --- | --- | --- |
 | AFX-001 | Amp | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-002 | Auto Filter (12.2 revision) | FILTER | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-003 | Auto Pan (12.2.1 behavior) | MODULATION | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-002 | Auto Filter (12.2 revision) | PARTIAL — original SVF low/high/band/notch, 12/24 dB, LFO (six shapes, Hz/tempo, stereo phase) and envelope follower; analytic magnitude tests. Morph/vowel/DJ circuits and numerical parity missing | PARTIAL |
+| AFX-003 | Auto Pan (12.2.1 behavior) | PARTIAL — original closed-form tremolo/panning with six shapes, Hz/tempo, phase and offset; transport-locked phase. Spin/stereo modes and parity missing | PARTIAL |
 | AFX-004 | Auto Shift | PITCH | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-005 | Beat Repeat | TIME | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-006 | Cabinet | FILTER | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-007 | Channel EQ | FILTER | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-008 | Chorus-Ensemble (12.2.1 behavior) | MODULATION | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-008 | Chorus-Ensemble (12.2.1 behavior) | PARTIAL — original 1–3 voice modulated-delay chorus with spread/feedback; Ensemble/Vibrato modes and parity missing | PARTIAL |
 | AFX-009 | Compressor | Linked peak/RMS compressor, soft knee, makeup and parallel mix; independent dynamics tests and native project/editor integration. Sidechain/lookahead and numerical parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated three-platform acceptance |
 | AFX-010 | Corpus | RESONANCE | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-011 | Delay (12.2.1 behavior) | Stereo and ping-pong delay, feedback damping, link, freeze and complete export tails; eleven project-tempo divisions are tested; sample-accurate tempo automation and reference parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated three-platform acceptance |
@@ -391,26 +391,26 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-013 | Dynamic Tube | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-014 | Echo | TIME | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-015 | EQ Eight | Eight serial bands, seven filter modes plus off, output/mix and actual response plot; independent response and project tests. Advanced modes and numerical parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated three-platform acceptance |
-| AFX-016 | EQ Three | FILTER | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-016 | EQ Three | PARTIAL — Linkwitz–Riley 24/48 dB three-band isolator with all-pass-aligned recombination, kill switches; parity unmeasured | PARTIAL |
 | AFX-017 | Erosion (12.2.1 behavior) | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-018 | External Audio Effect | EXTERNAL | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-019 | Filter Delay | TIME | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-020 | Gate | Original Noise Gate: linked peak detection, hysteresis, attack/hold/release, floor, duck and mix; independent envelopes, export, state/history/editor and callback tests pass locally. Sidechains, lookahead, metering and numerical reference parity remain missing or unverified. | PARTIAL — original native dynamics device |
-| AFX-021 | Glue Compressor | DYNAMICS | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-021 | Glue Compressor | PARTIAL — original Bus Compressor with discrete ratio/attack/release, auto release, range, soft clip and mix; sidechain and parity missing | PARTIAL |
 | AFX-022 | Grain Delay | TIME | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-023 | Hybrid Reverb | REVERB | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-024 | Limiter | Original linked-stereo Peak Limiter, fixed lookahead, gain/ceiling/release and native latency reporting. Independent five-rate windows, driven complete exports, short/resampled/serial/parallel/return compensation and state/editor/allocation tests pass locally. True-peak, adaptive release, metering and numerical reference parity remain unverified. | PARTIAL — original native sample-peak device |
 | AFX-025 | Looper | LOOPER | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-026 | Multiband Dynamics | DYNAMICS | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-027 | Overdrive | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-027 | Overdrive | PARTIAL — original band-pass drive with tone and dynamics restoration; measured-direction tests only; parity unmeasured | PARTIAL |
 | AFX-028 | Pedal | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-029 | Phaser-Flanger | MODULATION | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-029 | Phaser-Flanger | PARTIAL — separate original Phaser (2–12 all-pass stages) and Flanger devices; Doubler mode, envelope and tempo sync missing | PARTIAL |
 | AFX-030 | Redux | Original Bitcrusher: signed quantization, fractional sample holding, drive, wet output and mix. Hand-calculated samples, held tail, history/project/editor and allocation tests pass locally. Reference filters, jitter, legacy mode and numerical identity are unverified. | PARTIAL — original native reduction device |
 | AFX-031 | Resonators | RESONANCE | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-032 | Reverb | Original eight-line room with pre-delay, decay, size, damping, width and mix; reflected-impulse and export-tail tests. Proprietary topology and full controls remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated three-platform acceptance |
 | AFX-033 | Roar | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-034 | Saturator | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-035 | Shifter | PITCH | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-034 | Saturator | PARTIAL — six closed-form curves, DC filter, soft clip and mix; waveshaper/color controls and oversampling missing | PARTIAL |
+| AFX-035 | Shifter | PARTIAL — Frequency Shifter: single-sideband ±5 kHz shift and ring modulation; pitch mode missing | PARTIAL |
 | AFX-036 | Spectral Resonator | SPECTRAL | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-037 | Spectral Time | SPECTRAL | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-038 | Spectrum | METER | NOT IMPLEMENTED / UNVERIFIED |

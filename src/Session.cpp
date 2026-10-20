@@ -647,6 +647,8 @@ public:
     bool canScanPluginsOutOfProcess() override { return useDevices; }
     // Pre sends and soloed returns still need content from a dry-muted source.
     bool shouldProcessMutedTracks() override { return true; }
+    // Device chains are open-ended; the engine's 16-plugin default includes the mixer and meter.
+    te::EditLimits getEditLimits() override { te::EditLimits limits; limits.maxPluginsOnTrack = 64; return limits; }
     File getFileForNewAudioRecording (te::Track& track, const String& extension) override
     {
         auto base = te::EditFileOperations (track.edit).getEditFile();
@@ -3389,6 +3391,7 @@ Result Session::addNativeEffect (int index, EffectKind kind)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (index); if (! track) return Result::fail ("Track not found.");
     if (effectParameters (kind).empty()) return Result::fail ("Unknown native effect.");
+    if (! track->pluginList.canInsertPlugin()) return Result::fail ("This track's device chain is full.");
     juce::ValueTree state (te::IDs::PLUGIN);
     state.setProperty (te::IDs::type, NativeEffectPlugin::xmlTypeName, nullptr);
     state.setProperty ("effectKind", static_cast<int> (kind), nullptr);
@@ -3423,6 +3426,7 @@ Result Session::addUtility (int index)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (index); if (! track) return Result::fail ("Track not found.");
+    if (! track->pluginList.canInsertPlugin()) return Result::fail ("This track's device chain is full.");
     auto plugin = impl->edit->getPluginCache().createNewPlugin (UtilityPlugin::xmlTypeName, {});
     if (! plugin) return Result::fail ("The channel utility could not be created.");
     int insertion = track->pluginList.size();
@@ -3465,6 +3469,7 @@ Result Session::addPlugin (int index, const juce::PluginDescription& description
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
+    if (! t->pluginList.canInsertPlugin()) return Result::fail ("This track's device chain is full.");
     impl->transaction ("Add plug-in");
     // Tracktion resolves its persisted plug-in identity through this registry.
     knownPlugins().addType (description);
