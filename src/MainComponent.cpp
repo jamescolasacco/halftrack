@@ -575,7 +575,7 @@ public:
    #endif
 
 private:
-    static constexpr int categoryWidth = 98, browserWidth = 300, trackWidth = 280, trackHeight = 112, rulerHeight = 60,
+    static constexpr int categoryWidth = 98, browserWidth = 300, trackWidth = 252, trackHeight = 72, rulerHeight = 60,
                          deviceHeight = 268, statusHeight = 24;
     struct BrowserItem { juce::File file; bool directory = false; };
     struct FolderScan
@@ -631,7 +631,8 @@ private:
         {
             for (auto* c : std::initializer_list<juce::Component*> { &name, &mute, &solo, &arm, &gain, &pan, &input, &monitor, &sendMode }) addAndMakeVisible (c);
             name.setName ("Track name");
-            name.setFont (font (12.0f, true));
+            name.setFont (font (11.5f, true));
+            if (! columnLayout) name.setColour (juce::Label::textColourId, juce::Colour (0xff141414));
             name.setEditable (false, true, false);
             name.onTextChange = [this] { owner.report (owner.session.renameTrack (index, name.getText())); };
             name.setTooltip ("Double-click to rename this track");
@@ -663,7 +664,7 @@ private:
             gain.setSliderStyle (juce::Slider::LinearHorizontal);
             gain.setName ("Track volume"); gain.setRange (-100.0, 6.0, 0.1);
             gain.setSkewFactorFromMidPoint (-12);
-            gain.setTextBoxStyle (juce::Slider::TextBoxRight, false, 46, 21);
+            gain.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 18);
             gain.setDoubleClickReturnValue (true, 0);
             gain.textFromValueFunction = [] (double value) { return value <= -100 ? juce::String ("-inf") : juce::String (value, 1) + " dB"; };
             gain.valueFromTextFunction = [this] (juce::String text)
@@ -679,7 +680,7 @@ private:
             gain.onValueChange = [this] { owner.report (owner.session.setTrackGain (index, (float) gain.getValue())); };
             pan.setSliderStyle (juce::Slider::LinearHorizontal);
             pan.setName ("Track pan"); pan.setRange (-1.0, 1.0, 0.01);
-            pan.setTextBoxStyle (juce::Slider::TextBoxRight, false, 34, 21);
+            pan.setTextBoxStyle (juce::Slider::TextBoxRight, false, 32, 18);
             pan.setDoubleClickReturnValue (true, 0);
             pan.textFromValueFunction = [] (double v) { return std::abs (v) < 0.01 ? juce::String ("C") : juce::String ((int) std::round (std::abs (v) * 100.0)) + (v < 0 ? "L" : "R"); };
             pan.valueFromTextFunction = [] (const juce::String& value) { if (value.trim().equalsIgnoreCase ("C")) return 0.0; return value.getDoubleValue() * 0.01 * (value.containsIgnoreCase ("L") ? -1.0 : 1.0); };
@@ -768,18 +769,21 @@ private:
                 if (returnTrack) { g.setColour (muted); g.setFont (font (9.0f)); g.drawText ("SEND INPUT", 6, 27, getWidth() - 12, 16, juce::Justification::centred); }
                 return;
             }
-            g.drawText ("VOL", 12, 38, 25, 17, juce::Justification::centredLeft);
-            g.drawText ("PAN", 174, 38, 25, 17, juce::Justification::centredLeft);
-            if (returnTrack) { g.setColour (orange); g.drawText ("RETURN / SEND INPUT", 12, 78, 129, 23, juce::Justification::centredLeft); }
-            else
+            // Header strip in the track colour, then routing and mixer lines.
+            const bool selected = owner.selectedTrack == index;
+            g.setColour (selected ? colour.brighter (0.2f) : colour); g.fillRect (0, 0, getWidth() - 8, 24);
+            g.setColour (muted); g.setFont (font (9.0f, true));
+            if (returnTrack) g.drawText ("SEND INPUT", 10, 26, 64, 19, juce::Justification::centredLeft);
+            else g.drawText (midi ? "MIDI" : "IN", 10, 26, 24, 19, juce::Justification::centredLeft);
+            g.drawText ("VOL", 10, 49, 24, 20, juce::Justification::centredLeft);
+            for (int channel = 0; channel < 2; ++channel)
             {
-                g.drawText (midi ? "M" : "IN", 12, 78, 18, 23, juce::Justification::centredLeft);
-                g.drawText ("MON", 174, 78, 26, 23, juce::Justification::centredLeft);
+                const auto level = channel == 0 ? peakL : peakR;
+                const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (level, -60.0f) + 60.0f) / 60.0f);
+                const auto bar = juce::Rectangle<int> (getWidth() - 7 + channel * 3, 1, 2, getHeight() - 2);
+                g.setColour (juce::Colour (0xff181818)); g.fillRect (bar);
+                g.setColour (level >= 1.0f ? red : green); g.fillRect (bar.withTop (bar.getBottom() - juce::roundToInt (bar.getHeight() * fraction)));
             }
-            auto peak = juce::jmax (peakL, peakR);
-            auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (peak, -60.0f) + 60.0f) / 60.0f);
-            g.setColour (background); g.fillRect (12, 106, getWidth() - 24, 3);
-            g.setColour (peak >= 1.0f ? red : green); g.fillRect (12, 106, (int) ((getWidth() - 24) * fraction), 3);
         }
         void resized() override
         {
@@ -795,15 +799,12 @@ private:
                 mute.setBounds (5, buttons, w, 22); solo.setBounds (7 + w, buttons, w, 22); arm.setBounds (9 + 2 * w, buttons, w, 22);
                 return;
             }
-            name.setBounds (10, 5, getWidth() - 104, 25);
-            mute.setBounds (getWidth() - 88, 7, 26, 23);
-            solo.setBounds (getWidth() - 61, 7, 26, 23);
-            arm.setBounds (getWidth() - 34, 7, 26, 23);
-            gain.setBounds (37, 37, 129, 28);
-            pan.setBounds (199, 37, getWidth() - 207, 28);
-            input.setBounds (31, 79, 135, 23);
-            monitor.setBounds (201, 79, getWidth() - 209, 23);
-            sendMode.setBounds (143, 79, getWidth() - 151, 23);
+            const int w = getWidth() - 8, half = (w - 40) / 2;
+            name.setBounds (6, 2, w - 92, 20);
+            mute.setBounds (w - 84, 3, 26, 18); solo.setBounds (w - 56, 3, 26, 18); arm.setBounds (w - 28, 3, 26, 18);
+            input.setBounds (36, 27, half, 18); monitor.setBounds (40 + half, 27, w - 44 - half, 18);
+            sendMode.setBounds (76, 27, w - 80, 18);
+            gain.setBounds (32, 49, half + 4, 20); pan.setBounds (40 + half, 49, w - 44 - half, 20);
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
