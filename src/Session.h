@@ -239,11 +239,18 @@ public:
         bool mute = false, solo = false, folded = false;
         juce::StringArray memberIds; // Track order.
     };
+    // The project meter. Beats are quarter notes at every meter, so a bar is numerator x 4 / denominator beats.
+    struct TimeSignature
+    {
+        int numerator = 4, denominator = 4;
+        double beatsPerBar() const noexcept { return numerator * 4.0 / denominator; }
+        bool operator== (const TimeSignature&) const = default;
+    };
     struct MetronomeSettings
     {
         bool enabled = false, accent = true, recordingOnly = false;
         float gain = .6f;
-        int countInBars = 0; // 0, 1 or 2; current project meter is 4/4.
+        int countInBars = 0; // 0, 1 or 2 bars of the project meter.
         bool operator== (const MetronomeSettings&) const = default;
     };
     struct Snapshot
@@ -253,6 +260,7 @@ public:
         uint64_t projectGeneration = 0; // Transient identity; changes only on successful New/Load.
         bool dirty = false, playing = false, recording = false, looping = false;
         double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
+        TimeSignature timeSignature;
         float masterPeakL = 0, masterPeakR = 0, masterGainDb = 0;
         float crossfader = 0; // -1 is fully A, +1 fully B.
         AutomationLane masterVolumeAutomation;
@@ -416,6 +424,8 @@ public:
     juce::Result record();
     void seek (double seconds);
     void setTempo (double bpm);
+    // One project meter: numerator 1-99 over 1, 2, 4, 8 or 16. Tempo stays in quarter notes per minute.
+    juce::Result setTimeSignature (int numerator, int denominator);
     juce::Result tapTempo (double monotonicSeconds); // Message-thread tap time, not project time.
     juce::Result setMetronome (const MetronomeSettings&);
     juce::Result setRecordQuantisation (RecordQuantisation);

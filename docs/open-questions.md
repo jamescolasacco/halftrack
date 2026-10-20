@@ -235,3 +235,7 @@ While a Session slot take records, input assignment is refused on every track, a
 ### Arrangement selection defaults
 
 Split, Delete Selection, Duplicate Selection and Consolidate act on clips only; automation in the selection stays where it is. Consolidated audio is rendered at the audio device's rate, without the track's devices, and plays unwarped. Duplicate replaces the material in the time after the selection, and the selection moves onto the copy. Notes crossing a MIDI split become two notes. These are simplest-default choices pending reference measurement.
+
+### Time signature defaults
+
+The project has one meter, and beats are quarter notes at every meter, so the tempo counts quarter notes and 6/8 has three beats per bar. The metronome clicks quarter notes and accents bars. Importing a MIDI file does not change the project meter. These are simplest-default choices pending reference measurement.

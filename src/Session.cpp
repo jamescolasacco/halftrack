@@ -645,6 +645,18 @@ Result validateProjectTempo (const juce::ValueTree& state)
                 || value < te::TempoSetting::minBPM || value > te::TempoSetting::maxBPM)
                 return Result::fail ("Project tempo must be a finite number from 20 to 999 BPM.");
         }
+    // One meter at the start: numerator 1-99 over 1, 2, 4, 8 or 16.
+    int meters = 0;
+    for (const auto& meter : state.getChildWithName (te::IDs::TEMPOSEQUENCE))
+        if (meter.hasType (te::IDs::TIMESIG))
+        {
+            const auto numerator = meter.getProperty (te::IDs::numerator, 4), denominator = meter.getProperty (te::IDs::denominator, 4);
+            const int d = denominator;
+            if (++meters > 1 || ! finiteProperty (numerator, 1, 99) || static_cast<double> (numerator) != std::floor (static_cast<double> (numerator))
+                || ! finiteProperty (denominator, 1, 16) || static_cast<double> (denominator) != d || (d & (d - 1)) != 0
+                || ! finiteProperty (meter.getProperty (te::IDs::startBeat, 0), 0, 0))
+                return Result::fail ("The project needs one time signature of 1 to 99 over 1, 2, 4, 8 or 16.");
+        }
     return Result::ok();
 }
 constexpr std::array<te::FollowAction, 10> nativeFollowActions {
@@ -956,6 +968,8 @@ public:
     bool canScanPluginsOutOfProcess() override { return useDevices; }
     // Pre sends and soloed returns still need content from a dry-muted source.
     bool shouldProcessMutedTracks() override { return true; }
+    // A beat is a quarter note at every meter: 6/8 is three beats per bar, and the tempo counts quarter notes.
+    bool lengthOfOneBeatDependsOnTimeSignature() override { return false; }
     // Device chains are open-ended; the engine's 16-plugin default includes the mixer and meter.
     te::EditLimits getEditLimits() override { te::EditLimits limits; limits.maxPluginsOnTrack = 64; return limits; }
     File getFileForNewAudioRecording (te::Track& track, const String& extension) override
@@ -2081,6 +2095,7 @@ Session::Snapshot Session::snapshot() const
     s.position = transport.getPosition().inSeconds();
     s.duration = e.getLength().inSeconds();
     s.tempo = e.tempoSequence.getTempo (0)->getBpm();
+    if (auto* meter = e.tempoSequence.getTimeSig (0)) s.timeSignature = { meter->numerator.get(), meter->denominator.get() };
     s.masterGainDb=e.getMasterVolumePlugin()->getVolumeDb();
     s.masterVolumeAutomation = automationLane (*e.getMasterVolumePlugin(), AutomationTarget::volume);
     s.metronome = {e.clickTrackEnabled.get(),e.clickTrackEmphasiseBars.get(),e.clickTrackRecordingOnly.get(),
@@ -2660,6 +2675,7 @@ Result Session::exportMidiClip (const String& id, const File& destination)
     {message.setTimeStamp(std::round(beat*9600));sequence.addEvent(message);};
     add(juce::MidiMessage::textMetaEvent(3,clip->getName()),0);
     add(juce::MidiMessage::tempoMetaEvent((int)std::round(60000000.0/snapshot().tempo)),0);
+    {const auto meter=snapshot().timeSignature;add(juce::MidiMessage::timeSignatureMetaEvent(meter.numerator,meter.denominator),0);}
     double end=clip->getLengthInBeats().inBeats();
     for(auto* event:clip->getSequence().getSysexEvents())
     {
@@ -4981,6 +4997,19 @@ void Session::seek (double seconds)
         impl->cancelLaunches();
         impl->edit->getTransport().setPosition (te::TimePosition::fromSeconds (juce::jmax (0.0, seconds)));
     }
+}
+Result Session::setTimeSignature (int numerator, int denominator)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing the time signature.");
+    if (numerator < 1 || numerator > 99 || denominator < 1 || denominator > 16 || (denominator & (denominator - 1)) != 0)
+        return Result::fail ("Choose a time signature of 1 to 99 over 1, 2, 4, 8 or 16.");
+    auto* meter = impl->edit->tempoSequence.getTimeSig (0);
+    if (meter == nullptr) return Result::fail ("The project has no time signature.");
+    if (meter->numerator.get() == numerator && meter->denominator.get() == denominator) return Result::ok();
+    impl->transaction ("Time signature");
+    meter->numerator = numerator; meter->denominator = denominator;
+    impl->changed(); return Result::ok();
 }
 void Session::setTempo (double bpm)
 {

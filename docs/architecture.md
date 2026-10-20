@@ -274,6 +274,10 @@ A rack is an engine `RackInstance` on the track's device list plus a Halftrack-m
 
 `Impl::timeSelection` holds the selected range and track IDs; the canvas sets it from drags over empty lane space and draws it over the selected lanes. `splitRange`, `deleteRange` and `duplicateRange` validate every edge with `splittableAt`, then cut tracks with `splitTrackAt`, which uses the engine's split for audio and `splitMidiClipAt` for MIDI so both halves keep zero offset. See the [selection contract](research/arrangement-selection-contract.md).
 
+## Time signature
+
+The meter is the engine tempo sequence's first `TimeSigSetting`; `setTimeSignature` edits it in one transaction and `validateProjectTempo` rejects meter maps. The engine behaviour reports that a beat does not depend on the meter, so every Halftrack beat stays a quarter note. The UI derives bar lengths from `Snapshot::timeSignature`. See the [time signature contract](research/time-signature-contract.md).
+
 ## Audio warping
 
 `ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).
