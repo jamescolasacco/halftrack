@@ -884,9 +884,6 @@ Root owns the change in `src/Session.*`, the follow dialog, `tests/FollowActionT
 
 Root owns racks across `src/Session.*`, `tests/RackTests.cpp`, the suite registration and documentation. Audio devices can be grouped into an Audio Effect Rack whose chains run in parallel and sum. Each chain has volume, pan, mute and solo, chains hold their own devices, and eight macros drive native device controls over mapped ranges. Racks save, reopen, duplicate and undo, and invalid racks reject a load. The new `rack-acceptance` suite measures every behaviour against the generated source, and the full 39-suite run passes locally on the Mac in 110 s. See [the rack contract](research/racks-contract.md).
 
-## Rack device view — 2026-10-20
-
-UI change in `src/MainComponent.cpp`, `src/NativeEffectEditor.cpp`, `src/UtilityEditor.cpp` and `src/AutomationEditor.cpp`, with snapshot lookups added to `src/Session.*`. Devices can be selected (Shift extends, Cmd/Ctrl toggles) and grouped with Cmd/Ctrl+G. Racks show macro knobs, a chain list with activator, solo, volume and pan, and the selected chain's devices. Native controls inside a rack can be mapped to macros from their right-click menu, and the automation editor reaches chain devices. All 39 suites pass when run directly on the Mac. ctest runs hung at app launch on a macOS "reopen windows" crash prompt left by another session's crashed test, so the suites were run with `-ApplePersistenceIgnoreState YES`.
 
 ## Track Delay — 2026-10-20
 

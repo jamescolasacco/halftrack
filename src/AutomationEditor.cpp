@@ -273,11 +273,7 @@ public:
         const auto* d = device(); const auto* current = track();
         if (d == nullptr || current == nullptr) return nullptr;
         if (current->instrument.id == d->pluginId) return &current->instrument;
-        for (const auto& plugin : current->plugins)
-        {
-            if (plugin.id == d->pluginId) return &plugin;
-            for (const auto& chain : plugin.chains) for (const auto& device : chain.devices) if (device.id == d->pluginId) return &device;
-        }
+        for (const auto& plugin : current->plugins) if (plugin.id == d->pluginId) return &plugin;
         return nullptr;
     }
     juce::String targetKey() const
@@ -353,11 +349,7 @@ public:
             {
                 std::vector<const Session::PluginInfo*> devices;
                 if (current->instrument.isNativeEffect) devices.push_back (&current->instrument);
-                for (const auto& plugin : current->plugins)
-                {
-                    if (plugin.isNativeEffect) devices.push_back (&plugin);
-                    for (const auto& chain : plugin.chains) for (const auto& device : chain.devices) if (device.isNativeEffect) devices.push_back (&device);
-                }
+                for (const auto& plugin : current->plugins) if (plugin.isNativeEffect) devices.push_back (&plugin);
                 for (const auto* plugin : devices)
                 {
                     const auto fields = effectParameters (plugin->effect.kind);

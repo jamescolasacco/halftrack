@@ -130,8 +130,9 @@ public:
 private:
     std::optional<Session::UtilitySettings> settings() const
     {
-        const auto snapshot = session.snapshot();
-        if (const auto* plugin = Session::findDevice (snapshot, pluginId); plugin && plugin->isUtility) return plugin->utility;
+        for (const auto& track : session.snapshot().tracks)
+            for (const auto& plugin : track.plugins)
+                if (plugin.id == pluginId && plugin.isUtility) return plugin.utility;
         return {};
     }
     template <typename Edit> void edit (Edit&& update)

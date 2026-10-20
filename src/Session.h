@@ -266,9 +266,6 @@ public:
         double countInBeatsRemaining = 0;
     };
 
-    // Snapshot lookups that include instruments and devices inside racks; null when absent.
-    static const PluginInfo* findDevice (const Snapshot&, const juce::String& pluginId);
-    static const PluginInfo* findRackContaining (const Snapshot&, const juce::String& pluginId);
     explicit Session (bool enableAudioDevices = true, std::unique_ptr<juce::AudioIODeviceType> customDeviceType = {});
     ~Session() override;
     Snapshot snapshot() const;
