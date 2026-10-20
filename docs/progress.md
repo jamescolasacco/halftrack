@@ -789,3 +789,11 @@ Seven original MIDI effects (Arpeggiator, Chord, Scale, Pitch, Velocity, Random,
 
 During integration two test-only lifetime errors were found and corrected (a reference bound to a destroyed snapshot and a range-for over `snapshot().tracks[i].plugins`, which C++20 does not lifetime-extend); one test expectation about Velocity's Gate mode was corrected to the documented span mapping. The UI suite's keyboard-focus assertion failed once and passed on immediate rerun, consistent with the previously documented application-activation sensitivity. Engine-owned MIDI buffer growth remains a dependency behaviour; reference timing/numerical equivalence is unmeasured.
 
+## Native instruments — 2026-10-20
+
+Root owns `src/Instruments.*`, the instrument kinds/render path in `src/NativeEffects.*`, `Session::setTrackInstrument`/`showInstrumentEditor`, the instrument snapshot field, `tests/InstrumentsTests.cpp`, the instrument real-time fixture and documentation.
+
+Four original instruments (Poly Synth, FM Synth, Drum Kit, Wavetable) can replace a MIDI track's built-in synth in one undo step. The new `instruments-acceptance` suite passes **149 checks in 10.6 s**, including an engine export matching a closed-form sine sample for sample, FM sidebands matching Bessel J0/J1/J2, drum pitch/decay/choke behaviour, aliasing-free wavetable mip levels, bit-identical undo/redo, persistence and duplication. Native effects (**67.8 s**), MIDI effects (**23.0 s**), production UI (**9.6 s**) and Session/MIDI/persistence/real-time (**58.1 s**) pass; all instruments run allocation-free at parameter extremes. The owned source guard passes nine fixtures across **175 bodies**.
+
+Integration found one real defect: the generic editor's fixed 34-control arrays overflowed for the 39-control Poly Synth (segfault reproduced by opening its editor). The arrays are now sized from the packet type, with a compile-time check that every table fits. The device-chain instrument chooser UI follows separately.
+

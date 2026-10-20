@@ -442,19 +442,19 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 
 | ID | Reference target | Test profile (plus BASE) | Status |
 | --- | --- | --- | --- |
-| INS-001 | Analog | SYNTH | NOT IMPLEMENTED / UNVERIFIED |
+| INS-001 | Analog | PARTIAL — Poly Synth: two band-limited oscillators, noise, multimode filter with envelope/key/velocity/LFO, dual ADSR, mono/legato/glide, unison; closed-form tests. Analog's dual filters/routing and parity missing | PARTIAL |
 | INS-002 | Collision | PHYSICAL | NOT IMPLEMENTED / UNVERIFIED |
-| INS-003 | Drift | SYNTH | NOT IMPLEMENTED / UNVERIFIED |
+| INS-003 | Drift | PARTIAL — covered by Poly Synth subset; Drift's specific oscillator shapes, drift and modulation matrix missing | PARTIAL |
 | INS-004 | Drum Sampler | SAMPLER | NOT IMPLEMENTED / UNVERIFIED |
 | INS-005 | Electric | PHYSICAL | NOT IMPLEMENTED / UNVERIFIED |
 | INS-006 | External Instrument | EXTERNAL | NOT IMPLEMENTED / UNVERIFIED |
 | INS-007 | Impulse | SAMPLER | NOT IMPLEMENTED / UNVERIFIED |
 | INS-008 | Meld | SYNTH | NOT IMPLEMENTED / UNVERIFIED |
-| INS-009 | Operator | FM | NOT IMPLEMENTED / UNVERIFIED |
+| INS-009 | Operator | PARTIAL — FM Synth: four operators, eleven algorithms, feedback, filter, velocity; Bessel sideband oracle. Operator's waveforms, LFO, pitch envelope and filter set missing | PARTIAL |
 | INS-010 | Sampler | MULTISAMPLE | NOT IMPLEMENTED / UNVERIFIED |
 | INS-011 | Simpler | SAMPLER | NOT IMPLEMENTED / UNVERIFIED |
 | INS-012 | Tension | PHYSICAL | NOT IMPLEMENTED / UNVERIFIED |
-| INS-013 | Wavetable | WAVETABLE | NOT IMPLEMENTED / UNVERIFIED |
+| INS-013 | Wavetable | PARTIAL — two oscillators over four built-in band-limited morphing tables, filter, envelopes, LFO to position, unison; user tables and modulation matrix missing | PARTIAL |
 
 ### Rack infrastructure
 
@@ -480,7 +480,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | MXL-003 | DS Cymbal | DRUM | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-004 | DS FM | DRUM | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-005 | DS HH | DRUM | NOT IMPLEMENTED / UNVERIFIED |
-| MXL-006 | DS Kick | DRUM | NOT IMPLEMENTED / UNVERIFIED |
+| MXL-006 | DS Kick | PARTIAL — Drum Kit kick/snare/clap/hats/toms/cymbal pads with tune, decay, tone, level and hat choke; not individual DS devices | PARTIAL |
 | MXL-007 | DS Sampler | DRUM | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-008 | DS Snare | DRUM | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-009 | DS Tom | DRUM | NOT IMPLEMENTED / UNVERIFIED |

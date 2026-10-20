@@ -19,7 +19,16 @@ import unittest
 ROOTS = {
     "src/Session.cpp": ("applyToBuffer",),  # Original TrackMixer normalization wrapper.
     "src/SubtractiveSynth.cpp": ("SubtractiveSynthDSP::render", "SubtractiveSynthPlugin::applyToBuffer"),
-    "src/NativeEffects.cpp": ("NativeEffectDSP::processSamples", "NativeEffectPlugin::applyToBuffer", "NativeEffectPlugin::processMidi"),
+    "src/NativeEffects.cpp": ("NativeEffectDSP::processSamples", "NativeEffectPlugin::applyToBuffer", "NativeEffectPlugin::processMidi", "NativeEffectPlugin::renderInstrument"),
+    "src/Instruments.cpp": (
+        "InstrumentDSP::render",
+        "InstrumentDSP::noteOn",
+        "InstrumentDSP::noteOff",
+        "InstrumentDSP::controlChange",
+        "InstrumentDSP::pitchWheel",
+        "InstrumentDSP::configure",
+        "InstrumentDSP::reset",
+    ),
     "src/MidiEffects.cpp": (
         "Processor::process",
         "Processor::allNotesOff",

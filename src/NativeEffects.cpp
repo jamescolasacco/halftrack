@@ -187,6 +187,73 @@ constexpr EffectParameter noteLengthFields[] {
     { "lengthMs", "Length", 1, 4000, 250, 250, " ms" },
     { "division", "Division", 0, 8, 4, 0, "", STEP_RATES },
     { "gate", "Gate", .01f, 2, 1, 0, "%" } };
+#define OSC_SHAPES "Saw|Pulse|Triangle|Sine"
+#define VOICE_MODES "Mono|Legato|8 voices|16 voices|32 voices"
+#define FILTER_TYPES "Off|Low pass 12|Low pass 24|High pass 12|Band pass 12|Notch"
+#define ENVELOPE(PREFIX, LABEL, A, D, S, R) { PREFIX "Attack", LABEL " attack", 0, 10000, A, 100, " ms" }, { PREFIX "Decay", LABEL " decay", 1, 10000, D, 300, " ms" }, \
+    { PREFIX "Sustain", LABEL " sustain", 0, 1, S, 0, "%" }, { PREFIX "Release", LABEL " release", 1, 10000, R, 300, " ms" }
+constexpr EffectParameter polySynthFields[] {
+    { "osc1Shape", "Osc 1 shape", 0, 3, 0, 0, "", OSC_SHAPES }, { "osc1Octave", "Osc 1 octave", -3, 3, 0, 0, " oct", nullptr, true },
+    { "osc1Semitone", "Osc 1 semitone", -12, 12, 0, 0, " st", nullptr, true }, { "osc1Detune", "Osc 1 detune", -50, 50, 0, 0, " ct" },
+    { "osc1Level", "Osc 1 level", 0, 1, 1, 0, "%" }, { "osc1Width", "Osc 1 pulse width", .05f, .95f, .5f, 0, "%" },
+    { "osc2Shape", "Osc 2 shape", 0, 3, 1, 0, "", OSC_SHAPES }, { "osc2Octave", "Osc 2 octave", -3, 3, 0, 0, " oct", nullptr, true },
+    { "osc2Semitone", "Osc 2 semitone", -12, 12, 0, 0, " st", nullptr, true }, { "osc2Detune", "Osc 2 detune", -50, 50, 7, 0, " ct" },
+    { "osc2Level", "Osc 2 level", 0, 1, .5f, 0, "%" }, { "osc2Width", "Osc 2 pulse width", .05f, .95f, .5f, 0, "%" },
+    { "noiseLevel", "Noise", 0, 1, 0, 0, "%" },
+    { "filterType", "Filter", 0, 5, 2, 0, "", FILTER_TYPES }, { "cutoffHz", "Cutoff", 20, 20000, 2000, 1000, " Hz" },
+    { "resonance", "Resonance", 0, 1, .2f, 0, "%" }, { "filterEnvelope", "Filter envelope", -1, 1, .3f, 0, "%" },
+    { "keyTracking", "Key tracking", 0, 1, .5f, 0, "%" },
+    ENVELOPE ("filter", "Filter", 1, 400, .3f, 300), ENVELOPE ("amp", "Amp", 2, 300, .8f, 250),
+    { "lfoShape", "LFO shape", 0, 5, 0, 0, "", "Sine|Triangle|Saw up|Saw down|Square|Random" }, { "lfoRateHz", "LFO rate", .01f, 40, 5, 1, " Hz" },
+    { "lfoPitch", "LFO to pitch", 0, 12, 0, 1, " st" }, { "lfoCutoff", "LFO to cutoff", 0, 4, 0, 0, " oct" }, { "lfoAmp", "LFO to amp", 0, 1, 0, 0, "%" },
+    { "glideMs", "Glide", 0, 2000, 0, 200, " ms" }, { "voiceMode", "Voices", 0, 4, 3, 0, "", VOICE_MODES },
+    { "unison", "Unison", 0, 3, 0, 0, "", "1|2|3|4" }, { "unisonDetune", "Unison detune", 0, 50, 10, 0, " ct" },
+    { "velocityAmp", "Velocity to amp", 0, 1, .7f, 0, "%" }, { "velocityCutoff", "Velocity to cutoff", 0, 1, 0, 0, "%" },
+    { "bendRange", "Bend range", 0, 24, 2, 0, " st", nullptr, true }, { "volumeDb", "Volume", -36, 6, 0, 0, " dB" } };
+#define OPERATOR(N, L, D, S) { "op" N "Coarse", "Op " N " coarse", 0, 48, 1, 0, "", nullptr, true }, { "op" N "Fine", "Op " N " fine", 0, 1, 0, 0, "" }, \
+    { "op" N "Level", "Op " N " level", 0, 1, L, 0, "%" }, { "op" N "Attack", "Op " N " attack", 0, 10000, 1, 100, " ms" }, \
+    { "op" N "Decay", "Op " N " decay", 1, 10000, D, 300, " ms" }, { "op" N "Sustain", "Op " N " sustain", 0, 1, S, 0, "%" }, \
+    { "op" N "Release", "Op " N " release", 1, 10000, 300, 300, " ms" }
+constexpr EffectParameter fmSynthFields[] {
+    OPERATOR ("A", 1, 400, .6f), OPERATOR ("B", .3f, 600, .4f), OPERATOR ("C", 0, 600, .4f), OPERATOR ("D", 0, 600, .4f),
+    { "algorithm", "Algorithm", 0, 10, 0, 0, "", "1: D>C>B>A|2: C+D>B>A|3: B+(D>C)>A|4: B+C+D>A|5: B>A, D>C|6: D>A,B,C|7: C>B>A, D|8: D>C>B, A|9: B>A, C, D|10: D>(B,C)>A|11: A+B+C+D" },
+    { "feedback", "Feedback", 0, 1, 0, 0, "%" }, { "filterType", "Filter", 0, 2, 0, 0, "", "Off|Low pass|High pass" },
+    { "cutoffHz", "Cutoff", 20, 20000, 8000, 1000, " Hz" }, { "resonance", "Resonance", 0, 1, .1f, 0, "%" },
+    { "velocityLevel", "Velocity to level", 0, 1, .7f, 0, "%" }, { "bendRange", "Bend range", 0, 24, 2, 0, " st", nullptr, true },
+    { "volumeDb", "Volume", -36, 6, 0, 0, " dB" }, { "voices", "Voices", 0, 3, 2, 0, "", "4|8|16|32" } };
+#define PAD(KEY, LABEL) { KEY "Tune", LABEL " tune", -24, 24, 0, 0, " st" }, { KEY "Decay", LABEL " decay", .1f, 4, 1, 1, "x" }, \
+    { KEY "Tone", LABEL " tone", 0, 1, .5f, 0, "%" }, { KEY "Level", LABEL " level", 0, 1, .8f, 0, "%" }
+constexpr EffectParameter drumKitFields[] {
+    PAD ("kick", "Kick"), PAD ("snare", "Snare"), PAD ("clap", "Clap"), PAD ("closedHat", "Closed hat"),
+    PAD ("openHat", "Open hat"), PAD ("lowTom", "Low tom"), PAD ("highTom", "High tom"), PAD ("cymbal", "Cymbal"),
+    { "volumeDb", "Volume", -36, 6, 0, 0, " dB" } };
+#define WAVE_OSC(N, POSITION, DETUNE, LEVEL) { "osc" N "Table", "Osc " N " table", 0, 3, 0, 0, "", "Basic shapes|Harmonics|Pulse width|Sync" }, \
+    { "osc" N "Position", "Osc " N " position", 0, 1, POSITION, 0, "%" }, { "osc" N "Octave", "Osc " N " octave", -3, 3, 0, 0, " oct", nullptr, true }, \
+    { "osc" N "Detune", "Osc " N " detune", -50, 50, DETUNE, 0, " ct" }, { "osc" N "Level", "Osc " N " level", 0, 1, LEVEL, 0, "%" }, \
+    { "osc" N "Spread", "Osc " N " stereo spread", 0, 1, .5f, 0, "%" }
+constexpr EffectParameter wavetableFields[] {
+    WAVE_OSC ("1", 0, 0, 1), WAVE_OSC ("2", .5f, 5, 0),
+    { "filterType", "Filter", 0, 5, 1, 0, "", FILTER_TYPES }, { "cutoffHz", "Cutoff", 20, 20000, 5000, 1000, " Hz" },
+    { "resonance", "Resonance", 0, 1, .15f, 0, "%" }, { "filterEnvelope", "Filter envelope", -1, 1, 0, 0, "%" },
+    ENVELOPE ("filter", "Filter", 1, 400, .5f, 300), ENVELOPE ("amp", "Amp", 2, 300, .8f, 250),
+    { "lfoRateHz", "LFO rate", .01f, 40, .5f, 1, " Hz" }, { "lfoPosition", "LFO to position", 0, 1, 0, 0, "%" },
+    { "lfoPitch", "LFO to pitch", 0, 12, 0, 1, " st" }, { "unison", "Unison", 0, 3, 0, 0, "", "1|2|3|4" },
+    { "unisonDetune", "Unison detune", 0, 50, 12, 0, " ct" }, { "glideMs", "Glide", 0, 2000, 0, 200, " ms" },
+    { "voiceMode", "Voices", 0, 4, 3, 0, "", VOICE_MODES }, { "velocityAmp", "Velocity to amp", 0, 1, .7f, 0, "%" },
+    { "bendRange", "Bend range", 0, 24, 2, 0, " st", nullptr, true }, { "volumeDb", "Volume", -36, 6, 0, 0, " dB" } };
+static_assert (std::size (polySynthFields) <= std::tuple_size_v<decltype (Settings::values)> && std::size (fmSynthFields) <= std::tuple_size_v<decltype (Settings::values)>
+               && std::size (drumKitFields) <= std::tuple_size_v<decltype (Settings::values)> && std::size (wavetableFields) <= std::tuple_size_v<decltype (Settings::values)>,
+               "every device fits the shared packet");
+static_assert (std::size (polySynthFields) == instruments::poly::count && std::size (fmSynthFields) == instruments::fm::count
+               && std::size (drumKitFields) == instruments::drums::count && std::size (wavetableFields) == instruments::wavetable::count,
+               "instrument tables must follow their processor index enums");
+#undef OSC_SHAPES
+#undef VOICE_MODES
+#undef FILTER_TYPES
+#undef ENVELOPE
+#undef OPERATOR
+#undef PAD
+#undef WAVE_OSC
 #undef STEP_RATES
 #undef LFO_DIVISIONS
 #undef LFO_SHAPES
@@ -202,7 +269,8 @@ const char* effectName (Kind kind) noexcept
         case Kind::autoPan: return "Auto Pan"; case Kind::chorus: return "Chorus"; case Kind::phaser: return "Phaser"; case Kind::flanger: return "Flanger";
         case Kind::eqThree: return "Three-band EQ"; case Kind::glueCompressor: return "Bus Compressor"; case Kind::frequencyShifter: return "Frequency Shifter";
         case Kind::arpeggiator: return "Arpeggiator"; case Kind::chord: return "Chord"; case Kind::scale: return "Scale"; case Kind::pitch: return "Pitch";
-        case Kind::velocity: return "Velocity"; case Kind::random: return "Random"; case Kind::noteLength: return "Note Length"; }
+        case Kind::velocity: return "Velocity"; case Kind::random: return "Random"; case Kind::noteLength: return "Note Length";
+        case Kind::polySynth: return "Poly Synth"; case Kind::fmSynth: return "FM Synth"; case Kind::drumKit: return "Drum Kit"; case Kind::wavetableSynth: return "Wavetable"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
@@ -213,7 +281,8 @@ std::span<const EffectParameter> effectParameters (Kind kind) noexcept
         case Kind::autoPan: return autoPanFields; case Kind::chorus: return chorusFields; case Kind::phaser: return phaserFields; case Kind::flanger: return flangerFields;
         case Kind::eqThree: return eqThreeFields; case Kind::glueCompressor: return glueFields; case Kind::frequencyShifter: return shifterFields;
         case Kind::arpeggiator: return arpeggiatorFields; case Kind::chord: return chordFields; case Kind::scale: return scaleFields; case Kind::pitch: return pitchFields;
-        case Kind::velocity: return velocityFields; case Kind::random: return randomFields; case Kind::noteLength: return noteLengthFields; }
+        case Kind::velocity: return velocityFields; case Kind::random: return randomFields; case Kind::noteLength: return noteLengthFields;
+        case Kind::polySynth: return polySynthFields; case Kind::fmSynth: return fmSynthFields; case Kind::drumKit: return drumKitFields; case Kind::wavetableSynth: return wavetableFields; }
     return {};
 }
 const char* effectCategory (Kind kind) noexcept
@@ -226,12 +295,14 @@ const char* effectCategory (Kind kind) noexcept
         case Kind::bitcrusher: case Kind::saturator: case Kind::overdrive: return "Distortion";
         case Kind::autoPan: case Kind::chorus: case Kind::phaser: case Kind::flanger: case Kind::frequencyShifter: return "Modulation";
         case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return "MIDI Effects";
+        case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: return "Instruments";
     }
     return "Effects";
 }
 bool effectUsesTempo (Kind kind) noexcept
 { return kind == Kind::delay || kind == Kind::autoFilter || kind == Kind::autoPan || kind == Kind::arpeggiator || kind == Kind::noteLength; }
-bool effectIsMidi (Kind kind) noexcept { return static_cast<int> (kind) >= static_cast<int> (Kind::arpeggiator) && static_cast<int> (kind) < Session::effectKindCount; }
+bool effectIsMidi (Kind kind) noexcept { return static_cast<int> (kind) >= static_cast<int> (Kind::arpeggiator) && static_cast<int> (kind) <= static_cast<int> (Kind::noteLength); }
+bool effectIsInstrument (Kind kind) noexcept { return static_cast<int> (kind) >= static_cast<int> (Kind::polySynth) && static_cast<int> (kind) < Session::effectKindCount; }
 double effectLatencySeconds (Kind kind, double rate) noexcept
 { return kind == Kind::limiter && rate > 0 ? std::ceil (rate * .001) / rate : 0.0; }
 double effectTailSeconds (Kind kind, double rate) noexcept
@@ -249,6 +320,7 @@ double effectTailSeconds (Kind kind, double rate) noexcept
         case Kind::eqThree: case Kind::frequencyShifter: return .1;
         case Kind::compressor: case Kind::gate: case Kind::autoPan: case Kind::glueCompressor: return 0.0;
         case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return 0.0;
+        case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: return 0.0;
     }
     return 0.0;
 }
@@ -588,7 +660,11 @@ void EffectParameterQueue::resetWhileStopped() noexcept
 { readIndex.store (0, std::memory_order_relaxed); writeIndex.store (0, std::memory_order_relaxed); }
 NativeEffectPlugin::NativeEffectPlugin (tracktion::PluginCreationInfo info)
     : Plugin (info), kind (static_cast<Kind> (static_cast<int> (state.getProperty ("effectKind", 0))))
-{ publish(); startTimerHz (30); }
+{
+    // Shared tables are built here on the message thread, never during graph preparation.
+    if (kind == Kind::wavetableSynth) instruments::prepareWavetables();
+    publish(); startTimerHz (30);
+}
 NativeEffectPlugin::~NativeEffectPlugin() { stopTimer(); }
 Settings NativeEffectPlugin::readSettings() const
 {
@@ -642,9 +718,35 @@ void NativeEffectPlugin::initialise (const tracktion::PluginInitialisationInfo& 
 {
     sampleRate = info.sampleRate; processor.prepare (sampleRate, kind);
     midiProcessor.prepare (sampleRate); midiProcessor.configure (pendingSettings);
+    if (effectIsInstrument (kind)) { instrument.prepare (sampleRate, kind); instrument.configure (pendingSettings); }
     midiScratch.reserve (static_cast<int> (midiOutput.size()) + 256);
 }
-void NativeEffectPlugin::reset() { processor.reset(); midiProcessor.reset(); }
+void NativeEffectPlugin::reset() { processor.reset(); midiProcessor.reset(); if (effectIsInstrument (kind)) instrument.reset(); }
+void NativeEffectPlugin::renderInstrument (const tracktion::PluginRenderContext& context) noexcept
+{
+    if (! context.destBuffer || context.bufferNumSamples <= 0) return;
+    auto& buffer = *context.destBuffer;
+    buffer.clear (context.bufferStartSample, context.bufferNumSamples);
+    auto* left = buffer.getNumChannels() > 0 ? buffer.getWritePointer (0, context.bufferStartSample) : nullptr;
+    auto* right = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1, context.bufferStartSample) : nullptr;
+    const auto rate = sampleRate > 0 ? sampleRate : 48000.0;
+    int position = 0;
+    if (auto* midi = context.bufferForMidiMessages)
+    {
+        if (midi->isAllNotesOff) instrument.reset();
+        for (const auto& message : *midi)
+        {
+            const auto at = std::clamp (static_cast<int> (std::llround ((message.getTimeStamp() + context.midiBufferOffset) * rate)), position, context.bufferNumSamples);
+            instrument.render (left ? left + position : nullptr, right ? right + position : nullptr, at - position);
+            position = at;
+            if (message.isNoteOn()) instrument.noteOn (message.getChannel(), message.getNoteNumber(), message.getFloatVelocity());
+            else if (message.isNoteOff()) instrument.noteOff (message.getChannel(), message.getNoteNumber());
+            else if (message.isPitchWheel()) instrument.pitchWheel (message.getChannel(), message.getPitchWheelValue());
+            else if (message.isController()) instrument.controlChange (message.getChannel(), message.getControllerNumber(), message.getControllerValue());
+        }
+    }
+    instrument.render (left ? left + position : nullptr, right ? right + position : nullptr, context.bufferNumSamples - position);
+}
 void NativeEffectPlugin::processMidi (const tracktion::PluginRenderContext& context) noexcept
 {
     auto* midi = context.bufferForMidiMessages;
@@ -685,8 +787,9 @@ void NativeEffectPlugin::applyToBuffer (const tracktion::PluginRenderContext& co
 {
     const juce::ScopedNoDenormals noDenormals; Settings next; bool changed = false;
     for (int i = 0; i < 64 && parameters.pop (next); ++i) changed = true;
-    if (changed) { processor.configure (next); midiProcessor.configure (next); }
+    if (changed) { processor.configure (next); midiProcessor.configure (next); if (effectIsInstrument (kind)) instrument.configure (next); }
     if (effectIsMidi (kind)) { processMidi (context); return; }
+    if (effectIsInstrument (kind)) { renderInstrument (context); return; }
     if (! context.destBuffer || context.bufferNumSamples <= 0 || context.destBuffer->getNumChannels() == 0) return;
     auto* left = context.destBuffer->getWritePointer (0, context.bufferStartSample);
     auto* right = context.destBuffer->getNumChannels() > 1 ? context.destBuffer->getWritePointer (1, context.bufferStartSample) : nullptr;

@@ -221,7 +221,7 @@ void nativeEffectsRealtimeTests()
         noHeapCalls (calls, "native effect parameter extremes, processing and reset allocate/free nothing");
         requireRealtime (finite, "native effect extrema and variable mono/stereo blocks remain finite");
     }
-    for (int kind = static_cast<int> (Session::EffectKind::arpeggiator); kind < Session::effectKindCount; ++kind)
+    for (int kind = static_cast<int> (Session::EffectKind::arpeggiator); kind <= static_cast<int> (Session::EffectKind::noteLength); ++kind)
     {
         midifx::Processor processor; processor.prepare (48000);
         auto settings = defaultEffectSettings (static_cast<Session::EffectKind> (kind));
@@ -250,6 +250,34 @@ void nativeEffectsRealtimeTests()
         const auto text = juce::String (effectName (settings.kind)) + " output stays bounded and time ordered under note floods (generated "
                           + juce::String (generated) + (ordered ? ", ordered)" : ", unordered)");
         requireRealtime (generated > 0 && ordered, text.toRawUTF8());
+    }
+    for (int kind = static_cast<int> (Session::EffectKind::polySynth); kind < Session::effectKindCount; ++kind)
+    {
+        instruments::InstrumentDSP instrument; instrument.prepare (48000, static_cast<Session::EffectKind> (kind));
+        auto settings = defaultEffectSettings (static_cast<Session::EffectKind> (kind));
+        const auto fields = effectParameters (settings.kind);
+        std::array<float, 512> left {}, right {}; bool finite = true;
+        const auto calls = allocationAudit::measure ([&]
+        {
+            for (int pass = 0; pass < 24; ++pass)
+            {
+                for (size_t i = 0; i < fields.size(); ++i) settings.values[i] = pass % 2 ? fields[i].minimum : fields[i].maximum;
+                instrument.configure (settings);
+                for (int note = 24; note < 108; note += 3) instrument.noteOn (1 + note % 16, note, (float) (note % 7 + 1) / 7);
+                instrument.pitchWheel (1, pass % 2 ? 0 : 16383); instrument.controlChange (1, 64, pass % 2 ? 0 : 127);
+                instrument.render (left.data(), pass % 3 ? right.data() : nullptr, 1 + pass * 21);
+                for (int note = 24; note < 108; note += 6) instrument.noteOff (1 + note % 16, note);
+                instrument.controlChange (1 + pass % 16, pass % 2 ? 120 : 123, 0);
+                instrument.render (left.data(), right.data(), 512);
+                for (auto v : left) finite = finite && std::isfinite (v);
+                for (auto v : right) finite = finite && std::isfinite (v);
+                left.fill (0); right.fill (0);
+            }
+            instrument.reset();
+        });
+        noHeapCalls (calls, "native instrument extremes, voice floods, controllers and reset allocate/free nothing");
+        const auto text = juce::String (effectName (settings.kind)) + " remains finite at parameter extremes";
+        requireRealtime (finite, text.toRawUTF8());
     }
     EffectParameterQueue queue; auto value = defaultEffectSettings (Session::EffectKind::delay);
     int accepted = 0, received = 0; bool coherent = true;

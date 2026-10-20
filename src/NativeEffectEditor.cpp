@@ -41,7 +41,7 @@ public:
                 if (spec.midpoint > spec.minimum && spec.midpoint < spec.maximum && spec.midpoint != 0)
                     control.setSkewFactorFromMidPoint (spec.midpoint);
                 control.setSliderStyle (kind == Session::EffectKind::equalizer ? juce::Slider::LinearHorizontal : juce::Slider::RotaryHorizontalVerticalDrag);
-                control.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 100, 23);
+                control.setTextBoxStyle (juce::Slider::TextBoxBelow, false, effectParameters (kind).size() > 16 ? 86 : 100, 21);
                 const auto unit = juce::String (spec.unit);
                 const bool percent = unit == "%" || juce::String (spec.key) == "mix" || juce::String (spec.key) == "feedback";
                 control.setTextValueSuffix (percent ? juce::String() : unit); control.setDoubleClickReturnValue (true, spec.initial);
@@ -59,9 +59,9 @@ public:
             }
         }
         error.setColour (juce::Label::textColourId, juce::Colour (0xfff4ab84)); addAndMakeVisible (error);
-        const auto rows = static_cast<int> ((specs.size() + 3) / 4);
-        session.addChangeListener (this); setSize (kind == Session::EffectKind::equalizer ? 1000 : 660,
-            kind == Session::EffectKind::equalizer ? 640 : std::max (400, 96 + rows * 145)); synchronise(); startTimerHz (15);
+        const auto rows = static_cast<int> ((specs.size() + columns() - 1) / static_cast<size_t> (columns()));
+        session.addChangeListener (this); setSize (kind == Session::EffectKind::equalizer ? 1000 : dense() ? 48 + columns() * 120 : 660,
+            kind == Session::EffectKind::equalizer ? 640 : std::max (400, 96 + rows * (dense() ? 112 : 145))); synchronise(); startTimerHz (15);
     }
     ~NativeEffectEditor() override
     { stopTimer(); session.removeChangeListener (this); finishGesture(); setLookAndFeel (nullptr); }
@@ -122,6 +122,8 @@ public:
                 area = { 24+static_cast<int>(i/4)*120, 224+static_cast<int>(i%4)*84, 112, 82 };
             else if (kind == Session::EffectKind::equalizer)
                 area = { 24+static_cast<int>(i-32)*160, 560, 148, 62 };
+            else if (dense())
+                area = { 24 + static_cast<int> (i % 8) * 120, 62 + static_cast<int> (i / 8) * 112, 112, 106 };
             else area = { 24+static_cast<int>(i%4)*156, 66+static_cast<int>(i/4)*145, 144, 136 };
             labels[i].setBounds (area.removeFromTop (20));
             if (specs[i].choices) choices[i].setBounds (area.withHeight (28));
@@ -172,10 +174,17 @@ public:
         repaint();
     }
 private:
+    // Instruments and other large devices use a compact eight-column grid.
+    bool dense() const noexcept { return effectParameters (kind).size() > 16; }
+    int columns() const noexcept { return dense() ? 8 : 4; }
     std::optional<Session::EffectSettings> settings() const
     {
-        for (const auto& track : session.snapshot().tracks) for (const auto& p : track.plugins)
-            if (p.id == pluginId && p.isNativeEffect) return p.effect;
+        const auto snapshot = session.snapshot();
+        for (const auto& track : snapshot.tracks)
+        {
+            if (track.instrument.isNativeEffect && track.instrument.id == pluginId) return track.instrument.effect;
+            for (const auto& p : track.plugins) if (p.id == pluginId && p.isNativeEffect) return p.effect;
+        }
         return {};
     }
     void edit (size_t index, float v)
@@ -194,9 +203,10 @@ private:
     juce::String pluginId;
     Session::EffectKind kind;
     juce::LookAndFeel_V4 look;
-    std::array<juce::Slider, 34> sliders;
-    std::array<juce::ComboBox, 34> choices;
-    std::array<juce::Label, 34> labels;
+    static constexpr size_t maximumControls = std::tuple_size_v<decltype (Session::EffectSettings::values)>;
+    std::array<juce::Slider, maximumControls> sliders;
+    std::array<juce::ComboBox, maximumControls> choices;
+    std::array<juce::Label, maximumControls> labels;
     juce::Label error;
     bool dragging = false;
 };
@@ -212,10 +222,15 @@ int runNativeEffectEditorTests (const juce::File& root)
     for (int type = 0; type < Session::effectKindCount; ++type)
     {
         const auto kind = static_cast<Session::EffectKind> (type);
-        const auto before = s.snapshot().tracks[(size_t) track].plugins; check (s.addNativeEffect (track, kind).wasOk(), "add editor device");
+        const bool instrument = effectIsInstrument (kind);
+        const auto before = s.snapshot().tracks[(size_t) track].plugins;
+        if (instrument) check (s.setTrackInstrument (s.snapshot().tracks[(size_t) track].id, kind).wasOk(), "choose editor instrument");
+        else check (s.addNativeEffect (track, kind).wasOk(), "add editor device");
         const auto devices = s.snapshot().tracks[(size_t) track].plugins; int position = 0;
         while (position < (int) before.size() && devices[(size_t) position].id == before[(size_t) position].id) ++position;
-        const auto info = devices[(size_t) position]; auto editor = makeNativeEffectEditor (s, info.id);
+        const auto info = instrument ? s.snapshot().tracks[(size_t) track].instrument : devices[(size_t) position];
+        check (info.isNativeEffect && info.effect.kind == kind, "device appears in its chain position");
+        auto editor = makeNativeEffectEditor (s, info.id);
         juce::Slider* slider = nullptr;
         const auto specs = effectParameters (kind); size_t index = 0;
         while (index < specs.size() && specs[index].choices) ++index;
@@ -225,6 +240,7 @@ int runNativeEffectEditorTests (const juce::File& root)
         const auto device = [&]
         {
             const auto snapshot = s.snapshot(); // Keep the temporary alive across the loop.
+            if (snapshot.tracks[(size_t) track].instrument.id == info.id) return snapshot.tracks[(size_t) track].instrument;
             for (const auto& p : snapshot.tracks[(size_t) track].plugins) if (p.id == info.id) return p;
             return Session::PluginInfo {};
         };
@@ -232,10 +248,12 @@ int runNativeEffectEditorTests (const juce::File& root)
         s.undo(); check (device().effect == info.effect, "one undo restores full gesture"); s.redo();
         const auto image = editor->createComponentSnapshot (editor->getLocalBounds()); const auto file = root.getChildFile ("effect-editor-"+juce::String(type)+".png");
         juce::FileOutputStream output (file); juce::PNGImageFormat png; check (png.writeImageToStream (image, output), "write original editor snapshot");
-        check (s.showPluginEditor (track,position).wasOk(), "native editor window opens");
-        check (s.removePlugin (track,position).wasOk(), "remove device with open window");
+        const auto open = [&] { return instrument ? s.showInstrumentEditor (track) : s.showPluginEditor (track, position); };
+        check (open().wasOk(), "native editor window opens");
+        check ((instrument ? s.setTrackInstrument (s.snapshot().tracks[(size_t) track].id, std::nullopt) : s.removePlugin (track, position)).wasOk(), "remove device with open window");
         static_cast<NativeEffectEditor*> (editor.get())->synchronise(); check (! slider->isEnabled(), "removed device disables retained editor");
-        s.undo(); check (s.showPluginEditor (track,position).wasOk(), "undo restores reopenable native editor"); s.closePluginEditors();
+        s.undo(); check (open().wasOk(), "undo restores reopenable native editor"); s.closePluginEditors();
+        if (instrument) check (s.setTrackInstrument (s.snapshot().tracks[(size_t) track].id, std::nullopt).wasOk(), "restore the built-in synth before the next instrument");
     }
     check (s.newProject().wasOk(), "replace project after editor lifecycle checks"); return 0;
 }

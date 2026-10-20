@@ -1074,6 +1074,18 @@ struct Session::Impl
             if (auto* instrument = dynamic_cast<SubtractiveSynthPlugin*> (plugin)) return instrument;
         return nullptr;
     }
+    static NativeEffectPlugin* nativeInstrument (te::AudioTrack& track)
+    {
+        for (auto* plugin : track.pluginList.getPlugins())
+            if (auto* native = dynamic_cast<NativeEffectPlugin*> (plugin); native && effectIsInstrument (native->getKind())) return native;
+        return nullptr;
+    }
+    // The MIDI track's sound source: the built-in synth or a native instrument.
+    static te::Plugin* instrument (te::AudioTrack& track)
+    {
+        if (auto* s = synth (track)) return s;
+        return nativeInstrument (track);
+    }
     Result validateNote (te::MidiClip& clip, int pitch, double start, double length, float velocity) const
     {
         const auto beats = edit->tempoSequence.toBeats (clip.getPosition().time).getLength().inBeats();
@@ -1097,7 +1109,8 @@ struct Session::Impl
         juce::Array<te::Plugin*> result;
         if (auto* t = track (index))
             for (auto* p : t->pluginList.getPlugins())
-                if (dynamic_cast<te::ExternalPlugin*> (p) != nullptr || dynamic_cast<UtilityPlugin*> (p) != nullptr || dynamic_cast<NativeEffectPlugin*> (p) != nullptr) result.add (p);
+                if (auto* native = dynamic_cast<NativeEffectPlugin*> (p); native != nullptr ? ! effectIsInstrument (native->getKind())
+                        : dynamic_cast<te::ExternalPlugin*> (p) != nullptr || dynamic_cast<UtilityPlugin*> (p) != nullptr) result.add (p);
         return result;
     }
     te::Plugin* plugin (int trackIndex, int pluginIndex) const
@@ -1432,6 +1445,11 @@ Session::Snapshot Session::snapshot() const
                 info.sends.push_back ({ id, send ? send->getGainDb() : -100.0f });
             }
         if (auto* synth = Impl::synth (*t)) info.synth = synth->getSettings();
+        if (auto* native = Impl::nativeInstrument (*t))
+        {
+            info.instrument = { native->itemID.toString(), native->getName(), native->isEnabled() };
+            info.instrument.isNativeEffect = true; info.instrument.effect = native->readSettings();
+        }
         if (auto* v = t->getVolumePlugin())
         {
             info.gainDb = v->getVolumeDb(); info.pan = v->getPan();
@@ -2458,6 +2476,47 @@ Result Session::setSynthSettings (const String& trackId, const SynthSettings& se
         return Result::fail ("Synthesizer settings are outside their supported range.");
     impl->transaction ("Synthesizer settings"); synth->setSettings (settings); impl->changed(); return Result::ok();
 }
+Result Session::setTrackInstrument (const String& trackId, std::optional<EffectKind> kind)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* track = impl->track (trackId);
+    if (! track || ! track->state.getProperty (midiTrackProperty, false)) return Result::fail ("Instruments need a MIDI track.");
+    if (kind && ! effectIsInstrument (*kind)) return Result::fail ("That device is not an instrument.");
+    auto* current = Impl::instrument (*track);
+    if (current != nullptr)
+    {
+        if (! kind && dynamic_cast<SubtractiveSynthPlugin*> (current)) return Result::ok();
+        if (auto* native = dynamic_cast<NativeEffectPlugin*> (current); kind && native && native->getKind() == *kind) return Result::ok();
+    }
+    juce::ValueTree state (te::IDs::PLUGIN);
+    if (kind)
+    {
+        state.setProperty (te::IDs::type, NativeEffectPlugin::xmlTypeName, nullptr);
+        state.setProperty ("effectKind", static_cast<int> (*kind), nullptr);
+    }
+    else state.setProperty (te::IDs::type, SubtractiveSynthPlugin::xmlTypeName, nullptr);
+    auto plugin = impl->edit->getPluginCache().createNewPlugin (state);
+    if (! plugin) return Result::fail ("The instrument could not be created.");
+    // Keep MIDI effects ahead of the new instrument and audio devices after it.
+    int index = 0;
+    if (current) index = track->pluginList.indexOf (current);
+    else for (auto* p : track->pluginList.getPlugins()) if (auto* native = dynamic_cast<NativeEffectPlugin*> (p); native && effectIsMidi (native->getKind())) ++index;
+    impl->transaction ("Change instrument");
+    if (current) { current->windowState->closeWindowExplicitly(); current->deleteFromParent(); }
+    track->pluginList.insertPlugin (plugin, index, nullptr);
+    impl->changed(); return Result::ok();
+}
+Result Session::showInstrumentEditor (int trackIndex)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* track = impl->track (trackIndex);
+    auto* native = track ? Impl::nativeInstrument (*track) : nullptr;
+    if (! native) return Result::fail ("This track uses the built-in synthesizer panel.");
+    native->windowState->showWindowExplicitly();
+    auto* window = dynamic_cast<PluginWindow*> (native->windowState->pluginWindow.get());
+    if (window == nullptr || ! window->isVisible() || window->getContentComponent() == nullptr) return Result::fail ("This instrument has no available editor.");
+    return Result::ok();
+}
 Result Session::duplicateTrack (const String& id, String& duplicateId)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -3395,7 +3454,8 @@ Result Session::addNativeEffect (int index, EffectKind kind)
     juce::ValueTree state (te::IDs::PLUGIN);
     state.setProperty (te::IDs::type, NativeEffectPlugin::xmlTypeName, nullptr);
     state.setProperty ("effectKind", static_cast<int> (kind), nullptr);
-    auto* instrument = Impl::synth (*track);
+    if (effectIsInstrument (kind)) return Result::fail ("Choose instruments from the track's instrument menu.");
+    auto* instrument = Impl::instrument (*track);
     if (effectIsMidi (kind) && instrument == nullptr) return Result::fail ("MIDI effects need a MIDI track.");
     auto plugin = impl->edit->getPluginCache().createNewPlugin (state);
     if (! plugin) return Result::fail ("The native effect could not be created.");
@@ -3486,7 +3546,8 @@ Result Session::addPlugin (int index, const juce::PluginDescription& description
     auto* external = dynamic_cast<te::ExternalPlugin*> (plugin.get());
     if (! external || (! external->getAudioPluginInstance() && ! external->isInitialisingAsync()))
         return Result::fail (external ? external->getLoadError() : "The plug-in could not be instantiated.");
-    const auto insertIndex = (isReturn (*t) || Impl::synth (*t)) ? 1 : 0;
+    auto insertIndex = isReturn (*t) ? 1 : 0;
+    if (auto* source = Impl::instrument (*t)) insertIndex = t->pluginList.indexOf (source) + 1;
     t->pluginList.insertPlugin (plugin, insertIndex, nullptr);
     impl->changed(); return Result::ok();
 }

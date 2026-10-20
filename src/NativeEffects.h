@@ -2,6 +2,7 @@
 #include "Session.h"
 #include "EffectProcessors.h"
 #include "MidiEffects.h"
+#include "Instruments.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <array>
 #include <cmath>
@@ -28,6 +29,7 @@ bool validEffectSettings (const Session::EffectSettings&) noexcept;
 const char* effectCategory (Session::EffectKind) noexcept;
 bool effectUsesTempo (Session::EffectKind) noexcept;
 bool effectIsMidi (Session::EffectKind) noexcept;
+bool effectIsInstrument (Session::EffectKind) noexcept;
 double effectTailSeconds (Session::EffectKind, double sampleRate) noexcept;
 double effectLatencySeconds (Session::EffectKind, double sampleRate) noexcept;
 // Index of a named control in the kind's parameter table, or -1.
@@ -115,8 +117,10 @@ public:
     bool noTail() override { return kind == Session::EffectKind::compressor || kind == Session::EffectKind::gate || kind == Session::EffectKind::autoPan || kind == Session::EffectKind::glueCompressor; }
     double getLatencySeconds() override { return effectLatencySeconds (kind, sampleRate); }
     double getTailLength() const override { return effectTailSeconds (kind, sampleRate); }
-    bool takesMidiInput() override { return effectIsMidi (kind); }
-    bool takesAudioInput() override { return ! effectIsMidi (kind); }
+    bool takesMidiInput() override { return effectIsMidi (kind) || effectIsInstrument (kind); }
+    bool takesAudioInput() override { return ! effectIsMidi (kind) && ! effectIsInstrument (kind); }
+    bool isSynth() override { return effectIsInstrument (kind); }
+    Session::EffectKind getKind() const noexcept { return kind; }
     int getNumOutputChannelsGivenInputs (int) override { return effectIsMidi (kind) ? 0 : 2; }
     BusLayout getBusses() const override { return effectIsMidi (kind) ? BusLayout {} : BusLayout::singleStereoInOut(); }
     Session::EffectSettings readSettings() const;
@@ -129,6 +133,8 @@ private:
     void timerCallback() override;
     const Session::EffectKind kind;
     void processMidi (const tracktion::PluginRenderContext&) noexcept;
+    void renderInstrument (const tracktion::PluginRenderContext&) noexcept;
+    instruments::InstrumentDSP instrument;
     NativeEffectDSP processor;
     midifx::Processor midiProcessor;
     std::array<midifx::Event, 512> midiInput {};

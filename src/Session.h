@@ -58,12 +58,14 @@ public:
     enum class EffectKind { equalizer, compressor, delay, reverb, bitcrusher, gate, limiter,
         saturator, overdrive, autoFilter, autoPan, chorus, phaser, flanger, eqThree, glueCompressor, frequencyShifter,
         // MIDI effects process notes before a MIDI track's instrument.
-        arpeggiator, chord, scale, pitch, velocity, random, noteLength };
-    static constexpr int effectKindCount = 24;
+        arpeggiator, chord, scale, pitch, velocity, random, noteLength,
+        // Instruments replace a MIDI track's built-in synthesizer through setTrackInstrument.
+        polySynth, fmSynth, drumKit, wavetableSynth };
+    static constexpr int effectKindCount = 28;
     struct EffectSettings
     {
         EffectKind kind = EffectKind::equalizer;
-        std::array<float, 34> values {};
+        std::array<float, 64> values {};
         float tempoBpm = 120; // Derived project tempo, never a separate stored device setting.
         bool operator== (const EffectSettings&) const = default;
     };
@@ -143,7 +145,8 @@ public:
         MonitorMode monitor = MonitorMode::off;
         juce::String inputName;
         std::vector<ClipInfo> clips;
-        std::vector<PluginInfo> plugins;
+        std::vector<PluginInfo> plugins; // MIDI effects, then audio devices; never the instrument.
+        PluginInfo instrument;           // isNativeEffect when a native instrument replaces the built-in synth.
         std::vector<SlotInfo> slots;
         bool launcherActive = false;
     };
@@ -212,6 +215,9 @@ public:
     juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);
     juce::Result removeMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds);
     juce::Result setSynthSettings (const juce::String& trackId, const SynthSettings&);
+    // Replaces a MIDI track's instrument in one undo step; nullopt restores the built-in synth.
+    juce::Result setTrackInstrument (const juce::String& trackId, std::optional<EffectKind> instrument);
+    juce::Result showInstrumentEditor (int trackIndex);
     juce::Result duplicateTrack (const juce::String& trackId, juce::String& duplicateId);
     juce::Result moveTrack (const juce::String& trackId, int destinationIndex);
     juce::Result removeTrack (int trackIndex);
