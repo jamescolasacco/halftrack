@@ -52,4 +52,4 @@ The facade targets the input at the slot and arms that destination. It applies t
 - Capture MIDI.
 - Any comparison with reference recording timing.
 
-Assigning an input or arming a track currently restarts playback; this is tracked separately.
+Assigning an input, arming a track or changing monitoring keeps the transport and launched clips playing (see [immediate MIDI input activation](../architecture.md#immediate-midi-input-activation)).

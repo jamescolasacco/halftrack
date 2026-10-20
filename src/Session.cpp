@@ -1534,6 +1534,16 @@ struct Session::Impl
         if (! useDevices) return;
         edit->getTransport().ensureContextAllocated();
     }
+    // Enabling a device rebuilds every context's device list. Tracktion stops the play head
+    // while clearing the old graph but leaves the transport playing, and its timer then stops
+    // the transport and launched clips. Rebuild the graph and resume where the head stopped.
+    void resumePlayback (bool wasPlaying)
+    {
+        if (! wasPlaying || ! edit->getTransport().isPlaying()) return;
+        edit->dispatchPendingUpdatesSynchronously();
+        if (auto* context = edit->getCurrentPlaybackContext(); context && ! context->isPlaying() && ! context->isPlayPending())
+            context->play();
+    }
     Meter& meter (const String& id, te::LevelMeasurer& m) const
     {
         auto& result = meters[id];
@@ -3574,6 +3584,7 @@ Result Session::setTrackInput (int index, const String& name)
     // enabling because the native device list and playback graph may rebuild.
     if (name.isNotEmpty() && !inputNames (midi).contains (name)) return Result::fail ("That input is not available for this track type.");
     const auto monitored=impl->monitoredMidiTracks();
+    const bool playing = impl->edit->getTransport().isPlaying();
     if (midi)
     {
         auto& devices = impl->engine.getDeviceManager();
@@ -3594,7 +3605,7 @@ Result Session::setTrackInput (int index, const String& name)
     else for (auto* device : impl->engine.getDeviceManager().getWaveInputDevices())
         if (device->getName() == name)
         { if (!device->isEnabled()) device->setEnabled (true); break; }
-    impl->engine.getDeviceManager().dispatchPendingUpdates(); impl->refreshInputs();
+    impl->engine.getDeviceManager().dispatchPendingUpdates(); impl->refreshInputs(); impl->resumePlayback (playing);
     te::InputDeviceInstance* selected = nullptr;
     for (auto* d : impl->edit->getAllInputDevices())
         if (d->getInputDevice().isMidi() == midi && !d->getInputDevice().isTrackDevice() && d->getInputDevice().getName() == name) selected = d;

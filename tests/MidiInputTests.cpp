@@ -911,12 +911,69 @@ void sessionRecording()
     session.stop();
 }
 
+// Input assignment, arming and monitoring leave a playing transport and its launched Session
+// clip running, also when assigning an input enables its device and rebuilds the device list.
+void inputChangesKeepPlaying()
+{
+    Session session {false, makeSyntheticTestDeviceType()};
+    VirtualController controller {session}; // Disabled until a track selects it.
+    ok (session.addMidiTrack(), "create the launched instrument track");
+    const auto trackId = session.snapshot().tracks[2].id;
+    auto patch = session.snapshot().tracks[2].synth;
+    patch.waveform = 2; patch.attackSeconds = 0; patch.releaseSeconds = .02f; patch.level = .1f;
+    patch.cutoffHz = 20000; patch.resonance = 0;
+    ok (session.setSynthSettings (trackId, patch), "prepare an audible launched instrument");
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::none), "launch without a grid");
+    ok (session.addMidiClipToSlot (trackId, 0, 4), "create the launched Session clip");
+    const auto clipId = session.snapshot().tracks[2].slots[0].clip.id;
+    for (int step = 0; step < 16; ++step)
+        ok (session.addMidiNote (clipId, 60, step * .25, .2, .8f), "add a sixteenth note to the launched clip");
+    // Rebuilds replace Tracktion's wave input objects, so look the generated input up by name.
+    const auto audioInputs = session.inputNames();
+    check (! audioInputs.isEmpty(), "the synthetic device offers a generated audio input");
+    const auto audioInput = [&]
+    {
+        for (auto* device : controller.devices.getWaveInputDevices()) if (device->getName() == audioInputs[0]) return device;
+        throw std::runtime_error ("generated audio input disappeared");
+    };
+    audioInput()->setEnabled (false);
+    pumpSyntheticTestDevice (session, 8); // Apply the device list changes before playing.
+    check (! audioInput()->isEnabled(), "the generated audio input starts disabled");
+    ok (session.launchSlot (2, 0), "launch the Session clip");
+    pumpSyntheticTestDevice (session, 8);
+    check (session.snapshot().playing && session.snapshot().tracks[2].slots[0].playing, "the launched clip plays the transport");
+    const auto keepsPlaying = [&] (const juce::Result& result, const juce::String& change)
+    {
+        ok (result, change);
+        const auto before = session.snapshot().position;
+        const float peak = pumpSyntheticTestDevice (session, 40);
+        const auto state = session.snapshot();
+        check (state.playing && state.position > before && state.tracks[2].slots[0].playing && peak > .001f,
+               change + " keeps the transport and the launched clip playing (peak " + juce::String (peak) + ")");
+    };
+    keepsPlaying (session.setTrackInput (2, controller.name), "assigning the disabled controller");
+    check (controller.midi->isEnabled(), "assigning the controller enabled its device");
+    keepsPlaying (session.setTrackArmed (2, true), "arming the MIDI track");
+    keepsPlaying (session.setTrackMonitor (2, Session::MonitorMode::on), "monitoring the MIDI track");
+    keepsPlaying (session.setTrackMonitor (2, Session::MonitorMode::off), "ending MIDI monitoring");
+    keepsPlaying (session.setTrackArmed (2, false), "disarming the MIDI track");
+    keepsPlaying (session.setTrackInput (2, {}), "disconnecting the controller");
+    keepsPlaying (session.setTrackInput (0, audioInputs[0]), "assigning the disabled audio input");
+    check (audioInput()->isEnabled(), "assigning the audio input enabled its device");
+    keepsPlaying (session.setTrackArmed (0, true), "arming the audio track");
+    keepsPlaying (session.setTrackMonitor (0, Session::MonitorMode::automatic), "auto-monitoring the audio track");
+    keepsPlaying (session.setTrackMonitor (0, Session::MonitorMode::off), "ending audio monitoring");
+    keepsPlaying (session.setTrackArmed (0, false), "disarming the audio track");
+    keepsPlaying (session.setTrackInput (0, {}), "disconnecting the audio input");
+    session.stop();
+}
+
 int runMidiInputTests(const juce::File& artifacts)
 {
     try
     {
         const auto root=artifacts.getChildFile("midi-input-"+juce::Uuid().toString()); ok(root.createDirectory(),"create isolated fixtures");
-        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); recordingQuantisation(root); controllersAndOverdub(root); sessionRecording();
+        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); recordingQuantisation(root); controllersAndOverdub(root); sessionRecording(); inputChangesKeepPlaying();
         std::cout<<"MIDI input tests passed: "<<root.getFullPathName()<<std::endl; return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI input: "<<e.what()<<std::endl;return 1;}
