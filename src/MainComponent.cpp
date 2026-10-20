@@ -482,7 +482,7 @@ public:
         horizontalScroll.setBounds (area.removeFromBottom (12).withTrimmedRight (trackWidth + 10));
         ruler.setBounds (area.removeFromTop (rulerHeight));
         viewport.setBounds (area);
-        canvas.setSize (juce::jmax (1, viewport.getWidth() - 10), juce::jmax (area.getHeight(), (int) state.tracks.size() * trackHeight));
+        canvas.setSize (juce::jmax (1, viewport.getWidth() - 10), juce::jmax (area.getHeight(), lanesHeight));
         canvas.resized();
         ruler.resized(); // Place controls using the final timeline width after window resizing.
         updateScroll();
@@ -513,6 +513,7 @@ public:
             if (code == 'T') { if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
             if (code == 'Z') { if (shift) session.redo(); else session.undo(); refresh(); return true; }
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
+            if (code == 'G') { if (shift) ungroupSelectedTrack(); else groupSelectedTracks(); return true; }
             if (code == 'I') { importDialog(); return true; }
             if (code == 'E' && shift) { exportDialog(); return true; }
             if (! shift && ! showSession && ! showPiano && (code == 'E' || code == 'D' || code == 'C' || code == 'X' || code == 'V'))
@@ -599,6 +600,52 @@ public:
    #endif
 
 private:
+    // Arrangement lanes in visual order: group headers above their members; folded members have no height.
+    static constexpr int groupHeight = 40;
+    struct Lane { bool group = false; int index = -1, y = 0, height = 0; };
+    std::vector<Lane> lanes;
+    int lanesHeight = 0;
+    std::set<juce::String> multiSelectedTracks;
+    const Session::GroupInfo* groupInfo (const juce::String& id) const
+    { for (const auto& g : state.groups) if (g.id == id) return &g; return nullptr; }
+    void buildLanes()
+    {
+        lanes.clear(); int y = 0; juce::String open;
+        for (int t = 0; t < (int) state.tracks.size(); ++t)
+        {
+            const auto& track = state.tracks[(size_t) t];
+            if (track.groupId != open && track.groupId.isNotEmpty())
+                for (int g = 0; g < (int) state.groups.size(); ++g)
+                    if (state.groups[(size_t) g].id == track.groupId) { lanes.push_back ({ true, g, y, groupHeight }); y += groupHeight; }
+            open = track.groupId;
+            const auto* group = groupInfo (track.groupId);
+            const int height = group != nullptr && group->folded ? 0 : trackHeight;
+            lanes.push_back ({ false, t, y, height }); y += height;
+        }
+        lanesHeight = y;
+    }
+    int laneY (int track) const
+    { for (const auto& lane : lanes) if (! lane.group && lane.index == track) return lane.y; return track * trackHeight; }
+    int laneHeight (int track) const
+    { for (const auto& lane : lanes) if (! lane.group && lane.index == track) return lane.height; return trackHeight; }
+    // Track under a canvas y, -1 for none (including group header lanes).
+    int trackAtY (int y) const
+    {
+        if (y < 0) return -1;
+        for (const auto& lane : lanes) if (y >= lane.y && y < lane.y + lane.height) return lane.group ? -1 : lane.index;
+        return lanes.empty() && y / trackHeight < (int) state.tracks.size() ? y / trackHeight : -1;
+    }
+    void groupSelectedTracks()
+    {
+        juce::StringArray ids;
+        for (const auto& track : state.tracks) if (multiSelectedTracks.contains (track.id) || (currentTrack() != nullptr && track.id == currentTrack()->id)) ids.add (track.id);
+        juce::String group; report (session.groupTracks (ids, group)); multiSelectedTracks.clear(); refresh();
+    }
+    void ungroupSelectedTrack()
+    {
+        if (const auto* track = currentTrack(); track != nullptr && track->groupId.isNotEmpty()) report (session.ungroupTracks (track->groupId));
+        refresh();
+    }
     static constexpr int minimumClipViewHeight = 340, dividerHeight = 5;
     double clipViewFraction = .58;
     juce::Rectangle<int> dividerBounds;
@@ -797,8 +844,9 @@ private:
                 return;
             }
             // Header strip in the track colour, then routing and mixer lines.
-            const bool selected = owner.selectedTrack == index;
+            const bool selected = owner.selectedTrack == index || owner.multiSelectedTracks.contains (trackId);
             g.setColour (selected ? colour.brighter (0.2f) : colour); g.fillRect (0, 0, getWidth() - 8, 24);
+            if (owner.multiSelectedTracks.contains (trackId)) { g.setColour (orange); g.drawRect (0, 0, getWidth() - 8, getHeight(), 2); }
             g.setColour (muted); g.setFont (font (9.0f, true));
             if (returnTrack) g.drawText ("SEND INPUT", 10, 26, 64, 19, juce::Justification::centredLeft);
             else g.drawText (midi ? "MIDI" : "IN", 10, 26, 24, 19, juce::Justification::centredLeft);
@@ -835,6 +883,12 @@ private:
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
+            if (! columnLayout && e.mods.isShiftDown() && ! e.mods.isPopupMenu())
+            {
+                if (const auto* current = owner.currentTrack(); current != nullptr && current->id != trackId) owner.multiSelectedTracks.insert (current->id);
+                if (! owner.multiSelectedTracks.erase (trackId)) owner.multiSelectedTracks.insert (trackId);
+            }
+            else if (! e.mods.isPopupMenu()) owner.multiSelectedTracks.clear();
             owner.selectTrack (index);
             if (e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name))
                 if (const auto* track = owner.currentTrack()) owner.showTrackOrderMenu (track->id, columnLayout);
@@ -880,6 +934,98 @@ private:
         return reordered;
     }
 
+    // Disclosure triangle: points right when folded, down when open.
+    class FoldButton final : public juce::Button
+    {
+    public:
+        FoldButton() : juce::Button ("Fold") {}
+        bool folded = false;
+        void paintButton (juce::Graphics& g, bool over, bool) override
+        {
+            juce::Path triangle; const auto b = getLocalBounds().toFloat().withSizeKeepingCentre (9.0f, 9.0f);
+            if (folded) triangle.addTriangle (b.getX() + 1, b.getY(), b.getX() + 1, b.getBottom(), b.getRight(), b.getCentreY());
+            else triangle.addTriangle (b.getX(), b.getY() + 1, b.getRight(), b.getY() + 1, b.getCentreX(), b.getBottom());
+            g.setColour (juce::Colour (over ? 0xff000000 : 0xff141414)); g.fillPath (triangle);
+        }
+    };
+    // Arrangement header for a group: fold switch, name, activator, solo and the group mixer.
+    class GroupHeader final : public juce::Component
+    {
+    public:
+        GroupHeader (Impl& o, juce::String id) : owner (o), groupId (std::move (id))
+        {
+            for (auto* c : std::initializer_list<juce::Component*> { &fold, &name, &activator, &solo, &gain, &pan }) addAndMakeVisible (c);
+            fold.setName ("Group fold"); fold.setTooltip ("Fold or unfold the group's tracks");
+            fold.onClick = [this] { if (const auto* g = info()) owner.report (owner.session.setGroupFolded (groupId, ! g->folded)); owner.refresh(); };
+            name.setName ("Group name"); name.setFont (font (11.5f, true)); name.setEditable (false, true, false);
+            name.setColour (juce::Label::textColourId, juce::Colour (0xff141414));
+            name.onTextChange = [this] { owner.report (owner.session.renameGroup (groupId, name.getText())); owner.refresh(); };
+            for (auto* b : { &activator, &solo }) { b->setClickingTogglesState (true); b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); }
+            activator.setName ("Group activator"); activator.setTooltip ("Group activator: click to mute or unmute the whole group");
+            activator.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); activator.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            solo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff57a7ff)); solo.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            activator.onClick = [this] { owner.report (owner.session.setGroupMute (groupId, ! activator.getToggleState())); owner.refresh(); };
+            solo.onClick = [this] { owner.report (owner.session.setGroupSolo (groupId, solo.getToggleState())); owner.refresh(); };
+            gain.setName ("Group volume"); gain.setSliderStyle (juce::Slider::LinearHorizontal); gain.setRange (-100, 6, .1); gain.setSkewFactorFromMidPoint (-12);
+            gain.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 16); gain.setDoubleClickReturnValue (true, 0);
+            gain.textFromValueFunction = [] (double v) { return v <= -100 ? juce::String ("-inf") : juce::String (v, 1) + " dB"; };
+            gain.onDragStart = [this] { owner.session.beginEditGesture ("Group volume"); };
+            gain.onDragEnd = [this] { owner.session.endEditGesture(); };
+            gain.onValueChange = [this] { owner.report (owner.session.setGroupGain (groupId, (float) gain.getValue())); };
+            pan.setName ("Group pan"); pan.setSliderStyle (juce::Slider::LinearHorizontal); pan.setRange (-1, 1, .01);
+            pan.setTextBoxStyle (juce::Slider::TextBoxRight, false, 32, 16); pan.setDoubleClickReturnValue (true, 0);
+            pan.textFromValueFunction = [] (double v) { return std::abs (v) < 0.01 ? juce::String ("C") : juce::String ((int) std::round (std::abs (v) * 100.0)) + (v < 0 ? "L" : "R"); };
+            pan.onDragStart = [this] { owner.session.beginEditGesture ("Group pan"); };
+            pan.onDragEnd = [this] { owner.session.endEditGesture(); };
+            pan.onValueChange = [this] { owner.report (owner.session.setGroupPan (groupId, (float) pan.getValue())); };
+            gain.updateText(); pan.updateText();
+        }
+        const juce::String& getId() const noexcept { return groupId; }
+        void sync()
+        {
+            const auto* g = info(); if (g == nullptr) return;
+            colour = g->colour; folded = g->folded; peakL = g->peakL; peakR = g->peakR; fold.folded = folded; fold.repaint();
+            if (! name.isBeingEdited()) name.setText (g->name, juce::dontSendNotification);
+            activator.setToggleState (! g->mute, juce::dontSendNotification); solo.setToggleState (g->solo, juce::dontSendNotification);
+            activator.setButtonText ("G");
+            if (! gain.isMouseButtonDown()) gain.setValue (g->gainDb, juce::dontSendNotification);
+            if (! pan.isMouseButtonDown()) pan.setValue (g->pan, juce::dontSendNotification);
+            repaint();
+        }
+        void resized() override
+        {
+            const int w = getWidth() - 8;
+            fold.setBounds (2, 2, 18, 18); name.setBounds (20, 1, w - 80, 20);
+            activator.setBounds (w - 56, 2, 26, 18); solo.setBounds (w - 28, 2, 26, 18);
+            gain.setBounds (24, 21, (w - 30) / 2 + 10, 17); pan.setBounds (24 + (w - 30) / 2 + 14, 21, w - 38 - (w - 30) / 2 - 10, 17);
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (juce::Colour (0xff2a2a2a));
+            g.setColour (colour); g.fillRect (0, 0, getWidth() - 8, 21);
+            for (int channel = 0; channel < 2; ++channel)
+            {
+                const auto level = channel == 0 ? peakL : peakR;
+                const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (level, -60.0f) + 60.0f) / 60.0f);
+                const auto bar = juce::Rectangle<int> (getWidth() - 7 + channel * 3, 1, 2, getHeight() - 2);
+                g.setColour (juce::Colour (0xff181818)); g.fillRect (bar);
+                g.setColour (level >= 1.0f ? red : green); g.fillRect (bar.withTop (bar.getBottom() - juce::roundToInt (bar.getHeight() * fraction)));
+            }
+            g.setColour (line); g.drawRect (getLocalBounds());
+        }
+    private:
+        const Session::GroupInfo* info() const { return owner.groupInfo (groupId); }
+        Impl& owner;
+        juce::String groupId;
+        juce::Colour colour;
+        bool folded = false;
+        float peakL = 0, peakR = 0;
+        FoldButton fold;
+        juce::TextButton activator { "G" }, solo { "S" };
+        juce::Label name;
+        juce::Slider gain, pan;
+    };
+
     class Canvas final : public juce::Component, private juce::ChangeListener
     {
     public:
@@ -891,18 +1037,37 @@ private:
         }
         void syncRows()
         {
-            if (owner.syncTrackRows (*this, rows, false)) resized();
+            bool layout = owner.syncTrackRows (*this, rows, false);
+            bool same = groupHeaders.size() == owner.state.groups.size();
+            for (size_t i = 0; same && i < groupHeaders.size(); ++i) same = groupHeaders[i]->getId() == owner.state.groups[i].id;
+            if (! same)
+            {
+                groupHeaders.clear();
+                for (const auto& group : owner.state.groups) { groupHeaders.push_back (std::make_unique<GroupHeader> (owner, group.id)); addAndMakeVisible (*groupHeaders.back()); }
+                layout = true;
+            }
+            for (auto& header : groupHeaders) header->sync();
+            if (layout || owner.lanesHeight != lastLanesHeight) { lastLanesHeight = owner.lanesHeight; resized(); }
             repaint();
         }
+        std::vector<std::unique_ptr<GroupHeader>> groupHeaders;
+        int lastLanesHeight = -1;
         int timelineWidth() const { return getWidth() - trackWidth; }
         void resized() override
         {
-            for (size_t i = 0; i < rows.size(); ++i) rows[i]->setBounds (timelineWidth(), (int) i * trackHeight, trackWidth, trackHeight);
+            for (size_t i = 0; i < rows.size(); ++i)
+            {
+                const int height = owner.laneHeight ((int) i);
+                rows[i]->setVisible (height > 0); rows[i]->setBounds (timelineWidth(), owner.laneY ((int) i), trackWidth, juce::jmax (1, height));
+            }
+            for (const auto& lane : owner.lanes)
+                if (lane.group && juce::isPositiveAndBelow (lane.index, (int) groupHeaders.size()))
+                    groupHeaders[(size_t) lane.index]->setBounds (timelineWidth(), lane.y, trackWidth, lane.height);
         }
         juce::Rectangle<float> clipBounds (const Session::ClipInfo& clip, int track) const
         {
-            return { (float) ((clip.start - owner.viewStart) * owner.pixelsPerSecond), (float) (track * trackHeight + 6),
-                     (float) juce::jmax (3.0, clip.length * owner.pixelsPerSecond), (float) trackHeight - 12.0f };
+            return { (float) ((clip.start - owner.viewStart) * owner.pixelsPerSecond), (float) (owner.laneY (track) + 6),
+                     (float) juce::jmax (3.0, clip.length * owner.pixelsPerSecond), (float) juce::jmax (0, owner.laneHeight (track) - 12) };
         }
         juce::Point<float> fadeHandle (const Session::ClipInfo& clip, int track, bool out) const
         {
@@ -932,11 +1097,30 @@ private:
             const auto tw = timelineWidth();
             g.saveState();
             g.reduceClipRegion (0, 0, tw, getHeight());
-            for (int i = 0; i < (int) owner.state.tracks.size(); ++i)
+            for (const auto& lane : owner.lanes)
             {
-                g.setColour (i == owner.selectedTrack ? juce::Colour (0xff353535) : (i % 2 == 0 ? juce::Colour (0xff2c2c2c) : juce::Colour (0xff303030)));
-                g.fillRect (0, i * trackHeight, tw, trackHeight);
-                g.setColour (line); g.drawHorizontalLine ((i + 1) * trackHeight - 1, 0.0f, (float) tw);
+                if (lane.height == 0) continue;
+                if (lane.group)
+                {
+                    const auto& group = owner.state.groups[(size_t) lane.index];
+                    g.setColour (juce::Colour (0xff262626)); g.fillRect (0, lane.y, tw, lane.height);
+                    // Member clips summarized as thin bars, as on a folded group lane.
+                    for (int t = 0; t < (int) owner.state.tracks.size(); ++t)
+                        if (owner.state.tracks[(size_t) t].groupId == group.id)
+                            for (const auto& clip : owner.state.tracks[(size_t) t].clips)
+                            {
+                                const auto x = (float) ((clip.start - owner.viewStart) * owner.pixelsPerSecond);
+                                g.setColour (owner.state.tracks[(size_t) t].colour.withAlpha (clip.active ? 0.8f : 0.3f));
+                                g.fillRect (x, (float) lane.y + 12.0f, (float) juce::jmax (2.0, clip.length * owner.pixelsPerSecond), (float) lane.height - 24.0f);
+                            }
+                }
+                else
+                {
+                    const int i = lane.index;
+                    g.setColour (i == owner.selectedTrack ? juce::Colour (0xff353535) : (i % 2 == 0 ? juce::Colour (0xff2c2c2c) : juce::Colour (0xff303030)));
+                    g.fillRect (0, lane.y, tw, lane.height);
+                }
+                g.setColour (line); g.drawHorizontalLine (lane.y + lane.height - 1, 0.0f, (float) tw);
             }
             const double beat = 60.0 / owner.state.tempo;
             const auto grid = owner.gridSeconds();
@@ -958,9 +1142,9 @@ private:
                 const auto& track = owner.state.tracks[(size_t) t];
                 if (track.isReturn)
                 {
-                    g.setColour (background); g.fillRect (0, t * trackHeight + 1, tw, trackHeight - 2);
+                    g.setColour (background); g.fillRect (0, owner.laneY (t) + 1, tw, owner.laneHeight (t) - 2);
                     g.setColour (muted); g.setFont (font (11.0f));
-                    g.drawText ("RETURN  /  Audio from track sends", 16, t * trackHeight + 40, tw - 32, 26, juce::Justification::centredLeft);
+                    g.drawText ("RETURN  /  Audio from track sends", 16, owner.laneY (t) + owner.laneHeight (t) / 2 - 13, tw - 32, 26, juce::Justification::centredLeft);
                     continue;
                 }
                 for (int c = 0; c < (int) track.clips.size(); ++c)
@@ -1052,10 +1236,10 @@ private:
                 {
                     const auto from = owner.recordingStart;
                     g.setColour (red.withAlpha (0.22f));
-                    g.fillRect ((float) ((from - owner.viewStart) * owner.pixelsPerSecond), (float) t * trackHeight + 6,
-                                (float) juce::jmax (2.0, (owner.state.position - from) * owner.pixelsPerSecond), (float) trackHeight - 12);
+                    g.fillRect ((float) ((from - owner.viewStart) * owner.pixelsPerSecond), (float) owner.laneY (t) + 6,
+                                (float) juce::jmax (2.0, (owner.state.position - from) * owner.pixelsPerSecond), (float) owner.laneHeight (t) - 12);
                     g.setColour (red); g.setFont (font (11.0f, true));
-                    g.drawText ("RECORDING", (int) ((from - owner.viewStart) * owner.pixelsPerSecond) + 8, t * trackHeight + 12, 96, 18, juce::Justification::centredLeft);
+                    g.drawText ("RECORDING", (int) ((from - owner.viewStart) * owner.pixelsPerSecond) + 8, owner.laneY (t) + 12, 96, 18, juce::Justification::centredLeft);
                 }
             }
             if (owner.state.tracks.empty())
@@ -1082,7 +1266,7 @@ private:
             if (e.x >= timelineWidth()) return;
             grabKeyboardFocus(); fadeDrag = 0; rangeDrag = 0; dragClipId.clear();
             const auto previousTrack = owner.selectedTrack, previousClip = owner.selectedClip;
-            auto track = e.y / trackHeight;
+            auto track = owner.trackAtY (e.y);
             if (track < 0) return;
             owner.selectedClip = -1;
             owner.selectedLauncherClipId.clear();
@@ -1198,7 +1382,7 @@ private:
                         auto start = juce::jmax (0.0, originalStart + (e.x - dragStartX) / owner.pixelsPerSecond);
                         if (! e.mods.isAltDown()) start = std::round (start / owner.gridSeconds()) * owner.gridSeconds();
                         const auto& clip = current.tracks[(size_t)t].clips[(size_t)c];
-                        const int destination = e.y < 0 ? -1 : e.y/trackHeight;
+                        const int destination = owner.trackAtY (e.y);
                         if (! juce::isPositiveAndBelow (destination,(int)current.tracks.size())
                             || current.tracks[(size_t)destination].isMidi != clip.isMidi || current.tracks[(size_t)destination].isReturn) return;
                         if (! clipGesture) { owner.session.beginEditGesture ("Move clip"); clipGesture = true; }
@@ -1216,7 +1400,7 @@ private:
         }
         void mouseMove (const juce::MouseEvent& e) override
         {
-            const auto track = e.y/trackHeight; bool handle = false;
+            const auto track = owner.trackAtY (e.y); bool handle = false;
             if (e.x < timelineWidth() && e.y >= 0 && juce::isPositiveAndBelow (track,(int) owner.state.tracks.size()))
             {
                 const auto& clips = owner.state.tracks[(size_t) track].clips;
@@ -3439,6 +3623,7 @@ private:
         const auto previous = state;
         const auto selectedId = currentTrack() != nullptr ? currentTrack()->id : juce::String();
         state = session.snapshot();
+        buildLanes();
         if (selectedId.isNotEmpty())
         {
             const int liveIndex = launcherIndices (selectedId, {}).first;
@@ -3469,7 +3654,9 @@ private:
         if (! loopStartLabel.isBeingEdited()) loopStartLabel.setText (formatMusicalTime (state.loopStart * state.tempo / 60.0, true), juce::dontSendNotification);
         if (! loopLengthLabel.isBeingEdited()) loopLengthLabel.setText (formatMusicalTime ((state.loopEnd - state.loopStart) * state.tempo / 60.0, false), juce::dontSendNotification);
         projectLabel.setText (state.name + (state.dirty ? "  *" : ""), juce::dontSendNotification);
-        if (state.tracks.size() != previous.tracks.size()) resized();
+        if (state.tracks.size() != previous.tracks.size() || lanesHeight != canvas.getHeight() && lanesHeight > viewport.getHeight()) resized();
+        for (auto it = multiSelectedTracks.begin(); it != multiSelectedTracks.end();)
+            it = std::any_of (state.tracks.begin(), state.tracks.end(), [&] (const auto& t) { return t.id == *it; }) ? std::next (it) : multiSelectedTracks.erase (it);
         canvas.syncRows();
         if (selectedSceneIndex() < 0) selectedSceneId = state.scenes.empty() ? juce::String() : state.scenes.front().id;
         launcher.sync();
@@ -3511,7 +3698,7 @@ private:
     {
         showPiano = false;
         report (session.addAudioTrack()); refresh(); selectTrack ((int) state.tracks.size() - 1);
-        viewport.setViewPosition (0, juce::jmax (0, selectedTrack * trackHeight - viewport.getHeight() + trackHeight));
+        viewport.setViewPosition (0, juce::jmax (0, laneY (selectedTrack) - viewport.getHeight() + trackHeight));
     }
     void addReturnTrack()
     {
@@ -3581,6 +3768,9 @@ private:
             popup.addItem (38, "Duplicate Selected Track", currentTrack() != nullptr && !currentTrack()->isReturn);
             popup.addItem (36, "Move Selected Track Earlier", selectedTrack > 0);
             popup.addItem (37, "Move Selected Track Later", selectedTrack >= 0 && selectedTrack+1 < (int)state.tracks.size());
+            popup.addSeparator();
+            popup.addItem (72, "Group Tracks", currentTrack() != nullptr && ! currentTrack()->isReturn && currentTrack()->groupId.isEmpty());
+            popup.addItem (73, "Ungroup Tracks", currentTrack() != nullptr && currentTrack()->groupId.isNotEmpty());
             popup.addSeparator(); popup.addItem (32, "Add Plug-in...", currentTrack() != nullptr);
         }
         else if (index == 3)
@@ -3628,6 +3818,8 @@ private:
             case 32: addPluginMenu(); break;
             case 36: case 37: if (const auto* track = currentTrack()) reorderTrack (track->id, id == 36 ? -1 : 1); break;
             case 38: if (const auto* track = currentTrack()) duplicateTrackFromUI (track->id); break;
+            case 72: groupSelectedTracks(); break;
+            case 73: ungroupSelectedTrack(); break;
             case 40: if (showPiano) pianoRoll.fit(); else fitTimeline(); break;
             case 41: if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); break;
             case 42: if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); break;
@@ -4470,7 +4662,7 @@ private:
         }
         const auto p = canvas.getLocalPoint (this, juce::Point<int> (x, y));
         const auto inside = viewport.getBounds().contains (x, y) && p.x < canvas.timelineWidth();
-        const auto index = inside && p.y / trackHeight < (int) state.tracks.size() ? p.y / trackHeight : -1;
+        const auto index = inside ? trackAtY (p.y) : -1;
         const auto time = inside ? juce::jmax (0.0, viewStart + p.x / pixelsPerSecond) : state.position;
         importFiles (files, index, std::round (time / gridSeconds()) * gridSeconds());
     }
@@ -4828,6 +5020,42 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         session.undo(); session.undo(); session.undo(); refresh();
         check (state.tracks[0].plugins.empty(), "undo removes the inline test device");
         selectTrack (instrumentTrack); refresh();
+    }
+    {
+        // Groups: Shift-click extends the track selection, Cmd/Ctrl+G groups it, the header folds it.
+        showArrangementView(); refresh();
+        const auto firstId = state.tracks[0].id, secondId = state.tracks[1].id;
+        const auto now = juce::Time::getCurrentTime();
+        auto headerClick = [&] (int index, juce::ModifierKeys mods)
+        {
+            auto* row = canvas.getChildComponent (index);
+            row->mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { 20.0f, 30.0f }, mods, 1.0f, 0, 0, 0, 0, row, row, now, { 20.0f, 30.0f }, now, 1, false));
+        };
+        headerClick (0, {}); headerClick (1, juce::ModifierKeys (juce::ModifierKeys::shiftModifier));
+        check (multiSelectedTracks.contains (firstId) && multiSelectedTracks.contains (secondId), "Shift-click extends the track selection");
+        handleKey (juce::KeyPress ('G', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)); refresh();
+        check (state.groups.size() == 1 && state.groups[0].memberIds == juce::StringArray { firstId, secondId } && multiSelectedTracks.empty(),
+               "Cmd/Ctrl+G groups the selected tracks");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("arrangement-group.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (createComponentSnapshot (getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        auto* fold = dynamic_cast<juce::Button*> (findNamed (canvas, "Group fold"));
+        check (fold != nullptr && trackAtY (lanes.front().y + 5) == -1 && laneY (0) == groupHeight, "the group header occupies its own lane above its members");
+        fold->onClick(); refresh();
+        check (state.groups[0].folded && laneHeight (0) == 0 && laneHeight (1) == 0 && ! canvas.getChildComponent (0)->isVisible()
+               && canvas.clipBounds (state.tracks[0].clips.empty() ? Session::ClipInfo {} : state.tracks[0].clips[0], 0).getHeight() == 0,
+               "folding hides the member lanes and their clips");
+        fold->onClick(); refresh();
+        check (! state.groups[0].folded && laneHeight (0) == trackHeight, "unfolding restores the member lanes");
+        selectTrack (0); menuItemSelected (73, 2);
+        check (state.groups.empty() && laneY (0) == 0, "the Create menu ungroups the selected track's group");
+        session.undo(); session.undo(); refresh();
+        check (state.groups.empty(), "undo leaves no group behind");
     }
     {
         // Browser: categories list built-in devices; activating a row inserts it.
