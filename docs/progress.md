@@ -817,3 +817,5 @@ Stage 5 (Arrangement headers): 72-pixel tracks (previously 112) with a header st
 
 Stage 6 (clip view): an open clip's editor now appears in the bottom detail area in place of the device view, with the Session grid or Arrangement still visible above, as in the reference workflow. It defaults to 58% of the main height (at least 340 pixels) and a divider drags between 25% and 85%. The Clip button and Shift+Tab toggle between the clip and device views; Tab still switches Session/Arrangement. A send-control helper in the UI suite now shows the device view before locating device-view controls, since inserting a MIDI track opens its new clip. UI, export dialog, automation and plug-in editor suites pass.
 
+Integrated checkpoint after the interface stages: all **30 local Mac acceptance suites pass in 520.2 s** (new: native MIDI effects, instruments and warp suites), with the owned source guard covering 175 bodies. Not yet pushed or run on Windows/Linux CI in this session.
+
