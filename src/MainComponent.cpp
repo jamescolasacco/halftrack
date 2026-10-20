@@ -1231,6 +1231,14 @@ private:
                         }
                         else thumbnail->drawChannels (g, visible.toNearestInt(), clip.sourceOffset + startSeconds, clip.sourceOffset + endSeconds, 0.9f);
                     }
+                    if (track.frozen)
+                    {
+                        // Frozen clips play their render: an icy hatch marks them as locked.
+                        juce::Graphics::ScopedSaveState frost (g); g.reduceClipRegion (bounds.toNearestInt());
+                        g.setColour (juce::Colour (0x6094c8ff));
+                        for (auto x = bounds.getX() - bounds.getHeight(); x < bounds.getRight(); x += 9.0f)
+                            g.drawLine (x, bounds.getBottom(), x + bounds.getHeight(), bounds.getY(), 1.4f);
+                    }
                     if (selected && clip.isAudio && clip.canEditAudioFades && bounds.getWidth() >= 20)
                     {
                         const auto curve = [] (double x, Session::FadeCurve type)
@@ -3596,7 +3604,13 @@ private:
                 if (track != nullptr) for (const auto& p : track->plugins) { panels.push_back (std::make_unique<DevicePanel> (owner, p)); chain.addAndMakeVisible (*panels.back()); }
             }
             else if (track != nullptr) for (size_t i = 0; i < panels.size(); ++i) panels[i]->sync (track->plugins[i]);
-            synthPanel.sync(); layoutChain(); repaint();
+            synthPanel.sync(); layoutChain();
+            // A frozen track's devices play from its render and cannot change until it is unfrozen.
+            const bool frozen = track != nullptr && track->frozen;
+            for (auto* c : std::initializer_list<juce::Component*> { &chain, &synthPanel })
+            { c->setEnabled (! frozen); c->setAlpha (frozen ? .45f : 1.0f); }
+            addButton.setEnabled (track != nullptr && ! frozen);
+            repaint();
         }
         void paint (juce::Graphics& g) override
         {
@@ -4055,6 +4069,14 @@ private:
         if (beat * pixelsPerSecond >= 6) return beat * 2;
         return beat * 4;
     }
+    // Freeze toggles the track's freeze; Flatten replaces a frozen track with its render.
+    void freezeTrackFromUI (const juce::String& trackId, bool flatten)
+    {
+        const auto index = launcherIndices (trackId, {}).first;
+        if (index < 0) return;
+        const bool frozen = state.tracks[(size_t) index].frozen;
+        report (flatten ? session.flattenTrack (trackId) : session.setTrackFrozen (trackId, ! frozen)); refresh();
+    }
     void duplicateTrackFromUI (const juce::String& trackId)
     {
         juce::String created; const auto result = session.duplicateTrack (trackId, created); report (result); refresh();
@@ -4077,12 +4099,17 @@ private:
         juce::PopupMenu menu;
         menu.addItem (1, horizontal ? "Move track left" : "Move track up", indices.first > 0);
         menu.addItem (2, horizontal ? "Move track right" : "Move track down", indices.first >= 0 && indices.first+1 < (int)state.tracks.size());
-        menu.addSeparator(); menu.addItem (3, "Duplicate track", indices.first >= 0 && !state.tracks[(size_t)indices.first].isReturn);
+        const auto* info = indices.first >= 0 ? &state.tracks[(size_t) indices.first] : nullptr;
+        menu.addSeparator(); menu.addItem (3, "Duplicate track", info != nullptr && ! info->isReturn && ! info->frozen);
+        menu.addSeparator();
+        menu.addItem (4, info != nullptr && info->frozen ? "Unfreeze Track" : "Freeze Track", info != nullptr && ! info->isReturn && (info->frozen || ! info->clips.empty()));
+        menu.addItem (5, "Flatten", info != nullptr && info->frozen);
         menu.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), id] (int result)
         {
             if (safe == nullptr) return;
             if (result == 1 || result == 2) safe->reorderTrack (id, result == 1 ? -1 : 1);
             else if (result == 3) safe->duplicateTrackFromUI (id);
+            else if (result == 4 || result == 5) safe->freezeTrackFromUI (id, result == 5);
         });
     }
     void selectTrack (int track)
@@ -5583,6 +5610,32 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         for (int step = 0; step < 5; ++step) session.undo();
         refresh();
         check (! currentTrack()->instrument.isNativeEffect && ! pads->isVisible(), "undo returns to the built-in synth");
+    }
+    {
+        // Freeze and Flatten from the track menu: devices lock while frozen, Flatten leaves audio.
+        const int frozenTrack = selectedTrack; const auto frozenId = currentTrack()->id;
+        const auto before = state.tracks[(size_t) frozenTrack].clips.size();
+        check (session.addMidiClip (frozenId, 0, 4).wasOk(), "give the MIDI track an Arrangement clip"); refresh();
+        check (session.addMidiNote (state.tracks[(size_t) frozenTrack].clips.back().id, 60, 0, 1, .8f).wasOk(), "add a note to freeze"); refresh();
+        freezeTrackFromUI (frozenId, false); refresh();
+        auto* synthPanel = findNamed (deviceChain, "Halftrack synthesizer");
+        check (state.tracks[(size_t) frozenTrack].frozen && synthPanel != nullptr && ! synthPanel->isEnabled(), "Freeze Track freezes the track and locks its devices");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                showArrangementView(); refresh();
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("frozen-track.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (createComponentSnapshot (getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        freezeTrackFromUI (frozenId, true); refresh();
+        const auto& flat = state.tracks[(size_t) frozenTrack];
+        check (! flat.isMidi && ! flat.frozen && flat.clips.size() == 1 && flat.clips[0].isAudio && synthPanel->isEnabled(), "Flatten replaces the track with an audio clip of its render");
+        for (int step = 0; step < 4; ++step) session.undo();
+        refresh();
+        check (state.tracks[(size_t) frozenTrack].isMidi && ! state.tracks[(size_t) frozenTrack].frozen && state.tracks[(size_t) frozenTrack].clips.size() == before,
+               "undo restores the unfrozen MIDI track");
     }
     {
         const int instrumentTrack = selectedTrack;

@@ -195,3 +195,7 @@ Pads are one-shot at unity level and velocity scales linearly; length cuts fade 
 ### Device automation defaults
 
 Device lanes interpolate linearly in each control's knob position (its editor skew), and integer and choice controls step to the nearest value. Automation is applied at audio-block rate, without per-sample smoothing beyond each processor's own. Third-party plug-in parameters are not exposed. These are simplest-default choices pending reference measurement.
+
+### Freeze defaults
+
+Only Arrangement clips are frozen; Session clips keep playing live. Freeze renders stay in the engine's temporary folder, so a reopened project on another machine plays live. Undoing a Flatten returns to the unfrozen track rather than the frozen state. These are simplest-default choices pending reference measurement.

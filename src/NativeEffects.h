@@ -133,6 +133,8 @@ public:
     bool takesMidiInput() override { return effectIsMidi (kind) || effectIsInstrument (kind); }
     bool takesAudioInput() override { return ! effectIsMidi (kind) && ! effectIsInstrument (kind); }
     bool isSynth() override { return effectIsInstrument (kind); }
+    // Instruments sound from MIDI alone; renders such as freezes check this before rendering a MIDI track.
+    bool producesAudioWhenNoAudioInput() override { return effectIsInstrument (kind) || isAutomationNeeded(); }
     Session::EffectKind getKind() const noexcept { return kind; }
     int getNumOutputChannelsGivenInputs (int) override { return effectIsMidi (kind) ? 0 : 2; }
     BusLayout getBusses() const override { return effectIsMidi (kind) ? BusLayout {} : BusLayout::singleStereoInOut(); }

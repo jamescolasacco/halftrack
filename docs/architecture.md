@@ -238,6 +238,10 @@ Groups are engine submix folder tracks with Halftrack's constant-power mixer. `S
 
 `recordSlot(track, scene)` targets the armed track's input at an empty slot (a non-undoable destination), applies it to the graph synchronously and starts an engine punch-in at the next launch boundary's unlooped time. `Impl::slotRecordings` tracks active takes. Ending one (pressing the slot, another slot, a track or global stop, or transport stop) calls the engine's async or immediate `stopRecording`. A single completion step removes the slot destination, makes the take loop over its recorded beats, assigns MIDI note identities or audio tempo metadata, and queues playback at the past stop boundary for in-phase continuation. `SlotInfo::recording` reports active takes; armed empty slots draw a record button. See the [Session recording contract](research/session-recording-contract.md).
 
+## Freeze and Flatten
+
+`setTrackFrozen` writes the engine's `frozenIndividually` track property through the undo manager; the engine's listener renders the freeze (or removes it) synchronously. `Impl::unfrozen` guards device, instrument, clip and note commands on frozen tracks. `flattenTrack` converts the engine's freeze render into a WAV in Assets, unfreezes outside history (the engine cannot render during undo), then in one transaction removes instrument and device plugins and clips, clears MIDI state and inserts the audio clip. Native instruments and the built-in synth report `producesAudioWhenNoAudioInput` so the engine's audio-node check accepts MIDI-only freezes. See the [freeze contract](research/freeze-contract.md).
+
 ## Audio warping
 
 `ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).

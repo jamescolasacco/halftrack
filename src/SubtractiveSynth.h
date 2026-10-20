@@ -73,6 +73,7 @@ public:
     void reset() override;
     void applyToBuffer (const tracktion::PluginRenderContext&) override;
     bool isSynth() override { return true; }
+    bool producesAudioWhenNoAudioInput() override { return true; }
     bool takesMidiInput() override { return true; }
     bool takesAudioInput() override { return false; }
     int getNumOutputChannelsGivenInputs (int) override { return 2; }

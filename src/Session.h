@@ -169,6 +169,7 @@ public:
         juce::Colour colour;
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
         bool mute = false, solo = false, armed = false, isMidi = false, isReturn = false;
+        bool frozen = false; // Plays a render of its clips and devices; devices and clips are locked.
         SendMode sendMode = SendMode::post;
         std::vector<SendInfo> sends;
         SynthSettings synth;
@@ -272,6 +273,10 @@ public:
     // Loads (or with an empty file clears) a Drum Sampler pad, switching the instrument to a Drum Sampler if needed.
     juce::Result setDrumPadSample (const juce::String& trackId, int pad, const juce::File& sample);
     juce::Result duplicateTrack (const juce::String& trackId, juce::String& duplicateId);
+    // Freeze renders a track's Arrangement clips through its devices and plays the render; one undo step each.
+    juce::Result setTrackFrozen (const juce::String& trackId, bool frozen);
+    // Flatten replaces a frozen track's clips and devices with one audio clip of its render.
+    juce::Result flattenTrack (const juce::String& trackId);
     // Groups top-level audio/MIDI tracks (not returns) into a new group placed at the first one.
     juce::Result groupTracks (const juce::StringArray& trackIds, juce::String& groupId);
     juce::Result ungroupTracks (const juce::String& groupId);

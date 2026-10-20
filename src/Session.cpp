@@ -1319,6 +1319,23 @@ struct Session::Impl
         edit->markAsChanged();
         owner.sendChangeMessage();
     }
+    // Frozen tracks play their rendered audio, so their devices and clips cannot change until unfrozen.
+    static Result unfrozen (const te::Track* first, const te::Track* second = nullptr)
+    {
+        for (const auto* t : { first, second })
+            if (t != nullptr && t->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + t->getName() + "\" before editing its devices or clips.");
+        return Result::ok();
+    }
+    te::Track* trackOfPlugin (const String& pluginId) const
+    {
+        for (auto* t : te::getAudioTracks (*edit)) for (auto* p : t->pluginList.getPlugins()) if (p->itemID.toString() == pluginId) return t;
+        return nullptr;
+    }
+    te::Track* trackOfClip (const String& clipId) const
+    {
+        for (auto* t : te::getAudioTracks (*edit)) for (auto* c : t->getClips()) if (c->itemID.toString() == clipId) return t;
+        return nullptr;
+    }
     // Creates an instrument and puts it where the track's instrument belongs, in one transaction.
     Result replaceInstrument (te::AudioTrack& track, const juce::ValueTree& state, const String& name)
     {
@@ -1657,6 +1674,7 @@ Session::Snapshot Session::snapshot() const
         }
         for (auto* c : t->getClips()) info.clips.push_back (describeClip (*c));
         info.launcherActive = t->playSlotClips.get() || (t->launcherOwnership.load (std::memory_order_acquire) & 1) != 0;
+        info.frozen = t->isFrozen (te::Track::individualFreeze);
         for (auto* slot : t->getClipSlotList().getClipSlots())
         {
             SlotInfo slotInfo;
@@ -2196,6 +2214,7 @@ Result Session::exportMidiClip (const String& id, const File& destination)
 }
 Result Session::addMidiClip (const String& trackId, double start, double length)
 {
+    if (auto frozen = impl->unfrozen (impl->track (trackId)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (trackId);
     if (! track || isReturn (*track) || ! static_cast<bool> (track->state.getProperty (midiTrackProperty))) return Result::fail ("Select a MIDI track first.");
@@ -2591,6 +2610,7 @@ Result Session::addMidiNotes (const String& clipId, const std::vector<MidiNoteIn
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    if (auto frozen = impl->unfrozen (clip->getClipTrack()); frozen.failed()) return frozen;
     if (notes.empty()) { insertedIds.clear(); return Result::ok(); }
     const auto count = clip->getSequence().getNumNotes();
     if (count >= 100000 || notes.size() > static_cast<size_t> (100000 - count))
@@ -2632,6 +2652,7 @@ Result Session::updateMidiNotes (const String& clipId, const std::vector<MidiNot
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    if (auto frozen = impl->unfrozen (clip->getClipTrack()); frozen.failed()) return frozen;
     if (notes.empty()) return Result::ok();
     std::map<String, te::MidiNote*> existing;
     for (auto* note : clip->getSequence().getNotes())
@@ -2745,6 +2766,7 @@ Result Session::transformMidiNotes (const String& clipId, const juce::StringArra
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    if (auto frozen = impl->unfrozen (clip->getClipTrack()); frozen.failed()) return frozen;
     if (! std::isfinite (grid) || grid < 1.0/960 || grid > 16
         || static_cast<int> (operation) < 0 || static_cast<int> (operation) > 7)
         return Result::fail ("Invalid note transformation or grid.");
@@ -2810,6 +2832,7 @@ Result Session::removeMidiNotes (const String& clipId, const juce::StringArray& 
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    if (auto frozen = impl->unfrozen (clip->getClipTrack()); frozen.failed()) return frozen;
     if (noteIds.isEmpty()) return Result::ok();
     std::map<String, te::MidiNote*> existing;
     for (auto* note : clip->getSequence().getNotes())
@@ -2834,6 +2857,7 @@ Result Session::removeMidiNotes (const String& clipId, const juce::StringArray& 
 }
 Result Session::setSynthSettings (const String& trackId, const SynthSettings& settings)
 {
+    if (auto frozen = impl->unfrozen (impl->track (trackId)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (trackId); auto* synth = track ? Impl::synth (*track) : nullptr;
     if (! synth) return Result::fail ("Built-in synthesizer not found.");
@@ -2848,6 +2872,7 @@ Result Session::setSynthSettings (const String& trackId, const SynthSettings& se
 }
 Result Session::setTrackInstrument (const String& trackId, std::optional<EffectKind> kind)
 {
+    if (auto frozen = impl->unfrozen (impl->track (trackId)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (trackId);
     if (! track || ! track->state.getProperty (midiTrackProperty, false)) return Result::fail ("Instruments need a MIDI track.");
@@ -2869,6 +2894,7 @@ Result Session::setTrackInstrument (const String& trackId, std::optional<EffectK
 }
 Result Session::setInstrumentSample (const String& trackId, const File& sample)
 {
+    if (auto frozen = impl->unfrozen (impl->track (trackId)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (trackId);
     if (! track || ! track->state.getProperty (midiTrackProperty, false)) return Result::fail ("Samplers need a MIDI track.");
@@ -2888,6 +2914,7 @@ Result Session::setInstrumentSample (const String& trackId, const File& sample)
 }
 Result Session::setDrumPadSample (const String& trackId, int pad, const File& sample)
 {
+    if (auto frozen = impl->unfrozen (impl->track (trackId)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (trackId);
     if (! track || ! track->state.getProperty (midiTrackProperty, false)) return Result::fail ("Drum Samplers need a MIDI track.");
@@ -3074,6 +3101,73 @@ Result Session::moveTrack (const String& id, int destinationIndex)
     impl->edit->moveTrack (te::Track::Ptr (source), te::TrackInsertPoint (*target, destinationIndex < sourceIndex));
     impl->changed(); return Result::ok();
 }
+Result Session::setTrackFrozen (const String& trackId, bool frozen)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before freezing tracks.");
+    auto* track = impl->track (trackId);
+    if (track == nullptr || isReturn (*track)) return Result::fail ("Freeze an audio or MIDI track.");
+    if (track->isFrozen (te::Track::individualFreeze) == frozen) return Result::ok();
+    if (frozen && track->getClips().isEmpty()) return Result::fail ("This track has no Arrangement clips to freeze.");
+    closePluginEditors();
+    impl->transaction (frozen ? "Freeze track" : "Unfreeze track");
+    // The engine renders the freeze, or removes it, as this undoable property changes.
+    track->state.setProperty (te::IDs::frozenIndividually, frozen, &impl->edit->getUndoManager());
+    impl->edit->dispatchPendingUpdatesSynchronously();
+    if (frozen && ! track->isFrozen (te::Track::individualFreeze)) return Result::fail ("The track could not be frozen.");
+    impl->changed(); return Result::ok();
+}
+Result Session::flattenTrack (const String& trackId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before flattening tracks.");
+    auto* track = impl->track (trackId);
+    if (track == nullptr || ! track->isFrozen (te::Track::individualFreeze)) return Result::fail ("Freeze the track before flattening it.");
+    const bool midi = track->state.getProperty (midiTrackProperty, false);
+    if (midi)
+        for (auto* slot : track->getClipSlotList().getClipSlots())
+            if (slot->getClip() != nullptr) return Result::fail ("Clear this MIDI track's Session clips before flattening it.");
+    const auto freeze = te::TemporaryFileManager::getFreezeFileForTrack (*track);
+    std::unique_ptr<juce::AudioFormatReader> reader (impl->engine.getAudioFileFormatManager().readFormatManager.createReaderFor (freeze));
+    if (reader == nullptr || reader->lengthInSamples <= 0) return Result::fail ("The frozen render is unavailable. Unfreeze and freeze the track again.");
+    // The render becomes ordinary project audio: a 32-bit float WAV in the Assets folder.
+    auto assets = impl->assets(); if (auto r = assets.createDirectory(); r.failed()) return r;
+    const auto file = assets.getNonexistentChildFile (File::createLegalFileName (track->getName()) + " Flattened", ".wav", true);
+    {
+        juce::AudioBuffer<float> audio ((int) reader->numChannels, (int) reader->lengthInSamples);
+        if (! reader->read (&audio, 0, audio.getNumSamples(), 0, true, true)) return Result::fail ("The frozen render could not be read.");
+        juce::WavAudioFormat format; std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+        auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (reader->sampleRate)
+                                                        .withNumChannels ((int) reader->numChannels).withBitsPerSample (32));
+        if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples())) { file.deleteFile(); return Result::fail ("Could not write the flattened audio."); }
+    }
+    const auto seconds = (double) reader->lengthInSamples / reader->sampleRate;
+    reader.reset();
+    closePluginEditors();
+    // The engine cannot re-render a freeze while an undo is in progress, so the track is
+    // unfrozen outside history: undoing Flatten restores the unfrozen track and its devices.
+    track->state.setProperty (te::IDs::frozenIndividually, false, nullptr);
+    impl->transaction ("Flatten track");
+    auto* undo = &impl->edit->getUndoManager();
+    // Remove the sound sources and devices; the mixer, meter and sends stay.
+    for (auto* plugin : track->pluginList.getPlugins())
+        if (dynamic_cast<NativeEffectPlugin*> (plugin) || dynamic_cast<te::ExternalPlugin*> (plugin) || dynamic_cast<UtilityPlugin*> (plugin)
+            || dynamic_cast<SubtractiveSynthPlugin*> (plugin) || dynamic_cast<te::FreezePointPlugin*> (plugin))
+            plugin->deleteFromParent();
+    for (auto* clip : track->getClips()) clip->removeFromParent();
+    if (midi)
+    {
+        track->state.setProperty (midiTrackProperty, false, undo);
+        for (auto* input : impl->edit->getAllInputDevices())
+            if (input->getTargets().contains (track->itemID)) [[maybe_unused]] auto removed = input->removeTarget (track->itemID, undo);
+    }
+    auto clip = te::insertWaveClip (*track, track->getName() + " Flattened", file, { { te::TimePosition(), te::TimePosition::fromSeconds (seconds) }, {} }, te::DeleteExistingClips::no);
+    if (! clip) return Result::fail ("Could not create the flattened clip.");
+    clip->getSourceFileReference().setToFile (file, te::SourceFileReference::PathStyle::alwaysAbsolute, false);
+    clip->setAutoTempo (false); clip->setAutoPitch (false);
+    clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
+    impl->refreshRouting(); impl->changed(); return Result::ok();
+}
 Result Session::removeTrack (int index)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -3087,6 +3181,7 @@ Result Session::removeTrack (int index)
 }
 Result Session::importAudio (const File& source, int index, double start)
 {
+    if (auto frozen = impl->unfrozen (impl->track (index)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! source.existsAsFile()) return Result::fail ("The audio file does not exist.");
     te::AudioFile audio (impl->engine, source);
@@ -3117,6 +3212,7 @@ double Session::estimateClipTempo (double seconds)
 }
 Result Session::setAudioClipWarp (const String& id, const WarpSettings& settings)
 {
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
     if (! std::isfinite (settings.bpm) || settings.bpm < 20 || settings.bpm > 999) return Result::fail ("Clip tempo must be 20-999 BPM.");
@@ -3163,6 +3259,7 @@ Result Session::setAudioClipWarp (const String& id, const WarpSettings& settings
 }
 Result Session::setAudioClipSettings (const String& id, const AudioClipSettings& settings)
 {
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
     if (! validAudioSettings (settings, clip->getPosition().getLength().inSeconds()))
@@ -3183,6 +3280,7 @@ Result Session::setAudioClipSettings (const String& id, const AudioClipSettings&
 }
 Result Session::setAudioClipReversed (const String& id, bool reversed)
 {
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before reversing clips.");
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
@@ -3200,6 +3298,7 @@ Result Session::setAudioClipReversed (const String& id, bool reversed)
 }
 Result Session::setAudioClipRange (const String& id, double start, double length, double offset)
 {
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before trimming clips.");
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
@@ -3261,6 +3360,7 @@ Result Session::copyMidiClip (const String& id, bool cut)
 bool Session::hasMidiClipClipboard() const {return impl->midiClipboard.isValid();}
 Result Session::pasteMidiClip (const String& trackId, double start, String& pastedId)
 {
+    if (auto frozen = impl->unfrozen (impl->track (trackId)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before pasting clips.");
     auto* track=impl->track(trackId);
@@ -3280,6 +3380,7 @@ Result Session::pasteMidiClip (const String& trackId, double start, String& past
 }
 Result Session::duplicateMidiClip (const String& id, String& duplicateId)
 {
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before duplicating clips.");
     auto* clip=impl->midiClip(id);
@@ -3332,6 +3433,7 @@ bool Session::hasAudioClipClipboard() const
 }
 Result Session::pasteAudioClip (const String& trackId, double start, String& pastedId)
 {
+    if (auto frozen = impl->unfrozen (impl->track (trackId)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before pasting clips.");
     auto* track = impl->track (trackId);
@@ -3361,6 +3463,7 @@ Result Session::pasteAudioClip (const String& trackId, double start, String& pas
 }
 Result Session::moveMidiClip (const String& id, const String& destinationId, double start)
 {
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id), impl->track (destinationId)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before moving MIDI clips.");
     auto* clip = impl->midiClip (id); auto* destination = impl->track (destinationId);
@@ -3380,6 +3483,7 @@ Result Session::moveMidiClip (const String& id, const String& destinationId, dou
 }
 Result Session::moveAudioClip (const String& id, const String& destinationId, double start)
 {
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id), impl->track (destinationId)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before moving audio clips.");
     auto* clip = impl->audioClip (id); auto* destination = impl->track (destinationId);
@@ -3399,6 +3503,7 @@ Result Session::moveAudioClip (const String& id, const String& destinationId, do
 }
 Result Session::moveClip (int t, int c, double start)
 {
+    if (auto frozen = impl->unfrozen (impl->track (t)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->clip (t, c); if (! clip) return Result::fail ("Clip not found.");
     if (! std::isfinite (start) || start < 0 || start + clip->getPosition().getLength().inSeconds() > te::Edit::maximumLength)
@@ -3407,6 +3512,7 @@ Result Session::moveClip (int t, int c, double start)
 }
 Result Session::removeClip (int t, int c)
 {
+    if (auto frozen = impl->unfrozen (impl->track (t)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->clip (t, c); if (! clip) return Result::fail ("Clip not found.");
     impl->transaction ("Remove clip"); clip->removeFromParent(); impl->changed(); return Result::ok();
@@ -3554,6 +3660,7 @@ float Session::deviceAutomationValueToProportion (EffectKind kind, int parameter
 float Session::deviceAutomationProportionToValue (EffectKind kind, int parameter, float proportion) { return effectProportionToValue (kind, parameter, proportion); }
 Result Session::setDeviceAutomation (const String& pluginId, int parameter, const AutomationLane& lane)
 {
+    if (auto frozen = impl->unfrozen (impl->trackOfPlugin (pluginId)); frozen.failed()) return frozen;
     if (impl->exporting || impl->edit->getTransport().isRecording())
         return Result::fail ("Stop recording or finish exporting before editing automation.");
     NativeEffectPlugin* device = nullptr;
@@ -4052,6 +4159,7 @@ File Session::pluginScanDeadMansFile() const
 }
 Result Session::addNativeEffect (int index, EffectKind kind)
 {
+    if (auto frozen = impl->unfrozen (impl->track (index)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (index); if (! track) return Result::fail ("Track not found.");
     if (effectParameters (kind).empty()) return Result::fail ("Unknown native effect.");
@@ -4075,6 +4183,7 @@ Result Session::addNativeEffect (int index, EffectKind kind)
 }
 Result Session::setNativeEffectSettings (const String& id, const EffectSettings& settings)
 {
+    if (auto frozen = impl->unfrozen (impl->trackOfPlugin (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! validEffectSettings (settings)) return Result::fail ("Effect settings are outside their supported ranges.");
     for (auto* track : te::getAudioTracks (*impl->edit))
@@ -4092,6 +4201,7 @@ Result Session::setNativeEffectSettings (const String& id, const EffectSettings&
 }
 Result Session::addUtility (int index)
 {
+    if (auto frozen = impl->unfrozen (impl->track (index)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (index); if (! track) return Result::fail ("Track not found.");
     if (! track->pluginList.canInsertPlugin()) return Result::fail ("This track's device chain is full.");
@@ -4107,6 +4217,7 @@ Result Session::addUtility (int index)
 }
 Result Session::setUtilitySettings (const String& id, const UtilitySettings& settings)
 {
+    if (auto frozen = impl->unfrozen (impl->trackOfPlugin (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! UtilityPlugin::validSettings (settings)) return Result::fail ("Channel utility settings are outside their supported ranges.");
     for (auto* track : te::getAudioTracks (*impl->edit))
@@ -4122,6 +4233,7 @@ Result Session::setUtilitySettings (const String& id, const UtilitySettings& set
 }
 Result Session::movePlugin (int t, int p, int destination)
 {
+    if (auto frozen = impl->unfrozen (impl->track (t)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto list = impl->plugins (t);
     if (! juce::isPositiveAndBelow (p, list.size()) || ! juce::isPositiveAndBelow (destination, list.size()))
@@ -4140,6 +4252,7 @@ Result Session::movePlugin (int t, int p, int destination)
 }
 Result Session::addPlugin (int index, const juce::PluginDescription& description)
 {
+    if (auto frozen = impl->unfrozen (impl->track (index)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (! t->pluginList.canInsertPlugin()) return Result::fail ("This track's device chain is full.");
@@ -4158,18 +4271,21 @@ Result Session::addPlugin (int index, const juce::PluginDescription& description
 }
 Result Session::setPluginEnabled (int t, int p, bool enabled)
 {
+    if (auto frozen = impl->unfrozen (impl->track (t)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* plugin = impl->plugin (t, p); if (! plugin) return Result::fail ("Plug-in not found.");
     impl->transaction ("Bypass plug-in"); plugin->setEnabled (enabled); impl->changed(); return Result::ok();
 }
 Result Session::removePlugin (int t, int p)
 {
+    if (auto frozen = impl->unfrozen (impl->track (t)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* plugin = impl->plugin (t, p); if (! plugin) return Result::fail ("Plug-in not found.");
     plugin->windowState->closeWindowExplicitly(); impl->transaction ("Remove plug-in"); plugin->deleteFromParent(); impl->changed(); return Result::ok();
 }
 Result Session::setPluginParameter (int t, int p, int parameter, float value)
 {
+    if (auto frozen = impl->unfrozen (impl->track (t)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* plugin = impl->plugin (t, p);
     if (! plugin || ! std::isfinite (value)) return Result::fail ("Plug-in parameter not found.");
