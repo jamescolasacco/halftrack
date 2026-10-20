@@ -32,6 +32,17 @@ public:
         std::optional<juce::Range<double>> timeRange;
     };
     enum class FollowAction { off, stop, replay, previous, next, first, last, cycle };
+    // Clip launch behaviour on press/release of its launch button.
+    enum class LaunchMode { trigger, gate, toggle, repeat };
+    // Per-clip launch grid; global follows the project setting.
+    enum class ClipQuantisation { global, none, eightBars, fourBars, twoBars, bar, half, quarter, eighth, sixteenth, thirtysecond };
+    struct LaunchSettings
+    {
+        LaunchMode mode = LaunchMode::trigger;
+        ClipQuantisation quantisation = ClipQuantisation::global;
+        bool legato = false; // Start in phase with the clip already playing on the track.
+        bool operator== (const LaunchSettings&) const = default;
+    };
     struct FollowSettings
     {
         FollowAction action = FollowAction::off;
@@ -124,6 +135,7 @@ public:
         WarpSettings warp;
         bool canWarp = false;
         FollowSettings follow;
+        LaunchSettings launch;
         double startBeat = 0, lengthBeats = 0;
         std::vector<MidiNoteInfo> notes;
     };
@@ -221,6 +233,10 @@ public:
     juce::Result addMidiClipToSlot (const juce::String& trackId, int sceneIndex, double lengthBeats = 4);
     juce::Result clearSlot (int trackIndex, int sceneIndex);
     juce::Result launchSlot (int trackIndex, int sceneIndex);
+    // A launch button press/release applying the slot clip's launch mode.
+    juce::Result pressSlot (int trackIndex, int sceneIndex);
+    juce::Result releaseSlot (int trackIndex, int sceneIndex);
+    juce::Result setClipLaunchSettings (const juce::String& clipId, const LaunchSettings&);
     juce::Result launchScene (int sceneIndex);
     juce::Result stopLauncherTrack (int trackIndex);
     juce::Result stopAllLauncherClips();

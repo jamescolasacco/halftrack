@@ -22,6 +22,22 @@ const juce::Identifier recordQuantisationProperty { "halftrackRecordQuantisation
 const juce::Identifier countInProperty { "halftrackCountInBars" };
 const juce::Identifier midiTrackProperty { "halftrackMidiTrack" };
 const juce::Identifier groupFoldedProperty { "halftrackGroupFolded" };
+const juce::Identifier launchModeProperty { "halftrackLaunchMode" };
+const juce::Identifier launchQuantisationProperty { "halftrackLaunchQuantisation" };
+const juce::Identifier launchLegatoProperty { "halftrackLaunchLegato" };
+// Engine grid for each ClipQuantisation; Global is resolved from the project setting.
+constexpr std::array<te::LaunchQType, 11> clipLaunchGrids { te::LaunchQType::none, te::LaunchQType::none, te::LaunchQType::eightBars, te::LaunchQType::fourBars,
+    te::LaunchQType::twoBars, te::LaunchQType::bar, te::LaunchQType::half, te::LaunchQType::quarter, te::LaunchQType::eighth, te::LaunchQType::sixteenth,
+    te::LaunchQType::thirtySecond };
+Session::LaunchSettings clipLaunchSettings (const juce::ValueTree& state)
+{
+    Session::LaunchSettings settings;
+    const int mode = state.getProperty (launchModeProperty, 0), grid = state.getProperty (launchQuantisationProperty, 0);
+    if (mode >= 0 && mode <= 3) settings.mode = static_cast<Session::LaunchMode> (mode);
+    if (grid >= 0 && grid < (int) clipLaunchGrids.size()) settings.quantisation = static_cast<Session::ClipQuantisation> (grid);
+    settings.legato = state.getProperty (launchLegatoProperty, false);
+    return settings;
+}
 const juce::Identifier midiNoteIDProperty { "halftrackNoteId" };
 const juce::Identifier returnProperty { "halftrackReturn" };
 const juce::Identifier returnBusProperty { "halftrackReturnBus" };
@@ -627,6 +643,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
     result.start = position.time.getStart().inSeconds(); result.length = position.time.getLength().inSeconds();
     result.sourceOffset = position.offset.inSeconds();
     result.follow = clipFollowSettings (clip.state);
+    result.launch = clipLaunchSettings (clip.state);
     if (clip.usesSourceFile()) result.file = clip.getSourceFileReference().getFile();
     if (auto* audio = dynamic_cast<te::WaveAudioClip*> (&clip))
     {
@@ -1039,28 +1056,29 @@ struct Session::Impl
         for (auto* t : te::getAudioTracks (*edit))
         {
             for (auto* slot : t->getClipSlotList().getClipSlots())
-                if (auto* c = slot->getClip()) if (auto h = c->getLaunchHandle()) h->stop (std::nullopt);
+                if (auto* c = slot->getClip()) if (auto h = c->getLaunchHandle()) { h->stop (std::nullopt); h->setLooping (std::nullopt); }
             t->launcherSilence.stop (std::nullopt);
             // Cancel stale claims without releasing already acquired ownership.
             t->launcherOwnership.fetch_add (2, std::memory_order_acq_rel);
         }
+        heldSlots.clear();
     }
-    std::optional<te::MonotonicBeat> launchBoundary() const
+    // Next boundary on a launch grid, wrapping into the transport loop like the engine's play head.
+    std::optional<te::MonotonicBeat> boundaryOn (te::LaunchQType type) const
     {
         auto& transport = edit->getTransport();
-        if (! transport.isPlaying() || edit->getLaunchQuantisation().type == te::LaunchQType::none) return {};
+        if (! transport.isPlaying() || type == te::LaunchQType::none) return {};
         if (auto* context = transport.getCurrentPlaybackContext())
             if (auto sync = context->getSyncPoint())
             {
-                auto& quantisation = edit->getLaunchQuantisation();
-                auto next = quantisation.getNext (sync->beat);
+                auto next = te::getNext (type, edit->tempoSequence, sync->beat);
                 auto distance = next - sync->beat;
                 if (transport.looping)
                 {
                     const auto loop = edit->tempoSequence.toBeats (transport.getLoopRange());
                     if (loop.contains (sync->beat) && next >= loop.getEnd())
                     {
-                        auto wrapped = quantisation.getNext (loop.getStart());
+                        auto wrapped = te::getNext (type, edit->tempoSequence, loop.getStart());
                         if (! loop.contains (wrapped)) wrapped = loop.getStart();
                         distance = loop.getEnd() - sync->beat + (wrapped - loop.getStart());
                     }
@@ -1069,18 +1087,49 @@ struct Session::Impl
             }
         return {};
     }
+    std::optional<te::MonotonicBeat> launchBoundary() const { return boundaryOn (edit->getLaunchQuantisation().type); }
+    // The grid a clip launches on: its own setting, or the project grid for Global.
+    te::LaunchQType clipGrid (te::Clip* clip) const
+    {
+        const auto grid = clip ? clipLaunchSettings (clip->state).quantisation : Session::ClipQuantisation::global;
+        return grid == Session::ClipQuantisation::global ? edit->getLaunchQuantisation().type : clipLaunchGrids[static_cast<size_t> (grid)];
+    }
+    std::optional<te::MonotonicBeat> clipBoundary (te::Clip* clip) const { return boundaryOn (clipGrid (clip)); }
+    // One grid step at the play head, following the current time signature.
+    std::optional<te::BeatDuration> gridStep (te::LaunchQType type) const
+    {
+        if (type == te::LaunchQType::none) return {};
+        auto& transport = edit->getTransport();
+        auto beat = edit->tempoSequence.toBeats (transport.getPosition());
+        if (auto* context = transport.getCurrentPlaybackContext()) if (auto sync = context->getSyncPoint()) beat = sync->beat;
+        const auto first = te::getNext (type, edit->tempoSequence, beat);
+        const auto second = te::getNext (type, edit->tempoSequence, first + te::BeatDuration::fromBeats (1.0e-6));
+        return second - first;
+    }
     void queueTrack (te::AudioTrack& track, te::Clip* selected, std::optional<te::MonotonicBeat> boundary)
     {
         if (selected) track.launcherSilence.stop (boundary);
         else track.launcherSilence.play (boundary);
+        // A legato clip starts in phase with the clip already playing on its track.
+        te::LaunchHandle* playing = nullptr;
+        if (selected != nullptr && clipLaunchSettings (selected->state).legato)
+            for (auto* slot : track.getClipSlotList().getClipSlots())
+                if (auto* c = slot->getClip(); c != nullptr && c != selected)
+                    if (auto h = c->getLaunchHandle(); h && h->getPlayingStatus() == te::LaunchHandle::PlayState::playing) playing = h.get();
+        // Any launch on a track ends a held Repeat on it.
+        std::erase_if (heldSlots, [&] (const auto& h) { return h.trackId == track.itemID.toString(); });
         for (auto* slot : track.getClipSlotList().getClipSlots())
             if (auto* c = slot->getClip())
                 if (auto h = c->getLaunchHandle())
                 {
-                    if (c == selected) h->play (boundary);
+                    h->setLooping (std::nullopt);
+                    if (c == selected) { if (playing != nullptr) h->playSynced (*playing, boundary); else h->play (boundary); }
                     else h->stop (boundary);
                 }
     }
+    // Launch buttons held in Gate or Repeat mode.
+    struct HeldSlot { String trackId, clipId; };
+    std::vector<HeldSlot> heldSlots;
     te::FolderTrack* group (const String& id) const
     {
         for (auto* track : te::getAllTracks (*edit))
@@ -1553,7 +1602,7 @@ Result Session::newProject()
     endEditGesture();
     closePluginEditors();
     if (impl->edit) impl->edit->getTransport().stop (false, false);
-    impl->meters.clear();
+    impl->meters.clear(); impl->heldSlots.clear();
     impl->projectFile = File{};
     auto state = te::createEmptyEdit (impl->engine);
     auto options = te::Edit::Options { impl->engine, state, te::ProjectItemID::fromProperty (state, te::IDs::projectID) };
@@ -2195,6 +2244,64 @@ Result Session::setLaunchQuantisation (LaunchQuantisation quantisation)
     impl->transaction ("Launch quantisation"); impl->edit->getLaunchQuantisation().type = type;
     impl->changed(); return Result::ok();
 }
+Result Session::setClipLaunchSettings (const String& id, const LaunchSettings& settings)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    te::Clip* clip = nullptr;
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        for (auto* slot : track->getClipSlotList().getClipSlots()) if (auto* c = slot->getClip(); c && c->itemID.toString() == id) clip = c;
+    if (! clip) return Result::fail ("Session clip not found.");
+    if (static_cast<int> (settings.mode) < 0 || static_cast<int> (settings.mode) > 3
+        || static_cast<int> (settings.quantisation) < 0 || static_cast<int> (settings.quantisation) >= (int) clipLaunchGrids.size())
+        return Result::fail ("Unknown launch setting.");
+    if (clipLaunchSettings (clip->state) == settings) return Result::ok();
+    auto* um = &impl->edit->getUndoManager();
+    impl->transaction ("Clip launch settings");
+    clip->state.setProperty (launchModeProperty, static_cast<int> (settings.mode), um);
+    clip->state.setProperty (launchQuantisationProperty, static_cast<int> (settings.quantisation), um);
+    clip->state.setProperty (launchLegatoProperty, settings.legato, um);
+    impl->changed(); return Result::ok();
+}
+Result Session::pressSlot (int trackIndex, int sceneIndex)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* slot = impl->slot (trackIndex, sceneIndex);
+    if (! slot) return Result::fail ("Slot not found.");
+    auto* clip = slot->getClip();
+    if (clip == nullptr) return launchSlot (trackIndex, sceneIndex);
+    const auto settings = clipLaunchSettings (clip->state);
+    if (settings.mode == LaunchMode::toggle)
+        if (auto h = clip->getLaunchHandle(); h && (h->getPlayingStatus() == te::LaunchHandle::PlayState::playing
+                                                    || h->getQueuedStatus() == te::LaunchHandle::QueueState::playQueued))
+        {
+            impl->queueTrack (*impl->track (trackIndex), nullptr, impl->clipBoundary (clip));
+            sendChangeMessage(); return Result::ok();
+        }
+    const auto result = launchSlot (trackIndex, sceneIndex);
+    if (result.wasOk() && (settings.mode == LaunchMode::gate || settings.mode == LaunchMode::repeat))
+    {
+        impl->heldSlots.push_back ({ impl->track (trackIndex)->itemID.toString(), clip->itemID.toString() });
+        // Repeat restarts the clip every grid step from its launch for as long as it is held.
+        if (settings.mode == LaunchMode::repeat)
+            if (auto step = impl->gridStep (impl->clipGrid (clip))) clip->getLaunchHandle()->setLooping (step);
+    }
+    return result;
+}
+Result Session::releaseSlot (int trackIndex, int sceneIndex)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* slot = impl->slot (trackIndex, sceneIndex);
+    if (! slot) return Result::fail ("Slot not found.");
+    auto* track = impl->track (trackIndex);
+    const auto trackId = track->itemID.toString();
+    auto* clip = slot->getClip();
+    const auto held = std::find_if (impl->heldSlots.begin(), impl->heldSlots.end(), [&] (const auto& h)
+        { return h.trackId == trackId && clip != nullptr && h.clipId == clip->itemID.toString(); });
+    if (held == impl->heldSlots.end()) return Result::ok();
+    // Releasing a Gate or Repeat clip stops it on the clip's own grid.
+    impl->queueTrack (*track, nullptr, impl->clipBoundary (clip));
+    sendChangeMessage(); return Result::ok();
+}
 Result Session::launchSlot (int trackIndex, int sceneIndex)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -2203,7 +2310,7 @@ Result Session::launchSlot (int trackIndex, int sceneIndex)
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio output in Audio Settings.");
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->edit->getTransport().ensureContextAllocated();
-    impl->queueTrack (*impl->track (trackIndex), slot->getClip(), impl->launchBoundary());
+    impl->queueTrack (*impl->track (trackIndex), slot->getClip(), impl->clipBoundary (slot->getClip()));
     if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().play (false);
     sendChangeMessage(); return Result::ok();
 }

@@ -827,3 +827,9 @@ Root owns the group commands and snapshot fields in `src/Session.*`, `tests/Grou
 
 Group interface: the Arrangement now uses a lane model (group header lanes above their members; folded members take no height) for every row calculation, replacing fixed `index × trackHeight` arithmetic. A group header has a disclosure triangle, editable name, group activator and solo, and group volume/pan; its lane summarizes member clips as coloured bars. Shift-click on track headers extends the track selection, Cmd/Ctrl+G groups it and Cmd/Ctrl+Shift+G or Create > Ungroup Tracks removes the group. UI checks cover selection, grouping, lane geometry, folding/unfolding and ungrouping; UI, export dialog, automation editor, audio clip, track order and duplication suites pass. Session-view group columns remain to do.
 
+
+## Clip launch modes — 2026-10-20
+
+Root owns the launch commands and snapshot fields in `src/Session.*`, `tests/LaunchModeTests.cpp`, the Launch box UI and documentation. Session clips now carry a launch mode (Trigger, Gate, Toggle, Repeat), a legato switch and a per-clip launch quantization (Global, None, 8 Bars to 1/32). `pressSlot`/`releaseSlot` apply them to launch buttons; see [the launch modes contract](research/launch-modes-contract.md).
+
+Generated-signal tests found an upstream defect: a repeat loop point on a block start skipped that block. `cmake/PatchLaunchRepeat.cmake` fixes it (see [dependencies](dependencies.md)). The new `launch-modes-acceptance` suite passes. The launcher, follow-action, clip activation, warp, groups, track duplication, Session and UI suites pass locally on the Mac. The clip view shows a Launch box for Session audio and MIDI clips. Mouse down/up on a launch triangle and Enter down/up send press/release.

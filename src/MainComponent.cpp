@@ -212,7 +212,7 @@ public:
                  &playButton, &stopButton, &recordButton, &tempo, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &ruler, &viewport,
-                 &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &deviceChain })
+                 &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &deviceChain })
             addAndMakeVisible (child);
 
         for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
@@ -468,7 +468,12 @@ public:
         launcher.setBounds (area);
         launcher.setVisible (showSession);
         const bool audioClip = showPiano && selectedAudioClip() != nullptr;
-        pianoRoll.setBounds (deviceChain.getBounds());
+        // A Session MIDI clip shows its Launch box to the left of the note editor.
+        const auto* launchClip = showPiano && ! audioClip ? sessionMidiClip() : nullptr;
+        auto editor = deviceChain.getBounds();
+        midiLaunch.setVisible (launchClip != nullptr);
+        if (launchClip != nullptr) { midiLaunch.setBounds (editor.removeFromLeft (LaunchBox::width).reduced (0, 6).withTrimmedLeft (6)); midiLaunch.setClip (*launchClip); }
+        pianoRoll.setBounds (editor);
         pianoRoll.setVisible (showPiano && ! audioClip);
         audioClipView.setBounds (deviceChain.getBounds());
         audioClipView.setVisible (audioClip);
@@ -1809,7 +1814,11 @@ private:
             {
                 owner.selectLauncherSlot (cell.first, cell.second);
                 if (event.mods.isPopupMenu()) { slotMenu (cell.first, cell.second); return; }
-                if (event.x - slotBounds (cell.first, cell.second).getX() < 25) { owner.report (owner.session.launchSlot (cell.first, cell.second)); owner.refresh(); }
+                if (event.x - slotBounds (cell.first, cell.second).getX() < 25)
+                {
+                    // Gate and Repeat clips follow the button, so the release is sent on mouse up.
+                    pressedCell = cell; owner.report (owner.session.pressSlot (cell.first, cell.second)); owner.refresh();
+                }
                 repaint(); return;
             }
             if (stopAllBounds().contains (event.getPosition())) { owner.report (owner.session.stopAllLauncherClips()); owner.refresh(); return; }
@@ -1836,6 +1845,7 @@ private:
                 repaint();
             }
         }
+        void mouseUp (const juce::MouseEvent&) override { releasePressed (pressedCell); }
         void mouseDoubleClick (const juce::MouseEvent& event) override
         {
             const auto cell = cellAt (event.getPosition());
@@ -1861,9 +1871,13 @@ private:
             const auto code = key.getKeyCode();
             if (code == juce::KeyPress::returnKey)
             {
+                if (keyCell.first >= 0) return true; // Key repeat while Enter is held.
                 const auto scene = owner.selectedSceneIndex();
-                if (scene >= 0 && (key.getModifiers().isShiftDown() || (owner.currentTrack() != nullptr && ! owner.currentTrack()->isReturn)))
-                    owner.report (key.getModifiers().isShiftDown() ? owner.session.launchScene (scene) : owner.session.launchSlot (owner.selectedTrack, scene));
+                if (scene >= 0 && key.getModifiers().isShiftDown()) owner.report (owner.session.launchScene (scene));
+                else if (scene >= 0 && owner.currentTrack() != nullptr && ! owner.currentTrack()->isReturn)
+                {
+                    keyCell = { owner.selectedTrack, scene }; owner.report (owner.session.pressSlot (owner.selectedTrack, scene));
+                }
                 owner.refresh(); return true;
             }
             if (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey || code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
@@ -1876,6 +1890,12 @@ private:
             }
             return owner.handleKey (key);
         }
+        bool keyStateChanged (bool) override
+        {
+            if (keyCell.first >= 0 && ! juce::KeyPress::isKeyCurrentlyDown (juce::KeyPress::returnKey)) releasePressed (keyCell);
+            return false;
+        }
+        void focusLost (FocusChangeType) override { releasePressed (keyCell); }
         void mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
         {
             if (event.mods.isShiftDown() || std::abs (wheel.deltaX) > std::abs (wheel.deltaY)) offsetX = juce::jmax (0.0, offsetX - (wheel.deltaX + wheel.deltaY) * 300.0);
@@ -1891,6 +1911,15 @@ private:
         }
     private:
         Impl& owner;
+        // Launch buttons held by the mouse and by Enter, released into Gate and Repeat clips.
+        std::pair<int, int> pressedCell { -1, -1 }, keyCell { -1, -1 };
+        void releasePressed (std::pair<int, int>& cell)
+        {
+            if (cell.first < 0) return;
+            const auto held = std::exchange (cell, { -1, -1 });
+            if (owner.session.isExporting()) return;
+            owner.report (owner.session.releaseSlot (held.first, held.second)); owner.refresh();
+        }
     public:
         static constexpr int headerHeight = 22, gridTop = headerHeight, columnWidth = 120, rowHeight = 24,
                              sceneWidth = 132, mixerHeight = 252, stopHeight = 22, scrollSize = 10;
@@ -1962,6 +1991,67 @@ private:
     };
 
     // Audio clip detail: Clip and Sample boxes (warp, tempo, gain, reverse) beside the waveform.
+    // The clip view's Launch box for a Session clip: launch mode, legato and launch grid.
+    class LaunchBox final : public juce::Component
+    {
+    public:
+        static constexpr int width = 150;
+        explicit LaunchBox (Impl& o) : owner (o)
+        {
+            setName ("Launch box");
+            for (auto* c : std::initializer_list<juce::Component*> { &mode, &legato, &grid }) addAndMakeVisible (c);
+            mode.setName ("Launch mode");
+            for (auto* text : { "Trigger", "Gate", "Toggle", "Repeat" }) mode.addItem (text, mode.getNumItems() + 1);
+            mode.setTooltip ("Launch mode: Trigger starts on press, Gate plays while held, Toggle starts and stops on press, Repeat retriggers on the grid while held");
+            grid.setName ("Launch quantization");
+            for (auto* text : { "Global", "None", "8 Bars", "4 Bars", "2 Bars", "1 Bar", "1/2", "1/4", "1/8", "1/16", "1/32" }) grid.addItem (text, grid.getNumItems() + 1);
+            grid.setTooltip ("Launch quantization for this clip; Global follows the control bar");
+            legato.setName ("Launch legato"); legato.setClickingTogglesState (true);
+            legato.setWantsKeyboardFocus (false); legato.setMouseClickGrabsKeyboardFocus (false);
+            legato.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); legato.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            legato.setTooltip ("Legato: start in phase with the clip already playing on this track");
+            mode.onChange = [this] { apply(); }; grid.onChange = [this] { apply(); }; legato.onClick = [this] { apply(); };
+        }
+        void setClip (const Session::ClipInfo& shown)
+        {
+            clip = shown;
+            mode.setSelectedId ((int) clip.launch.mode + 1, juce::dontSendNotification);
+            grid.setSelectedId ((int) clip.launch.quantisation + 1, juce::dontSendNotification);
+            legato.setToggleState (clip.launch.legato, juce::dontSendNotification);
+            for (auto* c : std::initializer_list<juce::Component*> { &mode, &legato, &grid }) c->setEnabled (! owner.session.isExporting());
+        }
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced (6, 0).withTrimmedTop (28);
+            area.removeFromTop (14); mode.setBounds (area.removeFromTop (22));
+            area.removeFromTop (8); legato.setBounds (area.removeFromTop (22));
+            area.removeFromTop (20); grid.setBounds (area.removeFromTop (22));
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (juce::Colour (0xff303030)); g.fillRect (getLocalBounds());
+            g.setColour (juce::Colour (0xff4a4a4a)); g.fillRect (getLocalBounds().withHeight (22));
+            g.setColour (line); g.drawRect (getLocalBounds());
+            g.setColour (ink); g.setFont (font (11.0f, true));
+            g.drawText ("Launch", getLocalBounds().withHeight (22).reduced (6, 0), juce::Justification::centredLeft);
+            g.setColour (muted); g.setFont (font (10.0f));
+            g.drawText ("Mode", 6, mode.getY() - 14, getWidth() - 12, 13, juce::Justification::bottomLeft);
+            g.drawText ("Quantization", 6, grid.getY() - 14, getWidth() - 12, 13, juce::Justification::bottomLeft);
+        }
+    private:
+        Impl& owner;
+        Session::ClipInfo clip;
+        juce::ComboBox mode, grid;
+        juce::TextButton legato { "Legato" };
+        void apply()
+        {
+            const Session::LaunchSettings settings { static_cast<Session::LaunchMode> (mode.getSelectedId() - 1),
+                                                     static_cast<Session::ClipQuantisation> (grid.getSelectedId() - 1), legato.getToggleState() };
+            if (settings == clip.launch) return;
+            owner.report (owner.session.setClipLaunchSettings (clip.id, settings)); owner.refresh();
+        }
+    };
+
     class AudioClipView final : public juce::Component, private juce::ChangeListener
     {
     public:
@@ -1969,6 +2059,7 @@ private:
         {
             setName ("Audio clip view");
             for (auto* c : std::initializer_list<juce::Component*> { &warp, &mode, &bpm, &halve, &twice, &gain, &reverse }) addAndMakeVisible (c);
+            addChildComponent (launch);
             for (auto* b : { &warp, &halve, &twice, &reverse }) { b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); }
             warp.setName ("Clip warp"); warp.setClickingTogglesState (true); warp.setTooltip ("Warp: follow the project tempo (length fixed in beats)");
             warp.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); warp.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
@@ -2010,6 +2101,9 @@ private:
             const auto* selected = owner.selectedAudioClip();
             if (selected == nullptr) return false;
             clip = *selected;
+            // Session clips show their Launch box between the Clip and Sample boxes.
+            if (launch.isVisible() != owner.showSession) { launch.setVisible (owner.showSession); resized(); }
+            if (owner.showSession) launch.setClip (clip);
             if (clip.file != shownFile) { shownFile = clip.file; thumbnail.setSource (clip.file.existsAsFile() ? new juce::FileInputSource (clip.file) : nullptr); }
             const bool warped = clip.warp.mode != Session::WarpMode::off;
             warp.setToggleState (warped, juce::dontSendNotification); warp.setEnabled (clip.canWarp && ! owner.session.isExporting());
@@ -2023,6 +2117,7 @@ private:
         }
         void resized() override
         {
+            launch.setBounds (clipBox().getRight() + 6, 6, LaunchBox::width, getHeight() - 12);
             auto sample = sampleBox();
             sample.removeFromTop (24);
             auto row = sample.removeFromTop (22).reduced (6, 0);
@@ -2088,10 +2183,12 @@ private:
         juce::ComboBox mode;
         juce::Label bpm;
         juce::Slider gain;
+        LaunchBox launch { owner };
         bool gesture = false;
+        int launchSpace() const { return launch.isVisible() ? LaunchBox::width + 6 : 0; }
         juce::Rectangle<int> clipBox() const { return { 6, 6, 170, getHeight() - 12 }; }
-        juce::Rectangle<int> sampleBox() const { return { 182, 6, 200, getHeight() - 12 }; }
-        juce::Rectangle<int> waveBounds() const { return { 390, 6, juce::jmax (40, getWidth() - 396), getHeight() - 12 }; }
+        juce::Rectangle<int> sampleBox() const { return { 182 + launchSpace(), 6, 200, getHeight() - 12 }; }
+        juce::Rectangle<int> waveBounds() const { return { 390 + launchSpace(), 6, juce::jmax (40, getWidth() - 396 - launchSpace()), getHeight() - 12 }; }
         Session::WarpMode selectedMode() const { return mode.getSelectedId() == 2 ? Session::WarpMode::efficient : Session::WarpMode::stretch; }
         void apply (Session::WarpMode warpMode, double tempo)
         {
@@ -3194,6 +3291,7 @@ private:
     LauncherGrid launcher;
     PianoRoll pianoRoll;
     AudioClipView audioClipView { *this };
+    LaunchBox midiLaunch { *this };
     DeviceChain deviceChain;
     juce::Viewport viewport;
     juce::ScrollBar horizontalScroll { false };
@@ -3497,6 +3595,8 @@ private:
         return track->clips[(size_t) selectedClip].isAudio ? &track->clips[(size_t) selectedClip] : nullptr;
     }
     juce::Colour selectedTrackColour() const { const auto* track = currentTrack(); return track != nullptr ? track->colour : muted; }
+    // The Session MIDI clip an open clip view edits, which has launch settings.
+    const Session::ClipInfo* sessionMidiClip() const { return showSession && selectedLauncherClipId.isNotEmpty() ? currentMidiClip() : nullptr; }
     const Session::ClipInfo* currentMidiClip() const
     {
         const auto* track = currentTrack();
@@ -3661,8 +3761,9 @@ private:
         if (selectedSceneIndex() < 0) selectedSceneId = state.scenes.empty() ? juce::String() : state.scenes.front().id;
         launcher.sync();
         pianoRoll.sync();
-        if (showPiano && (audioClipView.isVisible() != (selectedAudioClip() != nullptr))) resized();
+        if (showPiano && (audioClipView.isVisible() != (selectedAudioClip() != nullptr) || midiLaunch.isVisible() != (selectedAudioClip() == nullptr && sessionMidiClip() != nullptr))) resized();
         if (audioClipView.isVisible()) audioClipView.sync();
+        if (midiLaunch.isVisible()) if (const auto* clip = sessionMidiClip()) midiLaunch.setClip (*clip);
         newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
         importButton.setEnabled (currentTrack() == nullptr || ! currentTrack()->isReturn);
         ruler.sync(); deviceChain.sync(); repaint();
@@ -5169,6 +5270,60 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     pumpSyntheticTestDevice (session, 8); refresh();
     check (state.tracks[(size_t) midiTrack].slots.front().playing,
            "Enter key launches the selected Session slot through the production handler");
+    {
+        // The clip view's Launch box and press/release launch semantics.
+        const auto slotState = [&] { return state.tracks[(size_t) midiTrack].slots.front(); };
+        launcher.keyStateChanged (false); // Key up after the Enter launch above.
+        check (slotState().playing, "releasing Enter leaves a Trigger clip playing");
+        launcher.mouseDown (launcherEvent (trackStopPoint)); pumpSyntheticTestDevice (session, 8); refresh();
+        selectLauncherSlot (midiTrack, 0); openPianoRoll(); refresh();
+        auto* launchMode = dynamic_cast<juce::ComboBox*> (findNamed (midiLaunch, "Launch mode"));
+        auto* launchQuantization = dynamic_cast<juce::ComboBox*> (findNamed (midiLaunch, "Launch quantization"));
+        auto* legato = dynamic_cast<juce::Button*> (findNamed (midiLaunch, "Launch legato"));
+        check (showPiano && midiLaunch.isVisible() && pianoRoll.getX() >= midiLaunch.getRight() && launchMode && launchQuantization && legato
+               && launchMode->getText() == "Trigger" && launchQuantization->getText() == "Global" && ! legato->getToggleState(),
+               "a Session MIDI clip shows a Launch box with Trigger on the global grid beside the note editor");
+        launchMode->setSelectedId (2, juce::sendNotificationSync);
+        launchQuantization->setSelectedId (2, juce::sendNotificationSync);
+        legato->setToggleState (true, juce::dontSendNotification); legato->onClick();
+        check (slotState().clip.launch == Session::LaunchSettings { Session::LaunchMode::gate, Session::ClipQuantisation::none, true },
+               "the Launch box edits the clip's launch mode, quantization and legato");
+        launcher.mouseDown (launcherEvent (launchPoint)); pumpSyntheticTestDevice (session, 8); refresh();
+        check (slotState().playing, "holding a Gate clip's launch button plays it");
+        launcher.mouseUp (launcherEvent (launchPoint)); pumpSyntheticTestDevice (session, 8); refresh();
+        check (! slotState().playing, "releasing a Gate clip's launch button stops it");
+        selectLauncherSlot (midiTrack, 0);
+        launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey)); launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey));
+        pumpSyntheticTestDevice (session, 8); refresh();
+        check (slotState().playing, "holding Enter plays the Gate clip, ignoring key repeat");
+        launcher.keyStateChanged (false); pumpSyntheticTestDevice (session, 8); refresh();
+        check (! slotState().playing, "releasing Enter closes the gate");
+        launchMode->setSelectedId (3, juce::sendNotificationSync);
+        for (const bool expected : { true, false })
+        {
+            launcher.mouseDown (launcherEvent (launchPoint)); launcher.mouseUp (launcherEvent (launchPoint));
+            pumpSyntheticTestDevice (session, 8); refresh();
+            check (slotState().playing == expected, expected ? "a Toggle click starts the clip and survives release" : "a second Toggle click stops the clip");
+        }
+        for (int step = 0; step < 4; ++step) session.undo();
+        refresh();
+        check (slotState().clip.launch == Session::LaunchSettings {} && launchMode->getText() == "Trigger" && ! legato->getToggleState(),
+               "undo restores Trigger launch settings in the Launch box");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("launch-box.png");
+                const auto area = midiLaunch.getBounds().getUnion (pianoRoll.getBounds().withWidth (420));
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (createComponentSnapshot (area, true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        closeClipView(); refresh();
+        check (! midiLaunch.isVisible(), "closing the clip view hides the Launch box");
+        launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey)); launcher.keyStateChanged (false);
+        pumpSyntheticTestDevice (session, 8); refresh();
+        check (slotState().playing, "a Trigger clip launched with Enter keeps playing after key up");
+    }
     menuItemSelected (43, 3);
     check (! showSession && state.tracks[(size_t) midiTrack].slots.front().playing,
            "switching to Arrangement does not stop a launched clip");
@@ -5914,6 +6069,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         auto* clipGain = dynamic_cast<juce::Slider*> (findNamed (audioClipView, "Clip gain"));
         check (showPiano && audioClipView.isVisible() && ! pianoRoll.isVisible() && warpButton && tempoLabel && clipGain && ! warpButton->getToggleState(),
                "double-clicking an audio clip opens the audio clip view instead of the note editor");
+        check (findNamed (audioClipView, "Launch box") != nullptr && ! findNamed (audioClipView, "Launch box")->isVisible() && ! midiLaunch.isVisible(),
+               "arrangement clips have no Launch box");
         const auto length = state.tracks[0].clips[0].length, estimate = state.tracks[0].clips[0].warp.bpm;
         warpButton->setToggleState (true, juce::dontSendNotification); warpButton->onClick();
         // Warping at the estimated source tempo rescales the clip onto the project tempo.
@@ -6447,6 +6604,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     runExportInteractionChecks (audioFixture);
     check (session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "prepare follow-action UI clip"); refresh(); showSessionView(); selectLauncherSlot (0, 0);
     const auto followClipId = selectedSlot()->clip.id;
+    {
+        openPianoRoll(); refresh();
+        auto* box = findNamed (audioClipView, "Launch box");
+        auto* mode = dynamic_cast<juce::ComboBox*> (findNamed (audioClipView, "Launch mode"));
+        check (audioClipView.isVisible() && box && box->isVisible() && mode && ! midiLaunch.isVisible(), "a Session audio clip shows its Launch box in the audio clip view");
+        mode->setSelectedId (4, juce::sendNotificationSync);
+        check (selectedSlot()->clip.launch.mode == Session::LaunchMode::repeat, "the audio clip view's Launch box edits the Session clip");
+        session.undo(); refresh(); closeClipView(); refresh();
+    }
     menuItemSelected (59, 4); check (alerts.back() != nullptr, "Session menu opens follow-action controls");
     const auto finishFollowDialog = [&] (int action, const juce::String& beats, int result)
     {

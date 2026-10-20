@@ -167,3 +167,7 @@ An explicit range exports exactly its chosen seconds, rounded to the nearest out
 ### Master-volume envelope defaults
 
 Use the existing arrangement-time volume-lane semantics on the native master output stage. Master is a separate destination with Volume only; no synthetic track ID or undocumented master-pan control. Protect the manual fader while any points exist, even with Read off. Reject obsolete/conflicting master serialization before loading rather than silently allowing native legacy conversion to erase an envelope. Existing modern Halftrack master levels remain supported.
+
+### Clip launch mode defaults
+
+Releasing a Repeat clip stops it on the clip's grid, like Gate; the reference manual describes only the retriggering while held. Gate and Repeat releases are quantized to the clip's own grid rather than stopping immediately. Repeat with no grid (None, or Global set to None) launches once without retriggering. A second Toggle press while the launch is still queued cancels it. Legato follows the clip already playing on the same track; with none playing it starts normally. Scene launches always trigger. Triplet grids and launch velocity are not exposed. These are simplest-default choices pending reference measurement.
