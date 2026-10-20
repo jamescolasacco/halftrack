@@ -12,7 +12,8 @@ namespace
 class NativeEffectEditor final : public juce::Component, private juce::ChangeListener, private juce::Timer
 {
 public:
-    NativeEffectEditor (Session& s, juce::String id, bool compactLayout = false) : session (s), pluginId (std::move (id)), compact (compactLayout)
+    NativeEffectEditor (Session& s, juce::String id, bool compactLayout = false, std::function<void (int)> automation = {})
+        : session (s), pluginId (std::move (id)), compact (compactLayout), showAutomation (std::move (automation))
     {
         const auto initial = settings();
         kind = initial ? initial->kind : Session::EffectKind::equalizer;
@@ -34,6 +35,7 @@ public:
                 auto& control = choices[i]; control.setName (spec.key);
                 control.addItemList (juce::StringArray::fromTokens (spec.choices, "|", ""), 1);
                 control.onChange = [this, i] { edit (i, static_cast<float> (choices[i].getSelectedId()-1)); };
+                if (showAutomation) control.addMouseListener (this, false);
                 addAndMakeVisible (control);
             }
             else
@@ -50,7 +52,8 @@ public:
                 }
                 else control.setTextBoxStyle (juce::Slider::TextBoxBelow, false, effectParameters (kind).size() > 16 ? 86 : 100, 21);
                 const auto unit = juce::String (spec.unit);
-                const bool percent = unit == "%" || juce::String (spec.key) == "mix" || juce::String (spec.key) == "feedback";
+                const bool percent = effectShowsPercent (spec);
+                if (showAutomation) control.addMouseListener (this, false);
                 control.setTextValueSuffix (percent ? juce::String() : unit); control.setDoubleClickReturnValue (true, spec.initial);
                 if (percent)
                 {
@@ -196,6 +199,21 @@ public:
         }
         repaint();
     }
+    // Right-clicking a control offers its automation lane.
+    void mouseDown (const juce::MouseEvent& event) override
+    {
+        if (! showAutomation || ! event.mods.isPopupMenu()) return;
+        for (size_t i = 0; i < effectParameters (kind).size(); ++i)
+            if (event.eventComponent == &sliders[i] || event.eventComponent == &choices[i])
+            {
+                juce::PopupMenu menu; menu.addItem (1, "Show Automation for " + juce::String (effectParameters (kind)[i].label));
+                auto safe = juce::Component::SafePointer<NativeEffectEditor> (this);
+                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (event.eventComponent),
+                                    [safe, i] (int choice) { if (safe != nullptr && choice == 1) safe->requestAutomation ((int) i); });
+                return;
+            }
+    }
+    void requestAutomation (int parameter) { finishGesture(); if (showAutomation) showAutomation (parameter); }
 private:
     // Instruments and other large devices use a compact eight-column grid.
     bool dense() const noexcept { return effectParameters (kind).size() > 16; }
@@ -227,6 +245,7 @@ private:
     Session& session;
     juce::String pluginId;
     bool compact = false;
+    std::function<void (int)> showAutomation;
     Session::EffectKind kind;
     juce::LookAndFeel_V4 look;
     static constexpr size_t maximumControls = std::tuple_size_v<decltype (Session::EffectSettings::values)>;
@@ -237,8 +256,8 @@ private:
     bool dragging = false;
 };
 }
-std::unique_ptr<juce::Component> makeNativeEffectEditor (Session& session, const juce::String& id, bool compact)
-{ return std::make_unique<NativeEffectEditor> (session, id, compact); }
+std::unique_ptr<juce::Component> makeNativeEffectEditor (Session& session, const juce::String& id, bool compact, std::function<void (int)> showAutomation)
+{ return std::make_unique<NativeEffectEditor> (session, id, compact, std::move (showAutomation)); }
 #if HALFTRACK_TESTS_ENABLED
 int runNativeEffectEditorTests (const juce::File& root)
 {
@@ -256,7 +275,10 @@ int runNativeEffectEditorTests (const juce::File& root)
         while (position < (int) before.size() && devices[(size_t) position].id == before[(size_t) position].id) ++position;
         const auto info = instrument ? s.snapshot().tracks[(size_t) track].instrument : devices[(size_t) position];
         check (info.isNativeEffect && info.effect.kind == kind, "device appears in its chain position");
-        auto editor = makeNativeEffectEditor (s, info.id);
+        int requested = -1;
+        auto editor = makeNativeEffectEditor (s, info.id, false, [&requested] (int parameter) { requested = parameter; });
+        dynamic_cast<NativeEffectEditor&> (*editor).requestAutomation ((int) effectParameters (kind).size() - 1);
+        check (requested == (int) effectParameters (kind).size() - 1, "a control's automation request reaches the host with its index");
         juce::Slider* slider = nullptr;
         const auto specs = effectParameters (kind); size_t index = 0;
         while (index < specs.size() && specs[index].choices) ++index;

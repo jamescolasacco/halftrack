@@ -159,6 +159,9 @@ public:
         EffectSettings effect;
         juce::File sample; // A Sampler instrument's loaded sample, if any.
         std::vector<juce::File> padSamples; // A Drum Sampler's sample per pad (empty files for empty pads).
+        // Arrangement automation of native device controls, in the controls' own units.
+        struct ControlAutomation { int parameter = 0; AutomationLane lane; bool operator== (const ControlAutomation&) const = default; };
+        std::vector<ControlAutomation> automation;
     };
     struct TrackInfo
     {
@@ -313,6 +316,11 @@ public:
     juce::Result setTrackPan (int trackIndex, float pan);
     // Atomic, strictly ordered beat points. Empty points restore manual control.
     juce::Result setTrackAutomation (const juce::String& trackId, AutomationTarget, const AutomationLane&);
+    // Automates one native device control (by parameter index) with values in the control's own units.
+    juce::Result setDeviceAutomation (const juce::String& pluginId, int parameter, const AutomationLane&);
+    // Knob-position mapping of a native control, used by automation editors; integer controls round.
+    static float deviceAutomationValueToProportion (EffectKind, int parameter, float value);
+    static float deviceAutomationProportionToValue (EffectKind, int parameter, float proportion);
     juce::Result setTrackMute (int trackIndex, bool);
     juce::Result setTrackSolo (int trackIndex, bool);
     juce::StringArray inputNames (bool midi = false) const;

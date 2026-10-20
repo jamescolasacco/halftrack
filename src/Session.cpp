@@ -63,6 +63,23 @@ Session::AutomationLane automationLane (te::VolumeAndPanPlugin& plugin, Session:
     }
     return lane;
 }
+// Lanes of a native device's controls that have points or are switched off.
+std::vector<Session::PluginInfo::ControlAutomation> deviceAutomation (NativeEffectPlugin& plugin)
+{
+    std::vector<Session::PluginInfo::ControlAutomation> result;
+    for (int i = 0; i < plugin.numControls(); ++i)
+    {
+        auto& curve = plugin.control (i)->getCurve();
+        if (curve.getNumPoints() == 0 && ! curve.bypass.get()) continue;
+        Session::PluginInfo::ControlAutomation entry { i, {} };
+        entry.lane.enabled = ! curve.bypass.get();
+        for (int p = 0; p < curve.getNumPoints(); ++p)
+            entry.lane.points.push_back ({ plugin.edit.tempoSequence.toBeats (curve.getPointTime (p)).inBeats(),
+                                           effectProportionToValue (plugin.getKind(), i, curve.getPointValue (p)) });
+        result.push_back (std::move (entry));
+    }
+    return result;
+}
 bool validAutomationLane (Session::AutomationTarget target, const Session::AutomationLane& lane)
 {
     if (target != Session::AutomationTarget::volume && target != Session::AutomationTarget::pan) return false;
@@ -1440,6 +1457,7 @@ struct Session::Impl
         configureMidiPlayback();
         const auto refresh = [this] (te::Plugin& plugin)
         {
+            if (auto* native = dynamic_cast<NativeEffectPlugin*> (&plugin)) { native->refreshAutomation(); return; }
             auto* mixer = dynamic_cast<te::VolumeAndPanPlugin*> (&plugin);
             for (auto* parameter : plugin.getAutomatableParameters())
             {
@@ -1615,7 +1633,7 @@ Session::Snapshot Session::snapshot() const
         if (auto* native = Impl::nativeInstrument (*t))
         {
             info.instrument = { native->itemID.toString(), native->getName(), native->isEnabled() };
-            info.instrument.isNativeEffect = true; info.instrument.effect = native->readSettings();
+            info.instrument.isNativeEffect = true; info.instrument.effect = native->readSettings(); info.instrument.automation = deviceAutomation (*native);
             if (native->getKind() == EffectKind::sampler) info.instrument.sample = native->sampleFile();
             if (native->getKind() == EffectKind::drumSampler)
                 for (int pad = 0; pad < drumPadCount; ++pad) info.instrument.padSamples.push_back (native->sampleFile (pad));
@@ -1669,7 +1687,8 @@ Session::Snapshot Session::snapshot() const
         {
             PluginInfo device { p->itemID.toString(), p->getName(), p->isEnabled() };
             if (auto* utility = dynamic_cast<UtilityPlugin*> (p)) { device.isUtility = true; device.utility = utility->readSettings(); }
-            if (auto* effect = dynamic_cast<NativeEffectPlugin*> (p)) { device.isNativeEffect = true; device.effect = effect->readSettings(); }
+            if (auto* effect = dynamic_cast<NativeEffectPlugin*> (p))
+            { device.isNativeEffect = true; device.effect = effect->readSettings(); device.automation = deviceAutomation (*effect); }
             info.plugins.push_back (std::move (device));
         }
         s.tracks.push_back (std::move (info));
@@ -3530,6 +3549,50 @@ Result Session::setTrackAutomation (const String& trackId, AutomationTarget targ
     if (! track || ! track->getVolumePlugin()) return Result::fail ("Automation track not found.");
     if (track->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze the track before editing automation.");
     return impl->setMixerAutomation (*track->getVolumePlugin(), target, lane);
+}
+float Session::deviceAutomationValueToProportion (EffectKind kind, int parameter, float value) { return effectValueToProportion (kind, parameter, value); }
+float Session::deviceAutomationProportionToValue (EffectKind kind, int parameter, float proportion) { return effectProportionToValue (kind, parameter, proportion); }
+Result Session::setDeviceAutomation (const String& pluginId, int parameter, const AutomationLane& lane)
+{
+    if (impl->exporting || impl->edit->getTransport().isRecording())
+        return Result::fail ("Stop recording or finish exporting before editing automation.");
+    NativeEffectPlugin* device = nullptr;
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        for (auto* plugin : track->pluginList.getPlugins())
+            if (plugin->itemID.toString() == pluginId) device = dynamic_cast<NativeEffectPlugin*> (plugin);
+    if (device == nullptr) return Result::fail ("Native device not found.");
+    auto* control = device->control (parameter);
+    if (control == nullptr) return Result::fail ("That device has no such control.");
+    const auto& field = effectParameters (device->getKind())[(size_t) parameter];
+    if (lane.points.size() > 4096) return Result::fail ("A lane can contain at most 4096 points.");
+    double previousBeat = -1, previousTime = -1;
+    for (const auto& point : lane.points)
+    {
+        const double time = std::isfinite (point.beat) ? impl->edit->tempoSequence.toTime (te::BeatPosition::fromBeats (point.beat)).inSeconds() : -1;
+        if (! std::isfinite (point.beat) || point.beat < 0 || point.beat > 1000000 || point.beat <= previousBeat || (previousBeat >= 0 && point.beat - previousBeat < 0.999e-6)
+            || ! std::isfinite (point.value) || point.value < field.minimum || point.value > field.maximum || ! std::isfinite (time) || time <= previousTime)
+            return Result::fail ("Automation requires up to 4096 ordered beat points within the control's range.");
+        previousBeat = point.beat; previousTime = time;
+    }
+    auto& curve = control->getCurve();
+    const auto kind = device->getKind();
+    bool same = lane.enabled == ! curve.bypass.get() && lane.points.size() == static_cast<size_t> (curve.getNumPoints());
+    for (size_t i = 0; same && i < lane.points.size(); ++i)
+        same = std::abs (impl->edit->tempoSequence.toBeats (curve.getPointTime ((int) i)).inBeats() - lane.points[i].beat) < 1e-9
+            && std::abs (curve.getPointValue ((int) i) - effectValueToProportion (kind, parameter, lane.points[i].value)) < 1e-6f;
+    if (same) return Result::ok();
+    impl->transaction ("Edit " + String (field.label) + " automation");
+    auto* undo = &impl->edit->getUndoManager();
+    device->remapOnTempoChange = true;
+    // Keep the curve container attached across Undo; the parameter caches that exact tree.
+    if (! curve.state.getParent().isValid()) device->state.addChild (curve.state, -1, nullptr);
+    curve.clear (undo);
+    curve.state.setProperty (te::IDs::bypass, ! lane.enabled, undo);
+    for (const auto& point : lane.points)
+        curve.addPoint (te::EditPosition (te::BeatPosition::fromBeats (point.beat)), effectValueToProportion (kind, parameter, point.value), 0, undo);
+    device->refreshAutomation();
+    impl->edit->dispatchPendingUpdatesSynchronously();
+    impl->changed(); return Result::ok();
 }
 Result Session::setMasterVolumeAutomation (const AutomationLane& lane)
 {

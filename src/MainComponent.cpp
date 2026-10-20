@@ -3243,7 +3243,8 @@ private:
             if (! native || drumSampler()) { nativeEditor.reset(); nativeEditorId.clear(); }
             else if (nativeEditorId != track->instrument.id)
             {
-                nativeEditor = makeNativeEffectEditor (owner.session, track->instrument.id, true);
+                nativeEditor = makeNativeEffectEditor (owner.session, track->instrument.id, true,
+                    [safe = juce::Component::SafePointer<Impl> (&owner), id = track->instrument.id] (int parameter) { if (safe != nullptr) safe->showAutomation (false, id, parameter); });
                 addAndMakeVisible (*nativeEditor); nativeEditorId = track->instrument.id;
             }
             instrument.setSelectedId (native ? 2 + (int) nativeSettings.kind - (int) Session::EffectKind::polySynth : 1, juce::dontSendNotification);
@@ -3437,7 +3438,12 @@ private:
             power.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.setPluginEnabled (owner.selectedTrack, p, power.getToggleState())); owner.refresh(); };
             open.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.showPluginEditor (owner.selectedTrack, p)); };
             remove.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.removePlugin (owner.selectedTrack, p)); owner.refresh(); };
-            if (native) { body = makeNativeEffectEditor (owner.session, info.id, true); addAndMakeVisible (*body); }
+            if (native)
+            {
+                body = makeNativeEffectEditor (owner.session, info.id, true,
+                    [safe = juce::Component::SafePointer<Impl> (&owner), id = info.id] (int parameter) { if (safe != nullptr) safe->showAutomation (false, id, parameter); });
+                addAndMakeVisible (*body);
+            }
             sync (info);
         }
         const juce::String& getId() const noexcept { return pluginId; }
@@ -4818,7 +4824,8 @@ private:
                 if (state.tracks[(size_t)t].clips[(size_t)c].id == id)
                 { selectTrack(t);selectedClip=c;selectedLauncherClipId.clear();canvas.repaint();return; }
     }
-    void showAutomation (bool master = false)
+    // Opens the automation window for the track, Master, or one native device control.
+    void showAutomation (bool master = false, const juce::String& pluginId = {}, int parameter = -1)
     {
         if (session.isExporting()) return;
         refresh();
@@ -4843,7 +4850,8 @@ private:
         };
         std::erase_if (automationWindows, [] (const auto& window) { return window == nullptr; });
         auto editor = master || track == nullptr ? std::make_unique<AutomationEditor> (session)
-                                                : std::make_unique<AutomationEditor> (session, track->id);
+                    : pluginId.isNotEmpty() ? std::make_unique<AutomationEditor> (session, track->id, pluginId, parameter)
+                                            : std::make_unique<AutomationEditor> (session, track->id);
         automationWindows.emplace_back (new Window (std::move (editor), theme, *this));
     }
     void showAudioSettings()

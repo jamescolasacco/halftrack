@@ -42,6 +42,9 @@ inline juce::Identifier drumPadSampleProperty (int pad) { return juce::Identifie
 int sampleSlotCount (Session::EffectKind) noexcept;
 juce::Identifier sampleSlotProperty (Session::EffectKind, int slot);
 inline constexpr double maximumSampleSeconds = 600;
+// Knob position (0-1) of a control value with the editor's skew, and back; integer controls round.
+float effectValueToProportion (Session::EffectKind, int parameter, float value) noexcept;
+float effectProportionToValue (Session::EffectKind, int parameter, float proportion) noexcept;
 // Why a file cannot be a Sampler sample, or empty when it can.
 juce::String samplerSampleProblem (const juce::File&);
 
@@ -140,6 +143,14 @@ public:
     static juce::Result resolveSamples (juce::ValueTree&, const juce::File& projectDirectory);
     void prepareForOfflineRender();
     juce::File sampleFile (int slot = 0) const;
+    // The automatable control for a parameter index, holding knob positions. It is not attached
+    // to the stored setting, so automation never overwrites the manual value.
+    tracktion::AutomatableParameter* control (int parameter) const noexcept
+    { return parameter >= 0 && parameter < (int) controls.size() ? controls[(size_t) parameter] : nullptr; }
+    int numControls() const noexcept { return (int) controls.size(); }
+    // Message thread, after curve edits, undo or load: which controls read their curves. A curve
+    // with one point holds its value; with more it streams; an empty or switched-off lane plays the manual value.
+    void refreshAutomation();
     // After Save collects a sample, point at the copy without decoding it again or adding history.
     void relocateSample (int slot, const juce::File&);
 private:
@@ -157,6 +168,10 @@ private:
     tracktion::MidiMessageArray midiScratch;
     EffectParameterQueue parameters;
     // Sampler: decoded samples stay alive until the audio thread acknowledges a newer one.
+    std::vector<tracktion::AutomatableParameter*> controls;
+    std::array<std::atomic<bool>, std::tuple_size_v<decltype (Session::EffectSettings::values)>> readsCurve {};
+    Session::EffectSettings audioSettings; // Audio thread: the last manual settings received.
+    bool automated = false;
     void loadSample (int slot);
     void retireSamples();
     std::vector<std::unique_ptr<instruments::SampleData>> samples;
@@ -168,7 +183,11 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NativeEffectPlugin)
 };
 // Compact editors are three rows of small controls for the inline device view.
-std::unique_ptr<juce::Component> makeNativeEffectEditor (Session&, const juce::String&, bool compact = false);
+// With showAutomation, right-clicking a control offers to open its automation.
+std::unique_ptr<juce::Component> makeNativeEffectEditor (Session&, const juce::String&, bool compact = false,
+                                                         std::function<void (int parameter)> showAutomation = {});
+// Whether a control displays as a percentage, as the device editor shows it.
+bool effectShowsPercent (const EffectParameter&) noexcept;
 #if HALFTRACK_TESTS_ENABLED
 int runNativeEffectEditorTests (const juce::File&);
 #endif

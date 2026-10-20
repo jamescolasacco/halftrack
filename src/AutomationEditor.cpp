@@ -1,4 +1,5 @@
 #include "AutomationEditor.h"
+#include "NativeEffects.h"
 #include "Session.h"
 #include <algorithm>
 #include <cmath>
@@ -33,15 +34,14 @@ public:
         {
             const auto bounds = plot();
             return { bounds.getX() + static_cast<float> ((point.beat - owner.viewStart) / owner.viewBeats) * bounds.getWidth(),
-                     bounds.getBottom() - Session::automationValueToProportion (owner.target(), point.value) * bounds.getHeight() };
+                     bounds.getBottom() - owner.toProportion (point.value) * bounds.getHeight() };
         }
         Session::AutomationPoint value (juce::Point<float> point, bool snap) const
         {
             const auto bounds = plot();
             auto beat = owner.viewStart + (point.x - bounds.getX()) / bounds.getWidth() * owner.viewBeats;
             if (snap && owner.snapBeats() > 0) beat = std::round (beat / owner.snapBeats()) * owner.snapBeats();
-            return { std::clamp (beat, 0.0, maximumBeat), Session::automationProportionToValue (owner.target(),
-                std::clamp ((bounds.getBottom() - point.y) / bounds.getHeight(), 0.0f, 1.0f)) };
+            return { std::clamp (beat, 0.0, maximumBeat), owner.fromProportion (std::clamp ((bounds.getBottom() - point.y) / bounds.getHeight(), 0.0f, 1.0f)) };
         }
         void paint (juce::Graphics& g) override
         {
@@ -51,12 +51,13 @@ public:
             g.setColour (panel); g.fillRect (bounds);
             g.setFont (juce::FontOptions (11.0f));
             const auto isVolume = owner.target() == Session::AutomationTarget::volume;
-            const std::vector<float> ticks = isVolume ? std::vector<float> { -100, -24, -12, -6, 0, 6 }
-                                                     : std::vector<float> { -1, -.5f, 0, .5f, 1 };
+            std::vector<float> ticks = isVolume ? std::vector<float> { -100, -24, -12, -6, 0, 6 } : std::vector<float> { -1, -.5f, 0, .5f, 1 };
+            // Device controls show quarter steps of the knob's scale in the control's units.
+            if (owner.device() != nullptr) ticks = { owner.fromProportion (0), owner.fromProportion (.25f), owner.fromProportion (.5f), owner.fromProportion (.75f), owner.fromProportion (1) };
             for (const auto tick : ticks)
             {
                 const auto y = position ({ owner.viewStart, tick }).y;
-                g.setColour (tick == 0 ? juce::Colour (0xff676767) : juce::Colour (0xff3e3e3e));
+                g.setColour (tick == 0 && owner.device() == nullptr ? juce::Colour (0xff676767) : juce::Colour (0xff3e3e3e));
                 g.drawHorizontalLine (juce::roundToInt (y), bounds.getX(), bounds.getRight());
                 g.setColour (ink.withAlpha (.65f));
                 g.drawText (owner.formatValue (tick), 0, juce::roundToInt (y) - 8, 56, 16, juce::Justification::centredRight);
@@ -173,7 +174,8 @@ public:
         Impl& owner;
     };
 
-    Impl (Session& s, juce::String id, bool master) : session (s), trackId (std::move (id)), editingMaster (master), curve (*this)
+    Impl (Session& s, juce::String id, bool master, juce::String pluginId = {}, int parameter = -1)
+        : session (s), trackId (std::move (id)), editingMaster (master), curve (*this), wantedPlugin (std::move (pluginId)), wantedParameter (parameter)
     {
         generation = session.snapshot().projectGeneration;
         look.setColour (juce::ComboBox::backgroundColourId, panel);
@@ -205,7 +207,7 @@ public:
             else if (index >= 0 && static_cast<size_t> (index) < trackIds.size()) trackId = trackIds[static_cast<size_t> (index)];
             selected = -1; error.clear(); synchronise();
         };
-        targetChoice.onChange = [this] { numericDirty = false; finishGesture(); selected = -1; error.clear(); synchronise(); };
+        targetChoice.onChange = [this] { numericDirty = false; finishGesture(); selected = -1; error.clear(); rememberTarget(); synchronise(); };
         read.onClick = [this] { const auto enabled = read.getToggleState(); finishGesture(); synchronise(); if (auto next = lane()) { next->enabled = enabled; apply (*next, false); } };
         clear.onClick = [this] { finishGesture(); synchronise(); if (auto next = lane()) { next->points.clear(); selected = -1; apply (*next, false); } };
         fit.onClick = [this] { fitView(); }; zoomIn.onClick = [this] { zoom (.5); }; zoomOut.onClick = [this] { zoom (2); };
@@ -256,6 +258,40 @@ public:
     }
     Session::AutomationTarget target() const
     { return ! editingMaster && targetChoice.getSelectedId() == 2 ? Session::AutomationTarget::pan : Session::AutomationTarget::volume; }
+    // A native device control offered as a destination after Volume and Pan.
+    struct DeviceTarget { juce::String pluginId; int parameter = -1; Session::EffectKind kind {}; juce::String label; };
+    static constexpr int firstDeviceItem = 100;
+    const DeviceTarget* device() const
+    {
+        const auto item = targetChoice.getSelectedId() - firstDeviceItem;
+        return ! editingMaster && item >= 0 && item < (int) deviceTargets.size() ? &deviceTargets[(size_t) item] : nullptr;
+    }
+    const EffectParameter* field() const
+    { if (const auto* d = device()) return &effectParameters (d->kind)[(size_t) d->parameter]; return nullptr; }
+    const Session::PluginInfo* devicePlugin() const
+    {
+        const auto* d = device(); const auto* current = track();
+        if (d == nullptr || current == nullptr) return nullptr;
+        if (current->instrument.id == d->pluginId) return &current->instrument;
+        for (const auto& plugin : current->plugins) if (plugin.id == d->pluginId) return &plugin;
+        return nullptr;
+    }
+    juce::String targetKey() const
+    { if (const auto* d = device()) return d->pluginId + ":" + juce::String (d->parameter); return target() == Session::AutomationTarget::pan ? "pan" : "volume"; }
+    void rememberTarget() { if (const auto* d = device()) { wantedPlugin = d->pluginId; wantedParameter = d->parameter; } else { wantedPlugin.clear(); wantedParameter = -1; } }
+    float toProportion (float value) const
+    {
+        if (const auto* d = device()) return Session::deviceAutomationValueToProportion (d->kind, d->parameter, value);
+        return Session::automationValueToProportion (target(), value);
+    }
+    float fromProportion (float proportion) const
+    {
+        if (const auto* d = device()) return Session::deviceAutomationProportionToValue (d->kind, d->parameter, proportion);
+        return Session::automationProportionToValue (target(), proportion);
+    }
+    // Values typed and shown in the numeric field: percent controls as 0-100.
+    double displayScale() const
+    { if (const auto* f = field()) return effectShowsPercent (*f) ? 100 : 1; return target() == Session::AutomationTarget::pan ? 100 : 1; }
     double snapBeats() const
     { constexpr double grid[] = { 0, 0, 1, .5, .25, .125, 1.0 / 3 }; return grid[std::clamp (snapChoice.getSelectedId(), 0, 6)]; }
     const Session::TrackInfo* track() const
@@ -266,12 +302,19 @@ public:
     float manualValue() const
     {
         if (editingMaster) return snapshot.masterGainDb;
+        if (device() != nullptr) { const auto* plugin = devicePlugin(); return plugin != nullptr ? plugin->effect.values[(size_t) device()->parameter] : 0.0f; }
         if (const auto* current = track()) return target() == Session::AutomationTarget::volume ? current->gainDb : current->pan;
         return 0;
     }
     std::optional<Session::AutomationLane> lane() const
     {
         if (editingMaster) return snapshot.masterVolumeAutomation;
+        if (device() != nullptr)
+        {
+            const auto* plugin = devicePlugin(); if (plugin == nullptr) return {};
+            for (const auto& entry : plugin->automation) if (entry.parameter == device()->parameter) return entry.lane;
+            return Session::AutomationLane {};
+        }
         if (const auto* current = track()) return target() == Session::AutomationTarget::volume ? current->volumeAutomation : current->panAutomation;
         return {};
     }
@@ -295,10 +338,38 @@ public:
         if (editingMaster)
         {
             if (targetChoice.getNumItems() > 1)
-            { targetChoice.clear (juce::dontSendNotification); targetChoice.addItem ("Volume", 1); }
+            { targetChoice.clear (juce::dontSendNotification); targetChoice.addItem ("Volume", 1); deviceTargets.clear(); targetSignature.clear(); }
             targetChoice.setSelectedId (1, juce::dontSendNotification);
         }
-        else if (targetChoice.getNumItems() == 1) targetChoice.addItem ("Pan", 2);
+        else
+        {
+            // Volume and Pan, then every control of the track's native devices.
+            std::vector<DeviceTarget> targets; juce::String signature;
+            if (const auto* current = track())
+            {
+                std::vector<const Session::PluginInfo*> devices;
+                if (current->instrument.isNativeEffect) devices.push_back (&current->instrument);
+                for (const auto& plugin : current->plugins) if (plugin.isNativeEffect) devices.push_back (&plugin);
+                for (const auto* plugin : devices)
+                {
+                    const auto fields = effectParameters (plugin->effect.kind);
+                    for (size_t i = 0; i < fields.size(); ++i)
+                        targets.push_back ({ plugin->id, (int) i, plugin->effect.kind, plugin->name + ": " + fields[i].label });
+                    signature << plugin->id << plugin->name << (int) fields.size() << ";";
+                }
+            }
+            if (signature != targetSignature || targetChoice.getNumItems() < 2)
+            {
+                const auto keep = targetChoice.getSelectedId() == 2 ? 2 : 1;
+                deviceTargets = std::move (targets); targetSignature = signature;
+                targetChoice.clear (juce::dontSendNotification); targetChoice.addItem ("Volume", 1); targetChoice.addItem ("Pan", 2);
+                for (size_t i = 0; i < deviceTargets.size(); ++i) targetChoice.addItem (deviceTargets[i].label, firstDeviceItem + (int) i);
+                int wanted = keep;
+                for (size_t i = 0; i < deviceTargets.size(); ++i)
+                    if (deviceTargets[i].pluginId == wantedPlugin && deviceTargets[i].parameter == wantedParameter) wanted = firstDeviceItem + (int) i;
+                targetChoice.setSelectedId (wanted, juce::dontSendNotification);
+            }
+        }
         trackChoice.setEnabled (snapshot.projectGeneration == generation);
         for (auto* control : std::initializer_list<juce::Component*> { &targetChoice, &read, &clear, &curve }) control->setEnabled (available());
         if (const auto current = lane())
@@ -310,8 +381,13 @@ public:
         const auto current = lane();
         const bool hasPoint = available() && current && selected >= 0 && selected < static_cast<int> (current->points.size());
         for (auto* control : std::initializer_list<juce::Component*> { &beatInput, &valueInput, &setPoint }) control->setEnabled (hasPoint);
-        valueLabel.setText (target() == Session::AutomationTarget::volume ? "Level (dB)" : "Pan (%)", juce::dontSendNotification);
-        const bool samePoint = hasPoint && numericPoint && numericTrackId == trackId && numericTarget == target()
+        if (const auto* f = field())
+        {
+            const auto unit = effectShowsPercent (*f) ? juce::String ("%") : juce::String (f->unit).trim();
+            valueLabel.setText (juce::String (f->label).substring (0, 14) + (unit.isNotEmpty() ? " (" + unit + ")" : juce::String()), juce::dontSendNotification);
+        }
+        else valueLabel.setText (target() == Session::AutomationTarget::volume ? "Level (dB)" : "Pan (%)", juce::dontSendNotification);
+        const bool samePoint = hasPoint && numericPoint && numericTrackId == trackId && numericTarget == targetKey()
             && numericSelection == selected && *numericPoint == current->points[static_cast<size_t> (selected)];
         if (! samePoint) numericDirty = false;
         else if (beatInput.getText() != displayedBeat || valueInput.getText() != displayedValue)
@@ -319,11 +395,10 @@ public:
         if (! numericDirty)
         {
             displayedBeat = hasPoint ? juce::String (current->points[static_cast<size_t> (selected)].beat, 6) : juce::String();
-            displayedValue = hasPoint ? juce::String (current->points[static_cast<size_t> (selected)].value *
-                (target() == Session::AutomationTarget::pan ? 100 : 1), 3) : juce::String();
+            displayedValue = hasPoint ? juce::String (current->points[static_cast<size_t> (selected)].value * displayScale(), 3) : juce::String();
             beatInput.setText (displayedBeat, false); valueInput.setText (displayedValue, false);
             numericPoint = hasPoint ? std::optional<Session::AutomationPoint> (current->points[static_cast<size_t> (selected)]) : std::nullopt;
-            numericTrackId = trackId; numericTarget = target(); numericSelection = selected;
+            numericTrackId = trackId; numericTarget = targetKey(); numericSelection = selected;
         }
         updateScroll(); updateStatus(); curve.repaint(); repaint();
     }
@@ -331,8 +406,15 @@ public:
     {
         if (! available()) return;
         if (const auto previous = lane(); previous && *previous == next) return;
-        if (! gesture) { session.beginEditGesture (target() == Session::AutomationTarget::volume ? "Edit volume automation" : "Edit pan automation"); gesture = true; }
-        const auto result = editingMaster ? session.setMasterVolumeAutomation (next) : session.setTrackAutomation (trackId, target(), next);
+        if (! gesture)
+        {
+            session.beginEditGesture (device() != nullptr ? "Edit " + device()->label + " automation"
+                                      : target() == Session::AutomationTarget::volume ? "Edit volume automation" : "Edit pan automation");
+            gesture = true;
+        }
+        const auto result = editingMaster ? session.setMasterVolumeAutomation (next)
+                          : device() != nullptr ? session.setDeviceAutomation (device()->pluginId, device()->parameter, next)
+                          : session.setTrackAutomation (trackId, target(), next);
         error = result.failed() ? result.getErrorMessage() : juce::String();
         if (! pointerGesture || result.failed()) finishGesture();
         synchronise();
@@ -370,11 +452,17 @@ public:
         const bool volume = target() == Session::AutomationTarget::volume;
         if (expectedPoint && *expectedPoint != current->points[static_cast<size_t> (selected)])
         { setError ("The selected point changed. Select it again before editing."); return; }
+        const auto scale = displayScale();
         const auto beat = beatUnchanged && expectedPoint ? std::optional<double> (expectedPoint->beat) : number (beatText);
-        const auto enteredValue = valueUnchanged && expectedPoint ? std::optional<double> (static_cast<double> (expectedPoint->value) * (volume ? 1 : 100)) : number (valueText);
-        if (! beat || ! enteredValue || *beat < 0 || *beat > maximumBeat
-            || *enteredValue < -100 || *enteredValue > (volume ? 6 : 100))
-        { setError (volume ? "Enter a beat from 0 to 1000000 and a level from -100 to +6 dB." : "Enter a beat from 0 to 1000000 and pan from -100% (left) to +100% (right)."); return; }
+        const auto enteredValue = valueUnchanged && expectedPoint ? std::optional<double> (static_cast<double> (expectedPoint->value) * scale) : number (valueText);
+        const auto* f = field();
+        const auto low = f != nullptr ? f->minimum * scale : -100.0, high = f != nullptr ? f->maximum * scale : volume ? 6.0 : 100.0;
+        if (! beat || ! enteredValue || *beat < 0 || *beat > maximumBeat || *enteredValue < low || *enteredValue > high)
+        {
+            setError (f != nullptr ? "Enter a beat from 0 to 1000000 and a value from " + juce::String (low) + " to " + juce::String (high) + "."
+                      : volume ? "Enter a beat from 0 to 1000000 and a level from -100 to +6 dB." : "Enter a beat from 0 to 1000000 and pan from -100% (left) to +100% (right).");
+            return;
+        }
         const auto index = static_cast<size_t> (selected);
         for (size_t i = 0; i < current->points.size(); ++i)
             if (i != index && std::abs (current->points[i].beat - *beat) < 1e-6)
@@ -383,7 +471,7 @@ public:
         const auto insert = std::lower_bound (current->points.begin(), current->points.end(), *beat,
             [] (const auto& point, double position) { return point.beat < position; });
         selected = static_cast<int> (std::distance (current->points.begin(), insert));
-        current->points.insert (insert, { *beat, static_cast<float> (*enteredValue / (volume ? 1 : 100)) });
+        current->points.insert (insert, { *beat, static_cast<float> (*enteredValue / scale) });
         numericDirty = false; apply (*current, false);
     }
     bool handleKey (const juce::KeyPress& key)
@@ -415,6 +503,17 @@ public:
     bool keyPressed (const juce::KeyPress& key) override { return handleKey (key); }
     juce::String formatValue (float value) const
     {
+        if (const auto* f = field())
+        {
+            if (f->choices != nullptr)
+            {
+                const auto options = juce::StringArray::fromTokens (f->choices, "|", {});
+                return options[juce::jlimit (0, options.size() - 1, juce::roundToInt (value))];
+            }
+            const juce::String unit (f->unit);
+            if (effectShowsPercent (*f)) return juce::String (value * 100, 1) + "%";
+            return juce::String (value, std::abs (value) >= 100 ? 0 : 2) + unit;
+        }
         if (target() == Session::AutomationTarget::volume) return value <= -99.99f ? juce::String ("Mute") : juce::String (value, 1) + " dB";
         if (std::abs (value) < .001f) return "Centre";
         return juce::String (std::abs (value) * 100, 0) + (value < 0 ? "% L" : "% R");
@@ -479,14 +578,19 @@ public:
     int selected = -1;
     bool gesture = false, pointerActive = false, numericDirty = false;
     std::optional<Session::AutomationPoint> numericPoint;
-    juce::String numericTrackId, displayedBeat, displayedValue;
-    Session::AutomationTarget numericTarget = Session::AutomationTarget::volume;
+    juce::String numericTrackId, displayedBeat, displayedValue, numericTarget;
     int numericSelection = -1;
+    std::vector<DeviceTarget> deviceTargets;
+    juce::String targetSignature, wantedPlugin;
+    int wantedParameter = -1;
 };
 
 AutomationEditor::AutomationEditor (Session& session) : impl (std::make_unique<Impl> (session, juce::String(), true))
 { setName ("Automation"); addAndMakeVisible (*impl); setSize (900, 460); }
 AutomationEditor::AutomationEditor (Session& session, const juce::String& trackId) : impl (std::make_unique<Impl> (session, trackId, false))
+{ setName ("Automation"); addAndMakeVisible (*impl); setSize (900, 460); }
+AutomationEditor::AutomationEditor (Session& session, const juce::String& trackId, const juce::String& pluginId, int parameter)
+    : impl (std::make_unique<Impl> (session, trackId, false, pluginId, parameter))
 { setName ("Automation"); addAndMakeVisible (*impl); setSize (900, 460); }
 AutomationEditor::~AutomationEditor() = default;
 void AutomationEditor::resized() { impl->setBounds (getLocalBounds()); }
@@ -612,6 +716,41 @@ int runAutomationEditorTests (const juce::File& root)
         ui.targetChoice.setSelectedId (2, juce::sendNotificationSync); ui.selected = 0; ui.synchronise();
         ui.beatInput.setText ("3.125", false); ui.valueInput.setText ("-37.5", false); ui.setPoint.onClick();
         check (session.snapshot().tracks[0].panAutomation.points[0].value == -.375f, "typed pan percent maps to the native pan range");
+        {
+            // Native device controls are destinations after Volume and Pan, in their own units.
+            check (session.addNativeEffect (0, Session::EffectKind::saturator).wasOk(), "add a Saturator to the edited track");
+            ui.synchronise();
+            const auto saturator = session.snapshot().tracks[0].plugins.back();
+            const int drive = effectParameterIndex (Session::EffectKind::saturator, "driveDb"), mix = effectParameterIndex (Session::EffectKind::saturator, "mix");
+            check (drive >= 0 && mix >= 0 && ui.targetChoice.getNumItems() == 2 + (int) effectParameters (Session::EffectKind::saturator).size()
+                   && ui.targetChoice.getItemText (2 + drive).startsWith ("Saturator: "), "the target menu lists every Saturator control after Volume and Pan");
+            ui.targetChoice.setSelectedId (AutomationEditor::Impl::firstDeviceItem + drive, juce::sendNotificationSync);
+            const auto& driveField = effectParameters (Session::EffectKind::saturator)[(size_t) drive];
+            const auto value = driveField.minimum + (driveField.maximum - driveField.minimum) * .75f;
+            click (2, value);
+            const auto deviceLane = [&] { const auto snap = session.snapshot(); const auto& p = snap.tracks[0].plugins.back(); return p.automation.empty() ? Session::AutomationLane {} : p.automation[0].lane; };
+            check (session.snapshot().tracks[0].plugins.back().automation.size() == 1 && session.snapshot().tracks[0].plugins.back().automation[0].parameter == drive
+                   && std::abs (deviceLane().points[0].value - value) < .05f * (driveField.maximum - driveField.minimum) && deviceLane().points[0].beat == 2,
+                   "clicking the Drive lane adds a point in the control's own units");
+            check (session.snapshot().tracks[0].plugins.back().effect.values[(size_t) drive] == saturator.effect.values[(size_t) drive], "the manual Drive setting is unchanged");
+            ui.targetChoice.setSelectedId (AutomationEditor::Impl::firstDeviceItem + mix, juce::sendNotificationSync); click (1, .5f);
+            ui.selected = 0; ui.synchronise(); ui.beatInput.setText ("1", false); ui.valueInput.setText ("25", false); ui.setPoint.onClick();
+            const auto mixLane = [&] { const auto snap = session.snapshot(); for (const auto& entry : snap.tracks[0].plugins.back().automation) if (entry.parameter == mix) return entry.lane; return Session::AutomationLane {}; };
+            check (mixLane().points.size() == 1 && std::abs (mixLane().points[0].value - .25f) < 1e-6f && ui.formatValue (.25f) == "25.0%",
+                   "Dry / Wet takes and shows percentages as the device editor does");
+            ui.valueInput.setText ("200", false); ui.setPoint.onClick();
+            check (std::abs (mixLane().points[0].value - .25f) < 1e-6f, "values outside the control's range are rejected");
+            ui.targetChoice.setSelectedId (AutomationEditor::Impl::firstDeviceItem + effectParameterIndex (Session::EffectKind::saturator, "curve"), juce::sendNotificationSync);
+            check (ui.formatValue (2) == "Medium curve", "choice controls show their option names");
+            ui.targetChoice.setSelectedId (AutomationEditor::Impl::firstDeviceItem + mix, juce::sendNotificationSync);
+            AutomationEditor preselected (session, firstId, saturator.id, drive);
+            check (preselected.impl->device() != nullptr && preselected.impl->device()->parameter == drive && preselected.impl->lane()->points.size() == 1,
+                   "an editor can open on a device control");
+            session.undo(); session.undo(); session.undo(); ui.synchronise();
+            check (session.snapshot().tracks[0].plugins.back().automation.empty(), "device automation edits undo");
+            session.undo(); ui.synchronise();
+            check (session.snapshot().tracks[0].plugins.empty() && ui.targetChoice.getNumItems() == 2 && ui.device() == nullptr, "removing the device removes its destinations");
+        }
         ui.targetChoice.setSelectedId (1, juce::sendNotificationSync); ui.selected = 0; ui.error.clear(); ui.synchronise();
         check (root.createDirectory().wasOk(), "create editor artifact directory");
         editor.setSize (820, 420);

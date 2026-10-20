@@ -191,3 +191,7 @@ Takes start on the global launch grid (immediately from a stopped transport) and
 ### Drum Sampler defaults
 
 Pads are one-shot at unity level and velocity scales linearly; length cuts fade over 5 ms and choke groups release over 5 ms. Sixteen pads cover C1 to D#2 with no bank switching. The kit shares 32 voices with oldest-voice stealing. Browser samples load into the selected pad. These are simplest-default choices pending reference measurement.
+
+### Device automation defaults
+
+Device lanes interpolate linearly in each control's knob position (its editor skew), and integer and choice controls step to the nearest value. Automation is applied at audio-block rate, without per-sample smoothing beyond each processor's own. Third-party plug-in parameters are not exposed. These are simplest-default choices pending reference measurement.
