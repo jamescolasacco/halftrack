@@ -1,4 +1,5 @@
 #include "NativeEffects.h"
+#include "Racks.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -261,6 +262,13 @@ constexpr EffectParameter drumSamplerFields[] {
     DRUM_PAD ("9"), DRUM_PAD ("10"), DRUM_PAD ("11"), DRUM_PAD ("12"), DRUM_PAD ("13"), DRUM_PAD ("14"), DRUM_PAD ("15"), DRUM_PAD ("16"),
     { "volumeDb", "Volume", -36, 6, 0, 0, " dB" } };
 #undef DRUM_PAD
+// Every rack kind has sixteen macros (0-127) and its chain selector.
+#define MACRO(N) { "macro" N, "Macro " N, 0, 127, 0, 0, "" }
+constexpr EffectParameter rackFields[] { MACRO ("1"), MACRO ("2"), MACRO ("3"), MACRO ("4"), MACRO ("5"), MACRO ("6"), MACRO ("7"), MACRO ("8"),
+    MACRO ("9"), MACRO ("10"), MACRO ("11"), MACRO ("12"), MACRO ("13"), MACRO ("14"), MACRO ("15"), MACRO ("16"),
+    { "chainSelector", "Chain selector", 0, 127, 0, 0, "", nullptr, true } };
+#undef MACRO
+static_assert (std::size (rackFields) == Session::rackChainSelector + 1, "the chain selector follows the macros");
 static_assert (std::size (drumSamplerFields) == instruments::drumSampler::count && std::size (drumSamplerFields) <= std::tuple_size_v<decltype (Settings::values)>,
                "the drum sampler table follows its processor index enum and fits the packet");
 static_assert (std::size (polySynthFields) <= std::tuple_size_v<decltype (Settings::values)> && std::size (fmSynthFields) <= std::tuple_size_v<decltype (Settings::values)>
@@ -293,7 +301,9 @@ const char* effectName (Kind kind) noexcept
         case Kind::arpeggiator: return "Arpeggiator"; case Kind::chord: return "Chord"; case Kind::scale: return "Scale"; case Kind::pitch: return "Pitch";
         case Kind::velocity: return "Velocity"; case Kind::random: return "Random"; case Kind::noteLength: return "Note Length";
         case Kind::polySynth: return "Poly Synth"; case Kind::fmSynth: return "FM Synth"; case Kind::drumKit: return "Drum Kit"; case Kind::wavetableSynth: return "Wavetable";
-        case Kind::sampler: return "Sampler"; case Kind::drumSampler: return "Drum Sampler"; }
+        case Kind::sampler: return "Sampler"; case Kind::drumSampler: return "Drum Sampler";
+        case Kind::instrumentRack: return "Instrument Rack"; case Kind::audioEffectRack: return "Audio Effect Rack";
+        case Kind::midiEffectRack: return "MIDI Effect Rack"; case Kind::drumRack: return "Drum Rack"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
@@ -306,7 +316,8 @@ std::span<const EffectParameter> effectParameters (Kind kind) noexcept
         case Kind::arpeggiator: return arpeggiatorFields; case Kind::chord: return chordFields; case Kind::scale: return scaleFields; case Kind::pitch: return pitchFields;
         case Kind::velocity: return velocityFields; case Kind::random: return randomFields; case Kind::noteLength: return noteLengthFields;
         case Kind::polySynth: return polySynthFields; case Kind::fmSynth: return fmSynthFields; case Kind::drumKit: return drumKitFields; case Kind::wavetableSynth: return wavetableFields;
-        case Kind::sampler: return samplerFields; case Kind::drumSampler: return drumSamplerFields; }
+        case Kind::sampler: return samplerFields; case Kind::drumSampler: return drumSamplerFields;
+        case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return rackFields; }
     return {};
 }
 const char* effectCategory (Kind kind) noexcept
@@ -320,13 +331,20 @@ const char* effectCategory (Kind kind) noexcept
         case Kind::autoPan: case Kind::chorus: case Kind::phaser: case Kind::flanger: case Kind::frequencyShifter: return "Modulation";
         case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return "MIDI Effects";
         case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return "Instruments";
+        case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return "Racks";
     }
     return "Effects";
 }
 bool effectUsesTempo (Kind kind) noexcept
 { return kind == Kind::delay || kind == Kind::autoFilter || kind == Kind::autoPan || kind == Kind::arpeggiator || kind == Kind::noteLength; }
-bool effectIsMidi (Kind kind) noexcept { return static_cast<int> (kind) >= static_cast<int> (Kind::arpeggiator) && static_cast<int> (kind) <= static_cast<int> (Kind::noteLength); }
-bool effectIsInstrument (Kind kind) noexcept { return static_cast<int> (kind) >= static_cast<int> (Kind::polySynth) && static_cast<int> (kind) < Session::effectKindCount; }
+bool effectIsMidi (Kind kind) noexcept
+{ return (static_cast<int> (kind) >= static_cast<int> (Kind::arpeggiator) && static_cast<int> (kind) <= static_cast<int> (Kind::noteLength)) || kind == Kind::midiEffectRack; }
+bool effectIsInstrument (Kind kind) noexcept
+{
+    return (static_cast<int> (kind) >= static_cast<int> (Kind::polySynth) && static_cast<int> (kind) <= static_cast<int> (Kind::drumSampler))
+        || kind == Kind::instrumentRack || kind == Kind::drumRack;
+}
+bool effectIsRack (Kind kind) noexcept { return racks::isRack (kind); }
 double effectLatencySeconds (Kind kind, double rate) noexcept
 { return kind == Kind::limiter && rate > 0 ? std::ceil (rate * .001) / rate : 0.0; }
 double effectTailSeconds (Kind kind, double rate) noexcept
@@ -345,6 +363,7 @@ double effectTailSeconds (Kind kind, double rate) noexcept
         case Kind::compressor: case Kind::gate: case Kind::autoPan: case Kind::glueCompressor: return 0.0;
         case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return 0.0;
         case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return 0.0;
+        case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return 0.0; // Racks report their chains.
     }
     return 0.0;
 }
@@ -711,9 +730,26 @@ NativeEffectPlugin::NativeEffectPlugin (tracktion::PluginCreationInfo info)
     for (int slot = 0; slot < sampleSlotCount (kind); ++slot) loadSample (slot);
     for (const auto& field : effectParameters (kind)) controls.push_back (addParam (field.key, field.label, { 0.0f, 1.0f }));
     audioSettings = readSettings();
+    if (effectIsRack (kind)) { rack = std::make_unique<racks::RackEngine> (*this); rack->structureChanged(); }
     publish(); refreshAutomation(); startTimerHz (30);
 }
-NativeEffectPlugin::~NativeEffectPlugin() { stopTimer(); }
+NativeEffectPlugin::~NativeEffectPlugin() { stopTimer(); rack.reset(); }
+double NativeEffectPlugin::getLatencySeconds() { return rack ? rack->latencySeconds() : effectLatencySeconds (kind, sampleRate); }
+double NativeEffectPlugin::getTailLength() const { return rack ? rack->tailSeconds() : effectTailSeconds (kind, sampleRate); }
+void NativeEffectPlugin::chokeAt (int sample) noexcept
+{
+    if (rack) { rack->chokeAt (sample); return; }
+    if (effectIsInstrument (kind) && chokeCount < (int) chokes.size()) chokes[(size_t) chokeCount++] = sample;
+}
+// Chains, returns and mappings are this rack's children; devices are its chains' children.
+bool NativeEffectPlugin::rackStructure (const juce::ValueTree& parent) const
+{ return rack != nullptr && (parent == state || parent.getParent() == state); }
+void NativeEffectPlugin::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child)
+{ Plugin::valueTreeChildAdded (parent, child); if (rackStructure (parent)) rack->structureChanged(); }
+void NativeEffectPlugin::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int index)
+{ Plugin::valueTreeChildRemoved (parent, child, index); if (rackStructure (parent)) rack->structureChanged(); }
+void NativeEffectPlugin::valueTreeChildOrderChanged (juce::ValueTree& parent, int oldIndex, int newIndex)
+{ Plugin::valueTreeChildOrderChanged (parent, oldIndex, newIndex); if (rackStructure (parent)) rack->structureChanged(); }
 juce::String samplerSampleProblem (const juce::File& file)
 {
     if (! file.existsAsFile()) return "Missing sample: " + file.getFullPathName();
@@ -824,8 +860,9 @@ juce::Result NativeEffectPlugin::validateState (const juce::ValueTree& tree)
             return ! value.empty() && end == value.c_str()+value.size() && std::isfinite (output);
         };
         double type = 0;
-        if (! parse ("effectKind", 0, type) || type < 0 || type >= Session::effectKindCount || std::floor (type) != type)
+        if (! parse ("effectKind", 0, type) || type < 0 || type >= Session::deviceKindCount || std::floor (type) != type)
             return juce::Result::fail ("The project contains an invalid native effect type.");
+        if (auto result = racks::validateRack (tree); result.failed()) return result;
         for (const auto& f : effectParameters (static_cast<Kind> (static_cast<int> (type))))
         {
             double v = 0;
@@ -855,6 +892,10 @@ juce::Result NativeEffectPlugin::validateState (const juce::ValueTree& tree)
 void NativeEffectPlugin::valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& property)
 {
     Plugin::valueTreePropertyChanged (tree, property);
+    // A chain, return or mapping setting, or a chain device switching on or off, changes the rack's layout.
+    if (rack != nullptr && tree != state
+        && (tree.getParent() == state || (property == tracktion::IDs::enabled && tree.getParent().getParent() == state)))
+    { rack->structureChanged(); return; }
     if (tree == state)
         for (int slot = 0; slot < sampleSlotCount (kind); ++slot)
             if (property == sampleSlotProperty (kind, slot)) { loadSample (slot); return; }
@@ -882,23 +923,36 @@ void NativeEffectPlugin::refreshAutomation()
         else controls[i]->setParameter (effectValueToProportion (kind, (int) i, settings.values[i]), juce::dontSendNotification);
         readsCurve[i].store (reads, std::memory_order_release);
     }
+    if (rack) rack->refreshAutomation();
 }
 void NativeEffectPlugin::timerCallback()
 {
+    if (rack) rack->retire();
     if (samples.size() > 1) retireSamples();
     if (effectUsesTempo (kind) && static_cast<float> (edit.tempoSequence.getTempo (0)->getBpm()) != pendingSettings.tempoBpm)
         publish();
     else if (pending) pending = ! parameters.push (pendingSettings);
 }
-void NativeEffectPlugin::prepareForOfflineRender() { JUCE_ASSERT_MESSAGE_THREAD parameters.resetWhileStopped(); publish(); }
+void NativeEffectPlugin::prepareForOfflineRender()
+{
+    JUCE_ASSERT_MESSAGE_THREAD parameters.resetWhileStopped(); publish();
+    if (rack) rack->prepareForOfflineRender();
+}
 void NativeEffectPlugin::initialise (const tracktion::PluginInitialisationInfo& info)
 {
     sampleRate = info.sampleRate; processor.prepare (sampleRate, kind); audioSettings = pendingSettings;
+    midiScratch.reserve (static_cast<int> (midiOutput.size()) + 256);
+    chokeCount = 0;
+    if (rack) { rack->initialise (info); return; }
     midiProcessor.prepare (sampleRate); midiProcessor.configure (pendingSettings);
     if (effectIsInstrument (kind)) { instrument.prepare (sampleRate, kind); instrument.configure (pendingSettings); }
-    midiScratch.reserve (static_cast<int> (midiOutput.size()) + 256);
 }
-void NativeEffectPlugin::reset() { processor.reset(); midiProcessor.reset(); if (effectIsInstrument (kind)) instrument.reset(); }
+void NativeEffectPlugin::deinitialise() { if (rack) rack->deinitialise(); }
+void NativeEffectPlugin::reset()
+{
+    if (rack) { rack->reset(); return; }
+    processor.reset(); midiProcessor.reset(); if (effectIsInstrument (kind)) instrument.reset();
+}
 void NativeEffectPlugin::renderInstrument (const tracktion::PluginRenderContext& context) noexcept
 {
     if (! context.destBuffer || context.bufferNumSamples <= 0) return;
@@ -907,13 +961,24 @@ void NativeEffectPlugin::renderInstrument (const tracktion::PluginRenderContext&
     auto* left = buffer.getNumChannels() > 0 ? buffer.getWritePointer (0, context.bufferStartSample) : nullptr;
     auto* right = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1, context.bufferStartSample) : nullptr;
     const auto rate = sampleRate > 0 ? sampleRate : 48000.0;
-    int position = 0;
+    int position = 0, choke = 0;
+    // A rack's choke fades the voices sounding at its sample, before that sample's events.
+    const auto chokeUntil = [&] (int at)
+    {
+        for (; choke < chokeCount && chokes[(size_t) choke] <= at; ++choke)
+        {
+            const auto point = std::clamp (chokes[(size_t) choke], position, context.bufferNumSamples);
+            instrument.render (left ? left + position : nullptr, right ? right + position : nullptr, point - position);
+            position = point; instrument.chokeAll();
+        }
+    };
     if (auto* midi = context.bufferForMidiMessages)
     {
         if (midi->isAllNotesOff) instrument.reset();
         for (const auto& message : *midi)
         {
             const auto at = std::clamp (static_cast<int> (std::llround ((message.getTimeStamp() + context.midiBufferOffset) * rate)), position, context.bufferNumSamples);
+            chokeUntil (at);
             instrument.render (left ? left + position : nullptr, right ? right + position : nullptr, at - position);
             position = at;
             if (message.isNoteOn()) instrument.noteOn (message.getChannel(), message.getNoteNumber(), message.getFloatVelocity());
@@ -922,6 +987,8 @@ void NativeEffectPlugin::renderInstrument (const tracktion::PluginRenderContext&
             else if (message.isController()) instrument.controlChange (message.getChannel(), message.getControllerNumber(), message.getControllerValue());
         }
     }
+    chokeUntil (context.bufferNumSamples);
+    chokeCount = 0;
     instrument.render (left ? left + position : nullptr, right ? right + position : nullptr, context.bufferNumSamples - position);
 }
 void NativeEffectPlugin::processMidi (const tracktion::PluginRenderContext& context) noexcept
@@ -965,16 +1032,20 @@ void NativeEffectPlugin::applyToBuffer (const tracktion::PluginRenderContext& co
     const juce::ScopedNoDenormals noDenormals; Settings next; bool changed = false;
     for (int i = 0; i < 64 && parameters.pop (next); ++i) changed = true;
     if (changed) audioSettings = next;
-    // Controls whose automation reads this block override their manual settings.
-    bool automatedNow = false;
+    // Controls whose automation reads this block override their manual settings, and an enclosing
+    // rack's macros override both.
+    bool automatedNow = rackControls != nullptr;
     for (size_t i = 0; i < controls.size(); ++i) automatedNow = automatedNow || readsCurve[i].load (std::memory_order_acquire);
     if (automatedNow)
     {
         next = audioSettings;
         for (size_t i = 0; i < controls.size(); ++i)
             if (readsCurve[i].load (std::memory_order_acquire)) next.values[i] = effectProportionToValue (kind, (int) i, controls[i]->getCurrentValue());
+        if (rackControls != nullptr)
+            for (size_t i = 0; i < controls.size(); ++i) if (! std::isnan (rackControls[i])) next.values[i] = rackControls[i];
     }
     else next = audioSettings;
+    if (rack) { automated = automatedNow; rack->process (context, next); return; }
     if (changed || automatedNow || automated) { processor.configure (next); midiProcessor.configure (next); if (effectIsInstrument (kind)) instrument.configure (next); }
     automated = automatedNow;
     if (kind == Kind::sampler)

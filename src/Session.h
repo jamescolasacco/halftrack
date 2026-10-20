@@ -74,9 +74,49 @@ public:
         // MIDI effects process notes before a MIDI track's instrument.
         arpeggiator, chord, scale, pitch, velocity, random, noteLength,
         // Instruments replace a MIDI track's built-in synthesizer through setTrackInstrument.
-        polySynth, fmSynth, drumKit, wavetableSynth, sampler, drumSampler };
-    static constexpr int effectKindCount = 30;
+        polySynth, fmSynth, drumKit, wavetableSynth, sampler, drumSampler,
+        // Racks hold parallel chains of devices. Instrument and Drum Racks are instruments; a MIDI
+        // Effect Rack is a MIDI effect; an Audio Effect Rack is an audio device.
+        instrumentRack, audioEffectRack, midiEffectRack, drumRack };
+    static constexpr int effectKindCount = 30; // Plain devices; the rack kinds follow them.
+    static constexpr int deviceKindCount = 34; // Every persisted kind, racks included.
     static constexpr int drumPadCount = 16; // Drum Sampler pads play notes 36 (C1) to 51.
+    // A rack's EffectSettings hold its macros (0-127) and then its chain selector (0-127), so the
+    // ordinary device commands set and automate them.
+    static constexpr int rackMacroCount = 16, rackChainSelector = 16;
+    static constexpr int maximumRackChains = 128, maximumRackReturns = 6, maximumChainDevices = 32, maximumMacroMappings = 256;
+    // A zone passes values from low to high. Values below fadeLow or above fadeHigh are inside its
+    // fade ranges, which fall linearly to the zone's edges.
+    struct RackZone
+    {
+        int low = 0, high = 127, fadeLow = 0, fadeHigh = 127;
+        bool operator== (const RackZone&) const = default;
+    };
+    struct RackChainSettings
+    {
+        juce::String name;
+        float volumeDb = 0, pan = 0; // -100 dB is silence; pan uses the track mixer's law.
+        bool active = true, solo = false; // Active is the chain activator.
+        RackZone key, velocity { 1, 127, 1, 127 }, select { 0, 0, 0, 0 };
+        int receiveNote = 36; // Drum Rack chains: the pad's note, or -1 for All Notes.
+        int playNote = 60;    // Drum Rack chains: the note the chain's devices receive.
+        int chokeGroup = 0;   // Drum Rack chains: 0 for none, or 1 to 16.
+        // Drum Rack chains: post-fader sends to the rack's return chains, -100 dB for off.
+        std::array<float, maximumRackReturns> sendsDb { -100, -100, -100, -100, -100, -100 };
+        bool operator== (const RackChainSettings&) const = default;
+    };
+    // A macro drives one target between minimum and maximum, in the target's own units; a minimum
+    // above the maximum inverts it. The target is a device inside the rack and one of its controls,
+    // a chain (parameter 0 volume, 1 pan, 2 to 7 its sends) or the rack itself (its chain selector).
+    struct MacroMapping
+    {
+        int macro = 0;
+        juce::String targetId;
+        int parameter = 0;
+        float minimum = 0, maximum = 1;
+        bool operator== (const MacroMapping&) const = default;
+    };
+    struct RackChainInfo;
     struct EffectSettings
     {
         EffectKind kind = EffectKind::equalizer;
@@ -165,6 +205,17 @@ public:
         // Arrangement automation of native device controls, in the controls' own units.
         struct ControlAutomation { int parameter = 0; AutomationLane lane; bool operator== (const ControlAutomation&) const = default; };
         std::vector<ControlAutomation> automation;
+        // Racks: chains in order, a Drum Rack's return chains and the macro mappings.
+        bool isRack = false;
+        int visibleMacros = 8;
+        std::vector<RackChainInfo> chains, returns;
+        std::vector<MacroMapping> mappings;
+    };
+    struct RackChainInfo
+    {
+        juce::String id;
+        RackChainSettings settings;
+        std::vector<PluginInfo> devices; // MIDI effects, then at most one instrument, then audio effects.
     };
     struct TrackInfo
     {
@@ -382,7 +433,38 @@ public:
     juce::AudioPluginFormatManager& pluginFormats();
     juce::File pluginScanDeadMansFile() const;
     juce::Result addNativeEffect (int trackIndex, EffectKind);
+    // Devices inside racks share these commands and setDeviceAutomation with track devices.
     juce::Result setNativeEffectSettings (const juce::String& pluginId, const EffectSettings&);
+    // Racks: each command is one undo step and validates everything before changing the project.
+    juce::Result addRackChain (const juce::String& rackId, const juce::String& name, juce::String& chainId, int index = -1);
+    juce::Result removeRackChain (const juce::String& chainId);
+    juce::Result moveRackChain (const juce::String& chainId, int destinationIndex);
+    juce::Result duplicateRackChain (const juce::String& chainId, juce::String& duplicateId);
+    juce::Result setRackChainSettings (const juce::String& chainId, const RackChainSettings&);
+    // Chains keep MIDI effects, then one instrument, then audio effects; an instrument replaces the chain's instrument.
+    juce::Result addRackDevice (const juce::String& chainId, EffectKind, juce::String& deviceId, int index = -1);
+    juce::Result removeRackDevice (const juce::String& deviceId);
+    juce::Result moveRackDevice (const juce::String& deviceId, int destinationIndex);
+    juce::Result setRackDeviceEnabled (const juce::String& deviceId, bool);
+    // Loads an audio file into a Sampler inside a rack.
+    juce::Result setRackDeviceSample (const juce::String& deviceId, const juce::File&);
+    // Adds the mapping, replacing any mapping of the same target control. The first mapping of a
+    // macro moves the macro to the control's current position.
+    juce::Result setRackMacroMapping (const juce::String& rackId, const MacroMapping&);
+    juce::Result removeRackMacroMapping (const juce::String& rackId, int macro, const juce::String& targetId, int parameter);
+    juce::Result setRackVisibleMacros (const juce::String& rackId, int count);
+    // Drum Rack: a sample on a pad (note 0-127) goes into the pad's Sampler, or a new chain that
+    // receives the note and plays it at C3 with a one-shot Sampler; an empty file removes the pad's chains.
+    juce::Result setDrumRackPadSample (const juce::String& rackId, int note, const juce::File&, juce::String& chainId);
+    // Swaps two pads' chains by exchanging their receive notes.
+    juce::Result swapDrumRackPads (const juce::String& rackId, int note, int otherNote);
+    juce::Result addRackReturn (const juce::String& rackId, const juce::String& name, juce::String& returnId);
+    juce::Result removeRackReturn (const juce::String& returnId);
+    // Group: wraps a track's devices first..last (indexes into TrackInfo::plugins, all MIDI effects or
+    // all audio devices) into a new rack with one chain. groupInstrument wraps the instrument and the
+    // audio devices after it into an Instrument Rack.
+    juce::Result groupDevices (int trackIndex, int firstPluginIndex, int lastPluginIndex, juce::String& rackId);
+    juce::Result groupInstrument (const juce::String& trackId, juce::String& rackId);
     juce::Result addUtility (int trackIndex);
     juce::Result setUtilitySettings (const juce::String& pluginId, const UtilitySettings&);
     juce::Result movePlugin (int trackIndex, int pluginIndex, int destinationIndex);

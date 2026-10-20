@@ -45,6 +45,7 @@ int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
 int runSendReturnTests (const juce::File&);
+int runRackTests (const juce::File&);
 #if JUCE_MAC
 juce::Result registerAudioUnitTestFixture();
 int runAudioUnitTests (const juce::File&);
@@ -230,6 +231,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-device-automation");
             setApplicationReturnValue (runDeviceAutomationTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-racks"))
+        {
+            const int i = args.indexOf ("--self-test-racks");
+            setApplicationReturnValue (runRackTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-sampler"))

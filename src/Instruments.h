@@ -90,6 +90,8 @@ public:
     void noteOff (int channel, int note) noexcept;
     void controlChange (int channel, int controller, int value) noexcept;
     void pitchWheel (int channel, int value) noexcept;
+    // Fades every sounding voice to silence over 5 ms, as a Drum Rack choke group does.
+    void chokeAll() noexcept;
     void render (float* left, float* right, int samples) noexcept;
     // Sampler: the sample to play. A different sample silences voices playing the old one.
     void setSample (const SampleData*) noexcept;
@@ -111,6 +113,7 @@ private:
         std::array<effects::StateVariable, 2> rightFilters {};
         uint32_t noise = 1;
         double time = 0, choke = 1, drumState = 0, drumState2 = 0, position = 0;
+        double fade = 1, fadeStep = 0; // A choked voice fades by fadeStep per sample.
         int pad = -1;
         effects::Biquad drumFilter;
     };
