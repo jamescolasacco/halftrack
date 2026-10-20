@@ -162,3 +162,17 @@ Both patches validate exact input/output, accept repeated application, reject un
 | `tracktion_MidiNode.cpp` | `161f6183ef28aa1c64f6862d7be299b8ce17b413a7b67c759f9112abeb16b5e8` | `208a3f2a6fd88470544538a01fc03a0b447296ce55022be1b0ece89ca4244e98` |
 
 Source-inclusive packages retain all modified dependency sources and GPL notices. Playback/undo and full-render comparisons are exercised in `clip-activation-acceptance`. The extra active-note check is bounded and MIDI transition state is atomic on supported targets; this does not certify existing native MIDI buffer allocation, graph synchronization, plug-ins or hardware deadlines.
+
+
+## Tracktion MIDI input activation and interruption patch
+
+`cmake/PatchMidiInputActivation.cmake` maintains the current input consumer across native graph replacement, initializes first-input ownership before the first callback, and records queue receipt age in fixed 256-entry storage. After an established callback interruption, it suppresses old nonzero-velocity note attacks and system messages while retaining old non-attack channel state at block start. The first fresh event establishes the timing origin independently of retained old releases. Six audible release regressions and native byte/order/timing tests cover this behavior.
+
+Receipt uses the accurate millisecond clock only for a construction-time non-track/non-hosted classification. The audited current ingress is non-audio; direct fallback of track/hosted devices through the generic node retains its cached clock. Processing still uses the existing cached clock. See [the audited thread boundary and limitations](realtime-safety.md#midi-receipt-clock-boundary); this patch does not certify native locks or arbitrary future callers. A regression observes an actual frozen cache before sending a fresh key, rather than assuming a sleep froze it.
+
+| File under `modules/tracktion_engine/playback/graph` | Pristine SHA-256 | Current SHA-256 |
+| --- | --- | --- |
+| `tracktion_MidiInputDeviceNode.cpp` | `f893b43a88aa1897164b1f6fe45516b4e5e7e5db435afd09292da34870f91b16` | `b0e8e73a5ab9f5dd1d13e96c2adc84313ed3a579ddb8ca7d80b6564a2c497000` |
+| `tracktion_MidiInputDeviceNode.h` | `976acfb6df698e01935bdb3cfad7761da884e07b41875edb325b2ee7a10879a9` | `6103673d444ed07506ab92f96fbfb835639ececeb834c5b936d6bd0838d146ef` |
+
+The helper also accepts exact earlier activation, receipt-age, consumer-lifetime and channel-state outputs, including cpp hashes `b417dbcd6f6dafba3078eaa408b0074d0cd6ba50e7e43f123d5a4f283b4af4a2`, `a1660920bf4c22133e1a5c33264c478ee466cedfccca26edf4be79248aa81c2f`, `a3e623634363acecd4096d29498b8237af3a468015aeccdf48716d4dab115866`, `335da793205ef43c19384f666e0c13bb3d7117595d12b60676f66e5af2027dec`, and header `82f9fae59e49a0293f5aa0e0ba8926faa359df5d33fafc92226480083fb049e5`. Both inputs and both transformed hashes validate before either file is written. Repeat application is a no-op; unknown source fails without mutation. Full modified source and upstream GPL notices remain included in packages. The historical [consumer-lifetime report](research/midi-consumer-lifetime.md) describes its earlier checkpoint, not the current output hashes.

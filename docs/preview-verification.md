@@ -1,8 +1,14 @@
 # Preview verification
 
+## MIDI interruption corrections — 2026-10-20
+
+Release correction `6d6fa88` and guarded receipt-clock correction `e2356e4` each address an independently reproduced input loss. Final test source `5cb6991` passes the full focused monitoring suite in **27.81 seconds**. The earlier release-only build also passes MIDI recording/input in **34.71 s**. The deterministic guard fixtures use actual track/hosted input instances and exact event consumption; they do not infer clock-call safety from equality of a process-global counter. The observed-cache fresh-key test, six audible release tests, stale-attack/system suppression and fresh timestamp/byte-order checks retain strict output oracles.
+
+Both independent read-only reviews accept the production changes. Patch migration and unknown-source no-mutation fixtures pass; callback source checks pass nine fixtures over 42 bodies, and analysis tooling passes 39 tests with two optional integrations skipped. The complete local native suite is running, and a new three-platform result/package is pending. The failed earlier Mac checkpoint below remains the latest completed CI result; no physical timing, complete host safety or reference-equivalence claim follows.
+
 ## Hosted-source readiness checkpoint — 2026-10-20
 
-Published source `65e1246df25a4dbed4c6ea1c42847cbe874ac11a` contains the unchanged master-automation implementation plus test-only source-readiness correction `24ad657`. Local master-volume/automation/tempo suites pass in **31.49 seconds**. [Fresh macOS/Windows/Linux CI](https://github.com/jamescolasacco/halftrack/actions/runs/39374712947) is running; the earlier Mac failure remains a failed checkpoint until this run completes.
+Published source `65e1246df25a4dbed4c6ea1c42847cbe874ac11a` contains the unchanged master-automation implementation plus test-only source-readiness correction `24ad657`. Local master-volume/automation/tempo suites pass in **31.49 seconds**. [Fresh CI](https://github.com/jamescolasacco/halftrack/actions/runs/39374712947) passes Linux **26/26 in 339.62 s** and Windows **26/26 in 409.95 s**. Mac passes the corrected automation check and **26/27 overall in 1202.18 s**, but fails the MIDI-monitor note-off release assertion. That distinct failure remains under diagnosis; this checkpoint is not all-platform green.
 
 `Halftrack-preview-darwin-arm64-65e1246.tar.gz` is **62,557,395 bytes**, SHA-256 `dd4574120b50e068b892ce214f36d3c3eb551a0a10a0720e0fb5af7d0d3f10ce`. Its executable is **26,351,992 bytes**, SHA-256 `20e55387548fbc5c421692afa429f346426495c46e21a7599fa79d6e96d4f014`, byte-identical to the tested build. Fresh extraction verifies all **116 owned source files**, **4,424 JUCE files**, **1,545 Tracktion files**, exact patched dependency contents, metadata and licenses. Private analysis and reference binaries remain excluded.
 
