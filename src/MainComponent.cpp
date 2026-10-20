@@ -96,6 +96,40 @@ public:
         g.setColour (line);
         g.drawRect (button.getLocalBounds().reduced (1));
     }
+    // Knob: dark ring, value arc from the centre detent for bipolar ranges, pointer line.
+    void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float position,
+                           float startAngle, float endAngle, juce::Slider& slider) override
+    {
+        const auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) width, (float) height).reduced (3.0f);
+        const auto radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) / 2.0f;
+        const auto centre = bounds.getCentre();
+        const auto angle = startAngle + position * (endAngle - startAngle);
+        const bool bipolar = slider.getMinimum() < 0 && slider.getMaximum() > 0;
+        const auto origin = bipolar ? startAngle + (float) ((0 - slider.getMinimum()) / (slider.getMaximum() - slider.getMinimum())) * (endAngle - startAngle) : startAngle;
+        juce::Path ring; ring.addCentredArc (centre.x, centre.y, radius - 2, radius - 2, 0, startAngle, endAngle, true);
+        g.setColour (juce::Colour (0xff141414)); g.strokePath (ring, juce::PathStrokeType (3.0f));
+        juce::Path value; value.addCentredArc (centre.x, centre.y, radius - 2, radius - 2, 0, juce::jmin (origin, angle), juce::jmax (origin, angle), true);
+        g.setColour (slider.isEnabled() ? orange : muted); g.strokePath (value, juce::PathStrokeType (3.0f));
+        g.setColour (juce::Colour (0xff3a3a3a)); g.fillEllipse (bounds.withSizeKeepingCentre ((radius - 5) * 2, (radius - 5) * 2));
+        g.setColour (ink); g.drawLine (centre.x, centre.y, centre.x + (radius - 5) * std::sin (angle), centre.y - (radius - 5) * std::cos (angle), 2.0f);
+    }
+    // Faders: thin dark slot, lighter fill below the cap, flat rectangular cap.
+    void drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height, float sliderPos, float minPos, float maxPos,
+                           juce::Slider::SliderStyle style, juce::Slider& slider) override
+    {
+        if (style != juce::Slider::LinearVertical && style != juce::Slider::LinearHorizontal)
+        { LookAndFeel_V4::drawLinearSlider (g, x, y, width, height, sliderPos, minPos, maxPos, style, slider); return; }
+        const bool vertical = style == juce::Slider::LinearVertical;
+        const auto area = juce::Rectangle<float> ((float) x, (float) y, (float) width, (float) height);
+        const auto track = vertical ? area.withSizeKeepingCentre (4.0f, area.getHeight()) : area.withSizeKeepingCentre (area.getWidth(), 4.0f);
+        g.setColour (juce::Colour (0xff141414)); g.fillRect (track);
+        const auto filled = vertical ? track.withTop (sliderPos) : track.withRight (sliderPos);
+        g.setColour (slider.isEnabled() ? orange : muted); g.fillRect (filled);
+        const auto cap = vertical ? juce::Rectangle<float> (area.getCentreX() - 9.0f, sliderPos - 4.0f, 18.0f, 8.0f)
+                                  : juce::Rectangle<float> (sliderPos - 4.0f, area.getCentreY() - 8.0f, 8.0f, 16.0f);
+        g.setColour (slider.isEnabled() ? juce::Colour (0xffcfcfcf) : muted); g.fillRect (cap);
+        g.setColour (juce::Colour (0xff141414)); g.drawRect (cap, 1.0f);
+    }
     void drawComboBox (juce::Graphics& g, int width, int height, bool,
                        int, int, int, int, juce::ComboBox& box) override
     {
@@ -169,7 +203,7 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &tempo, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel,
+                 &playButton, &stopButton, &recordButton, &tempo, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &ruler, &viewport,
                  &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &deviceChain })
@@ -210,6 +244,20 @@ public:
         }
         positionLabel.setTooltip ("Song position in bars, beats and sixteenths");
         loopStartLabel.setName ("Loop start"); loopLengthLabel.setName ("Loop length");
+        quantisation.setName ("Global launch quantization");
+        quantisation.addItem ("None", 1); quantisation.addItem ("1/4", 2); quantisation.addItem ("1 Bar", 3);
+        quantisation.setTooltip ("Global launch quantization for clips and scenes. View switches do not change what is playing.");
+        quantisation.onChange = [this]
+        {
+            const auto q = quantisation.getSelectedId() == 1 ? Session::LaunchQuantisation::none
+                         : quantisation.getSelectedId() == 2 ? Session::LaunchQuantisation::beat : Session::LaunchQuantisation::bar;
+            report (session.setLaunchQuantisation (q)); refresh();
+        };
+        backToArrangement.setName ("Return to Arrangement");
+        backToArrangement.setTooltip ("Release Session overrides so tracks play their arrangement again");
+        backToArrangement.setColour (juce::TextButton::buttonOnColourId, orange);
+        backToArrangement.onClick = [this] { report (session.returnToArrangement()); refresh(); };
+        backToArrangement.setWantsKeyboardFocus (false); backToArrangement.setMouseClickGrabsKeyboardFocus (false);
         loopStartLabel.setTooltip ("Loop start in bars.beats.sixteenths. Double-click to type a new start.");
         loopLengthLabel.setTooltip ("Loop length in bars.beats.sixteenths. Double-click to type a new length.");
         loopStartLabel.setEditable (false, true, false); loopLengthLabel.setEditable (false, true, false);
@@ -366,6 +414,7 @@ public:
         tempo.setBounds (bar.removeFromLeft (58)); bar.removeFromLeft (3);
         meterBounds = bar.removeFromLeft (40); bar.removeFromLeft (8);
         clickButton.setBounds (bar.removeFromLeft (46)); clickSettingsButton.setBounds (bar.removeFromLeft (20));
+        bar.removeFromLeft (8); quantisation.setBounds (bar.removeFromLeft (64));
         audioButton.setBounds (bar.removeFromRight (52)); bar.removeFromRight (8);
         arrangementTab.setBounds (bar.removeFromRight (62)); sessionTab.setBounds (bar.removeFromRight (62));
         pianoTab.setBounds (bar.removeFromRight (40)); bar.removeFromRight (10);
@@ -380,7 +429,9 @@ public:
         loopStartLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (3);
         loopButton.setBounds (centre.removeFromLeft (48)); centre.removeFromLeft (3);
         loopLengthLabel.setBounds (centre.removeFromLeft (78));
-        projectLabel.setBounds (bar.withLeft (centre.getRight() + 12));
+        auto status = bar.withLeft (centre.getRight() + 12);
+        backToArrangement.setBounds (status.removeFromLeft (124)); status.removeFromLeft (8);
+        projectLabel.setBounds (status);
         // Creation and zoom live in menus, keys and context menus, as in the reference workflow.
         for (auto* hidden : std::initializer_list<juce::Component*> { &importButton, &newMidiClipButton, &addTrackButton, &addMidiButton, &zoomIn, &zoomOut, &fitButton })
             hidden->setVisible (false);
@@ -548,10 +599,13 @@ private:
                 button->setWantsKeyboardFocus (false);
                 button->setMouseClickGrabsKeyboardFocus (false);
             }
-            mute.onClick = [this] { owner.selectTrack (index); owner.report (owner.session.setTrackMute (index, mute.getToggleState())); };
+            // The numbered track activator is lit while the track is audible.
+            mute.onClick = [this] { owner.selectTrack (index); owner.report (owner.session.setTrackMute (index, ! mute.getToggleState())); };
             solo.onClick = [this] { owner.selectTrack (index); owner.report (owner.session.setTrackSolo (index, solo.getToggleState())); };
             arm.onClick = [this] { owner.selectTrack (index); owner.report (owner.session.setTrackArmed (index, arm.getToggleState())); owner.refresh(); };
-            mute.setTooltip ("Mute track"); solo.setTooltip ("Solo track"); arm.setTooltip ("Arm track for audio recording");
+            mute.setTooltip ("Track activator: click to mute or unmute"); solo.setTooltip ("Solo track"); arm.setTooltip ("Arm track for audio recording");
+            mute.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); mute.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            solo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff57a7ff)); solo.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
             arm.setName ("Record arm"); input.setName ("Track audio input"); monitor.setName ("Track monitoring");
             sendMode.setName ("Return send position");
             sendMode.addItem ("Pre-fader", 1); sendMode.addItem ("Post-fader", 2);
@@ -591,6 +645,14 @@ private:
             pan.onDragStart = [this] { owner.session.beginEditGesture ("Track pan"); };
             pan.onDragEnd = [this] { owner.session.endEditGesture(); };
             pan.onValueChange = [this] { owner.report (owner.session.setTrackPan (index, (float) pan.getValue())); };
+            if (columnLayout)
+            {
+                gain.setSliderStyle (juce::Slider::LinearVertical); gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 16);
+                pan.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); pan.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 42, 15);
+                pan.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
+                name.setVisible (false); // The column title bar names the track.
+            }
+            gain.updateText(); pan.updateText(); // Text boxes predate their formatters.
             monitor.addItem ("Off", 1); monitor.addItem ("Auto", 2); monitor.addItem ("In", 3);
             monitor.onChange = [this]
             {
@@ -624,7 +686,8 @@ private:
                 : "Volume has automation. Edit or clear its lane in Automation.");
             pan.setTooltip (track.panAutomation.points.empty() ? "Track pan. Double-click to center."
                 : "Pan has automation. Edit or clear its lane in Automation.");
-            mute.setToggleState (track.mute, juce::dontSendNotification);
+            mute.setToggleState (! track.mute, juce::dontSendNotification);
+            mute.setButtonText (juce::String (position + 1));
             solo.setToggleState (track.solo, juce::dontSendNotification);
             arm.setToggleState (track.armed, juce::dontSendNotification);
             auto names = owner.session.inputNames (midi);
@@ -649,14 +712,18 @@ private:
             g.setColour (muted); g.setFont (font (9.5f, true));
             if (columnLayout)
             {
-                g.drawText ("VOL", 9, 67, 29, 20, juce::Justification::centredLeft);
-                g.drawText ("PAN", 9, 97, 29, 20, juce::Justification::centredLeft);
-                if (returnTrack) { g.setColour (orange); g.drawText ("RETURN / SEND INPUT", 9, 126, getWidth() - 18, 22, juce::Justification::centredLeft); }
-
-                const auto peak = juce::jmax (peakL, peakR);
-                const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (peak, -60.0f) + 60.0f) / 60.0f);
-                g.setColour (background); g.fillRect (9, getHeight() - 7, getWidth() - 18, 3);
-                g.setColour (peak >= 1.0f ? red : green); g.fillRect (9, getHeight() - 7, (int) ((getWidth() - 18) * fraction), 3);
+                // Two-channel meter beside the fader, 0 dB to -60 dB.
+                const auto meter = meterBounds();
+                for (int channel = 0; channel < 2; ++channel)
+                {
+                    const auto bar = meter.withWidth (4).translated (channel * 6, 0);
+                    const auto level = channel == 0 ? peakL : peakR;
+                    const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (level, -60.0f) + 60.0f) / 60.0f);
+                    g.setColour (juce::Colour (0xff181818)); g.fillRect (bar);
+                    const auto lit = bar.withTop (bar.getBottom() - juce::roundToInt (bar.getHeight() * fraction));
+                    g.setColour (level >= 1.0f ? red : green); g.fillRect (lit);
+                }
+                if (returnTrack) { g.setColour (muted); g.setFont (font (9.0f)); g.drawText ("SEND INPUT", 6, 27, getWidth() - 12, 16, juce::Justification::centred); }
                 return;
             }
             g.drawText ("VOL", 12, 38, 25, 17, juce::Justification::centredLeft);
@@ -676,11 +743,14 @@ private:
         {
             if (columnLayout)
             {
-                name.setBounds (8, 4, getWidth() - 16, 25);
-                mute.setBounds (9, 35, 38, 23); solo.setBounds (49, 35, 38, 23); arm.setBounds (89, 35, 38, 23);
-                gain.setBounds (36, 63, getWidth() - 43, 27); pan.setBounds (36, 93, getWidth() - 43, 27);
-                input.setBounds (9, 127, getWidth() - 18, 23); monitor.setBounds (9, 153, getWidth() - 18, 23);
-                sendMode.setBounds (9, 153, getWidth() - 18, 23);
+                // Top to bottom: input routing, pan, volume with meter, activator / solo / arm.
+                name.setBounds (6, 2, getWidth() - 12, 18);
+                input.setBounds (5, 4, getWidth() - 10, 19); monitor.setBounds (5, 25, getWidth() - 10, 19);
+                sendMode.setBounds (5, 4, getWidth() - 10, 19);
+                pan.setBounds ((getWidth() - 46) / 2, 50, 46, 50);
+                gain.setBounds (6, 106, 54, getHeight() - 140);
+                const int buttons = getHeight() - 28, w = (getWidth() - 14) / 3;
+                mute.setBounds (5, buttons, w, 22); solo.setBounds (7 + w, buttons, w, 22); arm.setBounds (9 + 2 * w, buttons, w, 22);
                 return;
             }
             name.setBounds (10, 5, getWidth() - 104, 25);
@@ -711,6 +781,7 @@ private:
         juce::Slider gain, pan;
         juce::ComboBox input, monitor, sendMode;
         juce::StringArray inputNames;
+        juce::Rectangle<int> meterBounds() const { return { 66, 110, 10, juce::jmax (10, getHeight() - 160) }; }
     };
 
     bool syncTrackRows (juce::Component& parent, std::vector<std::unique_ptr<TrackRow>>& rows, bool vertical)
@@ -1352,43 +1423,18 @@ private:
         explicit LauncherGrid (Impl& o) : owner (o)
         {
             setName ("Session clip grid"); setWantsKeyboardFocus (true);
-            for (auto* child : std::initializer_list<juce::Component*> { &quantisation, &stopAll, &arrangement, &addScene, &mixers, &horizontal, &vertical }) addAndMakeVisible (child);
+            for (auto* child : std::initializer_list<juce::Component*> { &mixers, &horizontal, &vertical }) addAndMakeVisible (child);
             mixers.setInterceptsMouseClicks (false, true);
-            quantisation.setName ("Global launch quantization");
-            quantisation.addItem ("None", 1); quantisation.addItem ("1 Beat", 2); quantisation.addItem ("1 Bar", 3);
-            quantisation.setTooltip ("Clip and scene launch timing. View switches do not change what is playing.");
-            quantisation.onChange = [this]
-            {
-                const auto q = quantisation.getSelectedId() == 1 ? Session::LaunchQuantisation::none
-                             : quantisation.getSelectedId() == 2 ? Session::LaunchQuantisation::beat : Session::LaunchQuantisation::bar;
-                owner.report (owner.session.setLaunchQuantisation (q)); owner.refresh();
-            };
-            stopAll.onClick = [this] { owner.report (owner.session.stopAllLauncherClips()); owner.refresh(); };
-            arrangement.onClick = [this] { owner.report (owner.session.returnToArrangement()); owner.refresh(); };
-            addScene.onClick = [this]
-            {
-                owner.addSceneFromUI();
-            };
-            for (auto* button : { &stopAll, &arrangement, &addScene }) { button->setWantsKeyboardFocus (false); button->setMouseClickGrabsKeyboardFocus (false); }
-            stopAll.setName ("Stop all Session clips"); arrangement.setName ("Return to Arrangement"); addScene.setName ("Add scene");
-            arrangement.setTooltip ("Release Session overrides so tracks play their arrangement again");
-            stopAll.setTooltip ("Stop every Session clip at the chosen launch quantization");
             horizontal.addListener (this); vertical.addListener (this);
         }
         ~LauncherGrid() override { horizontal.removeListener (this); vertical.removeListener (this); }
         void sync()
         {
             owner.syncTrackRows (mixers, rows, true);
-            quantisation.setSelectedId (owner.state.launchQuantisation == Session::LaunchQuantisation::none ? 1 : owner.state.launchQuantisation == Session::LaunchQuantisation::beat ? 2 : 3, juce::dontSendNotification);
-            const bool overridden = std::any_of (owner.state.tracks.begin(), owner.state.tracks.end(), [] (const auto& track) { return track.launcherActive; });
-            arrangement.setEnabled (overridden); arrangement.setToggleState (overridden, juce::dontSendNotification);
-            stopAll.setEnabled (! owner.state.tracks.empty());
             resized(); repaint();
         }
         void resized() override
         {
-            quantisation.setBounds (89, 6, 87, 23); stopAll.setBounds (190, 6, 90, 23);
-            arrangement.setBounds (288, 6, 157, 23); addScene.setBounds (getWidth() - 105, 6, 93, 23);
             const auto grid = gridArea();
             mixers.setBounds (0, grid.getBottom() + stopHeight, tracksWidth(), mixerHeight);
             for (int i = 0; i < (int) rows.size(); ++i) rows[(size_t) i]->setBounds (i * columnWidth - (int) offsetX, 0, columnWidth, mixerHeight);
@@ -1411,23 +1457,23 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (background);
-            g.setColour (panel); g.fillRect (0, 0, getWidth(), toolbarHeight);
-            g.setColour (muted); g.setFont (font (10.0f)); g.drawText ("Quantization", 10, 4, 77, 26, juce::Justification::centredLeft);
+            // Cells sit on a dark ground with one-pixel gutters, like a console grid.
+            g.fillAll (gutter);
             const auto grid = gridArea();
-            g.saveState(); g.reduceClipRegion (0, toolbarHeight, tracksWidth(), getHeight() - toolbarHeight);
+            const auto dark = juce::Colour (0xff141414);
+            g.saveState(); g.reduceClipRegion (0, 0, tracksWidth(), getHeight());
             for (int t = 0; t < (int) owner.state.tracks.size(); ++t)
             {
                 const auto& track = owner.state.tracks[(size_t) t]; const int x = t * columnWidth - (int) offsetX;
                 if (x + columnWidth <= 0 || x >= tracksWidth()) continue;
-                g.setColour (track.colour.withAlpha (t == owner.selectedTrack ? 0.75f : 0.4f)); g.fillRect (x, toolbarHeight, columnWidth, headerHeight);
-                g.setColour (ink); g.setFont (font (11.5f, true)); g.drawText (track.name, x + 9, toolbarHeight, columnWidth - 18, headerHeight, juce::Justification::centredLeft, true);
-                g.setColour (line); g.drawRect (x, toolbarHeight, columnWidth, headerHeight);
+                const bool selectedTrack = t == owner.selectedTrack;
+                const auto header = juce::Rectangle<int> (x, 0, columnWidth, headerHeight).reduced (1, 0).withTrimmedBottom (1);
+                g.setColour (selectedTrack ? track.colour.brighter (0.25f) : track.colour); g.fillRect (header);
+                g.setColour (dark); g.setFont (font (11.0f, selectedTrack));
+                g.drawText (track.name, header.reduced (6, 0), juce::Justification::centredLeft, true);
                 if (track.isReturn)
                 {
-                    g.setColour (panel); g.fillRect (x + 1, gridTop, columnWidth - 2, grid.getHeight() + stopHeight);
-                    g.setColour (muted); g.setFont (font (10.5f, true));
-                    g.drawText ("RETURN", x + 9, gridTop + 15, columnWidth - 18, 24, juce::Justification::centred);
+                    g.setColour (slotColour); g.fillRect (x + 1, gridTop, columnWidth - 2, grid.getHeight() + stopHeight);
                     continue;
                 }
                 g.saveState(); g.reduceClipRegion (grid.withWidth (tracksWidth()));
@@ -1437,48 +1483,69 @@ private:
                     if (! bounds.intersects (grid)) continue;
                     const auto* slot = slotAt (t, scene);
                     const bool filled = slot != nullptr && slot->hasClip;
-                    const bool selected = t == owner.selectedTrack && owner.state.scenes[(size_t) scene].id == owner.selectedSceneId;
-                    g.setColour (filled ? (slot->clip.active?track.colour:muted).withAlpha (slot->clip.active?0.30f:0.12f) : scene % 2 == 0 ? panel : juce::Colour (0xff333333)); g.fillRect (bounds.reduced (1));
+                    const bool selected = selectedTrack && owner.state.scenes[(size_t) scene].id == owner.selectedSceneId;
                     const bool queued = slot != nullptr && (slot->queued || slot->stopQueued);
-                    const auto stateColour = queued ? orange.withAlpha (owner.ticks % 16 < 8 ? 1.0f : 0.45f) : slot != nullptr && slot->playing ? green : muted;
-                    g.setColour (stateColour);
-                    if (filled && ! (slot != nullptr && slot->stopQueued)) drawTriangle (g, bounds.getX() + 10, bounds.getY() + 10);
-                    else g.fillRect (bounds.getX() + 10, bounds.getY() + 11, 7, 7);
+                    const bool blink = owner.ticks % 16 < 8;
+                    const auto cell = bounds.reduced (1, 0).withTrimmedBottom (1);
                     if (filled)
                     {
+                        const auto clipColour = slot->clip.active ? track.colour : juce::Colour (0xff6a6a6a);
+                        g.setColour (queued && blink ? clipColour.brighter (0.35f) : clipColour); g.fillRect (cell);
+                        g.setColour (slot->playing ? green.brighter (0.2f) : queued ? juce::Colours::white : dark);
+                        if (slot->stopQueued) g.fillRect (cell.getX() + 6, cell.getCentreY() - 4, 8, 8);
+                        else drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
+                        if (slot->playing) { g.setColour (dark.withAlpha (0.35f)); g.fillRect (cell.withTrimmedLeft (cell.getWidth() - 3)); }
                         const bool follows = slot->clip.follow.action != Session::FollowAction::off;
-                        g.setColour (ink); g.setFont (font (11.0f)); g.drawText ((slot->clip.active?juce::String():juce::String("OFF / "))+slot->clip.name, bounds.withTrimmedLeft (29).withTrimmedRight (follows ? 44 : 7), juce::Justification::centredLeft, true);
+                        g.setColour (dark); g.setFont (font (10.5f));
+                        g.drawText ((slot->clip.active ? juce::String() : juce::String ("OFF / ")) + slot->clip.name,
+                                    cell.withTrimmedLeft (20).withTrimmedRight (follows ? 34 : 4), juce::Justification::centredLeft, true);
                         if (follows)
                         {
-                            g.setColour (orange); g.setFont (font (9.0f));
-                            g.drawText (juce::String (slot->clip.follow.afterBeats, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") + "b >", bounds.withLeft (bounds.getRight() - 43).reduced (3, 0), juce::Justification::centredRight, true);
+                            g.setFont (font (9.0f));
+                            g.drawText (juce::String (slot->clip.follow.afterBeats, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") + "b >",
+                                        cell.withLeft (cell.getRight() - 33).reduced (2, 0), juce::Justification::centredRight, true);
                         }
-                        if (slot->playing) { g.setColour (green); g.fillRect (bounds.getX() + 1, bounds.getBottom() - 3, bounds.getWidth() - 2, 2); }
                     }
-                    g.setColour (selected ? orange : line); g.drawRect (bounds, selected ? 2 : 1);
+                    else
+                    {
+                        g.setColour (slotColour); g.fillRect (cell);
+                        g.setColour (queued ? orange.withAlpha (blink ? 1.0f : 0.45f) : juce::Colour (0xff4d4d4d));
+                        g.fillRect (cell.getX() + 7, cell.getCentreY() - 3, 6, 6);
+                    }
+                    if (selected) { g.setColour (orange); g.drawRect (cell.expanded (1, 0).withTrimmedTop (-1), 2); }
                 }
                 g.restoreState();
-                const auto stop = juce::Rectangle<int> (x, grid.getBottom(), columnWidth, stopHeight);
-                g.setColour (raised); g.fillRect (stop.reduced (1)); g.setColour (track.launcherActive ? orange : muted); g.fillRect (x + 10, stop.getY() + 9, 7, 7);
-                g.setFont (font (9.0f)); g.drawText (track.launcherActive ? "STOP / SESSION" : "STOP / ARRANGEMENT", stop.withTrimmedLeft (26), juce::Justification::centredLeft, true);
+                const auto stop = juce::Rectangle<int> (x, grid.getBottom(), columnWidth, stopHeight).reduced (1, 0).withTrimmedBottom (1);
+                g.setColour (slotColour.darker (0.15f)); g.fillRect (stop);
+                g.setColour (track.launcherActive ? orange : muted); g.fillRect (stop.getCentreX() - 4, stop.getCentreY() - 4, 8, 8);
             }
             g.restoreState();
+            // Master column: scene launchers, with Stop All Clips under them.
             const int sceneX = tracksWidth();
-            g.setColour (raised); g.fillRect (sceneX, toolbarHeight, sceneWidth, headerHeight);
-            g.setColour (ink); g.setFont (font (10.0f, true)); g.drawText ("SCENES", sceneX + 12, toolbarHeight, sceneWidth - 20, headerHeight, juce::Justification::centredLeft);
+            const auto master = juce::Rectangle<int> (sceneX, 0, sceneWidth, headerHeight).reduced (1, 0).withTrimmedBottom (1);
+            g.setColour (juce::Colour (0xff4a4a4a)); g.fillRect (master);
+            g.setColour (ink); g.setFont (font (11.0f, true)); g.drawText ("Master", master.reduced (6, 0), juce::Justification::centredLeft);
             g.saveState(); g.reduceClipRegion (sceneX, gridTop, sceneWidth, grid.getHeight());
             for (int scene = 0; scene < (int) owner.state.scenes.size(); ++scene)
             {
-                const auto bounds = juce::Rectangle<int> (sceneX, sceneY (scene), sceneWidth, rowHeight);
+                const auto cell = juce::Rectangle<int> (sceneX, sceneY (scene), sceneWidth, rowHeight).reduced (1, 0).withTrimmedBottom (1);
                 const bool selected = owner.state.scenes[(size_t) scene].id == owner.selectedSceneId;
-                g.setColour (selected ? raised : panel); g.fillRect (bounds.reduced (1)); g.setColour (selected ? orange : muted); drawTriangle (g, sceneX + 10, bounds.getY() + 10);
-                g.setColour (ink); g.setFont (font (11.0f)); g.drawText (owner.state.scenes[(size_t) scene].name, bounds.withTrimmedLeft (28).withTrimmedRight (24), juce::Justification::centredLeft, true);
-                g.setColour (muted); g.drawText ("...", bounds.withTrimmedLeft (sceneWidth - 22), juce::Justification::centred);
+                g.setColour (selected ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff383838)); g.fillRect (cell);
+                g.setColour (selected ? orange : ink.withAlpha (0.8f)); drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
+                g.setColour (ink); g.setFont (font (10.5f)); g.drawText (owner.state.scenes[(size_t) scene].name, cell.withTrimmedLeft (20).withTrimmedRight (6), juce::Justification::centredLeft, true);
             }
             g.restoreState();
-            g.setColour (line); g.drawVerticalLine (sceneX, (float) toolbarHeight, (float) getHeight());
-            if (owner.state.scenes.empty()) { g.setColour (muted); g.setFont (font (13.0f)); g.drawText ("Add a scene to begin launching clips.", grid.reduced (20), juce::Justification::centred); }
+            const auto stopAll = stopAllBounds();
+            g.setColour (juce::Colour (0xff383838)); g.fillRect (stopAll);
+            g.setColour (ink.withAlpha (0.85f)); g.fillRect (stopAll.getX() + 7, stopAll.getCentreY() - 4, 8, 8);
+            g.setFont (font (10.0f)); g.drawText ("Stop All Clips", stopAll.withTrimmedLeft (22), juce::Justification::centredLeft, true);
+            if (owner.state.scenes.empty()) { g.setColour (muted); g.setFont (font (13.0f)); g.drawText ("Insert a scene to begin launching clips.", grid.reduced (20), juce::Justification::centred); }
         }
+        // Geometry used by pointer handlers and their tests.
+        juce::Point<float> slotCentre (int track, int scene) const { return slotBounds (track, scene).getCentre().toFloat(); }
+        juce::Point<float> launchPoint (int track, int scene) const { const auto b = slotBounds (track, scene); return { (float) b.getX() + 10.0f, (float) b.getCentreY() }; }
+        juce::Point<float> trackStopPoint (int track) const { return { (float) (track * columnWidth - (int) offsetX + columnWidth / 2), (float) (gridArea().getBottom() + stopHeight / 2) }; }
+        juce::Point<float> stopAllPoint() const { return stopAllBounds().getCentre().toFloat(); }
         void mouseDown (const juce::MouseEvent& event) override
         {
             if (owner.session.isExporting()) return;
@@ -1491,13 +1558,21 @@ private:
                 if (event.x - slotBounds (cell.first, cell.second).getX() < 25) { owner.report (owner.session.launchSlot (cell.first, cell.second)); owner.refresh(); }
                 repaint(); return;
             }
+            if (stopAllBounds().contains (event.getPosition())) { owner.report (owner.session.stopAllLauncherClips()); owner.refresh(); return; }
             const auto scene = sceneAt (event.getPosition());
             if (scene >= 0)
             {
                 owner.selectedSceneId = owner.state.scenes[(size_t) scene].id;
-                if (event.mods.isPopupMenu() || event.x > tracksWidth() + sceneWidth - 24) sceneMenu (scene);
-                else if (event.x - tracksWidth() < 25) { owner.report (owner.session.launchScene (scene)); owner.refresh(); }
+                if (event.mods.isPopupMenu()) sceneMenu (scene);
+                else if (event.x - tracksWidth() < 22) { owner.report (owner.session.launchScene (scene)); owner.refresh(); }
                 repaint(); return;
+            }
+            if (event.x >= tracksWidth() && event.x < tracksWidth() + sceneWidth && event.y >= gridTop && event.mods.isPopupMenu())
+            {
+                juce::PopupMenu menu; menu.addItem (1, "Insert Scene");
+                auto safe = juce::Component::SafePointer<Impl> (&owner);
+                menu.showMenuAsync (juce::PopupMenu::Options(), [safe] (int choice) { if (safe != nullptr && choice == 1) safe->addSceneFromUI(); });
+                return;
             }
             const auto track = (int) ((event.x + offsetX) / columnWidth);
             if (event.x < tracksWidth() && track >= 0 && track < (int) owner.state.tracks.size())
@@ -1522,7 +1597,9 @@ private:
                 else if (slot != nullptr && ! slot->hasClip) owner.importSlotDialog (cell.first, cell.second);
                 return;
             }
-            const int scene = sceneAt (event.getPosition()); if (scene >= 0) owner.renameSceneDialog (scene);
+            const int scene = sceneAt (event.getPosition()); if (scene >= 0) { owner.renameSceneDialog (scene); return; }
+            // Double-clicking below the last scene inserts another, as in the master column.
+            if (event.x >= tracksWidth() && event.x < tracksWidth() + sceneWidth && event.y >= gridTop && event.y < gridArea().getBottom()) owner.addSceneFromUI();
         }
         bool keyPressed (const juce::KeyPress& key) override
         {
@@ -1560,10 +1637,11 @@ private:
         }
     private:
         Impl& owner;
-        static constexpr int toolbarHeight = 35, headerHeight = 29, gridTop = toolbarHeight + headerHeight,
-                             columnWidth = 170, rowHeight = 30, sceneWidth = 148, mixerHeight = 190, stopHeight = 26, scrollSize = 11;
-        juce::ComboBox quantisation;
-        juce::TextButton stopAll { "Stop All Clips" }, arrangement { "Return to Arrangement" }, addScene { "+ Scene" };
+    public:
+        static constexpr int headerHeight = 22, gridTop = headerHeight, columnWidth = 120, rowHeight = 24,
+                             sceneWidth = 132, mixerHeight = 252, stopHeight = 22, scrollSize = 10;
+    private:
+        static inline const juce::Colour gutter { 0xff1a1a1a }, slotColour { 0xff2c2c2c };
         juce::Component mixers;
         std::vector<std::unique_ptr<TrackRow>> rows;
         juce::ScrollBar horizontal { false }, vertical { true };
@@ -1571,6 +1649,7 @@ private:
         int tracksWidth() const { return juce::jmax (1, getWidth() - sceneWidth - scrollSize); }
         juce::Rectangle<int> gridArea() const { return { 0, gridTop, tracksWidth(), juce::jmax (rowHeight, getHeight() - gridTop - mixerHeight - stopHeight - scrollSize) }; }
         int sceneY (int scene) const { return gridTop + (int) std::round ((scene - offsetScene) * rowHeight); }
+        juce::Rectangle<int> stopAllBounds() const { return juce::Rectangle<int> (tracksWidth(), gridArea().getBottom(), sceneWidth, stopHeight).reduced (1, 0).withTrimmedBottom (1); }
         juce::Rectangle<int> slotBounds (int track, int scene) const { return { track * columnWidth - (int) offsetX, sceneY (scene), columnWidth, rowHeight }; }
         const Session::SlotInfo* slotAt (int track, int scene) const
         {
@@ -1584,7 +1663,7 @@ private:
             const int scene = (int) ((point.y - gridTop) / (double) rowHeight + offsetScene);
             return scene < (int) owner.state.scenes.size() ? scene : -1;
         }
-        static void drawTriangle (juce::Graphics& g, int x, int y) { juce::Path path; path.addTriangle ((float) x, (float) y, (float) x, (float) y + 10, (float) x + 8, (float) y + 5); g.fillPath (path); }
+        static void drawTriangle (juce::Graphics& g, int x, int y) { juce::Path path; path.addTriangle ((float) x, (float) y, (float) x, (float) y + 10, (float) x + 9, (float) y + 5); g.fillPath (path); }
         void scrollBarMoved (juce::ScrollBar* bar, double start) override { if (bar == &horizontal) offsetX = start; else offsetScene = start; resized(); repaint(); }
         void slotMenu (int track, int scene)
         {
@@ -2683,6 +2762,8 @@ private:
                      filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" },
                      zoomIn { "+" }, zoomOut { "-" }, fitButton { "Fit" };
     juce::Label tempo, positionLabel, projectLabel, loopStartLabel, loopLengthLabel;
+    juce::ComboBox quantisation;
+    juce::TextButton backToArrangement { "Back to Arrangement" };
     juce::Rectangle<int> meterBounds, cpuBounds;
     juce::TextEditor browserSearch;
     juce::ListBox browserList;
@@ -3116,6 +3197,11 @@ private:
         recordButton.setToggleState (state.recording, juce::dontSendNotification);
         loopButton.setToggleState (state.looping, juce::dontSendNotification);
         clickButton.setToggleState(state.metronome.enabled,juce::dontSendNotification);
+        quantisation.setSelectedId (state.launchQuantisation == Session::LaunchQuantisation::none ? 1 : state.launchQuantisation == Session::LaunchQuantisation::beat ? 2 : 3, juce::dontSendNotification);
+        {
+            const bool overridden = std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& track) { return track.launcherActive; });
+            backToArrangement.setEnabled (overridden); backToArrangement.setToggleState (overridden, juce::dontSendNotification);
+        }
         if (! tempo.isBeingEdited()) tempo.setText (juce::String (state.tempo, 2), juce::dontSendNotification);
         const auto beatPosition = juce::jmax (0.0, state.position) * state.tempo / 60.0;
         const auto bar = (int) (beatPosition / 4) + 1;
@@ -4411,7 +4497,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                                 juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
                                 &launcher, &launcher, now, at, now, 1, false);
     };
-    const auto slotPoint = juce::Point<float> ((float) (midiTrack * 170 + 65), 79.0f);
+    const auto slotPoint = launcher.slotCentre (midiTrack, 0);
     check (getComponentAt (getLocalPoint (&launcher, slotPoint.toInt())) == &launcher,
            "Session slot hit testing reaches the production clip-grid handler");
     launcher.mouseDown (launcherEvent (slotPoint)); launcher.mouseDoubleClick (launcherEvent (slotPoint));
@@ -4440,7 +4526,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                && status.contains ("Choose an empty audio slot in Session"),
            "audio drop onto a Session MIDI editor preserves arrangement and slot content");
     menuItemSelected (45, 3);
-    launcher.mouseDown (launcherEvent (slotPoint.withY (109.0f)));
+    launcher.mouseDown (launcherEvent (launcher.slotCentre (midiTrack, 1)));
     menuItemSelected (44, 3);
     check (showPiano && currentMidiClip() == nullptr && selectedLauncherClipId.isEmpty() && selectedSceneIndex() == 1,
            "Piano Roll on an empty selected Session slot never opens another row's clip");
@@ -4454,11 +4540,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     launcher.keyPressed (undo);
     check (state.tracks[(size_t) midiTrack].slots.front().hasClip && state.tracks[(size_t) midiTrack].slots.front().clip.id == launcherClipId,
            "slot-clear undo restores clip identity and notes");
-    auto* launchGrid = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Global launch quantization"));
+    auto* launchGrid = dynamic_cast<juce::ComboBox*> (findNamed (*this, "Global launch quantization"));
     check (launchGrid != nullptr, "global launch quantization has a named native control");
     launchGrid->setSelectedId (1, juce::sendNotificationSync);
     check (state.launchQuantisation == Session::LaunchQuantisation::none, "quantization control updates the actual launcher setting");
-    auto launchPoint = slotPoint.withX ((float) (midiTrack * 170 + 12));
+    auto launchPoint = launcher.launchPoint (midiTrack, 0);
     launcher.mouseDown (launcherEvent (launchPoint));
     pumpSyntheticTestDevice (session, 48); refresh();
     check (state.tracks[(size_t) midiTrack].slots.front().playing,
@@ -4473,7 +4559,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                && afterSlot.queued == beforeSlot.queued && afterSlot.stopQueued == beforeSlot.stopQueued,
            "Session MIDI ruler leaves global time and launch state unchanged");
     menuItemSelected (45, 3);
-    const auto trackStopPoint = juce::Point<float> (launchPoint.x, (float) (launcher.getHeight() - 227 + 12));
+    const auto trackStopPoint = launcher.trackStopPoint (midiTrack);
     launcher.mouseDown (launcherEvent (trackStopPoint));
     pumpSyntheticTestDevice (session, 8); refresh();
     check (! state.tracks[(size_t) midiTrack].slots.front().playing,
@@ -4498,7 +4584,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     menuItemSelected (20, 1);
     check (state.scenes.size() == sceneCount + 1 && state.scenes.back().id == addedScene,
            "scene deletion undo preserves the scene identity");
-    const auto dropPoint = getLocalPoint (&launcher, juce::Point<int> (65, 109));
+    const auto dropPoint = getLocalPoint (&launcher, launcher.slotCentre (0, 1).toInt());
     filesDropped ({ audioFixture.getFullPathName() }, dropPoint.x, dropPoint.y);
     check (state.tracks.front().slots[1].hasClip && ! state.tracks.front().slots[1].clip.isMidi,
            "production file-drop handler imports decoded audio into the addressed Session slot");
@@ -4679,7 +4765,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     auto* sessionReturnLabel = findReturnLabel (launcher);
     check (sessionReturnLabel != nullptr, "Session return mixer exposes its real track label");
     auto returnPoint = launcher.getLocalPoint (sessionReturnLabel, juce::Point<int> (0, 0)).toFloat();
-    returnPoint.y = 79;
+    returnPoint.y = launcher.slotCentre (0, 0).y;
     check (launcher.cellAt (returnPoint.toInt()).first == -1, "return column has no clickable clip or stop slot");
     launcher.mouseDown (launcherEvent (returnPoint)); launcher.mouseDoubleClick (launcherEvent (returnPoint));
     check (currentTrack()->id == firstReturnId && ! showPiano && clipIdentities() == beforeReturnKeys,
