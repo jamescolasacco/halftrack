@@ -927,3 +927,7 @@ Root owns the meter across `src/Session.*`, the control bar, rulers and grids in
 ## MIDI note tools — 2026-10-20
 
 Root owns the note tools across `src/NoteTools.*` (new), `applyNoteTool` in `src/Session.*`, the piano roll's Transform and Generate menus and settings window in `src/MainComponent.cpp`, `tests/MidiToolTests.cpp`, the suite registration and documentation. Ten tools are available: Strum, Chop, Span, Recombine, Velocity Shaper, Arpeggiate, Ornament, Connect, Euclidean and Seed. The new `midi-tools-acceptance` suite compares every tool's output with hand-computed notes. See [the note tool contract](research/midi-tools-contract.md).
+
+## Timeline navigation — 2026-10-20
+
+UI change in `src/MainComponent.cpp`. A Follow switch (Cmd/Ctrl+F) keeps the playhead in view by paging the Arrangement and the piano roll, and turns off when you scroll by hand during playback. Z zooms the Arrangement to the time selection or selected clip, and X zooms back. The UI suite covers both. See [the navigation contract](research/timeline-navigation-contract.md).

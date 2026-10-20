@@ -108,7 +108,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
-| ARR-001 | Timeline navigation | Test horizontal/vertical zoom, fit, follow, selection, scroll, and navigation while playback continues. | NOT IMPLEMENTED / UNVERIFIED |
+| ARR-001 | Timeline navigation | PARTIAL — paging Follow (button, Cmd/Ctrl+F, off on manual scroll) in the Arrangement and piano roll, +/− and Cmd-scroll zoom, Z/X zoom to and back from the selection; UI tests cover paging, manual-scroll cancel and exact zoom views. Continuous follow, vertical zoom and reference comparison missing | PARTIAL |
 | ARR-002 | Tracks and groups | PARTIAL — rename, colour, reorder, duplicate and delete tracks; one-level submix groups with gain/pan/mute/solo/fold, ungroup, undo and persistence; Session group columns with group slot launch/stop and a group mixer strip; nesting missing | PARTIAL |
 | ARR-003 | Move, trim, loop, slip | Exercise clip edges, source offsets, negative/late starts where supported, and repetition without destructive media changes. | PARTIAL — numeric and direct edge trim/source slip, bounds, snapping, undo, stable-ID audio/MIDI cross-track move; warp/loop edge editing missing |
 | ARR-004 | Selection and grid | PARTIAL — drag-selected time across tracks (grid snap, Alt bypass, Shift extend) with Split, Delete, Duplicate, Loop Selection and Consolidate (MIDI join, sample-exact audio render), MIDI clip splitting and selection-based Insert/Delete Time; sample-exact renders, note layouts, undo and rejections are tested. Automation in selections, ruler selection, range clipboard, adaptive/triplet grids and reference comparison missing | PARTIAL |

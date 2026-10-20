@@ -243,3 +243,7 @@ The project has one meter, and beats are quarter notes at every meter, so the te
 ### MIDI note tool defaults
 
 The note tools use Halftrack's own algorithms and parameter sets (for example, Strum keeps each note's end, and Connect interpolates passing-note pitches linearly). They apply on demand rather than previewing live. Generators add notes across the whole clip and replace only chosen notes. These are simplest-default choices pending reference measurement.
+
+### Timeline navigation defaults
+
+Follow pages the view (the playhead starts each new page) rather than scrolling continuously, and scrolling by hand while playing switches Follow off until it is turned back on. Z adds 5% margins around the selection. These are simplest-default choices pending reference measurement.
