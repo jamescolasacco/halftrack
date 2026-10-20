@@ -303,6 +303,11 @@ public:
     juce::Result setAudioClipWarp (const juce::String& clipId, const WarpSettings&);
     juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
     juce::Result splitAudioClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
+    // Insert Silence: everything at or after start moves later by length across all tracks, locators
+    // and automation; clips crossing start split (audio) or open a gap between their notes (MIDI).
+    juce::Result insertTime (double startSeconds, double lengthSeconds);
+    // Delete Time: removes [start, start + length) everywhere and moves later material earlier.
+    juce::Result deleteTime (double startSeconds, double lengthSeconds);
     juce::Result duplicateAudioClip (const juce::String& clipId, juce::String& duplicateId);
     // Typed application clipboard. Copy retains independent media before Cut removes anything.
     juce::Result copyMidiClip (const juce::String& clipId, bool cut = false);

@@ -871,3 +871,7 @@ UI-only change in `src/MainComponent.cpp`. The Session view now follows the refe
 ## Crossfader — 2026-10-20
 
 Root owns the crossfader across `src/Session.*`, the Session mixer UI, `tests/CrossfadeTests.cpp` and documentation. Tracks can be assigned to side A or B, and a project crossfader on the master strip fades between them on a dipless law. The new `crossfade-acceptance` suite checks renders at centre, fully A, fully B and halfway against the law, plus undo, reopen and invalid-file rejection. The source guard (184 bodies) and the Session (allocation audits), sends, groups, master volume, automation, stems, audio export, utility and UI suites pass locally on the Mac.
+
+## Insert Silence and Delete Time — 2026-10-20
+
+Root owns `insertTime`/`deleteTime` in `src/Session.*`, the Edit menu commands and shortcuts, `tests/TimeEditTests.cpp` and documentation. The Arrangement can insert silence or delete time across all tracks, locators and automation, using the loop range as the time selection. The new `time-edit-acceptance` suite checks clip splitting, MIDI note handling, locators, automation, an exact render resuming the split source, undo and warped-clip rejection. The full 38-suite run passes locally on the Mac in 142 s.

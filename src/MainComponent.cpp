@@ -518,6 +518,8 @@ public:
             if (code == 'T') { if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
             if (code == 'Z') { if (shift) session.redo(); else session.undo(); refresh(); return true; }
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
+            if (code == 'I' && ! showSession) { menuItemSelected (74, 1); return true; }
+            if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && shift && ! showSession) { menuItemSelected (75, 1); return true; }
             if (code == 'G') { if (shift) ungroupSelectedTrack(); else groupSelectedTracks(); return true; }
             if (code == 'I') { importDialog(); return true; }
             if (code == 'E' && shift) { exportDialog(); return true; }
@@ -4416,6 +4418,10 @@ private:
             for(int i=0;i<grids.size();++i) recordingGrid.addItem(60+i,grids[i],!state.recording,static_cast<int>(state.recordQuantisation)==i);
             popup.addSubMenu("Recording quantization",recordingGrid);popup.addSeparator();
             popup.addItem (22, showPiano ? "Delete Selected Notes" : showSession ? "Clear Selected Slot" : "Delete Selected Clip", showPiano ? pianoRoll.hasSelectedNote() : showSession ? selectedSlot() != nullptr && selectedSlot()->hasClip : selectedClip >= 0);
+            // Time edits use the loop brace as the time selection.
+            popup.addSeparator();
+            const bool range = state.loopEnd > state.loopStart && ! state.recording;
+            popup.addItem (74, "Insert Silence (Loop Range)", range); popup.addItem (75, "Delete Time (Loop Range)", range);
         }
         else if (index == 2)
         {
@@ -4466,6 +4472,8 @@ private:
             case 20: session.undo(); break;
             case 21: session.redo(); break;
             case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); break;
+            case 74: report (session.insertTime (state.loopStart, state.loopEnd - state.loopStart)); refresh(); break;
+            case 75: report (session.deleteTime (state.loopStart, state.loopEnd - state.loopStart)); refresh(); break;
             case 30: showPiano = false; addTrack(); resized(); break;
             case 33: addMidiTrack(); break;
             case 35: addReturnTrack(); break;
@@ -5818,6 +5826,25 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         refresh();
         check (state.tracks[(size_t) frozenTrack].isMidi && ! state.tracks[(size_t) frozenTrack].frozen && state.tracks[(size_t) frozenTrack].clips.size() == before,
                "undo restores the unfrozen MIDI track");
+    }
+    {
+        // Insert Silence and Delete Time act on the loop range across the arrangement.
+        const int timeTrack = selectedTrack; const auto timeId = currentTrack()->id;
+        check (session.addMidiClip (timeId, 4, 2).wasOk(), "a MIDI clip at two seconds"); refresh();
+        const auto clipId = state.tracks[(size_t) timeTrack].clips.back().id;
+        const auto clipStart = [&] { for (const auto& c : state.tracks[(size_t) timeTrack].clips) if (c.id == clipId) return c.start; return -1.0; };
+        session.setLoop (state.looping, .5, 1); refresh();
+        menuItemSelected (74, 1); refresh();
+        check (std::abs (clipStart() - 2.5) < 1e-6, "Insert Silence moves later clips by the loop length");
+        menuItemSelected (75, 1); refresh();
+        check (std::abs (clipStart() - 2) < 1e-6, "Delete Time moves them back");
+        showArrangementView(); refresh();
+        check (handleKey (juce::KeyPress ('I', juce::ModifierKeys::commandModifier, 0)), "Cmd/Ctrl+I inserts silence in the Arrangement"); refresh();
+        check (std::abs (clipStart() - 2.5) < 1e-6, "the shortcut inserts the loop length");
+        for (int step = 0; step < 3; ++step) session.undo();
+        refresh();
+        check (std::abs (clipStart() - 2) < 1e-6, "each time edit is one undo step");
+        deleteClipById (clipId); refresh();
     }
     {
         const int instrumentTrack = selectedTrack;

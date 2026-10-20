@@ -3378,6 +3378,164 @@ Result Session::splitAudioClip (const String& id, double at, String& rightId)
     if (! second) return Result::fail ("The audio clip could not be split.");
     rightId = second->itemID.toString(); impl->changed(); return Result::ok();
 }
+// Time edits across the whole arrangement. Every automation curve moves with the material.
+namespace
+{
+std::vector<te::AutomationCurve*> arrangementCurves (te::Edit& edit)
+{
+    std::vector<te::AutomationCurve*> curves;
+    const auto add = [&curves] (te::Plugin& plugin) { for (auto* parameter : plugin.getAutomatableParameters()) if (parameter->getCurve().getNumPoints() > 0) curves.push_back (&parameter->getCurve()); };
+    for (auto* track : te::getAllTracks (edit))
+        if (dynamic_cast<te::AudioTrack*> (track) != nullptr || dynamic_cast<te::FolderTrack*> (track) != nullptr)
+            for (auto* plugin : track->pluginList.getPlugins()) add (*plugin);
+    if (auto master = edit.getMasterVolumePlugin()) add (*master);
+    return curves;
+}
+// Removes points in `removed` and moves points at or after `from` by `delta`.
+void shiftCurve (te::AutomationCurve& curve, te::Edit& edit, te::TimePosition from, te::TimeDuration delta, std::optional<te::TimeRange> removed, juce::UndoManager* undo)
+{
+    struct Point { te::TimePosition time; float value, shape; };
+    std::vector<Point> points; bool changed = false;
+    for (int i = 0; i < curve.getNumPoints(); ++i)
+    {
+        auto time = curve.getPointTime (i);
+        if (removed && time >= removed->getStart() && time < removed->getEnd()) { changed = true; continue; }
+        if (time >= from) { time = time + delta; changed = true; }
+        points.push_back ({ time, curve.getPointValue (i), curve.getPointCurve (i) });
+    }
+    if (! changed) return;
+    curve.clear (undo);
+    for (const auto& p : points) curve.addPoint (te::EditPosition (edit.tempoSequence.toBeats (p.time)), p.value, p.shape, undo);
+}
+// A clip boundary edit can split an editable audio clip at `at` leaving 2 ms outside its fades on each side.
+bool canSplitAt (const te::WaveAudioClip& clip, double at)
+{
+    const auto p = clip.getPosition(); const auto s = audioSettings (clip);
+    const auto left = at - p.getStart().inSeconds(), right = p.getEnd().inSeconds() - at;
+    return canEditAudioRange (clip) && left >= .002 && right >= .002 && left >= s.fadeInSeconds && right >= s.fadeOutSeconds;
+}
+}
+Result Session::insertTime (double start, double length)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before inserting time.");
+    if (! std::isfinite (start) || ! std::isfinite (length) || start < 0 || length <= 0) return Result::fail ("Choose a start and a positive length of time to insert.");
+    double end = 0;
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        for (auto* clip : track->getClips())
+        {
+            const auto p = clip->getPosition(); end = std::max (end, p.getEnd().inSeconds());
+            if (p.getStart().inSeconds() < start && p.getEnd().inSeconds() > start)
+            {
+                if (track->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + track->getName() + "\" before inserting time inside its clips.");
+                const auto* wave = dynamic_cast<te::WaveAudioClip*> (clip); const auto* midi = dynamic_cast<te::MidiClip*> (clip);
+                if ((wave != nullptr && ! canSplitAt (*wave, start)) || (midi != nullptr && ! canCopyMidiClip (*midi)) || (wave == nullptr && midi == nullptr))
+                    return Result::fail ("\"" + clip->getName() + "\" cannot be split at the insertion point. Move it or choose another point.");
+            }
+        }
+    if (end + length > te::Edit::maximumLength) return Result::fail ("The arrangement would extend past the 48-hour timeline.");
+    endEditGesture(); closePluginEditors();
+    impl->transaction ("Insert time");
+    auto* undo = &impl->edit->getUndoManager();
+    const auto from = te::TimePosition::fromSeconds (start); const auto delta = te::TimeDuration::fromSeconds (length);
+    const auto deltaBeats = impl->edit->tempoSequence.toBeats (from + delta) - impl->edit->tempoSequence.toBeats (from);
+    for (auto* track : te::getAudioTracks (*impl->edit))
+    {
+        const auto clips = track->getClips();
+        for (int i = clips.size(); --i >= 0;)
+        {
+            auto* clip = clips[i]; const auto p = clip->getPosition();
+            if (p.getStart() >= from) { clip->setStart (p.getStart() + delta, false, true); continue; }
+            if (p.getEnd() <= from) continue;
+            if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
+            {
+                // Notes from the insertion point on move later; the clip grows by the gap.
+                const auto split = impl->edit->tempoSequence.toBeats (from) - midi->getStartBeat();
+                clip->setLength (p.getLength() + delta, true);
+                const auto notes = midi->getSequence().getNotes(); // Moving notes can reorder the live list.
+                for (auto* note : notes)
+                    if (note->getStartBeat().inBeats() >= split.inBeats() - 1e-9)
+                        note->setStartAndLength (note->getStartBeat() + deltaBeats, note->getLengthBeats(), undo);
+            }
+            else if (auto* right = track->splitClip (*clip, from)) right->setStart (from + delta, false, true);
+        }
+    }
+    for (auto* marker : impl->edit->getMarkerManager().getMarkers())
+        if (marker->getPosition().getStart() >= from) marker->setStart (marker->getPosition().getStart() + delta, false, true);
+    for (auto* curve : arrangementCurves (*impl->edit)) shiftCurve (*curve, *impl->edit, from, delta, std::nullopt, undo);
+    impl->refreshParameterValues();
+    impl->changed(); return Result::ok();
+}
+Result Session::deleteTime (double start, double length)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before deleting time.");
+    if (! std::isfinite (start) || ! std::isfinite (length) || start < 0 || length <= 0) return Result::fail ("Choose a start and a positive length of time to delete.");
+    const auto end = start + length;
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        for (auto* clip : track->getClips())
+        {
+            const auto p = clip->getPosition(); const auto cs = p.getStart().inSeconds(), ce = p.getEnd().inSeconds();
+            if (ce <= start || cs >= end) continue;
+            if (track->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + track->getName() + "\" before deleting time from its clips.");
+            const auto* wave = dynamic_cast<te::WaveAudioClip*> (clip); const auto* midi = dynamic_cast<te::MidiClip*> (clip);
+            const bool ok = midi != nullptr ? canCopyMidiClip (*midi)
+                          : wave != nullptr && (cs >= start || canSplitAt (*wave, start)) && (ce <= end || canSplitAt (*wave, end));
+            if (! ok) return Result::fail ("\"" + clip->getName() + "\" cannot be cut at the edges of the deleted time.");
+        }
+    endEditGesture(); closePluginEditors();
+    impl->transaction ("Delete time");
+    auto* undo = &impl->edit->getUndoManager();
+    const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (end);
+    const auto delta = te::TimeDuration::fromSeconds (length);
+    const auto& tempo = impl->edit->tempoSequence;
+    for (auto* track : te::getAudioTracks (*impl->edit))
+    {
+        const auto clips = track->getClips();
+        for (auto* clip : clips)
+        {
+            const auto p = clip->getPosition();
+            if (p.getEnd() <= from) continue;
+            if (p.getStart() >= to) { clip->setStart (p.getStart() - delta, false, true); continue; }
+            if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
+            {
+                // Notes inside the deleted time go, later notes move earlier, and a note crossing the start ends there.
+                const auto clipStart = midi->getStartBeat(), cut = tempo.toBeats (from), cutEnd = tempo.toBeats (to);
+                const auto newStart = p.getStart() < from ? clipStart : cut;
+                const auto notes = midi->getSequence().getNotes(); // Removing and moving notes changes the live list.
+                for (auto* note : notes)
+                {
+                    const auto noteStart = clipStart + toDuration (note->getStartBeat()), noteEnd = noteStart + note->getLengthBeats();
+                    if (noteStart >= cut && noteStart < cutEnd) { midi->getSequence().removeNote (*note, undo); continue; }
+                    auto absolute = noteStart; auto noteLength = note->getLengthBeats();
+                    if (noteStart >= cutEnd) absolute = noteStart - (cutEnd - cut);
+                    else if (noteEnd > cut) noteLength = cut - noteStart;
+                    note->setStartAndLength (te::BeatPosition::fromBeats ((absolute - newStart).inBeats()), noteLength, undo);
+                }
+                const auto remaining = p.getLength() - (std::min (p.getEnd(), to) - std::max (p.getStart(), from));
+                if (remaining.inSeconds() < .001) { clip->removeFromParent(); continue; }
+                clip->setPosition ({ { p.getStart() < from ? p.getStart() : from, remaining }, te::TimeDuration() });
+                continue;
+            }
+            te::Clip* middle = clip;
+            if (p.getStart() < from) middle = track->splitClip (*clip, from);
+            if (middle == nullptr) continue;
+            te::Clip* after = nullptr;
+            if (middle->getPosition().getEnd() > to) after = track->splitClip (*middle, to);
+            middle->removeFromParent();
+            if (after != nullptr) after->setStart (after->getPosition().getStart() - delta, false, true);
+        }
+    }
+    for (auto* marker : impl->edit->getMarkerManager().getMarkers())
+    {
+        const auto at = marker->getPosition().getStart();
+        if (at >= from && at < to) marker->removeFromParent();
+        else if (at >= to) marker->setStart (at - delta, false, true);
+    }
+    for (auto* curve : arrangementCurves (*impl->edit)) shiftCurve (*curve, *impl->edit, to, te::TimeDuration() - delta, te::TimeRange (from, to), undo);
+    impl->refreshParameterValues();
+    impl->changed(); return Result::ok();
+}
 Result Session::duplicateAudioClip (const String& id, String& duplicateId)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

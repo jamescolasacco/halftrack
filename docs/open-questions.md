@@ -207,3 +207,7 @@ Member tracks of a group are rendered through their group's mixer, and muted tra
 ### Crossfader defaults
 
 The crossfader uses the dipless curve (a side stays at 0 dB until the fader crosses the centre toward the other side) and is not selectable. Groups have no crossfade side. Crossfader moves are ordinary undoable edits and are not automatable yet. These are simplest-default choices pending reference measurement.
+
+### Time edit defaults
+
+The loop range stands in for an Arrangement time selection. MIDI clips crossing an edit are extended or shortened in place, not split. A note crossing the inserted point keeps its length, and automation is not given boundary points at the cut, so a ramp across deleted time joins its neighbours. Tempo is constant, so tempo events are not moved. These are simplest-default choices pending reference measurement.
