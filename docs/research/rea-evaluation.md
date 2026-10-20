@@ -59,3 +59,6 @@ The [factory-path follow-up](rea-dispatch-trace.md) resolves adapter call `0x19d
 
 
 The [control-record follow-up](rea-event-timing.md) distinguishes an entry-time control-message drain from the separate timestamped MIDI path. Traced scalar setters can call the router directly. The producer of that FIFO on the initialized path, downstream smoothing and actual host scheduling remain unresolved; no timing change or sound-equivalence claim follows.
+
+
+The [parameter-dispatch follow-up](rea-parameter-dispatch.md) resolves the earlier forwarding edge `0x19ff8` to wrapper setter `0x1853c` on the same factory path. It establishes one bounded index-6 clamp/custom-value mapping and its metadata selector without assuming a control name or downstream sound. This refines the earlier unresolved edge; it does not reconstruct the instrument.

@@ -46,3 +46,6 @@ No Halftrack timing defect or new DSP formula follows from this evidence. Before
 New router dossier: `ev_812e7a7da9eb527ad8a85e61415fefe6929277967b0b7010e44da0ddfb6ac61c`, JSON SHA-256 `1c91218eaf5b31e9271389c527c77f8183bb2bc6c2b10add8e495ece34f7a7e2`. REA and LLVM agree on the router’s signed-index load and direct calls to `0x29440`. REA reports complete immediate call-reference coverage for this small function; that does not resolve the downstream indirect receiver or the larger instrument graph.
 
 The inner-processing dossier reused here is `ev_9299319957840f755eadcb3d0de6796ccc6b9286a6a02d66c58814784414baac`, JSON SHA-256 `d2f455817fddf7eac40bcf1472d685fd303953faec9f8b4d294f3c395994512b`. The ignored evidence manifest SHA-256 is `b161a572ec68c905321d743f4cd23127e19385ad7f916bd95ab73f8c8a90790b`; it binds selected LLVM ranges, pointer/rebase rows, verified cached pseudocode hashes, dossier identities and unchanged input hashes. This investigation adds no feature-completion claim.
+
+
+The [subsequent parameter trace](rea-parameter-dispatch.md) connects the external forwarding entry to this wrapper setter and verifies one finite-input custom mapping before integer routing. Its metadata routing identity still requires a named receiver and output measurements; the scheduling and sound limitations above remain.
