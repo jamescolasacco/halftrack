@@ -200,6 +200,7 @@ public:
         bool mute = false, solo = false, armed = false, isMidi = false, isReturn = false;
         bool frozen = false; // Plays a render of its clips and devices; devices and clips are locked.
         CrossfadeAssign crossfade = CrossfadeAssign::none;
+        double delayMs = 0; // Track Delay: positive plays later, negative earlier.
         SendMode sendMode = SendMode::post;
         std::vector<SendInfo> sends;
         SynthSettings synth;
@@ -356,6 +357,10 @@ public:
     juce::Result renameTrack (int trackIndex, const juce::String&);
     juce::Result setMasterGain (float decibels);
     juce::Result setTrackCrossfade (const juce::String& trackId, CrossfadeAssign);
+    // Track Delay moves a track's output (after its devices, before its sends and mixer) from
+    // -1000 ms to +1000 ms; negative delays use the engine's delay compensation.
+    static constexpr double maximumTrackDelayMs = 1000;
+    juce::Result setTrackDelay (const juce::String& trackId, double milliseconds);
     juce::Result setCrossfader (float position);
     // Dipless crossfader law: a side keeps unity until the fader passes the centre toward the other side.
     static float crossfadeGain (CrossfadeAssign, float position);

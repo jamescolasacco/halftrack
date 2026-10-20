@@ -219,3 +219,7 @@ The follow-action time is one value shared by both actions, and a No action choi
 ### Audio Effect Rack defaults
 
 An empty rack and an empty chain pass their input unchanged. Chain volume and pan use the track mixer's fader and pan laws. A muted chain stops processing, so its tail does not continue. A macro's first mapping takes the control's current position; later mappings follow the macro, and the macro writes each mapped control as an ordinary settings change (block rate, no extra smoothing). Ungrouping a one-chain rack drops its chain mixer settings and macro mappings. Racks cannot be nested because the engine does not allow it. These are simplest-default choices pending reference measurement.
+
+### Track Delay defaults
+
+Track Delay runs from −1000 to +1000 ms in milliseconds only. It applies after the track's devices and before its sends, so pre- and post-fader sends both carry it, and MIDI is not delayed separately because native instruments come before it. A positively delayed track can replay up to the delay time of pre-seek audio after a jump. These are simplest-default choices pending reference measurement.

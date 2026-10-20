@@ -773,6 +773,18 @@ private:
             pan.onValueChange = [this] { owner.report (owner.session.setTrackPan (index, (float) pan.getValue())); };
             if (columnLayout)
             {
+                // Track Delay, in milliseconds; negative values play the track early.
+                addAndMakeVisible (delay); delay.setName ("Track delay");
+                delay.setSliderStyle (juce::Slider::LinearBar); delay.setRange (-Session::maximumTrackDelayMs, Session::maximumTrackDelayMs, .1);
+                delay.setDoubleClickReturnValue (true, 0); delay.setWantsKeyboardFocus (false);
+                delay.setColour (juce::Slider::trackColourId, juce::Colour (0xff4a4a4a)); delay.setColour (juce::Slider::textBoxTextColourId, ink);
+                delay.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " ms"; };
+                delay.valueFromTextFunction = [] (const juce::String& text) { return text.retainCharacters ("-.0123456789").getDoubleValue(); };
+                delay.setTooltip ("Track delay: positive values play this track later, negative values earlier. Double-click for 0 ms.");
+                delay.onDragStart = [this] { owner.session.beginEditGesture ("Track delay"); };
+                delay.onDragEnd = [this] { owner.session.endEditGesture(); };
+                delay.onValueChange = [this] { owner.report (owner.session.setTrackDelay (trackId, delay.getValue())); };
+                delay.updateText();
                 gain.setSliderStyle (juce::Slider::LinearVertical); gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 16);
                 pan.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); pan.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 42, 15);
                 pan.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
@@ -831,6 +843,8 @@ private:
             if (columnLayout) syncSends (track);
             if (columnLayout)
             {
+                if (! delay.isMouseButtonDown()) delay.setValue (track.delayMs, juce::dontSendNotification);
+                delay.setEnabled (! track.frozen && ! owner.session.isExporting());
                 // Crossfader sides: A and B are exclusive toggles; neither leaves the track unassigned.
                 if (sideA == nullptr)
                 {
@@ -937,7 +951,8 @@ private:
                 for (size_t i = 0; i < sends.size(); ++i)
                     sends[i]->setBounds (8 + (int) (i % 3) * 36, 48 + (int) (i / 3) * 40, 34, 28);
                 pan.setBounds ((getWidth() - 46) / 2, 50 + sendOffset(), 46, 50);
-                gain.setBounds (6, 106 + sendOffset(), 54, getHeight() - 162 - sendOffset());
+                gain.setBounds (6, 106 + sendOffset(), 54, getHeight() - 184 - sendOffset());
+                delay.setBounds (5, getHeight() - 74, getWidth() - 10, 19);
                 if (sideA != nullptr)
                 {
                     const int half = (getWidth() - 12) / 2;
@@ -975,12 +990,12 @@ private:
         bool midi = false, columnLayout = false, returnTrack = false;
         juce::Label name;
         juce::TextButton mute { "M" }, solo { "S" }, arm { "R" };
-        juce::Slider gain, pan;
+        juce::Slider gain, pan, delay;
         juce::ComboBox input, monitor, sendMode;
         juce::StringArray inputNames, sendReturnIds;
         std::vector<std::unique_ptr<juce::Slider>> sends;
         std::unique_ptr<juce::TextButton> sideA, sideB;
-        juce::Rectangle<int> meterBounds() const { return { 66, 110 + sendOffset(), 10, juce::jmax (10, getHeight() - 182 - sendOffset()) }; }
+        juce::Rectangle<int> meterBounds() const { return { 66, 110 + sendOffset(), 10, juce::jmax (10, getHeight() - 204 - sendOffset()) }; }
     };
 
     bool syncTrackRows (juce::Component& parent, std::vector<std::unique_ptr<TrackRow>>& rows, bool vertical)
@@ -7958,6 +7973,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         fader->setValue (1, juce::sendNotificationSync); refresh();
         bool assigned = false; for (const auto& track : state.tracks) assigned = assigned || track.crossfade == Session::CrossfadeAssign::a;
         check (assigned && std::abs (state.crossfader - 1) < 1e-6, "the A button and the crossfader edit the real crossfade");
+        auto* trackDelay = dynamic_cast<juce::Slider*> (findNamed (launcher, "Track delay"));
+        check (trackDelay != nullptr && trackDelay->isVisible() && trackDelay->getTextFromValue (0) == "0.0 ms", "track strips show their delay in milliseconds");
+        trackDelay->setValue (-12.5, juce::sendNotificationSync); refresh();
+        bool delayed = false; for (const auto& track : state.tracks) delayed = delayed || std::abs (track.delayMs + 12.5) < 1e-9;
+        check (delayed, "the delay field edits the real track delay");
         session.stop(); check (session.newProject().wasOk(), "reset after the group checks"); refresh();
     }
     check (session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "prepare follow-action UI clip"); refresh(); showSessionView(); selectLauncherSlot (0, 0);

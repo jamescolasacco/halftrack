@@ -262,6 +262,10 @@ Tracks carry an undoable `halftrackCrossfade` side (0 none, 1 A, 2 B) and the ed
 
 A rack is an engine `RackInstance` on the track's device list plus a Halftrack-marked rack type. `Impl::rackChains` reads the chains from the rack's plugin order: each chain's devices followed by a `TrackMixer` that ends the chain and carries its name, mute and solo. `Impl::rewire` rebuilds every rack connection from that order inside the current transaction (and outside history on load), so chain edits, mute and solo only reorder plugins or change properties. `Impl::device` and `Impl::allDevices` find devices inside racks for settings, automation, editor windows, parameter refresh and export preparation. Macros are Halftrack values on the rack type; `Impl::applyMacros` writes mapped native controls through the ordinary settings path, so the audio thread sees them like any other settings change. Unused rack types are removed with their rack or track, and duplicated tracks get their own rack type. See the [rack contract](research/racks-contract.md).
 
+## Track Delay
+
+`TrackDelayPlugin` (in `src/Session.cpp`) sits after a track's devices and before its sends and mixer once a delay is set. Positive delays run through a ring buffer allocated in `initialise`; negative delays are reported as latency, and the engine's delay compensation moves the track earlier. Device insertion keeps new devices ahead of it. See the [track delay contract](research/track-delay-contract.md).
+
 ## Audio warping
 
 `ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).

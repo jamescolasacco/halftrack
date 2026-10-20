@@ -422,6 +422,78 @@ private:
     float appliedCrossfade = 1.0f;
 };
 
+// Track Delay. A positive delay holds the track's audio back through a preallocated ring.
+// A negative delay reports that much latency instead, so the engine's delay compensation
+// holds every other path back and the track plays early.
+const juce::Identifier trackDelayProperty { "halftrackDelayMs" };
+class TrackDelayPlugin final : public te::Plugin
+{
+public:
+    static constexpr const char* xmlTypeName = "halftrack-track-delay";
+    static constexpr double maximumMs = 1000;
+    explicit TrackDelayPlugin (te::PluginCreationInfo info) : Plugin (info)
+    {
+        milliseconds.referTo (state, trackDelayProperty, getUndoManager(), 0.0);
+        delayMs.store (milliseconds.get(), std::memory_order_relaxed);
+    }
+    juce::String getName() const override { return "Track Delay"; }
+    juce::String getPluginType() override { return xmlTypeName; }
+    juce::String getSelectableDescription() override { return getName(); }
+    bool takesAudioInput() override { return true; }
+    bool takesMidiInput() override { return true; }
+    bool producesAudioWhenNoAudioInput() override { return milliseconds.get() > 0; }
+    int getNumOutputChannelsGivenInputs (int inputs) override { return juce::jmax (1, juce::jmin (2, inputs)); }
+    BusLayout getBusses() const override { return BusLayout::singleStereoInOut(); }
+    double getLatencySeconds() override { return juce::jmax (0.0, -milliseconds.get()) / 1000.0; }
+    void initialise (const te::PluginInitialisationInfo& info) override
+    {
+        rate = info.sampleRate;
+        ring.setSize (2, (int) std::ceil (maximumMs / 1000.0 * rate) + 1);
+        ring.clear(); position = 0;
+    }
+    void deinitialise() override {}
+    void reset() override { ring.clear(); position = 0; }
+    void applyToBuffer (const te::PluginRenderContext& context) override
+    {
+        auto* buffer = context.destBuffer;
+        const int capacity = ring.getNumSamples();
+        if (buffer == nullptr || capacity == 0) return;
+        const int delay = juce::jlimit (0, capacity - 1, (int) std::lround (juce::jmax (0.0, delayMs.load (std::memory_order_relaxed)) * rate / 1000.0));
+        const int channels = juce::jmin (2, buffer->getNumChannels());
+        for (int c = 0; c < channels; ++c)
+        {
+            auto* io = buffer->getWritePointer (c, context.bufferStartSample);
+            auto* line = ring.getWritePointer (c);
+            int write = position;
+            for (int n = 0; n < context.bufferNumSamples; ++n)
+            {
+                line[write] = io[n];
+                int read = write - delay; if (read < 0) read += capacity;
+                io[n] = line[read];
+                if (++write == capacity) write = 0;
+            }
+        }
+        position = (position + context.bufferNumSamples) % capacity;
+    }
+    juce::CachedValue<double> milliseconds;
+private:
+    void valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& id) override
+    {
+        if (tree == state && id == trackDelayProperty)
+        {
+            milliseconds.forceUpdateOfCachedValue();
+            const auto previous = delayMs.exchange (milliseconds.get(), std::memory_order_relaxed);
+            // Reported latency is read when the graph is built.
+            if (juce::jmin (0.0, previous) != juce::jmin (0.0, milliseconds.get())) edit.restartPlayback();
+        }
+        Plugin::valueTreePropertyChanged (tree, id);
+    }
+    std::atomic<double> delayMs { 0 };
+    juce::AudioBuffer<float> ring;
+    double rate = 44100;
+    int position = 0;
+};
+
 template <typename TrackType>
 Result useTrackMixer (TrackType& track)
 {
@@ -760,6 +832,21 @@ Result validateRacks (const juce::ValueTree& state)
     visit (visit, state);
     if (! valid) return fail();
     for (const auto& use : uses) if (use.second != 1) return fail();
+    return Result::ok();
+}
+// At most one Track Delay per track, within range.
+Result validateTrackDelays (const juce::ValueTree& state)
+{
+    if (state.hasType (te::IDs::PLUGIN) && state[te::IDs::type].toString() == TrackDelayPlugin::xmlTypeName)
+    {
+        int count = 0;
+        for (const auto& sibling : state.getParent())
+            if (sibling.hasType (te::IDs::PLUGIN) && sibling[te::IDs::type].toString() == TrackDelayPlugin::xmlTypeName) ++count;
+        if (! state.getParent().hasType (te::IDs::TRACK) || count != 1
+            || ! finiteProperty (state.getProperty (trackDelayProperty, 0), -Session::maximumTrackDelayMs, Session::maximumTrackDelayMs))
+            return Result::fail ("The project contains an invalid track delay.");
+    }
+    for (const auto& child : state) if (auto result = validateTrackDelays (child); result.failed()) return result;
     return Result::ok();
 }
 Result validateLocators (const juce::ValueTree& state)
@@ -1156,6 +1243,7 @@ struct Session::Impl
                             std::make_unique<Behaviour> (devices)), useDevices (devices)
     {
         engine.getPluginManager().createBuiltInType<TrackMixer>();
+        engine.getPluginManager().createBuiltInType<TrackDelayPlugin>();
         engine.getPluginManager().createBuiltInType<SubtractiveSynthPlugin>();
         engine.getPluginManager().createBuiltInType<UtilityPlugin>();
         engine.getPluginManager().createBuiltInType<NativeEffectPlugin>();
@@ -2025,6 +2113,7 @@ Session::Snapshot Session::snapshot() const
         info.launcherActive = t->playSlotClips.get() || (t->launcherOwnership.load (std::memory_order_acquire) & 1) != 0;
         info.frozen = t->isFrozen (te::Track::individualFreeze);
         info.crossfade = static_cast<CrossfadeAssign> (juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (crossfadeProperty, 0))));
+        if (auto* delay = t->pluginList.findFirstPluginOfType<TrackDelayPlugin>()) info.delayMs = delay->milliseconds.get();
         for (auto* slot : t->getClipSlotList().getClipSlots())
         {
             SlotInfo slotInfo;
@@ -2183,6 +2272,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateFollowActions (state); result.failed()) return result;
     if (auto result = validateLocators (state); result.failed()) return result;
     if (auto result = validateRacks (state); result.failed()) return result;
+    if (auto result = validateTrackDelays (state); result.failed()) return result;
     restoreManualMixerState (state);
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
@@ -4158,6 +4248,31 @@ Result Session::setTrackCrossfade (const String& trackId, CrossfadeAssign side)
     track->state.setProperty (crossfadeProperty, static_cast<int> (side), &impl->edit->getUndoManager());
     impl->refreshCrossfade(); impl->changed(); return Result::ok();
 }
+Result Session::setTrackDelay (const String& trackId, double milliseconds)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing track delay.");
+    auto* track = impl->track (trackId);
+    if (! track) return Result::fail ("Track not found.");
+    if (auto frozen = impl->unfrozen (track); frozen.failed()) return frozen;
+    if (! std::isfinite (milliseconds) || std::abs (milliseconds) > maximumTrackDelayMs) return Result::fail ("Track delay runs from -1000 to +1000 ms.");
+    auto* delay = track->pluginList.findFirstPluginOfType<TrackDelayPlugin>();
+    if ((delay ? delay->milliseconds.get() : 0.0) == milliseconds) return Result::ok();
+    impl->transaction ("Track delay");
+    if (delay == nullptr)
+    {
+        // The delay follows the devices and precedes sends and the mixer, so sends hear it too.
+        auto plugin = impl->edit->getPluginCache().createNewPlugin (TrackDelayPlugin::xmlTypeName, {});
+        if (plugin == nullptr) return Result::fail ("Could not create the track delay.");
+        int index = track->pluginList.size();
+        for (int i = 0; i < track->pluginList.size(); ++i)
+            if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i])) { index = i; break; }
+        track->pluginList.insertPlugin (plugin, index, nullptr);
+        delay = dynamic_cast<TrackDelayPlugin*> (plugin.get());
+    }
+    delay->milliseconds = milliseconds;
+    impl->changed(); return Result::ok();
+}
 Result Session::setCrossfader (float position)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -4814,7 +4929,7 @@ Result Session::addNativeEffect (int index, EffectKind kind)
     if (! plugin) return Result::fail ("The native effect could not be created.");
     int insertion = track->pluginList.size();
     for (int i = 0; i < track->pluginList.size(); ++i)
-        if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i])
+        if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i]) || dynamic_cast<TrackDelayPlugin*> (track->pluginList[i])
             || (effectIsMidi (kind) && track->pluginList[i] == instrument))
         { insertion = i; break; }
     impl->transaction ("Add " + String (effectName (kind)));
@@ -4849,7 +4964,7 @@ Result Session::addUtility (int index)
     if (! plugin) return Result::fail ("The channel utility could not be created.");
     int insertion = track->pluginList.size();
     for (int i = 0; i < track->pluginList.size(); ++i)
-        if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i]))
+        if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i]) || dynamic_cast<TrackDelayPlugin*> (track->pluginList[i]))
         { insertion = i; break; }
     impl->transaction ("Add channel utility");
     track->pluginList.insertPlugin (plugin, insertion, nullptr);
@@ -4946,7 +5061,7 @@ Result Session::groupDevices (int index, const juce::StringArray& ids, String& r
     if (! devices.isEmpty()) insertion = track->pluginList.indexOf (devices.getFirst());
     else
         for (int i = 0; i < track->pluginList.size(); ++i)
-            if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i])) { insertion = i; break; }
+            if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i]) || dynamic_cast<TrackDelayPlugin*> (track->pluginList[i])) { insertion = i; break; }
     impl->transaction (devices.isEmpty() ? "Add Audio Effect Rack" : "Group devices");
     auto* undo = &impl->edit->getUndoManager();
     auto type = impl->edit->getRackList().addNewRack();

@@ -887,3 +887,7 @@ Root owns racks across `src/Session.*`, `tests/RackTests.cpp`, the suite registr
 ## Rack device view — 2026-10-20
 
 UI change in `src/MainComponent.cpp`, `src/NativeEffectEditor.cpp`, `src/UtilityEditor.cpp` and `src/AutomationEditor.cpp`, with snapshot lookups added to `src/Session.*`. Devices can be selected (Shift extends, Cmd/Ctrl toggles) and grouped with Cmd/Ctrl+G. Racks show macro knobs, a chain list with activator, solo, volume and pan, and the selected chain's devices. Native controls inside a rack can be mapped to macros from their right-click menu, and the automation editor reaches chain devices. All 39 suites pass when run directly on the Mac. ctest runs hung at app launch on a macOS "reopen windows" crash prompt left by another session's crashed test, so the suites were run with `-ApplePersistenceIgnoreState YES`.
+
+## Track Delay — 2026-10-20
+
+Root owns Track Delay across `src/Session.*`, the Session mixer strip, `tests/TrackDelayTests.cpp`, the suite registration and documentation. Tracks can be delayed or pre-delayed by up to a second. Positive delays use a preallocated ring buffer in a new owned device, which the existing `applyToBuffer` source-guard root covers; negative delays use the engine's delay compensation. The new `track-delay-acceptance` suite locates impulses to the sample. All 40 suites and the source guard (186 bodies) pass locally on the Mac, run directly because of the launch prompt noted above. See [the track delay contract](research/track-delay-contract.md).
