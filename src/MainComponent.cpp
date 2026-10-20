@@ -2415,7 +2415,7 @@ private:
             addButton.onClick = [this] { owner.addPluginMenu(); };
             manageButton.onClick = [this] { owner.showPlugins(); };
             automationButton.setName ("Track automation");
-            automationButton.setTooltip ("Draw track volume and pan changes across the arrangement.");
+            automationButton.setTooltip ("Draw track volume, track pan, or master volume changes across the arrangement.");
             automationButton.onClick = [this] { owner.showAutomation(); };
             addAndMakeVisible(masterGain);masterGain.setName("Master volume");
             masterGain.setSliderStyle(juce::Slider::LinearVertical);masterGain.setRange(-100,6,.1);masterGain.setSkewFactorFromMidPoint(-12);
@@ -2429,9 +2429,25 @@ private:
                 const auto value=text.toStdString();char* end=nullptr;const double gain=std::strtod(value.c_str(),&end);
                 return !value.empty()&&end==value.c_str()+value.size()&&std::isfinite(gain)?gain:(double)owner.state.masterGainDb;
             };
-            masterGain.onDragStart=[this]{owner.session.beginEditGesture("Master volume");};
-            masterGain.onDragEnd=[this]{owner.session.endEditGesture();};
-            masterGain.onValueChange=[this]{owner.report(owner.session.setMasterGain((float)masterGain.getValue()));owner.refresh();};
+            masterGain.onDragStart = [this]
+            {
+                const auto current = owner.session.snapshot();
+                if (masterProjectGeneration != current.projectGeneration) { owner.refresh(); return; }
+                if (! current.masterVolumeAutomation.points.empty() || owner.session.isExporting()) return;
+                masterGestureGeneration = current.projectGeneration; owner.session.beginEditGesture ("Master volume");
+            };
+            masterGain.onDragEnd = [this]
+            {
+                if (masterGestureGeneration == owner.session.snapshot().projectGeneration) owner.session.endEditGesture();
+                masterGestureGeneration.reset();
+            };
+            masterGain.onValueChange = [this]
+            {
+                const auto generation = owner.session.snapshot().projectGeneration;
+                if (masterProjectGeneration == generation && (! masterGestureGeneration || *masterGestureGeneration == generation))
+                    owner.report (owner.session.setMasterGain ((float) masterGain.getValue()));
+                owner.refresh();
+            };
         }
         void resized() override
         {
@@ -2448,9 +2464,15 @@ private:
             const auto* track = owner.currentTrack();
             const auto total = track != nullptr ? (int) track->plugins.size() * 208 + (track->isMidi ? 554 : 0) : 0;
             sendsPanel.sync();
-            if(!masterGain.isMouseButtonDown())masterGain.setValue(owner.state.masterGainDb,juce::dontSendNotification);
-            masterGain.setEnabled(!owner.session.isExporting());
-            automationButton.setEnabled (track != nullptr && !owner.session.isExporting());
+            const bool projectChanged = masterProjectGeneration != owner.state.projectGeneration;
+            if (projectChanged) masterGain.hideTextBox (true);
+            masterProjectGeneration = owner.state.projectGeneration;
+            if (projectChanged || ! masterGain.isMouseButtonDown()) masterGain.setValue (owner.state.masterGainDb, juce::dontSendNotification);
+            masterGain.setEnabled (owner.state.masterVolumeAutomation.points.empty() && ! owner.session.isExporting());
+            masterGain.setTooltip (owner.state.masterVolumeAutomation.points.empty()
+                ? "Master output level. Double-click for 0 dB. The bottom of the fader is silence."
+                : "Master volume has automation. Choose Master in Automation and clear its points to edit this fader.");
+            automationButton.setEnabled (! owner.session.isExporting());
             offset = juce::jlimit (0, juce::jmax (0, total - getWidth() + chainLeft() + 141), offset);
             synthPanel.sync(); resized(); repaint();
         }
@@ -2548,6 +2570,8 @@ private:
         juce::TextButton addButton { "+ Device" }, manageButton { "Manage..." }, automationButton { "Automation" };
         SynthPanel synthPanel;
         juce::Slider masterGain;
+        std::optional<uint64_t> masterGestureGeneration;
+        uint64_t masterProjectGeneration = 0;
         juce::Component synthClip;
         SendsPanel sendsPanel;
         int chainLeft() const { return sendsPanel.isVisible() ? 250 : 9; }
@@ -3119,7 +3143,7 @@ private:
         }
         else if (index == 3)
         {
-            popup.addItem (45, "Session"); popup.addItem (43, "Arrangement"); popup.addItem (44, "Piano Roll"); popup.addItem (46, "Track Automation...", currentTrack() != nullptr); popup.addSeparator();
+            popup.addItem (45, "Session"); popup.addItem (43, "Arrangement"); popup.addItem (44, "Piano Roll"); popup.addItem (46, "Automation..."); popup.addItem (47, "Master Volume Automation..."); popup.addSeparator();
             const bool canZoom = ! showSession || showPiano;
             popup.addItem (40, showPiano ? "Fit Piano Roll" : "Fit Arrangement", canZoom); popup.addItem (41, "Zoom In", canZoom); popup.addItem (42, "Zoom Out", canZoom);
         }
@@ -3178,6 +3202,7 @@ private:
             case 55: report (session.returnToArrangement()); break;
             case 44: openPianoRoll(); break;
             case 46: showAutomation(); break;
+            case 47: showAutomation (true); break;
             default: break;
         }
         refresh();
@@ -3665,24 +3690,23 @@ private:
                 if (state.tracks[(size_t)t].clips[(size_t)c].id == id)
                 { selectTrack(t);selectedClip=c;selectedLauncherClipId.clear();canvas.repaint();return; }
     }
-    void showAutomation()
+    void showAutomation (bool master = false)
     {
         if (session.isExporting()) return;
         refresh();
         const auto* track = currentTrack();
-        if (track == nullptr) return;
         // A modeless window keeps the arrangement transport available while editing.
         class Window final : public juce::DocumentWindow
         {
         public:
-            Window (Session& session, const juce::String& trackId, juce::LookAndFeel& theme, juce::Component& parent)
-                : DocumentWindow ("Halftrack - Track Automation", panel, juce::DocumentWindow::closeButton)
+            Window (std::unique_ptr<AutomationEditor> editor, juce::LookAndFeel& theme, juce::Component& parent)
+                : DocumentWindow ("Halftrack - Automation", panel, juce::DocumentWindow::closeButton)
             {
                 setLookAndFeel (&theme);
                 setUsingNativeTitleBar (true);
                 setResizable (true, false);
                 setResizeLimits (820, 420, 2400, 1600);
-                setContentOwned (new AutomationEditor (session, trackId), true);
+                setContentOwned (editor.release(), true);
                 centreAroundComponent (&parent, 900, 460);
                 setVisible (true);
             }
@@ -3690,7 +3714,9 @@ private:
             void closeButtonPressed() override { delete this; }
         };
         std::erase_if (automationWindows, [] (const auto& window) { return window == nullptr; });
-        automationWindows.emplace_back (new Window (session, track->id, theme, *this));
+        auto editor = master || track == nullptr ? std::make_unique<AutomationEditor> (session)
+                                                : std::make_unique<AutomationEditor> (session, track->id);
+        automationWindows.emplace_back (new Window (std::move (editor), theme, *this));
     }
     void showAudioSettings()
     {
@@ -5664,14 +5690,66 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (automationWindows.size() == 1 && automationWindows.back() != nullptr,
         "device chain button opens an editor and removes expired window handles");
     automationWindows.back()->closeButtonPressed();
-
-
-
-
-
-
-
-
+    master->setValue (-9, juce::sendNotificationSync); refresh();
+    const Session::AutomationLane masterAutomation { true, {{0, -18}, {4, 0}} };
+    check (session.setMasterVolumeAutomation (masterAutomation).wasOk(), "prepare master automation for its output fader"); refresh();
+    check (! master->isEnabled() && master->getTooltip().contains ("Master volume has automation"),
+        "master automation protects its fader and explains how to restore manual editing");
+    const auto protectedMaster = state.masterVolumeAutomation;
+    master->setValue (-3, juce::sendNotificationSync); refresh();
+    check (state.masterVolumeAutomation == protectedMaster, "a forced manual fader callback cannot rewrite master automation");
+    auto bypassedMaster = masterAutomation; bypassedMaster.enabled = false;
+    check (session.setMasterVolumeAutomation (bypassedMaster).wasOk(), "bypass master automation with its points retained"); refresh();
+    check (! master->isEnabled(), "master fader remains protected while Read is off");
+    check (session.setMasterVolumeAutomation ({}).wasOk(), "clear master automation for manual mixing"); refresh();
+    check (master->isEnabled() && std::abs (state.masterGainDb + 9) < .001f,
+        "Clear restores the retained manual master level and enabled fader");
+    session.undo(); refresh(); check (! master->isEnabled(), "undo master Clear restores fader protection");
+    session.redo(); refresh(); check (master->isEnabled(), "redo master Clear restores manual control");
+    menuItemSelected (47, 3);
+    auto* masterWindow = automationWindows.back().getComponent();
+    auto* masterDestination = dynamic_cast<juce::ComboBox*> (findNamed (*masterWindow, "automation-track"));
+    auto* masterTarget = dynamic_cast<juce::ComboBox*> (findNamed (*masterWindow, "automation-target"));
+    check (masterDestination && masterDestination->getText() == "Master" && masterTarget && masterTarget->getNumItems() == 1,
+        "Master Volume Automation menu opens an explicit master-only parameter destination");
+    masterWindow->closeButtonPressed();
+    while (! state.tracks.empty()) { check (session.removeTrack (0).wasOk(), "remove track for empty-project automation navigation"); refresh(); }
+    check (automationButton->isEnabled(), "Automation button remains available with no tracks");
+    automationButton->onClick();
+    auto* emptyDestination = dynamic_cast<juce::ComboBox*> (findNamed (*automationWindows.back(), "automation-track"));
+    check (emptyDestination && emptyDestination->getText() == "Master" && emptyDestination->getNumItems() == 1,
+        "empty-project Automation button opens Master without a track selection");
+    automationWindows.back()->closeButtonPressed();
+    menuItemSelected (46, 3);
+    emptyDestination = dynamic_cast<juce::ComboBox*> (findNamed (*automationWindows.back(), "automation-track"));
+    check (emptyDestination && emptyDestination->getText() == "Master", "empty-project View Automation opens Master");
+    automationWindows.back()->closeButtonPressed();
+    master->onDragStart(); master->setValue (-3, juce::sendNotificationSync);
+    check (session.newProject().wasOk(), "replace project during a master fader drag"); refresh();
+    master->setValue (-15, juce::sendNotificationSync); master->onDragEnd(); refresh();
+    check (std::abs (state.masterGainDb) < .001f && ! session.canUndo(), "New rejects a retained master fader gesture");
+    juce::TemporaryFile masterProject (".halftrack");
+    check (session.saveProject (masterProject.getFile()).wasOk(), "save master fader lifecycle fixture");
+    master->onDragStart(); master->setValue (-3, juce::sendNotificationSync);
+    check (session.loadProject (masterProject.getFile()).wasOk(), "reload project during master fader drag"); refresh();
+    master->setValue (-12, juce::sendNotificationSync); master->onDragEnd(); refresh();
+    check (std::abs (state.masterGainDb) < .001f && ! session.canUndo(), "Load rejects a retained master fader gesture");
+    auto masterLabel = [&]() -> juce::Label*
+    {
+        for (auto* child : master->getChildren()) if (auto* label = dynamic_cast<juce::Label*> (child)) return label;
+        return nullptr;
+    };
+    for (const bool load : { false, true })
+    {
+        master->showTextBox(); auto* label = masterLabel();
+        check (label && label->getCurrentTextEditor(), "open the actual master fader text editor");
+        auto staleText = juce::Component::SafePointer<juce::TextEditor> (label->getCurrentTextEditor());
+        staleText->setText ("-21");
+        check ((load ? session.loadProject (masterProject.getFile()) : session.newProject()).wasOk(),
+            "replace project while a same-level master text edit is pending"); refresh();
+        check (staleText == nullptr && ! label->isBeingEdited() && std::abs (state.masterGainDb) < .001f && ! session.canUndo(),
+            "project replacement discards stale master text even when its displayed level did not change");
+    }
 
 }
 

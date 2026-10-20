@@ -7,10 +7,11 @@ namespace halftrack
 {
 class Session;
 
-// Message-thread editor for native track volume and pan automation.
+// Message-thread editor for native track volume/pan and master-volume automation.
 class AutomationEditor final : public juce::Component
 {
 public:
+    explicit AutomationEditor (Session&); // Opens the master-volume destination.
     AutomationEditor (Session&, const juce::String& trackId);
     ~AutomationEditor() override;
     void resized() override;

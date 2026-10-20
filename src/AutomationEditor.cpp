@@ -81,8 +81,7 @@ public:
                 juce::Path path;
                 if (lane->points.empty())
                 {
-                    const auto* track = owner.track();
-                    const auto y = position ({ 0, isVolume ? track->gainDb : track->pan }).y;
+                    const auto y = position ({ 0, owner.manualValue() }).y;
                     path.startNewSubPath (bounds.getX(), y); path.lineTo (bounds.getRight(), y);
                 }
                 else
@@ -174,7 +173,7 @@ public:
         Impl& owner;
     };
 
-    Impl (Session& s, juce::String id) : session (s), trackId (std::move (id)), curve (*this)
+    Impl (Session& s, juce::String id, bool master) : session (s), trackId (std::move (id)), editingMaster (master), curve (*this)
     {
         generation = session.snapshot().projectGeneration;
         look.setColour (juce::ComboBox::backgroundColourId, panel);
@@ -186,7 +185,8 @@ public:
         look.setColour (juce::ToggleButton::tickColourId, accent);
         look.setColour (juce::ScrollBar::thumbColourId, accent.withAlpha (.6f));
         setLookAndFeel (&look); setWantsKeyboardFocus (true);
-        trackChoice.setName ("automation-track"); targetChoice.setName ("automation-target"); snapChoice.setName ("automation-snap");
+        trackChoice.setName ("automation-track"); trackChoice.setTitle ("Automation destination");
+        targetChoice.setName ("automation-target"); snapChoice.setName ("automation-snap");
         targetChoice.addItem ("Volume", 1); targetChoice.addItem ("Pan", 2); targetChoice.setSelectedId (1, juce::dontSendNotification);
         snapChoice.addItem ("Snap off", 1); snapChoice.addItem ("1 beat", 2); snapChoice.addItem ("1/2 beat", 3);
         snapChoice.addItem ("1/4 beat", 4); snapChoice.addItem ("1/8 beat", 5); snapChoice.addItem ("1/3 beat", 6);
@@ -199,8 +199,10 @@ public:
         trackChoice.onChange = [this]
         {
             numericDirty = false; finishGesture();
-            const auto index = trackChoice.getSelectedId() - 1;
-            if (index >= 0 && static_cast<size_t> (index) < trackIds.size()) trackId = trackIds[static_cast<size_t> (index)];
+            editingMaster = trackChoice.getSelectedId() == 1;
+            const auto index = trackChoice.getSelectedId() - 2;
+            if (editingMaster) trackId.clear();
+            else if (index >= 0 && static_cast<size_t> (index) < trackIds.size()) trackId = trackIds[static_cast<size_t> (index)];
             selected = -1; error.clear(); synchronise();
         };
         targetChoice.onChange = [this] { numericDirty = false; finishGesture(); selected = -1; error.clear(); synchronise(); };
@@ -233,7 +235,7 @@ public:
     {
         g.fillAll (background); g.setColour (accent); g.fillRect (20, 18, 4, 18);
         g.setColour (ink); g.setFont (juce::FontOptions (17.0f, juce::Font::bold));
-        g.drawText ("TRACK AUTOMATION", 36, 10, getWidth() - 56, 34, juce::Justification::centredLeft);
+        g.drawText (editingMaster ? "MASTER AUTOMATION" : "TRACK AUTOMATION", 36, 10, getWidth() - 56, 34, juce::Justification::centredLeft);
     }
     void resized() override
     {
@@ -253,7 +255,7 @@ public:
         status.setBounds (20, getHeight() - 39, getWidth() - 40, 26);
     }
     Session::AutomationTarget target() const
-    { return targetChoice.getSelectedId() == 2 ? Session::AutomationTarget::pan : Session::AutomationTarget::volume; }
+    { return ! editingMaster && targetChoice.getSelectedId() == 2 ? Session::AutomationTarget::pan : Session::AutomationTarget::volume; }
     double snapBeats() const
     { constexpr double grid[] = { 0, 0, 1, .5, .25, .125, 1.0 / 3 }; return grid[std::clamp (snapChoice.getSelectedId(), 0, 6)]; }
     const Session::TrackInfo* track() const
@@ -261,26 +263,42 @@ public:
         const auto found = std::find_if (snapshot.tracks.begin(), snapshot.tracks.end(), [this] (const auto& t) { return t.id == trackId; });
         return found != snapshot.tracks.end() ? &*found : nullptr;
     }
+    float manualValue() const
+    {
+        if (editingMaster) return snapshot.masterGainDb;
+        if (const auto* current = track()) return target() == Session::AutomationTarget::volume ? current->gainDb : current->pan;
+        return 0;
+    }
     std::optional<Session::AutomationLane> lane() const
     {
+        if (editingMaster) return snapshot.masterVolumeAutomation;
         if (const auto* current = track()) return target() == Session::AutomationTarget::volume ? current->volumeAutomation : current->panAutomation;
         return {};
     }
     bool available() const
-    { return snapshot.projectGeneration == generation && track() != nullptr && ! snapshot.recording && ! session.isExporting(); }
+    { return snapshot.projectGeneration == generation && (editingMaster || track() != nullptr) && ! snapshot.recording && ! session.isExporting(); }
     void synchronise()
     {
         snapshot = session.snapshot();
         if (! available()) finishGesture();
         juce::StringArray names, ids;
         for (const auto& current : snapshot.tracks) { names.add (current.name); ids.add (current.id); }
-        if (names != trackNames || ids != trackIds)
+        if (names != trackNames || ids != trackIds || trackChoice.getNumItems() == 0)
         {
             trackNames = names; trackIds = ids; trackChoice.clear (juce::dontSendNotification);
-            trackChoice.addItemList (trackNames, 1);
+            trackChoice.addItem ("Master", 1);
+            trackChoice.addItemList (trackNames, 2);
         }
-        if (trackId.isEmpty() && ! trackIds.isEmpty()) trackId = trackIds[0];
-        trackChoice.setSelectedId (trackIds.indexOf (trackId) + 1, juce::dontSendNotification);
+        if (! editingMaster && trackId.isEmpty() && ! trackIds.isEmpty()) trackId = trackIds[0];
+        const auto index = trackIds.indexOf (trackId);
+        trackChoice.setSelectedId (editingMaster ? 1 : index >= 0 ? index + 2 : 0, juce::dontSendNotification);
+        if (editingMaster)
+        {
+            if (targetChoice.getNumItems() > 1)
+            { targetChoice.clear (juce::dontSendNotification); targetChoice.addItem ("Volume", 1); }
+            targetChoice.setSelectedId (1, juce::dontSendNotification);
+        }
+        else if (targetChoice.getNumItems() == 1) targetChoice.addItem ("Pan", 2);
         trackChoice.setEnabled (snapshot.projectGeneration == generation);
         for (auto* control : std::initializer_list<juce::Component*> { &targetChoice, &read, &clear, &curve }) control->setEnabled (available());
         if (const auto current = lane())
@@ -307,14 +325,14 @@ public:
             numericPoint = hasPoint ? std::optional<Session::AutomationPoint> (current->points[static_cast<size_t> (selected)]) : std::nullopt;
             numericTrackId = trackId; numericTarget = target(); numericSelection = selected;
         }
-        updateScroll(); updateStatus(); curve.repaint();
+        updateScroll(); updateStatus(); curve.repaint(); repaint();
     }
     void apply (const Session::AutomationLane& next, bool pointerGesture)
     {
         if (! available()) return;
         if (const auto previous = lane(); previous && *previous == next) return;
         if (! gesture) { session.beginEditGesture (target() == Session::AutomationTarget::volume ? "Edit volume automation" : "Edit pan automation"); gesture = true; }
-        const auto result = session.setTrackAutomation (trackId, target(), next);
+        const auto result = editingMaster ? session.setMasterVolumeAutomation (next) : session.setTrackAutomation (trackId, target(), next);
         error = result.failed() ? result.getErrorMessage() : juce::String();
         if (! pointerGesture || result.failed()) finishGesture();
         synchronise();
@@ -406,7 +424,7 @@ public:
     {
         juce::String text;
         if (snapshot.projectGeneration != generation) text = "Project changed. Reopen automation from the current project.";
-        else if (! track()) text = "This track is unavailable. Select another track, or undo its removal.";
+        else if (! editingMaster && ! track()) text = "This track is unavailable. Select another destination, or undo its removal.";
         else if (session.isExporting()) text = "Automation editing is unavailable during export.";
         else if (snapshot.recording) text = "Stop recording to edit automation.";
         else if (error.isNotEmpty()) text = error;
@@ -444,6 +462,7 @@ public:
 
     Session& session;
     juce::String trackId, error;
+    bool editingMaster = false;
     uint64_t generation = 0;
     Session::Snapshot snapshot;
     juce::StringArray trackIds, trackNames;
@@ -465,8 +484,10 @@ public:
     int numericSelection = -1;
 };
 
-AutomationEditor::AutomationEditor (Session& session, const juce::String& trackId) : impl (std::make_unique<Impl> (session, trackId))
-{ setName ("Track automation"); addAndMakeVisible (*impl); setSize (900, 460); }
+AutomationEditor::AutomationEditor (Session& session) : impl (std::make_unique<Impl> (session, juce::String(), true))
+{ setName ("Automation"); addAndMakeVisible (*impl); setSize (900, 460); }
+AutomationEditor::AutomationEditor (Session& session, const juce::String& trackId) : impl (std::make_unique<Impl> (session, trackId, false))
+{ setName ("Automation"); addAndMakeVisible (*impl); setSize (900, 460); }
 AutomationEditor::~AutomationEditor() = default;
 void AutomationEditor::resized() { impl->setBounds (getLocalBounds()); }
 bool AutomationEditor::keyPressed (const juce::KeyPress& key) { return impl->handleKey (key); }
@@ -540,18 +561,18 @@ int runAutomationEditorTests (const juce::File& root)
         ui.targetChoice.setSelectedId (2, juce::sendNotificationSync); click (2, -.75f);
         check (session.snapshot().tracks[0].panAutomation.points.size() == 1 && lane() == beforeRead,
                "Pan target edits its independent native lane");
-        ui.trackChoice.setSelectedId (2, juce::sendNotificationSync); click (4, .5f);
+        ui.trackChoice.setSelectedId (3, juce::sendNotificationSync); click (4, .5f);
         check (session.snapshot().tracks[1].panAutomation.points.size() == 1
             && session.snapshot().tracks[0].panAutomation.points.size() == 1, "track selector edits only the selected stable track");
-        ui.trackChoice.setSelectedId (1, juce::sendNotificationSync); ui.targetChoice.setSelectedId (1, juce::sendNotificationSync);
+        ui.trackChoice.setSelectedId (2, juce::sendNotificationSync); ui.targetChoice.setSelectedId (1, juce::sendNotificationSync);
         const auto beforeTrack = lane(); const auto changeDown = curve.position (beforeTrack.points[0]);
         curve.mouseDown (event (changeDown, changeDown));
         const auto changeMove = curve.position ({ 2, -12 }); curve.mouseDrag (event (changeMove, changeDown, true));
-        ui.trackChoice.setSelectedId (2, juce::sendNotificationSync);
+        ui.trackChoice.setSelectedId (3, juce::sendNotificationSync);
         curve.mouseDrag (event (changeMove, changeDown, true)); curve.mouseUp (event (changeMove, changeDown, true));
         check (session.snapshot().tracks[1].volumeAutomation.points.empty(), "switching tracks ends the pending pointer gesture");
         session.undo(); ui.synchronise(); check (lane() == beforeTrack, "track switch does not split or contaminate gesture undo");
-        ui.trackChoice.setSelectedId (1, juce::sendNotificationSync);
+        ui.trackChoice.setSelectedId (2, juce::sendNotificationSync);
         const auto beforeTarget = lane(), panBeforeTarget = session.snapshot().tracks[0].panAutomation;
         const auto targetDown = curve.position (beforeTarget.points[0]); curve.mouseDown (event (targetDown, targetDown));
         const auto targetMove = curve.position ({ 1.5, -9 }); curve.mouseDrag (event (targetMove, targetDown, true));
@@ -622,6 +643,114 @@ int runAutomationEditorTests (const juce::File& root)
         check (session.newProject().wasOk() && session.addAudioTrack ("Replacement").wasOk(), "replace project during active drag");
         next.curve.mouseDrag (freshEvent (freshMoved, true)); next.curve.mouseUp (freshEvent (freshMoved, true));
         check (session.snapshot().tracks[0].volumeAutomation.points.empty() && ! next.curve.isEnabled(), "New cannot redirect a stale gesture onto a reused track ID");
+        check (session.setMasterGain (-9).wasOk(), "set retained manual master level");
+        AutomationEditor masterEditor (session); auto& master = *masterEditor.impl; auto& masterCurve = master.curve;
+        auto masterEvent = [&] (juce::Point<float> position, juce::Point<float> downAt, bool dragged = false, bool right = false)
+        {
+            const auto now = juce::Time::getCurrentTime();
+            return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), position,
+                juce::ModifierKeys (right ? juce::ModifierKeys::rightButtonModifier : juce::ModifierKeys::leftButtonModifier),
+                1.0f, 0, 0, 0, 0, &masterCurve, &masterCurve, now, downAt, now, 1, dragged);
+        };
+        auto masterClick = [&] (double beat, float value)
+        {
+            const auto point = masterCurve.position ({ beat, value });
+            masterCurve.mouseDown (masterEvent (point, point)); masterCurve.mouseUp (masterEvent (point, point));
+        };
+        auto masterLane = [&] { return session.snapshot().masterVolumeAutomation; };
+        check (master.editingMaster && master.trackChoice.getText() == "Master" && master.targetChoice.getNumItems() == 1
+            && master.target() == Session::AutomationTarget::volume && std::abs (master.manualValue() + 9) < .001f,
+            "explicit master destination exposes only volume and its real manual baseline");
+        check (masterEditor.createComponentSnapshot (masterEditor.getLocalBounds()).isValid(), "empty master lane paints without a track pointer");
+        masterClick (1.12, -6);
+        check (masterLane().points.size() == 1 && masterLane().points[0].beat == 1
+            && std::abs (masterLane().points[0].value + 6) < .001f && session.snapshot().tracks[0].volumeAutomation.points.empty(),
+            "master pointer insertion edits only master volume");
+        session.undo(); master.synchronise(); check (masterLane().points.empty(), "one undo removes the master point");
+        session.redo(); master.synchronise(); masterClick (4, 0);
+        const auto masterOriginal = masterLane();
+        auto masterDown = masterCurve.position (masterOriginal.points[0]); masterCurve.mouseDown (masterEvent (masterDown, masterDown));
+        auto masterMove = masterCurve.position ({ 2, -12 }); masterCurve.mouseDrag (masterEvent (masterMove, masterDown, true));
+        masterMove = masterCurve.position ({ 3, -18 }); masterCurve.mouseDrag (masterEvent (masterMove, masterDown, true));
+        masterCurve.mouseUp (masterEvent (masterMove, masterDown, true));
+        check (masterLane().points[0].beat == 3 && std::abs (masterLane().points[0].value + 18) < .001f,
+            "master curve drag changes time and level");
+        session.undo(); master.synchronise(); check (masterLane() == masterOriginal, "one undo restores the entire master drag");
+        session.redo(); master.synchronise();
+        const auto beforeMasterTyped = masterLane(); master.selected = 0; master.synchronise();
+        master.beatInput.setText ("2.375", false); master.valueInput.setText ("-13.25", false); master.setPoint.onClick();
+        check (masterLane().points[0].beat == 2.375 && std::abs (masterLane().points[0].value + 13.25f) < .001f,
+            "master point accepts exact beat and decibel input");
+        session.undo(); master.synchronise(); check (masterLane() == beforeMasterTyped, "exact master point editing undoes once");
+        master.trackChoice.setSelectedId (2, juce::sendNotificationSync); master.targetChoice.setSelectedId (2, juce::sendNotificationSync);
+        masterClick (2, -.5f);
+        const auto firstTrackPan = session.snapshot().tracks[0].panAutomation;
+        check (firstTrackPan.points.size() == 1 && masterLane() == beforeMasterTyped, "master window can independently edit a track pan lane");
+        master.trackChoice.setSelectedId (1, juce::sendNotificationSync);
+        check (master.targetChoice.getNumItems() == 1 && master.targetChoice.getSelectedId() == 1
+            && master.target() == Session::AutomationTarget::volume, "switching track pan to Master removes unsupported pan");
+        masterDown = masterCurve.position (masterLane().points[0]); masterCurve.mouseDown (masterEvent (masterDown, masterDown));
+        masterMove = masterCurve.position ({ 2, -12 }); masterCurve.mouseDrag (masterEvent (masterMove, masterDown, true));
+        master.trackChoice.setSelectedId (2, juce::sendNotificationSync);
+        masterCurve.mouseDrag (masterEvent (masterMove, masterDown, true)); masterCurve.mouseUp (masterEvent (masterMove, masterDown, true));
+        check (session.snapshot().tracks[0].volumeAutomation.points.empty() && session.snapshot().tracks[0].panAutomation == firstTrackPan,
+            "switching away from Master ends its gesture without changing the destination track");
+        session.undo(); master.synchronise(); check (masterLane() == beforeMasterTyped, "destination change preserves one-step master gesture undo");
+        master.trackChoice.setSelectedId (1, juce::sendNotificationSync);
+        master.read.setToggleState (false, juce::dontSendNotification); master.read.onClick();
+        check (! masterLane().enabled && masterLane().points == beforeMasterTyped.points, "master Read bypass retains every point");
+        session.undo(); master.synchronise(); check (masterLane() == beforeMasterTyped, "master Read bypass undoes once");
+        master.clear.onClick();
+        check (masterLane().points.empty() && std::abs (session.snapshot().masterGainDb + 9) < .001f, "master Clear restores retained manual level");
+        session.undo(); master.synchronise(); check (masterLane() == beforeMasterTyped, "master Clear undoes once");
+        masterDown = masterCurve.position (masterLane().points[0]); masterCurve.mouseDown (masterEvent (masterDown, masterDown, false, true));
+        check (masterLane().points.size() == 1, "right-click removes a master point");
+        session.undo(); master.synchronise();
+        masterDown = masterCurve.position (masterLane().points[0]); masterCurve.mouseDown (masterEvent (masterDown, masterDown));
+        masterCurve.mouseUp (masterEvent (masterDown, masterDown)); masterCurve.keyPressed (juce::KeyPress (juce::KeyPress::deleteKey));
+        check (masterLane().points.size() == 1, "Delete removes the selected master point");
+        session.undo(); master.synchronise();
+        const auto beforeTrackRemoval = masterLane();
+        check (session.moveTrack (session.snapshot().tracks[0].id, 1).wasOk(), "reorder a track while master editor is open"); master.synchronise();
+        check (master.available() && masterLane() == beforeTrackRemoval && master.trackChoice.getText() == "Master",
+            "track reordering never redirects the master destination");
+        while (! session.snapshot().tracks.empty()) check (session.removeTrack (0).wasOk(), "remove an unrelated track while Master remains selected");
+        master.synchronise();
+        check (master.available() && master.trackChoice.getNumItems() == 1 && masterLane() == beforeTrackRemoval,
+            "master editor remains available with no tracks");
+        masterClick (8, -3); check (masterLane().points.size() == 3, "master pointer editing works in an empty track list");
+        {
+            auto stream = root.getChildFile ("master-automation-editor.png").createOutputStream();
+            check (stream && stream->setPosition (0) && stream->truncate().wasOk()
+                && juce::PNGImageFormat().writeImageToStream (masterEditor.createComponentSnapshot (masterEditor.getLocalBounds()), *stream),
+                "save actual master automation editor screenshot");
+        }
+        const auto masterFile = root.getChildFile ("master-automation-editor.halftrack");
+        check (session.saveProject (masterFile).wasOk(), "save the master editor fixture");
+        masterDown = masterCurve.position (masterLane().points[0]); masterCurve.mouseDown (masterEvent (masterDown, masterDown));
+        masterMove = masterCurve.position ({ 2, -15 }); masterCurve.mouseDrag (masterEvent (masterMove, masterDown, true));
+        check (session.loadProject (masterFile).wasOk(), "load project during a master curve gesture");
+        const auto loadedMaster = masterLane();
+        masterCurve.mouseDrag (masterEvent (masterMove, masterDown, true)); masterCurve.mouseUp (masterEvent (masterMove, masterDown, true));
+        master.clear.onClick(); master.read.setToggleState (false, juce::dontSendNotification); master.read.onClick();
+        check (masterLane() == loadedMaster && ! master.available() && ! masterCurve.isEnabled() && ! session.canUndo(),
+            "Load rejects retained master pointer, Clear and Read callbacks");
+        AutomationEditor newMasterEditor (session); auto& freshMaster = *newMasterEditor.impl;
+        const auto freshMasterDown = freshMaster.curve.position (loadedMaster.points[0]);
+        auto freshMasterEvent = [&] (juce::Point<float> point, bool dragged)
+        {
+            const auto now = juce::Time::getCurrentTime();
+            return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), point,
+                juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                &freshMaster.curve, &freshMaster.curve, now, freshMasterDown, now, 1, dragged);
+        };
+        freshMaster.curve.mouseDown (freshMasterEvent (freshMasterDown, false));
+        const auto freshMasterMove = freshMaster.curve.position ({ 1, -24 }); freshMaster.curve.mouseDrag (freshMasterEvent (freshMasterMove, true));
+        check (session.newProject().wasOk(), "replace project during a master gesture");
+        freshMaster.curve.mouseDrag (freshMasterEvent (freshMasterMove, true)); freshMaster.curve.mouseUp (freshMasterEvent (freshMasterMove, true));
+        freshMaster.clear.onClick();
+        check (session.snapshot().masterVolumeAutomation.points.empty() && ! freshMaster.available() && ! session.canUndo(),
+            "New cannot redirect a stale master gesture into its replacement project");
         return 0;
     }
     catch (const std::exception& exception)
