@@ -305,7 +305,8 @@ public:
         newMidiClipButton.onClick = [this] { if (showSession) createLauncherMidiClip(); else createMidiClip (state.position); };
         sessionTab.onClick = [this] { showSessionView(); };
         arrangementTab.onClick = [this] { showArrangementView(); };
-        pianoTab.onClick = [this] { openPianoRoll(); };
+        pianoTab.onClick = [this] { if (showPiano) closeClipView(); else openPianoRoll(); };
+        pianoTab.setTooltip ("Show the selected clip's editor in the detail view  |  Shift+Tab");
         addMidiButton.setTooltip ("Insert a MIDI track with the Halftrack synthesizer | Cmd/Ctrl+Shift+T");
         newMidiClipButton.setTooltip ("Create a four-bar MIDI clip at the playhead");
         addTrackButton.setTooltip ("Insert audio track  |  Cmd/Ctrl+T");
@@ -370,6 +371,7 @@ public:
         g.setColour (line);
         g.drawHorizontalLine (toolbarBounds.getBottom(), 0.0f, (float) getWidth());
         g.drawVerticalLine (browserBounds.getRight(), (float) browserBounds.getY(), (float) browserBounds.getBottom());
+        g.setColour (juce::Colour (0xff121212)); g.fillRect (dividerBounds);
         // Control bar: tempo/meter on the left, transport and loop in the centre, status on the right.
         g.setFont (font (11.0f));
         g.setColour (background); g.fillRect (meterBounds); g.setColour (line); g.drawRect (meterBounds);
@@ -445,7 +447,13 @@ public:
             hidden->setVisible (false);
         area.removeFromBottom (statusHeight);
         browserBounds = area.removeFromLeft (browserWidth);
-        deviceChain.setBounds (area.removeFromBottom (deviceHeight));
+        // The detail view shows either the device chain or, for an open clip, its editor.
+        const int detailHeight = showPiano ? juce::jlimit (minimumClipViewHeight, juce::jmax (minimumClipViewHeight, area.getHeight() - 140),
+                                                           juce::roundToInt (area.getHeight() * clipViewFraction))
+                                           : deviceHeight;
+        auto detail = area.removeFromBottom (detailHeight);
+        dividerBounds = detail.removeFromTop (dividerHeight);
+        deviceChain.setBounds (detail); deviceChain.setVisible (! showPiano);
         auto browser = browserBounds.reduced (6, 6);
         browserSearch.setBounds (browser.removeFromTop (24));
         browser.removeFromTop (6);
@@ -458,14 +466,14 @@ public:
         browser.removeFromBottom (4); browser.removeFromTop (22);
         browserList.setBounds (browser);
         launcher.setBounds (area);
-        launcher.setVisible (showSession && ! showPiano);
-        pianoRoll.setBounds (area);
+        launcher.setVisible (showSession);
+        pianoRoll.setBounds (deviceChain.getBounds());
         pianoRoll.setVisible (showPiano);
-        viewport.setVisible (! showPiano && ! showSession);
-        ruler.setVisible (! showPiano && ! showSession);
-        horizontalScroll.setVisible (! showPiano && ! showSession);
-        sessionTab.setToggleState (showSession && ! showPiano, juce::dontSendNotification);
-        arrangementTab.setToggleState (! showPiano && ! showSession, juce::dontSendNotification);
+        viewport.setVisible (! showSession);
+        ruler.setVisible (! showSession);
+        horizontalScroll.setVisible (! showSession);
+        sessionTab.setToggleState (showSession, juce::dontSendNotification);
+        arrangementTab.setToggleState (! showSession, juce::dontSendNotification);
         pianoTab.setToggleState (showPiano, juce::dontSendNotification);
         horizontalScroll.setBounds (area.removeFromBottom (12).withTrimmedRight (trackWidth + 10));
         ruler.setBounds (area.removeFromTop (rulerHeight));
@@ -476,6 +484,17 @@ public:
         updateScroll();
     }
 
+    void mouseDown (const juce::MouseEvent& e) override { draggingDivider = showPiano && dividerBounds.expanded (0, 3).contains (e.getPosition()); }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! draggingDivider) return;
+        const auto main = getLocalBounds().withTrimmedTop (toolbarBounds.getBottom()).withTrimmedBottom (statusHeight);
+        clipViewFraction = juce::jlimit (.25, .85, (main.getBottom() - e.y) / (double) juce::jmax (1, main.getHeight()));
+        resized();
+    }
+    void mouseUp (const juce::MouseEvent&) override { draggingDivider = false; }
+    juce::MouseCursor getMouseCursor() override { return showPiano ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor; }
+    bool draggingDivider = false;
     bool handleKey (const juce::KeyPress& key)
     {
         if (session.isExporting()) return true;
@@ -535,6 +554,7 @@ public:
             {const auto& clip=track->clips[(size_t)selectedClip];setClipActiveFromUI(clip.id,!clip.active);return true;}
             return false;
         }
+        if (code == juce::KeyPress::tabKey && shift) { if (showPiano) closeClipView(); else openPianoRoll(); return true; }
         if (code == juce::KeyPress::tabKey) { if (showSession) showArrangementView(); else showSessionView(); return true; }
         if (code == juce::KeyPress::spaceKey) { togglePlay(); return true; }
         if (code == juce::KeyPress::escapeKey) { session.stop(); session.seek (0); refresh(); return true; }
@@ -575,6 +595,9 @@ public:
    #endif
 
 private:
+    static constexpr int minimumClipViewHeight = 340, dividerHeight = 5;
+    double clipViewFraction = .58;
+    juce::Rectangle<int> dividerBounds;
     static constexpr int categoryWidth = 98, browserWidth = 300, trackWidth = 252, trackHeight = 72, rulerHeight = 60,
                          deviceHeight = 268, statusHeight = 24;
     struct BrowserItem { juce::File file; bool directory = false; };
@@ -2903,6 +2926,7 @@ private:
         if (selectedTrack >= 0 && selectedSceneIndex() >= 0) selectLauncherSlot (selectedTrack, selectedSceneIndex());
         resized(); launcher.grabKeyboardFocus();
     }
+    void closeClipView() { showPiano = false; resized(); }
     void showArrangementView()
     {
         showSession = false; showPiano = false; selectedLauncherClipId.clear(); resized();
@@ -4669,7 +4693,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "activating an instrument with an audio track selected creates a MIDI track with it");
         // Instrument choice, the new track's first clip, then the track itself.
         for (int step = 0; step < 3; ++step) session.undo();
-        refresh(); browserSearch.clear(); updateBrowser();
+        refresh(); browserSearch.setText ({}, juce::sendNotificationSync); updateBrowser();
         check (state.tracks.size() == tracks, "undo removes the browser-created track");
         selectTrack (juce::jmin (instrumentTrack, (int) state.tracks.size() - 1)); refresh();
     }
@@ -4861,6 +4885,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     selectTrack (sourceTrack);
     auto sendSlider = [&] (const juce::String& name)
     {
+        closeClipView(); // Sends live in the device view, which an open clip editor replaces.
         auto* slider = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "Send to " + name));
         bool visible = slider != nullptr;
         for (auto* child = static_cast<juce::Component*> (slider); child != this; child = child != nullptr ? child->getParentComponent() : nullptr)

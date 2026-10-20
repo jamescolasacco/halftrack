@@ -815,3 +815,5 @@ Stage 4 (browser): the browser now spans the window height beside the detail vie
 
 Stage 5 (Arrangement headers): 72-pixel tracks (previously 112) with a header strip in the track colour holding the name, numbered activator, solo and arm; routing (input/monitor or return send position) and volume/pan lines below; and a slim stereo meter at the right edge. Production UI, export dialog and automation editor suites pass.
 
+Stage 6 (clip view): an open clip's editor now appears in the bottom detail area in place of the device view, with the Session grid or Arrangement still visible above, as in the reference workflow. It defaults to 58% of the main height (at least 340 pixels) and a divider drags between 25% and 85%. The Clip button and Shift+Tab toggle between the clip and device views; Tab still switches Session/Arrangement. A send-control helper in the UI suite now shows the device view before locating device-view controls, since inserting a MIDI track opens its new clip. UI, export dialog, automation and plug-in editor suites pass.
+
