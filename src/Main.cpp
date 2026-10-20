@@ -38,6 +38,7 @@ int runLaunchModeTests (const juce::File&);
 int runSamplerTests (const juce::File&);
 int runDeviceAutomationTests (const juce::File&);
 int runFreezeTests (const juce::File&);
+int runStemExportTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -197,6 +198,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-groups");
             setApplicationReturnValue (runGroupTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-stems"))
+        {
+            const int i = args.indexOf ("--self-test-stems");
+            setApplicationReturnValue (runStemExportTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-freeze"))

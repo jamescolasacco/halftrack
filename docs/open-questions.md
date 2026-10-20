@@ -199,3 +199,7 @@ Device lanes interpolate linearly in each control's knob position (its editor sk
 ### Freeze defaults
 
 Only Arrangement clips are frozen; Session clips keep playing live. Freeze renders stay in the engine's temporary folder, so a reopened project on another machine plays live. Undoing a Flatten returns to the unfrozen track rather than the frozen state. These are simplest-default choices pending reference measurement.
+
+### Stem export defaults
+
+Member tracks of a group are rendered through their group's mixer, and muted tracks export silent stems. Stems use the export window's format, range, tail and normalization for every file, normalizing each file on its own. Master processing applies to every stem through the shared render path. These are simplest-default choices pending reference measurement.

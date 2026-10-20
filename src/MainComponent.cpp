@@ -4532,6 +4532,7 @@ private:
         {
             setLookAndFeel (&look);
             addComboBox ("range", { "Entire arrangement", "Loop range", "Custom range" }, {});
+            addComboBox ("rendered", { "Master", "All Individual Tracks" }, {});
             addTextEditor ("range-start", juce::String (loop.getStart(), 6), {});
             addTextEditor ("range-end", juce::String (loop.getEnd(), 6), {});
             customStart = getTextEditorContents ("range-start"); customEnd = getTextEditorContents ("range-end");
@@ -4548,13 +4549,14 @@ private:
             addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
             error.setName ("Export validation"); error.setColour (juce::Label::textColourId, orange);
             error.setJustificationType (juce::Justification::centredLeft); addAndMakeVisible (error);
-            const juce::StringArray order { "range", "range-start", "range-end", "format", "channels", "sample-rate", "bit-depth", "normalization", "effect-tail" };
-            const juce::StringArray titles { "Export range", "Start in seconds", "End in seconds", "File format", "Output channels", "Sample rate", "Bit depth", "Normalize exported peak", "Extra reverb and delay tail" };
+            const juce::StringArray order { "range", "rendered", "range-start", "range-end", "format", "channels", "sample-rate", "bit-depth", "normalization", "effect-tail" };
+            const juce::StringArray titles { "Export range", "Rendered track", "Start in seconds", "End in seconds", "File format", "Output channels", "Sample rate", "Bit depth", "Normalize exported peak", "Extra reverb and delay tail" };
+            getComboBoxComponent ("rendered")->setDescription ("Export the Master mix, or every track, group and return to its own file in a folder.");
             for (int i = 0; i < order.size(); ++i)
                 if (auto* control = controlNamed (order[i])) { control->setExplicitFocusOrder (i + 1); control->setTitle (titles[i]); }
             getComboBoxComponent ("range")->setDescription ("Export the entire arrangement, captured loop endpoints, or a custom time interval.");
             getTextEditor ("range-end")->setDescription ("End time, up to 172800 seconds. Selected ranges add no extra tail.");
-            getButton (0)->setExplicitFocusOrder (10); getButton (1)->setExplicitFocusOrder (11);
+            getButton (0)->setExplicitFocusOrder (11); getButton (1)->setExplicitFocusOrder (12);
             getComboBoxComponent ("range")->onChange = [this] { updateRangeControls(); };
             getComboBoxComponent ("format")->onChange = [this]
             {
@@ -4579,7 +4581,7 @@ private:
                 if (auto* component = controlNamed (name))
                     g.drawText (text, component->getX(), component->getY() - 20, component->getWidth(), 18, juce::Justification::centredLeft);
             };
-            label ("range", "Export range"); label ("range-start", "Start (seconds)"); label ("range-end", "End (seconds)");
+            label ("range", "Export range"); label ("rendered", "Rendered track"); label ("range-start", "Start (seconds)"); label ("range-end", "End (seconds)");
             label ("format", "File format"); label ("channels", "Output channels"); label ("sample-rate", "Sample rate");
             label ("bit-depth", "Bit depth"); label ("normalization", "Normalize exported peak"); label ("effect-tail", "Extra reverb / delay tail");
             const auto range = getComboBoxComponent ("range")->getSelectedItemIndex();
@@ -4598,7 +4600,7 @@ private:
             const auto width = getWidth(); const int half = (width - 60) / 2;
             auto place = [&] (const char* name, int column, int y, bool full = false)
             { if (auto* control = controlNamed (name)) control->setBounds (20 + column * (half + 20), y, full ? width - 40 : half, 28); };
-            place ("range", 0, 120, true); place ("range-start", 0, 182); place ("range-end", 1, 182);
+            place ("range", 0, 120); place ("rendered", 1, 120); place ("range-start", 0, 182); place ("range-end", 1, 182);
             place ("format", 0, 278); place ("channels", 1, 278);
             place ("sample-rate", 0, 338); place ("bit-depth", 1, 338);
             place ("normalization", 0, 398); place ("effect-tail", 1, 398);
@@ -4658,6 +4660,7 @@ private:
         const auto normalization = dialog.getComboBoxComponent ("normalization")->getSelectedItemIndex();
         settings.normalizePeak = normalization > 0;
         settings.peakCeilingDb = normalization == 2 ? -3.0f : normalization == 3 ? 0.0f : -1.0f;
+        settings.stems = dialog.getComboBoxComponent ("rendered")->getSelectedItemIndex() == 1;
         const auto mode = dialog.getComboBoxComponent ("range")->getSelectedItemIndex();
         if (mode == 0) return juce::Result::ok();
         auto start = dialog.capturedLoop.getStart(), end = dialog.capturedLoop.getEnd();
@@ -4730,6 +4733,29 @@ private:
         else safe->report (result, exportExtension (settings.format).toUpperCase() + (settings.mono ? " mono" : " stereo") + " exported: " + juce::String (settings.sampleRate / 1000.0, 1) + " kHz / " + juce::String (settings.bitDepth) + "-bit" + (settings.normalizePeak ? ", peak normalized." : "."));
         safe->refresh();
     }
+    // Renders every track into a folder, asking before replacing earlier stems there.
+    void performStemExport (const juce::File& folder, const Session::AudioExportSettings& settings, uint64_t generation, bool overwrite = false)
+    {
+        if (! exportProjectMatches (generation)) return;
+        juce::StringArray files;
+        const auto result = session.exportStems (folder, settings, files, overwrite);
+        if (result.failed() && ! overwrite && result.getErrorMessage().contains ("already exists"))
+        {
+            auto* alert = new juce::AlertWindow ("Replace Existing Stems?", result.getErrorMessage().upToFirstOccurrenceOf (" Choose", false, false)
+                                                 + " Replace every stem with the same name in " + folder.getFileName() + "?", juce::MessageBoxIconType::WarningIcon, this);
+            alert->setLookAndFeel (&theme);
+            alert->addButton ("Replace", 1);
+            alert->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+            alerts.emplace_back (alert);
+            auto safe = juce::Component::SafePointer<Impl> (this);
+            alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, folder, settings, generation] (int choice)
+            { if (choice == 1 && safe != nullptr) safe->performStemExport (folder, settings, generation, true); }), true);
+            return;
+        }
+        if (result.failed() && result.getErrorMessage() == "Export cancelled.") { status = "Export cancelled."; statusFrames = 24 * 5; }
+        else report (result, juce::String (files.size()) + " stems exported to " + folder.getFileName() + ".");
+        refresh();
+    }
     void exportAudioSelection (const juce::File& selected, Session::AudioExportSettings settings, uint64_t generation)
     {
         if (selected == juce::File() || ! exportProjectMatches (generation)) return;
@@ -4758,6 +4784,15 @@ private:
        #if HALFTRACK_TESTS_ENABLED
         if (testExportDestination) { testExportDestination (settings, generation); return; }
        #endif
+        if (settings.stems)
+        {
+            chooser = std::make_unique<juce::FileChooser> ("Choose a Folder for the Stems", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory));
+            auto safe = juce::Component::SafePointer<Impl> (this);
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                [safe, settings, generation] (const juce::FileChooser& fc)
+                { if (safe != nullptr && fc.getResult() != juce::File()) safe->performStemExport (fc.getResult(), settings, generation); });
+            return;
+        }
         const auto extension = exportExtension (settings.format);
         chooser = std::make_unique<juce::FileChooser> ("Export Arrangement as " + extension.toUpperCase(), juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (session.snapshot().name + "." + extension), "*." + extension);
         auto safe = juce::Component::SafePointer<Impl> (this);
@@ -5323,6 +5358,24 @@ void MainComponent::Impl::runExportInteractionChecks (const juce::File& audioFix
         && capturedSettings->format == Session::ExportFormat::flac && capturedSettings->sampleRate == 48000 && capturedSettings->bitDepth == 24
         && capturedSettings->mono && capturedSettings->normalizePeak && capturedSettings->peakCeilingDb == -3 && capturedSettings->tailSeconds == 0,
         "validated range, format and mix settings survive the asynchronous destination callback");
+    {
+        // Rendered track: All Individual Tracks exports stems into a folder and asks before replacing them.
+        AudioExportDialog stemsDialog (*this, theme, { 0, 1 });
+        stemsDialog.getComboBoxComponent ("rendered")->setSelectedItemIndex (1, juce::sendNotificationSync);
+        Session::AudioExportSettings stemSettings;
+        check (readAudioExportSettings (stemsDialog, stemSettings).wasOk() && stemSettings.stems, "All Individual Tracks selects stem export");
+        stemsDialog.setVisible (false);
+        juce::TemporaryFile stemFolder;
+        performStemExport (stemFolder.getFile(), stemSettings, session.snapshot().projectGeneration);
+        const auto exported = stemFolder.getFile().findChildFiles (juce::File::findFiles, false, "*.wav");
+        check (exported.size() == (int) session.snapshot().tracks.size() + 1, "a stem export writes one file per track plus Master");
+        const auto alertsBefore = alerts.size();
+        performStemExport (stemFolder.getFile(), stemSettings, session.snapshot().projectGeneration);
+        check (alerts.size() == alertsBefore + 1 && alerts.back() != nullptr, "exporting stems again asks before replacing the files");
+        alerts.back()->exitModalState (1); drainQueuedCallbacks();
+        check (status.contains ("stems exported"), "confirming replaces the stems");
+        stemFolder.getFile().deleteRecursively();
+    }
     juce::TemporaryFile destination (".flac"); check (destination.getFile().replaceWithText ("keep this existing audio"), "prepare export destination collision");
     const auto selectedPath = destination.getFile().withFileExtension ("unexpected");
     exportAudioSelection (selectedPath, *capturedSettings, capturedGeneration);

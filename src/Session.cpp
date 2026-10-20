@@ -4054,6 +4054,71 @@ Result Session::exportWav (const File& file, double rate, int bits, double tailS
     return exportAudio (file, ExportFormat::wav, rate, bits, tailSeconds);
 }
 
+Result Session::exportStems (const File& folder, const AudioExportSettings& settings, juce::StringArray& written, bool overwrite)
+{
+    written.clear();
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before exporting.");
+    const auto snapshot = this->snapshot();
+    const juce::String extension = settings.format == ExportFormat::aiff ? ".aiff" : settings.format == ExportFormat::flac ? ".flac" : ".wav";
+    // Stems in display order: a group before its members, returns after the tracks, then Master.
+    struct Stem { String name; std::optional<String> trackId, groupId; bool master = false; };
+    std::vector<Stem> stems; String open;
+    for (const auto& track : snapshot.tracks)
+    {
+        if (track.groupId.isNotEmpty() && track.groupId != open)
+            for (const auto& group : snapshot.groups) if (group.id == track.groupId) stems.push_back ({ group.name, std::nullopt, group.id });
+        open = track.groupId;
+        if (! track.isReturn) stems.push_back ({ track.name, track.id, std::nullopt });
+    }
+    for (const auto& track : snapshot.tracks) if (track.isReturn) stems.push_back ({ track.name, track.id, std::nullopt });
+    stems.push_back ({ "Master", std::nullopt, std::nullopt, true });
+    std::vector<File> files; std::set<String> used;
+    for (const auto& stem : stems)
+    {
+        auto base = File::createLegalFileName (snapshot.name + " " + stem.name), name = base;
+        for (int n = 2; ! used.insert (name.toLowerCase()).second; ++n) name = base + " " + String (n);
+        files.push_back (folder.getChildFile (name + extension));
+        if (! overwrite && files.back().exists()) return Result::fail (files.back().getFileName() + " already exists. Choose another folder or replace the files.");
+    }
+    if (auto r = folder.createDirectory(); r.failed()) return r;
+    // Isolate each stem with solo and return mutes outside history, then restore them exactly.
+    std::vector<std::pair<juce::ValueTree, std::pair<juce::var, juce::var>>> saved;
+    for (auto* track : te::getAllTracks (*impl->edit))
+        if (dynamic_cast<te::AudioTrack*> (track) != nullptr || dynamic_cast<te::FolderTrack*> (track) != nullptr)
+            saved.push_back ({ track->state, { track->state[te::IDs::solo], track->state[te::IDs::mute] } });
+    const bool wasDirty = snapshot.dirty;
+    const auto put = [] (juce::ValueTree& state, const juce::Identifier& id, const juce::var& value)
+    { if (value.isVoid()) state.removeProperty (id, nullptr); else state.setProperty (id, value, nullptr); };
+    const auto restore = [&]
+    {
+        for (auto& [state, values] : saved) { put (state, te::IDs::solo, values.first); put (state, te::IDs::mute, values.second); }
+        impl->refreshRouting();
+        if (! wasDirty) impl->edit->resetChangedStatus();
+    };
+    for (size_t i = 0; i < stems.size(); ++i)
+    {
+        const auto& stem = stems[i];
+        // Start each stem from the project's own solo and mute state; Master keeps it.
+        for (auto& [state, values] : saved) { put (state, te::IDs::solo, values.first); put (state, te::IDs::mute, values.second); }
+        if (! stem.master)
+        {
+            juce::ValueTree target;
+            if (stem.groupId) if (auto* folderTrack = impl->group (*stem.groupId)) target = folderTrack->state;
+            if (stem.trackId) if (auto* track = impl->track (*stem.trackId)) target = track->state;
+            for (auto& [state, values] : saved) state.setProperty (te::IDs::solo, state == target, nullptr);
+            // Track and group stems leave out return effects; a return stem keeps its sends.
+            for (auto* track : te::getAudioTracks (*impl->edit))
+                if (isReturn (*track) && track->state != target) track->state.setProperty (te::IDs::mute, true, nullptr);
+        }
+        impl->refreshRouting();
+        const auto result = exportAudio (files[i], settings);
+        if (result.failed()) { restore(); return result; }
+        written.add (files[i].getFullPathName());
+    }
+    restore();
+    sendChangeMessage(); return Result::ok();
+}
 Result Session::exportAudio (const File& file, ExportFormat format, double rate, int bits, double tailSeconds)
 {
     return exportAudio (file, { format, rate, bits, tailSeconds });

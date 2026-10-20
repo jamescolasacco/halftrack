@@ -30,6 +30,7 @@ public:
         float peakCeilingDb = -1;
         // Exact [start, end) seconds, rounded to output frames. Requires zero tail.
         std::optional<juce::Range<double>> timeRange;
+        bool stems = false; // Chosen in the export window: render every track to its own file with exportStems.
     };
     enum class FollowAction { off, stop, replay, previous, next, first, last, cycle };
     // Clip launch behaviour on press/release of its launch button.
@@ -355,6 +356,10 @@ public:
     juce::Result exportAudio (const juce::File&, const AudioExportSettings&);
     juce::Result exportAudio (const juce::File&, ExportFormat, double sampleRate = 48000, int bitDepth = 24, double tailSeconds = 0);
     juce::Result exportWav (const juce::File&, double sampleRate = 48000, int bitDepth = 24, double tailSeconds = 0);
+    // Renders every track, group and return on its own (tracks and groups without return effects,
+    // returns with their sends) and the Master mix into "<project> <name>" files in a folder.
+    // Existing files are only replaced with overwrite; nothing changes in the project or its history.
+    juce::Result exportStems (const juce::File& folder, const AudioExportSettings&, juce::StringArray& writtenFiles, bool overwrite = false);
     // Export pumps native events; edits reject while it owns the render graph.
     bool isExporting() const;
     void cancelExport();

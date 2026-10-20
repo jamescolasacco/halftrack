@@ -859,3 +859,7 @@ Root owns device automation across `src/NativeEffects.*`, `src/Session.*`, `src/
 ## Freeze and Flatten — 2026-10-20
 
 Root owns freeze across `src/Session.*`, `src/NativeEffects.h`, `src/SubtractiveSynth.h`, the track menu and arrangement drawing, tests and documentation. Tracks can be frozen (rendered through their devices, then locked), unfrozen and flattened into project audio with undo. Native instruments now declare that they sound without audio input, which the engine's freeze render requires. The new `freeze-acceptance` suite passes, and the full 35-suite run passes locally on the Mac in 140 s. See [the freeze contract](research/freeze-contract.md).
+
+## Stem export — 2026-10-20
+
+Root owns `exportStems` in `src/Session.*`, the export window's Rendered track choice, `tests/StemExportTests.cpp` and documentation. Export Audio can now render All Individual Tracks: one file per track and group (without return effects), per return (with the sends it receives) and the Master mix. Existing files are replaced only after confirmation, and the project is left unchanged. The new `stems-acceptance` suite checks each stem against generated sources exactly. Export UI, audio export, sends, groups and UI suites pass locally on the Mac.
