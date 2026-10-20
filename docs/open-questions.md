@@ -239,3 +239,7 @@ Split, Delete Selection, Duplicate Selection and Consolidate act on clips only; 
 ### Time signature defaults
 
 The project has one meter, and beats are quarter notes at every meter, so the tempo counts quarter notes and 6/8 has three beats per bar. The metronome clicks quarter notes and accents bars. Importing a MIDI file does not change the project meter. These are simplest-default choices pending reference measurement.
+
+### MIDI note tool defaults
+
+The note tools use Halftrack's own algorithms and parameter sets (for example, Strum keeps each note's end, and Connect interpolates passing-note pitches linearly). They apply on demand rather than previewing live. Generators add notes across the whole clip and replace only chosen notes. These are simplest-default choices pending reference measurement.

@@ -2,6 +2,7 @@
 #include "AudioClipEditor.h"
 #include "AutomationEditor.h"
 #include "NativeEffects.h"
+#include "NoteTools.h"
 #include "Session.h"
 
 #include <algorithm>
@@ -3382,6 +3383,92 @@ private:
             if (bar == &horizontal) viewBeat = start; else topPitch = 127 - (int) std::round (start);
             repaint();
         }
+    public:
+        // A note tool's settings, applied to the selected notes (or every note) each time Apply is pressed.
+        class NoteToolPanel final : public juce::Component
+        {
+        public:
+            NoteToolPanel (PianoRoll& r, Session::NoteTool tool) : roll (&r), settings (notetools::defaults (tool))
+            {
+                setName ("Note tool " + juce::String (notetools::name (tool)));
+                const auto fields = notetools::fields (tool);
+                for (size_t i = 0; i < fields.size(); ++i)
+                {
+                    const auto& f = fields[i];
+                    auto& label = labels[i]; label.setText (f.label, juce::dontSendNotification); label.setColour (juce::Label::textColourId, ink); addAndMakeVisible (label);
+                    if (f.choices)
+                    {
+                        auto& box = choices[i]; box.setName (f.label); box.addItemList (juce::StringArray::fromTokens (f.choices, "|", ""), 1);
+                        box.setSelectedId ((int) f.initial + 1, juce::dontSendNotification);
+                        box.onChange = [this, i] { settings.values[i] = choices[i].getSelectedId() - 1; };
+                        addAndMakeVisible (box);
+                    }
+                    else
+                    {
+                        auto& slider = sliders[i]; slider.setName (f.label); slider.setSliderStyle (juce::Slider::LinearBar);
+                        slider.setRange (f.minimum, f.maximum, f.integer ? 1.0 : 0.0); slider.setValue (f.initial, juce::dontSendNotification);
+                        slider.setTextValueSuffix (f.unit); slider.setNumDecimalPlacesToDisplay (f.integer ? 0 : 3); slider.updateText();
+                        slider.setColour (juce::Slider::trackColourId, juce::Colour (0xff59606a)); slider.setColour (juce::Slider::textBoxTextColourId, ink);
+                        slider.onValueChange = [this, i] { settings.values[i] = sliders[i].getValue(); };
+                        addAndMakeVisible (slider);
+                    }
+                }
+                rows = (int) fields.size();
+                apply.setName ("Apply note tool");
+                apply.setButtonText (notetools::generates (tool) ? "Generate" : "Transform");
+                apply.onClick = [this] { if (roll != nullptr) roll->applyNoteTool (settings); };
+                addAndMakeVisible (apply);
+                hint.setText (notetools::generates (tool) ? "Fills the clip, replacing any selected notes." : "Reshapes the selected notes, or every note when none is selected.",
+                              juce::dontSendNotification);
+                hint.setColour (juce::Label::textColourId, muted); hint.setFont (font (10.5f)); addAndMakeVisible (hint);
+            }
+            static int heightFor (Session::NoteTool tool) { return 78 + 28 * (int) notetools::fields (tool).size(); }
+            void resized() override
+            {
+                auto area = getLocalBounds().reduced (12, 10);
+                for (int i = 0; i < rows; ++i)
+                {
+                    auto row = area.removeFromTop (28).withTrimmedBottom (4);
+                    labels[(size_t) i].setBounds (row.removeFromLeft (90));
+                    choices[(size_t) i].setBounds (row); sliders[(size_t) i].setBounds (row);
+                }
+                area.removeFromTop (6);
+                auto buttons = area.removeFromBottom (26);
+                apply.setBounds (buttons.removeFromRight (110));
+                hint.setBounds (area);
+            }
+            Session::NoteToolSettings settings;
+            juce::TextButton apply;
+        private:
+            juce::Component::SafePointer<PianoRoll> roll;
+            std::array<juce::Label, 8> labels;
+            std::array<juce::ComboBox, 8> choices;
+            std::array<juce::Slider, 8> sliders;
+            juce::Label hint;
+            int rows = 0;
+        };
+        void openNoteTool (Session::NoteTool tool)
+        { owner.showDialog (juce::String (notetools::name (tool)), std::make_unique<NoteToolPanel> (*this, tool), 340, NoteToolPanel::heightFor (tool)); }
+        void applyNoteTool (const Session::NoteToolSettings& settings)
+        {
+            const auto* clip = owner.currentMidiClip(); if (! clip) return;
+            endGesture();
+            const bool generator = notetools::generates (settings.tool);
+            juce::StringArray ids;
+            for (const auto& note : clip->notes)
+                if (selectedNoteIds.empty() ? ! generator : selectedNoteIds.contains (note.id)) ids.add (note.id);
+            juce::StringArray created;
+            const auto result = owner.session.applyNoteTool (clip->id, ids, settings, created);
+            owner.report (result); owner.refresh();
+            if (result.wasOk())
+            {
+                clearSelection();
+                for (const auto& id : created) selectedNoteIds.insert (id);
+                if (! created.isEmpty()) selectedNoteId = created[0];
+            }
+            repaint();
+        }
+    private:
         void transformSelected (Session::NoteTransform operation)
         {
             const auto* clip = owner.currentMidiClip(); if (! clip) return;
@@ -3427,6 +3514,14 @@ private:
                                   "Compress Time by Half", "Stretch Time to Double", "Set Fixed Length" };
             for (int i=0;i<8;++i) popup.addItem (10+i, names[i], hasNotes);
             popup.addSeparator();
+            juce::PopupMenu transforms, generators;
+            for (int t = 0; t < Session::noteToolCount; ++t)
+            {
+                const auto tool = static_cast<Session::NoteTool> (t);
+                (notetools::generates (tool) ? generators : transforms).addItem (100 + t, juce::String (notetools::name (tool)) + "...", notetools::generates (tool) ? clip != nullptr : hasNotes);
+            }
+            popup.addSubMenu ("Transform", transforms, hasNotes); popup.addSubMenu ("Generate", generators, clip != nullptr);
+            popup.addSeparator();
             popup.addItem (2, "Copy Notes", hasSelectedNote()); popup.addItem (3, "Cut Notes", hasSelectedNote());
             popup.addItem (4, "Paste Notes at Marker", ! noteClipboard.empty()); popup.addItem (5, "Duplicate Notes");
             popup.addItem (7, "Split Notes at Marker", hasNotes);
@@ -3441,6 +3536,7 @@ private:
             {
                 if (safe == nullptr || safe->loadedClip != clipId || safe->selectedNoteIds != ids) return;
                 if (result >= 10 && result <= 17) safe->transformSelected (static_cast<Session::NoteTransform> (result-10));
+                if (result >= 100 && result < 100 + Session::noteToolCount) safe->openNoteTool (static_cast<Session::NoteTool> (result - 100));
                 if (result == 1) safe->deleteSelectedNote();
                 if (result == 7 && safe->insertionBeat==marker) safe->splitNotesAtMarker();
                 if (result == 8) safe->toggleSelectedNotes();
@@ -6496,6 +6592,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         laneMenu->setSelectedId (99, juce::sendNotificationSync);
         check (! laneView->isVisible(), "Hide lane gives the notes the full height");
         laneMenu->setSelectedId (1, juce::sendNotificationSync);
+    }
+    {
+        // Note tools open a settings window; Apply reshapes the selected note and keeps the window open.
+        const auto before = currentMidiClip()->notes;
+        pianoRoll.openNoteTool (Session::NoteTool::chop);
+        juce::Component* panel = nullptr;
+        for (int w = 0; w < juce::TopLevelWindow::getNumTopLevelWindows() && panel == nullptr; ++w)
+            if (auto* window = juce::TopLevelWindow::getTopLevelWindow (w)) panel = findNamed (*window, "Note tool Chop");
+        check (panel != nullptr, "Transform > Chop opens its settings window");
+        dynamic_cast<juce::Slider*> (findNamed (*panel, "Parts"))->setValue (2, juce::sendNotificationSync);
+        dynamic_cast<juce::Button*> (findNamed (*panel, "Apply note tool"))->onClick(); refresh();
+        const auto& chopped = currentMidiClip()->notes;
+        check (chopped.size() == before.size() + 1 && pianoRoll.hasSelectedNote(), "Apply chops the note into two and selects the parts");
+        pianoRoll.keyPressed (undo);
+        check (currentMidiClip()->notes.size() == before.size(), "one undo restores the note");
+        if (auto* window = panel->findParentComponentOfClass<juce::DialogWindow>()) delete window;
     }
     withGeneratedMidiController(session,[&](const juce::String& controller)
     {

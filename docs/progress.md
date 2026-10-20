@@ -923,3 +923,7 @@ Root owns `consolidateRange` in `src/Session.*`, Cmd/Ctrl+J and the Edit menu it
 ## Time signature — 2026-10-20
 
 Root owns the meter across `src/Session.*`, the control bar, rulers and grids in `src/MainComponent.cpp`, `tests/TimeSignatureTests.cpp`, the meter checks in `tests/MetronomeTests.cpp`, the suite registration and documentation. Projects can be in any meter from 1 to 99 over 1, 2, 4, 8 or 16, with beats kept as quarter notes. Launch quantisation, metronome accents, count-in, rulers, grids, clip creation, position fields and MIDI file export follow the meter. A 3/4 bar-quantized launch lands on sample 72000, and 3/4 and 5/4 clicks match exactly. See [the time signature contract](research/time-signature-contract.md).
+
+## MIDI note tools — 2026-10-20
+
+Root owns the note tools across `src/NoteTools.*` (new), `applyNoteTool` in `src/Session.*`, the piano roll's Transform and Generate menus and settings window in `src/MainComponent.cpp`, `tests/MidiToolTests.cpp`, the suite registration and documentation. Ten tools are available: Strum, Chop, Span, Recombine, Velocity Shaper, Arpeggiate, Ornament, Connect, Euclidean and Seed. The new `midi-tools-acceptance` suite compares every tool's output with hand-computed notes. See [the note tool contract](research/midi-tools-contract.md).
