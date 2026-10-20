@@ -3578,7 +3578,10 @@ Result Session::setTrackInput (int index, const String& name)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (isReturn (*t)) return Result::fail ("Return tracks cannot receive recording inputs.");
-    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing inputs.");
+    // Enabling a device rebuilds the device lists, which discards active takes, and a recording
+    // track must keep the input its Session take stops on. Session takes do not set the transport
+    // recording, so they are checked separately.
+    if (impl->edit->getTransport().isRecording() || ! impl->slotRecordings.empty()) return Result::fail ("Stop recording before changing inputs.");
     const bool midi = t->state.getProperty (midiTrackProperty, false);
     // Validate the typed name before enabling anything. Re-query instances after
     // enabling because the native device list and playback graph may rebuild.

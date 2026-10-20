@@ -968,12 +968,130 @@ void inputChangesKeepPlaying()
     session.stop();
 }
 
+// Enabling an input device or a change in the MIDI device list rebuilds every playback
+// context's device list, and the engine discards active input recordings while rebuilding.
+// A Session take leaves the transport out of recording, so it is protected separately:
+// input assignment is refused while it records, arming and monitoring another track leave
+// it running, and MIDI discovery waits until it ends.
+void sessionTakesSurviveDeviceChanges()
+{
+    Session session {false, makeSyntheticTestDeviceType()};
+    VirtualController keys {session}, spare {session}, other {session}; // Disabled until a track selects them.
+    ok (session.addMidiTrack(), "create the Session recording MIDI track");
+    ok (session.addMidiTrack(), "create a second MIDI track");
+    ok (session.setTrackInput (2, keys.name), "assign the generated controller to the recording track");
+    ok (session.setTrackInput (3, other.name), "assign another controller to the second MIDI track");
+    ok (session.setTrackArmed (2, true), "arm the Session recording track");
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::none), "record Session takes without a grid");
+    // Rebuilds replace the engine's wave input objects, so look the generated input up by name.
+    const auto audioInputs = session.inputNames();
+    check (! audioInputs.isEmpty(), "the synthetic device offers a generated audio input");
+    const auto audioInput = [&]
+    {
+        for (auto* device : keys.devices.getWaveInputDevices()) if (device->getName() == audioInputs[0]) return device;
+        throw std::runtime_error ("generated audio input disappeared");
+    };
+    audioInput()->setEnabled (false);
+    pumpSyntheticTestDevice (session, 8); // Apply the device list changes before recording.
+    const auto slotState = [&] (int track, int scene) { return session.snapshot().tracks[(size_t) track].slots[(size_t) scene]; };
+    const auto playKey = [&] (int pitch)
+    {
+        keys.sendNow (juce::MidiMessage::noteOn (1, pitch, (juce::uint8) 96)); pumpSyntheticTestDevice (session, 20);
+        keys.sendNow (juce::MidiMessage::noteOff (1, pitch)); pumpSyntheticTestDevice (session, 20);
+    };
+    const auto refused = [&] (const juce::Result& result, const juce::String& change, int track, int scene)
+    {
+        check (result.failed() && slotState (track, scene).recording && session.snapshot().playing,
+               change + " is refused while the Session take records (" + result.getErrorMessage() + ")");
+    };
+    const auto discovered = [&] (const juce::String& name)
+    {
+        const auto inputs = keys.devices.getMidiInDevices();
+        return std::any_of (inputs.begin(), inputs.end(), [&] (const auto& device) { return device->getName() == name; });
+    };
+    // A MIDI device appears while the take records: discovery waits and resumes after the take.
+    const auto plugInDuringTake = [&] (int track, int scene)
+    {
+        const auto name = "Halftrack plugged MIDI " + juce::Uuid().toString();
+        ok (keys.devices.createVirtualMidiDevice (name), "a MIDI device appears during the take");
+        keys.devices.rescanMidiDeviceListSynchronously();
+        pumpSyntheticTestDevice (session, 20); // The engine's own rescan request runs here as well.
+        check (slotState (track, scene).recording && session.snapshot().playing && ! discovered (name),
+               "MIDI discovery waits while the Session take records");
+        return name;
+    };
+    const auto discoveryResumes = [&] (const juce::String& name)
+    {
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + 2000;
+        while (! discovered (name) && juce::Time::getMillisecondCounterHiRes() < deadline) pumpSyntheticTestDevice (session, 4);
+        check (discovered (name), "deferred MIDI discovery resumes after the take ends");
+        for (auto device : keys.devices.getMidiInDevices())
+            if (auto plugged = std::dynamic_pointer_cast<te::VirtualMidiInputDevice> (device); plugged && plugged->getName() == name)
+            { keys.devices.deleteVirtualMidiDevice (*plugged); keys.devices.rescanMidiDeviceListSynchronously(); break; }
+    };
+
+    session.seek (0); ok (session.play(), "start the transport");
+    pumpSyntheticTestDevice (session, 8);
+    ok (session.recordSlot (2, 0), "start a MIDI Session take");
+    pumpSyntheticTestDevice (session, 8);
+    playKey (60);
+    refused (session.setTrackInput (3, spare.name), "assigning a disabled controller to another track", 2, 0);
+    check (! spare.midi->isEnabled() && session.snapshot().tracks[3].inputName == other.name,
+           "the refused controller assignment enabled no device and kept the track's input");
+    refused (session.setTrackInput (0, audioInputs[0]), "assigning a disabled audio input", 2, 0);
+    check (! audioInput()->isEnabled(), "the refused audio assignment left the input disabled");
+    refused (session.setTrackInput (2, {}), "disconnecting the recording track's input", 2, 0);
+    playKey (62);
+    // Arming and monitoring rebuild only the playback graph, which keeps the take.
+    ok (session.setTrackArmed (3, true), "arm another track during the take");
+    ok (session.setTrackMonitor (3, Session::MonitorMode::on), "monitor another track during the take");
+    ok (session.setTrackMonitor (3, Session::MonitorMode::off), "end monitoring during the take");
+    ok (session.setTrackArmed (3, false), "disarm another track during the take");
+    check (slotState (2, 0).recording && session.snapshot().playing, "arming and monitoring keep the take recording");
+    playKey (64);
+    const auto plugged = plugInDuringTake (2, 0);
+    playKey (65);
+    ok (session.recordSlot (2, 0), "end the MIDI take");
+    pumpSyntheticTestDevice (session, 60);
+    const auto take = slotState (2, 0);
+    check (! take.recording && take.hasClip && take.clip.isMidi, "the MIDI take becomes a slot clip");
+    std::vector<int> pitches;
+    for (const auto& note : take.clip.notes) pitches.push_back (note.pitch);
+    check (pitches == std::vector<int> { 60, 62, 64, 65 }, "the MIDI take keeps every key played around the input changes ("
+           + juce::String ((int) pitches.size()) + " notes)");
+    session.stop();
+    discoveryResumes (plugged);
+
+    // An audio take from the generated input survives the same changes.
+    audioInput()->setEnabled (true);
+    pumpSyntheticTestDevice (session, 8);
+    ok (session.setTrackInput (0, audioInputs[0]), "assign the generated audio input");
+    ok (session.setTrackArmed (0, true), "arm the audio track");
+    session.seek (0); ok (session.play(), "restart the transport");
+    pumpSyntheticTestDevice (session, 8);
+    ok (session.recordSlot (0, 1), "start an audio Session take");
+    pumpSyntheticTestDevice (session, 40);
+    refused (session.setTrackInput (3, spare.name), "assigning a disabled controller during an audio take", 0, 1);
+    const auto pluggedDuringAudio = plugInDuringTake (0, 1);
+    pumpSyntheticTestDevice (session, 100);
+    ok (session.recordSlot (0, 1), "end the audio take");
+    pumpSyntheticTestDevice (session, 60);
+    const auto audioTake = slotState (0, 1);
+    check (! audioTake.recording && audioTake.hasClip && audioTake.clip.isAudio && audioTake.clip.file.existsAsFile(),
+           "the audio take becomes a slot clip with its recording");
+    const auto recorded = readAudio (audioTake.clip.file);
+    check (std::abs (recorded.getNumSamples() - 160 * 256) <= 512 && recorded.getMagnitude (0, recorded.getNumSamples()) > .15f,
+           "the audio take holds the generated input from start to end (" + juce::String (recorded.getNumSamples()) + " samples)");
+    session.stop();
+    discoveryResumes (pluggedDuringAudio);
+}
+
 int runMidiInputTests(const juce::File& artifacts)
 {
     try
     {
         const auto root=artifacts.getChildFile("midi-input-"+juce::Uuid().toString()); ok(root.createDirectory(),"create isolated fixtures");
-        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); recordingQuantisation(root); controllersAndOverdub(root); sessionRecording(); inputChangesKeepPlaying();
+        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); recordingQuantisation(root); controllersAndOverdub(root); sessionRecording(); inputChangesKeepPlaying(); sessionTakesSurviveDeviceChanges();
         std::cout<<"MIDI input tests passed: "<<root.getFullPathName()<<std::endl; return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI input: "<<e.what()<<std::endl;return 1;}

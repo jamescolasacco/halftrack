@@ -191,3 +191,7 @@ Takes start on the global launch grid (immediately from a stopped transport) and
 ### Drum Sampler defaults
 
 Pads are one-shot at unity level and velocity scales linearly; length cuts fade over 5 ms and choke groups release over 5 ms. Sixteen pads cover C1 to D#2 with no bank switching. The kit shares 32 voices with oldest-voice stealing. Browser samples load into the selected pad. These are simplest-default choices pending reference measurement.
+
+### Input changes during Session takes
+
+While a Session slot take records, input assignment is refused on every track, as during Arrangement recording. Enabling a device would discard the take, and replacing or disconnecting the recording track's input would leave the take without the input that stops it. A narrower rule could still allow assigning already-enabled inputs to other tracks; the reference application's behavior is unmeasured. Arming and monitoring stay available during a take. A MIDI device that appears during a take is discovered when the take ends. Audio-device changes in Audio Settings take the same device-list rebuild during any recording, Arrangement or Session. Code inspection shows the rebuild discards the take, but this is unmeasured, and refusing versus deferring those changes is undecided. Other edits refused only during Arrangement recording have not been audited for Session takes. These are undo, removing tracks, and editing scenes or slots.
