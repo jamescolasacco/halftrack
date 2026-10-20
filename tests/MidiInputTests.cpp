@@ -307,8 +307,9 @@ void interruptedMidiStateOrdering()
 }
 
 // Even if these audio-derived device types are passed directly to this native
-// node (normally the builder selects dedicated nodes), receipt must not refresh
-// the shared wall clock. Use real native devices/instances, without audio input.
+// node (normally the builder selects dedicated nodes), its device classification
+// excludes the external receipt-clock branch. Verify real types and delivery;
+// do not compare a global cache that JUCE's timer thread can independently write.
 void audioDerivedMidiReceiptClockGuards()
 {
     Session session (false);
@@ -340,11 +341,18 @@ void audioDerivedMidiReceiptClockGuards()
         graph.sortedNodes.push_back ({receiver, receiver->getNodeProperties().nodeID});
         graph.rootNode = std::move (node);
         receiver->prepareToPlay ({48000, 256, graph, nullptr});
-        const auto before = waitForFrozenMidiClock();
+        const auto label = juce::String (source->isTrackDevice() ? "track" : "hosted");
+        check (source->isTrackDevice() || te::HostedAudioDeviceInterface::isHostedMidiInputDevice (*source),
+            label + " native input excludes the external receipt-clock classification");
         receiver->handleIncomingMidiMessage (juce::MidiMessage::noteOn (1, 72, (juce::uint8)96), source->getMPESourceID());
-        const auto after = juce::Time::getApproximateMillisecondCounter();
-        check (before == after, juce::String (source->isTrackDevice() ? "track" : "hosted")
-            + " MIDI receipt keeps the cached clock path; before=" + juce::String (before) + " after=" + juce::String (after));
+        te::MidiMessageArray messages;
+        tracktion::graph::Node::ProcessContext processContext {256, {0,256}, {{},messages}};
+        receiver->process (processContext);
+        check (messages.size() == 1 && messages.begin()->isNoteOn() && messages.begin()->getNoteNumber() == 72,
+            label + " native input delivers its first received key");
+        messages.clear();
+        receiver->process (processContext);
+        check (messages.isEmpty(), label + " native input consumes the key exactly once");
     }
 }
 
