@@ -49,35 +49,6 @@ const juce::Identifier crossfadeProperty { "halftrackCrossfade" };
 const juce::Identifier crossfaderProperty { "halftrackCrossfader" };
 const juce::Identifier manualPanProperty { "halftrackManualPan" };
 
-// Audio Effect Racks: chain mixer properties, the rack's macro knobs and each device's macro mappings.
-const juce::Identifier rackProperty { "halftrackRack" };
-const juce::Identifier chainNameProperty { "halftrackChainName" };
-const juce::Identifier chainMuteProperty { "halftrackChainMute" };
-const juce::Identifier chainSoloProperty { "halftrackChainSolo" };
-const juce::Identifier macrosType { "HALFTRACKMACROS" };
-const juce::Identifier macroType { "HALFTRACKMACRO" };
-const juce::Identifier macroMapProperty { "halftrackMacroMap" };
-// Stored mappings use knob positions (0-1); minimum may exceed maximum for an inverted range.
-struct StoredMacroMapping { int macro = 0, parameter = 0; float minimum = 0, maximum = 1; };
-// "macro,parameter,minimum,maximum" entries separated by semicolons.
-std::vector<StoredMacroMapping> macroMappings (const juce::ValueTree& plugin)
-{
-    std::vector<StoredMacroMapping> result;
-    for (const auto& entry : juce::StringArray::fromTokens (plugin[macroMapProperty].toString(), ";", ""))
-    {
-        const auto fields = juce::StringArray::fromTokens (entry, ",", "");
-        if (fields.size() == 4)
-            result.push_back ({ fields[0].getIntValue(), fields[1].getIntValue(), fields[2].getFloatValue(), fields[3].getFloatValue() });
-    }
-    return result;
-}
-String macroMapText (const std::vector<StoredMacroMapping>& mappings)
-{
-    juce::StringArray entries;
-    for (const auto& m : mappings)
-        entries.add (String (m.macro) + "," + String (m.parameter) + "," + String (m.minimum, 7) + "," + String (m.maximum, 7));
-    return entries.joinIntoString (";");
-}
 const juce::Identifier& manualAutomationProperty (Session::AutomationTarget target)
 { return target == Session::AutomationTarget::volume ? manualVolumeProperty : manualPanProperty; }
 te::AutomatableParameter& automationParameter (te::VolumeAndPanPlugin& plugin, Session::AutomationTarget target)
@@ -763,76 +734,6 @@ bool validLocator (const String& name, double seconds)
 {
     return name.trim().isNotEmpty() && name.length() <= 128 && ! name.containsAnyOf ("\r\n\t")
         && std::isfinite (seconds) && seconds >= 0 && seconds <= te::Edit::maximumLength-.001;
-}
-// Audio Effect Racks: each rack type is Halftrack's own, used by exactly one rack on an audio track,
-// and holds chains of audio devices that each end in a chain mixer. Connections are rebuilt on load.
-Result validateRacks (const juce::ValueTree& state)
-{
-    const auto fail = [] { return Result::fail ("The project contains an invalid Audio Effect Rack."); };
-    const auto racks = state.getChildWithName (te::IDs::RACKS);
-    std::map<String, int> uses;
-    for (const auto& rack : racks)
-    {
-        if (! rack.hasType (te::IDs::RACK)) continue;
-        const auto id = te::EditItemID::fromID (rack);
-        if (! id.isValid() || static_cast<int> (rack.getProperty (rackProperty, 0)) != 1 || uses.contains (id.toString())) return fail();
-        uses[id.toString()] = 0;
-        const auto macros = rack.getChildWithName (macrosType);
-        if (macros.getNumChildren() != Session::rackMacroCount) return fail();
-        for (const auto& macro : macros)
-            if (! macro.hasType (macroType) || macro[te::IDs::name].toString().trim().isEmpty() || macro[te::IDs::name].toString().length() > 64
-                || ! finiteProperty (macro.getProperty (te::IDs::value, 0), 0, 1)) return fail();
-        juce::String last;
-        for (const auto& instance : rack)
-        {
-            if (! instance.hasType (te::IDs::PLUGININSTANCE)) continue;
-            const auto plugin = instance.getChild (0);
-            const auto type = plugin[te::IDs::type].toString();
-            if (instance.getNumChildren() != 1 || ! plugin.hasType (te::IDs::PLUGIN)) return fail();
-            if (type == TrackMixer::xmlTypeName)
-            {
-                if (plugin[chainNameProperty].toString().trim().isEmpty() || plugin[chainNameProperty].toString().length() > 128
-                    || ! finiteProperty (plugin.getProperty (chainMuteProperty, 0), 0, 1) || ! finiteProperty (plugin.getProperty (chainSoloProperty, 0), 0, 1)
-                    || plugin.getChildWithName (te::IDs::AUTOMATIONCURVE).getNumChildren() > 0) return fail();
-            }
-            else if (type == NativeEffectPlugin::xmlTypeName)
-            {
-                const auto kind = static_cast<Session::EffectKind> (static_cast<int> (plugin.getProperty ("effectKind", 0)));
-                if (effectIsMidi (kind) || effectIsInstrument (kind)) return fail();
-                std::set<int> mapped;
-                for (const auto& entry : juce::StringArray::fromTokens (plugin[macroMapProperty].toString(), ";", ""))
-                {
-                    const auto fields = juce::StringArray::fromTokens (entry, ",", "");
-                    if (fields.size() != 4 || ! finiteProperty (fields[0], 0, Session::rackMacroCount - 1) || ! finiteProperty (fields[1], 0, 127)
-                        || ! finiteProperty (fields[2], 0, 1) || ! finiteProperty (fields[3], 0, 1)
-                        || fields[0].getIntValue() != fields[0].getDoubleValue() || fields[1].getIntValue() != fields[1].getDoubleValue()
-                        || fields[1].getIntValue() >= (int) effectParameters (kind).size() || ! mapped.insert (fields[1].getIntValue()).second) return fail();
-                    for (const auto& curve : plugin)
-                        if (curve.hasType (te::IDs::AUTOMATIONCURVE) && curve.getNumChildren() > 0
-                            && curve[te::IDs::paramID].toString() == effectParameters (kind)[(size_t) fields[1].getIntValue()].key) return fail();
-                }
-            }
-            else if (type != UtilityPlugin::xmlTypeName && type != te::ExternalPlugin::xmlTypeName) return fail();
-            if (type != NativeEffectPlugin::xmlTypeName && plugin.hasProperty (macroMapProperty)) return fail();
-            last = type;
-        }
-        if (last.isNotEmpty() && last != TrackMixer::xmlTypeName) return fail();
-    }
-    bool valid = true;
-    const auto visit = [&] (auto&& self, const juce::ValueTree& node) -> void
-    {
-        if (node.hasType (te::IDs::PLUGIN) && node[te::IDs::type].toString() == te::RackInstance::xmlTypeName)
-        {
-            const auto found = uses.find (node[te::IDs::rackType].toString());
-            if (found == uses.end() || ++found->second > 1 || ! node.getParent().hasType (te::IDs::TRACK)) valid = false;
-        }
-        if (node.hasType (te::IDs::RACKS)) return;
-        for (const auto& child : node) self (self, child);
-    };
-    visit (visit, state);
-    if (! valid) return fail();
-    for (const auto& use : uses) if (use.second != 1) return fail();
-    return Result::ok();
 }
 // At most one Track Delay per track, within range.
 Result validateTrackDelays (const juce::ValueTree& state)
@@ -1538,200 +1439,13 @@ struct Session::Impl
         if (auto* t = track (index))
             for (auto* p : t->pluginList.getPlugins())
                 if (auto* native = dynamic_cast<NativeEffectPlugin*> (p); native != nullptr ? ! effectIsInstrument (native->getKind())
-                        : dynamic_cast<te::ExternalPlugin*> (p) != nullptr || dynamic_cast<UtilityPlugin*> (p) != nullptr
-                          || dynamic_cast<te::RackInstance*> (p) != nullptr) result.add (p);
+                        : dynamic_cast<te::ExternalPlugin*> (p) != nullptr || dynamic_cast<UtilityPlugin*> (p) != nullptr) result.add (p);
         return result;
     }
     te::Plugin* plugin (int trackIndex, int pluginIndex) const
     {
         auto list = plugins (trackIndex);
         return juce::isPositiveAndBelow (pluginIndex, list.size()) ? list[pluginIndex] : nullptr;
-    }
-    // Audio Effect Racks. A rack's plugin list is its chains in order: each chain's devices followed
-    // by the chain's mixer, a TrackMixer. The rack's connections are always rebuilt from that order.
-    struct RackChain { TrackMixer* mixer = nullptr; juce::Array<te::Plugin*> devices; };
-    static std::vector<RackChain> rackChains (const te::RackType& rack)
-    {
-        std::vector<RackChain> chains; RackChain current;
-        for (auto* p : rack.getPlugins())
-            if (auto* mixer = dynamic_cast<TrackMixer*> (p)) { current.mixer = mixer; chains.push_back (current); current = {}; }
-            else current.devices.add (p);
-        return chains;
-    }
-    te::RackInstance* rack (const String& id) const
-    {
-        for (auto* t : te::getAudioTracks (*edit))
-            for (auto* p : t->pluginList.getPlugins())
-                if (auto* r = dynamic_cast<te::RackInstance*> (p); r && r->type && r->itemID.toString() == id) return r;
-        return nullptr;
-    }
-    struct DeviceLocation { te::AudioTrack* track = nullptr; te::RackInstance* rack = nullptr; te::Plugin* plugin = nullptr; int chain = -1; };
-    // Finds a device on a track or inside one of its racks.
-    DeviceLocation device (const String& id) const
-    {
-        for (auto* t : te::getAudioTracks (*edit))
-            for (auto* p : t->pluginList.getPlugins())
-            {
-                if (p->itemID.toString() == id) return { t, nullptr, p, -1 };
-                if (auto* r = dynamic_cast<te::RackInstance*> (p); r && r->type)
-                {
-                    const auto chains = rackChains (*r->type);
-                    for (int c = 0; c < (int) chains.size(); ++c)
-                        for (auto* d : chains[(size_t) c].devices) if (d->itemID.toString() == id) return { t, r, d, c };
-                }
-            }
-        return {};
-    }
-    // A chain is named by its mixer's ID.
-    DeviceLocation chain (const String& id) const
-    {
-        for (auto* t : te::getAudioTracks (*edit))
-            for (auto* p : t->pluginList.getPlugins())
-                if (auto* r = dynamic_cast<te::RackInstance*> (p); r && r->type)
-                {
-                    const auto chains = rackChains (*r->type);
-                    for (int c = 0; c < (int) chains.size(); ++c)
-                        if (chains[(size_t) c].mixer->itemID.toString() == id) return { t, r, chains[(size_t) c].mixer, c };
-                }
-        return {};
-    }
-    // Every device on a track, including those inside its racks.
-    static juce::Array<te::Plugin*> allDevices (te::AudioTrack& track)
-    {
-        juce::Array<te::Plugin*> result;
-        for (auto* p : track.pluginList.getPlugins())
-        {
-            result.add (p);
-            if (auto* r = dynamic_cast<te::RackInstance*> (p); r && r->type) result.addArray (r->type->getPlugins());
-        }
-        return result;
-    }
-    static int audioPins (te::Plugin& plugin, bool inputs)
-    {
-        juce::StringArray ins, outs; plugin.getChannelNames (&ins, &outs);
-        return juce::jlimit (1, 2, (inputs ? ins : outs).size());
-    }
-    // Chains run in parallel from the rack input and sum at its output; a rack without chains passes its input.
-    static void rewire (te::RackType& rackType)
-    {
-        auto* undo = rackType.getUndoManager();
-        for (int i = rackType.state.getNumChildren(); --i >= 0;)
-            if (rackType.state.getChild (i).hasType (te::IDs::CONNECTION)) rackType.state.removeChild (i, undo);
-        const auto connect = [&rackType] (te::EditItemID source, int sourcePins, te::EditItemID destination, int destinationPins)
-        {
-            rackType.addConnection (source, 0, destination, 0);
-            for (int pin = 1; pin <= juce::jmax (sourcePins, destinationPins); ++pin)
-                rackType.addConnection (source, juce::jmin (pin, sourcePins), destination, juce::jmin (pin, destinationPins));
-        };
-        const auto chains = rackChains (rackType);
-        if (chains.empty()) { connect ({}, 2, {}, 2); return; }
-        bool soloed = false;
-        for (const auto& c : chains) soloed = soloed || static_cast<bool> (c.mixer->state.getProperty (chainSoloProperty, false));
-        for (const auto& c : chains)
-        {
-            te::EditItemID previous; int pins = 2;
-            for (auto* d : c.devices) { connect (previous, pins, d->itemID, audioPins (*d, true)); previous = d->itemID; pins = audioPins (*d, false); }
-            connect (previous, pins, c.mixer->itemID, 2);
-            const bool audible = ! static_cast<bool> (c.mixer->state.getProperty (chainMuteProperty, false))
-                && (! soloed || static_cast<bool> (c.mixer->state.getProperty (chainSoloProperty, false)));
-            if (audible) connect (c.mixer->itemID, 2, {}, 2);
-        }
-    }
-    // Appends a chain mixer, which ends a new chain after the rack's last chain.
-    te::Plugin* addChainMixer (te::RackType& rackType, const String& name)
-    {
-        auto mixer = edit->getPluginCache().createNewPlugin (TrackMixer::xmlTypeName, {});
-        if (mixer == nullptr || ! rackType.addPlugin (mixer, { .5f, .5f }, false)) return nullptr;
-        mixer->state.setProperty (chainNameProperty, name, &edit->getUndoManager());
-        return mixer.get();
-    }
-    // Moves a rack plugin so it becomes the rack's plugin at index (counting only plugins).
-    void placeInRack (te::RackType& rackType, te::Plugin& plugin, int index)
-    {
-        auto instance = plugin.state.getParent();
-        juce::Array<int> slots;
-        for (int i = 0; i < rackType.state.getNumChildren(); ++i) if (rackType.state.getChild (i).hasType (te::IDs::PLUGININSTANCE)) slots.add (i);
-        const int from = rackType.state.indexOf (instance);
-        if (! juce::isPositiveAndBelow (index, slots.size()) || from < 0 || slots[index] == from) return;
-        rackType.state.moveChild (from, slots[index], &edit->getUndoManager());
-    }
-    // Writes each control mapped to a macro from the macro's position, in the current transaction.
-    void applyMacros (te::RackType& rackType)
-    {
-        const auto macros = rackType.state.getChildWithName (macrosType);
-        for (auto* p : rackType.getPlugins())
-            if (auto* native = dynamic_cast<NativeEffectPlugin*> (p))
-            {
-                auto settings = native->readSettings(); const auto before = settings;
-                for (const auto& m : macroMappings (native->state))
-                {
-                    const float value = macros.getChild (m.macro).getProperty (te::IDs::value, 0.0f);
-                    settings.values[(size_t) m.parameter] = effectProportionToValue (native->getKind(), m.parameter, m.minimum + value * (m.maximum - m.minimum));
-                }
-                if (settings.values != before.values) native->writeSettings (settings);
-            }
-    }
-    // A device the user placed: on a track's device list or inside a chain (never a chain mixer).
-    bool userDevice (const DeviceLocation& at) const
-    {
-        if (at.plugin == nullptr) return false;
-        if (at.rack != nullptr) return at.chain >= 0;
-        return plugins (te::getAudioTracks (*edit).indexOf (at.track)).contains (at.plugin);
-    }
-    // Adds a new device at the end of a chain, ahead of the chain's mixer.
-    Result addToChain (const String& chainId, const juce::ValueTree& pluginState, const String& name)
-    {
-        const auto at = chain (chainId);
-        if (! at.rack) return Result::fail ("Chain not found.");
-        if (auto frozen = unfrozen (at.track); frozen.failed()) return frozen;
-        if (exporting) return Result::fail ("Finish or cancel the current export first.");
-        if (edit->getTransport().isRecording()) return Result::fail ("Stop recording before adding devices.");
-        if (rackChains (*at.rack->type)[(size_t) at.chain].devices.size() >= 64) return Result::fail ("A chain holds at most 64 devices.");
-        auto plugin = edit->getPluginCache().createNewPlugin (pluginState);
-        if (! plugin) return Result::fail ("The device could not be created.");
-        transaction ("Add " + name);
-        at.rack->type->addPlugin (plugin, { .5f, .5f }, false);
-        placeInRack (*at.rack->type, *plugin, at.rack->type->getPlugins().indexOf (at.plugin));
-        rewire (*at.rack->type); changed(); return Result::ok();
-    }
-    static PluginInfo describeDevice (te::Plugin& p)
-    {
-        PluginInfo device { p.itemID.toString(), p.getName(), p.isEnabled() };
-        if (auto* utility = dynamic_cast<UtilityPlugin*> (&p)) { device.isUtility = true; device.utility = utility->readSettings(); }
-        if (auto* effect = dynamic_cast<NativeEffectPlugin*> (&p))
-        { device.isNativeEffect = true; device.effect = effect->readSettings(); device.automation = deviceAutomation (*effect); }
-        if (auto* r = dynamic_cast<te::RackInstance*> (&p); r && r->type)
-        {
-            device.isRack = true;
-            const auto macros = r->type->state.getChildWithName (macrosType);
-            for (int m = 0; m < Session::rackMacroCount; ++m)
-                device.macros.push_back ({ macros.getChild (m)[te::IDs::name].toString(), macros.getChild (m).getProperty (te::IDs::value, 0.0f), {} });
-            for (const auto& c : rackChains (*r->type))
-            {
-                RackChainInfo chain { c.mixer->itemID.toString(), { c.mixer->state[chainNameProperty].toString(), c.mixer->getVolumeDb(), c.mixer->getPan(),
-                    c.mixer->state.getProperty (chainMuteProperty, false), c.mixer->state.getProperty (chainSoloProperty, false) }, {} };
-                for (auto* d : c.devices)
-                {
-                    chain.devices.push_back (describeDevice (*d));
-                    if (auto* native = dynamic_cast<NativeEffectPlugin*> (d))
-                        for (const auto& m : macroMappings (native->state))
-                            if (juce::isPositiveAndBelow (m.macro, (int) device.macros.size()))
-                                device.macros[(size_t) m.macro].mappings.push_back ({ d->itemID.toString(), m.parameter,
-                                    effectProportionToValue (native->getKind(), m.parameter, m.minimum), effectProportionToValue (native->getKind(), m.parameter, m.maximum) });
-                }
-                device.chains.push_back (std::move (chain));
-            }
-        }
-        return device;
-    }
-    // Removes rack types that no rack on a track uses any more.
-    void removeUnusedRacks()
-    {
-        juce::Array<te::RackType*> used;
-        for (auto* t : te::getAudioTracks (*edit))
-            for (auto* p : t->pluginList.getPlugins()) if (auto* r = dynamic_cast<te::RackInstance*> (p); r && r->type) used.add (r->type.get());
-        const auto types = edit->getRackList().getTypes();
-        for (auto* type : types) if (! used.contains (type)) edit->getRackList().removeRackType (type);
     }
     File editLocation() const { return projectFile == File() ? scratch.getChildFile ("Untitled.halftrack") : projectFile; }
     File assets() const { auto f = editLocation(); return f.getSiblingFile (f.getFileNameWithoutExtension() + " Assets"); }
@@ -1788,7 +1502,11 @@ struct Session::Impl
             if (t != nullptr && t->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + t->getName() + "\" before editing its devices or clips.");
         return Result::ok();
     }
-    te::Track* trackOfPlugin (const String& pluginId) const { return device (pluginId).track; }
+    te::Track* trackOfPlugin (const String& pluginId) const
+    {
+        for (auto* t : te::getAudioTracks (*edit)) for (auto* p : t->pluginList.getPlugins()) if (p->itemID.toString() == pluginId) return t;
+        return nullptr;
+    }
     te::Track* trackOfClip (const String& clipId) const
     {
         for (auto* t : te::getAudioTracks (*edit)) for (auto* c : t->getClips()) if (c->itemID.toString() == clipId) return t;
@@ -1952,7 +1670,7 @@ struct Session::Impl
             }
         };
         for (auto* track : te::getAudioTracks (*edit))
-            for (auto* plugin : allDevices (*track)) refresh (*plugin);
+            for (auto* plugin : track->pluginList.getPlugins()) refresh (*plugin);
         for (auto* track : te::getAllTracks (*edit))
             if (auto* folder = dynamic_cast<te::FolderTrack*> (track); folder && folder->isSubmixFolder())
                 for (auto* plugin : folder->pluginList.getPlugins()) refresh (*plugin);
@@ -2174,7 +1892,14 @@ Session::Snapshot Session::snapshot() const
             }
             info.slots.push_back (std::move (slotInfo));
         }
-        for (auto* p : impl->plugins (index++)) info.plugins.push_back (Impl::describeDevice (*p));
+        for (auto* p : impl->plugins (index++))
+        {
+            PluginInfo device { p->itemID.toString(), p->getName(), p->isEnabled() };
+            if (auto* utility = dynamic_cast<UtilityPlugin*> (p)) { device.isUtility = true; device.utility = utility->readSettings(); }
+            if (auto* effect = dynamic_cast<NativeEffectPlugin*> (p))
+            { device.isNativeEffect = true; device.effect = effect->readSettings(); device.automation = deviceAutomation (*effect); }
+            info.plugins.push_back (std::move (device));
+        }
         s.tracks.push_back (std::move (info));
     }
     for (auto* track : te::getAllTracks (e))
@@ -2284,7 +2009,6 @@ Result Session::loadProject (const File& file)
     if (auto result = validateAudioClips (state); result.failed()) return result;
     if (auto result = validateFollowActions (state); result.failed()) return result;
     if (auto result = validateLocators (state); result.failed()) return result;
-    if (auto result = validateRacks (state); result.failed()) return result;
     if (auto result = validateTrackDelays (state); result.failed()) return result;
     restoreManualMixerState (state);
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
@@ -2302,11 +2026,8 @@ Result Session::loadProject (const File& file)
     for (const auto target : { AutomationTarget::volume, AutomationTarget::pan })
         if (! validAutomationLane (target, automationLane (*candidate->getMasterVolumePlugin(), target)))
             return Result::fail ("Master automation exceeds the supported beat or value range.");
-    // Rack connections follow from the chain order, so loading rebuilds them outside history.
-    for (auto* type : candidate->getRackList().getTypes()) Impl::rewire (*type);
-    candidate->getUndoManager().clearUndoHistory();
     for (auto* t : te::getAudioTracks (*candidate))
-        for (auto* p : Impl::allDevices (*t))
+        for (auto* p : t->pluginList.getPlugins())
             if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
                 if (! external->isInitialisingAsync() && external->getAudioPluginInstance() == nullptr)
                     return Result::fail ("Could not load plug-in " + external->getName()
@@ -3583,19 +3304,6 @@ Result Session::duplicateTrack (const String& id, String& duplicateId)
                 parameter.updateFromAutomationSources (impl->edit->getTransport().getPosition());
             }
     renewMidiNoteIDs (track->state, undo);
-    // A copied rack would share its chains with the original, so each copy gets its own rack.
-    for (auto* p : track->pluginList.getPlugins())
-        if (auto* rack = dynamic_cast<te::RackInstance*> (p); rack && rack->type)
-        {
-            auto type = impl->edit->getRackList().duplicateRack (*rack->type);
-            if (type == nullptr) return Result::fail ("Could not duplicate the track's rack.");
-            auto state = rack->state.createCopy();
-            state.setProperty (te::IDs::rackType, type->itemID.toString(), nullptr);
-            te::EditItemID::remapIDs (state, nullptr, *impl->edit);
-            const int at = track->pluginList.indexOf (rack);
-            rack->deleteFromParent();
-            track->pluginList.insertPlugin (impl->edit->getPluginCache().createNewPlugin (state), at, nullptr);
-        }
     track->setName (source->getName() + " copy");
     // Input target assignments live outside this copied track, so the new ID has
     // no input/arm state. Runtime Session ownership must not silence its Arrangement.
@@ -3671,9 +3379,8 @@ Result Session::flattenTrack (const String& trackId)
     // Remove the sound sources and devices; the mixer, meter and sends stay.
     for (auto* plugin : track->pluginList.getPlugins())
         if (dynamic_cast<NativeEffectPlugin*> (plugin) || dynamic_cast<te::ExternalPlugin*> (plugin) || dynamic_cast<UtilityPlugin*> (plugin)
-            || dynamic_cast<SubtractiveSynthPlugin*> (plugin) || dynamic_cast<te::FreezePointPlugin*> (plugin) || dynamic_cast<te::RackInstance*> (plugin))
+            || dynamic_cast<SubtractiveSynthPlugin*> (plugin) || dynamic_cast<te::FreezePointPlugin*> (plugin))
             plugin->deleteFromParent();
-    impl->removeUnusedRacks();
     for (auto* clip : track->getClips()) clip->removeFromParent();
     if (midi)
     {
@@ -3697,7 +3404,7 @@ Result Session::removeTrack (int index)
     if (isReturn (*t))
         for (auto* source : te::getAudioTracks (*impl->edit))
             if (auto* send = findSend (*source, t->itemID.toString())) send->deleteFromParent();
-    impl->edit->deleteTrack (t); impl->removeUnusedRacks(); impl->refreshRouting(); impl->changed(); return Result::ok();
+    impl->edit->deleteTrack (t); impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::importAudio (const File& source, int index, double start)
 {
@@ -4620,12 +4327,13 @@ Result Session::setDeviceAutomation (const String& pluginId, int parameter, cons
     if (auto frozen = impl->unfrozen (impl->trackOfPlugin (pluginId)); frozen.failed()) return frozen;
     if (impl->exporting || impl->edit->getTransport().isRecording())
         return Result::fail ("Stop recording or finish exporting before editing automation.");
-    auto* device = dynamic_cast<NativeEffectPlugin*> (impl->device (pluginId).plugin);
+    NativeEffectPlugin* device = nullptr;
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        for (auto* plugin : track->pluginList.getPlugins())
+            if (plugin->itemID.toString() == pluginId) device = dynamic_cast<NativeEffectPlugin*> (plugin);
     if (device == nullptr) return Result::fail ("Native device not found.");
     auto* control = device->control (parameter);
     if (control == nullptr) return Result::fail ("That device has no such control.");
-    for (const auto& m : macroMappings (device->state))
-        if (m.parameter == parameter && ! lane.points.empty()) return Result::fail ("This control follows Macro " + String (m.macro + 1) + ". Unmap it before drawing automation.");
     const auto& field = effectParameters (device->getKind())[(size_t) parameter];
     if (lane.points.size() > 4096) return Result::fail ("A lane can contain at most 4096 points.");
     double previousBeat = -1, previousTime = -1;
@@ -5138,7 +4846,7 @@ Result Session::exportAudio (const File& file, const AudioExportSettings& settin
     for (auto* track : te::getAudioTracks (*impl->edit))
     {
         if (auto* synth = Impl::synth (*track)) synth->prepareForOfflineRender();
-        for (auto* plugin : Impl::allDevices (*track))
+        for (auto* plugin : track->pluginList.getPlugins())
         {
             if (auto* utility = dynamic_cast<UtilityPlugin*> (plugin)) utility->prepareForOfflineRender();
             if (auto* effect = dynamic_cast<NativeEffectPlugin*> (plugin)) effect->prepareForOfflineRender();
@@ -5211,17 +4919,17 @@ Result Session::setNativeEffectSettings (const String& id, const EffectSettings&
     if (auto frozen = impl->unfrozen (impl->trackOfPlugin (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! validEffectSettings (settings)) return Result::fail ("Effect settings are outside their supported ranges.");
-    if (auto* effect = dynamic_cast<NativeEffectPlugin*> (impl->device (id).plugin))
-    {
-        const auto previous = effect->readSettings();
-        if (previous.kind != settings.kind) return Result::fail ("Effect type cannot change during an edit.");
-        if (previous.values == settings.values) return Result::ok();
-        for (const auto& m : macroMappings (effect->state))
-            if (settings.values[(size_t) m.parameter] != previous.values[(size_t) m.parameter])
-                return Result::fail (String (effectParameters (settings.kind)[(size_t) m.parameter].label) + " follows Macro " + String (m.macro + 1) + ".");
-        impl->transaction ("Edit " + String (effectName (settings.kind)));
-        effect->writeSettings (settings); impl->changed(); return Result::ok();
-    }
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        for (auto* plugin : track->pluginList.getPlugins())
+            if (plugin->itemID.toString() == id)
+                if (auto* effect = dynamic_cast<NativeEffectPlugin*> (plugin))
+                {
+                    const auto previous = effect->readSettings();
+                    if (previous.kind != settings.kind) return Result::fail ("Effect type cannot change during an edit.");
+                    if (previous.values == settings.values) return Result::ok();
+                    impl->transaction ("Edit " + String (effectName (settings.kind)));
+                    effect->writeSettings (settings); impl->changed(); return Result::ok();
+                }
     return Result::fail ("Native effect not found.");
 }
 Result Session::addUtility (int index)
@@ -5245,12 +4953,15 @@ Result Session::setUtilitySettings (const String& id, const UtilitySettings& set
     if (auto frozen = impl->unfrozen (impl->trackOfPlugin (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! UtilityPlugin::validSettings (settings)) return Result::fail ("Channel utility settings are outside their supported ranges.");
-    if (auto* utility = dynamic_cast<UtilityPlugin*> (impl->device (id).plugin))
-    {
-        if (utility->readSettings() == settings) return Result::ok();
-        impl->transaction ("Edit channel utility"); utility->writeSettings (settings);
-        impl->changed(); return Result::ok();
-    }
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        for (auto* plugin : track->pluginList.getPlugins())
+            if (plugin->itemID.toString() == id)
+                if (auto* utility = dynamic_cast<UtilityPlugin*> (plugin))
+                {
+                    if (utility->readSettings() == settings) return Result::ok();
+                    impl->transaction ("Edit channel utility"); utility->writeSettings (settings);
+                    impl->changed(); return Result::ok();
+                }
     return Result::fail ("Channel utility not found.");
 }
 Result Session::movePlugin (int t, int p, int destination)
@@ -5303,296 +5014,7 @@ Result Session::removePlugin (int t, int p)
     if (auto frozen = impl->unfrozen (impl->track (t)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* plugin = impl->plugin (t, p); if (! plugin) return Result::fail ("Plug-in not found.");
-    if (auto* rack = dynamic_cast<te::RackInstance*> (plugin); rack && rack->type) for (auto* d : rack->type->getPlugins()) d->windowState->closeWindowExplicitly();
-    plugin->windowState->closeWindowExplicitly(); impl->transaction ("Remove plug-in"); plugin->deleteFromParent(); impl->removeUnusedRacks();
-    impl->changed(); return Result::ok();
-}
-// Audio Effect Racks. Chains are identified by their mixer's ID, devices by their own ID.
-Result Session::groupDevices (int index, const juce::StringArray& ids, String& rackId)
-{
-    auto* track = impl->track (index);
-    if (! track) return Result::fail ("Track not found.");
-    if (auto frozen = impl->unfrozen (track); frozen.failed()) return frozen;
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before grouping devices.");
-    juce::Array<te::Plugin*> devices;
-    for (auto* p : impl->plugins (index)) if (ids.contains (p->itemID.toString())) devices.add (p);
-    juce::StringArray unique (ids); unique.removeDuplicates (false);
-    if (devices.size() != ids.size() || unique.size() != ids.size()) return Result::fail ("Group devices from the selected track's device chain.");
-    for (auto* d : devices)
-    {
-        if (dynamic_cast<te::RackInstance*> (d)) return Result::fail ("Racks cannot contain other racks.");
-        if (auto* native = dynamic_cast<NativeEffectPlugin*> (d); native && effectIsMidi (native->getKind()))
-            return Result::fail ("MIDI effects cannot go in an Audio Effect Rack.");
-        if (! te::RackType::isPluginAllowed (d)) return Result::fail (d->getName() + " cannot go in a rack.");
-    }
-    if (devices.isEmpty() && ! track->pluginList.canInsertPlugin()) return Result::fail ("This track's device chain is full.");
-    int insertion = track->pluginList.size();
-    if (! devices.isEmpty()) insertion = track->pluginList.indexOf (devices.getFirst());
-    else
-        for (int i = 0; i < track->pluginList.size(); ++i)
-            if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i]) || dynamic_cast<TrackDelayPlugin*> (track->pluginList[i])) { insertion = i; break; }
-    impl->transaction (devices.isEmpty() ? "Add Audio Effect Rack" : "Group devices");
-    auto* undo = &impl->edit->getUndoManager();
-    auto type = impl->edit->getRackList().addNewRack();
-    if (type == nullptr) return Result::fail ("Could not create the rack.");
-    type->rackName = "Audio Effect Rack";
-    type->state.setProperty (rackProperty, 1, undo);
-    juce::ValueTree macros (macrosType);
-    for (int m = 0; m < rackMacroCount; ++m)
-        macros.appendChild (juce::ValueTree (macroType, { { te::IDs::name, "Macro " + String (m + 1) }, { te::IDs::value, 0.0f } }), nullptr);
-    type->state.appendChild (macros, undo);
-    for (auto* d : devices) { d->windowState->closeWindowExplicitly(); type->addPlugin (d, { .5f, .5f }, false); }
-    if (! devices.isEmpty() && impl->addChainMixer (*type, devices.getFirst()->getName()) == nullptr) return Result::fail ("Could not create the chain.");
-    auto instance = impl->edit->getPluginCache().createNewPlugin (te::RackInstance::create (*type));
-    if (instance == nullptr) return Result::fail ("Could not create the rack.");
-    track->pluginList.insertPlugin (instance, insertion, nullptr);
-    impl->rewire (*type);
-    rackId = instance->itemID.toString();
-    impl->changed(); return Result::ok();
-}
-Result Session::ungroupRack (const String& rackId)
-{
-    auto* rack = impl->rack (rackId);
-    if (! rack) return Result::fail ("Rack not found.");
-    auto* track = impl->trackOfPlugin (rackId);
-    if (auto frozen = impl->unfrozen (track); frozen.failed()) return frozen;
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before ungrouping devices.");
-    const auto chains = Impl::rackChains (*rack->type);
-    if (chains.size() > 1) return Result::fail ("Only a rack with one chain can be ungrouped.");
-    auto* audio = dynamic_cast<te::AudioTrack*> (track);
-    impl->transaction ("Ungroup rack");
-    auto* undo = &impl->edit->getUndoManager();
-    int index = audio->pluginList.indexOf (rack);
-    if (! chains.empty())
-        for (auto* d : chains.front().devices)
-        {
-            const te::Plugin::Ptr device (d);
-            device->windowState->closeWindowExplicitly();
-            device->state.removeProperty (macroMapProperty, undo); // The rack's macros go with it.
-            audio->pluginList.insertPlugin (device, index++, nullptr);
-        }
-    rack->windowState->closeWindowExplicitly();
-    rack->deleteFromParent(); impl->removeUnusedRacks();
-    impl->changed(); return Result::ok();
-}
-Result Session::addRackChain (const String& rackId, String& chainId)
-{
-    auto* rack = impl->rack (rackId);
-    if (! rack) return Result::fail ("Rack not found.");
-    if (auto frozen = impl->unfrozen (impl->trackOfPlugin (rackId)); frozen.failed()) return frozen;
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before adding chains.");
-    const auto count = Impl::rackChains (*rack->type).size();
-    if (count >= 64) return Result::fail ("A rack holds at most 64 chains.");
-    impl->transaction ("Add chain");
-    auto* mixer = impl->addChainMixer (*rack->type, "Chain " + String ((int) count + 1));
-    if (mixer == nullptr) return Result::fail ("Could not create the chain.");
-    impl->rewire (*rack->type);
-    chainId = mixer->itemID.toString();
-    impl->changed(); return Result::ok();
-}
-Result Session::removeRackChain (const String& chainId)
-{
-    const auto at = impl->chain (chainId);
-    if (! at.rack) return Result::fail ("Chain not found.");
-    if (auto frozen = impl->unfrozen (at.track); frozen.failed()) return frozen;
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before removing chains.");
-    const auto chains = Impl::rackChains (*at.rack->type);
-    impl->transaction ("Delete chain");
-    for (auto* d : chains[(size_t) at.chain].devices) { d->windowState->closeWindowExplicitly(); d->deleteFromParent(); }
-    at.plugin->deleteFromParent();
-    impl->rewire (*at.rack->type);
-    impl->changed(); return Result::ok();
-}
-Result Session::setRackChain (const String& chainId, const ChainSettings& settings)
-{
-    const auto at = impl->chain (chainId);
-    auto* mixer = dynamic_cast<TrackMixer*> (at.plugin);
-    if (! at.rack || ! mixer) return Result::fail ("Chain not found.");
-    if (auto frozen = impl->unfrozen (at.track); frozen.failed()) return frozen;
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (! std::isfinite (settings.gainDb) || ! std::isfinite (settings.pan) || settings.pan < -1 || settings.pan > 1 || settings.gainDb > 6)
-        return Result::fail ("Chain volume runs to +6 dB and pan from -1 to +1.");
-    const auto name = settings.name.trim();
-    if (name.isEmpty() || name.length() > 128) return Result::fail ("Chains need a name of up to 128 characters.");
-    auto& state = mixer->state;
-    const bool routing = static_cast<bool> (state.getProperty (chainMuteProperty, false)) != settings.mute
-        || static_cast<bool> (state.getProperty (chainSoloProperty, false)) != settings.solo;
-    const auto gain = juce::jmax (-100.0f, settings.gainDb);
-    const bool level = std::abs (mixer->getVolumeDb() - gain) > 1e-4f || std::abs (mixer->getPan() - settings.pan) > 1e-6f;
-    if (! routing && ! level && state[chainNameProperty].toString() == name) return Result::ok();
-    auto* undo = &impl->edit->getUndoManager();
-    // As on track faders, the undoable manual values are what undo restores to the parameters.
-    for (const auto& pair : { std::pair { &manualVolumeProperty, mixer->volParam.get() }, std::pair { &manualPanProperty, mixer->panParam.get() } })
-        if (! state.hasProperty (*pair.first)) state.setProperty (*pair.first, pair.second->getCurrentExplicitValue(), nullptr);
-    impl->transaction ("Edit chain");
-    state.setProperty (chainNameProperty, name, undo);
-    state.setProperty (chainMuteProperty, settings.mute, undo);
-    state.setProperty (chainSoloProperty, settings.solo, undo);
-    if (level)
-    {
-        mixer->setVolumeDb (gain); mixer->setPan (settings.pan);
-        state.setProperty (manualVolumeProperty, te::decibelsToVolumeFaderPosition (gain), undo);
-        state.setProperty (manualPanProperty, settings.pan, undo);
-    }
-    if (routing) impl->rewire (*at.rack->type);
-    impl->changed(); return Result::ok();
-}
-Result Session::addNativeEffectToChain (const String& chainId, EffectKind kind)
-{
-    if (effectParameters (kind).empty()) return Result::fail ("Unknown native effect.");
-    if (effectIsInstrument (kind) || effectIsMidi (kind)) return Result::fail ("Audio Effect Racks hold audio effects.");
-    juce::ValueTree state (te::IDs::PLUGIN);
-    state.setProperty (te::IDs::type, NativeEffectPlugin::xmlTypeName, nullptr);
-    state.setProperty ("effectKind", static_cast<int> (kind), nullptr);
-    return impl->addToChain (chainId, state, effectName (kind));
-}
-Result Session::addUtilityToChain (const String& chainId)
-{
-    juce::ValueTree state (te::IDs::PLUGIN);
-    state.setProperty (te::IDs::type, UtilityPlugin::xmlTypeName, nullptr);
-    return impl->addToChain (chainId, state, "Utility");
-}
-Result Session::setDeviceEnabled (const String& id, bool enabled)
-{
-    const auto at = impl->device (id);
-    if (! impl->userDevice (at)) return Result::fail ("Device not found.");
-    if (auto frozen = impl->unfrozen (at.track); frozen.failed()) return frozen;
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (at.plugin->isEnabled() == enabled) return Result::ok();
-    impl->transaction (enabled ? "Activate device" : "Deactivate device"); at.plugin->setEnabled (enabled);
-    impl->changed(); return Result::ok();
-}
-Result Session::removeDevice (const String& id)
-{
-    const auto at = impl->device (id);
-    if (! impl->userDevice (at)) return Result::fail ("Device not found.");
-    if (! at.rack) return removePlugin (te::getAudioTracks (*impl->edit).indexOf (at.track), impl->plugins (te::getAudioTracks (*impl->edit).indexOf (at.track)).indexOf (at.plugin));
-    if (auto frozen = impl->unfrozen (at.track); frozen.failed()) return frozen;
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before removing devices.");
-    at.plugin->windowState->closeWindowExplicitly();
-    impl->transaction ("Remove device"); at.plugin->deleteFromParent(); impl->rewire (*at.rack->type);
-    impl->changed(); return Result::ok();
-}
-Result Session::moveDevice (const String& id, int destination)
-{
-    const auto at = impl->device (id);
-    if (! impl->userDevice (at)) return Result::fail ("Device not found.");
-    if (! at.rack)
-    {
-        const int t = te::getAudioTracks (*impl->edit).indexOf (at.track);
-        return movePlugin (t, impl->plugins (t).indexOf (at.plugin), destination);
-    }
-    if (auto frozen = impl->unfrozen (at.track); frozen.failed()) return frozen;
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    const auto devices = Impl::rackChains (*at.rack->type)[(size_t) at.chain].devices;
-    if (! juce::isPositiveAndBelow (destination, devices.size())) return Result::fail ("Device position not found.");
-    if (devices[destination] == at.plugin) return Result::ok();
-    impl->transaction ("Move device");
-    impl->placeInRack (*at.rack->type, *at.plugin, at.rack->type->getPlugins().indexOf (devices[destination]));
-    impl->rewire (*at.rack->type);
-    impl->changed(); return Result::ok();
-}
-Result Session::showDeviceEditor (const String& id)
-{
-    const auto at = impl->device (id);
-    if (! impl->userDevice (at)) return Result::fail ("Device not found.");
-    if (! at.rack)
-    {
-        const int t = te::getAudioTracks (*impl->edit).indexOf (at.track);
-        return showPluginEditor (t, impl->plugins (t).indexOf (at.plugin));
-    }
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (auto* external = dynamic_cast<te::ExternalPlugin*> (at.plugin); external && external->getAudioPluginInstance() == nullptr)
-        return Result::fail (external->isInitialisingAsync() ? "This plug-in is still loading. Try opening its editor again when loading completes."
-                                                            : external->getLoadError().isNotEmpty() ? external->getLoadError() : "This plug-in could not be loaded.");
-    at.plugin->windowState->showWindowExplicitly(); return Result::ok();
-}
-Result Session::setRackMacro (const String& rackId, int macro, float value)
-{
-    auto* rack = impl->rack (rackId);
-    if (! rack) return Result::fail ("Rack not found.");
-    if (auto frozen = impl->unfrozen (impl->trackOfPlugin (rackId)); frozen.failed()) return frozen;
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    auto knob = rack->type->state.getChildWithName (macrosType).getChild (macro);
-    if (! juce::isPositiveAndBelow (macro, rackMacroCount) || ! knob.isValid()) return Result::fail ("Macro not found.");
-    if (! std::isfinite (value) || value < 0 || value > 1) return Result::fail ("Macros run from 0 to 1.");
-    if (static_cast<float> (knob.getProperty (te::IDs::value, 0.0f)) == value) return Result::ok();
-    impl->transaction ("Set " + knob[te::IDs::name].toString());
-    knob.setProperty (te::IDs::value, value, &impl->edit->getUndoManager());
-    impl->applyMacros (*rack->type);
-    impl->changed(); return Result::ok();
-}
-Result Session::renameRackMacro (const String& rackId, int macro, const String& name)
-{
-    auto* rack = impl->rack (rackId);
-    if (! rack) return Result::fail ("Rack not found.");
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    auto knob = rack->type->state.getChildWithName (macrosType).getChild (macro);
-    if (! juce::isPositiveAndBelow (macro, rackMacroCount) || ! knob.isValid()) return Result::fail ("Macro not found.");
-    const auto text = name.trim();
-    if (text.isEmpty() || text.length() > 64) return Result::fail ("Macros need a name of up to 64 characters.");
-    if (knob[te::IDs::name].toString() == text) return Result::ok();
-    impl->transaction ("Rename macro"); knob.setProperty (te::IDs::name, text, &impl->edit->getUndoManager());
-    impl->changed(); return Result::ok();
-}
-Result Session::mapRackMacro (const String& rackId, int macro, const String& pluginId, int parameter, float minimum, float maximum)
-{
-    auto* rack = impl->rack (rackId);
-    if (! rack) return Result::fail ("Rack not found.");
-    if (auto frozen = impl->unfrozen (impl->trackOfPlugin (rackId)); frozen.failed()) return frozen;
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    auto knob = rack->type->state.getChildWithName (macrosType).getChild (macro);
-    if (! juce::isPositiveAndBelow (macro, rackMacroCount) || ! knob.isValid()) return Result::fail ("Macro not found.");
-    const auto at = impl->device (pluginId);
-    auto* native = dynamic_cast<NativeEffectPlugin*> (at.plugin);
-    if (at.rack != rack || native == nullptr) return Result::fail ("Macros map controls of native devices inside their own rack.");
-    const auto kind = native->getKind();
-    if (native->control (parameter) == nullptr) return Result::fail ("That device has no such control.");
-    const auto& field = effectParameters (kind)[(size_t) parameter];
-    if (! std::isfinite (minimum) || ! std::isfinite (maximum) || minimum < field.minimum || minimum > field.maximum
-        || maximum < field.minimum || maximum > field.maximum) return Result::fail ("A mapping range must lie within the control's range.");
-    auto mappings = macroMappings (native->state);
-    for (const auto& m : mappings)
-        if (m.parameter == parameter) return Result::fail (String (field.label) + " already follows Macro " + String (m.macro + 1) + ".");
-    if (native->control (parameter)->getCurve().getNumPoints() > 0) return Result::fail ("Clear this control's automation before mapping it.");
-    const auto low = effectValueToProportion (kind, parameter, minimum), high = effectValueToProportion (kind, parameter, maximum);
-    // A macro's first mapping takes the control's current position, so mapping does not move it.
-    bool first = true;
-    for (auto* p : rack->type->getPlugins())
-        for (const auto& m : macroMappings (p->state)) first = first && m.macro != macro;
-    impl->transaction ("Map to " + knob[te::IDs::name].toString());
-    auto* undo = &impl->edit->getUndoManager();
-    if (first)
-    {
-        const auto position = effectValueToProportion (kind, parameter, native->readSettings().values[(size_t) parameter]);
-        knob.setProperty (te::IDs::value, high == low ? 0.0f : juce::jlimit (0.0f, 1.0f, (position - low) / (high - low)), undo);
-    }
-    mappings.push_back ({ macro, parameter, low, high });
-    native->state.setProperty (macroMapProperty, macroMapText (mappings), undo);
-    impl->applyMacros (*rack->type);
-    impl->changed(); return Result::ok();
-}
-Result Session::unmapRackMacro (const String& pluginId, int parameter)
-{
-    const auto at = impl->device (pluginId);
-    auto* native = dynamic_cast<NativeEffectPlugin*> (at.plugin);
-    if (native == nullptr || at.rack == nullptr) return Result::fail ("Mapped control not found.");
-    if (auto frozen = impl->unfrozen (at.track); frozen.failed()) return frozen;
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    auto mappings = macroMappings (native->state);
-    const auto before = mappings.size();
-    mappings.erase (std::remove_if (mappings.begin(), mappings.end(), [parameter] (const auto& m) { return m.parameter == parameter; }), mappings.end());
-    if (mappings.size() == before) return Result::fail ("That control is not mapped to a macro.");
-    impl->transaction ("Remove macro mapping");
-    auto* undo = &impl->edit->getUndoManager();
-    if (mappings.empty()) native->state.removeProperty (macroMapProperty, undo);
-    else native->state.setProperty (macroMapProperty, macroMapText (mappings), undo);
-    impl->changed(); return Result::ok();
+    plugin->windowState->closeWindowExplicitly(); impl->transaction ("Remove plug-in"); plugin->deleteFromParent(); impl->changed(); return Result::ok();
 }
 Result Session::setPluginParameter (int t, int p, int parameter, float value)
 {
@@ -5631,6 +5053,6 @@ void Session::closePluginEditors()
 {
     if (impl->exporting) return;
     if (impl && impl->edit)
-        for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* p : Impl::allDevices (*t)) p->windowState->closeWindowExplicitly();
+        for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* p : t->pluginList.getPlugins()) p->windowState->closeWindowExplicitly();
 }
 }

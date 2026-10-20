@@ -258,9 +258,6 @@ Tracks carry an undoable `halftrackCrossfade` side (0 none, 1 A, 2 B) and the ed
 
 `setTrackFrozen` writes the engine's `frozenIndividually` track property through the undo manager; the engine's listener renders the freeze (or removes it) synchronously. `Impl::unfrozen` guards device, instrument, clip and note commands on frozen tracks. `flattenTrack` converts the engine's freeze render into a WAV in Assets, unfreezes outside history (the engine cannot render during undo), then in one transaction removes instrument and device plugins and clips, clears MIDI state and inserts the audio clip. Native instruments and the built-in synth report `producesAudioWhenNoAudioInput` so the engine's audio-node check accepts MIDI-only freezes. See the [freeze contract](research/freeze-contract.md).
 
-## Audio Effect Racks
-
-A rack is an engine `RackInstance` on the track's device list plus a Halftrack-marked rack type. `Impl::rackChains` reads the chains from the rack's plugin order: each chain's devices followed by a `TrackMixer` that ends the chain and carries its name, mute and solo. `Impl::rewire` rebuilds every rack connection from that order inside the current transaction (and outside history on load), so chain edits, mute and solo only reorder plugins or change properties. `Impl::device` and `Impl::allDevices` find devices inside racks for settings, automation, editor windows, parameter refresh and export preparation. Macros are Halftrack values on the rack type; `Impl::applyMacros` writes mapped native controls through the ordinary settings path, so the audio thread sees them like any other settings change. Unused rack types are removed with their rack or track, and duplicated tracks get their own rack type. See the [rack contract](research/racks-contract.md).
 
 ## Track Delay
 
