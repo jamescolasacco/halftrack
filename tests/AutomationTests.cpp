@@ -60,6 +60,23 @@ void level (const juce::AudioBuffer<float>& audio, int channel, int first, int c
     for (int n = first; n < first + count; ++n) error = std::max (error, std::abs (audio.getSample (channel, n) - expected));
     check (error < 2e-6, message + "; error=" + juce::String (error, 9));
 }
+void prepareHostedSource (te::Engine& engine, const juce::File& source, bool releaseCachedReader = false)
+{
+    auto* edit = engine.getActiveEdits().getEdits()[0];
+    edit->dispatchPendingUpdatesSynchronously();
+    edit->getTransport().ensureContextAllocated();
+    const te::AudioFile audioFile (engine, source);
+    if (releaseCachedReader) engine.getAudioFileManager().releaseFile (audioFile);
+    // EnginePlayer pumps faster than real time. Native real-time file readers
+    // deliberately return silence on a cache miss, so wait for the actual WAV
+    // mapping before measuring a fixed burst (as the native test helper does).
+    // Save As/reload can select a different, initially cold Assets path.
+    auto& cache = engine.getAudioFileManager().cache;
+    const auto deadline = juce::Time::getMillisecondCounterHiRes() + 5000.0;
+    while (! cache.hasMappedReader (audioFile, 0) && juce::Time::getMillisecondCounterHiRes() < deadline)
+        if (! juce::MessageManager::getInstance()->runDispatchLoopUntil (1)) break;
+    check (cache.hasMappedReader (audioFile, 0), "hosted source is mapped before the fixed audio measurement: " + source.getFileName());
+}
 void waveformTests (const juce::File& root)
 {
     Session s (false); ok (s.importAudio (constantFile (root), 0), "import automation source");
@@ -227,6 +244,7 @@ void playbackModeRegressions (const juce::File& root)
     ok (s.setTrackAutomation (id, Target::pan, pan), "one-point pan before duplication");
     const auto checkHostedTrack = [&] (double db, double balance)
     {
+        prepareHostedSource (*engine, s.snapshot().tracks[0].clips[0].file);
         ok (s.play(), "play single-point track automation"); const auto output = player.process (4096);
         const double gain = .125 * std::pow (10.0, db / 20) * std::sqrt (2.0);
         level (output, 0, 2048, 2048, gain * std::cos ((balance + 1) * juce::MathConstants<double>::pi / 4), "hosted single-point volume/pan left gain");
@@ -423,20 +441,41 @@ void masterHistoryTests (const juce::File& root)
     te::HostedAudioDeviceInterface::Parameters parameters; parameters.sampleRate=48000; parameters.blockSize=128;
     parameters.inputChannels=0; parameters.outputChannels=2; parameters.useMidiDevices=false;
     te::test_utilities::EnginePlayer player (*engine, parameters);
-    const auto playAndDispatch = [&]
+    bool cacheMissedDuringPlayback = false;
+    double renderedStart = 0;
+    const auto playAndDispatch = [&] (bool releaseCachedReader = false)
     {
+        prepareHostedSource (*engine, s.snapshot().tracks[0].clips[0].file, releaseCachedReader);
+        renderedStart = s.snapshot().position;
         ok (s.play(), "process master automation through hosted audio callbacks");
+        engine->getAudioFileManager().cache.hasCacheMissed (true);
         const auto output = player.process (4096);
+        cacheMissedDuringPlayback = engine->getAudioFileManager().cache.hasCacheMissed (false);
         juce::MessageManager::getInstance()->runDispatchLoopUntil (30); s.stop();
         juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
         return output;
     };
-    const auto checkHostedMaster = [&] (double db)
+    const auto checkHostedMaster = [&] (double db, bool releaseCachedReader = false)
     {
-        const auto output = playAndDispatch();
-        for (int channel = 0; channel < 2; ++channel)
-            level (output, channel, 2048, 2048, .125 * std::pow (10.0, db / 20),
-                "hosted master output follows its independent single-point/manual gain oracle");
+        const auto output = playAndDispatch (releaseCachedReader);
+        try
+        {
+            for (int channel = 0; channel < 2; ++channel)
+                level (output, channel, 2048, 2048, .125 * std::pow (10.0, db / 20),
+                    "hosted master output follows its independent single-point/manual gain oracle");
+        }
+        catch (...)
+        {
+            const auto current = s.snapshot();
+            const auto range = output.findMinMax (0,2048,2048);
+            int zeros = 0;
+            for (int n = 2048; n < 4096; ++n) if (output.getSample (0,n) == 0) ++zeros;
+            std::cerr << "Hosted master diagnostic: generation=" << current.projectGeneration
+                      << " render start=" << renderedStart << " current master=" << current.masterGainDb
+                      << " cache missed=" << cacheMissedDuringPlayback << " min=" << range.getStart()
+                      << " max=" << range.getEnd() << " zeros=" << zeros << std::endl;
+            throw;
+        }
     };
     ok (s.setMasterGain (-4), "manual master edit before first envelope");
     const Lane first {true,{{0,-18}}};
@@ -455,7 +494,8 @@ void masterHistoryTests (const juce::File& root)
     s.undo(); checkHostedMaster (-18);
     const auto onePointFile = root.getChildFile ("master-single-point.halftrack");
     ok (s.saveProject (onePointFile), "save a played single-point master curve");
-    ok (s.loadProject (onePointFile), "reload a played single-point master curve"); checkHostedMaster (-18);
+    ok (s.loadProject (onePointFile), "reload a played single-point master curve");
+    checkHostedMaster (-18, true); // Exercise readiness after explicitly retiring a cached source reader.
     ok (s.setMasterVolumeAutomation ({}), "clear reloaded single-point master curve"); checkHostedMaster (-4);
     s.undo(); checkHostedMaster (-18);
     const Lane edited {true,{{0,-12},{2,0},{4,6}}};
