@@ -556,6 +556,155 @@ void pitchWheelCallbackTests()
 
 }
 
+void variableBlockCallbackTests()
+{
+    Session session (false);
+    ok (session.addMidiTrack ("Variable-block fixture"), "create variable-block callback instrument without audio devices");
+    SubtractiveSynthPlugin* plugin = nullptr;
+    for (auto* engine : tracktion::Engine::getEngines())
+        if (&engine->getDeviceManager().deviceManager == &session.audioDeviceManager())
+            for (auto* edit : engine->getActiveEdits().getEdits())
+                for (auto* track : tracktion::getAudioTracks (*edit))
+                    for (auto* candidate : track->pluginList.getPlugins())
+                        if (auto* synth = dynamic_cast<SubtractiveSynthPlugin*> (candidate)) plugin = synth;
+    check (plugin != nullptr, "find built-in synth for mixed host-block timing");
+
+    constexpr int totalSamples = 6143;
+    constexpr std::array<int, 2> parameterBoundaries { 733, 1877 };
+    constexpr std::array<int, 7> mixedBlocks { 1, 31, 257, 2, 1024, 63, 509 };
+    struct Event { int sample; juce::MidiMessage message; };
+    const std::array<Event, 16> events {{
+        { 0, juce::MidiMessage::noteOn (1, 69, 0.75f) },
+        { 128, juce::MidiMessage::pitchWheel (1, 16383) },
+        { 211, juce::MidiMessage::noteOn (16, 64, 0.625f) },
+        { 255, juce::MidiMessage::controllerEvent (1, 64, 127) },
+        { 511, juce::MidiMessage::noteOff (1, 69) },
+        { 640, juce::MidiMessage::pitchWheel (16, 0) },
+        { 1024, juce::MidiMessage::controllerEvent (1, 64, 0) },
+        { 1300, juce::MidiMessage::noteOn (1, 72, 0.875f) },
+        { 1500, juce::MidiMessage::controllerEvent (16, 121, 0) },
+        { 2000, juce::MidiMessage::noteOff (16, 64) },
+        { 2048, juce::MidiMessage::pitchWheel (1, 0) },
+        { 3072, juce::MidiMessage::noteOn (16, 60, 0.5f) },
+        { 3501, juce::MidiMessage::controllerEvent (16, 64, 127) },
+        { 4096, juce::MidiMessage::noteOff (16, 60) },
+        { 4201, juce::MidiMessage::noteOff (1, 72) },
+        { 4410, juce::MidiMessage::controllerEvent (16, 64, 0) }
+    }};
+    auto deliver = [] (SubtractiveSynthDSP& synth, const juce::MidiMessage& message)
+    {
+        if (message.isNoteOn()) synth.noteOn (message.getChannel(), message.getNoteNumber(), message.getFloatVelocity());
+        else if (message.isNoteOff()) synth.noteOff (message.getChannel(), message.getNoteNumber());
+        else if (message.isPitchWheel()) synth.pitchWheel (message.getChannel(), message.getPitchWheelValue());
+        else if (message.isController()) synth.controlChange (message.getChannel(), message.getControllerNumber(), message.getControllerValue());
+    };
+
+    for (const double rate : { 44100.0, 48000.0, 96000.0 })
+    {
+        plugin->baseClassInitialise ({ {}, rate, 2048 });
+        struct Deinitialise
+        {
+            SubtractiveSynthPlugin& synth;
+            ~Deinitialise() { synth.baseClassDeinitialise(); }
+        } deinitialise { *plugin };
+        for (int waveform = 0; waveform < 4; ++waveform)
+        {
+            auto initial = flatSettings();
+            initial.waveform = waveform; initial.level = 0.25f; initial.attackSeconds = 0.005f;
+            initial.decaySeconds = 0.015f; initial.sustain = 0.7f; initial.pulseWidth = 0.63f;
+            std::array<Session::SynthSettings, 2> patches { initial, initial };
+            patches[0].waveform = (waveform + 1) % 4; patches[0].cutoffHz = 3100;
+            patches[0].resonance = 0.3f; patches[0].pulseWidth = 0.27f; patches[0].level = 0.375f;
+            patches[1].cutoffHz = 7200; patches[1].resonance = 0.15f;
+            patches[1].pulseWidth = 0.81f; patches[1].level = 0.1875f; patches[1].releaseSeconds = 0.006f;
+
+            // This oracle checks the host adapter against the existing DSP's
+            // exact event timeline. Independent waveform/filter fixtures below
+            // check the sound itself; this does not compare a reference product.
+            SubtractiveSynthDSP reference;
+            reference.prepare (rate); reference.setSettings (initial);
+            std::array<float, totalSamples> expected {};
+            size_t nextEvent = 0, nextPatch = 0;
+            for (int sample = 0; sample < totalSamples; ++sample)
+            {
+                if (nextPatch < patches.size() && sample == parameterBoundaries[nextPatch])
+                    reference.setSettings (patches[nextPatch++]);
+                while (nextEvent < events.size() && events[nextEvent].sample == sample)
+                    deliver (reference, events[nextEvent++].message);
+                reference.render (expected.data() + sample, nullptr, 1);
+            }
+            check (std::any_of (expected.begin(), expected.end(), [] (float value) { return std::abs (value) > 0.001f; })
+                   && std::all_of (expected.end() - 512, expected.end(), [] (float value) { return value == 0; }),
+                   "mixed-block oracle contains sound and a fully released silent tail");
+
+            for (int schedule = 0; schedule < 3; ++schedule)
+            {
+                plugin->setSettings (initial);
+                plugin->prepareForOfflineRender();
+                plugin->reset();
+                nextEvent = nextPatch = 0;
+                size_t block = 0;
+                bool matches = true, boundsPreserved = true, sawPartialBlock = false;
+                int start = 0;
+                while (start < totalSamples)
+                {
+                    // Parameter packets have no sample timestamps. All three
+                    // schedules therefore share these explicit host boundaries;
+                    // no unsupported mid-block parameter change is assumed.
+                    if (nextPatch < patches.size() && start == parameterBoundaries[nextPatch])
+                    {
+                        auto superseded = patches[nextPatch]; superseded.level = 0;
+                        plugin->setSettings (superseded);
+                        superseded.waveform = (superseded.waveform + 2) % 4;
+                        plugin->setSettings (superseded);
+                        plugin->setSettings (patches[nextPatch++]);
+                    }
+                    const int requested = schedule == 0 ? 128 : schedule == 1 ? 512
+                                          : mixedBlocks[block % mixedBlocks.size()];
+                    int count = std::min (requested, totalSamples - start);
+                    if (nextPatch < patches.size()) count = std::min (count, parameterBoundaries[nextPatch] - start);
+                    sawPartialBlock = sawPartialBlock || (start + count == totalSamples && count < requested);
+                    const int destinationStart = 3 + static_cast<int> (block % 11);
+                    juce::AudioBuffer<float> output (2, destinationStart + count + 13);
+                    for (int channel = 0; channel < 2; ++channel)
+                        for (int sample = 0; sample < output.getNumSamples(); ++sample) output.setSample (channel, sample, 0.25f);
+                    tracktion::MidiMessageArray midi;
+                    const double midiOffset = (5 + static_cast<int> (block % 7)) / rate;
+                    while (nextEvent < events.size())
+                    {
+                        const auto& event = events[nextEvent];
+                        const double arrival = event.sample == 0 ? 0.0 : event.sample - 0.25;
+                        if (arrival >= start + count) break;
+                        midi.addMidiMessage (event.message, (arrival - start) / rate - midiOffset, {});
+                        ++nextEvent;
+                    }
+                    plugin->applyToBuffer ({ &output, destinationStart, count, &midi, midiOffset,
+                                            { tracktion::TimePosition::fromSeconds (start / rate),
+                                              tracktion::TimePosition::fromSeconds ((start + count) / rate) },
+                                            true, false, true, false });
+                    for (int channel = 0; channel < 2; ++channel)
+                        for (int sample = 0; sample < output.getNumSamples(); ++sample)
+                        {
+                            const float actual = output.getSample (channel, sample);
+                            if (sample >= destinationStart && sample < destinationStart + count)
+                                matches = matches && std::isfinite (actual)
+                                          && std::abs (actual - expected[static_cast<size_t> (start + sample - destinationStart)]) < 1.0e-6f;
+                            else boundsPreserved = boundsPreserved && actual == 0.25f;
+                        }
+                    start += count;
+                    ++block;
+                }
+                const auto label = juce::String (rate, 0) + " Hz waveform " + juce::String (waveform)
+                                   + " schedule " + juce::String (schedule);
+                check (matches && nextEvent == events.size() && nextPatch == patches.size(),
+                       "complete callback PCM preserves events and held-note state across parameter packets: " + label);
+                check (boundsPreserved && sawPartialBlock,
+                       "stereo callback guards and partial final block survive: " + label);
+            }
+        }
+    }
+}
+
 void oscillatorContractTests()
 {
     // Independent sine input through a direct-form bilinear low-pass, evaluated
@@ -822,6 +971,7 @@ int runMidiTests (const juce::File& requestedDirectory)
     {
         oscillatorContractTests();
         pitchWheelCallbackTests();
+        variableBlockCallbackTests();
         pitchWheelStateTests();
         controllerReleaseTests();
         coreTests();
