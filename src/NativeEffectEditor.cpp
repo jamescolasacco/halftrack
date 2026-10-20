@@ -12,7 +12,7 @@ namespace
 class NativeEffectEditor final : public juce::Component, private juce::ChangeListener, private juce::Timer
 {
 public:
-    NativeEffectEditor (Session& s, juce::String id) : session (s), pluginId (std::move (id))
+    NativeEffectEditor (Session& s, juce::String id, bool compactLayout = false) : session (s), pluginId (std::move (id)), compact (compactLayout)
     {
         const auto initial = settings();
         kind = initial ? initial->kind : Session::EffectKind::equalizer;
@@ -22,12 +22,13 @@ public:
         look.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe9e9e9));
         look.setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xff515151));
         look.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff3a3a3a));
-        setLookAndFeel (&look);
+        if (! compact) setLookAndFeel (&look); // Inline editors inherit the host theme.
         const auto specs = effectParameters (kind);
         for (size_t i = 0; i < specs.size(); ++i)
         {
             const auto& spec = specs[i]; labels[i].setText (spec.label, juce::dontSendNotification);
             labels[i].setColour (juce::Label::textColourId, juce::Colour (0xffbbbbbb)); addAndMakeVisible (labels[i]);
+            if (compact) { labels[i].setFont (juce::FontOptions (9.5f)); labels[i].setJustificationType (juce::Justification::centred); labels[i].setMinimumHorizontalScale (.75f); }
             if (spec.choices)
             {
                 auto& control = choices[i]; control.setName (spec.key);
@@ -40,8 +41,14 @@ public:
                 auto& control = sliders[i]; control.setName (spec.key); control.setRange (spec.minimum, spec.maximum, spec.integer ? 1.0 : 0.0);
                 if (spec.midpoint > spec.minimum && spec.midpoint < spec.maximum && spec.midpoint != 0)
                     control.setSkewFactorFromMidPoint (spec.midpoint);
-                control.setSliderStyle (kind == Session::EffectKind::equalizer ? juce::Slider::LinearHorizontal : juce::Slider::RotaryHorizontalVerticalDrag);
-                control.setTextBoxStyle (juce::Slider::TextBoxBelow, false, effectParameters (kind).size() > 16 ? 86 : 100, 21);
+                control.setSliderStyle (kind == Session::EffectKind::equalizer && ! compact ? juce::Slider::LinearHorizontal : juce::Slider::RotaryHorizontalVerticalDrag);
+                if (compact)
+                {
+                    control.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 56, 13);
+                    control.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+                    control.setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
+                }
+                else control.setTextBoxStyle (juce::Slider::TextBoxBelow, false, effectParameters (kind).size() > 16 ? 86 : 100, 21);
                 const auto unit = juce::String (spec.unit);
                 const bool percent = unit == "%" || juce::String (spec.key) == "mix" || juce::String (spec.key) == "feedback";
                 control.setTextValueSuffix (percent ? juce::String() : unit); control.setDoubleClickReturnValue (true, spec.initial);
@@ -60,13 +67,17 @@ public:
         }
         error.setColour (juce::Label::textColourId, juce::Colour (0xfff4ab84)); addAndMakeVisible (error);
         const auto rows = static_cast<int> ((specs.size() + columns() - 1) / static_cast<size_t> (columns()));
-        session.addChangeListener (this); setSize (kind == Session::EffectKind::equalizer ? 1000 : dense() ? 48 + columns() * 120 : 660,
-            kind == Session::EffectKind::equalizer ? 640 : std::max (400, 96 + rows * (dense() ? 112 : 145))); synchronise(); startTimerHz (15);
+        session.addChangeListener (this);
+        if (compact) { setSize (8 + compactColumns() * compactCellWidth, compactHeight); error.setVisible (false); }
+        else setSize (kind == Session::EffectKind::equalizer ? 1000 : dense() ? 48 + columns() * 120 : 660,
+            kind == Session::EffectKind::equalizer ? 640 : std::max (400, 96 + rows * (dense() ? 112 : 145)));
+        synchronise(); startTimerHz (15);
     }
     ~NativeEffectEditor() override
     { stopTimer(); session.removeChangeListener (this); finishGesture(); setLookAndFeel (nullptr); }
     void paint (juce::Graphics& g) override
     {
+        if (compact) { g.fillAll (juce::Colour (0xff303030)); return; }
         g.fillAll (juce::Colour (0xff2b2b2b));
         g.setColour (juce::Colour (0xffe49a58)); g.fillRect (24, 22, 5, 18);
         g.setColour (juce::Colour (0xffe9e9e9)); g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
@@ -115,6 +126,18 @@ public:
     void resized() override
     {
         const auto specs = effectParameters (kind);
+        if (compact)
+        {
+            // Column-major grid of three rows, the density of an inline device.
+            for (size_t i = 0; i < specs.size(); ++i)
+            {
+                auto area = juce::Rectangle<int> (4 + static_cast<int> (i / 3) * compactCellWidth, 2 + static_cast<int> (i % 3) * compactRowHeight, compactCellWidth - 2, compactRowHeight - 2);
+                labels[i].setBounds (area.removeFromTop (13));
+                if (specs[i].choices) choices[i].setBounds (area.withSizeKeepingCentre (area.getWidth(), 20));
+                else sliders[i].setBounds (area);
+            }
+            return;
+        }
         for (size_t i = 0; i < specs.size(); ++i)
         {
             juce::Rectangle<int> area;
@@ -176,6 +199,8 @@ public:
 private:
     // Instruments and other large devices use a compact eight-column grid.
     bool dense() const noexcept { return effectParameters (kind).size() > 16; }
+    static constexpr int compactCellWidth = 60, compactRowHeight = 62, compactHeight = 3 * compactRowHeight + 4;
+    int compactColumns() const noexcept { return static_cast<int> ((effectParameters (kind).size() + 2) / 3); }
     int columns() const noexcept { return dense() ? 8 : 4; }
     std::optional<Session::EffectSettings> settings() const
     {
@@ -201,6 +226,7 @@ private:
     void timerCallback() override { synchronise(); }
     Session& session;
     juce::String pluginId;
+    bool compact = false;
     Session::EffectKind kind;
     juce::LookAndFeel_V4 look;
     static constexpr size_t maximumControls = std::tuple_size_v<decltype (Session::EffectSettings::values)>;
@@ -211,8 +237,8 @@ private:
     bool dragging = false;
 };
 }
-std::unique_ptr<juce::Component> makeNativeEffectEditor (Session& session, const juce::String& id)
-{ return std::make_unique<NativeEffectEditor> (session, id); }
+std::unique_ptr<juce::Component> makeNativeEffectEditor (Session& session, const juce::String& id, bool compact)
+{ return std::make_unique<NativeEffectEditor> (session, id, compact); }
 #if HALFTRACK_TESTS_ENABLED
 int runNativeEffectEditorTests (const juce::File& root)
 {

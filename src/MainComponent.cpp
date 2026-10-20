@@ -83,6 +83,12 @@ public:
         return font (juce::jlimit (10.0f, 12.0f, height * 0.52f));
     }
     juce::Font getComboBoxFont (juce::ComboBox&) override { return font (11.0f); }
+    juce::Label* createSliderTextBox (juce::Slider& slider) override
+    {
+        auto* label = LookAndFeel_V4::createSliderTextBox (slider);
+        label->setFont (font (slider.getTextBoxHeight() <= 16 ? 10.0f : 12.0f));
+        return label;
+    }
     juce::Font getPopupMenuFont() override { return font (12.0f); }
     void drawButtonBackground (juce::Graphics& g, juce::Button& button,
                                const juce::Colour& colour, bool over, bool down) override
@@ -571,7 +577,7 @@ public:
 
 private:
     static constexpr int browserWidth = 214, trackWidth = 280, trackHeight = 112, rulerHeight = 60,
-                         deviceHeight = 177, statusHeight = 24;
+                         deviceHeight = 268, statusHeight = 24;
     struct BrowserItem { juce::File file; bool directory = false; };
     struct FolderScan
     {
@@ -2373,6 +2379,12 @@ private:
             if (track == nullptr || ! track->isMidi) { setVisible (false); return; }
             setVisible (true);
             native = track->instrument.isNativeEffect; nativeSettings = track->instrument.effect;
+            if (! native) { nativeEditor.reset(); nativeEditorId.clear(); }
+            else if (nativeEditorId != track->instrument.id)
+            {
+                nativeEditor = makeNativeEffectEditor (owner.session, track->instrument.id, true);
+                addAndMakeVisible (*nativeEditor); nativeEditorId = track->instrument.id;
+            }
             instrument.setSelectedId (native ? 2 + (int) nativeSettings.kind - (int) Session::EffectKind::polySynth : 1, juce::dontSendNotification);
             instrument.setEnabled (! owner.session.isExporting());
             waveform.setVisible (! native); edit.setVisible (native);
@@ -2383,27 +2395,14 @@ private:
             controls[7].setEnabled (track->synth.waveform == 1);
             resized(); repaint(); // Layout depends on built-in versus native mode, not only size.
         }
+        int preferredWidth() const { return native && nativeEditor ? juce::jmax (330, nativeEditor->getWidth() + 4) : 536; }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (raised); g.setColour (orange); g.setFont (font (10.5f, true));
-            g.drawText (native ? juce::String (effectName (nativeSettings.kind)).toUpperCase() : juce::String ("HALFTRACK SYNTH"), 11, 2, 185, 24, juce::Justification::centredLeft);
-            if (native)
-            {
-                // A compact read-out of the first controls; the editor window holds them all.
-                const auto specs = effectParameters (nativeSettings.kind);
-                g.setFont (font (10.0f));
-                for (size_t i = 0; i < std::min<size_t> (12, specs.size()); ++i)
-                {
-                    const auto x = 12 + (int) (i % 3) * 172, y = 34 + (int) (i / 3) * 21;
-                    const auto value = nativeSettings.values[i];
-                    const bool percent = std::string_view (specs[i].unit) == "%";
-                    const auto text = specs[i].choices ? juce::StringArray::fromTokens (specs[i].choices, "|", "")[(int) value]
-                        : juce::String (percent ? value * 100 : value, specs[i].integer ? 0 : 1) + (percent ? juce::String ("%") : juce::String (specs[i].unit));
-                    g.setColour (muted); g.drawText (specs[i].label, x, y, 96, 18, juce::Justification::centredLeft, true);
-                    g.setColour (ink); g.drawText (text, x + 96, y, 72, 18, juce::Justification::centredLeft, true);
-                }
-                g.setColour (line); g.drawRect (getLocalBounds()); return;
-            }
+            g.fillAll (juce::Colour (0xff303030));
+            g.setColour (juce::Colour (0xff4a4a4a)); g.fillRect (0, 0, getWidth(), 26);
+            g.setColour (ink); g.setFont (font (11.0f, true));
+            g.drawText (native ? juce::String (effectName (nativeSettings.kind)) : juce::String ("Halftrack Synth"), 9, 0, 185, 26, juce::Justification::centredLeft);
+            if (native) { g.setColour (line); g.drawRect (getLocalBounds()); return; }
             g.setColour (muted); g.setFont (font (9.5f));
             const auto width = (getWidth() - 16) / 8;
             for (int i = 0; i < 8; ++i) g.drawText (names[i], 8 + i * width, 30, width, 14, juce::Justification::centred);
@@ -2411,9 +2410,10 @@ private:
         }
         void resized() override
         {
-            waveform.setBounds (getWidth() - 118, 5, 107, 22);
-            instrument.setBounds (getWidth() - (native ? 118 : 262), 5, native ? 107 : 138, 22);
-            edit.setBounds (getWidth() - 262, 5, 138, 22);
+            waveform.setBounds (getWidth() - 118, 3, 107, 20);
+            instrument.setBounds (getWidth() - (native ? 118 : 262), 3, native ? 107 : 138, 20);
+            edit.setBounds (getWidth() - 236, 3, 112, 20);
+            if (nativeEditor) nativeEditor->setTopLeftPosition (2, 28);
             const auto width = (getWidth() - 16) / 8;
             for (int i = 0; i < 8; ++i) controls[(size_t) i].setBounds (8 + i * width, 43, width - 2, getHeight() - 46);
         }
@@ -2423,6 +2423,8 @@ private:
         juce::TextButton edit { "Edit instrument..." };
         bool native = false;
         Session::EffectSettings nativeSettings;
+        std::unique_ptr<juce::Component> nativeEditor;
+        juce::String nativeEditorId;
         std::array<juce::Slider, 8> controls;
         static constexpr const char* names[] { "Cutoff", "Resonance", "Attack", "Decay", "Sustain", "Release", "Level", "Pulse width" };
         void changeParameter (int index, float value)
@@ -2543,13 +2545,103 @@ private:
         std::vector<std::unique_ptr<SendRow>> rows;
     };
 
+    // One device in the inline chain: a title bar (on/off, name, window, remove)
+    // over the device's own compact controls.
+    class DevicePanel final : public juce::Component
+    {
+    public:
+        DevicePanel (Impl& o, const Session::PluginInfo& info) : owner (o), pluginId (info.id), native (info.isNativeEffect)
+        {
+            for (auto* button : { &power, &open, &remove })
+            { addAndMakeVisible (*button); button->setWantsKeyboardFocus (false); button->setMouseClickGrabsKeyboardFocus (false); }
+            power.setClickingTogglesState (true); power.setName ("Device on");
+            power.setTooltip ("Turn this device on or off (bypass)");
+            power.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); power.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            open.setTooltip ("Open this device in its own window"); remove.setTooltip ("Remove this device");
+            power.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.setPluginEnabled (owner.selectedTrack, p, power.getToggleState())); owner.refresh(); };
+            open.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.showPluginEditor (owner.selectedTrack, p)); };
+            remove.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.removePlugin (owner.selectedTrack, p)); owner.refresh(); };
+            if (native) { body = makeNativeEffectEditor (owner.session, info.id, true); addAndMakeVisible (*body); }
+            sync (info);
+        }
+        const juce::String& getId() const noexcept { return pluginId; }
+        int preferredWidth() const { return native && body ? body->getWidth() + 2 : 184; }
+        void sync (const Session::PluginInfo& info)
+        {
+            name = info.name; enabled = info.enabled;
+            midi = info.isNativeEffect && effectIsMidi (info.effect.kind);
+            power.setToggleState (info.enabled, juce::dontSendNotification);
+            repaint();
+        }
+        void resized() override
+        {
+            auto title = getLocalBounds().removeFromTop (titleHeight).reduced (2);
+            power.setBounds (title.removeFromLeft (18)); remove.setBounds (title.removeFromRight (18)); open.setBounds (title.removeFromRight (22));
+            if (body) body->setTopLeftPosition (1, titleHeight);
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (juce::Colour (0xff303030));
+            g.setColour (enabled ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff383838)); g.fillRect (0, 0, getWidth(), titleHeight);
+            g.setColour (enabled ? ink : muted); g.setFont (font (11.0f, true));
+            g.drawText (name, 24, 0, getWidth() - 70, titleHeight, juce::Justification::centredLeft, true);
+            if (! native)
+            {
+                g.setColour (muted); g.setFont (font (10.5f));
+                g.drawFittedText (enabled ? juce::String (midi ? "Processing MIDI." : "Processing audio.") + "\nOpen its window for every control." : "Bypassed.",
+                                  getLocalBounds().withTrimmedTop (titleHeight).reduced (10), juce::Justification::centred, 3);
+            }
+            if (! enabled) { g.setColour (juce::Colours::black.withAlpha (0.25f)); g.fillRect (getLocalBounds().withTrimmedTop (titleHeight)); }
+            g.setColour (line); g.drawRect (getLocalBounds());
+        }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            if (! e.mods.isPopupMenu() || e.y > titleHeight) return;
+            const int p = index(); const auto* track = owner.currentTrack(); if (p < 0 || track == nullptr) return;
+            juce::PopupMenu menu;
+            menu.addItem (1, "Move left", p > 0); menu.addItem (2, "Move right", p + 1 < (int) track->plugins.size());
+            menu.addSeparator(); menu.addItem (3, enabled ? "Deactivate" : "Activate"); menu.addItem (4, "Delete");
+            const auto trackId = track->id, id = pluginId;
+            juce::Component::SafePointer<Impl> safe (&owner);
+            menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe, trackId, id] (int choice)
+            {
+                if (! safe || choice == 0) return;
+                const auto snapshot = safe->session.snapshot();
+                for (int t = 0; t < (int) snapshot.tracks.size(); ++t)
+                    if (snapshot.tracks[(size_t) t].id == trackId)
+                        for (int p = 0; p < (int) snapshot.tracks[(size_t) t].plugins.size(); ++p)
+                            if (snapshot.tracks[(size_t) t].plugins[(size_t) p].id == id)
+                            {
+                                if (choice <= 2) safe->report (safe->session.movePlugin (t, p, p + (choice == 1 ? -1 : 1)));
+                                else if (choice == 3) safe->report (safe->session.setPluginEnabled (t, p, ! snapshot.tracks[(size_t) t].plugins[(size_t) p].enabled));
+                                else safe->report (safe->session.removePlugin (t, p));
+                                safe->refresh(); return;
+                            }
+            });
+        }
+        static constexpr int titleHeight = 22;
+    private:
+        int index() const
+        {
+            if (const auto* track = owner.currentTrack())
+                for (int p = 0; p < (int) track->plugins.size(); ++p) if (track->plugins[(size_t) p].id == pluginId) return p;
+            return -1;
+        }
+        Impl& owner;
+        juce::String pluginId, name;
+        bool native = false, enabled = true, midi = false;
+        juce::TextButton power { "" }, open { "^" }, remove { "x" };
+        std::unique_ptr<juce::Component> body;
+    };
+
     class DeviceChain final : public juce::Component
     {
     public:
         explicit DeviceChain (Impl& o) : owner (o), synthPanel (o), sendsPanel (o)
         {
-            addAndMakeVisible (addButton); addAndMakeVisible (manageButton); addAndMakeVisible (automationButton); addAndMakeVisible (synthClip); addAndMakeVisible (sendsPanel);
-            synthClip.addAndMakeVisible (synthPanel); synthClip.setInterceptsMouseClicks (false, true);
+            addAndMakeVisible (addButton); addAndMakeVisible (manageButton); addAndMakeVisible (automationButton); addAndMakeVisible (chainView); addAndMakeVisible (sendsPanel);
+            chainView.setViewedComponent (&chain, false); chainView.setScrollBarsShown (false, true); chainView.setScrollBarThickness (8);
+            chain.addAndMakeVisible (synthPanel);
             addButton.onClick = [this] { owner.addPluginMenu(); };
             manageButton.onClick = [this] { owner.showPlugins(); };
             automationButton.setName ("Track automation");
@@ -2589,18 +2681,17 @@ private:
         }
         void resized() override
         {
-            masterGain.setBounds(getWidth()-98,36,49,getHeight()-46);
-            manageButton.setBounds (getWidth() - 212, 8, 94, 24);
-            addButton.setBounds (getWidth() - 320, 8, 101, 24);
-            automationButton.setBounds (getWidth() - 427, 8, 100, 24);
-            sendsPanel.setBounds (9, 39, 232, getHeight() - 48);
-            synthClip.setBounds (chainLeft(), 39, getWidth() - chainLeft() - 114, getHeight() - 48);
-            synthPanel.setBounds (5 - offset + midiEffectCount() * 208, 5, 536, getHeight() - 59);
+            masterGain.setBounds(getWidth()-98,32,49,getHeight()-42);
+            manageButton.setBounds (getWidth() - 212, 5, 94, 22);
+            addButton.setBounds (getWidth() - 320, 5, 101, 22);
+            automationButton.setBounds (getWidth() - 427, 5, 100, 22);
+            sendsPanel.setBounds (9, 32, 232, getHeight() - 40);
+            chainView.setBounds (chainLeft(), 32, getWidth() - chainLeft() - 114, getHeight() - 36);
+            layoutChain();
         }
         void sync()
         {
             const auto* track = owner.currentTrack();
-            const auto total = track != nullptr ? (int) track->plugins.size() * 208 + (track->isMidi ? 554 : 0) : 0;
             sendsPanel.sync();
             const bool projectChanged = masterProjectGeneration != owner.state.projectGeneration;
             if (projectChanged) masterGain.hideTextBox (true);
@@ -2611,98 +2702,38 @@ private:
                 ? "Master output level. Double-click for 0 dB. The bottom of the fader is silence."
                 : "Master volume has automation. Choose Master in Automation and clear its points to edit this fader.");
             automationButton.setEnabled (! owner.session.isExporting());
-            offset = juce::jlimit (0, juce::jmax (0, total - getWidth() + chainLeft() + 141), offset);
-            synthPanel.sync(); resized(); repaint();
+            addButton.setEnabled (track != nullptr);
+            // Rebuild panels only when the device list itself changes.
+            std::vector<juce::String> ids;
+            if (track != nullptr) for (const auto& p : track->plugins) ids.push_back (p.id);
+            bool same = ids.size() == panels.size();
+            for (size_t i = 0; same && i < ids.size(); ++i) same = panels[i]->getId() == ids[i];
+            if (! same)
+            {
+                panels.clear();
+                if (track != nullptr) for (const auto& p : track->plugins) { panels.push_back (std::make_unique<DevicePanel> (owner, p)); chain.addAndMakeVisible (*panels.back()); }
+            }
+            else if (track != nullptr) for (size_t i = 0; i < panels.size(); ++i) panels[i]->sync (track->plugins[i]);
+            synthPanel.sync(); layoutChain(); repaint();
         }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff2b2b2b));
+            g.fillAll (juce::Colour (0xff262626));
             g.setColour (line); g.drawHorizontalLine (0, 0.0f, (float) getWidth());
             g.setColour (muted); g.setFont (font (10.0f, true));
             const auto* track = owner.currentTrack();
-            auto title = track == nullptr ? juce::String ("DEVICE CHAIN") : "DEVICE CHAIN  /  " + track->name.toUpperCase();
-            g.drawText (title, 14, 8, juce::jmax (150, getWidth() - 455), 24, juce::Justification::centredLeft);
-            addButton.setEnabled (track != nullptr);
-            g.saveState(); g.reduceClipRegion (chainLeft(), 39, getWidth() - chainLeft() - 114, getHeight() - 48);
+            auto title = track == nullptr ? juce::String ("DEVICES") : "DEVICES  /  " + track->name.toUpperCase();
+            g.drawText (title, 14, 5, juce::jmax (150, getWidth() - 455), 22, juce::Justification::centredLeft);
             if (track == nullptr || (! track->isMidi && track->plugins.empty()))
             {
-                g.setColour (juce::Colour (0xff393939));
-                g.drawRect (chainLeft() + 5, 44, getWidth() - chainLeft() - 129, getHeight() - 59);
+                const auto hint = chainView.getBounds().reduced (6, 8);
+                g.setColour (juce::Colour (0xff3a3a3a)); g.drawRect (hint);
                 g.setColour (muted); g.setFont (font (12.0f));
-                g.drawText (track == nullptr ? "Select an audio track to view its device chain." : "Add a built-in device or a scanned plug-in.",
-                            chainLeft() + 16, 59, getWidth() - chainLeft() - 151, 32, juce::Justification::centred);
+                g.drawText (track == nullptr ? "Select a track to view its devices." : "Drop Audio Effects Here", hint.withTrimmedBottom (24), juce::Justification::centred);
                 g.setFont (font (10.5f));
-                g.drawText ("Audio flows through devices from left to right.", chainLeft() + 16, 91, getWidth() - chainLeft() - 151, 25, juce::Justification::centred);
+                g.drawText ("Use + Device or the browser. Audio flows left to right.", hint.withTrimmedTop (30), juce::Justification::centred);
             }
-            else
-            {
-                for (int i = 0; i < (int) track->plugins.size(); ++i)
-                {
-                    auto box = pluginBounds (i);
-                    const auto& plugin = track->plugins[(size_t) i];
-                    g.setColour (raised); g.fillRect (box);
-                    g.setColour (plugin.enabled ? orange : muted);
-                    g.fillEllipse ((float) box.getX() + 10, (float) box.getY() + 10, 7, 7);
-                    g.setColour (ink); g.setFont (font (11.0f, true));
-                    g.drawText (plugin.name, box.getX() + 24, box.getY() + 3, box.getWidth() - 30, 22, juce::Justification::centredLeft, true);
-                    g.setColour (panel); g.fillRect (box.withTrimmedTop (28).withHeight (47));
-                    g.setColour (muted); g.setFont (font (10.0f));
-                    g.drawText (plugin.enabled ? (plugin.isNativeEffect && effectIsMidi (plugin.effect.kind) ? "PROCESSING MIDI" : "PROCESSING AUDIO") : "BYPASSED",
-                                box.withTrimmedTop (30).withHeight (40), juce::Justification::centred);
-                    g.setColour (ink); g.drawText ("Open", box.getX() + 5, box.getBottom() - 29, 55, 24, juce::Justification::centred);
-                    g.setColour (plugin.enabled ? ink : orange);
-                    g.drawText ("Bypass", box.getX() + 62, box.getBottom() - 29, 66, 24, juce::Justification::centred);
-                    g.setColour (muted); g.drawText ("Remove", box.getX() + 128, box.getBottom() - 29, 59, 24, juce::Justification::centred);
-                    g.setColour (line); g.drawRect (box);
-                    g.drawVerticalLine (box.getX() + 61, (float) box.getBottom() - 29, (float) box.getBottom());
-                    g.drawVerticalLine (box.getX() + 128, (float) box.getBottom() - 29, (float) box.getBottom());
-                    g.setColour (muted); g.drawText (">", box.getRight(), box.getY() + 43, 17, 20, juce::Justification::centred);
-                }
-            }
-            g.restoreState();
             paintMaster (g);
-        }
-        void mouseDown (const juce::MouseEvent& e) override
-        {
-            const auto* track = owner.currentTrack();
-            if (track == nullptr || e.x < chainLeft() || e.x >= getWidth() - 111) return;
-            for (int i = 0; i < (int) track->plugins.size(); ++i)
-            {
-                const auto box = pluginBounds (i);
-                if (! box.contains (e.getPosition())) continue;
-                if (e.mods.isPopupMenu())
-                {
-                    juce::PopupMenu menu;
-                    menu.addItem (1, "Move left", i > 0);
-                    menu.addItem (2, "Move right", i + 1 < (int) track->plugins.size());
-                    const auto trackId = track->id, pluginId = track->plugins[(size_t) i].id;
-                    juce::Component::SafePointer<Impl> safe (&owner);
-                    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe, trackId, pluginId] (int choice)
-                    {
-                        if (! safe || choice == 0) return;
-                        const auto snapshot = safe->session.snapshot();
-                        for (int t = 0; t < (int) snapshot.tracks.size(); ++t)
-                            if (snapshot.tracks[(size_t) t].id == trackId)
-                                for (int p = 0; p < (int) snapshot.tracks[(size_t) t].plugins.size(); ++p)
-                                    if (snapshot.tracks[(size_t) t].plugins[(size_t) p].id == pluginId)
-                                    { safe->report (safe->session.movePlugin (t, p, p + (choice == 1 ? -1 : 1))); safe->refresh(); return; }
-                    });
-                    return;
-                }
-                if (e.y < box.getBottom() - 30) { owner.report (owner.session.showPluginEditor (owner.selectedTrack, i)); return; }
-                const auto x = e.x - box.getX();
-                if (x < 61) owner.report (owner.session.showPluginEditor (owner.selectedTrack, i));
-                else if (x < 128) owner.report (owner.session.setPluginEnabled (owner.selectedTrack, i, ! track->plugins[(size_t) i].enabled));
-                else owner.report (owner.session.removePlugin (owner.selectedTrack, i));
-                owner.refresh(); return;
-            }
-        }
-        void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& details) override
-        {
-            const auto* track = owner.currentTrack();
-            const auto total = track != nullptr ? (int) track->plugins.size() * 208 + (track->isMidi ? 554 : 0) : 0;
-            offset = juce::jlimit (0, juce::jmax (0, total - getWidth() + chainLeft() + 141), offset - (int) ((details.deltaX + details.deltaY) * 220));
-            resized(); repaint();
         }
     private:
         Impl& owner;
@@ -2711,22 +2742,25 @@ private:
         juce::Slider masterGain;
         std::optional<uint64_t> masterGestureGeneration;
         uint64_t masterProjectGeneration = 0;
-        juce::Component synthClip;
+        juce::Viewport chainView;
+        juce::Component chain;
+        std::vector<std::unique_ptr<DevicePanel>> panels;
         SendsPanel sendsPanel;
         int chainLeft() const { return sendsPanel.isVisible() ? 250 : 9; }
-        int offset = 0;
-        // MIDI effects, then the instrument panel, then audio devices, left to right.
-        int midiEffectCount() const
-        {
-            const auto* track = owner.currentTrack(); int count = 0;
-            if (track != nullptr) for (const auto& p : track->plugins) count += p.isNativeEffect && effectIsMidi (p.effect.kind);
-            return count;
-        }
-        juce::Rectangle<int> pluginBounds (int i) const
+        // MIDI effects, then the instrument, then audio devices, left to right.
+        void layoutChain()
         {
             const auto* track = owner.currentTrack();
-            const auto instrumentWidth = i >= midiEffectCount() && track != nullptr && track->isMidi ? 554 : 0;
-            return { chainLeft() + 5 + instrumentWidth + i * 208 - offset, 44, 192, getHeight() - 59 };
+            const int height = juce::jmax (1, chainView.getHeight() - 10);
+            int x = 4;
+            auto place = [&] (juce::Component& c, int width) { c.setBounds (x, 2, width, height); x += width + 4; };
+            size_t i = 0;
+            if (track != nullptr) for (; i < panels.size() && i < track->plugins.size() && track->plugins[i].isNativeEffect && effectIsMidi (track->plugins[i].effect.kind); ++i)
+                place (*panels[i], panels[i]->preferredWidth());
+            synthPanel.setVisible (track != nullptr && track->isMidi);
+            if (synthPanel.isVisible()) place (synthPanel, synthPanel.preferredWidth());
+            for (; i < panels.size(); ++i) place (*panels[i], panels[i]->preferredWidth());
+            chain.setSize (juce::jmax (x, chainView.getWidth()), height + 2);
         }
         void paintMaster (juce::Graphics& g)
         {
@@ -4477,10 +4511,33 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
         }
     }
+    {
+        // Inline device view: the native instrument's own controls live in the chain.
+        auto* operatorLevel = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "opALevel"));
+        check (operatorLevel != nullptr && operatorLevel->isVisible() && operatorLevel->getParentComponent()->isVisible(), "native instrument controls are shown inline in the device view");
+        operatorLevel->setValue (.25, juce::sendNotificationSync); refresh();
+        check (std::abs (currentTrack()->instrument.effect.values[2] - .25f) < 1e-6f, "an inline instrument control edits the real instrument");
+        session.undo(); refresh();
+    }
     session.undo(); refresh();
     check (! currentTrack()->instrument.isNativeEffect && chooser->getSelectedId() == 1 && waveform->isVisible()
                && session.snapshot().tracks[(size_t) selectedTrack].synth.pulseWidth == 0.64f,
            "undo restores the built-in synth with its previous settings");
+    {
+        const int instrumentTrack = selectedTrack;
+        selectTrack (0); report (session.addNativeEffect (0, Session::EffectKind::saturator)); refresh();
+        auto* drive = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "driveDb"));
+        auto* power = dynamic_cast<juce::Button*> (findNamed (deviceChain, "Device on"));
+        check (drive != nullptr && power != nullptr && drive->isVisible() && power->getToggleState(),
+               "inline device panels show each device's controls and a lit on/off switch");
+        drive->setValue (12, juce::sendNotificationSync); refresh();
+        check (state.tracks[0].plugins.back().effect.values[0] == 12, "an inline device control edits the real device");
+        power->setToggleState (false, juce::dontSendNotification); power->onClick(); refresh();
+        check (! state.tracks[0].plugins.back().enabled && ! power->getToggleState(), "the device switch bypasses the device");
+        session.undo(); session.undo(); session.undo(); refresh();
+        check (state.tracks[0].plugins.empty(), "undo removes the inline test device");
+        selectTrack (instrumentTrack); refresh();
+    }
     menuItemSelected (31, 2);
     menuItemSelected (20, 1);
     menuItemSelected (21, 1);

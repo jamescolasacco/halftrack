@@ -145,7 +145,8 @@ private:
     bool pending = false, writing = false;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NativeEffectPlugin)
 };
-std::unique_ptr<juce::Component> makeNativeEffectEditor (Session&, const juce::String&);
+// Compact editors are three rows of small controls for the inline device view.
+std::unique_ptr<juce::Component> makeNativeEffectEditor (Session&, const juce::String&, bool compact = false);
 #if HALFTRACK_TESTS_ENABLED
 int runNativeEffectEditorTests (const juce::File&);
 #endif
