@@ -25,6 +25,26 @@ void check (bool value, const juce::String& message)
 void ok (const juce::Result& result, const juce::String& message)
 { check (result.wasOk(), message + (result.failed() ? ": " + result.getErrorMessage() : "")); }
 
+// Observe the actual cached-clock precondition without retrying audio output.
+// JUCE's timer thread can wait 300 ms for desktop dispatch, leaving this cache
+// older than the native MIDI node's 110 ms stale-input window.
+juce::uint32 waitForFrozenMidiClock()
+{
+    auto cached = juce::Time::getApproximateMillisecondCounter();
+    auto stableSince = juce::Time::getMillisecondCounterHiRes();
+    const auto deadline = stableSince + 5000;
+    while (juce::Time::getMillisecondCounterHiRes() < deadline)
+    {
+        const auto latest = juce::Time::getApproximateMillisecondCounter();
+        const auto now = juce::Time::getMillisecondCounterHiRes();
+        if (latest != cached) { cached = latest; stableSince = now; }
+        if (now - stableSince >= 130) return latest;
+        juce::Thread::sleep (1);
+    }
+    check (false, "cached MIDI clock did not remain unchanged for 130 ms within the five-second precondition deadline");
+    return 0;
+}
+
 // The production facade selects this unique, source-free virtual device. No
 // physical MIDI input or system audio driver is opened by this test.
 struct VirtualController
@@ -272,7 +292,60 @@ void interruptedMidiStateOrdering()
     check (actual.back().isMidiClock() && std::abs (actual.back().getTimeStamp() - .003) < 1e-10,
         "fresh system messages retain their timing");
     check (consume().empty(), "interrupted state events are consumed exactly once");
+    const auto before = waitForFrozenMidiClock();
+    const auto sentAt = juce::Time::getMillisecondCounterHiRes();
+    enqueue (juce::MidiMessage::noteOn (1, 81, (juce::uint8)96), origin + 2.0);
+    const auto after = juce::Time::getApproximateMillisecondCounter();
+    const auto refreshed = juce::Time::getMillisecondCounter();
+    const auto emitted = consume();
+    const auto elapsed = juce::Time::getMillisecondCounterHiRes() - sentAt;
+    check (emitted.size() == 1 && emitted[0].isNoteOn() && emitted[0].getNoteNumber() == 81,
+        "fresh key survives observed stale cached receipt clock; before=" + juce::String (before)
+            + " after=" + juce::String (after) + " consume=" + juce::String (refreshed)
+            + " elapsed-ms=" + juce::String (elapsed, 3) + " emitted=" + juce::String ((int)emitted.size()));
 
+}
+
+// Even if these audio-derived device types are passed directly to this native
+// node (normally the builder selects dedicated nodes), receipt must not refresh
+// the shared wall clock. Use real native devices/instances, without audio input.
+void audioDerivedMidiReceiptClockGuards()
+{
+    Session session (false);
+    auto& devices = dynamic_cast<te::DeviceManager::TracktionEngineAudioDeviceManager&>
+        (session.audioDeviceManager()).engine.getDeviceManager();
+    te::HostedAudioDeviceInterface::Parameters parameters;
+    parameters.sampleRate = 48000; parameters.blockSize = 256;
+    devices.getHostedAudioDeviceInterface().initialise (parameters);
+    devices.rescanMidiDeviceListSynchronously();
+    auto* edit = devices.engine.getActiveEdits().getEdits()[0];
+    edit->getTransport().ensureContextAllocated();
+    auto* context = edit->getCurrentPlaybackContext();
+    check (context != nullptr, "receipt guard fixture has a hosted playback context");
+    auto& trackDevice = te::getAudioTracks (*edit)[0]->getMidiInputDevice();
+    te::MidiInputDevice* hostedDevice = nullptr;
+    for (const auto& input : devices.getMidiInDevices())
+        if (te::HostedAudioDeviceInterface::isHostedMidiInputDevice (*input)) hostedDevice = input.get();
+    check (trackDevice.isTrackDevice() && hostedDevice != nullptr && ! hostedDevice->isTrackDevice(),
+        "native track and hosted input types exercise both receipt-clock exclusions");
+    for (auto* source : {&trackDevice, hostedDevice})
+    {
+        std::unique_ptr<te::InputDeviceInstance> instance (source->createInstance (*context));
+        tracktion::graph::PlayHead playHead;
+        tracktion::graph::PlayHeadState playHeadState (playHead);
+        tracktion::graph::NodeGraph graph;
+        auto node = std::make_unique<te::MidiInputDeviceNode> (*instance, *source, source->getMPESourceID(),
+            playHeadState, te::getAudioTracks (*edit)[0]->itemID);
+        auto* receiver = node.get();
+        graph.sortedNodes.push_back ({receiver, receiver->getNodeProperties().nodeID});
+        graph.rootNode = std::move (node);
+        receiver->prepareToPlay ({48000, 256, graph, nullptr});
+        const auto before = waitForFrozenMidiClock();
+        receiver->handleIncomingMidiMessage (juce::MidiMessage::noteOn (1, 72, (juce::uint8)96), source->getMPESourceID());
+        const auto after = juce::Time::getApproximateMillisecondCounter();
+        check (before == after, juce::String (source->isTrackDevice() ? "track" : "hosted")
+            + " MIDI receipt keeps the cached clock path; before=" + juce::String (before) + " after=" + juce::String (after));
+    }
 }
 
 // A callback interruption must not discard the release of a voice that has
@@ -765,7 +838,7 @@ void withGeneratedMidiController (Session& session, const std::function<void(con
 }
 int runMidiMonitoringTests()
 {
-    try { interruptedMidiStateOrdering(); interruptedMidiReleases(); replacementConsumerLifetime(); immediateMonitoringTransitions(); selectionAndMonitoring(); return 0; }
+    try { interruptedMidiStateOrdering(); audioDerivedMidiReceiptClockGuards(); interruptedMidiReleases(); replacementConsumerLifetime(); immediateMonitoringTransitions(); selectionAndMonitoring(); return 0; }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI monitoring: "<<e.what()<<std::endl;return 1;}
 }
 int runMidiInputTests(const juce::File& artifacts)
