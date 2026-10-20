@@ -351,6 +351,15 @@ public:
     juce::Result setAudioClipWarp (const juce::String& clipId, const WarpSettings&);
     juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
     juce::Result splitAudioClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
+    // Splits an unlooped Arrangement MIDI clip; notes crossing the split become two notes and each
+    // controller's value at the split starts the right-hand clip.
+    juce::Result splitMidiClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
+    // Arrangement time-selection edits on the given tracks, each one undo step. Split cuts clips at
+    // both edges; Delete removes the material inside; Duplicate copies it to just after the
+    // selection, replacing what was there. Clips crossing an edge must be splittable there.
+    juce::Result splitRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
+    juce::Result deleteRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
+    juce::Result duplicateRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
     // Insert Silence: everything at or after start moves later by length across all tracks, locators
     // and automation; clips crossing start split (audio) or open a gap between their notes (MIDI).
     juce::Result insertTime (double startSeconds, double lengthSeconds);

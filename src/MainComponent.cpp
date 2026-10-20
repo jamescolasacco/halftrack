@@ -519,7 +519,9 @@ public:
             if (code == 'N') { ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) { safe->report (safe->session.newProject()); safe->resetView(); } }); return true; }
             if (code == 'T') { if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
             if (code == 'Z') { if (shift) session.redo(); else session.undo(); refresh(); return true; }
+            if (code == 'L' && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (79); return true; }
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
+            if (! shift && ! showSession && ! showPiano && timeSelection.active() && (code == 'E' || code == 'D')) { selectionCommand (code == 'E' ? 76 : 77); return true; }
             if (code == 'I' && ! showSession) { menuItemSelected (74, 1); return true; }
             if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && shift && ! showSession) { menuItemSelected (75, 1); return true; }
             if (code == 'G') { if (shift) ungroupSelectedTrack(); else groupSelectedTracks(); return true; }
@@ -535,6 +537,9 @@ public:
                     { if(track->isMidi)midiClipCommand(7,{});else audioClipCommand(7,{}); return true; }
                     return false;
                 }
+                if (const auto* track = currentTrack(); track && juce::isPositiveAndBelow(selectedClip,(int)track->clips.size())
+                    && track->clips[(size_t)selectedClip].isMidi && code=='E')
+                { juce::String right; report (session.splitMidiClip (track->clips[(size_t) selectedClip].id, state.position, right)); refresh(); return true; }
                 if (const auto* track = currentTrack(); track && juce::isPositiveAndBelow(selectedClip,(int)track->clips.size())
                     && track->clips[(size_t)selectedClip].isMidi && code!='E')
                 {midiClipCommand(code=='D'?4:code=='C'?5:6,track->clips[(size_t)selectedClip].id);return true;}
@@ -573,7 +578,12 @@ public:
         if (code == juce::KeyPress::spaceKey) { togglePlay(); return true; }
         if (code == juce::KeyPress::escapeKey) { session.stop(); session.seek (0); refresh(); return true; }
         if (code == juce::KeyPress::F9Key) { if (state.recording) session.stop(); else report (session.record()); refresh(); return true; }
-        if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) { if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); return true; }
+        if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)
+        {
+            if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot();
+            else if (timeSelection.active()) selectionCommand (78); else deleteSelectedClip();
+            return true;
+        }
         if (key.getTextCharacter() == '+' || key.getTextCharacter() == '=') { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); return true; }
         if (key.getTextCharacter() == '-') { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); return true; }
         return false;
@@ -615,6 +625,36 @@ private:
     std::vector<Lane> lanes;
     int lanesHeight = 0;
     std::set<juce::String> multiSelectedTracks;
+    // The Arrangement time selection: a range over a run of tracks; empty when end <= start.
+    struct TimeSelection
+    {
+        double start = 0, end = 0;
+        juce::StringArray trackIds;
+        bool active() const { return end - start > .001 && ! trackIds.isEmpty(); }
+    };
+    TimeSelection timeSelection;
+    int trackIndex (const juce::String& id) const
+    { for (int t = 0; t < (int) state.tracks.size(); ++t) if (state.tracks[(size_t) t].id == id) return t; return -1; }
+    double snapTime (double seconds, juce::ModifierKeys mods) const { return juce::jmax (0.0, mods.isAltDown() ? seconds : std::round (seconds / gridSeconds()) * gridSeconds()); }
+    // Time edits use the selection, or the loop range when nothing is selected.
+    std::pair<double, double> editRange() const
+    { return timeSelection.active() ? std::pair { timeSelection.start, timeSelection.end } : std::pair { state.loopStart, state.loopEnd }; }
+    void selectionCommand (int item)
+    {
+        if (! timeSelection.active()) return;
+        const auto [start, end] = editRange();
+        if (item == 76) report (session.splitRange (timeSelection.trackIds, start, end));
+        else if (item == 77)
+        {
+            const auto result = session.duplicateRange (timeSelection.trackIds, start, end);
+            report (result);
+            // As in the reference, the selection moves onto the copy so repeating it continues the pattern.
+            if (result.wasOk()) { timeSelection.start = end; timeSelection.end = end + (end - start); }
+        }
+        else if (item == 78) report (session.deleteRange (timeSelection.trackIds, start, end));
+        else if (item == 79) session.setLoop (true, start, end);
+        refresh();
+    }
     const Session::GroupInfo* groupInfo (const juce::String& id) const
     { for (const auto& g : state.groups) if (g.id == id) return &g; return nullptr; }
     void buildLanes()
@@ -1380,6 +1420,19 @@ private:
                 g.setColour (muted); g.setFont (font (12.0f));
                 g.drawText ("Or insert an audio track, choose an input and arm it to record.", message.withHeight (24).withY (message.getCentreY() + 8), juce::Justification::centred);
             }
+            // The time selection lights its lanes between its edges.
+            if (owner.timeSelection.active())
+            {
+                const auto x0 = (float) ((owner.timeSelection.start - owner.viewStart) * owner.pixelsPerSecond);
+                const auto x1 = (float) ((owner.timeSelection.end - owner.viewStart) * owner.pixelsPerSecond);
+                for (int t = 0; t < (int) owner.state.tracks.size(); ++t)
+                    if (owner.timeSelection.trackIds.contains (owner.state.tracks[(size_t) t].id) && owner.laneHeight (t) > 0)
+                    {
+                        const juce::Rectangle<float> area (x0, (float) owner.laneY (t), x1 - x0, (float) owner.laneHeight (t));
+                        g.setColour (juce::Colour (0xffb9d3ff).withAlpha (.3f)); g.fillRect (area);
+                        g.setColour (juce::Colour (0xffb9d3ff).withAlpha (.7f)); g.drawVerticalLine ((int) x0, area.getY(), area.getBottom()); g.drawVerticalLine ((int) x1, area.getY(), area.getBottom());
+                    }
+            }
             auto x = (float) ((owner.state.position - owner.viewStart) * owner.pixelsPerSecond);
             g.setColour (owner.state.recording ? red : juce::Colour (0xffeeeeee));
             g.drawLine (x, 0, x, (float) getHeight(), 1.3f);
@@ -1409,6 +1462,7 @@ private:
                     if (clipBounds (clips[(size_t) c], track).contains (e.position))
                     {
                         owner.selectedClip = c;
+                        owner.timeSelection = {};
                         draggedClip = c;
                         originalStart = clips[(size_t) c].start;
                         dragStartX = e.x;
@@ -1429,6 +1483,19 @@ private:
                     }
             }
             draggedClip = -1;
+            // Dragging over empty lane space selects time; Shift-click extends the selection.
+            if (! e.mods.isPopupMenu())
+            {
+                const auto at = owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods);
+                if (e.mods.isShiftDown() && owner.timeSelection.active())
+                {
+                    selectionAnchorTime = std::abs (at - owner.timeSelection.start) > std::abs (at - owner.timeSelection.end) ? owner.timeSelection.start : owner.timeSelection.end;
+                    selectionAnchorTrack = owner.trackIndex (owner.timeSelection.trackIds[0]);
+                    extendSelection (at, track);
+                }
+                else { owner.timeSelection = {}; selectionAnchorTime = at; selectionAnchorTrack = track; }
+                selecting = true;
+            }
             owner.session.seek (juce::jmax (0.0, owner.viewStart + e.x / owner.pixelsPerSecond));
             owner.refresh();
             if (e.mods.isPopupMenu())
@@ -1459,6 +1526,11 @@ private:
         }
         void mouseDrag (const juce::MouseEvent& e) override
         {
+            if (selecting && e.mouseWasDraggedSinceMouseDown())
+            {
+                extendSelection (owner.snapTime (juce::jmax (0.0, owner.viewStart + e.x / owner.pixelsPerSecond), e.mods), owner.trackAtY (juce::jmax (0, e.y)));
+                return;
+            }
             if (draggedClip < 0 || e.mods.isPopupMenu() || ! e.mouseWasDraggedSinceMouseDown()) return;
             const auto current = owner.session.snapshot();
             if (fadeDrag != 0)
@@ -1526,7 +1598,18 @@ private:
         void mouseUp (const juce::MouseEvent&) override
         {
             if (clipGesture) { owner.session.endEditGesture(); clipGesture = false; }
-            draggedClip = -1; fadeDrag = 0; rangeDrag = 0; dragClipId.clear();
+            draggedClip = -1; fadeDrag = 0; rangeDrag = 0; dragClipId.clear(); selecting = false;
+        }
+        // The selection runs from the anchor to the pointer in time and across the tracks between them.
+        void extendSelection (double at, int track)
+        {
+            const int count = (int) owner.state.tracks.size();
+            if (count == 0 || selectionAnchorTrack < 0) return;
+            const int first = juce::jlimit (0, count - 1, juce::jmin (selectionAnchorTrack, track < 0 ? count - 1 : track));
+            const int last = juce::jlimit (0, count - 1, juce::jmax (selectionAnchorTrack, track < 0 ? count - 1 : track));
+            Impl::TimeSelection next { juce::jmin (selectionAnchorTime, at), juce::jmax (selectionAnchorTime, at), {} };
+            for (int t = first; t <= last; ++t) next.trackIds.add (owner.state.tracks[(size_t) t].id);
+            owner.timeSelection = next; repaint(); owner.ruler.repaint();
         }
         void mouseMove (const juce::MouseEvent& e) override
         {
@@ -1558,8 +1641,9 @@ private:
         Impl& owner;
         std::vector<std::unique_ptr<TrackRow>> rows;
         std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbnails;
-        int draggedClip = -1, dragStartX = 0;
-        double originalStart = 0, originalFade = 0;
+        int draggedClip = -1, dragStartX = 0, selectionAnchorTrack = -1;
+        double originalStart = 0, originalFade = 0, selectionAnchorTime = 0;
+        bool selecting = false;
         int fadeDrag = 0, rangeDrag = 0;
         Session::ClipInfo originalRange;
         juce::String dragClipId;
@@ -4830,6 +4914,7 @@ private:
         if (! loopLengthLabel.isBeingEdited()) loopLengthLabel.setText (formatMusicalTime ((state.loopEnd - state.loopStart) * state.tempo / 60.0, false), juce::dontSendNotification);
         projectLabel.setText (state.name + (state.dirty ? "  *" : ""), juce::dontSendNotification);
         if (state.tracks.size() != previous.tracks.size() || lanesHeight != canvas.getHeight() && lanesHeight > viewport.getHeight()) resized();
+        for (int i = timeSelection.trackIds.size(); --i >= 0;) if (trackIndex (timeSelection.trackIds[i]) < 0) timeSelection.trackIds.remove (i);
         for (auto it = multiSelectedTracks.begin(); it != multiSelectedTracks.end();)
             it = std::any_of (state.tracks.begin(), state.tracks.end(), [&] (const auto& t) { return t.id == *it; }) ? std::next (it) : multiSelectedTracks.erase (it);
         canvas.syncRows();
@@ -4937,10 +5022,15 @@ private:
             for(int i=0;i<grids.size();++i) recordingGrid.addItem(60+i,grids[i],!state.recording,static_cast<int>(state.recordQuantisation)==i);
             popup.addSubMenu("Recording quantization",recordingGrid);popup.addSeparator();
             popup.addItem (22, showPiano ? "Delete Selected Notes" : showSession ? "Clear Selected Slot" : "Delete Selected Clip", showPiano ? pianoRoll.hasSelectedNote() : showSession ? selectedSlot() != nullptr && selectedSlot()->hasClip : selectedClip >= 0);
-            // Time edits use the loop brace as the time selection.
+            // Time edits use the time selection, or the loop brace when nothing is selected.
             popup.addSeparator();
-            const bool range = state.loopEnd > state.loopStart && ! state.recording;
-            popup.addItem (74, "Insert Silence (Loop Range)", range); popup.addItem (75, "Delete Time (Loop Range)", range);
+            const bool selection = timeSelection.active() && ! showSession && ! state.recording;
+            popup.addItem (76, "Split", selection); popup.addItem (77, "Duplicate Selection", selection);
+            popup.addItem (78, "Delete Selection", selection); popup.addItem (79, "Loop Selection", selection);
+            popup.addSeparator();
+            const bool range = (selection || state.loopEnd > state.loopStart) && ! state.recording;
+            const juce::String source = selection ? "" : " (Loop Range)";
+            popup.addItem (74, "Insert Silence" + source, range); popup.addItem (75, "Delete Time" + source, range);
         }
         else if (index == 2)
         {
@@ -4991,8 +5081,9 @@ private:
             case 20: session.undo(); break;
             case 21: session.redo(); break;
             case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); break;
-            case 74: report (session.insertTime (state.loopStart, state.loopEnd - state.loopStart)); refresh(); break;
-            case 75: report (session.deleteTime (state.loopStart, state.loopEnd - state.loopStart)); refresh(); break;
+            case 74: { const auto [a, b] = editRange(); report (session.insertTime (a, b - a)); refresh(); break; }
+            case 75: { const auto [a, b] = editRange(); report (session.deleteTime (a, b - a)); timeSelection = {}; refresh(); break; }
+            case 76: case 77: case 78: case 79: selectionCommand (id); break;
             case 30: showPiano = false; addTrack(); resized(); break;
             case 33: addMidiTrack(); break;
             case 35: addReturnTrack(); break;
@@ -6588,6 +6679,47 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         refresh();
         check (std::abs (clipStart() - 2) < 1e-6, "each time edit is one undo step");
         deleteClipById (clipId); refresh();
+    }
+    {
+        // Dragging over empty lane space selects time; Cmd/Ctrl+D duplicates it after itself and Delete clears it.
+        showArrangementView(); refresh();
+        const int previousTrack = selectedTrack;
+        check (session.addMidiTrack ("Selection").wasOk(), "add an empty MIDI track"); refresh();
+        selectTrack ((int) state.tracks.size() - 1); refresh();
+        const int t = selectedTrack; const auto trackId = currentTrack()->id;
+        check (session.addMidiClip (trackId, 2, 2).wasOk(), "a one-second MIDI clip at 1 s"); refresh();
+        const auto now = juce::Time::getCurrentTime();
+        const juce::ModifierKeys alt (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::altModifier);
+        auto canvasEvent = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged)
+        { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, alt, 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, down, now, 1, dragged); };
+        const auto xAt = [&] (double seconds) { return (float) ((seconds - viewStart) * pixelsPerSecond); };
+        const auto y = (float) (laneY (t) + laneHeight (t) / 2);
+        const juce::Point<float> down { xAt (.5), y }, up { xAt (2.5), y };
+        canvas.mouseDown (canvasEvent (down, down, false)); canvas.mouseDrag (canvasEvent (up, down, true)); canvas.mouseUp (canvasEvent (up, down, true));
+        const auto tolerance = 1.5 / pixelsPerSecond;
+        check (timeSelection.active() && std::abs (timeSelection.start - .5) < tolerance && std::abs (timeSelection.end - 2.5) < tolerance
+               && timeSelection.trackIds == juce::StringArray { trackId }, "dragging over empty lane space selects that time on the track");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("time-selection.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (createComponentSnapshot (getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        const auto starts = [&] { std::vector<double> result; for (const auto& c : state.tracks[(size_t) t].clips) result.push_back (c.start); std::sort (result.begin(), result.end()); return result; };
+        const auto before = starts();
+        check (handleKey (juce::KeyPress ('D', juce::ModifierKeys::commandModifier, 0)), "Cmd/Ctrl+D is handled"); refresh();
+        const auto selectionLength = timeSelection.end - timeSelection.start;
+        check (starts().size() == before.size() + 1 && std::abs (starts().back() - (1 + selectionLength)) < tolerance && std::abs (timeSelection.start - 2.5) < tolerance,
+               "the selection's clip is copied after it and the selection moves onto the copy");
+        check (handleKey (juce::KeyPress (juce::KeyPress::deleteKey)), "Delete is handled"); refresh();
+        check (starts() == before, "Delete removes the material in the selection");
+        session.undo(); session.undo(); refresh();
+        check (starts() == before, "undo restores each step");
+        timeSelection = {};
+        check (session.removeTrack (t).wasOk(), "remove the selection track"); refresh();
+        selectTrack (previousTrack); refresh();
     }
     {
         const int instrumentTrack = selectedTrack;

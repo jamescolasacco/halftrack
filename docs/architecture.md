@@ -270,6 +270,10 @@ A rack is an engine `RackInstance` on the track's device list plus a Halftrack-m
 
 `setMidiControllerLane` maps Halftrack lanes onto the engine's MIDI controller events in the clip's sequence (CC values stored as 14-bit, pitch bend offset by 8192) and replaces a lane in one transaction. `describeClip` groups them back into `ClipInfo::controllers`. Insert and Delete Time carry them with notes. The piano roll's `LaneView` edits velocities through `updateMidiNotes` and lanes through `setMidiControllerLane`, previewing locally until release. See the [controller lane contract](research/midi-controllers-contract.md).
 
+## Arrangement time selection
+
+`Impl::timeSelection` holds the selected range and track IDs; the canvas sets it from drags over empty lane space and draws it over the selected lanes. `splitRange`, `deleteRange` and `duplicateRange` validate every edge with `splittableAt`, then cut tracks with `splitTrackAt`, which uses the engine's split for audio and `splitMidiClipAt` for MIDI so both halves keep zero offset. See the [selection contract](research/arrangement-selection-contract.md).
+
 ## Audio warping
 
 `ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).

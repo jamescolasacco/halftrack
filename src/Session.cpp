@@ -3906,6 +3906,198 @@ bool canSplitAt (const te::WaveAudioClip& clip, double at)
     const auto left = at - p.getStart().inSeconds(), right = p.getEnd().inSeconds() - at;
     return canEditAudioRange (clip) && left >= .002 && right >= .002 && left >= s.fadeInSeconds && right >= s.fadeOutSeconds;
 }
+// A MIDI clip can be split strictly inside it, at least a 960th of a beat from either end.
+bool canSplitMidiAt (const te::MidiClip& clip, te::TimePosition at)
+{
+    const auto& tempo = clip.edit.tempoSequence;
+    const auto beat = (tempo.toBeats (at) - clip.getStartBeat()).inBeats();
+    return canCopyMidiClip (clip) && beat >= 1.0 / 960 && clip.getLengthInBeats().inBeats() - beat >= 1.0 / 960;
+}
+// Splits a MIDI clip into two clips that both start at zero offset. Notes crossing the split
+// become two notes, and each controller's value at the split starts the right-hand clip.
+te::MidiClip* splitMidiClipAt (te::MidiClip& clip, te::TimePosition at, juce::UndoManager* undo)
+{
+    auto& edit = clip.edit;
+    const auto split = edit.tempoSequence.toBeats (at) - clip.getStartBeat();
+    const auto end = clip.getPosition().getEnd();
+    auto copy = te::ClipCopy::fromClipboardState (clip.state, false).withNewItemID (edit);
+    auto state = copy.getState();
+    state.setProperty (te::IDs::start, at.inSeconds(), nullptr); state.setProperty (te::IDs::length, (end - at).inSeconds(), nullptr);
+    renewMidiNoteIDs (state);
+    auto* right = dynamic_cast<te::MidiClip*> (te::insertClipCopy (*clip.getClipTrack(), copy));
+    if (right == nullptr) return nullptr;
+    auto& left = clip.getSequence();
+    const auto leftNotes = left.getNotes();
+    for (auto* note : leftNotes)
+    {
+        if (note->getStartBeat() >= toPosition (split)) left.removeNote (*note, undo);
+        else if (note->getEndBeat() > toPosition (split)) note->setStartAndLength (note->getStartBeat(), split - toDuration (note->getStartBeat()), undo);
+    }
+    std::map<int, int> carried; // Each controller's value at the split.
+    const auto leftEvents = left.getControllerEvents();
+    for (auto* event : leftEvents)
+    {
+        if (event->getBeatPosition() < toPosition (split)) carried[event->getType()] = event->getControllerValue();
+        else left.removeControllerEvent (*event, undo);
+    }
+    auto& sequence = right->getSequence();
+    const auto rightNotes = sequence.getNotes();
+    for (auto* note : rightNotes)
+    {
+        if (note->getEndBeat() <= toPosition (split)) sequence.removeNote (*note, undo);
+        else if (note->getStartBeat() < toPosition (split)) note->setStartAndLength (te::BeatPosition(), note->getEndBeat() - toPosition (split), undo);
+        else note->setStartAndLength (note->getStartBeat() - split, note->getLengthBeats(), undo);
+    }
+    std::set<int> startsAtZero;
+    const auto rightEvents = sequence.getControllerEvents();
+    for (auto* event : rightEvents)
+    {
+        if (event->getBeatPosition() < toPosition (split)) { sequence.removeControllerEvent (*event, undo); continue; }
+        event->setBeatPosition (event->getBeatPosition() - split, undo);
+        if (event->getBeatPosition().inBeats() < 1e-9) startsAtZero.insert (event->getType());
+    }
+    for (const auto& [type, value] : carried)
+        if (! startsAtZero.contains (type)) sequence.addControllerEvent (te::BeatPosition(), type, value, undo);
+    clip.setLength (at - clip.getPosition().getStart(), true);
+    return right;
+}
+// Whether every Arrangement clip of the track crossing `at` can be split there.
+Result splittableAt (te::AudioTrack& track, te::TimePosition at)
+{
+    for (auto* clip : track.getClips())
+    {
+        const auto p = clip->getPosition();
+        if (p.getStart() >= at || p.getEnd() <= at) continue;
+        if (track.isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + track.getName() + "\" before editing its clips.");
+        if (auto* wave = dynamic_cast<te::WaveAudioClip*> (clip); wave != nullptr && canSplitAt (*wave, at.inSeconds())) continue;
+        if (auto* midi = dynamic_cast<te::MidiClip*> (clip); midi != nullptr && canSplitMidiAt (*midi, at)) continue;
+        return Result::fail ("\"" + clip->getName() + "\" cannot be split at the selection edge (warped, looped, inside a fade or too close to its end).");
+    }
+    return Result::ok();
+}
+void splitTrackAt (te::AudioTrack& track, te::TimePosition at, juce::UndoManager* undo)
+{
+    const auto clips = track.getClips();
+    for (auto* clip : clips)
+    {
+        const auto p = clip->getPosition();
+        if (p.getStart() >= at || p.getEnd() <= at) continue;
+        if (auto* midi = dynamic_cast<te::MidiClip*> (clip)) splitMidiClipAt (*midi, at, undo);
+        else track.splitClip (*clip, at);
+    }
+}
+}
+Result Session::splitMidiClip (const String& id, double at, String& rightId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before splitting clips.");
+    auto* clip = impl->midiClip (id); if (! clip) return Result::fail ("MIDI clip not found.");
+    if (auto frozen = impl->unfrozen (clip->getClipTrack()); frozen.failed()) return frozen;
+    if (! std::isfinite (at) || ! canSplitMidiAt (*clip, te::TimePosition::fromSeconds (at)))
+        return Result::fail ("Split inside an unlooped Arrangement MIDI clip, away from its ends.");
+    impl->transaction ("Split MIDI clip");
+    auto* right = splitMidiClipAt (*clip, te::TimePosition::fromSeconds (at), &impl->edit->getUndoManager());
+    if (! right) return Result::fail ("The MIDI clip could not be split.");
+    rightId = right->itemID.toString(); impl->changed(); return Result::ok();
+}
+namespace
+{
+// Tracks for a time selection, or a reason it cannot be edited.
+Result rangeTracks (te::Edit& edit, const juce::StringArray& ids, double start, double end, juce::Array<te::AudioTrack*>& tracks)
+{
+    if (! std::isfinite (start) || ! std::isfinite (end) || start < 0 || end - start < .001 || end > te::Edit::maximumLength)
+        return Result::fail ("Select a time range inside the timeline.");
+    for (const auto& id : ids)
+    {
+        te::AudioTrack* found = nullptr;
+        for (auto* t : te::getAudioTracks (edit)) if (t->itemID.toString() == id) found = t;
+        if (found == nullptr) return Result::fail ("A selected track no longer exists.");
+        if (! isReturn (*found)) tracks.addIfNotAlreadyThere (found);
+    }
+    if (tracks.isEmpty()) return Result::fail ("Select time on an audio or MIDI track.");
+    return Result::ok();
+}
+}
+Result Session::splitRange (const juce::StringArray& trackIds, double start, double end)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before splitting clips.");
+    juce::Array<te::AudioTrack*> tracks;
+    if (auto r = rangeTracks (*impl->edit, trackIds, start, end, tracks); r.failed()) return r;
+    const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (end);
+    for (auto* t : tracks) for (const auto at : { from, to }) if (auto r = splittableAt (*t, at); r.failed()) return r;
+    impl->transaction ("Split");
+    for (auto* t : tracks) for (const auto at : { from, to }) splitTrackAt (*t, at, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::deleteRange (const juce::StringArray& trackIds, double start, double end)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before deleting clips.");
+    juce::Array<te::AudioTrack*> tracks;
+    if (auto r = rangeTracks (*impl->edit, trackIds, start, end, tracks); r.failed()) return r;
+    const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (end);
+    for (auto* t : tracks)
+    {
+        for (const auto at : { from, to }) if (auto r = splittableAt (*t, at); r.failed()) return r;
+        for (auto* c : t->getClips())
+            if (c->getPosition().getStart() < to && c->getPosition().getEnd() > from)
+                if (auto r = impl->unfrozen (t); r.failed()) return r;
+    }
+    endEditGesture(); closePluginEditors();
+    impl->transaction ("Delete selection");
+    for (auto* t : tracks)
+    {
+        for (const auto at : { from, to }) splitTrackAt (*t, at, &impl->edit->getUndoManager());
+        const auto clips = t->getClips();
+        for (auto* c : clips)
+            if (c->getPosition().getStart() >= from - te::TimeDuration::fromSeconds (1e-6) && c->getPosition().getEnd() <= to + te::TimeDuration::fromSeconds (1e-6)) c->removeFromParent();
+    }
+    impl->changed(); return Result::ok();
+}
+Result Session::duplicateRange (const juce::StringArray& trackIds, double start, double end)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before duplicating clips.");
+    juce::Array<te::AudioTrack*> tracks;
+    if (auto r = rangeTracks (*impl->edit, trackIds, start, end, tracks); r.failed()) return r;
+    const auto length = end - start;
+    if (end + length > te::Edit::maximumLength) return Result::fail ("The copy must fit inside the 48-hour timeline.");
+    const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (end), after = te::TimePosition::fromSeconds (end + length);
+    const auto delta = te::TimeDuration::fromSeconds (length), epsilon = te::TimeDuration::fromSeconds (1e-6);
+    for (auto* t : tracks)
+    {
+        for (const auto at : { from, to, after }) if (auto r = splittableAt (*t, at); r.failed()) return r;
+        for (auto* c : t->getClips())
+            if (c->getPosition().getStart() < after && c->getPosition().getEnd() > from)
+                if (auto r = impl->unfrozen (t); r.failed()) return r;
+    }
+    endEditGesture(); closePluginEditors();
+    impl->transaction ("Duplicate selection");
+    auto* undo = &impl->edit->getUndoManager();
+    for (auto* t : tracks)
+    {
+        for (const auto at : { from, to, after }) splitTrackAt (*t, at, undo);
+        // The copy replaces whatever was in the time just after the selection.
+        std::vector<te::Clip::Ptr> sources, replaced;
+        for (auto* c : t->getClips())
+        {
+            const auto p = c->getPosition();
+            if (p.getStart() >= from - epsilon && p.getEnd() <= to + epsilon) sources.emplace_back (c);
+            else if (p.getStart() >= to - epsilon && p.getEnd() <= after + epsilon) replaced.emplace_back (c);
+        }
+        for (auto& c : replaced) c->removeFromParent();
+        for (auto& c : sources)
+        {
+            const auto p = c->getPosition();
+            auto copy = te::ClipCopy::fromClipboardState (c->state, false).withNewItemID (*impl->edit);
+            auto state = copy.getState();
+            state.setProperty (te::IDs::start, (p.getStart() + delta).inSeconds(), nullptr);
+            renewMidiNoteIDs (state);
+            te::insertClipCopy (*t, copy);
+        }
+    }
+    impl->changed(); return Result::ok();
 }
 Result Session::insertTime (double start, double length)
 {
