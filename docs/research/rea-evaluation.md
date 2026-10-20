@@ -52,3 +52,7 @@ Processing evidence: `ev_42951606eb7172c4f9fabc1abb503e164c6ba56aa75a5ed464c3215
 The next concrete question is **how event offsets, latency and parameter changes behave across this adapter's internal processing boundaries when host block sizes change**. The adapter observations justify investigating that seam; they do not establish a delay value or an oscillator/filter formula. Follow the already mapped constructor/table and inner wrapper, then compare generated note-on/off and parameter-step renders across irregular block sizes before changing Halftrack's audible behavior. Do not copy the reference adapter's exceptional-path logging into Halftrack's real-time callbacks.
 
 REA is useful here for structured, address-bound dossiers, call relationships, limitations and reusable evidence. It does not remove the need to resolve indirect dispatch, reconstruct state, write original portable implementations and compare actual outputs. This evaluation adds no claim to the feature-completion percentage.
+
+## Subsequent dispatch resolution
+
+The [factory-path follow-up](rea-dispatch-trace.md) resolves adapter call `0x19df0` to wrapper `0x18d24`, and initialized wrapper call `0x18eac` to inner processing entry `0xe78c`, through constructor stores, table pointers, relocation data and independent LLVM evidence. This narrows the earlier unresolved edge on that concrete path. A new REA dossier still reports partial callee coverage inside the inner routine; it does not establish complete instrument DSP, timing semantics or sound equivalence.
