@@ -36,6 +36,8 @@ public:
     void stop() override
     { if (auto* old = std::exchange (callback, nullptr)) old->audioDeviceStopped(); }
     bool isPlaying() override { return callback != nullptr; }
+    // A driver-initiated restart, such as a device reporting new details: same layout, same callback.
+    void restart() { if (auto* current = callback) { stop(); start (current); } }
     juce::String getLastError() override { return {}; }
     int getCurrentBufferSizeSamples() override { return 256; }
     double getCurrentSampleRate() override { return 48000; }
@@ -272,6 +274,78 @@ void panLawTests (const juce::File& root)
     compareMatrix (1.3, 0.7, "legacy save and reopen retains previous sound");
 }
 
+// Audio Settings applies its changes straight to the AudioDeviceManager, and a driver can restart
+// its device on its own. Both make the engine rebuild its devices while a take is recording.
+void deviceChangeRecordingTests (const juce::File& root)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    for (const bool slotTake : { false, true })
+        for (const bool driverRestart : { false, true })
+        {
+            const auto label = juce::String (slotTake ? "Session slot take" : "Arrangement take")
+                             + (driverRestart ? " across a driver restart" : " across an input-channel change");
+            Session session (false, std::make_unique<SyntheticDeviceType>());
+            auto& devices = session.audioDeviceManager();
+            const auto pump = [&devices] (int blocks) { dynamic_cast<SyntheticDevice&> (*devices.getCurrentAudioDevice()).pump (blocks); };
+            const auto folder = root.getChildFile (juce::String ("Device change ") + (slotTake ? "slot" : "arrangement") + (driverRestart ? " restart" : " channels"));
+            success (session.saveProject (folder.getChildFile ("Take.halftrack")), label + ": save the destination");
+            success (session.setTrackInput (0, session.inputNames()[0]), label + ": assign the generated input");
+            success (session.setTrackArmed (0, true), label + ": arm the track");
+            success (session.setTrackMonitor (0, Session::MonitorMode::off), label + ": record without monitoring");
+            pump (4);
+            session.seek (0);
+            success (slotTake ? session.recordSlot (0, 0) : session.record(), label + ": start the take");
+            pump (94); // 24,064 generated frames; the take keeps all but the first block.
+            if (driverRestart)
+                dynamic_cast<SyntheticDevice&> (*devices.getCurrentAudioDevice()).restart();
+            else
+            {
+                // As the Audio Settings input-channel toggle does, without storing it as the chosen
+                // setup: the engine saves that to the shared test settings, and later sessions reuse it.
+                auto setup = devices.getAudioDeviceSetup();
+                setup.useDefaultInputChannels = false;
+                setup.inputChannels.setBit (1, false);
+                require (devices.setAudioDeviceSetup (setup, false).isEmpty()
+                         && devices.getCurrentAudioDevice()->getActiveInputChannels().countNumberOfSetBits() == 1,
+                         label + ": the device reopens with one input channel");
+            }
+            pump (40);
+            const auto during = session.snapshot();
+            require (! during.recording && ! during.playing && ! during.tracks[0].slots[0].recording,
+                     label + ": the take ends where the device stopped, as Stop does");
+            const auto checkTake = [&] (const juce::File& file, const juce::String& what)
+            {
+                std::unique_ptr<juce::AudioFormatReader> reader (file.existsAsFile() ? formats.createReaderFor (file) : nullptr);
+                require (reader != nullptr && file.isAChildOf (root), label + ": " + what + " keeps its recording in the project assets");
+                juce::AudioBuffer<float> samples (static_cast<int> (reader->numChannels), static_cast<int> (reader->lengthInSamples));
+                require (std::abs (reader->lengthInSamples - 24064) <= 256 && reader->read (&samples, 0, samples.getNumSamples(), 0, true, true)
+                         && samples.getMagnitude (0, samples.getNumSamples()) > .15f,
+                         label + ": " + what + " holds half a second of the generated input");
+            };
+            const auto kept = session.snapshot().tracks[0];
+            if (slotTake)
+            {
+                require (kept.slots[0].hasClip && kept.slots[0].clip.isAudio && kept.clips.empty(), label + ": the take is the slot's clip");
+                checkTake (kept.slots[0].clip.file, "the slot clip");
+            }
+            else
+            {
+                require (kept.clips.size() == 1 && ! kept.slots[0].hasClip, label + ": the take is an Arrangement clip");
+                checkTake (kept.clips[0].file, "the Arrangement clip");
+            }
+            // The rebuilt devices record the next take.
+            session.seek (2);
+            success (slotTake ? session.recordSlot (0, 1) : session.record(), label + ": start another take after the change");
+            pump (94);
+            session.stop();
+            pump (4);
+            const auto next = session.snapshot().tracks[0];
+            if (slotTake) { require (next.slots[1].hasClip, label + ": the next take is a slot clip"); checkTake (next.slots[1].clip.file, "the next slot take"); }
+            else { require (next.clips.size() == 2, label + ": the next take is another Arrangement clip"); checkTake (next.clips[1].file, "the next Arrangement take"); }
+        }
+}
+
 void recordingTests (const juce::File& root)
 {
     Session recording (false, std::make_unique<SyntheticDeviceType>());
@@ -342,6 +416,7 @@ void recordingTests (const juce::File& root)
     require (take->read (&takeSamples, 0, takeSamples.getNumSamples(), 0, true, true) && takeSamples.getMagnitude (0, takeSamples.getNumSamples()) > .15f,
              "the audio take contains the generated input");
     recording.stop();
+    deviceChangeRecordingTests (root);
 }
 }
 

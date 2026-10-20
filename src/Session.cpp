@@ -1053,9 +1053,13 @@ struct Session::Impl
         // JUCE treats a nonexistent base path as a directory when making relative paths.
         // Materialise the scratch edit location before Tracktion stores source references.
         scratch.getChildFile ("Untitled.halftrack").create();
+        if (useDevices) { deviceStops.attached = true; engine.getDeviceManager().deviceManager.addAudioCallback (&deviceStops); }
     }
     ~Impl()
     {
+        // Removing the callback reports a device stop; the session is closing, so no take ends here.
+        deviceStops.attached = false;
+        engine.getDeviceManager().deviceManager.removeAudioCallback (&deviceStops);
         gesture.reset();
         meters.clear();
         edit.reset();
@@ -1621,6 +1625,32 @@ struct Session::Impl
         if (! result || result->measurer.get() != &m) result = std::make_unique<Meter> (m);
         return *result;
     }
+    // Each audio device stop (an Audio Settings change, a driver restart, a removed device) leads
+    // the engine to rebuild its device lists, which discards active takes. The takes end where the
+    // device stopped and are kept first, as Stop does.
+    struct DeviceStopWatch final : juce::AudioIODeviceCallback, private juce::AsyncUpdater
+    {
+        explicit DeviceStopWatch (Impl& i) : impl (i) {}
+        void audioDeviceIOCallbackWithContext (const float* const*, int, float* const* outputs, int numOutputs, int numSamples,
+                                               const juce::AudioIODeviceCallbackContext&) override
+        {
+            // The device manager adds this callback's outputs to the engine's.
+            for (int i = 0; i < numOutputs; ++i) if (outputs[i] != nullptr) juce::FloatVectorOperations::clear (outputs[i], numSamples);
+        }
+        void audioDeviceAboutToStart (juce::AudioIODevice*) override {}
+        void audioDeviceStopped() override
+        {
+            // A stop on the message thread ends the takes before the restart schedules the rebuild.
+            if (juce::MessageManager::existsAndIsCurrentThread()) handleAsyncUpdate(); else triggerAsyncUpdate();
+        }
+        void handleAsyncUpdate() override { if (attached) impl.endTakesForDeviceStop(); }
+        Impl& impl;
+        bool attached = false; // Message thread only.
+    };
+    void endTakesForDeviceStop()
+    {
+        if (edit != nullptr && ! exporting && (edit->getTransport().isRecording() || ! slotRecordings.empty())) owner.stop();
+    }
     Session& owner;
     te::Engine engine;
     bool useDevices;
@@ -1636,6 +1666,7 @@ struct Session::Impl
     std::unique_ptr<te::Edit> edit;
     std::unique_ptr<te::Edit::UndoTransactionInhibitor> gesture;
     mutable std::map<String, std::unique_ptr<Meter>> meters;
+    DeviceStopWatch deviceStops { *this };
 };
 
 Session::Session (bool enableAudioDevices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType)

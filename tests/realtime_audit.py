@@ -17,7 +17,8 @@ import unittest
 
 # Explicit roots keep disappearance/renaming from silently weakening the guard.
 ROOTS = {
-    "src/Session.cpp": ("applyToBuffer",),  # Original TrackMixer normalization wrapper.
+    # Original TrackMixer normalization wrapper, and the device-stop watch's silent output.
+    "src/Session.cpp": ("applyToBuffer", "audioDeviceIOCallbackWithContext"),
     "src/SubtractiveSynth.cpp": ("SubtractiveSynthDSP::render", "SubtractiveSynthPlugin::applyToBuffer"),
     "src/NativeEffects.cpp": ("NativeEffectDSP::processSamples", "NativeEffectPlugin::applyToBuffer", "NativeEffectPlugin::processMidi", "NativeEffectPlugin::renderInstrument"),
     "src/Instruments.cpp": (

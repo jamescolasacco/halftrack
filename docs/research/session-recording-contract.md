@@ -13,6 +13,7 @@ Session recording follows the reference workflow of recording into an empty clip
 - Calling `recordSlot` again on the recording track ends the take at the next boundary and plays it in phase from that boundary.
 - `pressSlot` routes an armed track's empty slot to `recordSlot`, and any slot button on a recording track ends the take. A different filled slot then launches normally while the take stays silent.
 - `stopLauncherTrack`, `stopAllLauncherClips` and transport stop also end the take and keep it silent. Transport stop ends it immediately.
+- An audio-device stop (an Audio Settings change, a driver restart, a removed device) ends Session and Arrangement takes where the device stopped, keeps them and stops the transport, as Stop does. Before this, the engine's device rebuild discarded the takes.
 
 The finished take:
 
@@ -40,6 +41,8 @@ The facade targets the input at the slot and arms that destination. It applies t
 - recording from a stopped transport, which starts playback.
 
 `tests/SessionTests.cpp` records the synthetic device's generated audio input into a slot: a one-second, two-beat, tempo-following take in the project Assets that contains the signal and plays. A UI check records and ends a take from the grid buttons.
+
+The same file runs four device-change scenarios: an Arrangement or slot take, then an input-channel change through the `AudioDeviceManager` or a same-layout driver restart. Each records 94 generated blocks before the change. Before the fix, all four lost the take: no clip after Stop, and slot takes still reported `recording`. Now each keeps a 23,808-frame take containing the signal (every block but the first), stops the transport, and records a further take on the rebuilt devices. The channel change is applied without storing it as the chosen setup, because the engine saves that to the shared test settings that later sessions load.
 
 ## Not implemented
 

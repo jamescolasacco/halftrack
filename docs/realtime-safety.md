@@ -27,7 +27,7 @@ Run:
 python tests/realtime_audit.py
 ```
 
-The guard requires the synth render/callback roots, the normalized track mixer callback in Session.cpp, and the generated gain callback to exist. It follows calls to helpers defined in the audited source/header files and rejects recognizable allocation, storage-growth, locking, waiting/signalling, file/system I/O, logging, UI dispatch, and throwing operations. Nine small positive/negative fixtures check the guard itself, including a forbidden operation hidden in a reachable helper. CI runs it on all three operating systems.
+The guard requires the synth render/callback roots, the normalized track mixer callback in Session.cpp, the device-stop watch's IO callback in Session.cpp (it only clears the outputs the device manager adds to the engine's), and the generated gain callback to exist. It follows calls to helpers defined in the audited source/header files and rejects recognizable allocation, storage-growth, locking, waiting/signalling, file/system I/O, logging, UI dispatch, and throwing operations. Nine small positive/negative fixtures check the guard itself, including a forbidden operation hidden in a reachable helper. CI runs it on all three operating systems.
 
 A renamed or missing required root fails rather than silently reducing coverage. Same-name overloads are conservatively included. This is a small source scanner, **not a C++ semantic parser**: macros, templates, indirect calls, virtual dispatch, hidden allocations, external methods, container implementations, and runtime contention can escape it. A pass means the inspected source patterns passed, not that the application is realtime certified. Extend the roots and audit scope whenever another owned processor is added.
 
