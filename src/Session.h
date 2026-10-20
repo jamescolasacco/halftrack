@@ -71,8 +71,8 @@ public:
         // MIDI effects process notes before a MIDI track's instrument.
         arpeggiator, chord, scale, pitch, velocity, random, noteLength,
         // Instruments replace a MIDI track's built-in synthesizer through setTrackInstrument.
-        polySynth, fmSynth, drumKit, wavetableSynth };
-    static constexpr int effectKindCount = 28;
+        polySynth, fmSynth, drumKit, wavetableSynth, sampler };
+    static constexpr int effectKindCount = 29;
     struct EffectSettings
     {
         EffectKind kind = EffectKind::equalizer;
@@ -155,6 +155,7 @@ public:
         UtilitySettings utility;
         bool isNativeEffect = false;
         EffectSettings effect;
+        juce::File sample; // A Sampler instrument's loaded sample, if any.
     };
     struct TrackInfo
     {
@@ -257,6 +258,8 @@ public:
     // Replaces a MIDI track's instrument in one undo step; nullopt restores the built-in synth.
     juce::Result setTrackInstrument (const juce::String& trackId, std::optional<EffectKind> instrument);
     juce::Result showInstrumentEditor (int trackIndex);
+    // Loads an audio file into the track's Sampler, switching the instrument to a Sampler first if needed (one undo step).
+    juce::Result setInstrumentSample (const juce::String& trackId, const juce::File& sample);
     juce::Result duplicateTrack (const juce::String& trackId, juce::String& duplicateId);
     // Groups top-level audio/MIDI tracks (not returns) into a new group placed at the first one.
     juce::Result groupTracks (const juce::StringArray& trackIds, juce::String& groupId);

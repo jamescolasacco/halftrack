@@ -34,6 +34,11 @@ double effectTailSeconds (Session::EffectKind, double sampleRate) noexcept;
 double effectLatencySeconds (Session::EffectKind, double sampleRate) noexcept;
 // Index of a named control in the kind's parameter table, or -1.
 int effectParameterIndex (Session::EffectKind, const char* key) noexcept;
+// A Sampler's sample path: absolute in a live edit, project-relative in a saved file.
+inline constexpr const char* samplerSampleProperty = "halftrackSample";
+inline constexpr double maximumSampleSeconds = 600;
+// Why a file cannot be a Sampler sample, or empty when it can.
+juce::String samplerSampleProblem (const juce::File&);
 
 class NativeEffectDSP final
 {
@@ -126,7 +131,12 @@ public:
     Session::EffectSettings readSettings() const;
     void writeSettings (const Session::EffectSettings&);
     static juce::Result validateState (const juce::ValueTree&);
+    // Resolves saved Sampler paths against the project directory, rejecting missing or unreadable samples.
+    static juce::Result resolveSamples (juce::ValueTree&, const juce::File& projectDirectory);
     void prepareForOfflineRender();
+    juce::File sampleFile() const;
+    // After Save collects the sample, point at the copy without decoding it again or adding history.
+    void relocateSample (const juce::File&);
 private:
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void publish();
@@ -141,6 +151,13 @@ private:
     std::array<midifx::Event, 2048> midiOutput {};
     tracktion::MidiMessageArray midiScratch;
     EffectParameterQueue parameters;
+    // Sampler: decoded samples stay alive until the audio thread acknowledges a newer one.
+    void loadSample();
+    void retireSamples();
+    std::vector<std::unique_ptr<instruments::SampleData>> samples;
+    std::atomic<const instruments::SampleData*> publishedSample { nullptr }, acknowledgedSample { nullptr };
+    static_assert (std::atomic<const instruments::SampleData*>::is_always_lock_free);
+    juce::File loadedSample;
     Session::EffectSettings pendingSettings;
     bool pending = false, writing = false;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NativeEffectPlugin)

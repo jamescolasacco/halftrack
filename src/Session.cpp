@@ -1222,6 +1222,21 @@ struct Session::Impl
         edit->markAsChanged();
         owner.sendChangeMessage();
     }
+    // Creates an instrument and puts it where the track's instrument belongs, in one transaction.
+    Result replaceInstrument (te::AudioTrack& track, const juce::ValueTree& state, const String& name)
+    {
+        auto* current = instrument (track);
+        auto plugin = edit->getPluginCache().createNewPlugin (state);
+        if (! plugin) return Result::fail ("The instrument could not be created.");
+        // Keep MIDI effects ahead of the new instrument and audio devices after it.
+        int index = 0;
+        if (current) index = track.pluginList.indexOf (current);
+        else for (auto* p : track.pluginList.getPlugins()) if (auto* native = dynamic_cast<NativeEffectPlugin*> (p); native && effectIsMidi (native->getKind())) ++index;
+        transaction (name);
+        if (current) { current->windowState->closeWindowExplicitly(); current->deleteFromParent(); }
+        track.pluginList.insertPlugin (plugin, index, nullptr);
+        changed(); return Result::ok();
+    }
     void transaction (const String& name)
     {
         flushStructuralUpdates();
@@ -1518,6 +1533,7 @@ Session::Snapshot Session::snapshot() const
         {
             info.instrument = { native->itemID.toString(), native->getName(), native->isEnabled() };
             info.instrument.isNativeEffect = true; info.instrument.effect = native->readSettings();
+            if (native->getKind() == EffectKind::sampler) info.instrument.sample = native->sampleFile();
         }
         if (auto* v = t->getVolumePlugin())
         {
@@ -1674,6 +1690,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateRouting (state); result.failed()) return result;
     if (auto result = UtilityPlugin::validateState (state); result.failed()) return result;
     if (auto result = NativeEffectPlugin::validateState (state); result.failed()) return result;
+    if (auto result = NativeEffectPlugin::resolveSamples (state, file.getParentDirectory()); result.failed()) return result;
     if (auto result = validateAudioClips (state); result.failed()) return result;
     if (auto result = validateFollowActions (state); result.failed()) return result;
     if (auto result = validateLocators (state); result.failed()) return result;
@@ -1768,6 +1785,26 @@ Result Session::saveProject (const File& destination)
             node.setProperty (te::IDs::source, target.getRelativePathFrom (file.getParentDirectory()), nullptr);
             sources.emplace_back (c, target);
         }
+    // Sampler samples are collected the same way and saved relative to the project.
+    std::vector<std::pair<NativeEffectPlugin*, File>> samples;
+    for (auto* t : te::getAudioTracks (*impl->edit))
+        if (auto* native = Impl::nativeInstrument (*t); native && native->getKind() == EffectKind::sampler && native->sampleFile() != File())
+        {
+            const auto original = native->sampleFile();
+            if (! original.existsAsFile()) return Result::fail ("Missing sample: " + original.getFullPathName());
+            File target;
+            if (original.isAChildOf (assets)) target = original;
+            else if (auto it = copied.find (original.getFullPathName()); it != copied.end()) target = it->second;
+            else
+            {
+                target = assets.getNonexistentChildFile (original.getFileNameWithoutExtension(), original.getFileExtension(), true);
+                if (! original.copyFileTo (target)) return Result::fail ("Could not collect sample: " + original.getFileName());
+                copied[original.getFullPathName()] = target;
+            }
+            auto node = findStateWithID (state, native->state.getProperty (te::IDs::id));
+            node.setProperty (samplerSampleProperty, target.getRelativePathFrom (file.getParentDirectory()), nullptr);
+            samples.emplace_back (native, target);
+        }
     juce::XmlElement document ("HALFTRACK");
     document.setAttribute ("version", 1);
     document.addChildElement (state.createXml().release());
@@ -1781,6 +1818,7 @@ Result Session::saveProject (const File& destination)
         // directory. The written copy above remains relative and portable.
         // Native listeners refresh playback, but relocation adds no undo action.
         clip->getSourceFileReference().source.setValue (source.getFullPathName(), nullptr);
+    for (auto& [native, target] : samples) native->relocateSample (target);
     impl->edit->resetChangedStatus();
     impl->explicitChanges = false;
     sendChangeMessage();
@@ -2638,16 +2676,26 @@ Result Session::setTrackInstrument (const String& trackId, std::optional<EffectK
         state.setProperty ("effectKind", static_cast<int> (*kind), nullptr);
     }
     else state.setProperty (te::IDs::type, SubtractiveSynthPlugin::xmlTypeName, nullptr);
-    auto plugin = impl->edit->getPluginCache().createNewPlugin (state);
-    if (! plugin) return Result::fail ("The instrument could not be created.");
-    // Keep MIDI effects ahead of the new instrument and audio devices after it.
-    int index = 0;
-    if (current) index = track->pluginList.indexOf (current);
-    else for (auto* p : track->pluginList.getPlugins()) if (auto* native = dynamic_cast<NativeEffectPlugin*> (p); native && effectIsMidi (native->getKind())) ++index;
-    impl->transaction ("Change instrument");
-    if (current) { current->windowState->closeWindowExplicitly(); current->deleteFromParent(); }
-    track->pluginList.insertPlugin (plugin, index, nullptr);
-    impl->changed(); return Result::ok();
+    return impl->replaceInstrument (*track, state, "Change instrument");
+}
+Result Session::setInstrumentSample (const String& trackId, const File& sample)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* track = impl->track (trackId);
+    if (! track || ! track->state.getProperty (midiTrackProperty, false)) return Result::fail ("Samplers need a MIDI track.");
+    if (const auto problem = samplerSampleProblem (sample); problem.isNotEmpty()) return Result::fail (problem);
+    if (auto* native = Impl::nativeInstrument (*track); native && native->getKind() == EffectKind::sampler)
+    {
+        if (native->sampleFile() == sample) return Result::ok();
+        impl->transaction ("Load sample");
+        native->state.setProperty (samplerSampleProperty, sample.getFullPathName(), &impl->edit->getUndoManager());
+        impl->changed(); return Result::ok();
+    }
+    juce::ValueTree state (te::IDs::PLUGIN);
+    state.setProperty (te::IDs::type, NativeEffectPlugin::xmlTypeName, nullptr);
+    state.setProperty ("effectKind", static_cast<int> (EffectKind::sampler), nullptr);
+    state.setProperty (samplerSampleProperty, sample.getFullPathName(), nullptr);
+    return impl->replaceInstrument (*track, state, "Load sample");
 }
 Result Session::showInstrumentEditor (int trackIndex)
 {

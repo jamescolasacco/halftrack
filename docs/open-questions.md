@@ -171,3 +171,11 @@ Use the existing arrangement-time volume-lane semantics on the native master out
 ### Clip launch mode defaults
 
 Releasing a Repeat clip stops it on the clip's grid, like Gate; the reference manual describes only the retriggering while held. Gate and Repeat releases are quantized to the clip's own grid rather than stopping immediately. Repeat with no grid (None, or Global set to None) launches once without retriggering. A second Toggle press while the launch is still queued cancels it. Legato follows the clip already playing on the same track; with none playing it starts normally. Scene launches always trigger. Triplet grids and launch velocity are not exposed. These are simplest-default choices pending reference measurement.
+
+### Sampler defaults
+
+Volume 0 dB plays the source at unity (the synthesizers keep quarter-scale headroom); velocity to amp defaults to 35%, voices to 8, release to 50 ms and filter off. Pan uses a balance law with unity at the centre. A missing or unreadable sample rejects the project load, matching missing clip audio, rather than opening with a silent Sampler. Samples are limited to ten minutes and decoded fully into memory. Slicing, warping and crossfaded loops are not implemented. These are simplest-default choices pending reference measurement.
+
+### Time signatures
+
+The project meter is fixed at 4/4. The pinned engine counts beats in the time signature's denominator unit, while Halftrack's model, UI and tests treat a beat as a quarter note. An editable meter therefore needs a beat-unit decision across notes, clips, grids, warping and count-in before it is exposed. The reference application's tempo is assumed to count quarter notes; this is unmeasured.

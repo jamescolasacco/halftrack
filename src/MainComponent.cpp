@@ -2808,6 +2808,105 @@ private:
         }
     };
 
+    // A Sampler's sample: waveform with draggable start/end markers, file loading and drops.
+    class SampleView final : public juce::Component, public juce::FileDragAndDropTarget, private juce::ChangeListener
+    {
+    public:
+        explicit SampleView (Impl& o) : owner (o), thumbnail (512, o.formats, o.thumbnailCache)
+        {
+            setName ("Sampler sample");
+            load.setName ("Load sample"); load.setTooltip ("Choose an audio file for this Sampler. You can also drop one here.");
+            load.setWantsKeyboardFocus (false); load.setMouseClickGrabsKeyboardFocus (false);
+            load.onClick = [this] { choose(); };
+            addAndMakeVisible (load);
+            thumbnail.addChangeListener (this);
+        }
+        ~SampleView() override { thumbnail.removeChangeListener (this); if (gesture) owner.session.endEditGesture(); }
+        void show (const Session::PluginInfo& info)
+        {
+            plugin = info;
+            if (info.sample != shown) { shown = info.sample; thumbnail.setSource (shown.existsAsFile() ? new juce::FileInputSource (shown) : nullptr); }
+            load.setEnabled (! owner.session.isExporting());
+            repaint();
+        }
+        void resized() override { load.setBounds (getWidth() - 62, 3, 58, 18); }
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (juce::Colour (0xff1c1c1c)); g.fillRect (getLocalBounds());
+            g.setColour (ink); g.setFont (font (10.5f, true));
+            g.drawText (shown == juce::File() ? juce::String ("No sample") : shown.getFileName(), 6, 3, getWidth() - 74, 18, juce::Justification::centredLeft, true);
+            const auto wave = waveBounds();
+            if (thumbnail.getTotalLength() <= 0)
+            {
+                g.setColour (muted); g.setFont (font (10.0f));
+                g.drawFittedText ("Drop an audio file here", wave, juce::Justification::centred, 2);
+                g.setColour (line); g.drawRect (wave); return;
+            }
+            g.setColour (owner.selectedTrackColour().withAlpha (0.85f));
+            thumbnail.drawChannels (g, wave.reduced (0, 4), 0, thumbnail.getTotalLength(), 0.95f);
+            const auto& v = plugin.effect.values;
+            const auto x = [&] (float fraction) { return wave.getX() + (int) std::lround (fraction * wave.getWidth()); };
+            const auto start = std::min (v[instruments::sampler::start], v[instruments::sampler::end]), end = std::max (v[instruments::sampler::start], v[instruments::sampler::end]);
+            // Outside the played region is dimmed, as are the markers' handles.
+            g.setColour (juce::Colour (0x99000000));
+            g.fillRect (wave.withRight (x (start))); g.fillRect (wave.withLeft (x (end)));
+            g.setColour (juce::Colour (0xffffab3d));
+            for (const auto f : { start, end }) { g.drawVerticalLine (x (f), (float) wave.getY(), (float) wave.getBottom()); g.fillRect (x (f) - (f == start ? 0 : 6), wave.getY(), 6, 6); }
+            if (v[instruments::sampler::mode] == 0 && v[instruments::sampler::loop] == 1)
+            {
+                const auto loopX = x (start + v[instruments::sampler::loopStart] * (end - start));
+                g.setColour (juce::Colour (0xff48d17e)); g.drawVerticalLine (loopX, (float) wave.getY(), (float) wave.getBottom());
+                g.drawText ("L", loopX + 2, wave.getBottom() - 14, 12, 12, juce::Justification::centredLeft);
+            }
+            g.setColour (line); g.drawRect (wave);
+        }
+        // Dragging a marker edits Start or End as one undo step.
+        void mouseDown (const juce::MouseEvent& event) override
+        {
+            dragging = -1;
+            if (thumbnail.getTotalLength() <= 0 || ! waveBounds().contains (event.getPosition())) return;
+            const auto& v = plugin.effect.values; const auto wave = waveBounds();
+            const auto distance = [&] (size_t index) { return std::abs (event.x - (wave.getX() + v[index] * wave.getWidth())); };
+            dragging = distance (instruments::sampler::start) <= distance (instruments::sampler::end) ? (int) instruments::sampler::start : (int) instruments::sampler::end;
+            owner.session.beginEditGesture ("Sample region"); gesture = true;
+            mouseDrag (event);
+        }
+        void mouseDrag (const juce::MouseEvent& event) override
+        {
+            if (dragging < 0) return;
+            const auto wave = waveBounds();
+            auto settings = plugin.effect;
+            settings.values[(size_t) dragging] = juce::jlimit (0.0f, 1.0f, (float) (event.x - wave.getX()) / (float) juce::jmax (1, wave.getWidth()));
+            if (settings == plugin.effect) return;
+            owner.report (owner.session.setNativeEffectSettings (plugin.id, settings)); owner.refresh();
+        }
+        void mouseUp (const juce::MouseEvent&) override { if (gesture) owner.session.endEditGesture(); gesture = false; dragging = -1; }
+        bool isInterestedInFileDrag (const juce::StringArray& files) override { return files.size() == 1 && isAudio (juce::File (files[0])); }
+        void filesDropped (const juce::StringArray& files, int, int) override { loadFile (juce::File (files[0])); }
+        void loadFile (const juce::File& file)
+        {
+            if (const auto* track = owner.currentTrack(); track != nullptr && track->isMidi) { owner.report (owner.session.setInstrumentSample (track->id, file)); owner.refresh(); }
+        }
+        juce::Rectangle<int> waveBounds() const { return getLocalBounds().withTrimmedTop (24).reduced (4, 4); }
+    private:
+        Impl& owner;
+        juce::AudioThumbnail thumbnail;
+        juce::File shown;
+        Session::PluginInfo plugin;
+        juce::TextButton load { "Load..." };
+        std::unique_ptr<juce::FileChooser> chooser;
+        int dragging = -1;
+        bool gesture = false;
+        void choose()
+        {
+            chooser = std::make_unique<juce::FileChooser> ("Load sample", shown.existsAsFile() ? shown.getParentDirectory() : juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
+            auto safe = juce::Component::SafePointer<SampleView> (this);
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                  [safe] (const juce::FileChooser& c) { if (safe != nullptr && c.getResult() != juce::File()) safe->loadFile (c.getResult()); });
+        }
+        void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
+    };
+
     class SynthPanel final : public juce::Component
     {
     public:
@@ -2856,6 +2955,7 @@ private:
             edit.setName ("Edit instrument"); edit.setTooltip ("Open every control of this instrument.");
             edit.onClick = [this] { owner.report (owner.session.showInstrumentEditor (owner.selectedTrack)); };
             addChildComponent (edit);
+            addChildComponent (sample);
         }
         void sync()
         {
@@ -2870,6 +2970,8 @@ private:
                 addAndMakeVisible (*nativeEditor); nativeEditorId = track->instrument.id;
             }
             instrument.setSelectedId (native ? 2 + (int) nativeSettings.kind - (int) Session::EffectKind::polySynth : 1, juce::dontSendNotification);
+            sample.setVisible (sampler());
+            if (sampler()) sample.show (track->instrument);
             instrument.setEnabled (! owner.session.isExporting());
             waveform.setVisible (! native); edit.setVisible (native);
             for (auto& control : controls) control.setVisible (! native);
@@ -2879,7 +2981,9 @@ private:
             controls[7].setEnabled (track->synth.waveform == 1);
             resized(); repaint(); // Layout depends on built-in versus native mode, not only size.
         }
-        int preferredWidth() const { return native && nativeEditor ? juce::jmax (330, nativeEditor->getWidth() + 4) : 536; }
+        int preferredWidth() const { return native && nativeEditor ? juce::jmax (330, nativeEditor->getWidth() + 4 + sampleWidth()) : 536; }
+        bool sampler() const { return native && nativeSettings.kind == Session::EffectKind::sampler; }
+        int sampleWidth() const { return sampler() ? 250 : 0; }
         void paint (juce::Graphics& g) override
         {
             g.fillAll (juce::Colour (0xff303030));
@@ -2897,7 +3001,8 @@ private:
             waveform.setBounds (getWidth() - 118, 3, 107, 20);
             instrument.setBounds (getWidth() - (native ? 118 : 262), 3, native ? 107 : 138, 20);
             edit.setBounds (getWidth() - 236, 3, 112, 20);
-            if (nativeEditor) nativeEditor->setTopLeftPosition (2, 28);
+            sample.setBounds (2, 28, sampleWidth() - 4, juce::jmax (40, getHeight() - 30));
+            if (nativeEditor) nativeEditor->setTopLeftPosition (2 + sampleWidth(), 28);
             const auto width = (getWidth() - 16) / 8;
             for (int i = 0; i < 8; ++i) controls[(size_t) i].setBounds (8 + i * width, 43, width - 2, getHeight() - 46);
         }
@@ -2909,6 +3014,7 @@ private:
         Session::EffectSettings nativeSettings;
         std::unique_ptr<juce::Component> nativeEditor;
         juce::String nativeEditorId;
+        SampleView sample { owner };
         std::array<juce::Slider, 8> controls;
         static constexpr const char* names[] { "Cutoff", "Resonance", "Attack", "Decay", "Sustain", "Release", "Level", "Pulse width" };
         void changeParameter (int index, float value)
@@ -4712,6 +4818,8 @@ private:
         {
             auto item = browserItems[(size_t) row];
             if (item.directory) { browserFolder = item.file; browserSearch.clear(); updateBrowser(); }
+            // A sample chosen for a MIDI track goes into its Sampler.
+            else if (const auto* track = currentTrack(); track != nullptr && track->isMidi) { report (session.setInstrumentSample (track->id, item.file)); refresh(); }
             else if (showSession) importLauncherFiles ({ item.file.getFullPathName() }, selectedTrack, selectedSceneIndex());
             else importFiles ({ item.file.getFullPathName() }, selectedTrack, state.position);
         }
@@ -5107,6 +5215,41 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (! currentTrack()->instrument.isNativeEffect && chooser->getSelectedId() == 1 && waveform->isVisible()
                && session.snapshot().tracks[(size_t) selectedTrack].synth.pulseWidth == 0.64f,
            "undo restores the built-in synth with its previous settings");
+    {
+        // Sampler: the instrument panel shows the sample, accepts a dropped file and edits the region by dragging.
+        chooser->setSelectedId (2 + (int) Session::EffectKind::sampler - (int) Session::EffectKind::polySynth, juce::sendNotificationSync); refresh();
+        auto* view = dynamic_cast<SampleView*> (findNamed (deviceChain, "Sampler sample"));
+        check (currentTrack()->instrument.effect.kind == Session::EffectKind::sampler && view != nullptr && view->isVisible()
+               && findNamed (*view, "Load sample") != nullptr && currentTrack()->instrument.sample == juce::File(),
+               "choosing Sampler shows an empty sample view with a load button");
+        check (view->isInterestedInFileDrag ({ audioFixture.getFullPathName() }) && ! view->isInterestedInFileDrag ({ audioFixture.withFileExtension ("txt").getFullPathName() }),
+               "the sample view accepts one audio file");
+        view->filesDropped ({ audioFixture.getFullPathName() }, 10, 10); refresh();
+        check (currentTrack()->instrument.sample == audioFixture, "dropping an audio file loads it into the Sampler");
+        const auto wave = view->waveBounds();
+        const auto at = juce::Point<float> ((float) wave.getX() + wave.getWidth() * .5f, (float) wave.getCentreY());
+        const auto now = juce::Time::getCurrentTime();
+        const juce::MouseEvent drag (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                     view, view, now, at.translated ((float) -wave.getWidth() * .5f, 0), now, 1, true);
+        // Start is nearer the left edge, so a press there drags Start to the middle.
+        const juce::MouseEvent press (juce::Desktop::getInstance().getMainMouseSource(), at.translated ((float) -wave.getWidth() * .45f, 0), juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier),
+                                      1.0f, 0, 0, 0, 0, view, view, now, at.translated ((float) -wave.getWidth() * .45f, 0), now, 1, false);
+        view->mouseDown (press); view->mouseDrag (drag); view->mouseUp (drag); refresh();
+        const auto start = currentTrack()->instrument.effect.values[instruments::sampler::start];
+        check (std::abs (start - .5f) < .01f && currentTrack()->instrument.effect.values[instruments::sampler::end] == 1, "dragging the start marker moves the region start");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("sampler.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (deviceChain.createComponentSnapshot (deviceChain.getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        session.undo(); refresh();
+        check (currentTrack()->instrument.effect.values[instruments::sampler::start] == 0, "one undo step restores the region dragged in one gesture");
+        session.undo(); session.undo(); refresh();
+        check (! currentTrack()->instrument.isNativeEffect && ! view->isShowing(), "undo removes the sample and the Sampler");
+    }
     {
         const int instrumentTrack = selectedTrack;
         selectTrack (0); report (session.addNativeEffect (0, Session::EffectKind::saturator)); refresh();

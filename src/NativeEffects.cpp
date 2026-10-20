@@ -241,6 +241,18 @@ constexpr EffectParameter wavetableFields[] {
     { "unisonDetune", "Unison detune", 0, 50, 12, 0, " ct" }, { "glideMs", "Glide", 0, 2000, 0, 200, " ms" },
     { "voiceMode", "Voices", 0, 4, 3, 0, "", VOICE_MODES }, { "velocityAmp", "Velocity to amp", 0, 1, .7f, 0, "%" },
     { "bendRange", "Bend range", 0, 24, 2, 0, " st", nullptr, true }, { "volumeDb", "Volume", -36, 6, 0, 0, " dB" } };
+constexpr EffectParameter samplerFields[] {
+    { "mode", "Mode", 0, 1, 0, 0, "", "Classic|One-Shot" }, { "rootNote", "Root note", 0, 127, 60, 0, "", nullptr, true },
+    { "transpose", "Transpose", -48, 48, 0, 0, " st", nullptr, true }, { "detune", "Detune", -50, 50, 0, 0, " ct" },
+    { "start", "Start", 0, 1, 0, 0, "%" }, { "end", "End", 0, 1, 1, 0, "%" },
+    { "loop", "Loop", 0, 1, 0, 0, "", "Off|On" }, { "loopStart", "Loop start", 0, 1, 0, 0, "%" },
+    { "trigger", "One-shot trigger", 0, 1, 0, 0, "", "Trigger|Gate" },
+    { "filterType", "Filter", 0, 5, 0, 0, "", FILTER_TYPES }, { "cutoffHz", "Cutoff", 20, 20000, 8000, 1000, " Hz" },
+    { "resonance", "Resonance", 0, 1, .1f, 0, "%" }, ENVELOPE ("amp", "Amp", 0, 600, 1, 50),
+    { "voices", "Voices", 0, 4, 2, 0, "", "Mono|4 voices|8 voices|16 voices|32 voices" },
+    { "velocityAmp", "Velocity to amp", 0, 1, .35f, 0, "%" }, { "bendRange", "Bend range", 0, 24, 2, 0, " st", nullptr, true },
+    { "pan", "Pan", -1, 1, 0, 0, "" }, { "volumeDb", "Volume", -36, 6, 0, 0, " dB" } };
+static_assert (std::size (samplerFields) == instruments::sampler::count, "the sampler table follows its processor index enum");
 static_assert (std::size (polySynthFields) <= std::tuple_size_v<decltype (Settings::values)> && std::size (fmSynthFields) <= std::tuple_size_v<decltype (Settings::values)>
                && std::size (drumKitFields) <= std::tuple_size_v<decltype (Settings::values)> && std::size (wavetableFields) <= std::tuple_size_v<decltype (Settings::values)>,
                "every device fits the shared packet");
@@ -270,7 +282,8 @@ const char* effectName (Kind kind) noexcept
         case Kind::eqThree: return "Three-band EQ"; case Kind::glueCompressor: return "Bus Compressor"; case Kind::frequencyShifter: return "Frequency Shifter";
         case Kind::arpeggiator: return "Arpeggiator"; case Kind::chord: return "Chord"; case Kind::scale: return "Scale"; case Kind::pitch: return "Pitch";
         case Kind::velocity: return "Velocity"; case Kind::random: return "Random"; case Kind::noteLength: return "Note Length";
-        case Kind::polySynth: return "Poly Synth"; case Kind::fmSynth: return "FM Synth"; case Kind::drumKit: return "Drum Kit"; case Kind::wavetableSynth: return "Wavetable"; }
+        case Kind::polySynth: return "Poly Synth"; case Kind::fmSynth: return "FM Synth"; case Kind::drumKit: return "Drum Kit"; case Kind::wavetableSynth: return "Wavetable";
+        case Kind::sampler: return "Sampler"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
@@ -282,7 +295,8 @@ std::span<const EffectParameter> effectParameters (Kind kind) noexcept
         case Kind::eqThree: return eqThreeFields; case Kind::glueCompressor: return glueFields; case Kind::frequencyShifter: return shifterFields;
         case Kind::arpeggiator: return arpeggiatorFields; case Kind::chord: return chordFields; case Kind::scale: return scaleFields; case Kind::pitch: return pitchFields;
         case Kind::velocity: return velocityFields; case Kind::random: return randomFields; case Kind::noteLength: return noteLengthFields;
-        case Kind::polySynth: return polySynthFields; case Kind::fmSynth: return fmSynthFields; case Kind::drumKit: return drumKitFields; case Kind::wavetableSynth: return wavetableFields; }
+        case Kind::polySynth: return polySynthFields; case Kind::fmSynth: return fmSynthFields; case Kind::drumKit: return drumKitFields; case Kind::wavetableSynth: return wavetableFields;
+        case Kind::sampler: return samplerFields; }
     return {};
 }
 const char* effectCategory (Kind kind) noexcept
@@ -295,7 +309,7 @@ const char* effectCategory (Kind kind) noexcept
         case Kind::bitcrusher: case Kind::saturator: case Kind::overdrive: return "Distortion";
         case Kind::autoPan: case Kind::chorus: case Kind::phaser: case Kind::flanger: case Kind::frequencyShifter: return "Modulation";
         case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return "MIDI Effects";
-        case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: return "Instruments";
+        case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: return "Instruments";
     }
     return "Effects";
 }
@@ -320,7 +334,7 @@ double effectTailSeconds (Kind kind, double rate) noexcept
         case Kind::eqThree: case Kind::frequencyShifter: return .1;
         case Kind::compressor: case Kind::gate: case Kind::autoPan: case Kind::glueCompressor: return 0.0;
         case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return 0.0;
-        case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: return 0.0;
+        case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: return 0.0;
     }
     return 0.0;
 }
@@ -663,9 +677,81 @@ NativeEffectPlugin::NativeEffectPlugin (tracktion::PluginCreationInfo info)
 {
     // Shared tables are built here on the message thread, never during graph preparation.
     if (kind == Kind::wavetableSynth) instruments::prepareWavetables();
+    if (kind == Kind::sampler) loadSample();
     publish(); startTimerHz (30);
 }
 NativeEffectPlugin::~NativeEffectPlugin() { stopTimer(); }
+juce::String samplerSampleProblem (const juce::File& file)
+{
+    if (! file.existsAsFile()) return "Missing sample: " + file.getFullPathName();
+    juce::AudioFormatManager formats; formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    if (reader == nullptr || reader->sampleRate <= 0 || reader->lengthInSamples <= 0 || reader->numChannels <= 0)
+        return "Not a readable audio sample: " + file.getFileName();
+    if (reader->lengthInSamples > static_cast<juce::int64> (reader->sampleRate * maximumSampleSeconds))
+        return "Samples longer than ten minutes are not supported: " + file.getFileName();
+    return {};
+}
+juce::File NativeEffectPlugin::sampleFile() const
+{
+    const auto path = state[samplerSampleProperty].toString();
+    return path.isNotEmpty() && juce::File::isAbsolutePath (path) ? juce::File (path) : juce::File();
+}
+void NativeEffectPlugin::loadSample()
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+    const auto file = sampleFile();
+    if (file == loadedSample) return;
+    loadedSample = file;
+    std::unique_ptr<instruments::SampleData> data;
+    juce::AudioFormatManager formats; formats.registerBasicFormats();
+    if (file != juce::File() && samplerSampleProblem (file).isEmpty())
+        if (std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file)); reader != nullptr)
+        {
+            const auto frames = static_cast<int> (reader->lengthInSamples);
+            juce::AudioBuffer<float> buffer (reader->numChannels > 1 ? 2 : 1, frames);
+            if (reader->read (&buffer, 0, frames, 0, true, true))
+            {
+                data = std::make_unique<instruments::SampleData>();
+                data->sampleRate = reader->sampleRate;
+                data->left.assign (buffer.getReadPointer (0), buffer.getReadPointer (0) + frames);
+                data->right.assign (buffer.getReadPointer (buffer.getNumChannels() - 1), buffer.getReadPointer (buffer.getNumChannels() - 1) + frames);
+            }
+        }
+    publishedSample.store (data.get(), std::memory_order_release);
+    if (data) samples.push_back (std::move (data));
+    retireSamples();
+}
+void NativeEffectPlugin::relocateSample (const juce::File& copy)
+{
+    // The copy has the same audio, so keep the decoded data and only follow the new path.
+    loadedSample = copy;
+    state.setProperty (samplerSampleProperty, copy.getFullPathName(), nullptr);
+}
+void NativeEffectPlugin::retireSamples()
+{
+    // Older samples are freed once the audio thread has acknowledged the current one.
+    const auto* current = publishedSample.load (std::memory_order_acquire);
+    if (acknowledgedSample.load (std::memory_order_acquire) != current) return;
+    std::erase_if (samples, [current] (const auto& s) { return s.get() != current; });
+}
+juce::Result NativeEffectPlugin::resolveSamples (juce::ValueTree& tree, const juce::File& directory)
+{
+    if (tree.hasType (tracktion::IDs::PLUGIN) && tree.getProperty (tracktion::IDs::type).toString() == xmlTypeName && tree.hasProperty (samplerSampleProperty))
+    {
+        if (static_cast<int> (tree.getProperty ("effectKind", 0)) != static_cast<int> (Kind::sampler))
+            return juce::Result::fail ("Only a Sampler can reference a sample.");
+        const auto path = tree[samplerSampleProperty].toString();
+        if (path.isNotEmpty())
+        {
+            const auto file = directory.getChildFile (path);
+            if (const auto problem = samplerSampleProblem (file); problem.isNotEmpty()) return juce::Result::fail (problem);
+            tree.setProperty (samplerSampleProperty, file.getFullPathName(), nullptr);
+        }
+    }
+    for (auto child : tree) if (auto result = resolveSamples (child, directory); result.failed()) return result;
+    return juce::Result::ok();
+}
 Settings NativeEffectPlugin::readSettings() const
 {
     auto s = defaultEffectSettings (kind); const auto fields = effectParameters (kind);
@@ -705,10 +791,15 @@ juce::Result NativeEffectPlugin::validateState (const juce::ValueTree& tree)
     return juce::Result::ok();
 }
 void NativeEffectPlugin::valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& property)
-{ Plugin::valueTreePropertyChanged (tree, property); if (tree == state && ! writing) publish(); }
+{
+    Plugin::valueTreePropertyChanged (tree, property);
+    if (tree == state && property == juce::Identifier (samplerSampleProperty)) { if (kind == Kind::sampler) loadSample(); return; }
+    if (tree == state && ! writing) publish();
+}
 void NativeEffectPlugin::publish() { pendingSettings = readSettings(); pending = ! parameters.push (pendingSettings); }
 void NativeEffectPlugin::timerCallback()
 {
+    if (samples.size() > 1) retireSamples();
     if (effectUsesTempo (kind) && static_cast<float> (edit.tempoSequence.getTempo (0)->getBpm()) != pendingSettings.tempoBpm)
         publish();
     else if (pending) pending = ! parameters.push (pendingSettings);
@@ -788,6 +879,12 @@ void NativeEffectPlugin::applyToBuffer (const tracktion::PluginRenderContext& co
     const juce::ScopedNoDenormals noDenormals; Settings next; bool changed = false;
     for (int i = 0; i < 64 && parameters.pop (next); ++i) changed = true;
     if (changed) { processor.configure (next); midiProcessor.configure (next); if (effectIsInstrument (kind)) instrument.configure (next); }
+    if (kind == Kind::sampler)
+    {
+        const auto* sample = publishedSample.load (std::memory_order_acquire);
+        instrument.setSample (sample);
+        acknowledgedSample.store (sample, std::memory_order_release);
+    }
     if (effectIsMidi (kind)) { processMidi (context); return; }
     if (effectIsInstrument (kind)) { renderInstrument (context); return; }
     if (! context.destBuffer || context.bufferNumSamples <= 0 || context.destBuffer->getNumChannels() == 0) return;

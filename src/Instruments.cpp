@@ -215,13 +215,19 @@ int InstrumentDSP::voiceLimit() const noexcept
     {
         case Kind::fmSynth: return std::array<int, 4> { 4, 8, 16, 32 } [static_cast<size_t> (v[fm::voices])];
         case Kind::drumKit: return 8;
+        case Kind::sampler: return std::array<int, 5> { 1, 4, 8, 16, 32 } [static_cast<size_t> (v[sampler::voices])];
         case Kind::wavetableSynth: return std::array<int, 5> { 1, 1, 8, 16, 32 } [static_cast<size_t> (v[wavetable::voiceMode])];
         default: return std::array<int, 5> { 1, 1, 8, 16, 32 } [static_cast<size_t> (v[poly::voiceMode])];
     }
 }
 bool InstrumentDSP::monophonic() const noexcept
 {
-    return (kind == Kind::polySynth && settings.values[poly::voiceMode] < 2) || (kind == Kind::wavetableSynth && settings.values[wavetable::voiceMode] < 2);
+    return (kind == Kind::polySynth && settings.values[poly::voiceMode] < 2) || (kind == Kind::wavetableSynth && settings.values[wavetable::voiceMode] < 2)
+        || (kind == Kind::sampler && settings.values[sampler::voices] == 0);
+}
+bool InstrumentDSP::legatoMode() const noexcept
+{
+    return (kind == Kind::polySynth && settings.values[poly::voiceMode] == 1) || (kind == Kind::wavetableSynth && settings.values[wavetable::voiceMode] == 1);
 }
 void InstrumentDSP::configure (const Session::EffectSettings& next) noexcept
 {
@@ -257,10 +263,20 @@ void InstrumentDSP::configure (const Session::EffectSettings& next) noexcept
                     voice.operators[o].configure (v[base + 3], v[base + 4], v[base + 5], v[base + 6], rate);
                 }
             break;
+        case Kind::sampler:
+            volume = v[sampler::volume];
+            for (auto& voice : voices)
+            {
+                // One-Shot plays at full level between its fade in and fade out.
+                const bool oneShot = v[sampler::mode] == 1;
+                voice.amp.configure (v[sampler::ampAttack], v[sampler::ampDecay], oneShot ? 1.0 : v[sampler::ampSustain], v[sampler::ampRelease], rate);
+            }
+            break;
         default: volume = v[drums::volume]; break;
     }
     glideCoefficient = glideMs > 0 ? std::exp (-1.0 / (glideMs * .001 * rate)) : 0.0;
-    gain = decibels (volume) * .25;
+    // The sampler plays its source at unity; synthesized sources leave headroom.
+    gain = decibels (volume) * (kind == Kind::sampler ? 1.0 : .25);
 }
 void InstrumentDSP::reset() noexcept
 {
@@ -273,7 +289,7 @@ int InstrumentDSP::activeVoices() const noexcept
 double InstrumentDSP::bend (int channel) const noexcept
 {
     const auto range = kind == Kind::polySynth ? settings.values[poly::bendRange] : kind == Kind::fmSynth ? settings.values[fm::bendRange]
-        : kind == Kind::wavetableSynth ? settings.values[wavetable::bendRange] : 0.0f;
+        : kind == Kind::wavetableSynth ? settings.values[wavetable::bendRange] : kind == Kind::sampler ? settings.values[sampler::bendRange] : 0.0f;
     return wheel[static_cast<size_t> (std::clamp (channel, 1, 16) - 1)] * range;
 }
 InstrumentDSP::Voice* InstrumentDSP::allocate() noexcept
@@ -304,6 +320,7 @@ void InstrumentDSP::start (Voice& v, int channel, int note, double velocity, boo
         if (v.noise == 0) v.noise = 1;
     }
     v.time = 0; v.choke = 1; v.drumState = v.drumState2 = 0;
+    if (kind == Kind::sampler && (retrigger || ! wasActive)) v.position = sampleRegion().first;
     if (retrigger) { v.amp.start(); v.filter.start(); for (auto& op : v.operators) op.start(); }
     if (kind == Kind::drumKit)
     {
@@ -352,7 +369,7 @@ void InstrumentDSP::noteOn (int channel, int note, float velocity) noexcept
         }
         keyStack[static_cast<size_t> (keyCount)] = note; keyChannels[static_cast<size_t> (keyCount)] = channel; keyVelocities[static_cast<size_t> (keyCount++)] = level;
         auto& v = voices[0];
-        const bool legato = (kind == Kind::polySynth ? settings.values[poly::voiceMode] : settings.values[wavetable::voiceMode]) == 1 && v.active && v.held;
+        const bool legato = legatoMode() && v.active && v.held;
         if (legato) { v.targetPitch = note; v.note = note; v.channel = channel; }
         else start (v, channel, note, level, true);
         return;
@@ -364,6 +381,8 @@ void InstrumentDSP::noteOn (int channel, int note, float velocity) noexcept
 void InstrumentDSP::noteOff (int channel, int note) noexcept
 {
     if (channel < 1 || channel > 16 || kind == Kind::drumKit) return;
+    // A triggered one-shot plays to its end regardless of the key.
+    if (kind == Kind::sampler && settings.values[sampler::mode] == 1 && settings.values[sampler::trigger] == 0) return;
     if (monophonic())
     {
         int kept = 0;
@@ -376,8 +395,7 @@ void InstrumentDSP::noteOff (int channel, int note) noexcept
         if (keyCount > 0)
         {
             const auto previous = keyStack[static_cast<size_t> (keyCount - 1)];
-            const bool legato = (kind == Kind::polySynth ? settings.values[poly::voiceMode] : settings.values[wavetable::voiceMode]) == 1;
-            if (legato) { v.targetPitch = previous; v.note = previous; v.channel = keyChannels[static_cast<size_t> (keyCount - 1)]; }
+            if (legatoMode()) { v.targetPitch = previous; v.note = previous; v.channel = keyChannels[static_cast<size_t> (keyCount - 1)]; }
             else start (v, keyChannels[static_cast<size_t> (keyCount - 1)], previous, keyVelocities[static_cast<size_t> (keyCount - 1)], true);
             return;
         }
@@ -633,9 +651,64 @@ void InstrumentDSP::renderVoice (Voice& v, double& left, double& right) noexcept
         }
         case Kind::drumKit: renderDrum (v, left, right); return;
         case Kind::wavetableSynth: renderWavetable (v, left, right); break;
+        case Kind::sampler: renderSampler (v, left, right); if (! v.active) return; break;
         default: renderPoly (v, left, right); break;
     }
     if (! v.amp.active() || (v.amp.stage == Envelope::Stage::sustain && v.amp.sustainLevel <= 0)) v.active = false;
+}
+void InstrumentDSP::setSample (const SampleData* next) noexcept
+{
+    if (next == sample) return;
+    sample = next;
+    for (auto& v : voices) if (v.active) v = Voice {};
+    configure (settings);
+}
+// Playback region [first, second) in source frames, and the loop restart frame.
+std::pair<double, double> InstrumentDSP::sampleRegion() const noexcept
+{
+    const auto frames = sample != nullptr ? static_cast<double> (sample->frames()) : 0.0;
+    const auto& p = settings.values;
+    const auto a = std::floor (std::min (p[sampler::start], p[sampler::end]) * frames), b = std::round (std::max (p[sampler::start], p[sampler::end]) * frames);
+    return { std::min (a, std::max (0.0, frames - 1)), std::max (std::min (a, std::max (0.0, frames - 1)) + 1, std::min (b, frames)) };
+}
+void InstrumentDSP::renderSampler (Voice& v, double& left, double& right) noexcept
+{
+    using namespace sampler;
+    if (sample == nullptr || sample->frames() < 1) { v.active = false; return; }
+    const auto& p = settings.values;
+    const auto [first, last] = sampleRegion();
+    const bool oneShot = p[mode] == 1, looping = ! oneShot && p[loop] == 1;
+    if (v.position >= last)
+    {
+        if (! looping) { v.active = false; return; }
+        const auto restart = first + std::floor (p[loopStart] * (last - first));
+        const auto length = std::max (1.0, last - std::min (restart, last - 1));
+        v.position = last - length + std::fmod (v.position - last, length);
+    }
+    // Four-point Hermite interpolation; whole-frame positions read the source exactly.
+    const int frames = sample->frames();
+    const auto index = static_cast<int> (std::floor (v.position));
+    const auto t = v.position - index;
+    const auto at = [frames] (const float* data, int i) { return static_cast<double> (data[std::clamp (i, 0, frames - 1)]); };
+    const auto hermite = [&] (const float* data)
+    {
+        const auto x0 = at (data, index - 1), x1 = at (data, index), x2 = at (data, index + 1), x3 = at (data, index + 2);
+        if (t == 0) return x1;
+        const auto c1 = .5 * (x2 - x0), c2 = x0 - 2.5 * x1 + 2 * x2 - .5 * x3, c3 = .5 * (x3 - x0) + 1.5 * (x1 - x2);
+        return ((c3 * t + c2) * t + c1) * t + x1;
+    };
+    auto sumL = hermite (sample->left.data()), sumR = hermite (sample->right.data());
+    const auto pitch = v.pitch + p[transpose] + p[detune] / 100.0 + bend (v.channel) - p[rootNote];
+    v.position += std::exp2 (pitch / 12.0) * sample->sampleRate / rate;
+    const int type = rounded (p[filterType]);
+    if (type != 0)
+    {
+        const auto frequency = std::clamp (static_cast<double> (p[cutoff]), 20.0, rate * .49);
+        const auto g = std::tan (pi * frequency / rate), k = 1 / effects::AutoFilter::qFromResonance (p[resonance]);
+        sumL = filterSample (v.filters, type, sumL, g, k); sumR = filterSample (v.rightFilters, type, sumR, g, k);
+    }
+    const auto level = v.amp.tick() * ((1 - p[velocityAmp]) + p[velocityAmp] * v.velocity) * gain;
+    left += sumL * level * std::min (1.0, 1.0 - p[pan]); right += sumR * level * std::min (1.0, 1.0 + p[pan]);
 }
 void InstrumentDSP::render (float* left, float* right, int samples) noexcept
 {

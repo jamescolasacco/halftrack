@@ -452,7 +452,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | INS-008 | Meld | SYNTH | NOT IMPLEMENTED / UNVERIFIED |
 | INS-009 | Operator | PARTIAL — FM Synth: four operators, eleven algorithms, feedback, filter, velocity; Bessel sideband oracle. Operator's waveforms, LFO, pitch envelope and filter set missing | PARTIAL |
 | INS-010 | Sampler | MULTISAMPLE | NOT IMPLEMENTED / UNVERIFIED |
-| INS-011 | Simpler | SAMPLER | NOT IMPLEMENTED / UNVERIFIED |
+| INS-011 | Simpler | PARTIAL — Sampler: one sample with Classic/One-Shot modes, root/transpose/detune, start/end region, loop, filter, ADSR, voices, velocity, pan and volume; exact whole-frame playback, Hermite closed-form accuracy, portable sample collection and real-time hand-off are tested. Slicing, warping, crossfade loops, modulation and reference comparison missing | PARTIAL |
 | INS-012 | Tension | PHYSICAL | NOT IMPLEMENTED / UNVERIFIED |
 | INS-013 | Wavetable | PARTIAL — two oscillators over four built-in band-limited morphing tables, filter, envelopes, LFO to position, unison; user tables and modulation matrix missing | PARTIAL |
 

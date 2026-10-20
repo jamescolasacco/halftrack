@@ -35,6 +35,7 @@ int runMidiEffectsTests (const juce::File&);
 int runInstrumentsTests (const juce::File&);
 int runWarpTests (const juce::File&);
 int runLaunchModeTests (const juce::File&);
+int runSamplerTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -194,6 +195,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-groups");
             setApplicationReturnValue (runGroupTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-sampler"))
+        {
+            const int i = args.indexOf ("--self-test-sampler");
+            setApplicationReturnValue (runSamplerTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-launch-modes"))

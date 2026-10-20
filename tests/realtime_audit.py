@@ -28,6 +28,7 @@ ROOTS = {
         "InstrumentDSP::pitchWheel",
         "InstrumentDSP::configure",
         "InstrumentDSP::reset",
+        "InstrumentDSP::setSample",
     ),
     "src/MidiEffects.cpp": (
         "Processor::process",

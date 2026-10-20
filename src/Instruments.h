@@ -3,6 +3,7 @@
 #include "Session.h"
 #include <array>
 #include <cstdint>
+#include <vector>
 
 // Original native instruments. prepare() may allocate (shared wavetables are
 // built once on the message thread); configure/note/render calls are bounded and
@@ -35,6 +36,18 @@ enum : size_t { oscillatorStride = 6, filterType = 12, cutoff, resonance, filter
     ampAttack, ampDecay, ampSustain, ampRelease, lfoRate, lfoPosition, lfoPitch, unison, unisonDetune, glide, voiceMode, velocityAmp, bendRange, volume, count };
 constexpr int tableCount = 4, frames = 16, size = 1024, levels = 10;
 }
+namespace sampler
+{
+enum : size_t { mode, rootNote, transpose, detune, start, end, loop, loopStart, trigger, filterType, cutoff, resonance,
+    ampAttack, ampDecay, ampSustain, ampRelease, voices, velocityAmp, bendRange, pan, volume, count };
+}
+// A decoded sample, immutable once published to the audio thread.
+struct SampleData
+{
+    std::vector<float> left, right;
+    double sampleRate = 48000;
+    int frames() const noexcept { return static_cast<int> (left.size()); }
+};
 
 struct Envelope
 {
@@ -71,6 +84,8 @@ public:
     void controlChange (int channel, int controller, int value) noexcept;
     void pitchWheel (int channel, int value) noexcept;
     void render (float* left, float* right, int samples) noexcept;
+    // Sampler: the sample to play. A different sample silences voices playing the old one.
+    void setSample (const SampleData*) noexcept;
     int activeVoices() const noexcept;
 private:
     struct Voice
@@ -86,7 +101,7 @@ private:
         std::array<effects::StateVariable, 2> filters {};
         std::array<effects::StateVariable, 2> rightFilters {};
         uint32_t noise = 1;
-        double time = 0, choke = 1, drumState = 0, drumState2 = 0;
+        double time = 0, choke = 1, drumState = 0, drumState2 = 0, position = 0;
         effects::Biquad drumFilter;
     };
     void start (Voice&, int channel, int note, double velocity, bool retrigger) noexcept;
@@ -97,11 +112,15 @@ private:
     void renderFm (Voice&, double& left, double& right) noexcept;
     void renderDrum (Voice&, double& left, double& right) noexcept;
     void renderWavetable (Voice&, double& left, double& right) noexcept;
+    void renderSampler (Voice&, double& left, double& right) noexcept;
+    bool legatoMode() const noexcept;
+    std::pair<double, double> sampleRegion() const noexcept;
     double bend (int channel) const noexcept;
     int voiceLimit() const noexcept;
     bool monophonic() const noexcept;
     Session::EffectKind kind = Session::EffectKind::polySynth;
     Session::EffectSettings settings;
+    const SampleData* sample = nullptr;
     double rate = 48000, glideCoefficient = 0, gain = 1;
     uint64_t clock = 0;
     uint32_t lfoSeed = 0x6d2b79f5u;
