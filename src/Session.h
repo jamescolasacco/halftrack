@@ -156,6 +156,17 @@ public:
         ClipInfo clip;
         double playPositionBeats = -1;
     };
+    struct RackChainInfo;
+    // A macro mapping drives one native control between two values in the control's own units.
+    struct MacroMapping
+    {
+        juce::String pluginId;
+        int parameter = 0;
+        float minimum = 0, maximum = 1;
+        bool operator== (const MacroMapping&) const = default;
+    };
+    struct MacroInfo { juce::String name; float value = 0; std::vector<MacroMapping> mappings; };
+    static constexpr int rackMacroCount = 8;
     struct PluginInfo
     {
         juce::String id, name;
@@ -168,7 +179,19 @@ public:
         // Arrangement automation of native device controls, in the controls' own units.
         struct ControlAutomation { int parameter = 0; AutomationLane lane; bool operator== (const ControlAutomation&) const = default; };
         std::vector<ControlAutomation> automation;
+        // An Audio Effect Rack runs its chains in parallel on the rack's input and sums them.
+        bool isRack = false;
+        std::vector<RackChainInfo> chains;
+        std::vector<MacroInfo> macros; // rackMacroCount knobs, 0-1.
     };
+    struct ChainSettings
+    {
+        juce::String name;
+        float gainDb = 0, pan = 0;
+        bool mute = false, solo = false; // Soloing any chain silences the chains that are not soloed.
+        bool operator== (const ChainSettings&) const = default;
+    };
+    struct RackChainInfo { juce::String id; ChainSettings settings; std::vector<PluginInfo> devices; };
     struct TrackInfo
     {
         juce::String id, name;
@@ -394,6 +417,25 @@ public:
     juce::Result removePlugin (int trackIndex, int pluginIndex);
     juce::Result setPluginParameter (int trackIndex, int pluginIndex, int parameterIndex, float normalisedValue);
     juce::Result showPluginEditor (int trackIndex, int pluginIndex);
+    // Audio Effect Racks. Group wraps audio devices of one track, in track order, into a rack at the
+    // first one's position, with one chain that holds them; an empty list adds an empty rack. Each is one undo step.
+    juce::Result groupDevices (int trackIndex, const juce::StringArray& pluginIds, juce::String& rackId);
+    juce::Result ungroupRack (const juce::String& rackId); // Returns a one-chain rack's devices to the track.
+    juce::Result addRackChain (const juce::String& rackId, juce::String& chainId);
+    juce::Result removeRackChain (const juce::String& chainId);
+    juce::Result setRackChain (const juce::String& chainId, const ChainSettings&);
+    juce::Result addNativeEffectToChain (const juce::String& chainId, EffectKind);
+    juce::Result addUtilityToChain (const juce::String& chainId);
+    // Devices by ID, on a track or in a chain. Moves stay within the device's own track or chain.
+    juce::Result setDeviceEnabled (const juce::String& pluginId, bool);
+    juce::Result removeDevice (const juce::String& pluginId);
+    juce::Result moveDevice (const juce::String& pluginId, int destinationIndex);
+    juce::Result showDeviceEditor (const juce::String& pluginId);
+    // Macros set mapped controls on the rack's native devices; mapped controls follow only their macro.
+    juce::Result setRackMacro (const juce::String& rackId, int macro, float value);
+    juce::Result renameRackMacro (const juce::String& rackId, int macro, const juce::String& name);
+    juce::Result mapRackMacro (const juce::String& rackId, int macro, const juce::String& pluginId, int parameter, float minimum, float maximum);
+    juce::Result unmapRackMacro (const juce::String& pluginId, int parameter);
     void closePluginEditors();
 
 private:

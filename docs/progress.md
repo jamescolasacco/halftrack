@@ -879,3 +879,7 @@ Root owns `insertTime`/`deleteTime` in `src/Session.*`, the Edit menu commands a
 ## Follow action B and chance — 2026-10-20
 
 Root owns the change in `src/Session.*`, the follow dialog, `tests/FollowActionTests.cpp`, a hash-gated engine patch and documentation. Session clips now carry action A and action B with a chance of A, matching the reference Launch box. Any and Other are added as actions. The dialog edits both actions and the percentage. Generated-signal tests check 0% and 100% chances, both outcomes at 50%, Other never replaying the same clip, No action continuing play (needing the engine patch), validation, persistence and corrupted-weight rejection.
+
+## Audio Effect Racks — 2026-10-20
+
+Root owns racks across `src/Session.*`, `tests/RackTests.cpp`, the suite registration and documentation. Audio devices can be grouped into an Audio Effect Rack whose chains run in parallel and sum. Each chain has volume, pan, mute and solo, chains hold their own devices, and eight macros drive native device controls over mapped ranges. Racks save, reopen, duplicate and undo, and invalid racks reject a load. The new `rack-acceptance` suite measures every behaviour against the generated source, and the full 39-suite run passes locally on the Mac in 110 s. See [the rack contract](research/racks-contract.md).

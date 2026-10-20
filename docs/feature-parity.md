@@ -465,7 +465,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | --- | --- | --- | --- |
 | RCK-001 | Instrument Rack | RACK | NOT IMPLEMENTED / UNVERIFIED |
 | RCK-002 | Drum Rack | PARTIAL — Drum Sampler: 16 sample pads on C1–D#2 in a 4x4 grid with per-pad tune, length, level, pan and four choke groups; exact pad playback, choke, block independence, portable pad collection and the pad UI are tested. Pad chains, per-pad devices/sends, 128-pad banks and reference comparison missing | PARTIAL |
-| RCK-003 | Audio Effect Rack | RACK | NOT IMPLEMENTED / UNVERIFIED |
+| RCK-003 | Audio Effect Rack | PARTIAL — Group devices into a rack with parallel chains (volume, pan, mute, solo), chain device add/move/bypass/remove, eight macros mapped to native controls over ranges, undo, portable save/reopen with identical renders, independent duplicates and corrupt-file rejection are tested. Zones, nested racks, macro automation/MIDI mapping, variations, presets and reference comparison missing | PARTIAL |
 | RCK-004 | MIDI Effect Rack | RACK | NOT IMPLEMENTED / UNVERIFIED |
 
 ### Built-in Max-based reference devices

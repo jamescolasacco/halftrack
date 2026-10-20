@@ -215,3 +215,7 @@ The loop range stands in for an Arrangement time selection. MIDI clips crossing 
 ### Follow action chance defaults
 
 The follow-action time is one value shared by both actions, and a No action choice is final for that launch (it is not evaluated again on later loops). Random choice uses the engine's unseeded generator, so tests check deterministic chances exactly and an even chance statistically. These are simplest-default choices pending reference measurement.
+
+### Audio Effect Rack defaults
+
+An empty rack and an empty chain pass their input unchanged. Chain volume and pan use the track mixer's fader and pan laws. A muted chain stops processing, so its tail does not continue. A macro's first mapping takes the control's current position; later mappings follow the macro, and the macro writes each mapped control as an ordinary settings change (block rate, no extra smoothing). Ungrouping a one-chain rack drops its chain mixer settings and macro mappings. Racks cannot be nested because the engine does not allow it. These are simplest-default choices pending reference measurement.

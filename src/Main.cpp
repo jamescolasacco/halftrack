@@ -41,6 +41,7 @@ int runFreezeTests (const juce::File&);
 int runStemExportTests (const juce::File&);
 int runCrossfadeTests (const juce::File&);
 int runTimeEditTests (const juce::File&);
+int runRackTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -200,6 +201,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-groups");
             setApplicationReturnValue (runGroupTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-rack"))
+        {
+            const int i = args.indexOf ("--self-test-rack");
+            setApplicationReturnValue (runRackTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-time-edit"))
