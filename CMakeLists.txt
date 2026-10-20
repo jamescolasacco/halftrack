@@ -67,6 +67,8 @@ include(cmake/PatchStretchAlignment.cmake)
 halftrack_patch_stretch_alignment("${tracktion_SOURCE_DIR}")
 include(cmake/PatchLaunchRepeat.cmake)
 halftrack_patch_launch_repeat("${tracktion_SOURCE_DIR}")
+include(cmake/PatchFollowNoAction.cmake)
+halftrack_patch_follow_no_action("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"

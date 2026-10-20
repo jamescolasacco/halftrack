@@ -875,3 +875,7 @@ Root owns the crossfader across `src/Session.*`, the Session mixer UI, `tests/Cr
 ## Insert Silence and Delete Time — 2026-10-20
 
 Root owns `insertTime`/`deleteTime` in `src/Session.*`, the Edit menu commands and shortcuts, `tests/TimeEditTests.cpp` and documentation. The Arrangement can insert silence or delete time across all tracks, locators and automation, using the loop range as the time selection. The new `time-edit-acceptance` suite checks clip splitting, MIDI note handling, locators, automation, an exact render resuming the split source, undo and warped-clip rejection. The full 38-suite run passes locally on the Mac in 142 s.
+
+## Follow action B and chance — 2026-10-20
+
+Root owns the change in `src/Session.*`, the follow dialog, `tests/FollowActionTests.cpp`, a hash-gated engine patch and documentation. Session clips now carry action A and action B with a chance of A, matching the reference Launch box. Any and Other are added as actions. The dialog edits both actions and the percentage. Generated-signal tests check 0% and 100% chances, both outcomes at 50%, Other never replaying the same clip, No action continuing play (needing the engine patch), validation, persistence and corrupted-weight rejection.

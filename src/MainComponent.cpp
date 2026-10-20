@@ -3985,11 +3985,17 @@ private:
             for (const auto& slot : track.slots)
                 if (slot.hasClip && slot.clip.id == id) { settings = slot.clip.follow; found = true; }
         if (! found) { report (juce::Result::fail ("Session clip not found.")); return; }
-        auto* dialog = new juce::AlertWindow ("Clip Follow Action", "After the chosen beats, change playback on this track. Next and Previous stop at the ends; Cycle wraps. Empty slots are skipped.", juce::MessageBoxIconType::NoIcon, this);
-        dialog->addComboBox ("action", { "Off", "Stop", "Play again", "Previous clip", "Next clip", "First clip", "Last clip", "Cycle to next clip" }, "Action");
+        auto* dialog = new juce::AlertWindow ("Clip Follow Action", "After the chosen beats, play action A (at its chance) or else action B. Next and Previous stop at the ends; Cycle wraps; Any picks any clip and Other any other clip. Empty slots are skipped.", juce::MessageBoxIconType::NoIcon, this);
+        const juce::StringArray actions { "Stop", "Play again", "Previous clip", "Next clip", "First clip", "Last clip", "Cycle to next clip", "Any clip", "Other clip" };
+        juce::StringArray first { "Off" }, second { "No action" }; first.addArray (actions); second.addArray (actions);
+        dialog->addComboBox ("action", first, "Action A");
         dialog->getComboBoxComponent ("action")->setSelectedItemIndex ((int) settings.action, juce::dontSendNotification);
         dialog->addTextEditor ("beats", juce::String (settings.afterBeats > 0 ? settings.afterBeats : 4, 6).trimCharactersAtEnd ("0").trimCharactersAtEnd ("."), "After beats");
-        dialog->getTextEditor ("beats")->setEnabled (settings.action != Session::FollowAction::off);
+        dialog->addComboBox ("action-b", second, "Action B");
+        dialog->getComboBoxComponent ("action-b")->setSelectedItemIndex ((int) settings.actionB, juce::dontSendNotification);
+        dialog->addTextEditor ("chance", juce::String (settings.chanceA * 100, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd ("."), "Chance of A (%)");
+        for (const char* name : { "beats", "chance" }) dialog->getTextEditor (name)->setEnabled (settings.action != Session::FollowAction::off);
+        dialog->getComboBoxComponent ("action-b")->setEnabled (settings.action != Session::FollowAction::off);
         dialog->addButton ("Apply", 1, juce::KeyPress (juce::KeyPress::returnKey));
         dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
         dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
@@ -3997,21 +4003,32 @@ private:
         auto safeDialog = juce::Component::SafePointer<juce::AlertWindow> (dialog);
         dialog->getComboBoxComponent ("action")->onChange = [safeDialog]
         {
-            if (safeDialog) safeDialog->getTextEditor ("beats")->setEnabled (safeDialog->getComboBoxComponent ("action")->getSelectedItemIndex() > 0);
+            if (! safeDialog) return;
+            const bool on = safeDialog->getComboBoxComponent ("action")->getSelectedItemIndex() > 0;
+            for (const char* name : { "beats", "chance" }) safeDialog->getTextEditor (name)->setEnabled (on);
+            safeDialog->getComboBoxComponent ("action-b")->setEnabled (on);
         };
         dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog, id] (int result)
         {
             if (! safe || ! safeDialog || result != 1) return;
             const auto action = static_cast<Session::FollowAction> (safeDialog->getComboBoxComponent ("action")->getSelectedItemIndex());
-            double beats = 0;
+            Session::FollowSettings next { action, 0 };
             if (action != Session::FollowAction::off)
             {
-                const auto text = safeDialog->getTextEditorContents ("beats").trim().toStdString();
-                char* end = nullptr; beats = std::strtod (text.c_str(), &end);
-                if (text.empty() || end != text.c_str() + text.size() || ! std::isfinite (beats))
+                const auto number = [] (const juce::String& field, double& value)
+                {
+                    const auto text = field.trim().toStdString(); char* end = nullptr; value = std::strtod (text.c_str(), &end);
+                    return ! text.empty() && end == text.c_str() + text.size() && std::isfinite (value);
+                };
+                double chance = 100;
+                if (! number (safeDialog->getTextEditorContents ("beats"), next.afterBeats))
                 { safe->report (juce::Result::fail ("Enter a complete numeric beat duration.")); return; }
+                if (! number (safeDialog->getTextEditorContents ("chance"), chance) || chance < 0 || chance > 100)
+                { safe->report (juce::Result::fail ("Enter a chance for action A from 0 to 100%.")); return; }
+                next.actionB = static_cast<Session::FollowAction> (safeDialog->getComboBoxComponent ("action-b")->getSelectedItemIndex());
+                next.chanceA = chance / 100;
             }
-            safe->report (safe->session.setClipFollowAction (id, { action, beats })); safe->refresh();
+            safe->report (safe->session.setClipFollowAction (id, next)); safe->refresh();
         }), true);
     }
     void renameClipDialog(const juce::String& id)
@@ -7456,6 +7473,23 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     finishFollowDialog ((int) Session::FollowAction::cycle, "2.5", 1);
     check (selectedSlot()->clip.follow == Session::FollowSettings { Session::FollowAction::cycle, 2.5 }, "production follow dialog sets actual native beat timing");
     session.undo(); refresh(); check (selectedSlot()->clip.follow.action == Session::FollowAction::off, "follow settings undo once"); session.redo(); refresh();
+    {
+        // Action B with a chance: A plays at its percentage and B otherwise.
+        clipFollowDialog (followClipId);
+        auto dialog = alerts.back(); check (dialog != nullptr && dialog->getComboBoxComponent ("action-b") != nullptr && dialog->getTextEditor ("chance") != nullptr,
+                                            "the follow dialog offers action B and its chance");
+        dialog->getComboBoxComponent ("action")->setSelectedItemIndex ((int) Session::FollowAction::next, juce::sendNotificationSync);
+        dialog->getComboBoxComponent ("action-b")->setSelectedItemIndex ((int) Session::FollowAction::other, juce::sendNotificationSync);
+        dialog->getTextEditor ("beats")->setText ("2"); dialog->getTextEditor ("chance")->setText ("30");
+        dialog->exitModalState (1); juce::MessageManager::getInstance()->runDispatchLoopUntil (20); refresh();
+        const auto follow = selectedSlot()->clip.follow;
+        check (follow.action == Session::FollowAction::next && follow.actionB == Session::FollowAction::other && std::abs (follow.chanceA - .3) < 1e-9 && follow.afterBeats == 2,
+               "the dialog sets action A, action B and the chance of A");
+        clipFollowDialog (followClipId); dialog = alerts.back();
+        dialog->getTextEditor ("chance")->setText ("140"); dialog->exitModalState (1); juce::MessageManager::getInstance()->runDispatchLoopUntil (20); refresh();
+        check (selectedSlot()->clip.follow == follow, "an out-of-range chance leaves the follow action unchanged");
+        session.undo(); refresh();
+    }
     clipFollowDialog (followClipId); finishFollowDialog ((int) Session::FollowAction::next, "2oops", 1);
     check (selectedSlot()->clip.follow.action == Session::FollowAction::cycle, "invalid follow timing preserves existing state");
     clipFollowDialog (followClipId); finishFollowDialog ((int) Session::FollowAction::stop, "1", 0);

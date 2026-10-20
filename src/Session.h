@@ -32,7 +32,7 @@ public:
         std::optional<juce::Range<double>> timeRange;
         bool stems = false; // Chosen in the export window: render every track to its own file with exportStems.
     };
-    enum class FollowAction { off, stop, replay, previous, next, first, last, cycle };
+    enum class FollowAction { off, stop, replay, previous, next, first, last, cycle, any, other };
     // A track's side of the crossfader; unassigned tracks ignore it.
     enum class CrossfadeAssign { none, a, b };
     // Clip launch behaviour on press/release of its launch button.
@@ -50,6 +50,9 @@ public:
     {
         FollowAction action = FollowAction::off;
         double afterBeats = 0;
+        // Action B plays when action A is not chosen; chanceA is A's probability (0-1). Off as B does nothing.
+        FollowAction actionB = FollowAction::off;
+        double chanceA = 1;
         bool operator== (const FollowSettings&) const = default;
     };
     struct SendInfo { juce::String returnTrackId; float gainDb = -100.0f; };

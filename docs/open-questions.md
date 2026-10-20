@@ -211,3 +211,7 @@ The crossfader uses the dipless curve (a side stays at 0 dB until the fader cros
 ### Time edit defaults
 
 The loop range stands in for an Arrangement time selection. MIDI clips crossing an edit are extended or shortened in place, not split. A note crossing the inserted point keeps its length, and automation is not given boundary points at the cut, so a ramp across deleted time joins its neighbours. Tempo is constant, so tempo events are not moved. These are simplest-default choices pending reference measurement.
+
+### Follow action chance defaults
+
+The follow-action time is one value shared by both actions, and a No action choice is final for that launch (it is not evaluated again on later loops). Random choice uses the engine's unseeded generator, so tests check deterministic chances exactly and an even chance statistically. These are simplest-default choices pending reference measurement.

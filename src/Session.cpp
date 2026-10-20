@@ -546,28 +546,42 @@ Result validateProjectTempo (const juce::ValueTree& state)
         }
     return Result::ok();
 }
-constexpr std::array<te::FollowAction, 8> nativeFollowActions {
+constexpr std::array<te::FollowAction, 10> nativeFollowActions {
     te::FollowAction::none, te::FollowAction::globalStop, te::FollowAction::globalPlayAgain,
     te::FollowAction::trackPrevious, te::FollowAction::trackNext, te::FollowAction::trackFirst,
-    te::FollowAction::trackLast, te::FollowAction::trackRoundRobin
+    te::FollowAction::trackLast, te::FollowAction::trackRoundRobin, te::FollowAction::trackAny, te::FollowAction::trackOther
 };
 bool validFollowSettings (const Session::FollowSettings& settings)
 {
-    const auto action = static_cast<int> (settings.action);
-    return action >= 0 && action < (int) nativeFollowActions.size() && std::isfinite (settings.afterBeats)
-        && (settings.action == Session::FollowAction::off ? settings.afterBeats == 0
-            : settings.afterBeats >= 1.0 / 960 && settings.afterBeats <= 4096);
+    const auto action = static_cast<int> (settings.action), second = static_cast<int> (settings.actionB);
+    if (action < 0 || action >= (int) nativeFollowActions.size() || second < 0 || second >= (int) nativeFollowActions.size()
+        || ! std::isfinite (settings.afterBeats) || ! std::isfinite (settings.chanceA) || settings.chanceA < 0 || settings.chanceA > 1) return false;
+    if (settings.action == Session::FollowAction::off)
+        return settings.afterBeats == 0 && settings.actionB == Session::FollowAction::off && settings.chanceA == 1;
+    return settings.afterBeats >= 1.0 / 960 && settings.afterBeats <= 4096;
 }
 Session::FollowSettings clipFollowSettings (const juce::ValueTree& state)
 {
     const auto actions = state.getChildWithName (te::IDs::FOLLOWACTIONS);
-    if (actions.getNumChildren() != 1) return {};
-    const auto native = te::followActionFromString (actions.getChild (0)[te::IDs::type].toString());
-    if (native)
-        for (size_t i = 1; i < nativeFollowActions.size(); ++i)
-            if (*native == nativeFollowActions[i])
-                return { static_cast<Session::FollowAction> (i), static_cast<double> (state.getProperty (te::IDs::followActionBeats, 0.0)) };
-    return {};
+    const int count = actions.getNumChildren();
+    if (count < 1 || count > 2) return {};
+    const auto parse = [] (const juce::ValueTree& action) -> std::optional<Session::FollowAction>
+    {
+        if (const auto native = te::followActionFromString (action[te::IDs::type].toString()))
+            for (size_t i = 0; i < nativeFollowActions.size(); ++i) if (*native == nativeFollowActions[i]) return static_cast<Session::FollowAction> (i);
+        return {};
+    };
+    const auto first = parse (actions.getChild (0));
+    if (! first || *first == Session::FollowAction::off) return {};
+    Session::FollowSettings settings { *first, static_cast<double> (state.getProperty (te::IDs::followActionBeats, 0.0)) };
+    if (count == 2)
+    {
+        const auto second = parse (actions.getChild (1)); if (! second) return {};
+        // A's chance is its share of the two weights; B, or nothing, takes the rest.
+        const double a = actions.getChild (0).getProperty (te::IDs::weight, 1.0), b = actions.getChild (1).getProperty (te::IDs::weight, 1.0);
+        settings.actionB = *second; settings.chanceA = a + b > 0 ? a / (a + b) : 1.0;
+    }
+    return settings;
 }
 Result validateFollowActions (const juce::ValueTree& state)
 {
@@ -578,7 +592,7 @@ Result validateFollowActions (const juce::ValueTree& state)
         const auto actions = state.getChildWithName (te::IDs::FOLLOWACTIONS);
         const auto text = state.getProperty (te::IDs::followActionBeats, 0.0).toString().trim().toStdString();
         char* end = nullptr; const auto beats = std::strtod (text.c_str(), &end);
-        if (containers > 1 || actions.getNumChildren() > 1 || text.empty() || end != text.c_str() + text.size()
+        if (containers > 1 || actions.getNumChildren() > 2 || text.empty() || end != text.c_str() + text.size()
             || ! std::isfinite (beats) || beats < 0 || beats > 4096
             || state.getProperty (te::IDs::followActionDurationType, "beats").toString() != "beats")
             return Result::fail ("The project contains unsupported clip follow timing.");
@@ -588,12 +602,18 @@ Result validateFollowActions (const juce::ValueTree& state)
         }
         else
         {
+            // One action at unit weight, or actions A and B whose weights are their chances.
             const auto settings = clipFollowSettings (state);
-            const auto action = actions.getChild (0);
-            const auto weight = action.getProperty (te::IDs::weight, 1.0).toString().trim().toStdString();
-            char* weightEnd = nullptr; const auto value = std::strtod (weight.c_str(), &weightEnd);
-            if (! action.hasType (te::IDs::ACTION) || settings.action == Session::FollowAction::off
-                || ! validFollowSettings (settings) || weight.empty() || weightEnd != weight.c_str() + weight.size() || value != 1)
+            double total = 0; bool shaped = actions.getNumChildren() <= 2;
+            for (const auto& action : actions)
+            {
+                const auto weight = action.getProperty (te::IDs::weight, 1.0).toString().trim().toStdString();
+                char* weightEnd = nullptr; const auto value = std::strtod (weight.c_str(), &weightEnd);
+                shaped = shaped && action.hasType (te::IDs::ACTION) && ! weight.empty() && weightEnd == weight.c_str() + weight.size()
+                       && std::isfinite (value) && value >= 0 && value <= 1;
+                total += value;
+            }
+            if (! shaped || settings.action == Session::FollowAction::off || ! validFollowSettings (settings) || std::abs (total - 1) > 1e-9)
                 return Result::fail ("The project contains unsupported clip follow actions.");
         }
     }
@@ -3752,7 +3772,14 @@ Result Session::setClipFollowAction (const String& id, const FollowSettings& set
     {
         auto& action = actions->addAction();
         action.action = nativeFollowActions[(size_t) settings.action];
-        action.weight = 1.0;
+        const bool single = settings.actionB == FollowAction::off && settings.chanceA == 1;
+        action.weight = single ? 1.0 : settings.chanceA;
+        if (! single)
+        {
+            auto& second = actions->addAction();
+            second.action = nativeFollowActions[(size_t) settings.actionB];
+            second.weight = 1.0 - settings.chanceA;
+        }
     }
     impl->edit->restartPlayback(); impl->edit->dispatchPendingUpdatesSynchronously();
     impl->changed(); return Result::ok();
