@@ -2078,6 +2078,27 @@ Session::Snapshot Session::snapshot() const
     return s;
 }
 
+const Session::PluginInfo* Session::findDevice (const Snapshot& snapshot, const String& id)
+{
+    for (const auto& track : snapshot.tracks)
+    {
+        if (track.instrument.id == id && id.isNotEmpty()) return &track.instrument;
+        for (const auto& p : track.plugins)
+        {
+            if (p.id == id) return &p;
+            for (const auto& chain : p.chains) for (const auto& d : chain.devices) if (d.id == id) return &d;
+        }
+    }
+    return nullptr;
+}
+const Session::PluginInfo* Session::findRackContaining (const Snapshot& snapshot, const String& id)
+{
+    for (const auto& track : snapshot.tracks)
+        for (const auto& p : track.plugins)
+            for (const auto& chain : p.chains) for (const auto& d : chain.devices) if (d.id == id) return &p;
+    return nullptr;
+}
+
 Result Session::newProject()
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

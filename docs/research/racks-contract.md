@@ -27,6 +27,18 @@ Audio Effect Racks follow the reference rack workflow ([Instrument, Drum and Eff
   - `unmapRackMacro(pluginId, parameter)` removes a mapping.
 - `PluginInfo::isRack`, `chains` (ID, settings, devices) and `macros` (name, value, mappings) describe a rack in snapshots.
 
+## Device view
+
+- Clicking a device's title selects it. Shift-click extends the selection within the same track or chain, and Cmd/Ctrl-click toggles a device.
+- With devices focused, Cmd/Ctrl+G groups the selection, Cmd/Ctrl+Shift+G ungroups a selected one-chain rack, and Delete removes the selected devices.
+- A device's menu offers Move left/right, Group, Ungroup and Add chain (racks), Activate/Deactivate and Delete. + Device offers an empty Audio Effect Rack.
+- A rack shows a title strip (power, Macros and Chains toggles, delete), then its sections:
+  - Eight macro knobs (0–127), showing their mappings in a tooltip. Right-clicking a knob renames it or removes a mapping.
+  - The chain list. Each row has an activator, solo, name, volume and pan; double-click renames a chain, right-click deletes it, and + adds one.
+  - The selected chain's devices, with a + menu of audio effects.
+- Right-clicking a native control inside a rack offers "Map … to" any macro, or "Remove Mapping". Mapped controls draw in the macro colour and ignore direct edits.
+- The automation editor lists chain devices' controls.
+
 ## Signal flow
 
 - Each chain is a serial path from the rack input through its devices to the chain's mixer.
@@ -78,6 +90,8 @@ Audio Effect Racks follow the reference rack workflow ([Instrument, Drum and Eff
 - an empty rack passes its input;
 - corrupted macro values, foreign racks and bad mappings are rejected;
 - frozen-track locks.
+
+The UI suite checks Shift-click selection, Cmd/Ctrl+G grouping, the rack panel's macros and chain devices, + chain, chain volume and activator rows, the mapped-control colour, a macro knob driving the mapped EQ output, a snapshot and undo.
 
 ## Not implemented
 

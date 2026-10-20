@@ -115,7 +115,9 @@ public:
         juce::Path ring; ring.addCentredArc (centre.x, centre.y, radius - 2, radius - 2, 0, startAngle, endAngle, true);
         g.setColour (juce::Colour (0xff141414)); g.strokePath (ring, juce::PathStrokeType (3.0f));
         juce::Path value; value.addCentredArc (centre.x, centre.y, radius - 2, radius - 2, 0, juce::jmin (origin, angle), juce::jmax (origin, angle), true);
-        g.setColour (slider.isEnabled() ? orange : muted); g.strokePath (value, juce::PathStrokeType (3.0f));
+        // A colour set on the slider itself (macro knobs and mapped controls) replaces the accent.
+        const auto accent = slider.isColourSpecified (juce::Slider::rotarySliderFillColourId) ? slider.findColour (juce::Slider::rotarySliderFillColourId) : orange;
+        g.setColour (slider.isEnabled() ? accent : muted); g.strokePath (value, juce::PathStrokeType (3.0f));
         g.setColour (juce::Colour (0xff3a3a3a)); g.fillEllipse (bounds.withSizeKeepingCentre ((radius - 5) * 2, (radius - 5) * 2));
         g.setColour (ink); g.drawLine (centre.x, centre.y, centre.x + (radius - 5) * std::sin (angle), centre.y - (radius - 5) * std::cos (angle), 2.0f);
     }
@@ -3563,20 +3565,30 @@ private:
 
     // One device in the inline chain: a title bar (on/off, name, window, remove)
     // over the device's own compact controls.
-    class DevicePanel final : public juce::Component
+    // A device or rack in a device chain.
+    class DeviceView : public juce::Component
+    {
+    public:
+        virtual const juce::String& getId() const noexcept = 0;
+        virtual int preferredWidth() const = 0;
+        virtual void sync (const Session::PluginInfo&) = 0;
+    };
+
+    class DevicePanel final : public DeviceView
     {
     public:
         DevicePanel (Impl& o, const Session::PluginInfo& info) : owner (o), pluginId (info.id), native (info.isNativeEffect)
         {
+            setWantsKeyboardFocus (true);
             for (auto* button : { &power, &open, &remove })
             { addAndMakeVisible (*button); button->setWantsKeyboardFocus (false); button->setMouseClickGrabsKeyboardFocus (false); }
             power.setClickingTogglesState (true); power.setName ("Device on");
             power.setTooltip ("Turn this device on or off (bypass)");
             power.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); power.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
             open.setTooltip ("Open this device in its own window"); remove.setTooltip ("Remove this device");
-            power.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.setPluginEnabled (owner.selectedTrack, p, power.getToggleState())); owner.refresh(); };
-            open.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.showPluginEditor (owner.selectedTrack, p)); };
-            remove.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.removePlugin (owner.selectedTrack, p)); owner.refresh(); };
+            power.onClick = [this] { owner.report (owner.session.setDeviceEnabled (pluginId, power.getToggleState())); owner.refresh(); };
+            open.onClick = [this] { owner.report (owner.session.showDeviceEditor (pluginId)); };
+            remove.onClick = [this] { owner.report (owner.session.removeDevice (pluginId)); owner.refresh(); };
             if (native)
             {
                 body = makeNativeEffectEditor (owner.session, info.id, true,
@@ -3585,9 +3597,9 @@ private:
             }
             sync (info);
         }
-        const juce::String& getId() const noexcept { return pluginId; }
-        int preferredWidth() const { return native && body ? body->getWidth() + 2 : 184; }
-        void sync (const Session::PluginInfo& info)
+        const juce::String& getId() const noexcept override { return pluginId; }
+        int preferredWidth() const override { return native && body ? body->getWidth() + 2 : 184; }
+        void sync (const Session::PluginInfo& info) override
         {
             name = info.name; enabled = info.enabled;
             midi = info.isNativeEffect && effectIsMidi (info.effect.kind);
@@ -3602,8 +3614,9 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
+            const bool selected = owner.selectedDevices.contains (pluginId);
             g.fillAll (juce::Colour (0xff303030));
-            g.setColour (enabled ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff383838)); g.fillRect (0, 0, getWidth(), titleHeight);
+            g.setColour (selected ? juce::Colour (0xff5e5e5e) : enabled ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff383838)); g.fillRect (0, 0, getWidth(), titleHeight);
             g.setColour (enabled ? ink : muted); g.setFont (font (11.0f, true));
             g.drawText (name, 24, 0, getWidth() - 70, titleHeight, juce::Justification::centredLeft, true);
             if (! native)
@@ -3613,46 +3626,290 @@ private:
                                   getLocalBounds().withTrimmedTop (titleHeight).reduced (10), juce::Justification::centred, 3);
             }
             if (! enabled) { g.setColour (juce::Colours::black.withAlpha (0.25f)); g.fillRect (getLocalBounds().withTrimmedTop (titleHeight)); }
-            g.setColour (line); g.drawRect (getLocalBounds());
+            g.setColour (selected ? orange : line); g.drawRect (getLocalBounds());
         }
+        // Clicking the title selects the device (Shift extends, Cmd toggles); right-click opens its menu.
         void mouseDown (const juce::MouseEvent& e) override
         {
-            if (! e.mods.isPopupMenu() || e.y > titleHeight) return;
-            const int p = index(); const auto* track = owner.currentTrack(); if (p < 0 || track == nullptr) return;
-            juce::PopupMenu menu;
-            menu.addItem (1, "Move left", p > 0); menu.addItem (2, "Move right", p + 1 < (int) track->plugins.size());
-            menu.addSeparator(); menu.addItem (3, enabled ? "Deactivate" : "Activate"); menu.addItem (4, "Delete");
-            const auto trackId = track->id, id = pluginId;
-            juce::Component::SafePointer<Impl> safe (&owner);
-            menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe, trackId, id] (int choice)
-            {
-                if (! safe || choice == 0) return;
-                const auto snapshot = safe->session.snapshot();
-                for (int t = 0; t < (int) snapshot.tracks.size(); ++t)
-                    if (snapshot.tracks[(size_t) t].id == trackId)
-                        for (int p = 0; p < (int) snapshot.tracks[(size_t) t].plugins.size(); ++p)
-                            if (snapshot.tracks[(size_t) t].plugins[(size_t) p].id == id)
-                            {
-                                if (choice <= 2) safe->report (safe->session.movePlugin (t, p, p + (choice == 1 ? -1 : 1)));
-                                else if (choice == 3) safe->report (safe->session.setPluginEnabled (t, p, ! snapshot.tracks[(size_t) t].plugins[(size_t) p].enabled));
-                                else safe->report (safe->session.removePlugin (t, p));
-                                safe->refresh(); return;
-                            }
-            });
+            if (e.y > titleHeight) return;
+            if (! e.mods.isPopupMenu()) { owner.selectDevice (pluginId, e.mods); grabKeyboardFocus(); return; }
+            owner.deviceMenu (pluginId, *this);
         }
+        bool keyPressed (const juce::KeyPress& key) override { return owner.deviceKey (key); }
         static constexpr int titleHeight = 22;
     private:
-        int index() const
-        {
-            if (const auto* track = owner.currentTrack())
-                for (int p = 0; p < (int) track->plugins.size(); ++p) if (track->plugins[(size_t) p].id == pluginId) return p;
-            return -1;
-        }
         Impl& owner;
         juce::String pluginId, name;
         bool native = false, enabled = true, midi = false;
         juce::TextButton power { "" }, open { "^" }, remove { "x" };
         std::unique_ptr<juce::Component> body;
+    };
+
+    // One chain in a rack's chain list: activator, solo, name, volume and pan.
+    class ChainRow final : public juce::Component
+    {
+    public:
+        ChainRow (Impl& o, juce::String rack, juce::String chain) : owner (o), rackId (std::move (rack)), chainId (std::move (chain))
+        {
+            for (auto* b : { &activator, &solo })
+            {
+                addAndMakeVisible (*b); b->setClickingTogglesState (true); b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false);
+                b->setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            }
+            activator.setName ("Chain activator"); activator.setTooltip ("Turn this chain on or off");
+            activator.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a));
+            solo.setName ("Chain solo"); solo.setTooltip ("Solo this chain");
+            solo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff6fa8ff));
+            activator.onClick = [this] { edit ([this] (auto& s) { s.mute = ! activator.getToggleState(); }); };
+            solo.onClick = [this] { edit ([this] (auto& s) { s.solo = solo.getToggleState(); }); };
+            for (auto* s : { &volume, &pan })
+            {
+                addAndMakeVisible (*s); s->setSliderStyle (juce::Slider::LinearBar); s->setWantsKeyboardFocus (false);
+                s->setColour (juce::Slider::trackColourId, juce::Colour (0xff59606a)); s->setColour (juce::Slider::textBoxTextColourId, ink);
+                s->onDragStart = [this] { owner.session.beginEditGesture ("Edit chain"); dragging = true; };
+                s->onDragEnd = [this] { if (dragging) { dragging = false; owner.session.endEditGesture(); } };
+            }
+            volume.setName ("Chain volume"); volume.setRange (-100, 6, .1); volume.setSkewFactorFromMidPoint (-12); volume.setDoubleClickReturnValue (true, 0);
+            volume.textFromValueFunction = [] (double v) { return v <= -100 ? juce::String ("-inf") : juce::String (v, 1); };
+            volume.onValueChange = [this] { edit ([this] (auto& s) { s.gainDb = (float) volume.getValue(); }); };
+            pan.setName ("Chain pan"); pan.setRange (-1, 1, .02); pan.setDoubleClickReturnValue (true, 0);
+            pan.textFromValueFunction = [] (double v) { const int n = juce::roundToInt (std::abs (v) * 50); return n == 0 ? juce::String ("C") : juce::String (n) + (v < 0 ? "L" : "R"); };
+            pan.onValueChange = [this] { edit ([this] (auto& s) { s.pan = (float) pan.getValue(); }); };
+            volume.updateText(); pan.updateText();
+        }
+        const juce::String& getId() const noexcept { return chainId; }
+        void sync (const Session::RackChainInfo& info, bool isSelected)
+        {
+            settings = info.settings; selected = isSelected;
+            activator.setToggleState (! info.settings.mute, juce::dontSendNotification);
+            solo.setToggleState (info.settings.solo, juce::dontSendNotification);
+            if (! dragging) { volume.setValue (info.settings.gainDb, juce::dontSendNotification); pan.setValue (info.settings.pan, juce::dontSendNotification); }
+            repaint();
+        }
+        void resized() override
+        {
+            auto r = getLocalBounds().reduced (2, 2);
+            activator.setBounds (r.removeFromLeft (16)); r.removeFromLeft (2); solo.setBounds (r.removeFromLeft (16));
+            pan.setBounds (r.removeFromRight (36)); r.removeFromRight (2); volume.setBounds (r.removeFromRight (48));
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (selected ? juce::Colour (0xff4f4f4f) : juce::Colour (0xff363636));
+            g.setColour (settings.mute ? muted : ink); g.setFont (font (10.5f));
+            g.drawText (settings.name, 40, 0, getWidth() - 132, getHeight(), juce::Justification::centredLeft, true);
+            g.setColour (line); g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
+        }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            owner.selectedChains[rackId] = chainId; owner.deviceChain.sync();
+            if (e.mods.isPopupMenu()) owner.chainMenu (rackId, chainId, *this);
+        }
+        void mouseDoubleClick (const juce::MouseEvent&) override { owner.renameChainDialog (chainId); }
+    private:
+        template <typename Change> void edit (Change&& change)
+        {
+            auto next = settings; change (next);
+            owner.report (owner.session.setRackChain (chainId, next));
+        }
+        Impl& owner;
+        juce::String rackId, chainId;
+        Session::ChainSettings settings;
+        bool selected = false, dragging = false;
+        juce::TextButton activator { "" }, solo { "S" };
+        juce::Slider volume, pan;
+    };
+
+    // An Audio Effect Rack: a title strip, the macro knobs, the chain list and the selected chain's devices.
+    class RackPanel final : public DeviceView
+    {
+    public:
+        RackPanel (Impl& o, const Session::PluginInfo& info) : owner (o), rackId (info.id)
+        {
+            setWantsKeyboardFocus (true);
+            for (auto* b : { &power, &remove, &macroToggle, &chainToggle, &addChain, &addDevice })
+            { addAndMakeVisible (*b); b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); }
+            power.setClickingTogglesState (true); power.setName ("Rack on"); power.setTooltip ("Turn this rack on or off (bypass)");
+            power.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); power.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            power.onClick = [this] { owner.report (owner.session.setDeviceEnabled (rackId, power.getToggleState())); owner.refresh(); };
+            remove.setTooltip ("Remove this rack and its chains");
+            remove.onClick = [this] { owner.report (owner.session.removeDevice (rackId)); owner.refresh(); };
+            for (auto* t : { &macroToggle, &chainToggle })
+            {
+                t->setClickingTogglesState (true); t->setToggleState (true, juce::dontSendNotification);
+                t->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff5b5b5b));
+                t->onClick = [this] { owner.deviceChain.sync(); };
+            }
+            macroToggle.setName ("Show macros"); macroToggle.setTooltip ("Show or hide the macro knobs");
+            chainToggle.setName ("Show chains"); chainToggle.setTooltip ("Show or hide the chain list");
+            addChain.setName ("Add chain"); addChain.setTooltip ("Add an empty chain");
+            addChain.onClick = [this]
+            {
+                juce::String id; owner.report (owner.session.addRackChain (rackId, id));
+                if (id.isNotEmpty()) owner.selectedChains[rackId] = id;
+                owner.refresh();
+            };
+            addDevice.setName ("Add chain device"); addDevice.setTooltip ("Add an audio effect to the selected chain");
+            addDevice.onClick = [this] { if (selected.isNotEmpty()) owner.addChainDeviceMenu (selected, addDevice); };
+            for (int m = 0; m < Session::rackMacroCount; ++m)
+            {
+                auto& k = knobs[(size_t) m]; addAndMakeVisible (k); k.setName ("Macro " + juce::String (m + 1));
+                k.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); k.setRange (0, 1, 0);
+                k.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 40, 12);
+                k.setColour (juce::Slider::rotarySliderFillColourId, macroColour);
+                k.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+                k.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 127)); };
+                k.valueFromTextFunction = [] (const juce::String& t) { return juce::jlimit (0.0, 1.0, t.getDoubleValue() / 127); };
+                k.setDoubleClickReturnValue (true, 0); k.updateText();
+                k.onDragStart = [this] { owner.session.beginEditGesture ("Macro"); dragging = true; };
+                k.onDragEnd = [this] { if (dragging) { dragging = false; owner.session.endEditGesture(); } };
+                k.onValueChange = [this, m] { owner.report (owner.session.setRackMacro (rackId, m, (float) knobs[(size_t) m].getValue())); };
+                k.addMouseListener (this, false);
+                auto& n = names[(size_t) m]; addAndMakeVisible (n); n.setFont (font (9.5f)); n.setJustificationType (juce::Justification::centred);
+                n.setColour (juce::Label::textColourId, ink); n.setMinimumHorizontalScale (.7f); n.setInterceptsMouseClicks (false, false);
+            }
+            sync (info);
+        }
+        const juce::String& getId() const noexcept override { return rackId; }
+        const juce::String& selectedChain() const noexcept { return selected; }
+        int preferredWidth() const override
+        {
+            int width = strip + 2 + (macroToggle.getToggleState() ? macroWidth : 0) + (chainToggle.getToggleState() ? chainWidth : 0);
+            for (const auto& d : devices) width += d->preferredWidth() + 4;
+            return width + (selected.isNotEmpty() ? addWidth : 0) + 4;
+        }
+        void sync (const Session::PluginInfo& info) override
+        {
+            name = info.name; enabled = info.enabled;
+            power.setToggleState (info.enabled, juce::dontSendNotification);
+            // Keep the chosen chain, falling back to the first.
+            auto& choice = owner.selectedChains[rackId];
+            const auto found = std::find_if (info.chains.begin(), info.chains.end(), [&] (const auto& c) { return c.id == choice; });
+            if (found == info.chains.end()) choice = info.chains.empty() ? juce::String() : info.chains.front().id;
+            selected = choice;
+            std::vector<juce::String> ids; for (const auto& c : info.chains) ids.push_back (c.id);
+            bool same = ids.size() == rows.size();
+            for (size_t i = 0; same && i < ids.size(); ++i) same = rows[i]->getId() == ids[i];
+            if (! same)
+            {
+                rows.clear();
+                for (const auto& c : info.chains) { rows.push_back (std::make_unique<ChainRow> (owner, rackId, c.id)); addAndMakeVisible (*rows.back()); }
+            }
+            for (size_t i = 0; i < rows.size(); ++i) rows[i]->sync (info.chains[i], info.chains[i].id == selected);
+            const Session::RackChainInfo* chain = nullptr;
+            for (const auto& c : info.chains) if (c.id == selected) chain = &c;
+            std::vector<juce::String> deviceIds; if (chain) for (const auto& d : chain->devices) deviceIds.push_back (d.id);
+            same = deviceIds.size() == devices.size();
+            for (size_t i = 0; same && i < deviceIds.size(); ++i) same = devices[i]->getId() == deviceIds[i];
+            if (! same)
+            {
+                devices.clear();
+                if (chain) for (const auto& d : chain->devices) { devices.push_back (std::make_unique<DevicePanel> (owner, d)); addAndMakeVisible (*devices.back()); }
+            }
+            else if (chain) for (size_t i = 0; i < devices.size(); ++i) devices[i]->sync (chain->devices[i]);
+            for (int m = 0; m < Session::rackMacroCount && m < (int) info.macros.size(); ++m)
+            {
+                const auto& macro = info.macros[(size_t) m];
+                if (! knobs[(size_t) m].isMouseButtonDown()) knobs[(size_t) m].setValue (macro.value, juce::dontSendNotification);
+                names[(size_t) m].setText (macro.name, juce::dontSendNotification);
+                juce::StringArray targets;
+                for (const auto& mapping : macro.mappings)
+                    if (const auto* device = Session::findDevice (owner.state, mapping.pluginId); device && device->isNativeEffect)
+                        targets.add (device->name + ": " + effectParameters (device->effect.kind)[(size_t) mapping.parameter].label);
+                knobs[(size_t) m].setTooltip (targets.isEmpty() ? macro.name + " (not mapped). Right-click a device control to map it."
+                                                                : macro.name + " controls " + targets.joinIntoString (", "));
+                mappings[(size_t) m] = macro.mappings;
+            }
+            addDevice.setVisible (selected.isNotEmpty());
+            resized(); repaint();
+        }
+        void resized() override
+        {
+            auto r = getLocalBounds();
+            auto left = r.removeFromLeft (strip);
+            power.setBounds (left.removeFromTop (20).reduced (2)); remove.setBounds (left.removeFromBottom (20).reduced (2));
+            macroToggle.setBounds (left.removeFromTop (22).reduced (2)); chainToggle.setBounds (left.removeFromTop (22).reduced (2));
+            r.removeFromLeft (2);
+            const bool showMacros = macroToggle.getToggleState(), showChains = chainToggle.getToggleState();
+            auto macroArea = showMacros ? r.removeFromLeft (macroWidth) : juce::Rectangle<int>();
+            for (int m = 0; m < Session::rackMacroCount; ++m)
+            {
+                knobs[(size_t) m].setVisible (showMacros); names[(size_t) m].setVisible (showMacros);
+                if (! showMacros) continue;
+                auto cell = juce::Rectangle<int> (macroArea.getX() + 4 + (m % 4) * 50, macroArea.getY() + 8 + (m / 4) * 104, 48, 100);
+                names[(size_t) m].setBounds (cell.removeFromBottom (16));
+                knobs[(size_t) m].setBounds (cell.reduced (2, 8));
+            }
+            auto chainArea = showChains ? r.removeFromLeft (chainWidth) : juce::Rectangle<int>();
+            addChain.setVisible (showChains);
+            for (auto& row : rows) row->setVisible (showChains);
+            if (showChains)
+            {
+                auto header = chainArea.removeFromTop (20);
+                addChain.setBounds (header.removeFromRight (24).reduced (2));
+                auto list = chainArea.reduced (2, 0);
+                for (auto& row : rows) row->setBounds (list.removeFromTop (22));
+            }
+            int x = r.getX() + 2;
+            for (auto& d : devices) { d->setBounds (x, 0, d->preferredWidth(), getHeight()); x += d->preferredWidth() + 4; }
+            addDevice.setBounds (x, getHeight() / 2 - 40, addWidth - 4, 80);
+        }
+        void paint (juce::Graphics& g) override
+        {
+            const bool focused = owner.selectedDevices.contains (rackId);
+            g.fillAll (juce::Colour (0xff2b2b2b));
+            g.setColour (focused ? juce::Colour (0xff5e5e5e) : enabled ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff383838));
+            g.fillRect (0, 0, strip, getHeight());
+            g.setColour (enabled ? ink : muted); g.setFont (font (11.0f, true));
+            // The rack name reads upward along the title strip.
+            g.saveState(); g.addTransform (juce::AffineTransform::rotation (-juce::MathConstants<float>::halfPi, 0, 0).translated (0.0f, (float) getHeight() - 22));
+            g.drawText (name, 0, 0, getHeight() - 90, strip, juce::Justification::centredLeft, true);
+            g.restoreState();
+            int x = strip + 2;
+            if (macroToggle.getToggleState()) { g.setColour (juce::Colour (0xff333333)); g.fillRect (x, 0, macroWidth, getHeight()); x += macroWidth; }
+            if (chainToggle.getToggleState())
+            {
+                g.setColour (juce::Colour (0xff2f2f2f)); g.fillRect (x, 0, chainWidth, getHeight());
+                g.setColour (muted); g.setFont (font (9.5f, true)); g.drawText ("CHAINS", x + 6, 0, chainWidth - 30, 20, juce::Justification::centredLeft);
+                if (rows.empty())
+                {
+                    g.setFont (font (10.5f));
+                    g.drawFittedText ("No chains. Audio passes through.\nAdd one with +.", juce::Rectangle<int> (x, 24, chainWidth, 60).reduced (8, 0), juce::Justification::centredTop, 3);
+                }
+                x += chainWidth;
+            }
+            if (selected.isNotEmpty() && devices.empty())
+            {
+                g.setColour (muted); g.setFont (font (10.5f));
+                g.drawFittedText ("Drop audio effects here.\nAn empty chain passes its input.", juce::Rectangle<int> (x + addWidth + 4, 0, 150, getHeight()), juce::Justification::centredLeft, 3);
+            }
+            if (! enabled) { g.setColour (juce::Colours::black.withAlpha (0.25f)); g.fillRect (getLocalBounds().withTrimmedLeft (strip)); }
+            g.setColour (focused ? orange : line); g.drawRect (getLocalBounds());
+        }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            for (int m = 0; m < Session::rackMacroCount; ++m)
+                if (e.eventComponent == &knobs[(size_t) m])
+                {
+                    if (e.mods.isPopupMenu()) owner.macroMenu (rackId, m, mappings[(size_t) m], knobs[(size_t) m]);
+                    return;
+                }
+            if (e.eventComponent != this || e.x > strip) return;
+            if (! e.mods.isPopupMenu()) { owner.selectDevice (rackId, e.mods); grabKeyboardFocus(); return; }
+            owner.deviceMenu (rackId, *this);
+        }
+        bool keyPressed (const juce::KeyPress& key) override { return owner.deviceKey (key); }
+        static inline const juce::Colour macroColour { 0xff6ccf6c };
+    private:
+        static constexpr int strip = 24, macroWidth = 208, chainWidth = 232, addWidth = 30;
+        Impl& owner;
+        juce::String rackId, name, selected;
+        bool enabled = true, dragging = false;
+        juce::TextButton power { "" }, remove { "x" }, macroToggle { "M" }, chainToggle { "C" }, addChain { "+" }, addDevice { "+" };
+        std::array<juce::Slider, Session::rackMacroCount> knobs;
+        std::array<juce::Label, Session::rackMacroCount> names;
+        std::array<std::vector<Session::MacroMapping>, Session::rackMacroCount> mappings;
+        std::vector<std::unique_ptr<ChainRow>> rows;
+        std::vector<std::unique_ptr<DevicePanel>> devices;
     };
 
     class DeviceChain final : public juce::Component
@@ -3732,7 +3989,12 @@ private:
             if (! same)
             {
                 panels.clear();
-                if (track != nullptr) for (const auto& p : track->plugins) { panels.push_back (std::make_unique<DevicePanel> (owner, p)); chain.addAndMakeVisible (*panels.back()); }
+                if (track != nullptr)
+                    for (const auto& p : track->plugins)
+                    {
+                        if (p.isRack) panels.push_back (std::make_unique<RackPanel> (owner, p)); else panels.push_back (std::make_unique<DevicePanel> (owner, p));
+                        chain.addAndMakeVisible (*panels.back());
+                    }
             }
             else if (track != nullptr) for (size_t i = 0; i < panels.size(); ++i) panels[i]->sync (track->plugins[i]);
             synthPanel.sync(); layoutChain();
@@ -3771,7 +4033,7 @@ private:
         uint64_t masterProjectGeneration = 0;
         juce::Viewport chainView;
         juce::Component chain;
-        std::vector<std::unique_ptr<DevicePanel>> panels;
+        std::vector<std::unique_ptr<DeviceView>> panels;
         SendsPanel sendsPanel;
         int chainLeft() const { return sendsPanel.isVisible() ? 250 : 9; }
         // MIDI effects, then the instrument, then audio devices, left to right.
@@ -4340,6 +4602,7 @@ private:
         if (midiLaunch.isVisible()) if (const auto* clip = sessionMidiClip()) midiLaunch.setClip (*clip);
         newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
         importButton.setEnabled (currentTrack() == nullptr || ! currentTrack()->isReturn);
+        if (! selectedDevices.isEmpty() && deviceSiblings (selectedDevices[0]).empty()) selectedDevices.clear();
         ruler.sync(); deviceChain.sync(); repaint();
         updateScroll();
     }
@@ -5082,12 +5345,206 @@ private:
         list->setNumberOfThreadsForScanning (1);
         showDialog ("Halftrack - Plug-in Library", std::move (list), 780, 520);
     }
+    // Devices and racks. Selection lives in one device list: the selected track's or a chain's.
+    juce::StringArray selectedDevices;
+    std::map<juce::String, juce::String> selectedChains; // Rack ID to the chain whose devices it shows.
+    std::vector<juce::String> deviceSiblings (const juce::String& id) const
+    {
+        if (const auto* track = currentTrack())
+        {
+            std::vector<juce::String> top; for (const auto& p : track->plugins) top.push_back (p.id);
+            if (std::find (top.begin(), top.end(), id) != top.end()) return top;
+            for (const auto& p : track->plugins)
+                for (const auto& c : p.chains)
+                {
+                    std::vector<juce::String> ids; for (const auto& d : c.devices) ids.push_back (d.id);
+                    if (std::find (ids.begin(), ids.end(), id) != ids.end()) return ids;
+                }
+        }
+        return {};
+    }
+    void selectDevice (const juce::String& id, juce::ModifierKeys mods)
+    {
+        const auto siblings = deviceSiblings (id);
+        const bool sameList = ! selectedDevices.isEmpty() && std::find (siblings.begin(), siblings.end(), selectedDevices[0]) != siblings.end();
+        if (mods.isShiftDown() && sameList)
+        {
+            const auto anchor = std::find (siblings.begin(), siblings.end(), selectedDevices[0]) - siblings.begin();
+            const auto target = std::find (siblings.begin(), siblings.end(), id) - siblings.begin();
+            const auto first = selectedDevices[0];
+            selectedDevices.clear(); selectedDevices.add (first);
+            for (auto i = std::min (anchor, target); i <= std::max (anchor, target); ++i) selectedDevices.addIfNotAlreadyThere (siblings[(size_t) i]);
+        }
+        else if (mods.isCommandDown() && sameList) { if (selectedDevices.contains (id)) selectedDevices.removeString (id); else selectedDevices.add (id); }
+        else { selectedDevices.clear(); selectedDevices.add (id); }
+        deviceChain.repaint();
+    }
+    // Selected devices in their list order.
+    juce::StringArray orderedSelection() const
+    {
+        juce::StringArray ordered;
+        if (selectedDevices.isEmpty()) return ordered;
+        for (const auto& id : deviceSiblings (selectedDevices[0])) if (selectedDevices.contains (id)) ordered.add (id);
+        return ordered;
+    }
+    void groupSelectedDevices()
+    {
+        const auto ids = orderedSelection();
+        if (ids.isEmpty() || selectedTrack < 0) return;
+        juce::String rack; report (session.groupDevices (selectedTrack, ids, rack));
+        if (rack.isNotEmpty()) { selectedDevices.clear(); selectedDevices.add (rack); }
+        refresh();
+    }
+    void ungroupSelectedRack()
+    {
+        for (const auto& id : orderedSelection())
+            if (const auto* device = Session::findDevice (state, id); device && device->isRack)
+            { report (session.ungroupRack (id)); selectedDevices.clear(); refresh(); return; }
+    }
+    void deleteSelectedDevices()
+    {
+        const auto ids = orderedSelection();
+        for (const auto& id : ids) report (session.removeDevice (id));
+        selectedDevices.clear(); refresh();
+    }
+    bool deviceKey (const juce::KeyPress& key)
+    {
+        if (session.isExporting()) return true;
+        const auto code = key.getKeyCode();
+        const auto cmd = key.getModifiers().isCommandDown(), shift = key.getModifiers().isShiftDown();
+        if (cmd && code == 'G') { if (shift) ungroupSelectedRack(); else groupSelectedDevices(); return true; }
+        if (! cmd && (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)) { deleteSelectedDevices(); return true; }
+        return false;
+    }
+    void deviceMenu (const juce::String& id, juce::Component& target)
+    {
+        const auto siblings = deviceSiblings (id);
+        const auto* device = Session::findDevice (state, id);
+        if (device == nullptr) return;
+        const int index = (int) (std::find (siblings.begin(), siblings.end(), id) - siblings.begin());
+        if (! selectedDevices.contains (id)) { selectedDevices.clear(); selectedDevices.add (id); deviceChain.repaint(); }
+        const bool topLevel = currentTrack() != nullptr && std::any_of (currentTrack()->plugins.begin(), currentTrack()->plugins.end(), [&] (const auto& p) { return p.id == id; });
+        const bool midi = device->isNativeEffect && effectIsMidi (device->effect.kind);
+        juce::PopupMenu menu;
+        menu.addItem (1, "Move left", index > 0); menu.addItem (2, "Move right", index + 1 < (int) siblings.size());
+        menu.addSeparator();
+        menu.addItem (5, "Group", topLevel && ! midi && ! device->isRack);
+        if (device->isRack) menu.addItem (6, "Ungroup", device->chains.size() <= 1);
+        if (device->isRack) menu.addItem (7, "Add chain");
+        menu.addSeparator(); menu.addItem (3, device->enabled ? "Deactivate" : "Activate"); menu.addItem (4, "Delete");
+        juce::Component::SafePointer<Impl> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&target), [safe, id] (int choice)
+        {
+            if (! safe || choice == 0) return;
+            const auto now = safe->deviceSiblings (id);
+            const int at = (int) (std::find (now.begin(), now.end(), id) - now.begin());
+            const auto* current = Session::findDevice (safe->state, id);
+            if (current == nullptr) return;
+            if (choice <= 2) safe->report (safe->session.moveDevice (id, at + (choice == 1 ? -1 : 1)));
+            else if (choice == 3) safe->report (safe->session.setDeviceEnabled (id, ! current->enabled));
+            else if (choice == 4) { safe->report (safe->session.removeDevice (id)); safe->selectedDevices.clear(); }
+            else if (choice == 5) safe->groupSelectedDevices();
+            else if (choice == 6) safe->ungroupSelectedRack();
+            else if (choice == 7) { juce::String chain; safe->report (safe->session.addRackChain (id, chain)); if (chain.isNotEmpty()) safe->selectedChains[id] = chain; }
+            safe->refresh();
+        });
+    }
+    void chainMenu (const juce::String& rackId, const juce::String& chainId, juce::Component& target)
+    {
+        juce::PopupMenu menu; menu.addItem (1, "Rename"); menu.addItem (2, "Delete");
+        juce::Component::SafePointer<Impl> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&target), [safe, rackId, chainId] (int choice)
+        {
+            if (! safe) return;
+            if (choice == 1) safe->renameChainDialog (chainId);
+            if (choice == 2) { safe->report (safe->session.removeRackChain (chainId)); safe->selectedChains.erase (rackId); safe->refresh(); }
+        });
+    }
+    const Session::RackChainInfo* findChain (const juce::String& chainId) const
+    {
+        for (const auto& track : state.tracks) for (const auto& p : track.plugins) for (const auto& c : p.chains) if (c.id == chainId) return &c;
+        return nullptr;
+    }
+    // Asks for a name and applies it; the dialog closes on Cancel or Escape.
+    void nameDialog (const juce::String& title, const juce::String& initial, std::function<juce::Result (const juce::String&)> apply)
+    {
+        if (session.isExporting()) return;
+        auto* dialog = new juce::AlertWindow (title, "Enter a name.", juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor ("name", initial, "Name");
+        dialog->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey)); dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
+        auto safe = juce::Component::SafePointer<Impl> (this); auto safeDialog = juce::Component::SafePointer<juce::AlertWindow> (dialog);
+        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog, apply] (int result)
+        {
+            if (! safe || ! safeDialog || result != 1) return;
+            safe->report (apply (safeDialog->getTextEditorContents ("name"))); safe->refresh();
+        }), true);
+    }
+    void renameChainDialog (const juce::String& chainId)
+    {
+        const auto* chain = findChain (chainId);
+        if (chain == nullptr) return;
+        nameDialog ("Rename chain", chain->settings.name, [this, chainId] (const juce::String& text)
+        {
+            const auto* current = findChain (chainId);
+            if (current == nullptr) return juce::Result::fail ("Chain not found.");
+            auto settings = current->settings; settings.name = text;
+            return session.setRackChain (chainId, settings);
+        });
+    }
+    void macroMenu (const juce::String& rackId, int macro, const std::vector<Session::MacroMapping>& mappings, juce::Component& target)
+    {
+        juce::PopupMenu menu; menu.addItem (1, "Rename");
+        if (! mappings.empty()) menu.addSeparator();
+        for (size_t i = 0; i < mappings.size(); ++i)
+            if (const auto* device = Session::findDevice (state, mappings[i].pluginId); device && device->isNativeEffect)
+                menu.addItem (100 + (int) i, "Remove mapping: " + device->name + " " + effectParameters (device->effect.kind)[(size_t) mappings[i].parameter].label);
+        juce::Component::SafePointer<Impl> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&target), [safe, rackId, macro, mappings] (int choice)
+        {
+            if (! safe) return;
+            if (choice == 1)
+            {
+                const auto* rack = Session::findDevice (safe->state, rackId);
+                if (rack == nullptr || ! juce::isPositiveAndBelow (macro, (int) rack->macros.size())) return;
+                safe->nameDialog ("Rename macro", rack->macros[(size_t) macro].name, [safe, rackId, macro] (const juce::String& text)
+                { return safe ? safe->session.renameRackMacro (rackId, macro, text) : juce::Result::ok(); });
+            }
+            else if (choice >= 100 && choice - 100 < (int) mappings.size())
+            { safe->report (safe->session.unmapRackMacro (mappings[(size_t) (choice - 100)].pluginId, mappings[(size_t) (choice - 100)].parameter)); safe->refresh(); }
+        });
+    }
+    // Audio effects for a chain: the Utility and native audio effects.
+    void addChainDeviceMenu (const juce::String& chainId, juce::Component& target)
+    {
+        juce::PopupMenu popup; popup.addItem (1, "Utility");
+        juce::StringArray categories;
+        for (int i = 0; i < Session::effectKindCount; ++i)
+            if (const auto kind = static_cast<Session::EffectKind> (i); ! effectIsMidi (kind) && ! effectIsInstrument (kind)) categories.addIfNotAlreadyThere (effectCategory (kind));
+        for (const auto& category : categories)
+        {
+            juce::PopupMenu group;
+            for (int i = 0; i < Session::effectKindCount; ++i)
+                if (const auto kind = static_cast<Session::EffectKind> (i); ! effectIsMidi (kind) && ! effectIsInstrument (kind) && category == effectCategory (kind))
+                    group.addItem (100 + i, effectName (kind));
+            popup.addSubMenu (category, group);
+        }
+        juce::Component::SafePointer<Impl> safe (this);
+        popup.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&target), [safe, chainId] (int choice)
+        {
+            if (! safe || choice == 0) return;
+            if (choice == 1) safe->report (safe->session.addUtilityToChain (chainId));
+            else safe->report (safe->session.addNativeEffectToChain (chainId, static_cast<Session::EffectKind> (choice - 100)));
+            safe->refresh();
+        });
+    }
     void addPluginMenu()
     {
         if (selectedTrack < 0 || selectedTrack >= static_cast<int> (state.tracks.size())) return;
         auto types = session.knownPlugins().getTypes();
         juce::PopupMenu popup;
         popup.addItem (100001, "Utility  (Built-in)");
+        popup.addItem (100099, "Audio Effect Rack  (Built-in)");
         juce::StringArray categories;
         const bool midiTrack = state.tracks[static_cast<size_t> (selectedTrack)].isMidi;
         for (int i = 0; i < Session::effectKindCount; ++i)
@@ -5114,7 +5571,7 @@ private:
     void insertDeviceSelection (uint64_t generation, const juce::String& trackId, int choice, const juce::Array<juce::PluginDescription>& types)
     {
         if (choice == 100000) { showPlugins(); return; }
-        const bool native = choice >= 100001 && choice < 100002 + Session::effectKindCount;
+        const bool native = (choice >= 100001 && choice < 100002 + Session::effectKindCount) || choice == 100099;
         if (! native && (choice <= 0 || choice > types.size())) return;
         const auto current = session.snapshot();
         if (current.projectGeneration != generation)
@@ -5125,6 +5582,7 @@ private:
         { report (juce::Result::fail ("The selected track is no longer available.")); refresh(); return; }
         const int track = static_cast<int> (found - current.tracks.begin());
         if (choice == 100001) { report (session.addUtility (track)); refresh(); }
+        else if (choice == 100099) { juce::String rack; report (session.groupDevices (track, {}, rack)); refresh(); }
         else if (choice >= 100002 && choice < 100002 + Session::effectKindCount)
         { report (session.addNativeEffect (track, static_cast<Session::EffectKind> (choice-100002))); refresh(); }
         else if (choice > 0 && choice <= types.size()) { report (session.addPlugin (track, types[choice-1])); refresh(); }
@@ -5876,6 +6334,58 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (! state.tracks[0].plugins.back().enabled && ! power->getToggleState(), "the device switch bypasses the device");
         session.undo(); session.undo(); session.undo(); refresh();
         check (state.tracks[0].plugins.empty(), "undo removes the inline test device");
+        selectTrack (instrumentTrack); refresh();
+    }
+    {
+        // Audio Effect Racks: Shift-click two devices and Cmd/Ctrl+G groups them; chain rows, macros and mapped controls edit the real rack.
+        const int instrumentTrack = selectedTrack;
+        selectTrack (0);
+        report (session.addUtility (0)); report (session.addNativeEffect (0, Session::EffectKind::equalizer)); refresh();
+        const auto utilityId = state.tracks[0].plugins[0].id, eqId = state.tracks[0].plugins[1].id;
+        selectDevice (utilityId, {}); selectDevice (eqId, juce::ModifierKeys (juce::ModifierKeys::shiftModifier));
+        check (orderedSelection() == juce::StringArray { utilityId, eqId }, "Shift-click extends the device selection");
+        check (deviceKey (juce::KeyPress ('G', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)), "the device chain handles Cmd/Ctrl+G"); refresh();
+        const auto rack = [&] { return state.tracks[0].plugins.empty() ? Session::PluginInfo {} : state.tracks[0].plugins[0]; };
+        check (state.tracks[0].plugins.size() == 1 && rack().isRack && rack().chains.size() == 1 && rack().chains[0].devices.size() == 2
+               && selectedDevices == juce::StringArray { rack().id }, "Cmd/Ctrl+G groups the selected devices into a rack and selects it");
+        auto* toggle = findNamed (deviceChain, "Show macros");
+        auto* panel = toggle != nullptr ? dynamic_cast<RackPanel*> (toggle->getParentComponent()) : nullptr;
+        check (panel != nullptr && panel->isVisible() && findNamed (*panel, "Macro 1") != nullptr && findNamed (*panel, "outputDb") != nullptr,
+               "the rack panel shows its macros and its chain's devices");
+        dynamic_cast<juce::Button*> (findNamed (*panel, "Add chain"))->onClick(); refresh();
+        check (rack().chains.size() == 2 && panel->selectedChain() == rack().chains[1].id && findNamed (*panel, "outputDb") == nullptr,
+               "+ adds a chain and shows its empty device list");
+        std::vector<juce::Component*> found;
+        std::function<void (juce::Component&, const juce::String&)> findAll = [&] (juce::Component& parent, const juce::String& name)
+        { for (auto* child : parent.getChildren()) { if (child->getName() == name) found.push_back (child); findAll (*child, name); } };
+        found.clear(); findAll (*panel, "Chain volume");
+        check (found.size() == 2, "each chain has a row with a volume control");
+        dynamic_cast<juce::Slider*> (found.back())->setValue (-6, juce::sendNotificationSync); refresh();
+        check (std::abs (rack().chains[1].settings.gainDb + 6) < .05f, "the chain row's volume edits the chain");
+        found.clear(); findAll (*panel, "Chain activator");
+        auto* activator = dynamic_cast<juce::Button*> (found.back());
+        activator->setToggleState (false, juce::dontSendNotification); activator->onClick(); refresh();
+        check (rack().chains[1].settings.mute && ! rack().chains[0].settings.mute, "the activator turns only its chain off");
+        selectedChains[rack().id] = rack().chains[0].id; deviceChain.sync();
+        check (session.mapRackMacro (rack().id, 0, eqId, 32, -24, 24).wasOk(), "map Macro 1 to the EQ output"); refresh();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (100); // Inline editors refresh on the session's change message.
+        auto* output = dynamic_cast<juce::Slider*> (findNamed (*panel, "outputDb"));
+        check (output != nullptr && output->findColour (juce::Slider::rotarySliderFillColourId) == RackPanel::macroColour, "the mapped control shows the macro colour");
+        dynamic_cast<juce::Slider*> (findNamed (*panel, "Macro 1"))->setValue (.25, juce::sendNotificationSync); refresh();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+        check (std::abs (rack().chains[0].devices[1].effect.values[32] + 12) < 1e-3f && std::abs (output->getValue() + 12) < 1e-3,
+               "turning Macro 1 moves the mapped EQ output");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("audio-effect-rack.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (deviceChain.createComponentSnapshot (deviceChain.getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        for (int step = 0; step < 8; ++step) session.undo();
+        refresh();
+        check (state.tracks[0].plugins.empty() && selectedDevices.isEmpty(), "undo removes the rack and its devices");
         selectTrack (instrumentTrack); refresh();
     }
     {
