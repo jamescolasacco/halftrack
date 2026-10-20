@@ -16,16 +16,16 @@ class AudioClipEditor final : public juce::Component, private juce::ChangeListen
 public:
     AudioClipEditor (Session& s, juce::String id) : session (s), clipId (std::move (id))
     {
-        look.setColour(juce::Label::textColourId,juce::Colour(0xffeee8df));
-        look.setColour(juce::ToggleButton::textColourId,juce::Colour(0xffeee8df));
+        look.setColour(juce::Label::textColourId,juce::Colour(0xffe9e9e9));
+        look.setColour(juce::ToggleButton::textColourId,juce::Colour(0xffe9e9e9));
         look.setColour(juce::ToggleButton::tickColourId,juce::Colour(0xffe49a58));
         look.setColour(juce::Slider::thumbColourId,juce::Colour(0xffe49a58));
         look.setColour(juce::Slider::trackColourId,juce::Colour(0xffe49a58));
-        look.setColour(juce::Slider::textBoxTextColourId,juce::Colour(0xffeee8df));
-        look.setColour(juce::Slider::textBoxOutlineColourId,juce::Colour(0xff4c5355));
-        look.setColour(juce::ComboBox::backgroundColourId,juce::Colour(0xff353b3e));
-        look.setColour(juce::TextEditor::backgroundColourId,juce::Colour(0xff202528));
-        look.setColour(juce::TextEditor::textColourId,juce::Colour(0xffeee8df));
+        look.setColour(juce::Slider::textBoxTextColourId,juce::Colour(0xffe9e9e9));
+        look.setColour(juce::Slider::textBoxOutlineColourId,juce::Colour(0xff515151));
+        look.setColour(juce::ComboBox::backgroundColourId,juce::Colour(0xff3a3a3a));
+        look.setColour(juce::TextEditor::backgroundColourId,juce::Colour(0xff242424));
+        look.setColour(juce::TextEditor::textColourId,juce::Colour(0xffe9e9e9));
         setLookAndFeel(&look);
         const std::array<const char*, 3> names { "Clip gain", "Fade in", "Fade out" };
         const std::array<const char*, 3> keys { "clipGain", "fadeIn", "fadeOut" };
@@ -116,11 +116,11 @@ public:
     }
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (juce::Colour (0xff272c2f)); const auto clip = findClip();
-        g.setColour (juce::Colour (0xffeee8df)); g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+        g.fillAll (juce::Colour (0xff2b2b2b)); const auto clip = findClip();
+        g.setColour (juce::Colour (0xffe9e9e9)); g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
         g.drawText (clip ? clip->name : "Audio clip unavailable", 24, 14, getWidth()-48, 30, juce::Justification::centredLeft, true);
         const juce::Rectangle<float> plot (24, 60, (float)getWidth()-48, 80);
-        g.setColour (juce::Colour (0xff202528)); g.fillRect (plot);
+        g.setColour (juce::Colour (0xff242424)); g.fillRect (plot);
         if (clip && clip->length > 0 && clip->canEditAudioFades)
         {
             const auto curve = [] (double x, Session::FadeCurve kind)
@@ -139,13 +139,13 @@ public:
                 if(x==0)envelope.startNewSubPath(px,py);else envelope.lineTo(px,py);
             }
             g.setColour(juce::Colour(0xffe49a58));g.strokePath(envelope,juce::PathStrokeType(1.8f));
-            g.setFont(juce::FontOptions(11.0f));g.setColour(juce::Colour(0xffbbbcb8));
+            g.setFont(juce::FontOptions(11.0f));g.setColour(juce::Colour(0xffbbbbbb));
             g.drawText("Fade envelope  /  "+juce::String(clip->length,4)+" s",24,140,getWidth()-48,18,juce::Justification::centredRight);
             g.drawText(clip->canEditAudioRange ? "Non-destructive range / source audio stays unchanged" : (clip->reversed ? "Switch off Reverse audio to edit the source range." : "Range editing is available for unwarped arrangement clips"),24,288,getWidth()-48,20,juce::Justification::centredLeft);
         }
         else if (clip)
         {
-            g.setColour(juce::Colour(0xffbbbcb8));g.setFont(juce::FontOptions(13.0f));
+            g.setColour(juce::Colour(0xffbbbbbb));g.setFont(juce::FontOptions(13.0f));
             g.drawText("Session clip gain",plot,juce::Justification::centred);
             g.setFont(juce::FontOptions(11.0f));
             g.drawText("Fade and range editing is available in Arrangement.",24,288,getWidth()-48,20,juce::Justification::centredLeft);

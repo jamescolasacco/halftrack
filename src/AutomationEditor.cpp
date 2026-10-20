@@ -15,7 +15,7 @@ namespace halftrack
 namespace
 {
 constexpr double maximumBeat = 1000000.0;
-const juce::Colour background (0xff202326), panel (0xff2b2e31), ink (0xffe2e5e6), accent (0xffffa65a);
+const juce::Colour background (0xff222222), panel (0xff2d2d2d), ink (0xffe4e4e4), accent (0xffffa65a);
 }
 
 class AutomationEditor::Impl final : public juce::Component, private juce::ChangeListener,
@@ -56,7 +56,7 @@ public:
             for (const auto tick : ticks)
             {
                 const auto y = position ({ owner.viewStart, tick }).y;
-                g.setColour (tick == 0 ? juce::Colour (0xff62686b) : juce::Colour (0xff3a3f42));
+                g.setColour (tick == 0 ? juce::Colour (0xff676767) : juce::Colour (0xff3e3e3e));
                 g.drawHorizontalLine (juce::roundToInt (y), bounds.getX(), bounds.getRight());
                 g.setColour (ink.withAlpha (.65f));
                 g.drawText (owner.formatValue (tick), 0, juce::roundToInt (y) - 8, 56, 16, juce::Justification::centredRight);
@@ -68,7 +68,7 @@ public:
                  beat <= std::min (maximumBeat, owner.viewStart + owner.viewBeats); beat += spacing)
             {
                 const auto x = position ({ beat, 0 }).x;
-                g.setColour (juce::Colour (0xff3a3f42)); g.drawVerticalLine (juce::roundToInt (x), bounds.getY(), bounds.getBottom());
+                g.setColour (juce::Colour (0xff3e3e3e)); g.drawVerticalLine (juce::roundToInt (x), bounds.getY(), bounds.getBottom());
                 g.setColour (ink.withAlpha (.65f));
                 g.drawText (juce::String (beat, spacing < 1 ? 2 : 0), juce::roundToInt (x) - 24,
                             juce::roundToInt (bounds.getBottom()) + 9, 48, 18, juce::Justification::centred);
@@ -178,7 +178,7 @@ public:
         generation = session.snapshot().projectGeneration;
         look.setColour (juce::ComboBox::backgroundColourId, panel);
         look.setColour (juce::ComboBox::textColourId, ink);
-        look.setColour (juce::ComboBox::outlineColourId, juce::Colour (0xff53595d));
+        look.setColour (juce::ComboBox::outlineColourId, juce::Colour (0xff585858));
         look.setColour (juce::TextButton::buttonColourId, panel);
         look.setColour (juce::TextButton::textColourOffId, ink);
         look.setColour (juce::ToggleButton::textColourId, ink);
@@ -215,7 +215,7 @@ public:
         {
             input->setColour (juce::TextEditor::backgroundColourId, panel);
             input->setColour (juce::TextEditor::textColourId, ink);
-            input->setColour (juce::TextEditor::outlineColourId, juce::Colour (0xff53595d));
+            input->setColour (juce::TextEditor::outlineColourId, juce::Colour (0xff585858));
             input->setSelectAllWhenFocused (true); input->onReturnKey = [this] { commitSelected(); };
             input->onTextChange = [this] { numericDirty = true; };
         }

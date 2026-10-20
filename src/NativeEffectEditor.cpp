@@ -19,15 +19,15 @@ public:
         setName (juce::String (effectName (kind)) + " editor");
         look.setColour (juce::Slider::thumbColourId, juce::Colour (0xffe49a58));
         look.setColour (juce::Slider::trackColourId, juce::Colour (0xffe49a58));
-        look.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffeee8df));
-        look.setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xff4c5355));
-        look.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff353b3e));
+        look.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe9e9e9));
+        look.setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xff515151));
+        look.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff3a3a3a));
         setLookAndFeel (&look);
         const auto specs = effectParameters (kind);
         for (size_t i = 0; i < specs.size(); ++i)
         {
             const auto& spec = specs[i]; labels[i].setText (spec.label, juce::dontSendNotification);
-            labels[i].setColour (juce::Label::textColourId, juce::Colour (0xffbbbcb8)); addAndMakeVisible (labels[i]);
+            labels[i].setColour (juce::Label::textColourId, juce::Colour (0xffbbbbbb)); addAndMakeVisible (labels[i]);
             if (spec.choices)
             {
                 auto& control = choices[i]; control.setName (spec.key);
@@ -67,15 +67,15 @@ public:
     { stopTimer(); session.removeChangeListener (this); finishGesture(); setLookAndFeel (nullptr); }
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (juce::Colour (0xff272c2f));
+        g.fillAll (juce::Colour (0xff2b2b2b));
         g.setColour (juce::Colour (0xffe49a58)); g.fillRect (24, 22, 5, 18);
-        g.setColour (juce::Colour (0xffeee8df)); g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+        g.setColour (juce::Colour (0xffe9e9e9)); g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
         g.drawText (juce::String (effectName (kind)).toUpperCase(), 42, 12, getWidth()-66, 38, juce::Justification::centredLeft);
         if (kind == Session::EffectKind::equalizer)
         {
             const juce::Rectangle<float> plot (24, 62, 952, 132);
-            g.setColour (juce::Colour (0xff202528)); g.fillRect (plot);
-            g.setColour (juce::Colour (0xff4c5355));
+            g.setColour (juce::Colour (0xff242424)); g.fillRect (plot);
+            g.setColour (juce::Colour (0xff515151));
             for (int db : { -24, -12, 0, 12, 24 }) { const auto y = plot.getCentreY()-db*plot.getHeight()/48; g.drawHorizontalLine ((int)y, plot.getX(), plot.getRight()); }
             for (double hz : { 20, 100, 1000, 10000, 20000 })
             { const auto x = plot.getX()+std::log10(hz/20)*plot.getWidth()/3; g.drawVerticalLine ((int)x, plot.getY(), plot.getBottom()); }
@@ -103,7 +103,7 @@ public:
                 }
                 g.setColour (juce::Colour (0xffe49a58)); g.strokePath (path, juce::PathStrokeType (1.8f));
             }
-            g.setFont (juce::FontOptions (11.0f)); g.setColour (juce::Colour (0xffbbbcb8));
+            g.setFont (juce::FontOptions (11.0f)); g.setColour (juce::Colour (0xffbbbbbb));
             for (double hz : { 20, 100, 1000, 10000, 20000 })
             {
                 const auto x = 24 + std::log10 (hz/20) * 952/3;

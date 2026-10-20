@@ -32,9 +32,10 @@ void withGeneratedMidiController (Session&, const std::function<void(const juce:
 #endif
 namespace
 {
-const juce::Colour background { 0xff202326 }, panel { 0xff2b2e31 }, raised { 0xff3b4044 },
-                   line { 0xff171a1c }, ink { 0xffe2e5e6 }, muted { 0xff949da4 },
-                   orange { 0xffffa65a }, red { 0xffe6656a }, green { 0xff9fd49a };
+// Neutral studio grays with one warm selection accent.
+const juce::Colour background { 0xff1d1d1d }, panel { 0xff2d2d2d }, raised { 0xff3e3e3e },
+                   line { 0xff141414 }, ink { 0xffdadada }, muted { 0xff8e8e8e },
+                   orange { 0xffffab3d }, red { 0xffed5249 }, green { 0xff48d17e };
 
 juce::Font font (float size = 12.0f, bool bold = false)
 {
@@ -66,7 +67,7 @@ public:
         setColour (juce::TextEditor::focusedOutlineColourId, orange);
         setColour (juce::ListBox::backgroundColourId, panel);
         setColour (juce::ListBox::outlineColourId, line);
-        setColour (juce::ScrollBar::thumbColourId, juce::Colour (0xff667078));
+        setColour (juce::ScrollBar::thumbColourId, juce::Colour (0xff6e6e6e));
         setColour (juce::Slider::thumbColourId, ink);
         setColour (juce::Slider::trackColourId, orange);
         setColour (juce::Slider::backgroundColourId, background);
@@ -124,7 +125,8 @@ public:
         g.fillRect (getLocalBounds().reduced (1));
         g.setColour (line);
         g.drawRect (getLocalBounds().reduced (1));
-        auto r = getLocalBounds().toFloat().reduced (10.0f, 9.0f);
+        const auto side = juce::jmin (getWidth(), getHeight()) * .42f;
+        auto r = getLocalBounds().toFloat().withSizeKeepingCentre (side, side);
         auto c = kind == record ? red : ink;
         if (getToggleState()) c = kind == record ? red.brighter (0.3f) : green;
         g.setColour (c);
@@ -167,7 +169,7 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &tempo, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel,
+                 &playButton, &stopButton, &recordButton, &tempo, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &ruler, &viewport,
                  &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &deviceChain })
@@ -199,9 +201,33 @@ public:
                 session.setTempo (value);
             refresh();
         };
-        positionLabel.setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain)));
-        positionLabel.setJustificationType (juce::Justification::centred);
-        positionLabel.setColour (juce::Label::backgroundColourId, background);
+        for (auto* display : { &positionLabel, &loopStartLabel, &loopLengthLabel })
+        {
+            display->setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 12.5f, juce::Font::plain)));
+            display->setJustificationType (juce::Justification::centred);
+            display->setColour (juce::Label::backgroundColourId, background);
+            display->setColour (juce::Label::outlineColourId, line);
+        }
+        positionLabel.setTooltip ("Song position in bars, beats and sixteenths");
+        loopStartLabel.setName ("Loop start"); loopLengthLabel.setName ("Loop length");
+        loopStartLabel.setTooltip ("Loop start in bars.beats.sixteenths. Double-click to type a new start.");
+        loopLengthLabel.setTooltip ("Loop length in bars.beats.sixteenths. Double-click to type a new length.");
+        loopStartLabel.setEditable (false, true, false); loopLengthLabel.setEditable (false, true, false);
+        loopStartLabel.onTextChange = [this]
+        {
+            if (const auto beats = parseMusicalTime (loopStartLabel.getText(), true))
+            {
+                const auto start = *beats * 60.0 / state.tempo;
+                session.setLoop (state.looping, start, start + (state.loopEnd - state.loopStart));
+            }
+            refresh();
+        };
+        loopLengthLabel.onTextChange = [this]
+        {
+            if (const auto beats = parseMusicalTime (loopLengthLabel.getText(), false); beats && *beats > 0)
+                session.setLoop (state.looping, state.loopStart, state.loopStart + *beats * 60.0 / state.tempo);
+            refresh();
+        };
         projectLabel.setFont (font (12.0f));
         projectLabel.setJustificationType (juce::Justification::centredRight);
         playButton.setTooltip ("Play / pause  |  Space");
@@ -286,17 +312,16 @@ public:
         g.setColour (panel);
         g.fillRect (browserBounds);
         g.fillRect (toolbarBounds);
-        g.fillRect (sectionBounds);
         g.setColour (line);
         g.drawHorizontalLine (toolbarBounds.getBottom(), 0.0f, (float) getWidth());
-        g.drawHorizontalLine (sectionBounds.getBottom(), 0.0f, (float) getWidth());
         g.drawVerticalLine (browserBounds.getRight(), (float) browserBounds.getY(), (float) browserBounds.getBottom());
-        g.setColour (ink);
-        g.setFont (font (13.0f, true));
-        g.drawText ("HALFTRACK", toolbarBounds.getX() + 15, toolbarBounds.getY(), 102, toolbarBounds.getHeight(), juce::Justification::centredLeft);
+        // Control bar: tempo/meter on the left, transport and loop in the centre, status on the right.
+        g.setFont (font (11.0f));
+        g.setColour (background); g.fillRect (meterBounds); g.setColour (line); g.drawRect (meterBounds);
+        g.setColour (ink); g.drawText ("4 / 4", meterBounds, juce::Justification::centred);
+        g.setColour (muted); g.setFont (font (10.0f));
+        g.drawText ("CPU " + juce::String (juce::roundToInt (state.cpu * 100.0)) + "%", cpuBounds, juce::Justification::centredRight);
         g.setFont (font (10.0f, true));
-        g.setColour (muted);
-        g.drawText ("BPM", tempo.getX() - 30, toolbarBounds.getY(), 27, toolbarBounds.getHeight(), juce::Justification::centredRight);
         g.drawText (pluginBrowser ? "PLUG-IN LIBRARY" : browserFolder == juce::File() ? "AUDIO FILES" : browserFolder.getFileName().toUpperCase(),
                     browserBounds.getX() + 12, browserBounds.getY() + 112,
                     browserBounds.getWidth() - 24, 20, juce::Justification::centredLeft, true);
@@ -325,7 +350,7 @@ public:
         const auto deviceText = device != nullptr
             ? juce::String (device->getCurrentSampleRate() / 1000.0, 1) + " kHz  /  " + juce::String (device->getCurrentBufferSizeSamples()) + " smp"
             : "Audio device offline";
-        g.drawText (deviceText + "     CPU " + juce::String (state.cpu * 100.0, 1) + "%", getWidth() - 265,
+        g.drawText (deviceText, getWidth() - 265,
                     getHeight() - statusHeight, 252, statusHeight, juce::Justification::centredRight);
     }
 
@@ -335,24 +360,30 @@ public:
        #if ! JUCE_MAC
         menu.setBounds (area.removeFromTop (23));
        #endif
-        toolbarBounds = area.removeFromTop (49);
-        auto toolbar = toolbarBounds.reduced (12, 10);
-        toolbar.removeFromLeft (139);
-        tempo.setBounds (toolbar.removeFromLeft (55));
-        toolbar.removeFromLeft (6);tapButton.setBounds(toolbar.removeFromLeft(36));
-        toolbar.removeFromLeft (11);
-        playButton.setBounds (toolbar.removeFromLeft (34));
-        stopButton.setBounds (toolbar.removeFromLeft (34));
-        recordButton.setBounds (toolbar.removeFromLeft (34));
-        toolbar.removeFromLeft (11);
-        positionLabel.setBounds (toolbar.removeFromLeft (121));
-        toolbar.removeFromLeft (11);
-        loopButton.setBounds (toolbar.removeFromLeft (48));
-        toolbar.removeFromLeft(8); clickButton.setBounds(toolbar.removeFromLeft(48));
-        clickSettingsButton.setBounds(toolbar.removeFromLeft(25));
-        audioButton.setBounds (toolbar.removeFromRight (91));
-        toolbar.removeFromRight (12);
-        projectLabel.setBounds (toolbar);
+        toolbarBounds = area.removeFromTop (38);
+        auto bar = toolbarBounds.reduced (8, 7);
+        tapButton.setBounds (bar.removeFromLeft (36)); bar.removeFromLeft (3);
+        tempo.setBounds (bar.removeFromLeft (58)); bar.removeFromLeft (3);
+        meterBounds = bar.removeFromLeft (40); bar.removeFromLeft (8);
+        clickButton.setBounds (bar.removeFromLeft (46)); clickSettingsButton.setBounds (bar.removeFromLeft (20));
+        audioButton.setBounds (bar.removeFromRight (52)); bar.removeFromRight (8);
+        arrangementTab.setBounds (bar.removeFromRight (62)); sessionTab.setBounds (bar.removeFromRight (62));
+        pianoTab.setBounds (bar.removeFromRight (40)); bar.removeFromRight (10);
+        cpuBounds = bar.removeFromRight (56); bar.removeFromRight (8);
+        // Transport is centred on the window, independent of the side groups.
+        constexpr int transportWidth = 92 + 6 + 3 * 28 + 14 + 78 + 3 + 48 + 3 + 78;
+        auto centre = juce::Rectangle<int> (juce::jmax (bar.getX(), getWidth() / 2 - transportWidth / 2), bar.getY(), transportWidth, bar.getHeight());
+        positionLabel.setBounds (centre.removeFromLeft (92)); centre.removeFromLeft (6);
+        playButton.setBounds (centre.removeFromLeft (28));
+        stopButton.setBounds (centre.removeFromLeft (28));
+        recordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (14);
+        loopStartLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (3);
+        loopButton.setBounds (centre.removeFromLeft (48)); centre.removeFromLeft (3);
+        loopLengthLabel.setBounds (centre.removeFromLeft (78));
+        projectLabel.setBounds (bar.withLeft (centre.getRight() + 12));
+        // Creation and zoom live in menus, keys and context menus, as in the reference workflow.
+        for (auto* hidden : std::initializer_list<juce::Component*> { &importButton, &newMidiClipButton, &addTrackButton, &addMidiButton, &zoomIn, &zoomOut, &fitButton })
+            hidden->setVisible (false);
         area.removeFromBottom (statusHeight);
         auto deviceArea = area.removeFromBottom (deviceHeight);
         deviceChain.setBounds (deviceArea);
@@ -370,21 +401,6 @@ public:
         folderButton.setBounds (actions);
         browser.removeFromTop (29);
         browserList.setBounds (browser);
-        sectionBounds = area.removeFromTop (35);
-        auto section = sectionBounds.reduced (8, 5);
-        sessionTab.setBounds (section.removeFromLeft (70));
-        arrangementTab.setBounds (section.removeFromLeft (98));
-        pianoTab.setBounds (section.removeFromLeft (84));
-        addMidiButton.setBounds (section.removeFromRight (71));
-        addTrackButton.setBounds (section.removeFromRight (77));
-        section.removeFromRight (7);
-        newMidiClipButton.setBounds (section.removeFromRight (91));
-        section.removeFromRight (7);
-        importButton.setBounds (section.removeFromRight (89));
-        section.removeFromRight (12);
-        zoomIn.setBounds (section.removeFromRight (25));
-        zoomOut.setBounds (section.removeFromRight (25));
-        fitButton.setBounds (section.removeFromRight (36));
         launcher.setBounds (area);
         launcher.setVisible (showSession && ! showPiano);
         pianoRoll.setBounds (area);
@@ -394,8 +410,6 @@ public:
         horizontalScroll.setVisible (! showPiano && ! showSession);
         sessionTab.setToggleState (showSession && ! showPiano, juce::dontSendNotification);
         arrangementTab.setToggleState (! showPiano && ! showSession, juce::dontSendNotification);
-        const bool timelineTools = ! showSession || showPiano;
-        zoomIn.setVisible (timelineTools); zoomOut.setVisible (timelineTools); fitButton.setVisible (timelineTools);
         pianoTab.setToggleState (showPiano, juce::dontSendNotification);
         horizontalScroll.setBounds (area.removeFromBottom (12).withTrimmedRight (trackWidth + 10));
         ruler.setBounds (area.removeFromTop (rulerHeight));
@@ -629,7 +643,7 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (owner.selectedTrack == index ? juce::Colour (0xff41464a) : juce::Colour (0xff35393d));
+            g.fillAll (owner.selectedTrack == index ? juce::Colour (0xff454545) : juce::Colour (0xff383838));
             g.setColour (colour); g.fillRect (0, 0, 4, getHeight() - 1);
             g.setColour (line); g.drawRect (getLocalBounds());
             g.setColour (muted); g.setFont (font (9.5f, true));
@@ -779,7 +793,7 @@ private:
             g.reduceClipRegion (0, 0, tw, getHeight());
             for (int i = 0; i < (int) owner.state.tracks.size(); ++i)
             {
-                g.setColour (i == owner.selectedTrack ? juce::Colour (0xff30363a) : (i % 2 == 0 ? juce::Colour (0xff292d30) : juce::Colour (0xff2d3134)));
+                g.setColour (i == owner.selectedTrack ? juce::Colour (0xff353535) : (i % 2 == 0 ? juce::Colour (0xff2c2c2c) : juce::Colour (0xff303030)));
                 g.fillRect (0, i * trackHeight, tw, trackHeight);
                 g.setColour (line); g.drawHorizontalLine ((i + 1) * trackHeight - 1, 0.0f, (float) tw);
             }
@@ -789,7 +803,7 @@ private:
             for (double t = std::floor (owner.viewStart / grid) * grid; t <= end; t += grid)
             {
                 const bool bar = std::abs (t / (beat * 4) - std::round (t / (beat * 4))) < 0.001;
-                g.setColour (bar ? juce::Colour (0xff454b50) : juce::Colour (0xff353b3f));
+                g.setColour (bar ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff3a3a3a));
                 g.drawVerticalLine ((int) std::round ((t - owner.viewStart) * owner.pixelsPerSecond), 0.0f, (float) getHeight());
             }
             if (owner.state.looping)
@@ -912,7 +926,7 @@ private:
                 g.drawText ("Or insert an audio track, choose an input and arm it to record.", message.withHeight (24).withY (message.getCentreY() + 8), juce::Justification::centred);
             }
             auto x = (float) ((owner.state.position - owner.viewStart) * owner.pixelsPerSecond);
-            g.setColour (owner.state.recording ? red : juce::Colour (0xffedf0e9));
+            g.setColour (owner.state.recording ? red : juce::Colour (0xffeeeeee));
             g.drawLine (x, 0, x, (float) getHeight(), 1.3f);
             if (dragHover)
             {
@@ -1214,7 +1228,7 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff343a3e));
+            g.fillAll (juce::Colour (0xff393939));
             const auto width=owner.canvas.timelineWidth();
             g.saveState();g.reduceClipRegion (0,0,width,getHeight());
             const auto x1=(float)((owner.state.loopStart-owner.viewStart)*owner.pixelsPerSecond);
@@ -1229,14 +1243,14 @@ private:
             {
                 const int x=(int)std::round ((time-owner.viewStart)*owner.pixelsPerSecond);
                 g.setColour (muted);g.drawText (juce::String ((int)std::round (time/bar)+1),x+5,15,55,19,juce::Justification::centredLeft);
-                g.setColour (juce::Colour (0xff575f65));g.drawVerticalLine (x,14.0f,34.0f);
+                g.setColour (juce::Colour (0xff5d5d5d));g.drawVerticalLine (x,14.0f,34.0f);
             }
             g.setColour (background);g.fillRect (0,35,width,getHeight()-35);
             for (const auto& marker : owner.state.locators)
             {
                 const auto bounds=locatorBounds (marker);
                 if (bounds.getRight()<0 || bounds.getX()>=width) continue;
-                g.setColour (marker.id==selected?orange:juce::Colour (0xffa9b8a7));
+                g.setColour (marker.id==selected?orange:juce::Colour (0xffb2b2b2));
                 juce::Path flag;flag.addTriangle (bounds.getX(),37,bounds.getX()+8,37,bounds.getX(),45);g.fillPath (flag);
                 g.drawVerticalLine ((int)bounds.getX(),37,56);
                 g.setFont (font (10.0f,marker.id==selected));
@@ -1424,7 +1438,7 @@ private:
                     const auto* slot = slotAt (t, scene);
                     const bool filled = slot != nullptr && slot->hasClip;
                     const bool selected = t == owner.selectedTrack && owner.state.scenes[(size_t) scene].id == owner.selectedSceneId;
-                    g.setColour (filled ? (slot->clip.active?track.colour:muted).withAlpha (slot->clip.active?0.30f:0.12f) : scene % 2 == 0 ? panel : juce::Colour (0xff303438)); g.fillRect (bounds.reduced (1));
+                    g.setColour (filled ? (slot->clip.active?track.colour:muted).withAlpha (slot->clip.active?0.30f:0.12f) : scene % 2 == 0 ? panel : juce::Colour (0xff333333)); g.fillRect (bounds.reduced (1));
                     const bool queued = slot != nullptr && (slot->queued || slot->stopQueued);
                     const auto stateColour = queued ? orange.withAlpha (owner.ticks % 16 < 8 ? 1.0f : 0.45f) : slot != nullptr && slot->playing ? green : muted;
                     g.setColour (stateColour);
@@ -1743,9 +1757,9 @@ private:
                 const int semitone = pitch % 12;
                 const bool black = semitone == 1 || semitone == 3 || semitone == 6 || semitone == 8 || semitone == 10;
                 const int y = gridTop + row * rowHeight;
-                g.setColour (black ? juce::Colour (0xff262b30) : juce::Colour (0xff30363b));
+                g.setColour (black ? juce::Colour (0xff2a2a2a) : juce::Colour (0xff353535));
                 g.fillRect (keysWidth, y, grid.getWidth(), rowHeight);
-                g.setColour (black ? juce::Colour (0xff202429) : juce::Colour (0xffc1c8c8));
+                g.setColour (black ? juce::Colour (0xff232323) : juce::Colour (0xffc6c6c6));
                 g.fillRect (0, y, black ? keysWidth - 14 : keysWidth, rowHeight);
                 g.setColour (line); g.drawHorizontalLine (y + rowHeight - 1, 0.0f, (float) getWidth());
                 if (semitone == 0)
@@ -1758,7 +1772,7 @@ private:
             {
                 const auto x = (int) std::round (keysWidth + (beat - viewBeat) * pixelsPerBeat);
                 const bool bar = std::abs (beat / 4.0 - std::round (beat / 4.0)) < 0.001;
-                g.setColour (bar ? juce::Colour (0xff667078) : juce::Colour (0xff3c454c));
+                g.setColour (bar ? juce::Colour (0xff6e6e6e) : juce::Colour (0xff434343));
                 g.drawVerticalLine (x, (float) gridTop, (float) grid.getBottom());
             }
             const auto clipEnd = (float) (keysWidth + (clip->lengthBeats - viewBeat) * pixelsPerBeat);
@@ -1769,7 +1783,7 @@ private:
                 auto r = noteBounds (note);
                 const bool selected = selectedNoteIds.contains (note.id);
                 const auto noteColour = note.active ? (selected ? orange : juce::Colour (0xff8cc4b5)).withAlpha (0.48f + note.velocity * 0.52f)
-                                                    : juce::Colour (0xff526066);
+                                                    : juce::Colour (0xff5c5c5c);
                 g.setColour (noteColour); g.fillRect (r);
                 g.setColour (selected ? (note.active ? ink : orange) : juce::Colour (0xff203d36)); g.drawRect (r, 1.0f);
                 if (r.getWidth() > 22)
@@ -2523,7 +2537,7 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff282c2f));
+            g.fillAll (juce::Colour (0xff2b2b2b));
             g.setColour (line); g.drawHorizontalLine (0, 0.0f, (float) getWidth());
             g.setColour (muted); g.setFont (font (10.0f, true));
             const auto* track = owner.currentTrack();
@@ -2533,7 +2547,7 @@ private:
             g.saveState(); g.reduceClipRegion (chainLeft(), 39, getWidth() - chainLeft() - 114, getHeight() - 48);
             if (track == nullptr || (! track->isMidi && track->plugins.empty()))
             {
-                g.setColour (juce::Colour (0xff343b40));
+                g.setColour (juce::Colour (0xff393939));
                 g.drawRect (chainLeft() + 5, 44, getWidth() - chainLeft() - 129, getHeight() - 59);
                 g.setColour (muted); g.setFont (font (12.0f));
                 g.drawText (track == nullptr ? "Select an audio track to view its device chain." : "Add a built-in device or a scanned plug-in.",
@@ -2664,11 +2678,12 @@ private:
     juce::AudioFormatManager formats;
     juce::AudioThumbnailCache thumbnailCache { 128 };
     TransportButton playButton { TransportButton::play }, stopButton { TransportButton::stop }, recordButton { TransportButton::record };
-    juce::TextButton tapButton { "Tap" }, loopButton { "Loop" }, clickButton { "Click" }, clickSettingsButton { "..." }, audioButton { "Audio Setup" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
-                     sessionTab { "Session" }, arrangementTab { "Arrangement" }, pianoTab { "Piano Roll" }, importButton { "Import Audio" },
+    juce::TextButton tapButton { "TAP" }, loopButton { "Loop" }, clickButton { "Metro" }, clickSettingsButton { "..." }, audioButton { "Audio" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
+                     sessionTab { "Session" }, arrangementTab { "Arrange" }, pianoTab { "Clip" }, importButton { "Import Audio" },
                      filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" },
                      zoomIn { "+" }, zoomOut { "-" }, fitButton { "Fit" };
-    juce::Label tempo, positionLabel, projectLabel;
+    juce::Label tempo, positionLabel, projectLabel, loopStartLabel, loopLengthLabel;
+    juce::Rectangle<int> meterBounds, cpuBounds;
     juce::TextEditor browserSearch;
     juce::ListBox browserList;
     Canvas canvas;
@@ -2682,7 +2697,7 @@ private:
     std::vector<juce::Component::SafePointer<juce::DialogWindow>> dialogs;
     std::vector<juce::Component::SafePointer<juce::DocumentWindow>> automationWindows;
     std::vector<juce::Component::SafePointer<juce::AlertWindow>> alerts;
-    juce::Rectangle<int> toolbarBounds, browserBounds, sectionBounds;
+    juce::Rectangle<int> toolbarBounds, browserBounds;
     std::vector<BrowserItem> browserItems, allBrowserItems;
     std::shared_ptr<FolderScan> browserScan;
     std::shared_ptr<std::atomic<int>> activeBrowserScans = std::make_shared<std::atomic<int>> (0);
@@ -3059,6 +3074,29 @@ private:
         canvas.repaint(); deviceChain.sync();
         for (int i = 0; i < canvas.getNumChildComponents(); ++i) canvas.getChildComponent (i)->repaint();
     }
+    // Bars.beats.sixteenths in 4/4. Positions count from 1; lengths count from 0.
+    static juce::String formatMusicalTime (double beats, bool position)
+    {
+        const auto sixteenths = juce::jmax (0LL, (long long) std::floor (beats * 4 + 1.0e-6));
+        const auto bars = sixteenths / 16, beat = (sixteenths / 4) % 4, sixteenth = sixteenths % 4;
+        const int offset = position ? 1 : 0;
+        return juce::String (bars + offset) + ". " + juce::String (beat + offset) + ". " + juce::String (sixteenth + offset);
+    }
+    static std::optional<double> parseMusicalTime (const juce::String& text, bool position)
+    {
+        auto fields = juce::StringArray::fromTokens (text.trim(), ".", "");
+        fields.trim(); fields.removeEmptyStrings();
+        if (fields.isEmpty() || fields.size() > 3) return std::nullopt;
+        std::array<int, 3> value { position ? 1 : 0, position ? 1 : 0, position ? 1 : 0 };
+        for (int i = 0; i < fields.size(); ++i)
+        {
+            if (! fields[i].containsOnly ("0123456789")) return std::nullopt;
+            value[(size_t) i] = fields[i].getIntValue();
+        }
+        const int offset = position ? 1 : 0;
+        if (value[0] < offset || value[1] < offset || value[2] < offset || value[1] - offset > 3 || value[2] - offset > 3) return std::nullopt;
+        return (value[0] - offset) * 4.0 + (value[1] - offset) + (value[2] - offset) / 4.0;
+    }
     void refresh()
     {
         const auto previous = state;
@@ -3085,7 +3123,9 @@ private:
         const auto sixteenth = (int) (beatPosition * 4) % 4 + 1;
         positionLabel.setText (state.countInBeatsRemaining>0
             ? "Count in " + juce::String((int)std::ceil(state.countInBeatsRemaining))
-            : juce::String (bar).paddedLeft ('0', 3) + " . " + juce::String (beat) + " . " + juce::String (sixteenth), juce::dontSendNotification);
+            : juce::String (bar) + ". " + juce::String (beat) + ". " + juce::String (sixteenth), juce::dontSendNotification);
+        if (! loopStartLabel.isBeingEdited()) loopStartLabel.setText (formatMusicalTime (state.loopStart * state.tempo / 60.0, true), juce::dontSendNotification);
+        if (! loopLengthLabel.isBeingEdited()) loopLengthLabel.setText (formatMusicalTime ((state.loopEnd - state.loopStart) * state.tempo / 60.0, false), juce::dontSendNotification);
         projectLabel.setText (state.name + (state.dirty ? "  *" : ""), juce::dontSendNotification);
         if (state.tracks.size() != previous.tracks.size()) resized();
         canvas.syncRows();
@@ -3168,7 +3208,7 @@ private:
     }
     void scrollBarMoved (juce::ScrollBar*, double start) override { viewStart = start; canvas.repaint(); ruler.repaint(); }
 
-    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Track", "View", "Session" }; }
+    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Create", "View", "Session" }; }
     juce::PopupMenu getMenuForIndex (int index, const juce::String&) override
     {
         juce::PopupMenu popup;
@@ -3973,7 +4013,7 @@ private:
         {
             for (int i = 0; i < 5; ++i) { const int h = i % 2 == 0 ? 6 : 12; g.drawVerticalLine (6 + i * 2, (float) (height - h) / 2, (float) (height + h) / 2); }
         }
-        g.setColour (selected ? ink : juce::Colour (0xffc1c7cb));
+        g.setColour (selected ? ink : juce::Colour (0xffc6c6c6));
         g.drawText (label, 25, 0, width - 29, height, juce::Justification::centredLeft, true);
     }
     void activateBrowserRow (int row)

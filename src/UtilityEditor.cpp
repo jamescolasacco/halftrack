@@ -18,11 +18,11 @@ public:
         setName ("Channel utility editor");
         look.setColour (juce::Slider::thumbColourId, juce::Colour (0xffe49a58));
         look.setColour (juce::Slider::trackColourId, juce::Colour (0xffe49a58));
-        look.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe8e5dc));
-        look.setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xff4d5355));
-        look.setColour (juce::ToggleButton::textColourId, juce::Colour (0xffe8e5dc));
-        look.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff353b3e));
-        look.setColour (juce::ComboBox::textColourId, juce::Colour (0xffe8e5dc));
+        look.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe5e5e5));
+        look.setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xff515151));
+        look.setColour (juce::ToggleButton::textColourId, juce::Colour (0xffe5e5e5));
+        look.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff3a3a3a));
+        look.setColour (juce::ComboBox::textColourId, juce::Colour (0xffe5e5e5));
         setLookAndFeel (&look);
         channels.setName ("Channel mode"); channels.addItemList ({ "Stereo", "Left", "Right", "Swap" }, 1);
         stereoMode.setName ("Stereo control mode"); stereoMode.addItemList ({ "Width", "Mid / Side" }, 1);
@@ -81,18 +81,18 @@ public:
     { stopTimer(); session.removeChangeListener (this); finishGesture(); setLookAndFeel (nullptr); }
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (juce::Colour (0xff272c2f));
+        g.fillAll (juce::Colour (0xff2b2b2b));
         g.setColour (juce::Colour (0xffe49a58)); g.fillRect (24, 22, 5, 17);
-        g.setColour (juce::Colour (0xffe8e5dc)); g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+        g.setColour (juce::Colour (0xffe5e5e5)); g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
         g.drawText ("CHANNEL UTILITY", 40, 15, 350, 32, juce::Justification::centredLeft);
-        g.setFont (juce::FontOptions (10.0f)); g.setColour (juce::Colour (0xffaab0b0));
+        g.setFont (juce::FontOptions (10.0f)); g.setColour (juce::Colour (0xffaeaeae));
         g.drawText ("INPUT", 24, 58, 160, 20, juce::Justification::centredLeft);
         g.drawText ("STEREO", 236, 58, 160, 20, juce::Justification::centredLeft);
         g.drawText ("OUTPUT", 450, 58, 160, 20, juce::Justification::centredLeft);
         g.drawText ("Gain", 450, 109, 82, 20, juce::Justification::centred);
         g.drawText ("Balance", 548, 109, 82, 20, juce::Justification::centred);
         g.drawText ("BASS FREQUENCY", 24, 278, 330, 20, juce::Justification::centredLeft);
-        g.setColour (juce::Colour (0xff444d50)); g.drawHorizontalLine (228, 24, 616);
+        g.setColour (juce::Colour (0xff4b4b4b)); g.drawHorizontalLine (228, 24, 616);
         g.drawVerticalLine (218, 60, 214); g.drawVerticalLine (432, 60, 214);
     }
     void resized() override
