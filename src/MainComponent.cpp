@@ -825,6 +825,27 @@ private:
             if (track.inputName.isEmpty()) input.setSelectedId (1, juce::dontSendNotification);
             monitor.setSelectedId (track.monitor == Session::MonitorMode::on ? 3 : track.monitor == Session::MonitorMode::automatic ? 2 : 1, juce::dontSendNotification);
             if (columnLayout) syncSends (track);
+            if (columnLayout)
+            {
+                // Crossfader sides: A and B are exclusive toggles; neither leaves the track unassigned.
+                if (sideA == nullptr)
+                {
+                    for (auto* side : { &sideA, &sideB })
+                    {
+                        *side = std::make_unique<juce::TextButton> (side == &sideA ? "A" : "B");
+                        (*side)->setName (side == &sideA ? "Crossfade A" : "Crossfade B");
+                        (*side)->setClickingTogglesState (true); (*side)->setWantsKeyboardFocus (false);
+                        (*side)->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); (*side)->setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+                        addAndMakeVisible (**side);
+                    }
+                    sideA->setTooltip ("Assign this track to the crossfader's A side"); sideB->setTooltip ("Assign this track to the crossfader's B side");
+                    sideA->onClick = [this] { owner.report (owner.session.setTrackCrossfade (trackId, sideA->getToggleState() ? Session::CrossfadeAssign::a : Session::CrossfadeAssign::none)); owner.refresh(); };
+                    sideB->onClick = [this] { owner.report (owner.session.setTrackCrossfade (trackId, sideB->getToggleState() ? Session::CrossfadeAssign::b : Session::CrossfadeAssign::none)); owner.refresh(); };
+                    resized();
+                }
+                sideA->setToggleState (track.crossfade == Session::CrossfadeAssign::a, juce::dontSendNotification);
+                sideB->setToggleState (track.crossfade == Session::CrossfadeAssign::b, juce::dontSendNotification);
+            }
             repaint();
         }
         // Session mixer sends: one knob per return, labelled A, B, C as the returns are.
@@ -912,7 +933,12 @@ private:
                 for (size_t i = 0; i < sends.size(); ++i)
                     sends[i]->setBounds (8 + (int) (i % 3) * 36, 48 + (int) (i / 3) * 40, 34, 28);
                 pan.setBounds ((getWidth() - 46) / 2, 50 + sendOffset(), 46, 50);
-                gain.setBounds (6, 106 + sendOffset(), 54, getHeight() - 140 - sendOffset());
+                gain.setBounds (6, 106 + sendOffset(), 54, getHeight() - 162 - sendOffset());
+                if (sideA != nullptr)
+                {
+                    const int half = (getWidth() - 12) / 2;
+                    sideA->setBounds (5, getHeight() - 52, half, 20); sideB->setBounds (7 + half, getHeight() - 52, half, 20);
+                }
                 const int buttons = getHeight() - 28, w = (getWidth() - 14) / 3;
                 mute.setBounds (5, buttons, w, 22); solo.setBounds (7 + w, buttons, w, 22); arm.setBounds (9 + 2 * w, buttons, w, 22);
                 return;
@@ -949,7 +975,8 @@ private:
         juce::ComboBox input, monitor, sendMode;
         juce::StringArray inputNames, sendReturnIds;
         std::vector<std::unique_ptr<juce::Slider>> sends;
-        juce::Rectangle<int> meterBounds() const { return { 66, 110 + sendOffset(), 10, juce::jmax (10, getHeight() - 160 - sendOffset()) }; }
+        std::unique_ptr<juce::TextButton> sideA, sideB;
+        juce::Rectangle<int> meterBounds() const { return { 66, 110 + sendOffset(), 10, juce::jmax (10, getHeight() - 182 - sendOffset()) }; }
     };
 
     bool syncTrackRows (juce::Component& parent, std::vector<std::unique_ptr<TrackRow>>& rows, bool vertical)
@@ -2161,19 +2188,29 @@ private:
                 gain.onDragEnd = [this] { owner.session.endEditGesture(); };
                 gain.onValueChange = [this] { owner.report (owner.session.setMasterGain ((float) gain.getValue())); };
                 gain.updateText(); addAndMakeVisible (gain);
+                crossfader.setName ("Crossfader"); crossfader.setSliderStyle (juce::Slider::LinearHorizontal);
+                crossfader.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0); crossfader.setRange (-1, 1, .001); crossfader.setDoubleClickReturnValue (true, 0);
+                crossfader.setTooltip ("Crossfader: left plays side A, right plays side B. Double-click to centre.");
+                crossfader.onDragStart = [this] { owner.session.beginEditGesture ("Crossfader"); };
+                crossfader.onDragEnd = [this] { owner.session.endEditGesture(); };
+                crossfader.onValueChange = [this] { owner.report (owner.session.setCrossfader ((float) crossfader.getValue())); };
+                addAndMakeVisible (crossfader);
             }
             void sync()
             {
+                if (! crossfader.isMouseButtonDown()) crossfader.setValue (owner.state.crossfader, juce::dontSendNotification);
+                crossfader.setEnabled (! owner.session.isExporting());
                 if (! gain.isMouseButtonDown()) gain.setValue (owner.state.masterGainDb, juce::dontSendNotification);
                 gain.setEnabled (owner.state.masterVolumeAutomation.points.empty() && ! owner.session.isExporting());
                 peakL = owner.state.masterPeakL; peakR = owner.state.masterPeakR; repaint();
             }
-            void resized() override { gain.setBounds (6, 106, 54, getHeight() - 140); }
+            void resized() override { gain.setBounds (6, 106, 54, getHeight() - 162); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22); }
             void paint (juce::Graphics& g) override
             {
                 g.fillAll (juce::Colour (0xff383838));
                 g.setColour (muted); g.setFont (font (9.0f, true)); g.drawText ("MASTER", 6, 8, getWidth() - 12, 16, juce::Justification::centred);
-                const juce::Rectangle<int> meter { 66, 110, 10, juce::jmax (10, getHeight() - 160) };
+                g.drawText ("A", 4, getHeight() - 34, 12, 22, juce::Justification::centred); g.drawText ("B", getWidth() - 16, getHeight() - 34, 12, 22, juce::Justification::centred);
+                const juce::Rectangle<int> meter { 66, 110, 10, juce::jmax (10, getHeight() - 182) };
                 for (int channel = 0; channel < 2; ++channel)
                 {
                     const auto bar = meter.withWidth (4).translated (channel * 6, 0);
@@ -2186,7 +2223,7 @@ private:
             }
         private:
             Impl& owner;
-            juce::Slider gain;
+            juce::Slider gain, crossfader;
             float peakL = 0, peakR = 0;
         } masterStrip { owner };
         juce::ScrollBar horizontal { false }, vertical { true };
@@ -7360,6 +7397,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         bool sent = false;
         for (const auto& track : state.tracks) for (const auto& send : track.sends) sent = sent || (send.returnTrackId == echo && std::abs (send.gainDb + 6) < 1e-3);
         check (sent, "a Session send knob edits the real send level");
+        auto* sideA = dynamic_cast<juce::Button*> (findNamed (launcher, "Crossfade A"));
+        auto* fader = dynamic_cast<juce::Slider*> (findNamed (launcher, "Crossfader"));
+        check (sideA != nullptr && sideA->isVisible() && fader != nullptr && fader->isVisible(), "track strips have A/B buttons and the master strip a crossfader");
+        sideA->setToggleState (true, juce::dontSendNotification); sideA->onClick(); refresh();
+        fader->setValue (1, juce::sendNotificationSync); refresh();
+        bool assigned = false; for (const auto& track : state.tracks) assigned = assigned || track.crossfade == Session::CrossfadeAssign::a;
+        check (assigned && std::abs (state.crossfader - 1) < 1e-6, "the A button and the crossfader edit the real crossfade");
         session.stop(); check (session.newProject().wasOk(), "reset after the group checks"); refresh();
     }
     check (session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "prepare follow-action UI clip"); refresh(); showSessionView(); selectLauncherSlot (0, 0);

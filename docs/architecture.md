@@ -242,6 +242,10 @@ Groups are engine submix folder tracks with Halftrack's constant-power mixer. `S
 
 `LauncherGrid::masterX()` places the Master column after the last display column, clamped to the right edge when tracks scroll; scene hit testing, Stop All and the master strip use it. `mixerHeight()` grows the mixer by 40 px per three returns. Column-layout `TrackRow`s build one rotary send knob per return from `TrackInfo::sends` and call `setTrackSendGain`. The `MasterStrip` edits `setMasterGain` and shows the master peaks, disabled while master volume has automation.
 
+## Crossfader
+
+Tracks carry an undoable `halftrackCrossfade` side (0 none, 1 A, 2 B) and the edit an undoable `halftrackCrossfader` position (-1 to +1); both are validated on load. `Session::crossfadeGain` is the dipless law: a side keeps unity until the fader passes the centre toward the other side, then follows cos(πx/2) to silence. `Impl::refreshCrossfade` runs on every model change, project preparation and parameter refresh after undo, and stores each `TrackMixer`'s gain in an atomic. The mixer's owned callback ramps from the previous block's gain to the new one with its existing √2 normalization, so the callback stays allocation- and lock-free. The Session mixer shows A/B buttons per strip and a crossfader on the master strip.
+
 ## Stem export
 
 `exportStems(folder, settings, files, overwrite)` plans "<project> <name>" files for every top-level track, group (before its members), return and Master, checks none exist unless replacing is confirmed, then renders each through the ordinary `exportAudio` path. Before each stem it restores the project's solo and mute properties outside history. For tracks and groups it then solos the target and mutes other returns (dry stems); for a return it solos only that return (fed by its sends); Master uses the project's own state. Afterwards it restores every property, removing absent ones, and the saved flag. `AudioExportSettings::stems` carries the export window's "All Individual Tracks" choice, which picks a folder and confirms replacement.

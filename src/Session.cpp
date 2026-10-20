@@ -45,6 +45,8 @@ const juce::Identifier returnModeProperty { "halftrackReturnSendMode" };
 const juce::Identifier sendReturnProperty { "halftrackSendReturnID" };
 
 const juce::Identifier manualVolumeProperty { "halftrackManualVolume" };
+const juce::Identifier crossfadeProperty { "halftrackCrossfade" };
+const juce::Identifier crossfaderProperty { "halftrackCrossfader" };
 const juce::Identifier manualPanProperty { "halftrackManualPan" };
 
 const juce::Identifier& manualAutomationProperty (Session::AutomationTarget target)
@@ -373,14 +375,22 @@ public:
         setPanLaw (te::PanLaw3dBCenter);
     }
     juce::String getPluginType() override { return xmlTypeName; }
+    // The crossfade gain is set on the message thread and ramped across each block.
+    std::atomic<float> crossfade { 1.0f };
+    void initialise (const te::PluginInitialisationInfo& info) override
+    { VolumeAndPanPlugin::initialise (info); appliedCrossfade = crossfade.load (std::memory_order_relaxed); }
     void applyToBuffer (const te::PluginRenderContext& context) override
     {
         VolumeAndPanPlugin::applyToBuffer (context);
+        const auto target = crossfade.load (std::memory_order_relaxed);
         if (isEnabled() && context.destBuffer != nullptr)
             for (int channel = 0; channel < juce::jmin (2, context.destBuffer->getNumChannels()); ++channel)
-                context.destBuffer->applyGain (channel, context.bufferStartSample,
-                                               context.bufferNumSamples, 1.4142135623730951f);
+                context.destBuffer->applyGainRamp (channel, context.bufferStartSample, context.bufferNumSamples,
+                                                   1.4142135623730951f * appliedCrossfade, 1.4142135623730951f * target);
+        appliedCrossfade = target;
     }
+private:
+    float appliedCrossfade = 1.0f;
 };
 
 template <typename TrackType>
@@ -470,6 +480,28 @@ Result validateMasterVolume(const juce::ValueTree& state)
         }
     }
     return Result::ok();
+}
+// Crossfade sides are 0 (none), 1 (A) or 2 (B); the crossfader is a finite -1..1 position.
+Result validateCrossfade (const juce::ValueTree& state)
+{
+    if (state.hasProperty (crossfaderProperty))
+    {
+        const auto text = state[crossfaderProperty].toString().trim().toStdString(); char* end = nullptr;
+        const auto value = std::strtod (text.c_str(), &end);
+        if (text.empty() || end != text.c_str() + text.size() || ! std::isfinite (value) || value < -1 || value > 1)
+            return Result::fail ("The project has an invalid crossfader position.");
+    }
+    const auto check = [] (auto&& self, const juce::ValueTree& node) -> Result
+    {
+        if (node.hasType (te::IDs::TRACK) && node.hasProperty (crossfadeProperty))
+        {
+            const auto text = node[crossfadeProperty].toString().trim();
+            if (text != "0" && text != "1" && text != "2") return Result::fail ("The project has an invalid crossfade assignment.");
+        }
+        for (const auto& child : node) if (auto r = self (self, child); r.failed()) return r;
+        return Result::ok();
+    };
+    return check (check, state);
 }
 Result validateRecordQuantisation(const juce::ValueTree& state)
 {
@@ -1316,8 +1348,20 @@ struct Session::Impl
         // independent flag so that timer cannot clear a real user edit.
         explicitChanges = true;
         pristineNewDocument = false;
+        refreshCrossfade(); // New, duplicated and reordered tracks pick up their crossfade gains.
         edit->markAsChanged();
         owner.sendChangeMessage();
+    }
+    // Each track mixer's crossfade gain from its side and the project crossfader.
+    void refreshCrossfade()
+    {
+        const auto position = static_cast<float> (edit->state.getProperty (crossfaderProperty, 0.0f));
+        for (auto* t : te::getAudioTracks (*edit))
+            if (auto* mixer = dynamic_cast<TrackMixer*> (t->getVolumePlugin()))
+            {
+                const auto side = static_cast<Session::CrossfadeAssign> (juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (crossfadeProperty, 0))));
+                mixer->crossfade.store (Session::crossfadeGain (side, position), std::memory_order_relaxed);
+            }
     }
     // Frozen tracks play their rendered audio, so their devices and clips cannot change until unfrozen.
     static Result unfrozen (const te::Track* first, const te::Track* second = nullptr)
@@ -1505,11 +1549,13 @@ struct Session::Impl
                     juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (monitorProperty, 0)))));
         edit->setCountInMode (static_cast<te::Edit::CountIn> (static_cast<int> (edit->state.getProperty(countInProperty,0))));
         refreshRouting();
+        refreshCrossfade();
         edit->dispatchPendingUpdatesSynchronously();
     }
     void resetTapTempo() { lastTap=-1; numTapIntervals=nextTapInterval=0; }
     void prepareEdit()
     {
+        refreshCrossfade(); // Loaded and new projects apply their saved crossfade gains.
         resetTapTempo();
         edit->editFileRetriever = [this] { return editLocation(); };
         flushStructuralUpdates();
@@ -1605,6 +1651,7 @@ Session::Snapshot Session::snapshot() const
     s.projectGeneration = impl->projectGeneration;
     s.name = s.projectFile == File() ? "Untitled" : s.projectFile.getFileNameWithoutExtension();
     s.dirty = impl->explicitChanges || (! impl->pristineNewDocument && e.hasChangedSinceSaved());
+    s.crossfader = static_cast<float> (e.state.getProperty (crossfaderProperty, 0.0f));
     s.playing = transport.isPlaying(); s.recording = transport.isRecording();
     s.looping = transport.looping;
     s.position = transport.getPosition().inSeconds();
@@ -1675,6 +1722,7 @@ Session::Snapshot Session::snapshot() const
         for (auto* c : t->getClips()) info.clips.push_back (describeClip (*c));
         info.launcherActive = t->playSlotClips.get() || (t->launcherOwnership.load (std::memory_order_acquire) & 1) != 0;
         info.frozen = t->isFrozen (te::Track::individualFreeze);
+        info.crossfade = static_cast<CrossfadeAssign> (juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (crossfadeProperty, 0))));
         for (auto* slot : t->getClipSlotList().getClipSlots())
         {
             SlotInfo slotInfo;
@@ -1808,6 +1856,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateProjectTempo (state); result.failed()) return result;
     if (auto result = validateMetronome (state); result.failed()) return result;
     if (auto result = validateRecordQuantisation (state); result.failed()) return result;
+    if (auto result = validateCrossfade (state); result.failed()) return result;
     if (auto result = validateMasterVolume (state); result.failed()) return result;
     if (auto result = validateMixerAutomation (state); result.failed()) return result;
     if (auto result = validateRouting (state); result.failed()) return result;
@@ -3591,6 +3640,34 @@ Result Session::renameTrack (int index, const String& name)
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (name.trim().isEmpty()) return Result::fail ("Enter a track name.");
     impl->transaction ("Rename track"); t->setName (name.trim()); impl->changed(); return Result::ok();
+}
+float Session::crossfadeGain (CrossfadeAssign side, float position)
+{
+    const auto x = juce::jlimit (-1.0f, 1.0f, std::isfinite (position) ? position : 0.0f);
+    const auto away = side == CrossfadeAssign::a ? x : side == CrossfadeAssign::b ? -x : 0.0f;
+    if (away <= 0) return 1.0f;
+    if (away >= 1) return 0.0f;
+    return std::cos (away * juce::MathConstants<float>::halfPi);
+}
+Result Session::setTrackCrossfade (const String& trackId, CrossfadeAssign side)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* track = impl->track (trackId); if (! track) return Result::fail ("Track not found.");
+    if (static_cast<int> (side) < 0 || static_cast<int> (side) > 2) return Result::fail ("Unknown crossfader side.");
+    if (static_cast<int> (track->state.getProperty (crossfadeProperty, 0)) == static_cast<int> (side)) return Result::ok();
+    impl->transaction ("Crossfade assign");
+    track->state.setProperty (crossfadeProperty, static_cast<int> (side), &impl->edit->getUndoManager());
+    impl->refreshCrossfade(); impl->changed(); return Result::ok();
+}
+Result Session::setCrossfader (float position)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! std::isfinite (position)) return Result::fail ("Invalid crossfader position.");
+    position = juce::jlimit (-1.0f, 1.0f, position);
+    if (static_cast<float> (impl->edit->state.getProperty (crossfaderProperty, 0.0f)) == position) return Result::ok();
+    impl->transaction ("Crossfader");
+    impl->edit->state.setProperty (crossfaderProperty, position, &impl->edit->getUndoManager());
+    impl->refreshCrossfade(); impl->changed(); return Result::ok();
 }
 Result Session::setMasterGain(float value)
 {

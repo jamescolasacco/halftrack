@@ -203,3 +203,7 @@ Only Arrangement clips are frozen; Session clips keep playing live. Freeze rende
 ### Stem export defaults
 
 Member tracks of a group are rendered through their group's mixer, and muted tracks export silent stems. Stems use the export window's format, range, tail and normalization for every file, normalizing each file on its own. Master processing applies to every stem through the shared render path. These are simplest-default choices pending reference measurement.
+
+### Crossfader defaults
+
+The crossfader uses the dipless curve (a side stays at 0 dB until the fader crosses the centre toward the other side) and is not selectable. Groups have no crossfade side. Crossfader moves are ordinary undoable edits and are not automatable yet. These are simplest-default choices pending reference measurement.

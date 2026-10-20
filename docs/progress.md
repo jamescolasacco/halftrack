@@ -867,3 +867,7 @@ Root owns `exportStems` in `src/Session.*`, the export window's Rendered track c
 ## Session mixer layout — 2026-10-20
 
 UI-only change in `src/MainComponent.cpp`. The Session view now follows the reference layout more closely. The Master column (scene launchers, Stop All Clips) sits directly after the last track column and stays at the right edge only once tracks scroll. A Master strip below it carries the master volume fader and output meter. Every track strip has a send knob per return (labelled A, B, C), and the mixer grows by a row for every three returns. UI checks cover the Master position, the master strip editing the real master level, and a send knob editing the real send level; the UI suite passes locally on the Mac.
+
+## Crossfader — 2026-10-20
+
+Root owns the crossfader across `src/Session.*`, the Session mixer UI, `tests/CrossfadeTests.cpp` and documentation. Tracks can be assigned to side A or B, and a project crossfader on the master strip fades between them on a dipless law. The new `crossfade-acceptance` suite checks renders at centre, fully A, fully B and halfway against the law, plus undo, reopen and invalid-file rejection. The source guard (184 bodies) and the Session (allocation audits), sends, groups, master volume, automation, stems, audio export, utility and UI suites pass locally on the Mac.

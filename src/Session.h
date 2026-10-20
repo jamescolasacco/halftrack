@@ -33,6 +33,8 @@ public:
         bool stems = false; // Chosen in the export window: render every track to its own file with exportStems.
     };
     enum class FollowAction { off, stop, replay, previous, next, first, last, cycle };
+    // A track's side of the crossfader; unassigned tracks ignore it.
+    enum class CrossfadeAssign { none, a, b };
     // Clip launch behaviour on press/release of its launch button.
     enum class LaunchMode { trigger, gate, toggle, repeat };
     // Per-clip launch grid; global follows the project setting.
@@ -171,6 +173,7 @@ public:
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
         bool mute = false, solo = false, armed = false, isMidi = false, isReturn = false;
         bool frozen = false; // Plays a render of its clips and devices; devices and clips are locked.
+        CrossfadeAssign crossfade = CrossfadeAssign::none;
         SendMode sendMode = SendMode::post;
         std::vector<SendInfo> sends;
         SynthSettings synth;
@@ -208,6 +211,7 @@ public:
         bool dirty = false, playing = false, recording = false, looping = false;
         double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
         float masterPeakL = 0, masterPeakR = 0, masterGainDb = 0;
+        float crossfader = 0; // -1 is fully A, +1 fully B.
         AutomationLane masterVolumeAutomation;
         std::vector<TrackInfo> tracks;
         std::vector<GroupInfo> groups;
@@ -317,6 +321,10 @@ public:
     juce::Result renameClip (const juce::String& clipId, const juce::String& name);
     juce::Result renameTrack (int trackIndex, const juce::String&);
     juce::Result setMasterGain (float decibels);
+    juce::Result setTrackCrossfade (const juce::String& trackId, CrossfadeAssign);
+    juce::Result setCrossfader (float position);
+    // Dipless crossfader law: a side keeps unity until the fader passes the centre toward the other side.
+    static float crossfadeGain (CrossfadeAssign, float position);
     juce::Result setMasterVolumeAutomation (const AutomationLane&);
     juce::Result setTrackGain (int trackIndex, float decibels);
     juce::Result setTrackPan (int trackIndex, float pan);
