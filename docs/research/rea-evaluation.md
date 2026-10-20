@@ -56,3 +56,6 @@ REA is useful here for structured, address-bound dossiers, call relationships, l
 ## Subsequent dispatch resolution
 
 The [factory-path follow-up](rea-dispatch-trace.md) resolves adapter call `0x19df0` to wrapper `0x18d24`, and initialized wrapper call `0x18eac` to inner processing entry `0xe78c`, through constructor stores, table pointers, relocation data and independent LLVM evidence. This narrows the earlier unresolved edge on that concrete path. A new REA dossier still reports partial callee coverage inside the inner routine; it does not establish complete instrument DSP, timing semantics or sound equivalence.
+
+
+The [control-record follow-up](rea-event-timing.md) distinguishes an entry-time control-message drain from the separate timestamped MIDI path. Traced scalar setters can call the router directly. The producer of that FIFO on the initialized path, downstream smoothing and actual host scheduling remain unresolved; no timing change or sound-equivalence claim follows.

@@ -735,3 +735,9 @@ REA event/timing follow-up ownership: the research agent owns a new docs/researc
 
 
 Hosted-source readiness correction `24ad657`: diagnostics observed the collected source unmapped before the callback burst and native cache misses while master state was correctly -18 dB. On the local machine mapping recovered before the measured tail, so the earlier CI tail silence is consistent with that race but was not reproduced independently. The test now prepares the native context, waits up to five seconds for the actual source mapping and fails explicitly on timeout; the reloaded fixture evicts its reader once to exercise cold readiness. No production playback change, output retry, warm-up extension or tolerance relaxation. Independent review passed, as did the focused 31.49-second run. Native ownership returns to root for packaging/integration.
+
+
+Root documentation integration ownership: the REA research agent finished its owned event/timing report in `cdc254a`. Root now adds the reviewed MIDI-identification evidence and report cross-links, and records the bounded findings here; no application/test changes.
+
+
+The [REA control-record report](research/rea-event-timing.md) verifies an entry-time 56-byte control FIFO drain and a separate timestamped MIDI path, plus scalar setters that invoke the control router directly. Root checked the new dossier/manifest hashes and all 14 retained LLVM ranges/rebase-list hashes. The ring producer on that concrete path, receiver semantics, smoothing and actual host scheduling remain unresolved. No Halftrack production change or feature-completion credit is claimed from this static result.
