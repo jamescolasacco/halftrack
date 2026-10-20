@@ -1,6 +1,17 @@
 # Preview verification
 
-## Current export and native-device checkpoint (2026-10-15)
+## Master automation verification — 2026-10-20
+
+Engine source `b0aa4b8` passes focused master-volume, automation and tempo acceptance in **33.31 seconds** (8.67/18.12/6.52 s). Production UI source `f04cfb3` passes the separate automation editor and main-window handlers in 0.92/9.76 s. The actual Master editor snapshot was inspected. New tests cover hosted single-point track gain/pan/master output, Read/Clear/Undo, three-rate sum/render behavior, exact selected ranges, baseline persistence and 22 invalid master states. The integrated build passes all **27 local Mac suites in 422.51 seconds**, including Session/synth in 57.74 s and main UI in 9.58 s. The final test-only event-boundary strengthening also passes rebuilt Session acceptance in **61.57 s**. Refreshed packaging and clean three-platform CI follow publication; the archive below contains the earlier track/range implementation. Physical listening and native pointer checks remain NOT RUN.
+
+## Track automation and exact-range export checkpoint — 2026-10-15
+
+Source `3bffb08f3f37aeae4fe51d67cd1d250cb4b577e5` passes all **27 local Mac suites in 432.47 seconds**. The real keyboard-focus assertion and production main-window handlers now pass in 8.87 s without weakening any assertion; earlier desktop focus interference was transient. Audio export passes in 45.17 s, export dialog checks in 3.80 s and automation lifecycle checks in 11.82 s. The corresponding [CI](https://github.com/jamescolasacco/halftrack/actions/runs/38768662796) passes Windows/Linux; Mac passes 26/27 suites and fails a held-note MIDI-monitoring assertion. All new automation/export suites and main UI pass. The intermittent MIDI failure is not yet diagnosed. A personal listening/native-pointer walkthrough has not been run.
+
+The source-inclusive archive is `Halftrack-preview-darwin-arm64-3bffb08.tar.gz`, **62,499,926 bytes**, SHA-256 `2d01905cd486b8036c877833cfd744c635f93391e863a9b6582848e6d14fcce4`. Its executable is **26,280,056 bytes**, SHA-256 `399de218593ba873ef185311f65d2818cef5f1c6e6af9bfd54f6fbb976858ca8`, byte-identical to the tested build. Fresh extraction verifies all 113 owned source files against the exact commit, all 4,424 JUCE and 1,545 Tracktion files against the patched build inputs, and included licenses. Private/generated analysis trees are excluded. The freshly extracted executable also passes automation (12.23 s), automation editor (0.71 s), audio export (45.07 s) and export dialog (3.73 s) acceptance. This verifies package identity and source inclusion, not independent reproducibility, signing, hardware timing or reference equivalence.
+
+
+## Earlier export and native-device checkpoint (2026-10-15)
 
 The combined mono/peak-normalization, Bitcrusher, Noise Gate and Peak Limiter implementation passes all 24 local Mac acceptance suites in 381.19 seconds. Independent signal checks, project/history/editor integration, allocation guards and compensated export edges are recorded in the progress log and native effects contract. Actual device-editor snapshots were inspected. The last published export checkpoint `62e2fed` passes all three platforms in [CI 38736655759](https://github.com/jamescolasacco/halftrack/actions/runs/38736655759); newer device commits require their own CI result. Physical hardware, arbitrary commercial plugins and numerical reference parity remain separate checks. Historical evidence below retains its original scope.
 
@@ -8,7 +19,7 @@ Latest application source: `ea24869`, adding sine/noise/pulse-width synthesis, n
 
 Evidence includes checkpoints through **2026-10-14**. This records the original audio/MIDI preview and subsequent research-driven corrections. It is not a completed DAW or a feature/sound parity certification.
 
-## Current integrated checkpoint
+## Earlier integrated checkpoint
 
 The new pitch-wheel implementation passes all **eight local Mac suites in 122.25 seconds**. Its original audio fixtures cover per-channel tuning/reset and note identity, sounding-voice continuity, a timed 2,048-frame sequence across five block sizes and finite upper-pitch behavior. The prepared-DSP allocation fixture remains free of intercepted C++ new/delete calls; the source guard passes nine self-tests and eighteen owned bodies. Source `6690295` also passes [clean builds, all tests and source-inclusive packaging on macOS, Windows and Linux](https://github.com/jamescolasacco/halftrack/actions/runs/38513977347). External MIDI-device UI and paired reference-instrument comparison are not included.
 
@@ -108,7 +119,7 @@ The [eight-minute smoke path and extended checklist](manual-test-phase1.md) dist
 
 The current implementation contains native audio and MIDI editing, a Session clip/scene launcher with None/Beat/Bar quantization, one polyphonic subtractive synth, track mixing with native Pre/Post sends and shared returns, audio device controls, arrangement recording, portable projects, external plug-in hosting and arrangement WAV export. Its UI uses an original dark/amber identity and editable SVG mark.
 
-The complete target remains much larger: additional launch modes, follow actions, Session recording and performance capture, automation, send automation and advanced routing, racks/macros, full instruments/effects, warp-marker editing, comping/slicing, MIDI expression/tuning, CLAP hosting, recovery and library management are unfinished. Controlled AUv2 hosting is verified on macOS; AUv3 and arbitrary vendor compatibility are not established. No controls are described as implemented merely because a drawing exists.
+The complete target remains much larger: additional launch modes, probabilistic/scene follow actions, Session recording and performance capture, device/send automation and advanced routing, racks/macros, full instruments/effects, warp-marker editing, comping/slicing, MIDI expression/tuning, CLAP hosting, recovery and library management are unfinished. Controlled AUv2 hosting is verified on macOS; AUv3 and arbitrary vendor compatibility are not established. No controls are described as implemented merely because a drawing exists.
 
 The requested **whole-host no-lock/no-allocation callback contract is not met by the selected engine**. Dependency callbacks use locks and recording has fallback allocations. Owned synth checks passing do not waive this gap. Existing proprietary project compatibility, a programmable patch environment, branded hardware integration and cloud features are outside the current accepted scope.
 

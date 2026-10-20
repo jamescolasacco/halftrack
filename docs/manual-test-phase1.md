@@ -315,14 +315,14 @@ Add Peak Limiter to a track and open its editor. Raise Input gain and lower Peak
 
 These checks are NOT RUN until a person completes them on the candidate build. Use a disposable project and generated audio, or a held chord from the built-in synth. This editor changes mixer envelopes over arrangement time; it does not capture fader gestures or automate third-party devices.
 
-1. Select a sounding track and choose **View → Track Automation**, or the **Automation** button above the device chain. Keep the modeless editor open while starting playback in the main window.
+1. Select a sounding track and choose **View → Automation**, or the **Automation** button above the device chain. Keep the modeless editor open while starting playback in the main window.
 2. Choose Volume. Click at two different beats and levels; drag one point. The curve and sound should change together. Undo once must reverse the entire drag, and redo must restore it. Confirm that the selected track's manual volume fader is disabled while points exist; pan remains available.
 3. Choose Pan. Draw a left-to-right move and listen with headphones or inspect a stereo export. Switch back to Volume and confirm its points remain. Read off must retain points while using the saved manual setting; it does not discard the curve. Clear restores manual editing, and undo restores the curve.
 4. Change the project tempo; verify that points stay at the same beats. Save, close the editor, reopen the project, and open Automation again. Both lanes, their read settings and rendered behavior should persist.
 5. Reorder or duplicate the track and confirm its curves remain associated with the correct track. While an editor is open, open a new project or reload the saved one. The old editor must stop editing; opening a fresh editor must work.
 6. Resize the editor, zoom/scroll, delete a point, and undo/redo it. Close it while playback continues; the music must continue and the main window must remain usable.
 
-Record native pointer delivery and actual listening separately from automated pointer-handler and offline-render tests. Volume interpolation uses the engine's fader scale; it is not a straight decibel ramp. Automation recording, arbitrary plug-in parameters, master/send envelopes, clip envelopes and curved/weighted shapes remain outside this implementation.
+Record native pointer delivery and actual listening separately from automated pointer-handler and offline-render tests. Volume interpolation uses the engine's fader scale; it is not a straight decibel ramp. Automation recording, arbitrary plug-in parameters, send envelopes, clip envelopes and curved/weighted shapes remain outside this implementation.
 
 
 ### Export a section of a song
@@ -332,3 +332,13 @@ Manual walkthrough: NOT RUN. The following extends the main smoke test.
 1. Put a held MIDI note and a delay before the start of a short loop range. In **Export Audio**, select **Loop range**. The range endpoints should match the ruler even when looping is off; extra tail is unavailable for this exact interval. Export and listen for the held note/delay already in progress at the file's start.
 2. Select **Custom range**, enter a start after its end, then choose the destination. The dialog must stay open with an error. Correct the range and export a mono normalized FLAC; check duration and both channels' contribution.
 3. Return to **Entire arrangement** and verify the saved tail choice is available again. Cancel a long export into an existing file; the old file must remain intact and project undo/redo must still work.
+
+
+### Master-volume automation
+
+Manual pointer/listening walkthrough: NOT RUN.
+
+1. Choose **View → Master Volume Automation**. The destination must read Master and offer Volume only, including in a project with no tracks. Add a fade with two points and play a mix containing a send/return: the complete mix should follow the fade once.
+2. Confirm the main master fader is unavailable while points exist. Turn Read off: points remain and the stored manual level is heard. Clear restores the manual fader; undo restores the curve and its protection.
+3. Switch the editor from a track's Pan lane to Master, then back. The track's points and pan must remain unchanged. Undo/redo one master point drag as a single edit.
+4. Change tempo, save/reopen and export both the full arrangement and a selected range. Master points should stay at their beats and the master envelope should be audible in each export. New/Open must invalidate an already-open editor until a fresh one is opened.

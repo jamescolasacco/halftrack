@@ -1,6 +1,6 @@
 # Recorded implementation coverage
 
-Current implementation checkpoint: track volume and pan automation, 2026-10-15. **38 of 246 tracked active feature areas have partial implementation evidence: 15.4%.** None of these broad rows establishes complete measured reference parity.
+Current implementation checkpoint: track volume/pan and master-volume automation, 2026-10-20. **38 of 246 tracked active feature areas have partial implementation evidence: 15.4%.** None of these broad rows establishes complete measured reference parity.
 
 This is recorded partial coverage, not percentage finished, remaining engineering time, or a weighted feature score. The initial inventory is not exhaustive, some existing behavior is recorded only in preview rows, and items vary greatly in size. Static decompiler coverage uses a different denominator and must never be reported as application completion.
 
@@ -45,3 +45,5 @@ The original Peak Limiter adds bounded partial coverage for AFX-024: 37/246 (15.
 Graphical track volume and pan automation adds bounded partial coverage for MIX-013: 38/246 (15.4%). Generated audio, editing, history and project tests cover these two native mixer targets. This does not establish other targets, capture/override, curved segments or complete reference parity.
 
 Exact selected-range export deepens PRJ-012 without adding a row: coverage remains 38/246 (15.4%). Equality to slices of complete Halftrack renders proves the exercised internal history/selection behavior, not matching reference-application audio.
+
+Master-volume automation and corrected single-point hosted playback deepen MIX-013 without adding a row: coverage remains 38/246 (15.4%). REA integration and static adapter evidence add no implementation credit.

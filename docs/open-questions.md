@@ -162,3 +162,8 @@ Pending device insertion belongs to the project instance and track that opened t
 ### Selected-range export default
 
 An explicit range exports exactly its chosen seconds, rounded to the nearest output-sample boundaries. Render the arrangement prefix first so held MIDI notes, automation and stateful effects reach the start naturally. Extra tail is unavailable in this initial range mode: select a later endpoint to include the continuing mix. Whole-arrangement export retains its tail options. This avoids silently including later clips as an alleged isolated effect tail. Normalization measures only the exported interval; source project state and history remain unchanged.
+
+
+### Master-volume envelope defaults
+
+Use the existing arrangement-time volume-lane semantics on the native master output stage. Master is a separate destination with Volume only; no synthetic track ID or undocumented master-pan control. Protect the manual fader while any points exist, even with Read off. Reject obsolete/conflicting master serialization before loading rather than silently allowing native legacy conversion to erase an envelope. Existing modern Halftrack master levels remain supported.
