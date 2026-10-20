@@ -1130,6 +1130,86 @@ struct Session::Impl
     // Launch buttons held in Gate or Repeat mode.
     struct HeldSlot { String trackId, clipId; };
     std::vector<HeldSlot> heldSlots;
+    // Session recordings into empty slots, from their punch-in to a grid-quantised stop.
+    struct SlotRecording { String trackId; te::EditItemID slotId; te::TimePosition start; bool stopping = false; };
+    std::vector<SlotRecording> slotRecordings;
+    const SlotRecording* slotRecording (te::EditItemID slotId) const
+    { for (const auto& r : slotRecordings) if (r.slotId == slotId) return &r; return nullptr; }
+    SlotRecording* trackRecording (const String& trackId)
+    { for (auto& r : slotRecordings) if (r.trackId == trackId) return &r; return nullptr; }
+    // Unlooped edit time of a monotonic beat ahead of the play head, or the play head itself.
+    te::TimePosition unloopedTime (std::optional<te::MonotonicBeat> beat) const
+    {
+        if (auto* context = edit->getTransport().getCurrentPlaybackContext())
+        {
+            if (auto sync = context->getSyncPoint(); sync && beat)
+            {
+                const auto target = sync->beat + (beat->v - sync->monotonicBeat.v);
+                return sync->unloopedTime + (edit->tempoSequence.toTime (target) - sync->time);
+            }
+            return context->getUnloopedPosition();
+        }
+        return edit->getTransport().getPosition();
+    }
+    // Ends a slot recording at the next launch boundary. The finished take loops over its
+    // recorded length and, when asked, plays in phase from that boundary.
+    void finishSlotRecording (SlotRecording& recording, bool playTake, bool immediately)
+    {
+        auto* t = track (recording.trackId); auto* in = t ? input (*t) : nullptr;
+        if (in == nullptr) { std::erase_if (slotRecordings, [&] (const auto& r) { return &r == &recording; }); return; }
+        const auto boundary = immediately ? std::nullopt : launchBoundary();
+        const auto end = std::max (recording.start + te::TimeDuration::fromSeconds (.001), unloopedTime (boundary));
+        recording.stopping = true;
+        te::InputDeviceInstance::StopRecordingParameters params;
+        params.targetsToStop = { recording.slotId };
+        params.unloopedTimeToEndRecording = end;
+        transaction ("Record Session clip");
+        const auto trackId = recording.trackId; const auto slotId = recording.slotId; const auto start = recording.start;
+        if (immediately)
+        {
+            // A pending grid stop completes from its own callback inside this call; otherwise complete here.
+            [[maybe_unused]] auto clips = in->stopRecording (params);
+            completeSlotRecording (trackId, slotId, start, end, boundary, playTake);
+            return;
+        }
+        in->stopRecording (params, [this, trackId, slotId, start, end, boundary, playTake] (tl::expected<te::Clip::Array, juce::String>)
+                           { completeSlotRecording (trackId, slotId, start, end, boundary, playTake); });
+    }
+    void completeSlotRecording (const String& trackId, te::EditItemID slotId, te::TimePosition start, te::TimePosition end,
+                                std::optional<te::MonotonicBeat> boundary, bool playTake)
+    {
+        // Each take completes once, whichever stop reaches it first.
+        if (slotRecording (slotId) == nullptr) return;
+        std::erase_if (slotRecordings, [&] (const auto& r) { return r.slotId == slotId; });
+        auto* t = track (trackId);
+        auto* slot = te::findClipSlotForID (*edit, slotId);
+        if (t != nullptr) if (auto* in = input (*t)) [[maybe_unused]] auto removed = in->removeTarget (slotId, nullptr);
+        if (t == nullptr || slot == nullptr) { owner.sendChangeMessage(); return; }
+        // The take covers whole beats from punch-in to the grid stop; an empty MIDI take is still a clip.
+        const auto length = std::max (1.0, std::round ((edit->tempoSequence.toBeats (end) - edit->tempoSequence.toBeats (start)).inBeats() * 960.0) / 960.0);
+        const te::BeatRange beats { te::BeatPosition(), te::BeatPosition::fromBeats (length) };
+        auto* clip = slot->getClip();
+        if (clip == nullptr && static_cast<bool> (t->state.getProperty (midiTrackProperty, false)))
+            clip = te::insertMIDIClip (*slot, "MIDI clip", edit->tempoSequence.toTime (beats)).get();
+        if (clip == nullptr) { changed(); return; }
+        auto* undo = &edit->getUndoManager();
+        clip->setPosition ({ { te::TimePosition(), edit->tempoSequence.toTime (beats.getEnd()) }, te::TimeDuration() });
+        if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
+        {
+            midi->setSyncType (te::Clip::syncBarsBeats); midi->setLoopRangeBeats (beats);
+            for (auto* note : midi->getSequence().getNotes())
+                if (! note->state.hasProperty (midiNoteIDProperty)) note->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), undo);
+        }
+        else if (auto* wave = dynamic_cast<te::WaveAudioClip*> (clip))
+        {
+            // The take was recorded at the project tempo, so it follows tempo changes like imported slot audio.
+            auto info = wave->getLoopInfo(); info.setBpm (edit->tempoSequence.getTempo (0)->getBpm(), wave->getAudioFile().getInfo());
+            wave->setLoopInfo (info); wave->setAutoTempo (true); wave->setAutoPitch (false); wave->setUsesProxy (false);
+            wave->setLoopRangeBeats (beats);
+        }
+        if (playTake) queueTrack (*t, clip, boundary);
+        changed();
+    }
     te::FolderTrack* group (const String& id) const
     {
         for (auto* track : te::getAllTracks (*edit))
@@ -1561,6 +1641,7 @@ Session::Snapshot Session::snapshot() const
         {
             SlotInfo slotInfo;
             slotInfo.id = slot->itemID.toString();
+            slotInfo.recording = impl->slotRecording (slot->itemID) != nullptr;
             if (auto* c = slot->getClip())
             {
                 slotInfo.hasClip = true; slotInfo.clip = describeClip (*c);
@@ -2303,12 +2384,66 @@ Result Session::setClipLaunchSettings (const String& id, const LaunchSettings& s
     clip->state.setProperty (launchLegatoProperty, settings.legato, um);
     impl->changed(); return Result::ok();
 }
+Result Session::recordSlot (int trackIndex, int sceneIndex)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop Arrangement recording before recording into Session slots.");
+    auto* slot = impl->slot (trackIndex, sceneIndex);
+    if (! slot) return Result::fail ("Slot not found.");
+    auto* track = impl->track (trackIndex);
+    const auto trackId = track->itemID.toString();
+    if (auto* active = impl->trackRecording (trackId))
+    {
+        if (active->stopping) return Result::ok();
+        impl->finishSlotRecording (*active, active->slotId == slot->itemID, false);
+        sendChangeMessage(); return Result::ok();
+    }
+    if (slot->getClip()) return Result::fail ("Session recording needs an empty slot.");
+    auto* input = impl->input (*track);
+    if (input == nullptr || ! input->isRecordingEnabled (track->itemID)) return Result::fail ("Arm the track to record into a Session slot.");
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio device in Audio Settings.");
+    if (auto r = impl->assets().createDirectory(); r.failed()) return r;
+    auto& transport = impl->edit->getTransport();
+    transport.ensureContextAllocated();
+    auto destination = input->setTarget (slot->itemID, false, nullptr);
+    if (! destination) return Result::fail (destination.error());
+    (*destination)->recordEnabled = true;
+    // Apply the new destination to the graph before the transport starts, so a deferred
+    // rebuild cannot replace a running play head.
+    input->flushRecordingStateUpdates();
+    impl->edit->dispatchPendingUpdatesSynchronously();
+    const bool wasPlaying = transport.isPlaying();
+    // From a stopped transport the take starts at once; otherwise on the launch grid.
+    const auto boundary = wasPlaying ? impl->launchBoundary() : std::nullopt;
+    const auto start = wasPlaying ? impl->unloopedTime (boundary) : transport.getPosition();
+    if (auto* midi = dynamic_cast<te::MidiInputDevice*> (&input->getInputDevice())) midi->quantisation.setType ("(none)");
+    te::InputDeviceInstance::RecordingParameters params;
+    params.punchRange = { start, te::Edit::getMaximumEditTimeRange().getEnd() };
+    params.targets = { slot->itemID };
+    auto [contexts, errors] = te::extract (input->prepareToRecord (params));
+    if (! errors.isEmpty()) { [[maybe_unused]] auto removed = input->removeTarget (slot->itemID, nullptr); return Result::fail (errors[0]); }
+    // The track's other clips stop where the take begins.
+    impl->queueTrack (*track, nullptr, boundary);
+    input->startRecording (std::move (contexts));
+    if (! transport.isPlaying()) transport.play (false);
+    impl->slotRecordings.push_back ({ trackId, slot->itemID, start });
+    sendChangeMessage(); return Result::ok();
+}
 Result Session::pressSlot (int trackIndex, int sceneIndex)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* slot = impl->slot (trackIndex, sceneIndex);
     if (! slot) return Result::fail ("Slot not found.");
     auto* clip = slot->getClip();
+    // While a track records, any of its slot buttons ends the take; on an armed track an empty slot records.
+    if (auto* active = impl->trackRecording (impl->track (trackIndex)->itemID.toString()))
+    {
+        if (active->slotId == slot->itemID || clip == nullptr) return recordSlot (trackIndex, sceneIndex);
+        impl->finishSlotRecording (*active, false, false);
+    }
+    else if (clip == nullptr)
+        if (auto* input = impl->input (*impl->track (trackIndex)); input && input->isRecordingEnabled (impl->track (trackIndex)->itemID))
+            return recordSlot (trackIndex, sceneIndex);
     if (clip == nullptr) return launchSlot (trackIndex, sceneIndex);
     const auto settings = clipLaunchSettings (clip->state);
     if (settings.mode == LaunchMode::toggle)
@@ -2373,6 +2508,7 @@ Result Session::stopLauncherTrack (int trackIndex)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (trackIndex); if (! track) return Result::fail ("Track not found.");
     if (isReturn (*track)) return Result::fail ("Return tracks do not launch clips.");
+    if (auto* active = impl->trackRecording (track->itemID.toString()); active && ! active->stopping) impl->finishSlotRecording (*active, false, false);
     impl->queueTrack (*track, nullptr, impl->launchBoundary());
     sendChangeMessage(); return Result::ok();
 }
@@ -2404,6 +2540,7 @@ Result Session::stopGroup (const String& groupId)
 Result Session::stopAllLauncherClips()
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    for (auto& recording : impl->slotRecordings) if (! recording.stopping) impl->finishSlotRecording (recording, false, false);
     const auto boundary = impl->launchBoundary();
     for (auto* track : te::getAudioTracks (*impl->edit))
         if (! isReturn (*track)) impl->queueTrack (*track, nullptr, boundary);
@@ -3487,6 +3624,12 @@ void Session::stop()
 {
     if (impl->exporting) return;
     const bool recording = impl->edit->getTransport().isRecording();
+    // Session recordings end where the transport stops and keep their takes.
+    while (! impl->slotRecordings.empty())
+    {
+        endEditGesture();
+        impl->finishSlotRecording (impl->slotRecordings.front(), false, true);
+    }
     if (recording) { endEditGesture(); impl->transaction ("Record take"); }
     te::Edit::UndoTransactionInhibitor stopping (*impl->edit);
     impl->cancelLaunches();

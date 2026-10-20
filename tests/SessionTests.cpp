@@ -322,6 +322,26 @@ void recordingTests (const juce::File& root)
     require (samples.getMagnitude (0, samples.getNumSamples()) > 0.15f, "recording contains generated signal");
     success (recording.exportWav (root.getChildFile ("recorded-mix.wav")), "export captured audio through mix graph");
     success (recording.saveProject (captured.projectFile), "save recorded clip and assets");
+    // Session recording: the generated input records into an empty slot from one beat to the next grid stop.
+    success (recording.setLaunchQuantisation (Session::LaunchQuantisation::beat), "Session recording on the beat grid");
+    recording.seek (0); success (recording.play(), "start the transport for Session recording");
+    device->pump (34);
+    success (recording.recordSlot (0, 0), "record the input into an empty audio slot");
+    require (recording.snapshot().tracks[0].slots[0].recording, "the audio slot reports recording");
+    device->pump (230);
+    success (recording.recordSlot (0, 0), "end the audio take on the next beat");
+    device->pump (60);
+    const auto slot = recording.snapshot().tracks[0].slots[0];
+    require (! slot.recording && slot.hasClip && slot.clip.isAudio && slot.clip.file.existsAsFile() && slot.clip.file.isAChildOf (root),
+             "the audio take is a slot clip with its recording in the project assets");
+    require (std::abs (slot.clip.length - 1) < 1e-6 && slot.clip.warp.mode != Session::WarpMode::off && slot.clip.warp.bpm == 120 && slot.playing,
+             "the audio take loops over its two beats, follows the tempo and plays at once");
+    std::unique_ptr<juce::AudioFormatReader> take (formats.createReaderFor (slot.clip.file));
+    require (take != nullptr && std::abs ((double) take->lengthInSamples - 48000) <= 512, "the audio take holds the second between punch-in and stop");
+    juce::AudioBuffer<float> takeSamples (static_cast<int> (take->numChannels), static_cast<int> (take->lengthInSamples));
+    require (take->read (&takeSamples, 0, takeSamples.getNumSamples(), 0, true, true) && takeSamples.getMagnitude (0, takeSamples.getNumSamples()) > .15f,
+             "the audio take contains the generated input");
+    recording.stop();
 }
 }
 

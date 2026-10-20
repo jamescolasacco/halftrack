@@ -1844,11 +1844,26 @@ private:
                                         cell.withLeft (cell.getRight() - 33).reduced (2, 0), juce::Justification::centredRight, true);
                         }
                     }
+                    else if (slot != nullptr && slot->recording)
+                    {
+                        // A recording slot blinks red until its take ends on the grid.
+                        g.setColour (red.withAlpha (0.35f)); g.fillRect (cell);
+                        g.setColour (red.withAlpha (blink ? 1.0f : 0.55f)); g.fillEllipse ((float) cell.getX() + 6, (float) cell.getCentreY() - 4, 8, 8);
+                        g.setColour (ink); g.setFont (font (10.5f)); g.drawText ("Recording", cell.withTrimmedLeft (20), juce::Justification::centredLeft, true);
+                    }
                     else
                     {
                         g.setColour (slotColour); g.fillRect (cell);
-                        g.setColour (queued ? orange.withAlpha (blink ? 1.0f : 0.45f) : juce::Colour (0xff4d4d4d));
-                        g.fillRect (cell.getX() + 7, cell.getCentreY() - 3, 6, 6);
+                        if (track.armed && ! queued)
+                        {
+                            // On an armed track an empty slot's button records into it.
+                            g.setColour (juce::Colour (0xff9a4a46)); g.drawEllipse ((float) cell.getX() + 6, (float) cell.getCentreY() - 4, 8, 8, 1.5f);
+                        }
+                        else
+                        {
+                            g.setColour (queued ? orange.withAlpha (blink ? 1.0f : 0.45f) : juce::Colour (0xff4d4d4d));
+                            g.fillRect (cell.getX() + 7, cell.getCentreY() - 3, 6, 6);
+                        }
                     }
                     if (selected) { g.setColour (orange); g.drawRect (cell.expanded (1, 0).withTrimmedTop (-1), 2); }
                 }
@@ -5561,6 +5576,32 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     pumpSyntheticTestDevice (session, 8); refresh();
     check (state.tracks[(size_t) midiTrack].slots.front().playing,
            "Enter key launches the selected Session slot through the production handler");
+    withGeneratedMidiController (session, [&] (const juce::String& controller)
+    {
+        // Session recording from the grid: an armed track's empty slot button records, and pressing it again ends the take.
+        check (session.setTrackInput (midiTrack, controller).wasOk() && session.setTrackArmed (midiTrack, true).wasOk(), "arm the MIDI track for Session recording");
+        refresh();
+        pumpSyntheticTestDevice (session, 8); // Input changes restart playback; let it settle.
+        const auto recordPoint = launcher.launchPoint (midiTrack, 1);
+        check (! state.tracks[(size_t) midiTrack].slots[1].hasClip, "the second slot is empty");
+        launcher.mouseDown (launcherEvent (recordPoint)); launcher.mouseUp (launcherEvent (recordPoint)); refresh();
+        check (state.tracks[(size_t) midiTrack].slots[1].recording, "clicking an armed empty slot's button records into it");
+        pumpSyntheticTestDevice (session, 40); refresh();
+        check (state.playing && state.tracks[(size_t) midiTrack].slots[1].recording, "recording keeps the transport running");
+        launcher.mouseDown (launcherEvent (recordPoint)); launcher.mouseUp (launcherEvent (recordPoint));
+        pumpSyntheticTestDevice (session, 60); refresh();
+        check (! state.tracks[(size_t) midiTrack].slots[1].recording && state.tracks[(size_t) midiTrack].slots[1].hasClip
+               && state.tracks[(size_t) midiTrack].slots[1].clip.isMidi && state.tracks[(size_t) midiTrack].slots[1].playing,
+               "clicking the recording slot ends the take and plays it");
+        session.undo(); refresh();
+        check (! state.tracks[(size_t) midiTrack].slots[1].hasClip, "undo removes the recorded take");
+        check (session.setTrackArmed (midiTrack, false).wasOk() && session.setTrackInput (midiTrack, {}).wasOk(), "disarm and disconnect the controller");
+    });
+    // The generated controller stops the transport when it is removed; relaunch the first clip.
+    pumpSyntheticTestDevice (session, 8);
+    launcher.mouseDown (launcherEvent (launcher.launchPoint (midiTrack, 0))); launcher.mouseUp (launcherEvent (launcher.launchPoint (midiTrack, 0)));
+    pumpSyntheticTestDevice (session, 8); refresh();
+    check (state.tracks[(size_t) midiTrack].slots[0].playing, "the first clip plays again after the recording checks");
     {
         // The clip view's Launch box and press/release launch semantics.
         const auto slotState = [&] { return state.tracks[(size_t) midiTrack].slots.front(); };

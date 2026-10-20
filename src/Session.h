@@ -145,6 +145,7 @@ public:
     {
         juce::String id;
         bool hasClip = false, playing = false, queued = false, stopQueued = false;
+        bool recording = false; // A Session recording is capturing into this empty slot.
         ClipInfo clip;
         double playPositionBeats = -1;
     };
@@ -237,6 +238,9 @@ public:
     // A launch button press/release applying the slot clip's launch mode.
     juce::Result pressSlot (int trackIndex, int sceneIndex);
     juce::Result releaseSlot (int trackIndex, int sceneIndex);
+    // Records the armed track's input into an empty slot from the next launch boundary. Pressing the
+    // recording slot again ends the take on the grid and plays it in loop; stopping the track keeps it silent.
+    juce::Result recordSlot (int trackIndex, int sceneIndex);
     juce::Result setClipLaunchSettings (const juce::String& clipId, const LaunchSettings&);
     juce::Result launchScene (int sceneIndex);
     juce::Result stopLauncherTrack (int trackIndex);

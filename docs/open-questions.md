@@ -183,3 +183,7 @@ The project meter is fixed at 4/4. The pinned engine counts beats in the time si
 ### Group slot launching
 
 A group slot launches its members' clips in that row on the global grid, and members with an empty slot there stop, as in a scene launch. Per-clip launch modes and grids are not applied through a group slot. Folding hides member columns and their mixer strips in Session view. These are simplest-default choices pending reference measurement.
+
+### Session recording defaults
+
+Takes start on the global launch grid (immediately from a stopped transport) and end on it; per-clip grids do not apply to recording. Pressing another filled slot on a recording track ends the take without playing it and launches that slot. Track and global stops and transport stop keep the take silent. An empty MIDI take still creates a clip of its length. Audio takes follow tempo at the tempo they were recorded at. Recording while the transport loops is not handled specially. These are simplest-default choices pending reference measurement.

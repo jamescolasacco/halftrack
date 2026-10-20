@@ -849,12 +849,74 @@ int runMidiMonitoringTests()
     try { interruptedMidiStateOrdering(); audioDerivedMidiReceiptClockGuards(); interruptedMidiReleases(); replacementConsumerLifetime(); immediateMonitoringTransitions(); selectionAndMonitoring(); return 0; }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI monitoring: "<<e.what()<<std::endl;return 1;}
 }
+// Session recording into clip slots: generated events land in the slot take relative to
+// its grid punch-in, the take ends on the grid, loops over its length and plays at once.
+void sessionRecording()
+{
+    GeneratedInput f; auto& session = f.session;
+    const auto slotState = [&] (int scene) { const auto state = session.snapshot(); return state.tracks[2].slots[(size_t) scene]; };
+    check (session.recordSlot (2, 0).failed() && ! slotState (0).recording, "an unarmed track cannot record into a slot");
+    ok (session.setTrackArmed (2, true), "arm the Session recording track");
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::beat), "record on the one-beat grid");
+    ok (session.addMidiClipToSlot (session.snapshot().tracks[2].id, 3, 4), "occupy another slot");
+    check (session.recordSlot (2, 3).failed(), "recording needs an empty slot");
+    session.seek (0); ok (session.play(), "start the transport");
+    const auto origin = f.devices.getCurrentStreamTime() + 256.0 / 48000;
+    pumpSyntheticTestDevice (session, 34); // About 0.18 s into the first beat.
+    ok (session.recordSlot (2, 0), "record into an empty slot from the next beat");
+    check (slotState (0).recording && ! slotState (0).hasClip, "the slot reports that it is recording");
+    // At 120 BPM the punch-in is at 0.5 s. The first key is before it and is left out.
+    f.send (juce::MidiMessage::noteOn (1, 55, (juce::uint8) 90), origin + .3); f.send (juce::MidiMessage::noteOff (1, 55), origin + .35);
+    f.send (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 96), origin + .6); f.send (juce::MidiMessage::noteOff (1, 60), origin + .8);
+    f.send (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 64), origin + 1.1); f.send (juce::MidiMessage::noteOff (1, 64), origin + 1.3);
+    pumpSyntheticTestDevice (session, 230); // About 1.41 s.
+    ok (session.recordSlot (2, 0), "press the recording slot to end the take on the next beat");
+    check (slotState (0).recording, "the take continues until its grid stop");
+    pumpSyntheticTestDevice (session, 60); // Past the 1.5 s stop.
+    auto take = slotState (0);
+    check (! take.recording && take.hasClip && take.clip.isMidi, "the finished take becomes a MIDI clip in the slot");
+    check (std::abs (take.clip.lengthBeats - 2) < 1e-6, "the take spans the two beats from punch-in to the grid stop (length " + juce::String (take.clip.lengthBeats, 6) + ")");
+    check (take.clip.notes.size() == 2 && ! take.clip.notes[0].id.isEmpty() && take.clip.notes[0].id != take.clip.notes[1].id,
+           "the take keeps the two keys inside it with editable identities");
+    const double starts[] { .2, 1.2 }, lengths[] { .4, .4 };
+    for (size_t i = 0; i < 2; ++i)
+        check (take.clip.notes[i].pitch == (i == 0 ? 60 : 64) && std::abs (take.clip.notes[i].startBeat - starts[i]) < 2.0 / 24000
+               && std::abs (take.clip.notes[i].lengthBeats - lengths[i]) < 2.0 / 24000,
+               "recorded key " + juce::String ((int) i + 1) + " sits at its offset from the punch-in (" + juce::String (take.clip.notes[i].startBeat, 6) + ")");
+    check (take.playing, "the take plays in loop as soon as it is recorded");
+    ok (session.stopLauncherTrack (2), "stop the track"); pumpSyntheticTestDevice (session, 100);
+    check (! slotState (0).playing, "the take stops with its track");
+    session.undo(); check (! slotState (0).hasClip, "one undo removes the take");
+    session.redo(); check (slotState (0).hasClip && slotState (0).clip.id == take.clip.id && slotState (0).clip.notes.size() == 2, "redo restores the take");
+    // An empty armed slot records from its launch button, and transport stop keeps the take silent.
+    ok (session.pressSlot (2, 1), "the launch button of an empty armed slot records");
+    check (slotState (1).recording, "the pressed slot records");
+    pumpSyntheticTestDevice (session, 120);
+    f.send (juce::MidiMessage::noteOn (1, 67, (juce::uint8) 100), f.devices.getCurrentStreamTime() + .02);
+    pumpSyntheticTestDevice (session, 20);
+    f.send (juce::MidiMessage::noteOff (1, 67), f.devices.getCurrentStreamTime() + .02);
+    pumpSyntheticTestDevice (session, 20);
+    session.stop();
+    const auto stopped = slotState (1);
+    check (! stopped.recording && stopped.hasClip && stopped.clip.notes.size() == 1 && stopped.clip.notes[0].pitch == 67 && ! stopped.playing,
+           "stopping the transport ends the take, keeps its notes and leaves it silent");
+    check (session.recordSlot (2, 1).failed(), "a finished take's slot is no longer empty");
+    // From a stopped transport the take starts at once and the transport keeps running.
+    ok (session.recordSlot (2, 2), "record from a stopped transport");
+    pumpSyntheticTestDevice (session, 40);
+    check (session.snapshot().playing && slotState (2).recording, "recording from a stopped transport starts playback");
+    ok (session.recordSlot (2, 2), "end the take started from a stopped transport");
+    pumpSyntheticTestDevice (session, 120); // Past the next beat.
+    check (slotState (2).hasClip && slotState (2).playing, "the take from a stopped transport plays");
+    session.stop();
+}
+
 int runMidiInputTests(const juce::File& artifacts)
 {
     try
     {
         const auto root=artifacts.getChildFile("midi-input-"+juce::Uuid().toString()); ok(root.createDirectory(),"create isolated fixtures");
-        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); recordingQuantisation(root); controllersAndOverdub(root);
+        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); recordingQuantisation(root); controllersAndOverdub(root); sessionRecording();
         std::cout<<"MIDI input tests passed: "<<root.getFullPathName()<<std::endl; return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI input: "<<e.what()<<std::endl;return 1;}
