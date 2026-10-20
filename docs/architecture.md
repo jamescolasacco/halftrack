@@ -238,6 +238,10 @@ Groups are engine submix folder tracks with Halftrack's constant-power mixer. `S
 
 `recordSlot(track, scene)` targets the armed track's input at an empty slot (a non-undoable destination), applies it to the graph synchronously and starts an engine punch-in at the next launch boundary's unlooped time. `Impl::slotRecordings` tracks active takes. Ending one (pressing the slot, another slot, a track or global stop, or transport stop) calls the engine's async or immediate `stopRecording`. A single completion step removes the slot destination, makes the take loop over its recorded beats, assigns MIDI note identities or audio tempo metadata, and queues playback at the past stop boundary for in-phase continuation. `SlotInfo::recording` reports active takes; armed empty slots draw a record button. See the [Session recording contract](research/session-recording-contract.md).
 
+## Session mixer layout
+
+`LauncherGrid::masterX()` places the Master column after the last display column, clamped to the right edge when tracks scroll; scene hit testing, Stop All and the master strip use it. `mixerHeight()` grows the mixer by 40 px per three returns. Column-layout `TrackRow`s build one rotary send knob per return from `TrackInfo::sends` and call `setTrackSendGain`. The `MasterStrip` edits `setMasterGain` and shows the master peaks, disabled while master volume has automation.
+
 ## Stem export
 
 `exportStems(folder, settings, files, overwrite)` plans "<project> <name>" files for every top-level track, group (before its members), return and Master, checks none exist unless replacing is confirmed, then renders each through the ordinary `exportAudio` path. Before each stem it restores the project's solo and mute properties outside history. For tracks and groups it then solos the target and mutes other returns (dry stems); for a return it solos only that return (fed by its sends); Master uses the project's own state. Afterwards it restores every property, removing absent ones, and the saved flag. `AudioExportSettings::stems` carries the export window's "All Individual Tracks" choice, which picks a folder and confirms replacement.

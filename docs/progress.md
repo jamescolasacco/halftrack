@@ -863,3 +863,7 @@ Root owns freeze across `src/Session.*`, `src/NativeEffects.h`, `src/Subtractive
 ## Stem export — 2026-10-20
 
 Root owns `exportStems` in `src/Session.*`, the export window's Rendered track choice, `tests/StemExportTests.cpp` and documentation. Export Audio can now render All Individual Tracks: one file per track and group (without return effects), per return (with the sends it receives) and the Master mix. Existing files are replaced only after confirmation, and the project is left unchanged. The new `stems-acceptance` suite checks each stem against generated sources exactly. Export UI, audio export, sends, groups and UI suites pass locally on the Mac.
+
+## Session mixer layout — 2026-10-20
+
+UI-only change in `src/MainComponent.cpp`. The Session view now follows the reference layout more closely. The Master column (scene launchers, Stop All Clips) sits directly after the last track column and stays at the right edge only once tracks scroll. A Master strip below it carries the master volume fader and output meter. Every track strip has a send knob per return (labelled A, B, C), and the mixer grows by a row for every three returns. UI checks cover the Master position, the master strip editing the real master level, and a send knob editing the real send level; the UI suite passes locally on the Mac.
