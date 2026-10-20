@@ -5,6 +5,7 @@
 #include "Session.h"
 
 #include <algorithm>
+#include <string_view>
 #include <atomic>
 #include <array>
 #include <cctype>
@@ -2256,21 +2257,60 @@ private:
             controls[6].setRange (0, 1, 0.01);
             controls[7].setRange (0, 100, 1); controls[7].setTextValueSuffix (" %");
             for (int i = 0; i < 8; ++i) controls[(size_t) i].onValueChange = [this, i] { changeParameter (i, (float) controls[(size_t) i].getValue()); };
+            instrument.setName ("Track instrument"); instrument.setTooltip ("Choose the sound source for this MIDI track. Changing it is one undo step.");
+            instrument.addItem ("Halftrack Synth", 1);
+            for (int kind = (int) Session::EffectKind::polySynth; kind < Session::effectKindCount; ++kind)
+                instrument.addItem (effectName ((Session::EffectKind) kind), 2 + kind - (int) Session::EffectKind::polySynth);
+            instrument.onChange = [this]
+            {
+                const auto* track = owner.currentTrack(); if (track == nullptr || ! track->isMidi) return;
+                const int id = instrument.getSelectedId();
+                const std::optional<Session::EffectKind> kind = id <= 1 ? std::nullopt
+                    : std::optional<Session::EffectKind> ((Session::EffectKind) ((int) Session::EffectKind::polySynth + id - 2));
+                owner.report (owner.session.setTrackInstrument (track->id, kind)); owner.refresh();
+            };
+            addAndMakeVisible (instrument);
+            edit.setName ("Edit instrument"); edit.setTooltip ("Open every control of this instrument.");
+            edit.onClick = [this] { owner.report (owner.session.showInstrumentEditor (owner.selectedTrack)); };
+            addChildComponent (edit);
         }
         void sync()
         {
             const auto* track = owner.currentTrack();
             if (track == nullptr || ! track->isMidi) { setVisible (false); return; }
-            setVisible (true); waveform.setSelectedId (track->synth.waveform + 1, juce::dontSendNotification);
+            setVisible (true);
+            native = track->instrument.isNativeEffect; nativeSettings = track->instrument.effect;
+            instrument.setSelectedId (native ? 2 + (int) nativeSettings.kind - (int) Session::EffectKind::polySynth : 1, juce::dontSendNotification);
+            instrument.setEnabled (! owner.session.isExporting());
+            waveform.setVisible (! native); edit.setVisible (native);
+            for (auto& control : controls) control.setVisible (! native);
+            waveform.setSelectedId (track->synth.waveform + 1, juce::dontSendNotification);
             const float values[] { track->synth.cutoffHz, track->synth.resonance, track->synth.attackSeconds, track->synth.decaySeconds, track->synth.sustain, track->synth.releaseSeconds, track->synth.level, track->synth.pulseWidth * 100 };
             for (int i = 0; i < 8; ++i) controls[(size_t) i].setValue (values[i], juce::dontSendNotification);
             controls[7].setEnabled (track->synth.waveform == 1);
-            repaint();
+            resized(); repaint(); // Layout depends on built-in versus native mode, not only size.
         }
         void paint (juce::Graphics& g) override
         {
             g.fillAll (raised); g.setColour (orange); g.setFont (font (10.5f, true));
-            g.drawText ("HALFTRACK SYNTH", 11, 2, 185, 24, juce::Justification::centredLeft);
+            g.drawText (native ? juce::String (effectName (nativeSettings.kind)).toUpperCase() : juce::String ("HALFTRACK SYNTH"), 11, 2, 185, 24, juce::Justification::centredLeft);
+            if (native)
+            {
+                // A compact read-out of the first controls; the editor window holds them all.
+                const auto specs = effectParameters (nativeSettings.kind);
+                g.setFont (font (10.0f));
+                for (size_t i = 0; i < std::min<size_t> (12, specs.size()); ++i)
+                {
+                    const auto x = 12 + (int) (i % 3) * 172, y = 34 + (int) (i / 3) * 21;
+                    const auto value = nativeSettings.values[i];
+                    const bool percent = std::string_view (specs[i].unit) == "%";
+                    const auto text = specs[i].choices ? juce::StringArray::fromTokens (specs[i].choices, "|", "")[(int) value]
+                        : juce::String (percent ? value * 100 : value, specs[i].integer ? 0 : 1) + (percent ? juce::String ("%") : juce::String (specs[i].unit));
+                    g.setColour (muted); g.drawText (specs[i].label, x, y, 96, 18, juce::Justification::centredLeft, true);
+                    g.setColour (ink); g.drawText (text, x + 96, y, 72, 18, juce::Justification::centredLeft, true);
+                }
+                g.setColour (line); g.drawRect (getLocalBounds()); return;
+            }
             g.setColour (muted); g.setFont (font (9.5f));
             const auto width = (getWidth() - 16) / 8;
             for (int i = 0; i < 8; ++i) g.drawText (names[i], 8 + i * width, 30, width, 14, juce::Justification::centred);
@@ -2279,12 +2319,17 @@ private:
         void resized() override
         {
             waveform.setBounds (getWidth() - 118, 5, 107, 22);
+            instrument.setBounds (getWidth() - (native ? 118 : 262), 5, native ? 107 : 138, 22);
+            edit.setBounds (getWidth() - 262, 5, 138, 22);
             const auto width = (getWidth() - 16) / 8;
             for (int i = 0; i < 8; ++i) controls[(size_t) i].setBounds (8 + i * width, 43, width - 2, getHeight() - 46);
         }
     private:
         Impl& owner;
-        juce::ComboBox waveform;
+        juce::ComboBox waveform, instrument;
+        juce::TextButton edit { "Edit instrument..." };
+        bool native = false;
+        Session::EffectSettings nativeSettings;
         std::array<juce::Slider, 8> controls;
         static constexpr const char* names[] { "Cutoff", "Resonance", "Attack", "Decay", "Sustain", "Release", "Level", "Pulse width" };
         void changeParameter (int index, float value)
@@ -2457,7 +2502,7 @@ private:
             automationButton.setBounds (getWidth() - 427, 8, 100, 24);
             sendsPanel.setBounds (9, 39, 232, getHeight() - 48);
             synthClip.setBounds (chainLeft(), 39, getWidth() - chainLeft() - 114, getHeight() - 48);
-            synthPanel.setBounds (5 - offset, 5, 536, getHeight() - 59);
+            synthPanel.setBounds (5 - offset + midiEffectCount() * 208, 5, 536, getHeight() - 59);
         }
         void sync()
         {
@@ -2509,7 +2554,8 @@ private:
                     g.drawText (plugin.name, box.getX() + 24, box.getY() + 3, box.getWidth() - 30, 22, juce::Justification::centredLeft, true);
                     g.setColour (panel); g.fillRect (box.withTrimmedTop (28).withHeight (47));
                     g.setColour (muted); g.setFont (font (10.0f));
-                    g.drawText (plugin.enabled ? "PROCESSING AUDIO" : "BYPASSED", box.withTrimmedTop (30).withHeight (40), juce::Justification::centred);
+                    g.drawText (plugin.enabled ? (plugin.isNativeEffect && effectIsMidi (plugin.effect.kind) ? "PROCESSING MIDI" : "PROCESSING AUDIO") : "BYPASSED",
+                                box.withTrimmedTop (30).withHeight (40), juce::Justification::centred);
                     g.setColour (ink); g.drawText ("Open", box.getX() + 5, box.getBottom() - 29, 55, 24, juce::Justification::centred);
                     g.setColour (plugin.enabled ? ink : orange);
                     g.drawText ("Bypass", box.getX() + 62, box.getBottom() - 29, 66, 24, juce::Justification::centred);
@@ -2576,7 +2622,19 @@ private:
         SendsPanel sendsPanel;
         int chainLeft() const { return sendsPanel.isVisible() ? 250 : 9; }
         int offset = 0;
-        juce::Rectangle<int> pluginBounds (int i) const { const auto* track = owner.currentTrack(); return { chainLeft() + 5 + (track != nullptr && track->isMidi ? 554 : 0) + i * 208 - offset, 44, 192, getHeight() - 59 }; }
+        // MIDI effects, then the instrument panel, then audio devices, left to right.
+        int midiEffectCount() const
+        {
+            const auto* track = owner.currentTrack(); int count = 0;
+            if (track != nullptr) for (const auto& p : track->plugins) count += p.isNativeEffect && effectIsMidi (p.effect.kind);
+            return count;
+        }
+        juce::Rectangle<int> pluginBounds (int i) const
+        {
+            const auto* track = owner.currentTrack();
+            const auto instrumentWidth = i >= midiEffectCount() && track != nullptr && track->isMidi ? 554 : 0;
+            return { chainLeft() + 5 + instrumentWidth + i * 208 - offset, 44, 192, getHeight() - 59 };
+        }
         void paintMaster (juce::Graphics& g)
         {
             auto box = getLocalBounds().removeFromRight (107).reduced (8, 8);
@@ -4271,6 +4329,32 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     session.redo(); refresh();
     check (width->getValue() == 64 && session.snapshot().tracks[(size_t) selectedTrack].synth.pulseWidth == 0.64f,
            "native width edit redo restores both UI and model");
+    auto* chooser = dynamic_cast<juce::ComboBox*> (findNamed (deviceChain, "Track instrument"));
+    auto* editInstrument = dynamic_cast<juce::Button*> (findNamed (deviceChain, "Edit instrument"));
+    check (chooser != nullptr && editInstrument != nullptr && chooser->getNumItems() == 1 + Session::effectKindCount - (int) Session::EffectKind::polySynth,
+           "instrument chooser lists the built-in synth and every native instrument");
+    chooser->setSelectedId (3, juce::sendNotificationSync); refresh();
+    check (currentTrack()->instrument.isNativeEffect && currentTrack()->instrument.effect.kind == Session::EffectKind::fmSynth
+               && editInstrument->isVisible() && ! waveform->isVisible() && ! cutoff->isVisible(),
+           "choosing FM Synth replaces the built-in controls with the native instrument panel");
+    status.clear(); editInstrument->onClick();
+    check (status.isEmpty(), "edit button opens the native instrument editor without an error");
+    session.closePluginEditors();
+    if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+    {
+        const juce::File directory (juce::String::fromUTF8 (configured));
+        if (directory.createDirectory().wasOk())
+        {
+            juce::PNGImageFormat png; const auto output = directory.getChildFile ("instrument-chain.png");
+            if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                && png.writeImageToStream (deviceChain.createComponentSnapshot (deviceChain.getLocalBounds(), true, 1.0f), *stream))
+                std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+        }
+    }
+    session.undo(); refresh();
+    check (! currentTrack()->instrument.isNativeEffect && chooser->getSelectedId() == 1 && waveform->isVisible()
+               && session.snapshot().tracks[(size_t) selectedTrack].synth.pulseWidth == 0.64f,
+           "undo restores the built-in synth with its previous settings");
     menuItemSelected (31, 2);
     menuItemSelected (20, 1);
     menuItemSelected (21, 1);

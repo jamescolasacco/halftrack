@@ -797,3 +797,5 @@ Four original instruments (Poly Synth, FM Synth, Drum Kit, Wavetable) can replac
 
 Integration found one real defect: the generic editor's fixed 34-control arrays overflowed for the 39-control Poly Synth (segfault reproduced by opening its editor). The arrays are now sized from the packet type, with a compile-time check that every table fits. The device-chain instrument chooser UI follows separately.
 
+Instrument chooser UI: the MIDI track's instrument panel now has a production chooser (Halftrack Synth plus the four native instruments) and an Edit button for the full editor; native instruments show a compact read-out of their first twelve controls. The device chain draws MIDI effects before the instrument panel and audio devices after it, labelled "PROCESSING MIDI". Production handler tests cover the chooser list, FM selection hiding the built-in controls, the editor button and undo restoring the built-in synth with its previous settings; the UI suite passes. A captured layout check found the chooser hidden behind the Edit button because the panel only re-laid out on size changes; it now re-lays out on every sync. Physical OS input remains NOT RUN.
+
