@@ -607,6 +607,16 @@ Result validateLocators (const juce::ValueTree& state)
     return Result::ok();
 }
 
+Session::WarpSettings warpSettings (te::WaveAudioClip& clip)
+{
+    Session::WarpSettings result;
+    const auto source = clip.getSourceLength().inSeconds();
+    result.bpm = Session::estimateClipTempo (source);
+    if (! clip.getAutoTempo()) return result;
+    result.mode = clip.getTimeStretchMode() == te::TimeStretcher::signalsmithCheaper ? Session::WarpMode::efficient : Session::WarpMode::stretch;
+    if (const auto bpm = clip.getLoopInfo().getBpm (clip.getWaveInfo()); std::isfinite (bpm) && bpm > 0) result.bpm = bpm;
+    return result;
+}
 Session::ClipInfo describeClip (te::Clip& clip)
 {
     Session::ClipInfo result;
@@ -622,6 +632,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
         result.sourceLength = audio->getSourceLength().inSeconds(); result.canEditAudioRange = canEditAudioRange (*audio);
         result.canEditAudioFades = audio->getClipSlot() == nullptr;
         result.reversed = audio->getIsReversed(); result.canReverse = canReverseAudio (*audio);
+        result.warp = warpSettings (*audio); result.canWarp = ! audio->getIsReversed() && ! audio->isUsingARA() && ! audio->isGrouped();
     }
     if (auto* midi = dynamic_cast<te::MidiClip*> (&clip))
     {
@@ -2604,6 +2615,60 @@ Result Session::importAudio (const File& source, int index, double start)
     clip->getSourceFileReference().setToFile (file, te::SourceFileReference::PathStyle::alwaysAbsolute, false);
     clip->setAutoTempo (false); clip->setAutoPitch (false);
     clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
+    impl->changed(); return Result::ok();
+}
+double Session::estimateClipTempo (double seconds)
+{
+    if (! std::isfinite (seconds) || seconds <= 0) return 120;
+    double beats = 4, bpm = beats * 60 / seconds;
+    while (bpm < 80) { beats *= 2; bpm *= 2; }
+    while (bpm >= 160 && beats > .25) { beats /= 2; bpm /= 2; }
+    return juce::jlimit (20.0, 999.0, bpm);
+}
+Result Session::setAudioClipWarp (const String& id, const WarpSettings& settings)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
+    if (! std::isfinite (settings.bpm) || settings.bpm < 20 || settings.bpm > 999) return Result::fail ("Clip tempo must be 20-999 BPM.");
+    if (clip->getIsReversed() || clip->isUsingARA() || clip->isGrouped()) return Result::fail ("Unreverse or ungroup this clip before warping it.");
+    const bool slot = clip->getClipSlot() != nullptr;
+    if (slot && settings.mode == WarpMode::off) return Result::fail ("Session clips always follow the project tempo.");
+    const auto previous = warpSettings (*clip);
+    if (previous == settings || (settings.mode == WarpMode::off && previous.mode == WarpMode::off)) return Result::ok();
+    const auto source = clip->getSourceLength().inSeconds();
+    if (source <= 0) return Result::fail ("The clip's audio is not available.");
+    const auto tempo = impl->edit->tempoSequence.getBeatsPerSecondAt (clip->getPosition().getStart()) * 60;
+    const auto position = clip->getPosition();
+    const auto start = position.getStart(); auto length = position.getLength().inSeconds(); auto offset = position.getOffset().inSeconds();
+    impl->transaction ("Warp audio clip");
+    if (settings.mode == WarpMode::off)
+    {
+        // Back to source time: the visible source span is unchanged.
+        const auto scale = tempo / previous.bpm;
+        length *= scale; offset *= scale;
+        offset = juce::jlimit (0.0, source, offset); length = juce::jlimit (0.001, source - offset, length);
+        clip->setAutoTempo (false); clip->setTimeStretchMode (te::TimeStretcher::disabled);
+        clip->setPosition ({ { start, start + te::TimeDuration::fromSeconds (length) }, te::TimeDuration::fromSeconds (offset) });
+        impl->changed(); return Result::ok();
+    }
+    clip->setTimeStretchMode (settings.mode == WarpMode::efficient ? te::TimeStretcher::signalsmithCheaper : te::TimeStretcher::signalsmithDefault);
+    clip->setUsesProxy (false);
+    const auto scale = previous.mode == WarpMode::off ? settings.bpm / tempo : settings.bpm / previous.bpm;
+    clip->getLoopInfo().setNumBeats (settings.bpm * source / 60);
+    if (slot)
+    {
+        if (previous.mode != WarpMode::off && previous.bpm != settings.bpm)
+        {
+            const auto loop = clip->getLoopRangeBeats();
+            clip->setLoopRangeBeats ({ te::BeatPosition::fromBeats (loop.getStart().inBeats() * scale), te::BeatPosition::fromBeats (loop.getEnd().inBeats() * scale) });
+        }
+    }
+    else
+    {
+        if (previous.mode == WarpMode::off) clip->setAutoTempo (true);
+        if (scale != 1)
+            clip->setPosition ({ { start, start + te::TimeDuration::fromSeconds (length * scale) }, te::TimeDuration::fromSeconds (offset * scale) });
+    }
     impl->changed(); return Result::ok();
 }
 Result Session::setAudioClipSettings (const String& id, const AudioClipSettings& settings)

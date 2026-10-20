@@ -33,6 +33,7 @@ int runClipActivationTests (const juce::File&);
 int runRealtimeTests();
 int runMidiEffectsTests (const juce::File&);
 int runInstrumentsTests (const juce::File&);
+int runWarpTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
 int runSendReturnTests (const juce::File&);
@@ -186,6 +187,12 @@ public:
             const auto destination = i + 1 < args.size() ? juce::File (args[i + 1])
                 : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-tests");
             setApplicationReturnValue (runNoteToolsTests (destination)); quit(); return;
+        }
+        if (args.contains ("--self-test-warp"))
+        {
+            const int i = args.indexOf ("--self-test-warp");
+            setApplicationReturnValue (runWarpTests (juce::File (args[i + 1])));
+            quit(); return;
         }
         if (args.contains ("--self-test-instruments"))
         {

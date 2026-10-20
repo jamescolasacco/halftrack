@@ -145,13 +145,13 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | ID | Capability / target | Proposed acceptance evidence | Status |
 | --- | --- | --- | --- |
 | WRP-001 | Unwarped audio | Verify sample-rate conversion policy, start offset, pitch, reverse, looping, gain, and end-of-file handling. | PARTIAL — gain/offset/duration/reversal, immediate export/undo/redo and full-buffer tests at 48 kHz; pitch, looping controls and broader conversion unverified |
-| WRP-002 | Transient and tempo analysis | Use original percussive and sustained fixtures; record detection accuracy and provide editable results. | NOT IMPLEMENTED / UNVERIFIED |
+| WRP-002 | Transient and tempo analysis | PARTIAL — bar-length tempo estimate only; no transient or content analysis | PARTIAL |
 | WRP-003 | Warp-marker editing | Add/move/remove/reset markers; test segment continuity, undo, and save/reopen. | NOT IMPLEMENTED / UNVERIFIED |
-| WRP-004 | Rhythmic stretching | Compare timing and transient preservation for a Beats-like mode over several tempo ratios. | NOT IMPLEMENTED / UNVERIFIED |
+| WRP-004 | Rhythmic stretching | PARTIAL — warped clips follow tempo via Signalsmith stretch/efficient modes; onsets within ~1 ms of the grid at 60–240 BPM after engine alignment fixes. Transient-slicing Beats mode missing | PARTIAL |
 | WRP-005 | Tonal and textured stretching | Compare sustained-tone and granular-texture modes; document artifacts and deterministic settings. | NOT IMPLEMENTED / UNVERIFIED |
 | WRP-006 | Repitch behavior | Verify coupled pitch/speed changes and tempo automation using known-frequency fixtures. | NOT IMPLEMENTED / UNVERIFIED |
 | WRP-007 | Complex stretching | Assess polyphonic and formant-aware processing on permitted material; record subjective and numeric tolerances. | NOT IMPLEMENTED / UNVERIFIED |
-| WRP-008 | Leader/follower tempo | Test clips that define versus follow tempo, conflicts between leaders, and automation ownership. | NOT IMPLEMENTED / UNVERIFIED |
+| WRP-008 | Leader/follower tempo | PARTIAL — warped clips follow the project tempo with clip BPM and length in beats; clips cannot lead the tempo | PARTIAL |
 | WRP-009 | Groove pool | Extract, apply, edit, commit, and remove timing/velocity grooves without losing original note/marker data. | NOT IMPLEMENTED / UNVERIFIED |
 | WRP-010 | Slicing and conversion | Test transient slicing and separate melody, harmony, and drum transcription fixtures; report errors rather than imply perfect inference. | NOT IMPLEMENTED / UNVERIFIED |
 | WRP-011 | Shared media edits | Verify that duplicate clips and alternate sessions do not unexpectedly mutate each other's source files. | NOT IMPLEMENTED / UNVERIFIED |

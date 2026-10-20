@@ -95,6 +95,16 @@ public:
         bool active = true;
     };
     enum class FadeCurve { linear = 1, convex, concave, sCurve };
+    // Warped audio follows the project tempo; its length is fixed in beats.
+    enum class WarpMode { off, stretch, efficient };
+    struct WarpSettings
+    {
+        WarpMode mode = WarpMode::off;
+        double bpm = 120; // The source's own tempo.
+        bool operator== (const WarpSettings&) const = default;
+    };
+    // Tempo guess for a source: whole 4/4 bars, doubled or halved into 80-160 BPM.
+    static double estimateClipTempo (double sourceSeconds);
     struct AudioClipSettings
     {
         float gainDb = 0;
@@ -111,6 +121,8 @@ public:
         bool reversed = false, canReverse = false, canEditMidiClip = false, active = true;
         double sourceLength = 0;
         AudioClipSettings audio;
+        WarpSettings warp;
+        bool canWarp = false;
         FollowSettings follow;
         double startBeat = 0, lengthBeats = 0;
         std::vector<MidiNoteInfo> notes;
@@ -224,6 +236,8 @@ public:
     juce::Result importAudio (const juce::File&, int trackIndex = -1, double startSeconds = 0);
     juce::Result setAudioClipSettings (const juce::String& clipId, const AudioClipSettings&);
     juce::Result setAudioClipReversed (const juce::String& clipId, bool reversed);
+    // Arrangement clips may turn warping off; Session slots always follow the tempo.
+    juce::Result setAudioClipWarp (const juce::String& clipId, const WarpSettings&);
     juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
     juce::Result splitAudioClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
     juce::Result duplicateAudioClip (const juce::String& clipId, juce::String& duplicateId);

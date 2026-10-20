@@ -198,9 +198,11 @@ void MidiNode::processSection (Node::ProcessContext& pc,
 
     if (wasMute.exchange (false, std::memory_order_relaxed))
         shouldCreateMessagesForTime = true;]=])
+    # The later stretch-alignment patch builds on this WaveNode result.
+    set(downstream0 "2f2a0038be5991510a1d0222f166d831fa9865dfe6f9d42e4dbbe4e20c6b2cd0")
     foreach(index RANGE 0 3)
         file(SHA256 "${source${index}}" hash)
-        if(hash STREQUAL "${patched${index}}")
+        if(hash STREQUAL "${patched${index}}" OR (DEFINED downstream${index} AND hash STREQUAL "${downstream${index}}"))
             set(write${index} FALSE)
             continue()
         endif()

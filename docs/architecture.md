@@ -226,6 +226,10 @@ Native effect kinds 24–27 (Poly Synth, FM Synth, Drum Kit, Wavetable) are inst
 
 Starts quantize to the nearest grid with ties later; duration stays unchanged and the result is constrained to the clip. End quantization preserves starts and the model's 1/960-beat minimum. Reverse reflects complete note intervals inside the selected time extent. Pitch inversion reflects around the selected lowest/highest pitches. Legato extends each note to the next distinct selected onset, or the selected end for the last chord. Half/double time scales starts and durations around the earliest selected onset. Fixed length uses the editor's chosen note length, bounded by the clip end. IDs and velocity remain unchanged. These are documented deterministic defaults, not measured numerical reference parity.
 
+## Audio warping
+
+`ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).
+
 ## Audio clip editing interface
 
 `ClipInfo` carries `isAudio`, `audio` (gain, fade durations and curve types), source length and `canEditAudioRange` / `canEditAudioFades`. Stable clip IDs resolve both arrangement and Session clips for `setAudioClipSettings`. Values validate before the native undo transaction; explicit manual fades disable automatic crossfade. The engine owns graph updates and clip-level DSP; this does not introduce another audio thread or claim its internals meet the stricter owned-callback contract. Invalid serialized gain/fade data rejects before constructing a candidate edit.
