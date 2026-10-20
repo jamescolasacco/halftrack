@@ -157,6 +157,7 @@ public:
         bool dirty = false, playing = false, recording = false, looping = false;
         double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
         float masterPeakL = 0, masterPeakR = 0, masterGainDb = 0;
+        AutomationLane masterVolumeAutomation;
         std::vector<TrackInfo> tracks;
         std::vector<SceneInfo> scenes;
         std::vector<LocatorInfo> locators;
@@ -232,6 +233,7 @@ public:
     juce::Result renameClip (const juce::String& clipId, const juce::String& name);
     juce::Result renameTrack (int trackIndex, const juce::String&);
     juce::Result setMasterGain (float decibels);
+    juce::Result setMasterVolumeAutomation (const AutomationLane&);
     juce::Result setTrackGain (int trackIndex, float decibels);
     juce::Result setTrackPan (int trackIndex, float pan);
     // Atomic, strictly ordered beat points. Empty points restore manual control.

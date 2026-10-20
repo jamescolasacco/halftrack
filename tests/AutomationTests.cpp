@@ -225,8 +225,22 @@ void playbackModeRegressions (const juce::File& root)
     const Lane volume {true,{{0,-18}}}, pan {true,{{0,.7f}}};
     ok (s.setTrackAutomation (id, Target::volume, volume), "one-point volume before duplication");
     ok (s.setTrackAutomation (id, Target::pan, pan), "one-point pan before duplication");
-    ok (s.play(), "play single-point automation"); player.process (4096);
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (30); s.stop();
+    const auto checkHostedTrack = [&] (double db, double balance)
+    {
+        ok (s.play(), "play single-point track automation"); const auto output = player.process (4096);
+        const double gain = .125 * std::pow (10.0, db / 20) * std::sqrt (2.0);
+        level (output, 0, 2048, 2048, gain * std::cos ((balance + 1) * juce::MathConstants<double>::pi / 4), "hosted single-point volume/pan left gain");
+        level (output, 1, 2048, 2048, gain * std::sin ((balance + 1) * juce::MathConstants<double>::pi / 4), "hosted single-point volume/pan right gain");
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (30); s.stop();
+    };
+    checkHostedTrack (-18, .7);
+    auto volumeOff = volume, panOff = pan; volumeOff.enabled = panOff.enabled = false;
+    ok (s.setTrackAutomation (id, Target::volume, volumeOff), "bypass hosted single-point track gain");
+    ok (s.setTrackAutomation (id, Target::pan, panOff), "bypass hosted single-point track pan"); checkHostedTrack (-4, -.3);
+    s.undo(); s.undo(); checkHostedTrack (-18, .7);
+    ok (s.setTrackAutomation (id, Target::volume, {}), "clear hosted single-point track gain");
+    ok (s.setTrackAutomation (id, Target::pan, {}), "clear hosted single-point track pan"); checkHostedTrack (-4, -.3);
+    s.undo(); s.undo(); checkHostedTrack (-18, .7);
     ok (s.saveProject (root.getChildFile ("automation-single-point-history.halftrack")), "save played single-point values before track removal");
     auto* activeEdit = engine->getActiveEdits().getEdits()[0];
     const auto mixerID = te::getAudioTracks (*activeEdit)[0]->getVolumePlugin()->itemID;
@@ -258,6 +272,7 @@ void playbackModeRegressions (const juce::File& root)
               << " pan=" << lane(s,Target::pan).points[0].value << std::endl;
     check (equal (lane (s,Target::volume),volume) && equal (lane(s,Target::pan),pan),
         "undo track removal reconstructs original single-point envelopes");
+    checkHostedTrack (-18, .7);
     s.redo(); check(s.snapshot().tracks.size()==1,"redo removes the restored automated track");
     retireRemovedMixer ("redo removal releases the reconstructed mixer as well");
     s.undo(); check(equal(lane(s,Target::volume),volume) && equal(lane(s,Target::pan),pan),
@@ -347,6 +362,209 @@ void playbackPersistence (const juce::File& root)
             retainExplicitValues ? "legacy migration recovers original explicit manual values" : "legacy migration falls back to saved native values when original manual values are absent");
     }
 }
+void masterWaveformTests (const juce::File& root)
+{
+    Session s (false); ok (s.importAudio (constantFile (root), 0), "import master automation source");
+    const auto track = s.snapshot().tracks[0].id;
+    ok (s.addReturnTrack ("Automated master return"), "include return in automated master mix");
+    const auto returnId = s.snapshot().tracks.back().id;
+    ok (s.setTrackSendGain (0, returnId, -6), "send known post-fader contribution to master");
+    const Lane trackCurve {true,{{0,-12},{1,-12},{1.001,0},{4,0}}};
+    const Lane masterCurve {true,{{0,-6},{1,-6},{1.001,6},{3,6},{3.001,-100},{4,-100}}};
+    ok (s.setTrackAutomation (track, Target::volume, trackCurve), "automate source before dry and return paths");
+    ok (s.setMasterGain (-4), "retain independent master manual level");
+    ok (s.setMasterVolumeAutomation (masterCurve), "automate final master volume");
+    const double mix = .125 * (1 + std::pow (10.0, -6.0 / 20));
+    for (const double rate : {44100.0,48000.0,96000.0})
+    {
+        const auto audio = render (s, root, rate);
+        for (int channel = 0; channel < 2; ++channel)
+        {
+            level (audio, channel, (int) (.1 * rate), (int) (.25 * rate), mix * std::pow (10.0, -18.0 / 20), "master scales complete automated source-plus-return mix exactly once");
+            level (audio, channel, (int) (.8 * rate), (int) (.3 * rate), mix * std::pow (10.0, 6.0 / 20), "master +6 dB plateau retains native gain law");
+            check (audio.getMagnitude (channel, (int) (1.7 * rate), (int) (.2 * rate)) == 0, "master -100 dB plateau is exact silence");
+        }
+        if (rate == 48000)
+        {
+            const auto file = root.getChildFile ("selected-master-automation.wav");
+            Session::AudioExportSettings settings; settings.bitDepth = 32; settings.timeRange = juce::Range<double> (.8, 1.1);
+            ok (s.exportAudio (file, settings), "selected export includes track, return and master automation");
+            juce::AudioFormatManager formats; formats.registerBasicFormats();
+            std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+            check (reader && reader->lengthInSamples == 14400 && reader->numChannels == 2, "selected automated master keeps exact stereo extent");
+            juce::AudioBuffer<float> selected (2,14400); check (reader->read (&selected,0,14400,0,true,true), "read complete selected automated output");
+            bool exact = true;
+            for (int channel = 0; channel < 2; ++channel) for (int n = 0; n < 14400; ++n)
+                exact = exact && selected.getSample (channel,n) == audio.getSample (channel,n+38400);
+            check (exact, "every selected master-automated sample matches its full-render slice");
+        }
+    }
+    auto bypass = masterCurve; bypass.enabled = false;
+    ok (s.setMasterVolumeAutomation (bypass), "bypass master reading while retaining points");
+    check (s.setMasterGain (0).failed(), "master manual fader stays locked when populated lane reading is off");
+    const auto audio = render (s, root);
+    for (int channel = 0; channel < 2; ++channel)
+        level (audio, channel, 38400, 14400, mix * std::pow (10.0, -4.0 / 20), "master Read off restores retained manual gain on the complete mix");
+    ok (s.setMasterVolumeAutomation ({}), "clear master lane after actual playback");
+    check (std::abs (s.snapshot().masterGainDb + 4) < 2e-5, "clearing master restores its original manual level");
+    s.undo(); check (equal (s.snapshot().masterVolumeAutomation, bypass), "undo master clear restores bypassed curve");
+    s.redo(); check (s.snapshot().masterVolumeAutomation.points.empty() && std::abs (s.snapshot().masterGainDb + 4) < 2e-5, "redo master clear retains manual baseline");
+}
+void masterHistoryTests (const juce::File& root)
+{
+    Session s (false);
+    ok (s.setMasterVolumeAutomation ({}), "empty initial master lane is a no-op");
+    check (! s.canUndo() && ! s.snapshot().dirty, "empty master lane does not create scaffolding or dirty a new project");
+    ok (s.importAudio (constantFile (root), 0), "import master history source");
+    te::Engine* engine = nullptr;
+    for (auto* candidate : te::Engine::getEngines())
+        if (&candidate->getDeviceManager().deviceManager == &s.audioDeviceManager()) engine = candidate;
+    check (engine != nullptr, "find native master hosted engine");
+    te::HostedAudioDeviceInterface::Parameters parameters; parameters.sampleRate=48000; parameters.blockSize=128;
+    parameters.inputChannels=0; parameters.outputChannels=2; parameters.useMidiDevices=false;
+    te::test_utilities::EnginePlayer player (*engine, parameters);
+    const auto playAndDispatch = [&]
+    {
+        ok (s.play(), "process master automation through hosted audio callbacks");
+        const auto output = player.process (4096);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (30); s.stop();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+        return output;
+    };
+    const auto checkHostedMaster = [&] (double db)
+    {
+        const auto output = playAndDispatch();
+        for (int channel = 0; channel < 2; ++channel)
+            level (output, channel, 2048, 2048, .125 * std::pow (10.0, db / 20),
+                "hosted master output follows its independent single-point/manual gain oracle");
+    };
+    ok (s.setMasterGain (-4), "manual master edit before first envelope");
+    const Lane first {true,{{0,-18}}};
+    ok (s.setMasterVolumeAutomation (first), "create single-point master envelope");
+    checkHostedMaster (-18);
+    check (std::abs (s.snapshot().masterGainDb + 18) < 2e-5, "hosted playback actually updates instantaneous master value");
+    s.undo(); check (s.snapshot().masterVolumeAutomation.points.empty() && std::abs (s.snapshot().masterGainDb + 4) < 2e-5, "first master-envelope undo after playback restores manual -4 dB");
+    s.undo(); check (std::abs (s.snapshot().masterGainDb) < 2e-5, "earlier manual master undo crosses baseline creation back to unity");
+    s.redo(); check (std::abs (s.snapshot().masterGainDb + 4) < 2e-5, "redo restores original manual master edit");
+    s.redo(); check (equal (s.snapshot().masterVolumeAutomation, first), "redo restores single-point master envelope");
+    checkHostedMaster (-18);
+    auto disabled = first; disabled.enabled = false;
+    ok (s.setMasterVolumeAutomation (disabled), "bypass hosted single-point master lane"); checkHostedMaster (-4);
+    s.undo(); checkHostedMaster (-18);
+    ok (s.setMasterVolumeAutomation ({}), "clear hosted single-point master lane"); checkHostedMaster (-4);
+    s.undo(); checkHostedMaster (-18);
+    const auto onePointFile = root.getChildFile ("master-single-point.halftrack");
+    ok (s.saveProject (onePointFile), "save a played single-point master curve");
+    ok (s.loadProject (onePointFile), "reload a played single-point master curve"); checkHostedMaster (-18);
+    ok (s.setMasterVolumeAutomation ({}), "clear reloaded single-point master curve"); checkHostedMaster (-4);
+    s.undo(); checkHostedMaster (-18);
+    const Lane edited {true,{{0,-12},{2,0},{4,6}}};
+    s.beginEditGesture ("Drag master point");
+    ok (s.setMasterVolumeAutomation ({true,{{0,-12},{2,-6},{4,6}}}), "intermediate master drag");
+    ok (s.setMasterVolumeAutomation (edited), "final master drag"); s.endEditGesture();
+    s.undo(); check (equal (s.snapshot().masterVolumeAutomation, first), "master drag is a single native undo transaction");
+    ok (s.setMasterVolumeAutomation (s.snapshot().masterVolumeAutomation), "reapplying master snapshot is unchanged");
+    check (s.canRedo(), "master snapshot no-op retains pending redo");
+    for (const Lane bad : { Lane {true,{{0,7}}}, Lane {true,{{0,-101}}}, Lane {true,{{-1,0}}}, Lane {true,{{0,0},{0,1}}},
+                            Lane {true,{{1000001,0}}}, Lane {true,{{0,std::numeric_limits<float>::quiet_NaN()}}} })
+        check (s.setMasterVolumeAutomation (bad).failed() && s.canRedo() && equal (s.snapshot().masterVolumeAutomation, first), "invalid master edits preserve curve and redo atomically");
+    s.redo(); check (equal (s.snapshot().masterVolumeAutomation, edited), "redo survives invalid master edits");
+    s.setTempo (60); check (equal (s.snapshot().masterVolumeAutomation, edited), "master envelope remains beat-anchored after tempo edit");
+    s.undo(); check (s.snapshot().tempo == 120 && equal (s.snapshot().masterVolumeAutomation, edited), "master beat endpoints survive tempo undo");
+    s.redo(); check (s.snapshot().tempo == 60 && equal (s.snapshot().masterVolumeAutomation, edited), "master beat endpoints survive tempo redo");
+    s.undo(); s.seek (.75); playAndDispatch();
+    const auto file = root.getChildFile ("master-automation-history.halftrack");
+    ok (s.saveProject (file), "save played master envelope and manual baseline");
+    ok (s.loadProject (file), "load master envelope through staged native construction");
+    check (equal (s.snapshot().masterVolumeAutomation, edited) && ! s.canUndo(), "master envelope round trips with fresh undo history");
+    ok (s.setMasterVolumeAutomation (s.snapshot().masterVolumeAutomation), "unchanged reloaded master lane remains a no-op");
+    check (! s.snapshot().dirty && ! s.canUndo(), "unchanged reloaded master lane preserves clean state");
+    ok (s.setMasterVolumeAutomation ({}), "clear played and reloaded master envelope");
+    check (std::abs (s.snapshot().masterGainDb + 4) < 2e-5, "reload then clear restores manual master rather than last automated value");
+    s.undo(); check (equal (s.snapshot().masterVolumeAutomation, edited), "undo reloaded master clear restores musical points");
+    bool rejected = false;
+    juce::Timer::callAfterDelay (10, [&]
+    {
+        rejected = s.isExporting() && s.setMasterVolumeAutomation ({}).failed() && s.setMasterGain (0).failed();
+        s.cancelExport();
+    });
+    const auto cancelled = s.exportWav (root.getChildFile ("cancelled-master.wav"),48000,24,60);
+    check (cancelled.failed() && rejected && equal (s.snapshot().masterVolumeAutomation, edited) && s.canRedo(), "export reentrancy guards master lane and manual control without losing redo");
+    // Explicit parameter blobs use master-specific IDs even though the attached
+    // XML volume/pan fields have the same names as ordinary track mixers.
+    for (const bool explicitBaseline : {true,false})
+    {
+        auto xml = juce::XmlDocument::parse (file); check (xml != nullptr, "read master migration fixture");
+        auto* master = xml->getChildByName ("EDIT")->getChildByName ("MASTERVOLUME")->getChildByName ("PLUGIN");
+        const double savedVolume = master->getDoubleAttribute ("volume");
+        master->removeAttribute ("halftrackManualVolume"); master->removeAttribute ("base64:parameters");
+        master->setAttribute ("pan", -.25);
+        if (explicitBaseline)
+        {
+            juce::MemoryOutputStream values; values.writeString ("master volume"); values.writeFloat (std::exp (-10.0f/20));
+            values.writeString ("master pan"); values.writeFloat (.625f);
+            master->setAttribute ("base64:parameters", values.getMemoryBlock().toBase64Encoding());
+        }
+        const auto legacy = root.getChildFile (explicitBaseline ? "master-explicit-baseline.halftrack" : "master-attached-baseline.halftrack");
+        check (xml->writeTo (legacy), "write generated master baseline migration fixture");
+        ok (s.loadProject (legacy), "migrate native master parameter names without changing curve");
+        check (equal (s.snapshot().masterVolumeAutomation, edited), "master migration retains every musical point");
+        const auto nativeMaster = engine->getActiveEdits().getEdits()[0]->getMasterVolumePlugin();
+        check (std::abs (nativeMaster->getPan() - (explicitBaseline ? .625f : -.25f)) < 1e-6f,
+            "retiring a master volume parameter blob preserves its independent explicit pan value");
+        ok (s.setMasterVolumeAutomation ({}), "clear migrated master envelope");
+        const double expected = explicitBaseline ? -4 : savedVolume > 0 ? 20 * std::log (savedVolume) + 6 : -100;
+        check (std::abs (s.snapshot().masterGainDb - expected) < 2e-5, "master baseline migration uses explicit value or documented attached-value fallback");
+    }
+    ok (s.newProject(), "replace master-automated project");
+    check (s.snapshot().masterVolumeAutomation.points.empty() && std::abs (s.snapshot().masterGainDb) < 2e-5, "new project resets master lane and manual gain");
+}
+void malformedMasterLoads (const juce::File& root)
+{
+    Session s (false); const Lane original {true,{{0,-6},{4,0}}};
+    ok (s.setMasterVolumeAutomation (original), "create serialized master validation fixture");
+    const auto file = root.getChildFile ("master-automation-valid.halftrack"); ok (s.saveProject (file), "save master validation fixture");
+    auto valid = juce::XmlDocument::parse (file); check (valid != nullptr, "read master validation XML");
+    ok (s.setMasterVolumeAutomation ({true,{{0,-12}}}), "prepare master redo checkpoint"); s.undo();
+    for (int mutation = 0; mutation < 22; ++mutation)
+    {
+        auto xml = std::make_unique<juce::XmlElement> (*valid);
+        auto* edit = xml->getChildByName ("EDIT"); auto* group = edit->getChildByName ("MASTERVOLUME"); auto* master = group->getChildByName ("PLUGIN");
+        auto* curve = master->getChildByAttribute ("paramID", "master volume");
+        check (curve != nullptr, "master curve uses its native distinct parameter ID");
+        auto* point = curve->getFirstChildElement();
+        if (mutation == 0) curve->setAttribute ("paramID", "volume");
+        if (mutation == 1) point->setAttribute ("t", "nan");
+        if (mutation == 2) point->setAttribute ("v", "1.01");
+        if (mutation == 3) curve->setAttribute ("bypass", ".5");
+        if (mutation == 4) master->addChildElement (new juce::XmlElement (*curve));
+        if (mutation == 5) group->setAttribute ("left", "0");
+        if (mutation == 6) { auto* obsolete = edit->createNewChildElement ("PLUGIN"); obsolete->setAttribute ("type", "volume"); }
+        if (mutation == 7) master->setAttribute ("halftrackManualVolume", "nan");
+        if (mutation == 8) curve->getChildElement (1)->setAttribute ("t", "2000000");
+        if (mutation == 9) point->setAttribute ("c", ".5");
+        if (mutation == 10) master->setAttribute ("halftrackManualVolume", "0.000001");
+        if (mutation == 11) group->setAttribute ("right", "nan");
+        if (mutation >= 12 && mutation <= 15)
+        {
+            juce::MemoryOutputStream values; values.writeString (mutation == 12 ? "volume" : "master volume");
+            if (mutation != 13) values.writeFloat (mutation == 14 ? std::numeric_limits<float>::quiet_NaN() : .5f);
+            if (mutation == 15) { values.writeString ("master volume"); values.writeFloat (.4f); }
+            master->setAttribute ("base64:parameters", values.getMemoryBlock().toBase64Encoding());
+        }
+        if (mutation >= 16)
+        {
+            const juce::StringArray invalidPan {"nan", "inf", "-1.01", "1.01", "0.5 trailing", ""};
+            master->setAttribute ("pan", invalidPan[mutation - 16]);
+        }
+        const auto bad = root.getChildFile ("master-automation-invalid.halftrack"); check (xml->writeTo (bad), "write malformed master fixture");
+        const auto generation = s.snapshot().projectGeneration;
+        check (s.loadProject (bad).failed() && s.snapshot().projectGeneration == generation && s.canRedo()
+            && equal (s.snapshot().masterVolumeAutomation, original), "malformed master load preserves active project and redo " + juce::String (mutation));
+    }
+    s.redo(); check (s.snapshot().masterVolumeAutomation.points.size() == 1 && s.snapshot().masterVolumeAutomation.points[0].value == -12,
+        "master redo remains functional after all rejected loads");
+}
 void interpolationTests (const juce::File& root)
 {
     // Formula independent of Session's helper: native linear fader-coordinate
@@ -378,7 +596,7 @@ int runAutomationTests (const juce::File& artifacts)
     try
     {
         const auto root = artifacts.getChildFile ("automation-" + juce::Uuid().toString()); ok (root.createDirectory(), "create isolated test directory");
-        historyTests (root); malformedLoads (root); waveformTests (root); playbackPersistence (root); interpolationTests (root); beatBoundaryTests(); playbackModeRegressions (root); return 0;
+        historyTests (root); malformedLoads (root); waveformTests (root); playbackPersistence (root); interpolationTests (root); beatBoundaryTests(); playbackModeRegressions (root); masterWaveformTests (root); masterHistoryTests (root); malformedMasterLoads (root); return 0;
     }
     catch (const std::exception& error) { std::cerr << "FAIL automation: " << error.what() << std::endl; return 1; }
 }
