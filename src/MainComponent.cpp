@@ -2,6 +2,7 @@
 #include "AudioClipEditor.h"
 #include "AutomationEditor.h"
 #include "NativeEffects.h"
+#include "RackEditor.h"
 #include "Session.h"
 
 #include <algorithm>
@@ -3357,6 +3358,8 @@ private:
             instrument.addItem ("Halftrack Synth", 1);
             for (int kind = (int) Session::EffectKind::polySynth; kind < Session::effectKindCount; ++kind)
                 instrument.addItem (effectName ((Session::EffectKind) kind), 2 + kind - (int) Session::EffectKind::polySynth);
+            for (const auto kind : { Session::EffectKind::instrumentRack, Session::EffectKind::drumRack })
+                instrument.addItem (effectName (kind), 2 + (int) kind - (int) Session::EffectKind::polySynth);
             instrument.onChange = [this]
             {
                 const auto* track = owner.currentTrack(); if (track == nullptr || ! track->isMidi) return;
@@ -3369,6 +3372,9 @@ private:
             edit.setName ("Edit instrument"); edit.setTooltip ("Open every control of this instrument.");
             edit.onClick = [this] { owner.report (owner.session.showInstrumentEditor (owner.selectedTrack)); };
             addChildComponent (edit);
+            group.setName ("Group instrument"); group.setTooltip ("Group this instrument and the built-in effects after it into an Instrument Rack");
+            group.onClick = [this] { if (const auto* track = owner.currentTrack()) { juce::String rack; owner.report (owner.session.groupInstrument (track->id, rack)); owner.refresh(); } };
+            addChildComponent (group);
             addChildComponent (sample);
             addChildComponent (drumPads);
         }
@@ -3382,8 +3388,9 @@ private:
             if (! native || drumSampler()) { nativeEditor.reset(); nativeEditorId.clear(); }
             else if (nativeEditorId != track->instrument.id)
             {
-                nativeEditor = makeNativeEffectEditor (owner.session, track->instrument.id, true,
-                    [safe = juce::Component::SafePointer<Impl> (&owner), id = track->instrument.id] (int parameter) { if (safe != nullptr) safe->showAutomation (false, id, parameter); });
+                const auto automation = [safe = juce::Component::SafePointer<Impl> (&owner)] (const juce::String& id, int parameter) { if (safe != nullptr) safe->showAutomation (false, id, parameter); };
+                nativeEditor = track->instrument.isRack ? makeRackEditor (owner.session, track->instrument.id, automation)
+                    : makeNativeEffectEditor (owner.session, track->instrument.id, true, [automation, id = track->instrument.id] (int parameter) { automation (id, parameter); });
                 addAndMakeVisible (*nativeEditor); nativeEditorId = track->instrument.id;
             }
             instrument.setSelectedId (native ? 2 + (int) nativeSettings.kind - (int) Session::EffectKind::polySynth : 1, juce::dontSendNotification);
@@ -3392,7 +3399,7 @@ private:
             drumPads.setVisible (drumSampler());
             if (drumSampler()) drumPads.show (track->instrument);
             instrument.setEnabled (! owner.session.isExporting());
-            waveform.setVisible (! native); edit.setVisible (native);
+            waveform.setVisible (! native); edit.setVisible (native); group.setVisible (native);
             for (auto& control : controls) control.setVisible (! native);
             waveform.setSelectedId (track->synth.waveform + 1, juce::dontSendNotification);
             const float values[] { track->synth.cutoffHz, track->synth.resonance, track->synth.attackSeconds, track->synth.decaySeconds, track->synth.sustain, track->synth.releaseSeconds, track->synth.level, track->synth.pulseWidth * 100 };
@@ -3413,7 +3420,7 @@ private:
             g.fillAll (juce::Colour (0xff303030));
             g.setColour (juce::Colour (0xff4a4a4a)); g.fillRect (0, 0, getWidth(), 26);
             g.setColour (ink); g.setFont (font (11.0f, true));
-            g.drawText (native ? juce::String (effectName (nativeSettings.kind)) : juce::String ("Halftrack Synth"), 9, 0, 185, 26, juce::Justification::centredLeft);
+            g.drawText (native ? juce::String (effectName (nativeSettings.kind)) : juce::String ("Halftrack Synth"), 9, 0, native ? juce::jmin (185, getWidth() - 305) : 185, 26, juce::Justification::centredLeft, true);
             if (native) { g.setColour (line); g.drawRect (getLocalBounds()); return; }
             g.setColour (muted); g.setFont (font (9.5f));
             const auto width = (getWidth() - 16) / 8;
@@ -3425,6 +3432,7 @@ private:
             waveform.setBounds (getWidth() - 118, 3, 107, 20);
             instrument.setBounds (getWidth() - (native ? 118 : 262), 3, native ? 107 : 138, 20);
             edit.setBounds (getWidth() - 236, 3, 112, 20);
+            group.setBounds (getWidth() - 296, 3, 56, 20);
             sample.setBounds (2, 28, sampleWidth() - 4, juce::jmax (40, getHeight() - 30));
             drumPads.setBounds (2, 28, getWidth() - 4, juce::jmax (40, getHeight() - 30));
             if (nativeEditor) nativeEditor->setTopLeftPosition (2 + sampleWidth(), 28);
@@ -3434,7 +3442,7 @@ private:
     private:
         Impl& owner;
         juce::ComboBox waveform, instrument;
-        juce::TextButton edit { "Edit instrument..." };
+        juce::TextButton edit { "Edit instrument..." }, group { "Group" };
         bool native = false;
         Session::EffectSettings nativeSettings;
         std::unique_ptr<juce::Component> nativeEditor;
@@ -3579,8 +3587,9 @@ private:
             remove.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.removePlugin (owner.selectedTrack, p)); owner.refresh(); };
             if (native)
             {
-                body = makeNativeEffectEditor (owner.session, info.id, true,
-                    [safe = juce::Component::SafePointer<Impl> (&owner), id = info.id] (int parameter) { if (safe != nullptr) safe->showAutomation (false, id, parameter); });
+                const auto automation = [safe = juce::Component::SafePointer<Impl> (&owner)] (const juce::String& id, int parameter) { if (safe != nullptr) safe->showAutomation (false, id, parameter); };
+                body = info.isRack ? makeRackEditor (owner.session, info.id, automation)
+                                   : makeNativeEffectEditor (owner.session, info.id, true, [automation, id = info.id] (int parameter) { automation (id, parameter); });
                 addAndMakeVisible (*body);
             }
             sync (info);
@@ -3621,7 +3630,7 @@ private:
             const int p = index(); const auto* track = owner.currentTrack(); if (p < 0 || track == nullptr) return;
             juce::PopupMenu menu;
             menu.addItem (1, "Move left", p > 0); menu.addItem (2, "Move right", p + 1 < (int) track->plugins.size());
-            menu.addSeparator(); menu.addItem (3, enabled ? "Deactivate" : "Activate"); menu.addItem (4, "Delete");
+            menu.addSeparator(); menu.addItem (3, enabled ? "Deactivate" : "Activate"); menu.addItem (5, "Group", native); menu.addItem (4, "Delete");
             const auto trackId = track->id, id = pluginId;
             juce::Component::SafePointer<Impl> safe (&owner);
             menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe, trackId, id] (int choice)
@@ -3633,8 +3642,10 @@ private:
                         for (int p = 0; p < (int) snapshot.tracks[(size_t) t].plugins.size(); ++p)
                             if (snapshot.tracks[(size_t) t].plugins[(size_t) p].id == id)
                             {
+                                juce::String rack;
                                 if (choice <= 2) safe->report (safe->session.movePlugin (t, p, p + (choice == 1 ? -1 : 1)));
                                 else if (choice == 3) safe->report (safe->session.setPluginEnabled (t, p, ! snapshot.tracks[(size_t) t].plugins[(size_t) p].enabled));
+                                else if (choice == 5) safe->report (safe->session.groupDevices (t, p, p, rack));
                                 else safe->report (safe->session.removePlugin (t, p));
                                 safe->refresh(); return;
                             }
@@ -5082,6 +5093,13 @@ private:
                 if (category == effectCategory (static_cast<Session::EffectKind> (i))) group.addItem (100002+i, effectName (static_cast<Session::EffectKind> (i)));
             popup.addSubMenu (category + "  (Built-in)", group);
         }
+        {
+            // Effect racks insert like devices; instrument racks come from the instrument menu.
+            juce::PopupMenu group;
+            group.addItem (100002 + (int) Session::EffectKind::audioEffectRack, effectName (Session::EffectKind::audioEffectRack));
+            if (midiTrack) group.addItem (100002 + (int) Session::EffectKind::midiEffectRack, effectName (Session::EffectKind::midiEffectRack));
+            popup.addSubMenu ("Racks  (Built-in)", group);
+        }
         popup.addSeparator();
         for (int i = 0; i < types.size(); ++i) popup.addItem (i + 1, types[i].name + "  (" + types[i].pluginFormatName + ")");
         popup.addSeparator(); popup.addItem (100000, "Scan / Manage Plug-ins...");
@@ -5097,7 +5115,7 @@ private:
     void insertDeviceSelection (uint64_t generation, const juce::String& trackId, int choice, const juce::Array<juce::PluginDescription>& types)
     {
         if (choice == 100000) { showPlugins(); return; }
-        const bool native = choice >= 100001 && choice < 100002 + Session::effectKindCount;
+        const bool native = choice >= 100001 && choice < 100002 + Session::deviceKindCount;
         if (! native && (choice <= 0 || choice > types.size())) return;
         const auto current = session.snapshot();
         if (current.projectGeneration != generation)
@@ -5108,7 +5126,7 @@ private:
         { report (juce::Result::fail ("The selected track is no longer available.")); refresh(); return; }
         const int track = static_cast<int> (found - current.tracks.begin());
         if (choice == 100001) { report (session.addUtility (track)); refresh(); }
-        else if (choice >= 100002 && choice < 100002 + Session::effectKindCount)
+        else if (choice >= 100002 && choice < 100002 + Session::deviceKindCount)
         { report (session.addNativeEffect (track, static_cast<Session::EffectKind> (choice-100002))); refresh(); }
         else if (choice > 0 && choice <= types.size()) { report (session.addPlugin (track, types[choice-1])); refresh(); }
     }
@@ -5236,6 +5254,8 @@ private:
             if (matches ("Halftrack Synth")) deviceItems.push_back ({ "Halftrack Synth", false, -2 });
             for (int kind = (int) Session::EffectKind::polySynth; kind < Session::effectKindCount; ++kind)
                 if (matches (effectName ((Session::EffectKind) kind))) deviceItems.push_back ({ effectName ((Session::EffectKind) kind), false, kind });
+            for (const auto kind : { Session::EffectKind::instrumentRack, Session::EffectKind::drumRack })
+                if (matches (effectName (kind))) deviceItems.push_back ({ effectName (kind), false, (int) kind });
         }
         else
         {
@@ -5243,13 +5263,15 @@ private:
             juce::StringArray groups;
             for (int kind = 0; kind < Session::effectKindCount; ++kind)
                 if (effectIsMidi ((Session::EffectKind) kind) == midi && ! effectIsInstrument ((Session::EffectKind) kind)) groups.addIfNotAlreadyThere (effectCategory ((Session::EffectKind) kind));
-            if (! midi) groups.add ("Utilities");
+            if (! midi) { groups.add ("Racks"); groups.add ("Utilities"); }
             for (const auto& group : groups)
             {
                 std::vector<DeviceRow> rows;
                 for (int kind = 0; kind < Session::effectKindCount; ++kind)
                     if (group == effectCategory ((Session::EffectKind) kind) && matches (effectName ((Session::EffectKind) kind))) rows.push_back ({ effectName ((Session::EffectKind) kind), false, kind });
                 if (group == "Utilities" && matches ("Utility")) rows.push_back ({ "Utility", false, -3 });
+                if (group == "MIDI Effects" && matches (effectName (Session::EffectKind::midiEffectRack))) rows.push_back ({ effectName (Session::EffectKind::midiEffectRack), false, (int) Session::EffectKind::midiEffectRack });
+                if (group == "Racks" && matches (effectName (Session::EffectKind::audioEffectRack))) rows.push_back ({ effectName (Session::EffectKind::audioEffectRack), false, (int) Session::EffectKind::audioEffectRack });
                 if (rows.empty()) continue;
                 if (! midi) deviceItems.push_back ({ group, true, -1 });
                 deviceItems.insert (deviceItems.end(), rows.begin(), rows.end());
@@ -5701,8 +5723,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
            "native width edit redo restores both UI and model");
     auto* chooser = dynamic_cast<juce::ComboBox*> (findNamed (deviceChain, "Track instrument"));
     auto* editInstrument = dynamic_cast<juce::Button*> (findNamed (deviceChain, "Edit instrument"));
-    check (chooser != nullptr && editInstrument != nullptr && chooser->getNumItems() == 1 + Session::effectKindCount - (int) Session::EffectKind::polySynth,
-           "instrument chooser lists the built-in synth and every native instrument");
+    check (chooser != nullptr && editInstrument != nullptr && chooser->getNumItems() == 3 + Session::effectKindCount - (int) Session::EffectKind::polySynth,
+           "instrument chooser lists the built-in synth, every native instrument and both instrument racks");
     chooser->setSelectedId (3, juce::sendNotificationSync); refresh();
     check (currentTrack()->instrument.isNativeEffect && currentTrack()->instrument.effect.kind == Session::EffectKind::fmSynth
                && editInstrument->isVisible() && ! waveform->isVisible() && ! cutoff->isVisible(),
@@ -5800,6 +5822,140 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         for (int step = 0; step < 5; ++step) session.undo();
         refresh();
         check (! currentTrack()->instrument.isNativeEffect && ! pads->isVisible(), "undo returns to the built-in synth");
+    }
+    {
+        // Racks in the device view. An Instrument Rack takes the instrument slot; its editor adds
+        // chains, mixes them, drags key zones and fades, maps a macro and edits chain devices.
+        std::function<void (juce::Component&, const juce::String&, std::vector<juce::Component*>&)> findAll;
+        findAll = [&] (juce::Component& parent, const juce::String& name, std::vector<juce::Component*>& found)
+        {
+            for (int i = 0; i < parent.getNumChildComponents(); ++i)
+            {
+                auto* child = parent.getChildComponent (i);
+                if (child->getName() == name) found.push_back (child);
+                findAll (*child, name, found);
+            }
+        };
+        const auto named = [&] (juce::Component& parent, const juce::String& name, size_t index = 0) -> juce::Component*
+        { std::vector<juce::Component*> found; findAll (parent, name, found); return index < found.size() ? found[index] : nullptr; };
+        const auto mouse = [] (juce::Component& c, juce::Point<int> at, juce::Point<int> down, bool dragged)
+        {
+            const auto now = juce::Time::getCurrentTime();
+            return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at.toFloat(), juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f,
+                                     0, 0, 0, 0, &c, &c, now, down.toFloat(), now, 1, dragged);
+        };
+        const auto pump = [] { juce::MessageManager::getInstance()->runDispatchLoopUntil (30); };
+        const auto rackInfo = [&] { refresh(); return currentTrack()->instrument; };
+        chooser->setSelectedId (2 + (int) Session::EffectKind::instrumentRack - (int) Session::EffectKind::polySynth, juce::sendNotificationSync); refresh();
+        auto* editor = findNamed (deviceChain, "Rack editor");
+        check (rackInfo().isRack && rackInfo().effect.kind == Session::EffectKind::instrumentRack && editor != nullptr && editor->isVisible(),
+               "choosing Instrument Rack shows the rack editor in the instrument slot");
+        auto* addChain = dynamic_cast<juce::Button*> (named (*editor, "Add chain"));
+        check (addChain != nullptr, "the rack editor has an Add chain button");
+        addChain->onClick(); addChain->onClick(); refresh();
+        check (rackInfo().chains.size() == 2, "+ Chain adds chains to the real rack");
+        auto* volume = dynamic_cast<juce::Slider*> (named (*editor, "Chain volume", 1));
+        auto* active = dynamic_cast<juce::Button*> (named (*editor, "Chain active"));
+        check (volume != nullptr && active != nullptr, "each chain row has an activator and a volume");
+        volume->setValue (-6, juce::sendNotificationSync);
+        check (std::abs (rackInfo().chains[1].settings.volumeDb + 6) < 1e-4f && rackInfo().chains[0].settings.volumeDb == 0, "a chain's volume slider edits only that chain");
+        active->setToggleState (false, juce::dontSendNotification); active->onClick();
+        check (! rackInfo().chains[0].settings.active, "the chain activator switches the chain off");
+        session.undo(); check (rackInfo().chains[0].settings.active, "undo restores the chain activator");
+        // Drag the second chain's key zone low edge from C-2 up to C3, then its top fade inward.
+        auto* zones = named (*editor, "Zone editor");
+        check (zones != nullptr && zones->isVisible(), "the zone editor is shown for an Instrument Rack");
+        const auto low = rackZonePoint (*zones, 1, 0, false), moved = rackZonePoint (*zones, 1, 60, false);
+        zones->mouseDown (mouse (*zones, low, low, false)); zones->mouseDrag (mouse (*zones, moved, low, true)); zones->mouseUp (mouse (*zones, moved, low, true));
+        check (rackInfo().chains[1].settings.key.low == 60 && rackInfo().chains[1].settings.key.fadeLow == 60 && rackInfo().chains[0].settings.key.low == 0,
+               "dragging a zone's low edge moves that chain's key zone");
+        const auto fadeEdge = rackZonePoint (*zones, 1, 127, true) + juce::Point<int> (3, 0), fadeTarget = rackZonePoint (*zones, 1, 100, true);
+        zones->mouseDown (mouse (*zones, fadeEdge, fadeEdge, false)); zones->mouseDrag (mouse (*zones, fadeTarget, fadeEdge, true)); zones->mouseUp (mouse (*zones, fadeTarget, fadeEdge, true));
+        check (rackInfo().chains[1].settings.key.fadeHigh == 100 && rackInfo().chains[1].settings.key.high == 127, "dragging the fade strip sets the top fade range");
+        session.undo(); check (rackInfo().chains[1].settings.key.fadeHigh == 127 && rackInfo().chains[1].settings.key.low == 60, "one undo reverts one zone drag");
+        auto* velocityMode = dynamic_cast<juce::Button*> (named (*editor, "Velocity zones"));
+        velocityMode->onClick();
+        const auto vLow = rackZonePoint (*zones, 0, 1, false), vTarget = rackZonePoint (*zones, 0, 64, false);
+        zones->mouseDown (mouse (*zones, vLow, vLow, false)); zones->mouseDrag (mouse (*zones, vTarget, vLow, true)); zones->mouseUp (mouse (*zones, vTarget, vLow, true));
+        check (rackInfo().chains[0].settings.velocity.low == 64, "the velocity view edits velocity zones");
+        // Map macro 1 to the chain selector and turn it.
+        auto* map = dynamic_cast<juce::Button*> (named (*editor, "Map macros"));
+        map->setToggleState (true, juce::dontSendNotification); map->onClick();
+        auto* target = dynamic_cast<juce::ComboBox*> (named (*editor, "Mapping target"));
+        auto* add = dynamic_cast<juce::Button*> (named (*editor, "Add mapping"));
+        check (target != nullptr && add != nullptr && named (*editor, "Macro mappings")->isVisible() && target->getItemText (0) == "Chain Selector",
+               "Map shows the mapping list, starting with the chain selector");
+        target->setSelectedId (1, juce::sendNotificationSync); add->onClick();
+        check (rackInfo().mappings.size() == 1 && rackInfo().mappings[0].targetId == rackInfo().id && rackInfo().mappings[0].parameter == Session::rackChainSelector,
+               "Map adds a macro mapping to the chain selector");
+        auto* macro = dynamic_cast<juce::Slider*> (named (*editor, "Macro 1"));
+        check (macro != nullptr && macro->isVisible() && named (*editor, "Macro 9") != nullptr && ! named (*editor, "Macro 9")->isVisible(), "eight macros show by default");
+        macro->setValue (64, juce::sendNotificationSync);
+        check (rackInfo().effect.values[0] == 64, "turning a macro knob sets the real macro");
+        auto* maximum = dynamic_cast<juce::Slider*> (named (*editor, "Mapping maximum 1"));
+        maximum->setValue (100, juce::sendNotificationSync);
+        check (rackInfo().mappings[0].maximum == 100, "the mapping's maximum slider sets its range");
+        dynamic_cast<juce::Button*> (named (*editor, "More macros"))->onClick(); refresh();
+        check (rackInfo().visibleMacros == 9, "+ shows another macro");
+        map->setToggleState (false, juce::dontSendNotification); map->onClick();
+        // Chain devices: a device added to the selected chain shows inline and can be bypassed or removed.
+        juce::String deviceId;
+        check (session.addRackDevice (rackInfo().chains[0].id, Session::EffectKind::polySynth, deviceId).wasOk(), "add a Poly Synth to the first chain");
+        auto* row = named (*editor, "Chain name"); row->getParentComponent()->mouseDown (mouse (*row->getParentComponent(), { 4, 4 }, { 4, 4 }, false)); refresh();
+        auto* power = dynamic_cast<juce::Button*> (named (*editor, "Chain device on"));
+        check (power != nullptr && named (*editor, "Chain devices") != nullptr && named (*named (*editor, "Chain devices"), "osc1Level") != nullptr,
+               "the selected chain's devices show their own controls inline");
+        power->setToggleState (false, juce::dontSendNotification); power->onClick();
+        check (! rackInfo().chains[0].devices[0].enabled, "a chain device's power button bypasses it");
+        dynamic_cast<juce::Button*> (named (*editor, "Remove chain device"))->onClick(); pump(); refresh();
+        check (rackInfo().chains[0].devices.empty(), "a chain device's remove button deletes it");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("instrument-rack.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (deviceChain.createComponentSnapshot (deviceChain.getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        // A Drum Rack: drop a sample on a pad, set its choke group, add a return and send to it, then move the pad.
+        chooser->setSelectedId (2 + (int) Session::EffectKind::drumRack - (int) Session::EffectKind::polySynth, juce::sendNotificationSync); refresh();
+        editor = findNamed (deviceChain, "Rack editor");
+        auto* pads = dynamic_cast<juce::FileDragAndDropTarget*> (named (*editor, "Drum pads"));
+        auto* padGrid = named (*editor, "Drum pads");
+        check (rackInfo().effect.kind == Session::EffectKind::drumRack && pads != nullptr && padGrid->isVisible() && named (*editor, "Zone editor") != nullptr
+               && ! named (*editor, "Zone editor")->isVisible(), "a Drum Rack shows pads instead of zones");
+        const auto c1 = rackPadBounds (*padGrid, 36), d1 = rackPadBounds (*padGrid, 37);
+        check (c1.getY() > rackPadBounds (*padGrid, 48).getY() && c1.getX() < d1.getX(), "C1 sits bottom left and pads rise row by row");
+        check (pads->isInterestedInFileDrag ({ audioFixture.getFullPathName() }) && ! pads->isInterestedInFileDrag ({ audioFixture.withFileExtension ("txt").getFullPathName() }),
+               "pads accept one audio file");
+        pads->filesDropped ({ audioFixture.getFullPathName() }, c1.getCentreX(), c1.getCentreY()); refresh();
+        check (rackInfo().chains.size() == 1 && rackInfo().chains[0].settings.receiveNote == 36 && rackInfo().chains[0].devices.size() == 1
+               && rackInfo().chains[0].devices[0].sample == audioFixture, "dropping a sample on C1 makes a pad chain with a Sampler");
+        auto* choke = dynamic_cast<juce::ComboBox*> (named (*editor, "Pad choke"));
+        check (choke != nullptr && choke->isVisible(), "the selected pad shows its choke group");
+        choke->setSelectedId (3, juce::sendNotificationSync);
+        check (rackInfo().chains[0].settings.chokeGroup == 2, "the choke chooser sets the pad's group");
+        dynamic_cast<juce::Button*> (named (*editor, "Add return"))->onClick(); refresh();
+        auto* send = dynamic_cast<juce::Slider*> (named (*editor, "Send A"));
+        check (rackInfo().returns.size() == 1 && send != nullptr && send->isVisible(), "+ Return adds a return and a send for the pad");
+        send->setValue (-12, juce::sendNotificationSync);
+        check (std::abs (rackInfo().chains[0].settings.sendsDb[0] + 12) < 1e-4f, "the send slider sets the pad's send");
+        padGrid->mouseDown (mouse (*padGrid, c1.getCentre(), c1.getCentre(), false));
+        padGrid->mouseUp (mouse (*padGrid, d1.getCentre(), c1.getCentre(), true)); refresh();
+        check (rackInfo().chains[0].settings.receiveNote == 37, "dragging a pad onto another moves its chain to that note");
+        dynamic_cast<juce::Button*> (named (*editor, "Pads up"))->onClick();
+        check (rackPadBounds (*padGrid, 52).getWidth() > 0 && rackPadBounds (*padGrid, 36).isEmpty(), "Up shows the next sixteen pads");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                dynamic_cast<juce::Button*> (named (*editor, "Pads down"))->onClick();
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("drum-rack.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (deviceChain.createComponentSnapshot (deviceChain.getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        check (chooser->getSelectedId() == 2 + (int) Session::EffectKind::drumRack - (int) Session::EffectKind::polySynth, "the instrument chooser shows Drum Rack");
+        check (session.setTrackInstrument (currentTrack()->id, std::nullopt).wasOk(), "restore the built-in synth after the rack checks"); refresh();
     }
     {
         // Freeze and Flatten from the track menu: devices lock while frozen, Flatten leaves audio.

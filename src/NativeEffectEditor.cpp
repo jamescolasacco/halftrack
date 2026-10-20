@@ -1,4 +1,5 @@
 #include "NativeEffects.h"
+#include "Racks.h"
 #include <complex>
 #include <optional>
 #if HALFTRACK_TESTS_ENABLED
@@ -160,11 +161,26 @@ public:
     }
     void synchronise()
     {
-        const auto value = settings(); const bool enabled = value.has_value() && ! session.isExporting();
+        auto value = settings(); const bool enabled = value.has_value() && ! session.isExporting();
         const auto specs = effectParameters (kind);
+        // A control a rack's macro drives shows the macro's value and cannot be edited directly.
+        std::array<bool, maximumControls> mapped {};
+        if (value)
+        {
+            const auto snapshot = session.snapshot();
+            if (const auto where = racks::locate (snapshot, pluginId); where.rack != nullptr)
+                for (size_t i = 0; i < specs.size(); ++i)
+                    if (const auto driven = racks::macroValue (*where.rack, pluginId, (int) i))
+                    {
+                        mapped[i] = true; value->values[i] = *driven;
+                        const auto tip = "Mapped to " + racks::macroName (*where.rack, racks::macroOf (*where.rack, pluginId, (int) i));
+                        sliders[i].setTooltip (tip); choices[i].setTooltip (tip);
+                    }
+        }
         for (size_t i = 0; i < specs.size(); ++i)
         {
-            sliders[i].setEnabled (enabled); choices[i].setEnabled (enabled);
+            sliders[i].setEnabled (enabled && ! mapped[i]); choices[i].setEnabled (enabled && ! mapped[i]);
+            if (! mapped[i]) { sliders[i].setTooltip ({}); choices[i].setTooltip ({}); }
             if (value) { sliders[i].setValue (value->values[i], juce::dontSendNotification); choices[i].setSelectedId ((int)value->values[i]+1, juce::dontSendNotification); }
         }
         if (value && kind == Session::EffectKind::equalizer)
@@ -223,11 +239,7 @@ private:
     std::optional<Session::EffectSettings> settings() const
     {
         const auto snapshot = session.snapshot();
-        for (const auto& track : snapshot.tracks)
-        {
-            if (track.instrument.isNativeEffect && track.instrument.id == pluginId) return track.instrument.effect;
-            for (const auto& p : track.plugins) if (p.id == pluginId && p.isNativeEffect) return p.effect;
-        }
+        if (const auto where = racks::locate (snapshot, pluginId); where.device != nullptr && where.device->isNativeEffect) return where.device->effect;
         return {};
     }
     void edit (size_t index, float v)

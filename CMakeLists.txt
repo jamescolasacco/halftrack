@@ -81,7 +81,7 @@ juce_add_gui_app(Halftrack
     PLUGINHOST_AU TRUE)
 
 juce_add_binary_data(HalftrackAssets SOURCES assets/halftrack-mark.svg)
-target_sources(Halftrack PRIVATE src/Main.cpp src/Session.cpp src/SubtractiveSynth.cpp src/UtilityProcessor.cpp src/UtilityEditor.cpp src/NativeEffects.cpp src/Racks.cpp src/EffectProcessors.cpp src/MidiEffects.cpp src/Instruments.cpp src/NativeEffectEditor.cpp src/AudioClipEditor.cpp src/AutomationEditor.cpp src/MainComponent.cpp tests/SessionTests.cpp tests/MidiTests.cpp tests/PersistenceTests.cpp tests/LatencyTests.cpp tests/LauncherTests.cpp)
+target_sources(Halftrack PRIVATE src/Main.cpp src/Session.cpp src/SubtractiveSynth.cpp src/UtilityProcessor.cpp src/UtilityEditor.cpp src/NativeEffects.cpp src/Racks.cpp src/EffectProcessors.cpp src/MidiEffects.cpp src/Instruments.cpp src/NativeEffectEditor.cpp src/RackEditor.cpp src/AudioClipEditor.cpp src/AutomationEditor.cpp src/MainComponent.cpp tests/SessionTests.cpp tests/MidiTests.cpp tests/PersistenceTests.cpp tests/LatencyTests.cpp tests/LauncherTests.cpp)
 target_include_directories(Halftrack PRIVATE src)
 target_compile_definitions(Halftrack PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
