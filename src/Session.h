@@ -360,6 +360,10 @@ public:
     juce::Result splitRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
     juce::Result deleteRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
     juce::Result duplicateRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
+    // Consolidate replaces each track's material in the selection with one clip spanning it: MIDI
+    // clips join into one MIDI clip, and audio clips render (without devices) into a new file in
+    // the project's Assets. Tracks without clips in the selection are left alone.
+    juce::Result consolidateRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds, juce::StringArray& newClipIds);
     // Insert Silence: everything at or after start moves later by length across all tracks, locators
     // and automation; clips crossing start split (audio) or open a gap between their notes (MIDI).
     juce::Result insertTime (double startSeconds, double lengthSeconds);

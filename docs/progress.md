@@ -915,3 +915,7 @@ The new test records a MIDI take and a generated audio take. During the MIDI tak
 ## Arrangement time selection — 2026-10-20
 
 Root owns the selection across `src/Session.*`, the Arrangement canvas and Edit menu in `src/MainComponent.cpp`, `tests/RangeEditTests.cpp`, the suite registration and documentation. Dragging over empty lane space selects time across tracks. Split, Duplicate (Cmd/Ctrl+D), Delete and Loop Selection act on it, and Insert Silence and Delete Time now use it in place of the loop range. MIDI clips can be split, with crossing notes divided and controller values carried. The new `range-edit-acceptance` suite compares renders sample by sample, and the UI suite covers selecting, duplicating and deleting. See [the selection contract](research/arrangement-selection-contract.md).
+
+## Consolidate — 2026-10-20
+
+Root owns `consolidateRange` in `src/Session.*`, Cmd/Ctrl+J and the Edit menu item, the consolidation block of `tests/RangeEditTests.cpp` and documentation. Consolidate replaces each selected track's material with one clip spanning the selection. MIDI clips join, and audio clips render (without devices) into a new file in Assets. The range-edit suite checks that a muted track with clip gain, a fade and a gap renders identically after consolidation, and that the MIDI join keeps every note and controller point.

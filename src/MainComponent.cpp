@@ -520,6 +520,7 @@ public:
             if (code == 'T') { if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
             if (code == 'Z') { if (shift) session.redo(); else session.undo(); refresh(); return true; }
             if (code == 'L' && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (79); return true; }
+            if (code == 'J' && ! shift && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (80); return true; }
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
             if (! shift && ! showSession && ! showPiano && timeSelection.active() && (code == 'E' || code == 'D')) { selectionCommand (code == 'E' ? 76 : 77); return true; }
             if (code == 'I' && ! showSession) { menuItemSelected (74, 1); return true; }
@@ -653,6 +654,7 @@ private:
         }
         else if (item == 78) report (session.deleteRange (timeSelection.trackIds, start, end));
         else if (item == 79) session.setLoop (true, start, end);
+        else if (item == 80) { juce::StringArray created; report (session.consolidateRange (timeSelection.trackIds, start, end, created)); }
         refresh();
     }
     const Session::GroupInfo* groupInfo (const juce::String& id) const
@@ -5027,6 +5029,7 @@ private:
             const bool selection = timeSelection.active() && ! showSession && ! state.recording;
             popup.addItem (76, "Split", selection); popup.addItem (77, "Duplicate Selection", selection);
             popup.addItem (78, "Delete Selection", selection); popup.addItem (79, "Loop Selection", selection);
+            popup.addItem (80, "Consolidate", selection);
             popup.addSeparator();
             const bool range = (selection || state.loopEnd > state.loopStart) && ! state.recording;
             const juce::String source = selection ? "" : " (Loop Range)";
@@ -5083,7 +5086,7 @@ private:
             case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); break;
             case 74: { const auto [a, b] = editRange(); report (session.insertTime (a, b - a)); refresh(); break; }
             case 75: { const auto [a, b] = editRange(); report (session.deleteTime (a, b - a)); timeSelection = {}; refresh(); break; }
-            case 76: case 77: case 78: case 79: selectionCommand (id); break;
+            case 76: case 77: case 78: case 79: case 80: selectionCommand (id); break;
             case 30: showPiano = false; addTrack(); resized(); break;
             case 33: addMidiTrack(); break;
             case 35: addReturnTrack(); break;
@@ -6715,6 +6718,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "the selection's clip is copied after it and the selection moves onto the copy");
         check (handleKey (juce::KeyPress (juce::KeyPress::deleteKey)), "Delete is handled"); refresh();
         check (starts() == before, "Delete removes the material in the selection");
+        timeSelection.start = .5; timeSelection.end = 2.5;
+        check (handleKey (juce::KeyPress ('J', juce::ModifierKeys::commandModifier, 0)), "Cmd/Ctrl+J is handled"); refresh();
+        check (state.tracks[(size_t) t].clips.size() == 1 && std::abs (state.tracks[(size_t) t].clips[0].start - .5) < 1e-6
+               && std::abs (state.tracks[(size_t) t].clips[0].length - 2) < 1e-6, "Cmd/Ctrl+J consolidates the selection into one clip spanning it");
+        session.undo(); refresh();
         session.undo(); session.undo(); refresh();
         check (starts() == before, "undo restores each step");
         timeSelection = {};

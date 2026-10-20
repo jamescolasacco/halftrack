@@ -4099,6 +4099,109 @@ Result Session::duplicateRange (const juce::StringArray& trackIds, double start,
     }
     impl->changed(); return Result::ok();
 }
+Result Session::consolidateRange (const juce::StringArray& trackIds, double start, double end, juce::StringArray& newClipIds)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before consolidating clips.");
+    juce::Array<te::AudioTrack*> tracks;
+    if (auto r = rangeTracks (*impl->edit, trackIds, start, end, tracks); r.failed()) return r;
+    const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (end);
+    const te::TimeRange range (from, to);
+    juce::Array<te::AudioTrack*> work;
+    for (auto* t : tracks)
+    {
+        bool any = false;
+        for (auto* c : t->getClips()) any = any || c->getPosition().time.overlaps (range);
+        if (! any) continue;
+        if (auto r = impl->unfrozen (t); r.failed()) return r;
+        for (const auto at : { from, to }) if (auto r = splittableAt (*t, at); r.failed()) return r;
+        work.add (t);
+    }
+    if (work.isEmpty()) return Result::fail ("There are no clips in the selection to consolidate.");
+    endEditGesture(); closePluginEditors();
+    // Audio tracks render first, before anything changes, so a failed render leaves the project as it was.
+    std::map<te::AudioTrack*, File> renders;
+    {
+        const juce::ScopedValueSetter<bool> exporting (impl->exporting, true);
+        std::vector<std::pair<juce::ValueTree, std::pair<juce::var, juce::var>>> saved;
+        for (auto* track : te::getAllTracks (*impl->edit))
+            if (dynamic_cast<te::AudioTrack*> (track) != nullptr || dynamic_cast<te::FolderTrack*> (track) != nullptr)
+                saved.push_back ({ track->state, { track->state[te::IDs::solo], track->state[te::IDs::mute] } });
+        const bool wasDirty = impl->edit->hasChangedSinceSaved();
+        const auto put = [] (juce::ValueTree& state, const juce::Identifier& id, const juce::var& value)
+        { if (value.isVoid()) state.removeProperty (id, nullptr); else state.setProperty (id, value, nullptr); };
+        const auto restore = [&]
+        {
+            for (auto& [state, values] : saved) { put (state, te::IDs::solo, values.first); put (state, te::IDs::mute, values.second); }
+            impl->refreshRouting();
+            if (! wasDirty) impl->edit->resetChangedStatus();
+        };
+        auto assets = impl->assets();
+        if (auto r = assets.createDirectory(); r.failed()) return r;
+        const auto rate = impl->engine.getDeviceManager().getSampleRate() > 0 ? impl->engine.getDeviceManager().getSampleRate() : 48000.0;
+        for (auto* t : work)
+        {
+            if (static_cast<bool> (t->state.getProperty (midiTrackProperty, false))) continue;
+            // Only this track's clips, heard alone and unmuted, without its devices or mixer.
+            for (auto& [state, values] : saved) { state.setProperty (te::IDs::solo, state == t->state, nullptr); if (state == t->state) state.setProperty (te::IDs::mute, false, nullptr); }
+            impl->refreshRouting();
+            impl->edit->dispatchPendingUpdatesSynchronously();
+            const te::Edit::ScopedRenderStatus renderStatus (*impl->edit, true);
+            const auto target = assets.getNonexistentChildFile (File::createLegalFileName (t->getName() + " Consolidated"), ".wav", true);
+            te::Renderer::Parameters p (*impl->edit);
+            p.destFile = target; p.audioFormat = impl->engine.getAudioFileFormatManager().getWavFormat();
+            p.bitDepth = 32; p.sampleRateForAudio = rate; p.blockSizeForAudio = 512;
+            p.time = range; p.tracksToDo = te::toBitSet (juce::Array<te::Track*> { t });
+            for (auto* c : t->getClips()) if (c->getPosition().time.overlaps (range)) p.allowedClips.add (c);
+            p.usePlugins = false; p.useMasterPlugins = false; p.canRenderInMono = false; p.checkNodesForAudio = false; p.ditheringEnabled = false;
+            const auto rendered = te::Renderer::renderToFile ("Consolidate " + t->getName(), p);
+            if (! rendered.existsAsFile()) { restore(); return Result::fail ("\"" + t->getName() + "\" could not be consolidated."); }
+            renders[t] = rendered;
+        }
+        restore();
+    }
+    impl->transaction ("Consolidate");
+    auto* undo = &impl->edit->getUndoManager();
+    newClipIds.clear();
+    for (auto* t : work)
+    {
+        for (const auto at : { from, to }) splitTrackAt (*t, at, undo);
+        std::vector<te::Clip::Ptr> inside;
+        for (auto* c : t->getClips())
+            if (c->getPosition().getStart() >= from - te::TimeDuration::fromSeconds (1e-6) && c->getPosition().getEnd() <= to + te::TimeDuration::fromSeconds (1e-6)) inside.emplace_back (c);
+        if (auto found = renders.find (t); found != renders.end())
+        {
+            for (auto& c : inside) c->removeFromParent();
+            auto clip = te::insertWaveClip (*t, t->getName() + " Consolidated", found->second, { range, {} }, te::DeleteExistingClips::no);
+            if (! clip) return Result::fail ("The consolidated clip could not be created.");
+            clip->setAutoTempo (false); clip->setAutoPitch (false);
+            clip->setFadeIn (te::TimeDuration()); clip->setFadeOut (te::TimeDuration());
+            newClipIds.add (clip->itemID.toString());
+            continue;
+        }
+        // MIDI: one clip over the selection holding every note and controller point, in time order.
+        auto joined = t->insertMIDIClip ("MIDI clip", range, nullptr);
+        if (joined == nullptr) return Result::fail ("The consolidated MIDI clip could not be created.");
+        joined->setSyncType (te::Clip::syncBarsBeats);
+        auto& sequence = joined->getSequence();
+        const auto origin = impl->edit->tempoSequence.toBeats (from);
+        for (auto& c : inside)
+            if (auto* midi = dynamic_cast<te::MidiClip*> (c.get()))
+            {
+                const auto shift = midi->getStartBeat() - origin;
+                for (auto* note : midi->getSequence().getNotes())
+                {
+                    auto* added = sequence.addNote (note->getNoteNumber(), note->getStartBeat() + shift, note->getLengthBeats(), note->getVelocity(), note->getColour(), undo);
+                    if (added != nullptr) { added->setMute (note->isMute(), undo); added->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), undo); }
+                }
+                for (auto* event : midi->getSequence().getControllerEvents())
+                    sequence.addControllerEvent (event->getBeatPosition() + shift, event->getType(), event->getControllerValue(), event->getMetadata(), undo);
+                c->removeFromParent();
+            }
+        newClipIds.add (joined->itemID.toString());
+    }
+    impl->changed(); return Result::ok();
+}
 Result Session::insertTime (double start, double length)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
