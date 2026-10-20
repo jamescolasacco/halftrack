@@ -223,13 +223,41 @@ public:
             if (event.eventComponent == &sliders[i] || event.eventComponent == &choices[i])
             {
                 juce::PopupMenu menu; menu.addItem (1, "Show Automation for " + juce::String (effectParameters (kind)[i].label));
+                // Inside a rack, a control can be mapped to one of the rack's macros, or unmapped.
+                juce::String rackId; int mappedTo = -1;
+                {
+                    const auto snapshot = session.snapshot();
+                    if (const auto where = racks::locate (snapshot, pluginId); where.rack != nullptr)
+                    {
+                        rackId = where.rack->id; mappedTo = racks::macroOf (*where.rack, pluginId, (int) i);
+                        juce::PopupMenu macros;
+                        for (int m = 0; m < Session::rackMacroCount; ++m) macros.addItem (100 + m, racks::macroName (*where.rack, m), m != mappedTo);
+                        menu.addSeparator(); menu.addSubMenu ("Map to Macro", macros);
+                        if (mappedTo >= 0) menu.addItem (2, "Remove Mapping from " + racks::macroName (*where.rack, mappedTo));
+                    }
+                }
                 auto safe = juce::Component::SafePointer<NativeEffectEditor> (this);
-                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (event.eventComponent),
-                                    [safe, i] (int choice) { if (safe != nullptr && choice == 1) safe->requestAutomation ((int) i); });
+                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (event.eventComponent), [safe, i, rackId, mappedTo] (int choice)
+                {
+                    if (safe == nullptr) return;
+                    if (choice == 1) safe->requestAutomation ((int) i);
+                    else if (choice == 2) safe->mapToMacro ((int) i, rackId, -1, mappedTo);
+                    else if (choice >= 100) safe->mapToMacro ((int) i, rackId, choice - 100, mappedTo);
+                });
                 return;
             }
     }
     void requestAutomation (int parameter) { finishGesture(); if (showAutomation) showAutomation (parameter); }
+    // Maps a control to a macro over its whole range (macro -1 removes the mapping from `previous`).
+    void mapToMacro (int parameter, const juce::String& rackId, int macro, int previous)
+    {
+        finishGesture();
+        const auto& field = effectParameters (kind)[(size_t) parameter];
+        const auto result = macro < 0 ? session.removeRackMacroMapping (rackId, previous, pluginId, parameter)
+                                      : session.setRackMacroMapping (rackId, { macro, pluginId, parameter, field.minimum, field.maximum });
+        error.setText (result.failed() ? result.getErrorMessage() : juce::String(), juce::dontSendNotification);
+        synchronise();
+    }
 private:
     // Instruments and other large devices use a compact eight-column grid.
     bool dense() const noexcept { return effectParameters (kind).size() > 16; }

@@ -3915,13 +3915,16 @@ private:
                                    : makeNativeEffectEditor (owner.session, info.id, true, [automation, id = info.id] (int parameter) { automation (id, parameter); });
                 addAndMakeVisible (*body);
             }
+            // The title selects the device for Cmd/Ctrl+G grouping and deletion.
+            setWantsKeyboardFocus (true);
+            rack = info.isRack; chains = (int) info.chains.size();
             sync (info);
         }
         const juce::String& getId() const noexcept { return pluginId; }
         int preferredWidth() const { return native && body ? body->getWidth() + 2 : 184; }
         void sync (const Session::PluginInfo& info)
         {
-            name = info.name; enabled = info.enabled;
+            name = info.name; enabled = info.enabled; chains = (int) info.chains.size();
             midi = info.isNativeEffect && effectIsMidi (info.effect.kind);
             power.setToggleState (info.enabled, juce::dontSendNotification);
             repaint();
@@ -3934,8 +3937,9 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
+            const bool selected = owner.selectedDevices.contains (pluginId);
             g.fillAll (juce::Colour (0xff303030));
-            g.setColour (enabled ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff383838)); g.fillRect (0, 0, getWidth(), titleHeight);
+            g.setColour (selected ? juce::Colour (0xff5e5e5e) : enabled ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff383838)); g.fillRect (0, 0, getWidth(), titleHeight);
             g.setColour (enabled ? ink : muted); g.setFont (font (11.0f, true));
             g.drawText (name, 24, 0, getWidth() - 70, titleHeight, juce::Justification::centredLeft, true);
             if (! native)
@@ -3945,15 +3949,21 @@ private:
                                   getLocalBounds().withTrimmedTop (titleHeight).reduced (10), juce::Justification::centred, 3);
             }
             if (! enabled) { g.setColour (juce::Colours::black.withAlpha (0.25f)); g.fillRect (getLocalBounds().withTrimmedTop (titleHeight)); }
-            g.setColour (line); g.drawRect (getLocalBounds());
+            g.setColour (selected ? orange : line); g.drawRect (getLocalBounds());
         }
+        bool keyPressed (const juce::KeyPress& key) override { return owner.deviceKey (key); }
         void mouseDown (const juce::MouseEvent& e) override
         {
-            if (! e.mods.isPopupMenu() || e.y > titleHeight) return;
+            if (e.y > titleHeight) return;
+            // Clicking the title selects the device: Shift extends the selection, Cmd/Ctrl toggles it.
+            if (! e.mods.isPopupMenu()) { owner.selectDevice (pluginId, e.mods); grabKeyboardFocus(); return; }
             const int p = index(); const auto* track = owner.currentTrack(); if (p < 0 || track == nullptr) return;
+            if (! owner.selectedDevices.contains (pluginId)) owner.selectDevice (pluginId, {});
             juce::PopupMenu menu;
             menu.addItem (1, "Move left", p > 0); menu.addItem (2, "Move right", p + 1 < (int) track->plugins.size());
-            menu.addSeparator(); menu.addItem (3, enabled ? "Deactivate" : "Activate"); menu.addItem (5, "Group", native); menu.addItem (4, "Delete");
+            menu.addSeparator(); menu.addItem (3, enabled ? "Deactivate" : "Activate");
+            menu.addItem (5, "Group", native); if (rack) menu.addItem (6, "Ungroup", chains <= 1);
+            menu.addItem (4, "Delete");
             const auto trackId = track->id, id = pluginId;
             juce::Component::SafePointer<Impl> safe (&owner);
             menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe, trackId, id] (int choice)
@@ -3965,10 +3975,10 @@ private:
                         for (int p = 0; p < (int) snapshot.tracks[(size_t) t].plugins.size(); ++p)
                             if (snapshot.tracks[(size_t) t].plugins[(size_t) p].id == id)
                             {
-                                juce::String rack;
                                 if (choice <= 2) safe->report (safe->session.movePlugin (t, p, p + (choice == 1 ? -1 : 1)));
                                 else if (choice == 3) safe->report (safe->session.setPluginEnabled (t, p, ! snapshot.tracks[(size_t) t].plugins[(size_t) p].enabled));
-                                else if (choice == 5) safe->report (safe->session.groupDevices (t, p, p, rack));
+                                else if (choice == 5) safe->groupSelectedDevices();
+                                else if (choice == 6) { safe->report (safe->session.ungroupRack (id)); safe->selectedDevices.clear(); }
                                 else safe->report (safe->session.removePlugin (t, p));
                                 safe->refresh(); return;
                             }
@@ -3984,7 +3994,8 @@ private:
         }
         Impl& owner;
         juce::String pluginId, name;
-        bool native = false, enabled = true, midi = false;
+        bool native = false, enabled = true, midi = false, rack = false;
+        int chains = 0;
         juce::TextButton power { "" }, open { "^" }, remove { "x" };
         std::unique_ptr<juce::Component> body;
     };
@@ -4675,6 +4686,10 @@ private:
         if (midiLaunch.isVisible()) if (const auto* clip = sessionMidiClip()) midiLaunch.setClip (*clip);
         newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
         importButton.setEnabled (currentTrack() == nullptr || ! currentTrack()->isReturn);
+        {
+            const auto ids = trackDeviceIds();
+            for (int i = selectedDevices.size(); --i >= 0;) if (std::find (ids.begin(), ids.end(), selectedDevices[i]) == ids.end()) selectedDevices.remove (i);
+        }
         ruler.sync(); deviceChain.sync(); repaint();
         updateScroll();
     }
@@ -5422,6 +5437,68 @@ private:
         list->setOptionsButtonText ("Scan / Manage Plug-ins");
         list->setNumberOfThreadsForScanning (1);
         showDialog ("Halftrack - Plug-in Library", std::move (list), 780, 520);
+    }
+    // Devices selected in the track's device chain, for grouping, ungrouping and deleting.
+    juce::StringArray selectedDevices;
+    std::vector<juce::String> trackDeviceIds() const
+    {
+        std::vector<juce::String> ids;
+        if (const auto* track = currentTrack()) for (const auto& p : track->plugins) ids.push_back (p.id);
+        return ids;
+    }
+    void selectDevice (const juce::String& id, juce::ModifierKeys mods)
+    {
+        const auto ids = trackDeviceIds();
+        const auto at = [&] (const juce::String& v) { return (int) (std::find (ids.begin(), ids.end(), v) - ids.begin()); };
+        if (at (id) >= (int) ids.size()) return;
+        if (mods.isShiftDown() && ! selectedDevices.isEmpty() && at (selectedDevices[0]) < (int) ids.size())
+        {
+            const auto anchor = selectedDevices[0];
+            selectedDevices.clearQuick(); selectedDevices.add (anchor);
+            for (int i = juce::jmin (at (anchor), at (id)); i <= juce::jmax (at (anchor), at (id)); ++i) selectedDevices.addIfNotAlreadyThere (ids[(size_t) i]);
+        }
+        else if (mods.isCommandDown()) { if (selectedDevices.contains (id)) selectedDevices.removeString (id); else selectedDevices.add (id); }
+        else { selectedDevices.clearQuick(); selectedDevices.add (id); }
+        deviceChain.repaint();
+    }
+    juce::StringArray orderedSelection() const
+    {
+        juce::StringArray ordered;
+        for (const auto& id : trackDeviceIds()) if (selectedDevices.contains (id)) ordered.add (id);
+        return ordered;
+    }
+    void groupSelectedDevices()
+    {
+        const auto ids = orderedSelection();
+        if (ids.isEmpty() || selectedTrack < 0) return;
+        juce::String rack; report (session.groupDevices (selectedTrack, ids, rack));
+        selectedDevices.clearQuick(); if (rack.isNotEmpty()) selectedDevices.add (rack);
+        refresh();
+    }
+    void ungroupSelectedRack()
+    {
+        if (const auto* track = currentTrack())
+            for (const auto& id : orderedSelection())
+                for (const auto& p : track->plugins)
+                    if (p.id == id && p.isRack) { report (session.ungroupRack (id)); selectedDevices.clearQuick(); refresh(); return; }
+    }
+    void deleteSelectedDevices()
+    {
+        for (const auto& id : orderedSelection())
+        {
+            const auto ids = trackDeviceIds();
+            if (const auto index = (int) (std::find (ids.begin(), ids.end(), id) - ids.begin()); index < (int) ids.size())
+            { report (session.removePlugin (selectedTrack, index)); refresh(); }
+        }
+        selectedDevices.clearQuick(); refresh();
+    }
+    bool deviceKey (const juce::KeyPress& key)
+    {
+        if (session.isExporting()) return true;
+        const auto code = key.getKeyCode(); const auto mods = key.getModifiers();
+        if (mods.isCommandDown() && (code == 'G' || code == 'g')) { if (mods.isShiftDown()) ungroupSelectedRack(); else groupSelectedDevices(); return true; }
+        if (! mods.isCommandDown() && (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)) { deleteSelectedDevices(); return true; }
+        return false;
     }
     void addPluginMenu()
     {
@@ -6293,6 +6370,40 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     && png.writeImageToStream (deviceChain.createComponentSnapshot (deviceChain.getLocalBounds(), true, 1.0f), *stream))
                     std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
             }
+        // Device selection: Shift-click two device titles, group them with Cmd/Ctrl+G, ungroup with
+        // Cmd/Ctrl+Shift+G and delete the selection with Delete.
+        check (session.addNativeEffect (selectedTrack, Session::EffectKind::equalizer).wasOk() && session.addNativeEffect (selectedTrack, Session::EffectKind::delay).wasOk(),
+               "add two audio devices after the rack"); refresh();
+        const auto devicePanels = [&]
+        {
+            std::vector<DevicePanel*> found;
+            std::function<void (juce::Component&)> scan = [&] (juce::Component& c)
+            { for (int i = 0; i < c.getNumChildComponents(); ++i) { if (auto* p = dynamic_cast<DevicePanel*> (c.getChildComponent (i))) found.push_back (p); scan (*c.getChildComponent (i)); } };
+            scan (deviceChain); return found;
+        };
+        const auto title = [&] (DevicePanel& panel, juce::ModifierKeys mods)
+        {
+            const auto now = juce::Time::getCurrentTime();
+            return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { 40.0f, 8.0f }, mods, 1.0f, 0, 0, 0, 0, &panel, &panel, now, { 40.0f, 8.0f }, now, 1, false);
+        };
+        auto panels = devicePanels();
+        check (panels.size() == 2, "both devices show in the chain");
+        panels[0]->mouseDown (title (*panels[0], juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier)));
+        panels[1]->mouseDown (title (*panels[1], juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier)));
+        check (selectedDevices.size() == 2, "Shift-click extends the device selection");
+        panels[1]->keyPressed (juce::KeyPress ('G', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)); refresh();
+        check (currentTrack()->plugins.size() == 1 && currentTrack()->plugins[0].isRack && currentTrack()->plugins[0].effect.kind == Session::EffectKind::audioEffectRack
+               && currentTrack()->plugins[0].chains.size() == 1 && currentTrack()->plugins[0].chains[0].devices.size() == 2 && selectedDevices.size() == 1,
+               "Cmd/Ctrl+G groups the selected devices into an Audio Effect Rack and selects it");
+        panels = devicePanels();
+        panels[0]->keyPressed (juce::KeyPress ('G', juce::ModifierKeys (juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier), 0)); refresh();
+        check (currentTrack()->plugins.size() == 2 && ! currentTrack()->plugins[0].isRack && currentTrack()->plugins[0].effect.kind == Session::EffectKind::equalizer,
+               "Cmd/Ctrl+Shift+G ungroups the selected rack");
+        panels = devicePanels();
+        panels[0]->mouseDown (title (*panels[0], juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier)));
+        panels[1]->mouseDown (title (*panels[1], juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::commandModifier)));
+        panels[1]->keyPressed (juce::KeyPress (juce::KeyPress::deleteKey)); refresh();
+        check (currentTrack()->plugins.empty() && selectedDevices.isEmpty(), "Delete removes the selected devices");
         // A Drum Rack: drop a sample on a pad, set its choke group, add a return and send to it, then move the pad.
         chooser->setSelectedId (2 + (int) Session::EffectKind::drumRack - (int) Session::EffectKind::polySynth, juce::sendNotificationSync); refresh();
         editor = findNamed (deviceChain, "Rack editor");

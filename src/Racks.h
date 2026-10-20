@@ -23,6 +23,7 @@ namespace racks
 using Kind = Session::EffectKind;
 inline const juce::Identifier chainType { "RACKCHAIN" }, returnType { "RACKRETURN" }, mappingType { "MACROMAPPING" };
 inline const juce::Identifier visibleMacrosProperty { "halftrackVisibleMacros" };
+inline juce::Identifier macroNameProperty (int macro) { return juce::Identifier ("halftrackMacroName" + juce::String (macro + 1)); }
 constexpr int maximumSlots = Session::maximumRackChains + Session::maximumRackReturns;
 constexpr int maximumDepth = 4;            // A rack and up to three racks nested inside it.
 constexpr double rampSeconds = .005;       // Chain gain, input and send changes ramp over 5 ms.
@@ -72,7 +73,7 @@ Located locate (const Session::Snapshot&, const juce::String& id);
 std::optional<float> macroValue (const Session::PluginInfo& rack, const juce::String& targetId, int parameter);
 // The macro driving a target, or -1.
 int macroOf (const Session::PluginInfo& rack, const juce::String& targetId, int parameter);
-// A macro's label: the name of its only target's control, otherwise "Macro N".
+// A macro's label: its given name, else the name of its only target's control, else "Macro N".
 juce::String macroName (const Session::PluginInfo& rack, int macro);
 
 class RackEngine final
@@ -92,6 +93,8 @@ public:
     double tailSeconds() const noexcept { return tail; }
     // Devices directly in this rack's chains and returns, in order.
     std::vector<NativeEffectPlugin*> devices() const;
+    // Every device directly in this rack's chains and returns, Utilities included.
+    std::vector<tracktion::Plugin*> plugins() const;
     // A device here or in a nested rack.
     NativeEffectPlugin* findDevice (const juce::String& id) const;
     // Audio thread.
@@ -101,7 +104,7 @@ private:
     struct Device
     {
         tracktion::Plugin* plugin = nullptr;
-        NativeEffectPlugin* native = nullptr;
+        NativeEffectPlugin* native = nullptr; // Null for a Utility.
         Kind kind = Kind::equalizer;
         bool enabled = true;
         int mapped = -1; // Index of this device's macro value array, or -1.

@@ -95,14 +95,25 @@ Session::PluginInfo describeDevice (NativeEffectPlugin& native)
     {
         info.isRack = true;
         info.visibleMacros = juce::jlimit (1, Session::rackMacroCount, static_cast<int> (native.state.getProperty (racks::visibleMacrosProperty, 8)));
-        const auto devices = engine->devices();
+        for (int m = 0; m < Session::rackMacroCount; ++m) info.macroNames[(size_t) m] = native.state[racks::macroNameProperty (m)].toString();
+        const auto devices = engine->plugins();
         for (const auto& child : native.state)
         {
             if (child.hasType (racks::mappingType)) { info.mappings.push_back (racks::readMapping (child)); continue; }
             if (! child.hasType (racks::chainType) && ! child.hasType (racks::returnType)) continue;
             Session::RackChainInfo chain { child[te::IDs::id].toString(), racks::readChain (child), {} };
             for (const auto& device : child)
-                for (auto* d : devices) if (d->state == device) chain.devices.push_back (describeDevice (*d));
+                for (auto* d : devices)
+                {
+                    if (d->state != device) continue;
+                    if (auto* inner = dynamic_cast<NativeEffectPlugin*> (d)) chain.devices.push_back (describeDevice (*inner));
+                    else if (auto* utility = dynamic_cast<UtilityPlugin*> (d))
+                    {
+                        Session::PluginInfo entry { utility->itemID.toString(), utility->getName(), utility->isEnabled() };
+                        entry.isUtility = true; entry.utility = utility->readSettings();
+                        chain.devices.push_back (std::move (entry));
+                    }
+                }
             (child.hasType (racks::returnType) ? info.returns : info.chains).push_back (std::move (chain));
         }
     }
@@ -1593,17 +1604,27 @@ struct Session::Impl
         return result;
     }
     // A device inside a rack: the rack directly holding it and the chain it is in.
-    struct RackDeviceRef { NativeEffectPlugin* device = nullptr; NativeEffectPlugin* rack = nullptr; juce::ValueTree chain; te::AudioTrack* track = nullptr; };
+    struct RackDeviceRef { te::Plugin* device = nullptr; NativeEffectPlugin* native = nullptr; NativeEffectPlugin* rack = nullptr; juce::ValueTree chain; te::AudioTrack* track = nullptr; };
     RackDeviceRef rackDevice (const String& id) const
     {
         RackDeviceRef result;
         visitDevices ([&] (te::AudioTrack& t, NativeEffectPlugin& d)
         {
             if (result.device != nullptr || d.rackEngine() == nullptr) return;
-            for (auto* inner : d.rackEngine()->devices())
-                if (inner->itemID.toString() == id) { result = { inner, &d, inner->state.getParent(), &t }; return; }
+            for (auto* inner : d.rackEngine()->plugins())
+                if (inner->itemID.toString() == id) { result = { inner, dynamic_cast<NativeEffectPlugin*> (inner), &d, inner->state.getParent(), &t }; return; }
         });
         return result;
+    }
+    // A Utility on a track or inside a rack.
+    UtilityPlugin* utility (const String& id, te::AudioTrack** owner = nullptr) const
+    {
+        for (auto* t : te::getAudioTracks (*edit))
+            for (auto* p : t->pluginList.getPlugins())
+                if (auto* found = dynamic_cast<UtilityPlugin*> (p); found && found->itemID.toString() == id) { if (owner) *owner = t; return found; }
+        const auto ref = rackDevice (id);
+        if (auto* found = dynamic_cast<UtilityPlugin*> (ref.device)) { if (owner) *owner = ref.track; return found; }
+        return nullptr;
     }
     // Removes the rack's macro mappings that drive any of these targets, in the current transaction.
     void removeMappings (NativeEffectPlugin& rackDevice, const juce::StringArray& targets)
@@ -1641,7 +1662,7 @@ struct Session::Impl
         return deepest + (effectIsRack (static_cast<EffectKind> (static_cast<int> (device.getProperty ("effectKind", 0)))) ? 1 : 0);
     }
     // Wraps devices (copies with fresh identities) into one chain of a new rack at the first device's position.
-    Result group (te::AudioTrack& track, const std::vector<NativeEffectPlugin*>& devices, EffectKind kind, String& rackId)
+    Result group (te::AudioTrack& track, const std::vector<te::Plugin*>& devices, EffectKind kind, String& rackId)
     {
         int depth = 0;
         for (auto* d : devices) depth = std::max (depth, nestedDepth (d->state));
@@ -1654,6 +1675,8 @@ struct Session::Impl
         edit->createNewItemID().writeID (chainState, nullptr);
         RackChainSettings settings; settings.name = devices.front()->getName();
         racks::writeChain (chainState, settings, nullptr);
+        if (kind == EffectKind::midiEffectRack)
+            for (auto* d : devices) if (dynamic_cast<NativeEffectPlugin*> (d) == nullptr) return Result::fail ("A MIDI Effect Rack holds MIDI effects only.");
         for (auto* d : devices)
         {
             auto copy = d->state.createCopy();
@@ -1662,9 +1685,10 @@ struct Session::Impl
         }
         rackState.appendChild (chainState, nullptr);
         const int position = track.pluginList.indexOf (devices.front());
+        // Creating the inner devices can write to their state, so that belongs to this step too.
+        transaction ("Group devices");
         auto plugin = edit->getPluginCache().createNewPlugin (rackState);
         if (plugin == nullptr) return Result::fail ("The rack could not be created.");
-        transaction ("Group devices");
         for (auto* d : devices) { d->windowState->closeWindowExplicitly(); d->deleteFromParent(); }
         track.pluginList.insertPlugin (plugin, position, nullptr);
         rackId = plugin->itemID.toString();
@@ -5143,19 +5167,15 @@ Result Session::addUtility (int index)
 }
 Result Session::setUtilitySettings (const String& id, const UtilitySettings& settings)
 {
-    if (auto frozen = impl->unfrozen (impl->trackOfPlugin (id)); frozen.failed()) return frozen;
+    te::AudioTrack* owner = nullptr;
+    auto* utility = impl->utility (id, &owner);
+    if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! UtilityPlugin::validSettings (settings)) return Result::fail ("Channel utility settings are outside their supported ranges.");
-    for (auto* track : te::getAudioTracks (*impl->edit))
-        for (auto* plugin : track->pluginList.getPlugins())
-            if (plugin->itemID.toString() == id)
-                if (auto* utility = dynamic_cast<UtilityPlugin*> (plugin))
-                {
-                    if (utility->readSettings() == settings) return Result::ok();
-                    impl->transaction ("Edit channel utility"); utility->writeSettings (settings);
-                    impl->changed(); return Result::ok();
-                }
-    return Result::fail ("Channel utility not found.");
+    if (utility == nullptr) return Result::fail ("Channel utility not found.");
+    if (utility->readSettings() == settings) return Result::ok();
+    impl->transaction ("Edit channel utility"); utility->writeSettings (settings);
+    impl->changed(); return Result::ok();
 }
 namespace
 {
@@ -5309,6 +5329,38 @@ Result Session::addRackDevice (const String& chainId, EffectKind kind, String& d
     deviceId = state[te::IDs::id].toString();
     impl->changed(); return Result::ok();
 }
+Result Session::addRackUtility (const String& chainId, String& deviceId, int index)
+{
+    auto ref = impl->chain (chainId);
+    if (ref.rack == nullptr) return Result::fail ("Chain not found.");
+    if (auto r = impl->editable (ref.track); r.failed()) return r;
+    if (! ref.isReturn && ref.rack->getKind() == EffectKind::midiEffectRack) return Result::fail ("A MIDI chain holds MIDI effects only.");
+    const auto devices = chainDevices (ref.state);
+    if ((int) devices.size() >= maximumChainDevices) return Result::fail ("A chain holds at most 32 devices.");
+    // The Utility goes among the chain's audio devices.
+    int low = 0;
+    for (const auto& d : devices) if (racks::deviceStage (deviceKind (d)) < 2 && d[te::IDs::type].toString() == NativeEffectPlugin::xmlTypeName) ++low;
+    const int position = index < 0 ? (int) devices.size() : juce::jlimit (low, (int) devices.size(), index);
+    juce::ValueTree state (te::IDs::PLUGIN);
+    state.setProperty (te::IDs::type, UtilityPlugin::xmlTypeName, nullptr);
+    impl->edit->createNewItemID().writeID (state, nullptr);
+    impl->transaction ("Add channel utility");
+    ref.state.addChild (state, position < (int) devices.size() ? ref.state.indexOf (devices[(size_t) position]) : -1, &impl->edit->getUndoManager());
+    if (devices.empty() && ref.state[te::IDs::name].toString() == "Chain") ref.state.setProperty (te::IDs::name, "Utility", &impl->edit->getUndoManager());
+    deviceId = state[te::IDs::id].toString();
+    impl->changed(); return Result::ok();
+}
+Result Session::showDeviceEditor (const String& deviceId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    te::Plugin* plugin = impl->nativeDevice (deviceId);
+    if (plugin == nullptr) plugin = impl->utility (deviceId);
+    if (plugin == nullptr) return Result::fail ("Device not found.");
+    plugin->windowState->showWindowExplicitly();
+    auto* window = dynamic_cast<PluginWindow*> (plugin->windowState->pluginWindow.get());
+    if (window == nullptr || ! window->isVisible() || window->getContentComponent() == nullptr) return Result::fail ("This device has no available editor.");
+    return Result::ok();
+}
 Result Session::removeRackDevice (const String& deviceId)
 {
     auto ref = impl->rackDevice (deviceId);
@@ -5352,10 +5404,10 @@ Result Session::setRackDeviceEnabled (const String& deviceId, bool enabled)
 Result Session::setRackDeviceSample (const String& deviceId, const File& sample)
 {
     auto ref = impl->rackDevice (deviceId);
-    if (ref.device == nullptr || ref.device->getKind() != EffectKind::sampler) return Result::fail ("Sampler not found in a rack.");
+    if (ref.native == nullptr || ref.native->getKind() != EffectKind::sampler) return Result::fail ("Sampler not found in a rack.");
     if (auto r = impl->editable (ref.track); r.failed()) return r;
     if (const auto problem = samplerSampleProblem (sample); problem.isNotEmpty()) return Result::fail (problem);
-    if (ref.device->sampleFile() == sample) return Result::ok();
+    if (ref.native->sampleFile() == sample) return Result::ok();
     impl->transaction ("Load sample");
     ref.device->state.setProperty (samplerSampleProperty, sample.getFullPathName(), &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
@@ -5476,6 +5528,21 @@ Result Session::setRackVisibleMacros (const String& rackId, int count)
     rack->state.setProperty (racks::visibleMacrosProperty, count, nullptr);
     impl->changed(); return Result::ok();
 }
+Result Session::setRackMacroName (const String& rackId, int macro, const String& name)
+{
+    te::AudioTrack* track = nullptr;
+    auto* rack = impl->rack (rackId, &track);
+    if (rack == nullptr) return Result::fail ("Rack not found.");
+    if (auto r = impl->editable (track); r.failed()) return r;
+    if (! juce::isPositiveAndBelow (macro, rackMacroCount)) return Result::fail ("Racks have macros 1 to 16.");
+    const auto trimmed = name.trim();
+    if (trimmed.length() > 64 || trimmed.containsAnyOf ("\r\n")) return Result::fail ("Macro names are one line of at most 64 characters.");
+    if (rack->state[racks::macroNameProperty (macro)].toString() == trimmed) return Result::ok();
+    impl->transaction ("Rename macro");
+    if (trimmed.isEmpty()) rack->state.removeProperty (racks::macroNameProperty (macro), &impl->edit->getUndoManager());
+    else rack->state.setProperty (racks::macroNameProperty (macro), trimmed, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
 Result Session::setDrumRackPadSample (const String& rackId, int note, const File& sample, String& chainId)
 {
     te::AudioTrack* track = nullptr;
@@ -5593,23 +5660,59 @@ Result Session::removeRackReturn (const String& returnId)
     ref.rack->state.removeChild (ref.state, undo);
     impl->changed(); return Result::ok();
 }
-Result Session::groupDevices (int trackIndex, int first, int last, String& rackId)
+Result Session::groupDevices (int trackIndex, const juce::StringArray& ids, String& rackId)
 {
     auto* track = impl->track (trackIndex);
     if (track == nullptr) return Result::fail ("Track not found.");
     if (auto r = impl->editable (track); r.failed()) return r;
-    const auto list = impl->plugins (trackIndex);
-    if (first < 0 || last < first || last >= list.size()) return Result::fail ("Choose devices to group.");
-    std::vector<NativeEffectPlugin*> devices;
-    for (int i = first; i <= last; ++i)
+    std::set<String> wanted (ids.begin(), ids.end());
+    if (ids.isEmpty() || (int) wanted.size() != ids.size()) return Result::fail ("Choose devices to group, each once.");
+    std::vector<te::Plugin*> devices; bool anyMidi = false;
+    for (auto* p : impl->plugins (trackIndex))
     {
-        auto* native = dynamic_cast<NativeEffectPlugin*> (list[i]);
-        if (native == nullptr) return Result::fail ("Only built-in devices can be grouped into a rack.");
-        if (! devices.empty() && effectIsMidi (native->getKind()) != effectIsMidi (devices.front()->getKind()))
-            return Result::fail ("Group MIDI effects and audio effects separately.");
-        devices.push_back (native);
+        if (! wanted.contains (p->itemID.toString())) continue;
+        auto* native = dynamic_cast<NativeEffectPlugin*> (p);
+        // Built-in devices and the Utility can go into racks; hosted plug-ins cannot yet.
+        const bool midi = native != nullptr && effectIsMidi (native->getKind());
+        if (native == nullptr && dynamic_cast<UtilityPlugin*> (p) == nullptr) return Result::fail ("Only built-in devices and the Utility can be grouped into a rack.");
+        if (! devices.empty() && midi != anyMidi) return Result::fail ("Group MIDI effects and audio effects separately.");
+        anyMidi = midi; devices.push_back (p);
     }
-    return impl->group (*track, devices, effectIsMidi (devices.front()->getKind()) ? EffectKind::midiEffectRack : EffectKind::audioEffectRack, rackId);
+    if (devices.size() != wanted.size()) return Result::fail ("Those devices are not all on this track.");
+    return impl->group (*track, devices, anyMidi ? EffectKind::midiEffectRack : EffectKind::audioEffectRack, rackId);
+}
+Result Session::ungroupRack (const String& rackId)
+{
+    te::AudioTrack* track = nullptr;
+    auto* rack = impl->rack (rackId, &track);
+    if (rack == nullptr || track == nullptr || rack->state.getParent() != track->state) return Result::fail ("Ungroup a rack on a track.");
+    if (auto r = impl->editable (track); r.failed()) return r;
+    if (rack->getKind() == EffectKind::drumRack) return Result::fail ("A Drum Rack's pads stay in the rack.");
+    const auto chains = rackChildren (rack->state, racks::chainType);
+    if (chains.size() > 1) return Result::fail ("Only a rack with one chain can be ungrouped.");
+    std::vector<juce::ValueTree> copies;
+    if (! chains.empty())
+        for (const auto& device : chainDevices (chains.front()))
+        {
+            auto copy = device.createCopy();
+            te::EditItemID::remapIDs (copy, nullptr, *impl->edit);
+            copies.push_back (copy);
+        }
+    const bool instrument = effectIsInstrument (rack->getKind());
+    if (instrument && std::none_of (copies.begin(), copies.end(), [] (const auto& d) { return racks::deviceStage (deviceKind (d)) == 1; }))
+        return Result::fail ("The rack's chain has no instrument to put on the track.");
+    if (track->pluginList.size() - 1 + (int) copies.size() > 64) return Result::fail ("This track's device chain is full.");
+    impl->transaction ("Ungroup rack");
+    std::vector<te::Plugin::Ptr> plugins;
+    for (const auto& copy : copies)
+        if (auto plugin = impl->edit->getPluginCache().createNewPlugin (copy)) plugins.push_back (plugin);
+        else return Result::fail ("A device could not be restored.");
+    closePluginEditors();
+    // The devices take the rack's place in order; chain volume, pan and macro mappings go with the rack.
+    int position = track->pluginList.indexOf (rack);
+    rack->deleteFromParent();
+    for (auto& plugin : plugins) track->pluginList.insertPlugin (plugin, position++, nullptr);
+    impl->changed(); return Result::ok();
 }
 Result Session::groupInstrument (const String& trackId, String& rackId)
 {
@@ -5618,13 +5721,14 @@ Result Session::groupInstrument (const String& trackId, String& rackId)
     if (auto r = impl->editable (track); r.failed()) return r;
     auto* instrument = Impl::nativeInstrument (*track);
     if (instrument == nullptr) return Result::fail ("Group a built-in instrument; the Halftrack Synth cannot go into a rack.");
-    // The instrument and the built-in audio effects after it become one chain.
-    std::vector<NativeEffectPlugin*> devices { instrument };
+    // The instrument and the built-in audio devices after it become one chain.
+    std::vector<te::Plugin*> devices { instrument };
     for (int i = track->pluginList.indexOf (instrument) + 1; i < track->pluginList.size(); ++i)
     {
-        auto* native = dynamic_cast<NativeEffectPlugin*> (track->pluginList[i]);
-        if (native == nullptr || effectIsMidi (native->getKind()) || effectIsInstrument (native->getKind())) break;
-        devices.push_back (native);
+        auto* plugin = track->pluginList[i];
+        auto* native = dynamic_cast<NativeEffectPlugin*> (plugin);
+        if (native != nullptr ? (effectIsMidi (native->getKind()) || effectIsInstrument (native->getKind())) : dynamic_cast<UtilityPlugin*> (plugin) == nullptr) break;
+        devices.push_back (plugin);
     }
     return impl->group (*track, devices, EffectKind::instrumentRack, rackId);
 }

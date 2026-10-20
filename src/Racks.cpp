@@ -1,5 +1,6 @@
 #include "Racks.h"
 #include "NativeEffects.h"
+#include "UtilityProcessor.h"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -54,6 +55,9 @@ bool canonicalId (const juce::var& value)
 Kind kindOf (const juce::ValueTree& plugin) { return static_cast<Kind> (static_cast<int> (plugin.getProperty ("effectKind", 0))); }
 bool nativeDevice (const juce::ValueTree& tree)
 { return tree.hasType (te::IDs::PLUGIN) && tree[te::IDs::type].toString() == NativeEffectPlugin::xmlTypeName; }
+// The channel Utility can sit in audio positions of a chain, like an audio effect.
+bool utilityDevice (const juce::ValueTree& tree)
+{ return tree.hasType (te::IDs::PLUGIN) && tree[te::IDs::type].toString() == UtilityPlugin::xmlTypeName; }
 }
 
 bool isRack (Kind kind) noexcept { return static_cast<int> (kind) >= static_cast<int> (Kind::instrumentRack) && static_cast<int> (kind) < Session::deviceKindCount; }
@@ -179,6 +183,8 @@ juce::Result validateRack (const juce::ValueTree& rack)
     if (depth > maximumDepth) return juce::Result::fail ("The project nests racks more deeply than supported.");
     const auto fail = [] { return juce::Result::fail ("The project contains an invalid rack."); };
     if (! optional (rack, visibleMacrosProperty, 1, Session::rackMacroCount, true)) return fail();
+    for (int m = 0; m < Session::rackMacroCount; ++m)
+        if (rack[macroNameProperty (m)].toString().length() > 64 || rack[macroNameProperty (m)].toString().containsAnyOf ("\r\n")) return fail();
     int chains = 0, returns = 0, mappings = 0;
     std::set<juce::String> ids { rack[te::IDs::id].toString() };
     std::map<juce::String, std::pair<Kind, int>> targets; // id -> (kind, 0 device / 1 chain / 2 return)
@@ -207,15 +213,16 @@ juce::Result validateRack (const juce::ValueTree& rack)
         for (const auto& device : child)
         {
             if (! device.hasType (te::IDs::PLUGIN)) continue;
-            if (! nativeDevice (device) || ++devices > Session::maximumChainDevices) return fail();
+            if ((! nativeDevice (device) && ! utilityDevice (device)) || ++devices > Session::maximumChainDevices) return fail();
             double type = 0;
-            if (! parse (device.getProperty ("effectKind", 0), 0, Session::deviceKindCount - 1, true, type)) return fail();
-            const auto deviceKind = static_cast<Kind> (static_cast<int> (type));
+            if (nativeDevice (device) && ! parse (device.getProperty ("effectKind", 0), 0, Session::deviceKindCount - 1, true, type)) return fail();
+            const auto deviceKind = utilityDevice (device) ? Kind::equalizer : static_cast<Kind> (static_cast<int> (type));
             const int next = deviceStage (deviceKind);
             if (! chainAccepts (isReturn ? Kind::audioEffectRack : kind, deviceKind) || next < stage || (next == 1 && ++instruments > 1)) return fail();
             stage = next;
             if (! canonicalId (device[te::IDs::id]) || ! ids.insert (device[te::IDs::id].toString()).second) return fail();
-            targets[device[te::IDs::id].toString()] = { deviceKind, 0 };
+            // Macros drive built-in device controls only.
+            if (nativeDevice (device)) targets[device[te::IDs::id].toString()] = { deviceKind, 0 };
         }
     }
     if (mappings > Session::maximumMacroMappings) return fail();
@@ -298,6 +305,7 @@ std::optional<float> macroValue (const Session::PluginInfo& rack, const juce::St
 }
 juce::String macroName (const Session::PluginInfo& rack, int macro)
 {
+    if (juce::isPositiveAndBelow (macro, Session::rackMacroCount) && rack.macroNames[(size_t) macro].isNotEmpty()) return rack.macroNames[(size_t) macro];
     const Session::MacroMapping* only = nullptr; int count = 0;
     for (const auto& m : rack.mappings) if (m.macro == macro) { only = &m; ++count; }
     if (count == 1)
@@ -347,8 +355,9 @@ void RackEngine::structureChanged()
     for (const auto& chain : owner.state)
         if (chain.hasType (chainType) || chain.hasType (returnType))
             for (const auto& device : chain)
-                if (nativeDevice (device))
-                    if (auto plugin = owner.edit.getPluginCache().getOrCreatePluginFor (device); plugin != nullptr && dynamic_cast<NativeEffectPlugin*> (plugin.get()) != nullptr)
+                if (nativeDevice (device) || utilityDevice (device))
+                    if (auto plugin = owner.edit.getPluginCache().getOrCreatePluginFor (device);
+                        plugin != nullptr && (dynamic_cast<NativeEffectPlugin*> (plugin.get()) != nullptr || dynamic_cast<UtilityPlugin*> (plugin.get()) != nullptr))
                         next.push_back (plugin);
     current = std::move (next);
     if (info)
@@ -384,8 +393,8 @@ std::unique_ptr<RackEngine::Layout> RackEngine::build()
                 if (plugin->state == device)
                 {
                     auto* native = dynamic_cast<NativeEffectPlugin*> (plugin.get());
-                    chain.devices.push_back ({ plugin.get(), native, native->getKind(), plugin->isEnabled(), -1 });
-                    if (plugin->isEnabled()) chain.latency += static_cast<int> (std::lround (native->getLatencySeconds() * sampleRate));
+                    chain.devices.push_back ({ plugin.get(), native, native != nullptr ? native->getKind() : Kind::equalizer, plugin->isEnabled(), -1 });
+                    if (plugin->isEnabled()) chain.latency += static_cast<int> (std::lround (plugin->getLatencySeconds() * sampleRate));
                     layout->holders.push_back (plugin);
                 }
         (isReturn ? layout->returns : layout->chains).push_back (std::move (chain));
@@ -434,7 +443,7 @@ std::unique_ptr<RackEngine::Layout> RackEngine::build()
                     found = true; break;
                 }
                 for (auto& device : c.devices)
-                    if (device.plugin->itemID.toString() == m.targetId && m.parameter >= 0 && m.parameter < (int) effectParameters (device.kind).size())
+                    if (device.native != nullptr && device.plugin->itemID.toString() == m.targetId && m.parameter >= 0 && m.parameter < (int) effectParameters (device.kind).size())
                     {
                         if (device.mapped < 0)
                         {
@@ -518,7 +527,19 @@ void RackEngine::deinitialise()
 }
 void RackEngine::reset() { for (auto& plugin : current) plugin->reset(); }
 void RackEngine::prepareForOfflineRender()
-{ for (auto* device : devices()) device->prepareForOfflineRender(); }
+{
+    for (auto& plugin : current)
+    {
+        if (auto* native = dynamic_cast<NativeEffectPlugin*> (plugin.get())) native->prepareForOfflineRender();
+        else if (auto* utility = dynamic_cast<UtilityPlugin*> (plugin.get())) utility->prepareForOfflineRender();
+    }
+}
+std::vector<tracktion::Plugin*> RackEngine::plugins() const
+{
+    std::vector<tracktion::Plugin*> result;
+    for (const auto& plugin : current) result.push_back (plugin.get());
+    return result;
+}
 void RackEngine::refreshAutomation()
 { for (auto* device : devices()) device->refreshAutomation(); }
 std::vector<NativeEffectPlugin*> RackEngine::devices() const
@@ -788,6 +809,7 @@ void RackEngine::runChain (Chain& chain, const te::PluginRenderContext& context,
     for (auto& device : chain.devices)
     {
         if (! device.enabled) continue;
+        if (device.native == nullptr) { device.plugin->applyToBufferWithAutomation (inner); continue; }
         if (deviceStage (device.kind) == 1)
             for (int c = 0; c < chain.chokes; ++c) device.native->chokeAt (chain.chokeSamples[(size_t) c]);
         device.native->setRackControls (device.mapped >= 0 ? layout.values[(size_t) device.mapped].data() : nullptr);

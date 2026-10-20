@@ -471,6 +471,7 @@ public:
     {
         juce::PopupMenu menu;
         menu.addItem (1, "Show Automation for " + racks::macroName (rack, macro), (bool) showAutomation);
+        menu.addItem (2, "Rename...");
         int item = 100;
         std::vector<Session::MacroMapping> listed;
         for (const auto& m : rack.mappings)
@@ -480,9 +481,21 @@ public:
         {
             if (safe == nullptr || choice == 0) return;
             if (choice == 1 && safe->showAutomation) safe->showAutomation (safe->rackId, macro);
+            else if (choice == 2) safe->renameMacro (macro);
             else if (choice >= 100 && choice - 100 < (int) listed.size())
                 safe->report (safe->session.removeRackMacroMapping (safe->rackId, macro, listed[(size_t) choice - 100].targetId, listed[(size_t) choice - 100].parameter));
         });
+    }
+    void renameMacro (int macro)
+    {
+        auto* window = new juce::AlertWindow ("Rename macro", "A name for " + racks::macroName (rack, macro) + ". Leave it empty for the automatic name.", juce::MessageBoxIconType::NoIcon);
+        window->addTextEditor ("name", rack.macroNames[(size_t) macro]);
+        window->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey)); window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        auto safe = juce::Component::SafePointer<RackEditor> (this);
+        window->enterModalState (true, juce::ModalCallbackFunction::create ([safe, window, macro] (int result)
+        {
+            if (safe != nullptr && result == 1) safe->report (safe->session.setRackMacroName (safe->rackId, macro, window->getTextEditorContents ("name")));
+        }), true);
     }
     // Devices the selected chain accepts, grouped by browser category.
     void deviceMenu()
@@ -499,9 +512,14 @@ public:
                 if (racks::chainAccepts (accepts, (Kind) k) && category == effectCategory ((Kind) k)) group.addItem (k + 1, effectName ((Kind) k));
             menu.addSubMenu (category, group);
         }
+        if (accepts != Kind::midiEffectRack) menu.addItem (1000, "Utility");
         auto safe = juce::Component::SafePointer<RackEditor> (this); const auto id = chain->id;
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&addDevice), [safe, id] (int choice)
-        { if (safe != nullptr && choice > 0) safe->addDeviceToChain (id, (Kind) (choice - 1)); });
+        {
+            if (safe == nullptr || choice <= 0) return;
+            if (choice == 1000) { juce::String device; safe->report (safe->session.addRackUtility (id, device)); }
+            else safe->addDeviceToChain (id, (Kind) (choice - 1));
+        });
     }
     void addDeviceToChain (const juce::String& chain, Kind kind) { juce::String id; report (session.addRackDevice (chain, kind, id)); }
     void setMacro (int macro, float value)
@@ -982,7 +1000,15 @@ ChainDevice::ChainDevice (RackEditor& o, const Session::PluginInfo& info) : devi
     for (auto* b : { &power, &remove }) { quiet (*b); addAndMakeVisible (*b); }
     auto automation = [safe = juce::Component::SafePointer<RackEditor> (&o), id = info.id] (int parameter)
     { if (safe != nullptr && safe->showAutomation) safe->showAutomation (id, parameter); };
-    body = info.isRack ? makeRackEditor (o.session, info.id, o.showAutomation) : makeNativeEffectEditor (o.session, info.id, true, automation);
+    if (info.isUtility)
+    {
+        // The Utility's controls open in its own window.
+        auto panel = std::make_unique<juce::TextButton> ("Open Utility");
+        panel->setName ("Open chain device"); panel->setTooltip ("Open this Utility's controls in a window");
+        panel->onClick = [this] { owner.report (owner.session.showDeviceEditor (deviceId)); };
+        panel->setSize (110, 26); body = std::move (panel);
+    }
+    else body = info.isRack ? makeRackEditor (o.session, info.id, o.showAutomation) : makeNativeEffectEditor (o.session, info.id, true, automation);
     if (info.isRack) body->setSize (static_cast<RackEditor&> (*body).preferredWidth(), RackEditor::editorHeight);
     addAndMakeVisible (*body);
     sync (info);

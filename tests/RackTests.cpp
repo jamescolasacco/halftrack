@@ -270,13 +270,50 @@ void audioRackTests (const juce::File& root)
     setControl (s, s.snapshot().tracks[1].plugins[0].id, "outputDb", -4); setControl (s, s.snapshot().tracks[1].plugins[1].id, "outputDb", -2);
     const auto serial = render (s, out);
     juce::String grouped;
-    ok (s.groupDevices (1, 0, 1, grouped), "group both EQs");
+    const juce::StringArray pair { s.snapshot().tracks[1].plugins[1].id, s.snapshot().tracks[1].plugins[0].id };
+    check (s.groupDevices (1, { pair[0], pair[0] }, grouped).failed() && s.groupDevices (1, { pair[0], "missing" }, grouped).failed() && s.groupDevices (1, {}, grouped).failed(),
+           "grouping refuses repeated, missing and empty selections");
+    ok (s.groupDevices (1, pair, grouped), "group both EQs");
     const auto groupedInfo = s.snapshot().tracks[1].plugins;
     check (groupedInfo.size() == 1 && groupedInfo[0].id == grouped && groupedInfo[0].effect.kind == Kind::audioEffectRack
            && groupedInfo[0].chains.size() == 1 && groupedInfo[0].chains[0].devices.size() == 2, "grouping puts the devices in one chain of a new rack");
     check (difference (render (s, out), serial) < 1e-6, "the grouped chain sounds like the serial devices");
-    s.undo(); check (s.snapshot().tracks[1].plugins.size() == 2 && ! s.snapshot().tracks[1].plugins[0].isRack, "one undo restores the ungrouped devices");
-    check (s.groupDevices (1, 0, 3, grouped).failed(), "grouping needs devices that exist");
+    check (std::abs (groupedInfo[0].chains[0].devices[0].effect.values[(size_t) effectParameterIndex (Kind::equalizer, "outputDb")] + 4) < 1e-6,
+           "grouping keeps the devices in track order whatever order they were chosen in");
+    ok (s.setRackMacroName (grouped, 0, "  Drive  "), "name macro 1");
+    check (device (s, grouped).macroNames[0] == "Drive" && racks::macroName (device (s, grouped), 0) == "Drive" && racks::macroName (device (s, grouped), 1) == "Macro 2",
+           "a named macro shows its name; others keep their automatic names");
+    check (s.setRackMacroName (grouped, 16, "x").failed() && s.setRackMacroName (grouped, 0, juce::String::repeatedString ("x", 65)).failed(), "macro names need a macro and at most 64 characters");
+    s.undo(); check (device (s, grouped).macroNames[0].isEmpty(), "renaming a macro is one undo step");
+    ok (s.ungroupRack (grouped), "ungroup the rack");
+    const auto ungrouped = s.snapshot().tracks[1].plugins;
+    check (ungrouped.size() == 2 && ! ungrouped[0].isRack && ungrouped[0].effect.kind == Kind::equalizer && difference (render (s, out), serial) < 1e-6,
+           "ungrouping puts the chain's devices back on the track and they sound the same");
+    s.undo(); check (s.snapshot().tracks[1].plugins.size() == 1 && s.snapshot().tracks[1].plugins[0].id == grouped, "undo restores the rack");
+    juce::String extraChain;
+    ok (s.addRackChain (grouped, {}, extraChain), "give the rack a second chain");
+    check (s.ungroupRack (grouped).failed(), "a rack with two chains cannot be ungrouped");
+    s.undo(); s.undo();
+    check (s.snapshot().tracks[1].plugins.size() == 2 && ! s.snapshot().tracks[1].plugins[0].isRack, "undo restores the ungrouped devices");
+    // The channel Utility groups with built-in devices and works inside a chain.
+    ok (s.addUtility (1), "add a Utility after the EQs");
+    auto utilitySettings = s.snapshot().tracks[1].plugins[2].utility; utilitySettings.gainDb = -6;
+    ok (s.setUtilitySettings (s.snapshot().tracks[1].plugins[2].id, utilitySettings), "turn the Utility down 6 dB");
+    const auto withUtility = render (s, out);
+    juce::StringArray three; const auto beforeUtility = s.snapshot(); for (const auto& p : beforeUtility.tracks[1].plugins) three.add (p.id);
+    ok (s.groupDevices (1, three, grouped), "group the EQs and the Utility");
+    const auto utilityChain = device (s, grouped).chains[0];
+    check (utilityChain.devices.size() == 3 && utilityChain.devices[2].isUtility && utilityChain.devices[2].utility.gainDb == -6
+           && difference (render (s, out), withUtility) < 1e-6, "a Utility inside a chain keeps its settings and sound");
+    utilitySettings.gainDb = -12;
+    ok (s.setUtilitySettings (utilityChain.devices[2].id, utilitySettings), "edit the Utility inside the chain");
+    check (difference (render (s, out), withUtility) > 1e-3 && device (s, grouped).chains[0].devices[2].utility.gainDb == -12, "a chain Utility is edited through the ordinary Utility command");
+    juce::String added;
+    ok (s.addRackUtility (utilityChain.id, added), "add another Utility to the chain");
+    check (device (s, grouped).chains[0].devices.size() == 4 && device (s, grouped).chains[0].devices[3].isUtility, "Utilities can be added to chains");
+    check (s.setRackMacroMapping (grouped, { 0, added, 0, -100, 0 }).failed(), "macros map built-in device controls, not the Utility");
+    s.undo(); s.undo(); s.undo(); s.undo(); s.undo();
+    check (s.snapshot().tracks[1].plugins.size() == 2, "undo removes the Utility again");
 }
 
 void instrumentRackTests (const juce::File& root)
@@ -363,7 +400,7 @@ void instrumentRackTests (const juce::File& root)
     ok (s.addMidiNote (secondClip, 60, 0, .5, 1), "C3 into the MIDI rack");
     const auto up = addChain (s, midiRack, "Octave"), through = addChain (s, midiRack, "Through");
     const auto pitch = addDevice (s, up, Kind::pitch); setControl (s, pitch, "semitones", 12);
-    juce::String refused; check (s.addRackDevice (up, Kind::delay, refused).failed(), "a MIDI chain refuses audio effects");
+    juce::String refused; check (s.addRackDevice (up, Kind::delay, refused).failed() && s.addRackUtility (up, refused).failed(), "a MIDI chain refuses audio effects and the Utility");
     const auto both = render (s, out);
     check (error (both, [&] (int n) { const auto v = at (c, n) + at (c, 2 * n) * (n < 4800); return std::pair { v, v }; }, 0, beat) < 1e-6,
            "both MIDI chains' notes reach the Sampler: the original and an octave up");
@@ -395,6 +432,10 @@ void instrumentRackTests (const juce::File& root)
     check (groupedTrack.instrument.id == instrumentRack && groupedTrack.instrument.effect.kind == Kind::instrumentRack
            && groupedTrack.instrument.chains[0].devices.size() == 2 && groupedTrack.plugins.empty(), "the instrument and its EQ become one chain of an Instrument Rack");
     check (difference (render (s, out), before) < 1e-6, "the grouped instrument sounds the same");
+    ok (s.ungroupRack (instrumentRack), "ungroup the Instrument Rack");
+    const auto restored = s.snapshot().tracks.back();
+    check (! restored.instrument.isRack && restored.instrument.effect.kind == Kind::sampler && restored.plugins.size() == 1 && restored.plugins[0].effect.kind == Kind::equalizer
+           && difference (render (s, out), before) < 1e-6, "ungrouping returns the instrument to the instrument slot and the EQ after it");
 }
 
 void drumRackTests (const juce::File& root)
