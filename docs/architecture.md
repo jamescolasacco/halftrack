@@ -205,6 +205,10 @@ flowchart LR
 
 `setAudioEngineEnabled (false)` calls `stop()`, which keeps takes and cancels launches, then `AudioDeviceManager::closeAudioDevice()`; `true` calls `restartLastAudioDevice()`. `Impl::engineOff` only selects the message the device checks give; `isAudioEngineEnabled()` is true whenever a device is open. See the [contract](research/audio-engine-contract.md).
 
+## Device restarts
+
+`DeviceStopWatch` notes, when the device stops on the message thread, whether playback was running without a take. When the device starts again, `DeviceRestart` checks every 20 ms for up to a second and calls `TransportControl::play` once the engine's timer has stopped the transport, until the play head runs. `Session::stop` cancels it.
+
 ## Track input facade
 
 `inputSources (trackId)` and `setTrackInputTrack (trackId, sourceId)` route another track's output into an audio track through the source's native track wave input device (`AudioTrack::getWaveInputDevice()`). Assigning one enables the device, creates its `INPUTDEVICE` state through `EditInputDevices` (which adds the instance to the playback context) and targets the destination as one undo step. `Impl::input` now includes track devices, so arming, monitoring and recording treat them like hardware inputs; `Impl::feeds` follows track outputs and track inputs to refuse loops for both Audio To and Audio From. The tap is a `halftrackInputTap` property on the input destination: Pre FX (after any instrument), Post FX (before the volume plug-in) or Post Mixer (after the plug-ins and mute). `cmake/PatchRenderTrackInputs.cmake` adds the two earlier taps and makes renders carry monitored track inputs from the edit's input state. See the [Audio From contract](research/audio-from-contract.md).

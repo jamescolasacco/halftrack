@@ -24,11 +24,16 @@ public:
     ~SyntheticDevice() override { stop(); }
     juce::StringArray getOutputChannelNames() override { return { "Left", "Right" }; }
     juce::StringArray getInputChannelNames() override { return { "Generated left", "Generated right" }; }
-    juce::Array<double> getAvailableSampleRates() override { return { 48000.0 }; }
-    juce::Array<int> getAvailableBufferSizes() override { return { 256 }; }
+    // 48 kHz with 256-sample blocks unless a test chooses another rate or block size.
+    juce::Array<double> getAvailableSampleRates() override { return { 44100.0, 48000.0, 96000.0 }; }
+    juce::Array<int> getAvailableBufferSizes() override { return { 128, 256, 512 }; }
     int getDefaultBufferSize() override { return 256; }
-    juce::String open (const juce::BigInteger& in, const juce::BigInteger& out, double, int) override
-    { inputs = in; outputs = out; opened = true; return {}; }
+    juce::String open (const juce::BigInteger& in, const juce::BigInteger& out, double sampleRate, int bufferSizeSamples) override
+    {
+        if (getAvailableSampleRates().contains (sampleRate)) rate = sampleRate;
+        if (getAvailableBufferSizes().contains (bufferSizeSamples)) blockSize = bufferSizeSamples;
+        inputs = in; outputs = out; opened = true; return {};
+    }
     void close() override { stop(); opened = false; }
     bool isOpen() override { return opened; }
     void start (juce::AudioIODeviceCallback* next) override
@@ -39,8 +44,8 @@ public:
     // A driver-initiated restart, such as a device reporting new details: same layout, same callback.
     void restart() { if (auto* current = callback) { stop(); start (current); } }
     juce::String getLastError() override { return {}; }
-    int getCurrentBufferSizeSamples() override { return 256; }
-    double getCurrentSampleRate() override { return 48000; }
+    int getCurrentBufferSizeSamples() override { return blockSize; }
+    double getCurrentSampleRate() override { return rate; }
     int getCurrentBitDepth() override { return 24; }
     juce::BigInteger getActiveOutputChannels() const override { return outputs; }
     juce::BigInteger getActiveInputChannels() const override { return inputs; }
@@ -56,11 +61,11 @@ public:
         float peak = 0;
         for (int block = 0; block < blocks; ++block)
         {
-            juce::AudioBuffer<float> in (2, 256), out (2, 256);
-            for (int i = 0; i < 256; ++i, ++sample)
+            juce::AudioBuffer<float> in (2, blockSize), out (2, blockSize);
+            for (int i = 0; i < blockSize; ++i, ++sample)
             {
-                in.setSample (0, i, 0.2f * std::sin (juce::MathConstants<double>::twoPi * sample * 440.0 / 48000.0));
-                in.setSample (1, i, 0.2f * std::sin (juce::MathConstants<double>::twoPi * sample * 660.0 / 48000.0));
+                in.setSample (0, i, 0.2f * std::sin (juce::MathConstants<double>::twoPi * sample * 440.0 / rate));
+                in.setSample (1, i, 0.2f * std::sin (juce::MathConstants<double>::twoPi * sample * 660.0 / rate));
             }
             out.clear();
             if (callback)
@@ -70,15 +75,15 @@ public:
                     // Opt-in test diagnostics only. The high-resolution clock
                     // does not refresh the dependency's cached MIDI-age clock.
                     firstCallback->entryMilliseconds = juce::Time::getMillisecondCounterHiRes();
-                    callback->audioDeviceIOCallbackWithContext (in.getArrayOfReadPointers(), 2, out.getArrayOfWritePointers(), 2, 256, {});
+                    callback->audioDeviceIOCallbackWithContext (in.getArrayOfReadPointers(), 2, out.getArrayOfWritePointers(), 2, blockSize, {});
                     firstCallback->exitMilliseconds = juce::Time::getMillisecondCounterHiRes();
                 }
-                else callback->audioDeviceIOCallbackWithContext (in.getArrayOfReadPointers(), 2, out.getArrayOfWritePointers(), 2, 256, {});
+                else callback->audioDeviceIOCallbackWithContext (in.getArrayOfReadPointers(), 2, out.getArrayOfWritePointers(), 2, blockSize, {});
             }
-            const float blockPeak = out.getMagnitude (0, 256);
+            const float blockPeak = out.getMagnitude (0, blockSize);
             peak = juce::jmax (peak, blockPeak);
             if (firstCallback != nullptr && block == 0) firstCallback->peak = blockPeak;
-            if (captured) for(int channel=0;channel<2;++channel) captured->copyFrom(channel,block*256,out,channel,0,256);
+            if (captured) for(int channel=0;channel<2;++channel) captured->copyFrom(channel,block*blockSize,out,channel,0,blockSize);
             juce::MessageManager::getInstance()->runDispatchLoopUntil (dispatchMilliseconds);
         }
         return peak;
@@ -88,6 +93,10 @@ private:
     juce::BigInteger inputs, outputs;
     bool opened = false;
     int64_t sample = 0;
+    double rate = 48000;
+    int blockSize = 256;
+public:
+    int currentBlockSize() const { return blockSize; }
 };
 class SyntheticDeviceType final : public juce::AudioIODeviceType
 {
@@ -500,7 +509,7 @@ juce::AudioBuffer<float> captureSyntheticTestDevice (Session& session, int block
 {
     auto* device=dynamic_cast<SyntheticDevice*>(session.audioDeviceManager().getCurrentAudioDevice());
     if(!device || blocks<=0) throw std::runtime_error("invalid synthetic capture request");
-    juce::AudioBuffer<float> result(2,blocks*256);result.clear();device->pump(blocks,1,&result);return result;
+    juce::AudioBuffer<float> result(2,blocks*device->currentBlockSize());result.clear();device->pump(blocks,1,&result);return result;
 }
 
 int runSettingsIsolationProbe (const juce::File& report)

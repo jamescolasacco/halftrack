@@ -3068,16 +3068,47 @@ struct Session::Impl
             // The device manager adds this callback's outputs to the engine's.
             for (int i = 0; i < numOutputs; ++i) if (outputs[i] != nullptr) juce::FloatVectorOperations::clear (outputs[i], numSamples);
         }
-        void audioDeviceAboutToStart (juce::AudioIODevice*) override {}
+        // Playback that the restart interrupted carries on once the device runs again, as it does
+        // after an audio settings change in the reference. Takes are kept and not resumed.
+        void audioDeviceAboutToStart (juce::AudioIODevice*) override
+        { if (std::exchange (resumePlayback, false)) impl.deviceRestart.watch(); }
         void audioDeviceStopped() override
         {
+            if (juce::MessageManager::existsAndIsCurrentThread() && attached && impl.edit != nullptr)
+                resumePlayback = impl.edit->getTransport().isPlaying() && ! impl.anyRecording() && ! impl.exporting;
             // A stop on the message thread ends the takes before the restart schedules the rebuild.
             if (juce::MessageManager::existsAndIsCurrentThread()) handleAsyncUpdate(); else triggerAsyncUpdate();
         }
         void handleAsyncUpdate() override { if (attached) impl.endTakesForDeviceStop(); }
         Impl& impl;
         bool attached = false; // Message thread only.
+        bool resumePlayback = false;
     };
+    // The engine rebuilds its playback context after a device restart, and its transport timer then
+    // stops a transport whose new play head is not running. For a second after the restart this
+    // watches for that and plays again from where playback stopped.
+    struct DeviceRestart final : juce::Timer
+    {
+        explicit DeviceRestart (Impl& i) : impl (i) {}
+        void watch() { ticks = 0; startTimer (20); }
+        void timerCallback() override { if (++ticks > 50 || impl.continueAfterDeviceRestart()) stopTimer(); }
+        Impl& impl;
+        int ticks = 0;
+    };
+    // True once playback runs again, or when there is nothing to resume.
+    bool continueAfterDeviceRestart()
+    {
+        if (edit == nullptr || exporting || anyRecording()) return true;
+        auto& transport = edit->getTransport();
+        if (transport.isPlaying())
+        {
+            auto* context = transport.getCurrentPlaybackContext();
+            return context != nullptr && context->isPlaying();
+        }
+        transport.play (false);
+        owner.sendChangeMessage();
+        return false; // Checked again until the play head runs.
+    }
     bool engineOff = false; // Audio Engine Off closed the device.
     // The recording format chosen here, given to inputs that appear later too.
     std::optional<Session::RecordingFormat> chosenRecordingFormat;
@@ -3183,6 +3214,7 @@ struct Session::Impl
     GrooveWatcher grooveWatcher { edit };
     std::unique_ptr<te::Edit::UndoTransactionInhibitor> gesture;
     mutable std::map<String, std::unique_ptr<Meter>> meters;
+    DeviceRestart deviceRestart { *this };
     DeviceStopWatch deviceStops { *this };
 };
 
@@ -7268,6 +7300,7 @@ Result Session::continuePlayback()
 void Session::stop()
 {
     if (impl->exporting) return;
+    impl->deviceRestart.stopTimer(); // A stop after a device restart is the user's, not the engine's.
     const bool recording = impl->edit->getTransport().isRecording();
     // Session recordings end where the transport stops and keep their takes.
     while (! impl->slotRecordings.empty())

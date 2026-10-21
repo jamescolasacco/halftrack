@@ -1315,3 +1315,10 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **A teardown crash.** Destroying a Session whose clips the engine resolved on its way out read through `Session::impl` after it was cleared. The Edit's file callbacks now hold the Impl itself.
 
 See [the contract](research/recording-format-contract.md).
+
+## Device rate and buffer changes — 2026-10-21
+
+Engine and test change in `src/Session.cpp`, `tests/SessionTests.cpp` (the synthetic device), `tests/DeviceSettingsTests.cpp` (new), `src/Main.cpp` and `CMakeLists.txt`.
+
+- **Playback carries on.** Changing the audio device's sample rate or block size while playing used to stop playback. The engine restarts the device, rebuilds its playback context, and its transport timer stopped the transport. Halftrack now resumes playback from where it stopped, within a second of the restart, unless the user stops it or a take was recording.
+- **The synthetic device** now offers 44.1, 48 and 96 kHz with 128, 256 or 512-sample blocks; it still opens at 48 kHz with 256-sample blocks.

@@ -74,6 +74,7 @@ int runSharedMediaTests (const juce::File&);
 int runWavDecoderTests (const juce::File&);
 int runRenderAgreementTests (const juce::File&);
 int runRecordingFormatTests (const juce::File&);
+int runDeviceSettingsTests (const juce::File&);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -247,6 +248,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-routing");
             setApplicationReturnValue (runRoutingTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-device-settings"))
+        {
+            const int i = args.indexOf ("--self-test-device-settings");
+            setApplicationReturnValue (runDeviceSettingsTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-recording-format"))
