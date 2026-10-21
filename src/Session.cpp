@@ -676,6 +676,17 @@ Result validateProjectTempo (const juce::ValueTree& state)
                 || value < te::TempoSetting::minBPM || value > te::TempoSetting::maxBPM)
                 return Result::fail ("Project tempo must be a finite number from 20 to 999 BPM.");
         }
+    // Tempo points: the first at beat 0, beats increasing at least a 960th apart, curves from -1 to 1.
+    double previous = -1; int tempos = 0;
+    for (const auto& tempo : state.getChildWithName (te::IDs::TEMPOSEQUENCE))
+        if (tempo.hasType (te::IDs::TEMPO))
+        {
+            const auto beat = tempo.getProperty (te::IDs::startBeat, 0);
+            if (! finiteProperty (beat, 0, 1000000) || ! finiteProperty (tempo.getProperty (te::IDs::curve, 0), -1, 1) || ++tempos > 4096
+                || (previous < 0 && static_cast<double> (beat) != 0) || (previous >= 0 && static_cast<double> (beat) - previous < 1.0 / 960 - 1e-12))
+                return Result::fail ("The project's tempo map needs a first point at beat 0 and increasing beats.");
+            previous = static_cast<double> (beat);
+        }
     // One meter at the start: numerator 1-99 over 1, 2, 4, 8 or 16.
     int meters = 0;
     for (const auto& meter : state.getChildWithName (te::IDs::TEMPOSEQUENCE))
@@ -2087,7 +2098,10 @@ Session::Snapshot Session::snapshot() const
     s.looping = transport.looping;
     s.position = transport.getPosition().inSeconds();
     s.duration = e.getLength().inSeconds();
-    s.tempo = e.tempoSequence.getTempo (0)->getBpm();
+    s.tempo = e.tempoSequence.getBpmAt (te::TimePosition::fromSeconds (juce::jmax (0.0, s.position)));
+    s.tempoMap.clear();
+    for (int i = 0; i < e.tempoSequence.getNumTempos(); ++i)
+        if (auto* t = e.tempoSequence.getTempo (i)) s.tempoMap.push_back ({ t->startBeatNumber.get().inBeats(), t->getBpm() });
     if (auto* meter = e.tempoSequence.getTimeSig (0)) s.timeSignature = { meter->numerator.get(), meter->denominator.get() };
     s.masterGainDb=e.getMasterVolumePlugin()->getVolumeDb();
     s.masterVolumeAutomation = automationLane (*e.getMasterVolumePlugin(), AutomationTarget::volume);
@@ -2804,7 +2818,14 @@ Result Session::exportMidiClip (const String& id, const File& destination)
     const auto add=[&](juce::MidiMessage message,double beat)
     {message.setTimeStamp(std::round(beat*9600));sequence.addEvent(message);};
     add(juce::MidiMessage::textMetaEvent(3,clip->getName()),0);
-    add(juce::MidiMessage::tempoMetaEvent((int)std::round(60000000.0/snapshot().tempo)),0);
+    // The tempo at the clip's start, then each later tempo point inside the clip, in clip beats;
+    // ramps between points are written as steps at each point.
+    {
+        const auto origin=clip->getStartBeat().inBeats(),span=clip->getLengthInBeats().inBeats();
+        add(juce::MidiMessage::tempoMetaEvent((int)std::round(60000000.0/impl->edit->tempoSequence.getBpmAt(clip->getPosition().getStart()))),0);
+        for(const auto& point:snapshot().tempoMap)
+            if(point.beat>origin+1e-9&&point.beat<origin+span-1e-9) add(juce::MidiMessage::tempoMetaEvent((int)std::round(60000000.0/point.bpm)),point.beat-origin);
+    }
     {const auto meter=snapshot().timeSignature;add(juce::MidiMessage::timeSignatureMetaEvent(meter.numerator,meter.denominator),0);}
     double end=clip->getLengthInBeats().inBeats();
     for(auto* event:clip->getSequence().getSysexEvents())
@@ -4483,6 +4504,7 @@ Result Session::consolidateRange (const juce::StringArray& trackIds, double star
 Result Session::insertTime (double start, double length)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->tempoSequence.getNumTempos() > 1) return Result::fail ("Insert Silence needs a constant tempo; clear the Song Tempo lane first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before inserting time.");
     if (! std::isfinite (start) || ! std::isfinite (length) || start < 0 || length <= 0) return Result::fail ("Choose a start and a positive length of time to insert.");
     double end = 0;
@@ -4537,6 +4559,7 @@ Result Session::insertTime (double start, double length)
 Result Session::deleteTime (double start, double length)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->tempoSequence.getNumTempos() > 1) return Result::fail ("Delete Time needs a constant tempo; clear the Song Tempo lane first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before deleting time.");
     if (! std::isfinite (start) || ! std::isfinite (length) || start < 0 || length <= 0) return Result::fail ("Choose a start and a positive length of time to delete.");
     const auto end = start + length;
@@ -5272,9 +5295,42 @@ Result Session::setTimeSignature (int numerator, int denominator)
     meter->numerator = numerator; meter->denominator = denominator;
     impl->changed(); return Result::ok();
 }
+Result Session::setTempoMap (const std::vector<TempoPoint>& points)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing the tempo.");
+    if (points.empty() || points.size() > 4096 || points.front().beat != 0)
+        return Result::fail ("A tempo map starts at beat 0 and holds at most 4096 points.");
+    double previous = -1;
+    for (const auto& p : points)
+    {
+        if (! std::isfinite (p.beat) || ! std::isfinite (p.bpm) || p.beat > 1000000 || p.bpm < te::TempoSetting::minBPM || p.bpm > te::TempoSetting::maxBPM
+            || (previous >= 0 && p.beat - previous < 1.0 / 960 - 1e-9))
+            return Result::fail ("Tempo points need increasing beats and tempos from 20 to 999 BPM.");
+        previous = p.beat;
+    }
+    if (snapshot().tempoMap == points) return Result::ok();
+    impl->resetTapTempo();
+    impl->transaction ("Tempo");
+    auto* undo = &impl->edit->getUndoManager();
+    auto& sequence = impl->edit->tempoSequence;
+    // Clips, automation and the loop keep their beats while the map is rebuilt.
+    te::EditTimecodeRemapperSnapshot remap; remap.savePreChangeState (*impl->edit);
+    for (int i = sequence.getNumTempos(); --i > 0;) sequence.removeTempo (i, false);
+    auto* first = sequence.getTempo (0);
+    first->bpm.setValue (points.front().bpm, undo); first->curve.setValue (0.0f, undo);
+    // Curve 0 ramps linearly to the next point; the engine applies ramps in quarter-beat steps.
+    for (size_t i = 1; i < points.size(); ++i) sequence.insertTempo (te::BeatPosition::fromBeats (points[i].beat), points[i].bpm, 0.0f);
+    remap.remapEdit (*impl->edit);
+    impl->refreshParameterValues();
+    impl->changed(); return Result::ok();
+}
+double Session::beatsAt (double seconds) const { return impl->edit->tempoSequence.toBeats (te::TimePosition::fromSeconds (seconds)).inBeats(); }
+double Session::secondsAt (double beats) const { return impl->edit->tempoSequence.toTime (te::BeatPosition::fromBeats (beats)).inSeconds(); }
 void Session::setTempo (double bpm)
 {
     if (impl->exporting) return;
+    if (impl->edit->tempoSequence.getNumTempos() > 1) return;
     if (! std::isfinite (bpm)) return;
     impl->resetTapTempo();
     const auto value = juce::jlimit (te::TempoSetting::minBPM, te::TempoSetting::maxBPM, bpm);
@@ -5285,6 +5341,7 @@ void Session::setTempo (double bpm)
 Result Session::tapTempo(double seconds)
 {
     if (impl->exporting) return Result::fail("Finish or cancel the current export first.");
+    if (impl->edit->tempoSequence.getNumTempos() > 1) return Result::fail("The tempo is automated. Edit its points in the Song Tempo lane.");
     if (!std::isfinite(seconds) || seconds<0 || (impl->lastTap>=0 && seconds<impl->lastTap))
         return Result::fail("Tap timestamps must be finite and monotonic.");
     const double interval=seconds-impl->lastTap;

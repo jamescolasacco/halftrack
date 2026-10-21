@@ -307,6 +307,10 @@ A MIDI clip's scale is three properties on its state, read by `clipScale` into `
 
 `saveDevicePreset`, `readDevicePreset` and `loadDevicePreset` in `src/Session.cpp` keep presets to native settings by control key (or Utility fields), validated with the same checks as live edits; loading runs inside one edit gesture. `saveDefaultSet` and `newProjectFromDefaultSet` reuse the recovery writer and `loadProject`. `MainComponent::setUserLibrary` points the browser rows, Save Preset dialog and New at the library folder chosen in `Main.cpp`. See the [preset contract](research/presets-contract.md).
 
+## Tempo automation
+
+`setTempoMap` rebuilds the engine tempo sequence (curve 0 ramps) inside an `EditTimecodeRemapperSnapshot`, so clips, automation and the loop keep their beats, all in one transaction. `Session::beatsAt`/`secondsAt` wrap the engine conversions; the UI's grids, rulers, snapping and labels use them instead of a constant tempo. The automation editor maps a Song Tempo lane to and from the map. See the [tempo map contract](research/tempo-map-contract.md).
+
 ## Audio warping
 
 `ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).

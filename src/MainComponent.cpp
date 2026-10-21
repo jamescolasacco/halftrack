@@ -285,7 +285,7 @@ public:
         {
             if (const auto beats = parseMusicalTime (loopStartLabel.getText(), true, state.timeSignature))
             {
-                const auto start = *beats * 60.0 / state.tempo;
+                const auto start = secondsAt (*beats);
                 session.setLoop (state.looping, start, start + (state.loopEnd - state.loopStart));
             }
             refresh();
@@ -293,7 +293,7 @@ public:
         loopLengthLabel.onTextChange = [this]
         {
             if (const auto beats = parseMusicalTime (loopLengthLabel.getText(), false, state.timeSignature); beats && *beats > 0)
-                session.setLoop (state.looping, state.loopStart, state.loopStart + *beats * 60.0 / state.tempo);
+                session.setLoop (state.looping, state.loopStart, secondsAt (beatsAt (state.loopStart) + *beats));
             refresh();
         };
         projectLabel.setFont (font (12.0f));
@@ -694,7 +694,7 @@ private:
     TimeSelection timeSelection;
     int trackIndex (const juce::String& id) const
     { for (int t = 0; t < (int) state.tracks.size(); ++t) if (state.tracks[(size_t) t].id == id) return t; return -1; }
-    double snapTime (double seconds, juce::ModifierKeys mods) const { return juce::jmax (0.0, mods.isAltDown() ? seconds : std::round (seconds / gridSeconds()) * gridSeconds()); }
+    double snapTime (double seconds, juce::ModifierKeys mods) const { return juce::jmax (0.0, mods.isAltDown() ? seconds : snapSeconds (seconds)); }
     // Time edits use the selection, or the loop range when nothing is selected.
     std::pair<double, double> editRange() const
     { return timeSelection.active() ? std::pair { timeSelection.start, timeSelection.end } : std::pair { state.loopStart, state.loopEnd }; }
@@ -1344,13 +1344,13 @@ private:
                 }
                 g.setColour (line); g.drawHorizontalLine (lane.y + lane.height - 1, 0.0f, (float) tw);
             }
-            const double beat = 60.0 / owner.state.tempo;
-            const auto grid = owner.gridSeconds();
+            const auto grid = owner.gridBeats(), barBeats = owner.state.timeSignature.beatsPerBar();
             const auto end = owner.viewStart + tw / owner.pixelsPerSecond;
-            for (double t = std::floor (owner.viewStart / grid) * grid; t <= end; t += grid)
+            for (double b = std::floor (owner.beatsAt (owner.viewStart) / grid) * grid; ; b += grid)
             {
-                const auto barSeconds = beat * owner.state.timeSignature.beatsPerBar();
-                const bool bar = std::abs (t / barSeconds - std::round (t / barSeconds)) < 0.001;
+                const auto t = owner.secondsAt (b);
+                if (t > end) break;
+                const bool bar = std::abs (b / barBeats - std::round (b / barBeats)) < 0.001;
                 g.setColour (bar ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff3a3a3a));
                 g.drawVerticalLine ((int) std::round ((t - owner.viewStart) * owner.pixelsPerSecond), 0.0f, (float) getHeight());
             }
@@ -1618,7 +1618,7 @@ private:
                         const auto minimum = juce::jmax (.001, clip.audio.fadeInSeconds+clip.audio.fadeOutSeconds);
                         const auto delta = (e.x-dragStartX)/owner.pixelsPerSecond;
                         const auto snap = [&] (double value)
-                        { return e.mods.isAltDown() ? value : std::round (value/owner.gridSeconds())*owner.gridSeconds(); };
+                        { return e.mods.isAltDown() ? value : owner.snapSeconds (value); };
                         if (rangeDrag == 1)
                         {
                             const auto shift = juce::jlimit (-juce::jmin (start,offset), juce::jmax (0.0,length-minimum), snap (start+delta)-start);
@@ -1643,7 +1643,7 @@ private:
                     if (current.tracks[(size_t)t].clips[(size_t)c].id == dragClipId)
                     {
                         auto start = juce::jmax (0.0, originalStart + (e.x - dragStartX) / owner.pixelsPerSecond);
-                        if (! e.mods.isAltDown()) start = std::round (start / owner.gridSeconds()) * owner.gridSeconds();
+                        if (! e.mods.isAltDown()) start = owner.snapSeconds (start);
                         const auto& clip = current.tracks[(size_t)t].clips[(size_t)c];
                         const int destination = owner.trackAtY (e.y);
                         if (! juce::isPositiveAndBelow (destination,(int)current.tracks.size())
@@ -1836,14 +1836,17 @@ private:
             const auto x2=(float)((owner.state.loopEnd-owner.viewStart)*owner.pixelsPerSecond);
             g.setColour (owner.state.looping?orange:muted.withAlpha (.55f));
             g.fillRect (x1,3.0f,juce::jmax (1.0f,x2-x1),3.0f);g.fillRect (x1,3.0f,2.0f,9.0f);g.fillRect (x2-2,3.0f,2.0f,9.0f);
-            const auto bar=owner.state.timeSignature.beatsPerBar()*60.0/owner.state.tempo;
-            const auto step=bar*juce::jmax (1.0,std::pow (2.0,std::ceil (std::log2 (48.0/(bar*owner.pixelsPerSecond)))));
+            // Bar numbers at the bars' times on the tempo map, spaced at least 48 pixels apart at the playhead's tempo.
+            const auto barBeats=owner.state.timeSignature.beatsPerBar(),barWidth=barBeats*60.0/owner.state.tempo*owner.pixelsPerSecond;
+            const auto stepBars=juce::jmax (1.0,std::pow (2.0,std::ceil (std::log2 (48.0/juce::jmax (1.0e-6,barWidth)))));
             const auto end=owner.viewStart+width/owner.pixelsPerSecond;
             g.setFont (font (10.5f));
-            for (double time=std::floor (owner.viewStart/step)*step;time<=end;time+=step)
+            for (double bar=std::floor (owner.beatsAt (owner.viewStart)/barBeats/stepBars)*stepBars;;bar+=stepBars)
             {
+                const auto time=owner.secondsAt (bar*barBeats);
+                if (time>end) break;
                 const int x=(int)std::round ((time-owner.viewStart)*owner.pixelsPerSecond);
-                g.setColour (muted);g.drawText (juce::String ((int)std::round (time/bar)+1),x+5,15,55,19,juce::Justification::centredLeft);
+                g.setColour (muted);g.drawText (juce::String ((int)std::round (bar)+1),x+5,15,55,19,juce::Justification::centredLeft);
                 g.setColour (juce::Colour (0xff5d5d5d));g.drawVerticalLine (x,14.0f,34.0f);
             }
             g.setColour (background);g.fillRect (0,35,width,getHeight()-35);
@@ -1895,16 +1898,16 @@ private:
             if (owner.session.isExporting()) return;
             if (definingLoop)
             {
-                const auto grid=owner.gridSeconds(),cursor=juce::jmax (0.0,owner.viewStart+event.x/owner.pixelsPerSecond);
-                const auto start=std::floor (juce::jmin (anchor,cursor)/grid)*grid;
-                const auto end=juce::jmax (start+grid,std::ceil (juce::jmax (anchor,cursor)/grid)*grid);
-                owner.session.setLoop (true,start,end);owner.refresh();return;
+                const auto grid=owner.gridBeats(),cursor=juce::jmax (0.0,owner.viewStart+event.x/owner.pixelsPerSecond);
+                const auto first=std::floor (owner.beatsAt (juce::jmin (anchor,cursor))/grid)*grid;
+                const auto last=juce::jmax (first+grid,std::ceil (owner.beatsAt (juce::jmax (anchor,cursor))/grid)*grid);
+                owner.session.setLoop (true,owner.secondsAt (first),owner.secondsAt (last));owner.refresh();return;
             }
             if (dragId.isEmpty() || ! event.mouseWasDraggedSinceMouseDown()) return;
             for (const auto& marker : owner.session.snapshot().locators) if (marker.id==dragId)
             {
                 auto time=original+(event.x-downX)/owner.pixelsPerSecond;
-                if (!event.mods.isAltDown())time=std::round (time/owner.gridSeconds())*owner.gridSeconds();
+                if (!event.mods.isAltDown())time=owner.snapSeconds (time);
                 time=juce::jlimit (0.0,172800.0-.001,time);
                 if (!locatorGesture){owner.session.beginEditGesture ("Move locator");locatorGesture=true;}
                 owner.report (owner.session.updateLocator (dragId,marker.name,time));owner.refresh();return;
@@ -2621,7 +2624,9 @@ private:
             // Waveform of the visible source span, with beat lines when warped.
             const auto wave = waveBounds();
             g.setColour (juce::Colour (0xff1c1c1c)); g.fillRect (wave);
-            const auto sourceSpan = clip.warp.mode == Session::WarpMode::off ? clip.length : clip.length * owner.state.tempo / clip.warp.bpm;
+            // A warped clip spans its beats at the source's own tempo.
+            const auto clipBeats = owner.session.beatsAt (clip.start + clip.length) - owner.session.beatsAt (clip.start);
+            const auto sourceSpan = clip.warp.mode == Session::WarpMode::off ? clip.length : clipBeats * 60.0 / clip.warp.bpm;
             const auto offset = clip.warp.mode == Session::WarpMode::off ? clip.sourceOffset : clip.sourceOffset * owner.state.tempo / clip.warp.bpm;
             if (thumbnail.getTotalLength() > 0 && sourceSpan > 0)
             {
@@ -2864,7 +2869,7 @@ private:
                 g.setColour (orange); g.drawRect (marqueeBounds, 1.0f);
             }
             const auto* launched = owner.editedLauncherSlot();
-            const auto beatPosition = launched != nullptr ? launched->playPositionBeats : (owner.state.position - clip->start) * owner.state.tempo / 60.0;
+            const auto beatPosition = launched != nullptr ? launched->playPositionBeats : owner.beatsAt (owner.state.position) - clip->startBeat;
             const auto playhead = (float) (keysWidth + (beatPosition - viewBeat) * pixelsPerBeat);
             if (beatPosition >= 0 && (owner.selectedLauncherClipId.isEmpty() || launched != nullptr)) { g.setColour (ink); g.drawLine (playhead, (float) gridTop, playhead, (float) grid.getBottom(), 1.2f); }
             const auto insertX = (float) (keysWidth + (insertionBeat - viewBeat) * pixelsPerBeat);
@@ -2899,7 +2904,7 @@ private:
                 // Launcher playback has a clip-local clock. Its insertion cursor
                 // must not seek unrelated arrangement transport state.
                 if (owner.selectedLauncherClipId.isEmpty())
-                    owner.session.seek (clip->start + juce::jmax (0.0, beatAt (e.x)) * 60.0 / owner.state.tempo);
+                    owner.session.seek (owner.secondsAt (clip->startBeat + juce::jmax (0.0, beatAt (e.x))));
                 owner.refresh(); return;
             }
             if (! gridBounds().contains (e.getPosition())) return;
@@ -3463,7 +3468,7 @@ private:
             if (clip == nullptr) return;
             const auto* launched = owner.editedLauncherSlot();
             if (owner.selectedLauncherClipId.isNotEmpty() && launched == nullptr) return;
-            const auto beat = launched != nullptr ? launched->playPositionBeats : (owner.state.position - clip->start) * owner.state.tempo / 60.0;
+            const auto beat = launched != nullptr ? launched->playPositionBeats : owner.beatsAt (owner.state.position) - clip->startBeat;
             if (beat < 0 || beat > clip->lengthBeats) return;
             const auto next = followedViewStart (beat, viewBeat, gridBounds().getWidth() / pixelsPerBeat);
             if (next != viewBeat) { viewBeat = next; updateScroll(); repaint(); }
@@ -4789,7 +4794,7 @@ private:
         const auto trackId = track->id;
         const auto previousIds = track->clips;
         const auto barBeats = state.timeSignature.beatsPerBar();
-        const auto startBeat = std::floor (seconds * state.tempo / 60.0 / barBeats + 1e-9) * barBeats;
+        const auto startBeat = std::floor (beatsAt (seconds) / barBeats + 1e-9) * barBeats;
         const auto result = session.addMidiClip (trackId, startBeat, 16.0);
         report (result); refresh();
         if (result.failed()) return;
@@ -4806,14 +4811,20 @@ private:
         if (result.wasOk()) { selectTrack ((int) state.tracks.size() - 1); if (showSession) createLauncherMidiClip(); else createMidiClip (state.position); }
         session.endEditGesture();
     }
-    double gridSeconds() const
+    // The Arrangement grid in beats, chosen from the beat width at the playhead's tempo.
+    double gridBeats() const
     {
         const auto beat = 60.0 / state.tempo;
-        if (beat * pixelsPerSecond >= 30) return beat / 4;
-        if (beat * pixelsPerSecond >= 15) return beat;
-        if (beat * pixelsPerSecond >= 6) return beat * 2;
-        return beat * state.timeSignature.beatsPerBar();
+        if (beat * pixelsPerSecond >= 30) return .25;
+        if (beat * pixelsPerSecond >= 15) return 1;
+        if (beat * pixelsPerSecond >= 6) return 2;
+        return state.timeSignature.beatsPerBar();
     }
+    // Times go through the tempo map, so the grid and bars follow tempo changes.
+    double beatsAt (double seconds) const { return session.beatsAt (seconds); }
+    double secondsAt (double beats) const { return session.secondsAt (beats); }
+    double snapSeconds (double seconds) const
+    { const auto grid = gridBeats(); return juce::jmax (0.0, secondsAt (std::round (beatsAt (juce::jmax (0.0, seconds)) / grid) * grid)); }
     // Freeze toggles the track's freeze; Flatten replaces a frozen track with its render.
     void freezeTrackFromUI (const juce::String& trackId, bool flatten)
     {
@@ -4917,13 +4928,17 @@ private:
             backToArrangement.setEnabled (overridden); backToArrangement.setToggleState (overridden, juce::dontSendNotification);
         }
         if (! tempo.isBeingEdited()) tempo.setText (juce::String (state.tempo, 2), juce::dontSendNotification);
+        // An automated tempo shows the playhead's tempo and is edited in the Song Tempo lane.
+        tempo.setEditable (false, state.tempoMap.size() <= 1, false); tapButton.setEnabled (state.tempoMap.size() <= 1);
+        tempo.setTooltip (state.tempoMap.size() <= 1 ? "Tempo: 20–999 beats per minute. Double-click to edit."
+                                                    : "The tempo is automated; this is the tempo at the playhead. Edit it in Automation > Master > Song Tempo.");
         if (! meterLabel.isBeingEdited()) meterLabel.setText (juce::String (state.timeSignature.numerator) + " / " + juce::String (state.timeSignature.denominator), juce::dontSendNotification);
-        const auto beatPosition = juce::jmax (0.0, state.position) * state.tempo / 60.0;
+        const auto beatPosition = beatsAt (juce::jmax (0.0, state.position));
         positionLabel.setText (state.countInBeatsRemaining>0
             ? "Count in " + juce::String((int)std::ceil(state.countInBeatsRemaining))
             : formatMusicalTime (beatPosition, true, state.timeSignature), juce::dontSendNotification);
-        if (! loopStartLabel.isBeingEdited()) loopStartLabel.setText (formatMusicalTime (state.loopStart * state.tempo / 60.0, true, state.timeSignature), juce::dontSendNotification);
-        if (! loopLengthLabel.isBeingEdited()) loopLengthLabel.setText (formatMusicalTime ((state.loopEnd - state.loopStart) * state.tempo / 60.0, false, state.timeSignature), juce::dontSendNotification);
+        if (! loopStartLabel.isBeingEdited()) loopStartLabel.setText (formatMusicalTime (beatsAt (state.loopStart), true, state.timeSignature), juce::dontSendNotification);
+        if (! loopLengthLabel.isBeingEdited()) loopLengthLabel.setText (formatMusicalTime (beatsAt (state.loopEnd) - beatsAt (state.loopStart), false, state.timeSignature), juce::dontSendNotification);
         projectLabel.setText (state.name + (state.dirty ? "  *" : ""), juce::dontSendNotification);
         if (state.tracks.size() != previous.tracks.size() || lanesHeight != canvas.getHeight() && lanesHeight > viewport.getHeight()) resized();
         for (int i = timeSelection.trackIds.size(); --i >= 0;) if (trackIndex (timeSelection.trackIds[i]) < 0) timeSelection.trackIds.remove (i);
@@ -6137,7 +6152,7 @@ private:
         const auto inside = viewport.getBounds().contains (x, y) && p.x < canvas.timelineWidth();
         const auto index = inside ? trackAtY (p.y) : -1;
         const auto time = inside ? juce::jmax (0.0, viewStart + p.x / pixelsPerSecond) : state.position;
-        importFiles (files, index, std::round (time / gridSeconds()) * gridSeconds());
+        importFiles (files, index, snapSeconds (time));
     }
 };
 
@@ -8675,8 +8690,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     auto* masterWindow = automationWindows.back().getComponent();
     auto* masterDestination = dynamic_cast<juce::ComboBox*> (findNamed (*masterWindow, "automation-track"));
     auto* masterTarget = dynamic_cast<juce::ComboBox*> (findNamed (*masterWindow, "automation-target"));
-    check (masterDestination && masterDestination->getText() == "Master" && masterTarget && masterTarget->getNumItems() == 1,
-        "Master Volume Automation menu opens an explicit master-only parameter destination");
+    check (masterDestination && masterDestination->getText() == "Master" && masterTarget && masterTarget->getNumItems() == 2 && masterTarget->getText() == "Volume",
+        "Master Volume Automation menu opens the master destination on its volume (song tempo is the other master target)");
     masterWindow->closeButtonPressed();
     while (! state.tracks.empty()) { check (session.removeTrack (0).wasOk(), "remove track for empty-project automation navigation"); refresh(); }
     check (automationButton->isEnabled(), "Automation button remains available with no tracks");
@@ -8779,6 +8794,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tempo == 97 && state.projectFile == juce::File() && ! state.dirty && state.tracks.size() == 3, "New starts from the default set, untitled and unchanged");
         setUserLibrary ({}); check (session.newProject().wasOk(), "leave the template behind"); refresh();
         library.deleteRecursively();
+    }
+    {
+        // An automated tempo: positions, snapping and the tempo field follow the map.
+        check (session.setTempoMap ({ { 0, 120 }, { 4, 120 }, { 4 + 1.0 / 960, 60 } }).wasOk(), "drop to 60 BPM at beat 4"); refresh();
+        session.seek (4); refresh();
+        check (positionLabel.getText() == "2. 3. 1", "4 s reads as bar 2, beat 3 (beat 6 on the map)");
+        check (std::abs (beatsAt (snapSeconds (4.1)) - std::round (beatsAt (4.1) / gridBeats()) * gridBeats()) < 1e-6, "snapping rounds to grid beats on the map");
+        check (! tempo.isEditable() && ! tapButton.isEnabled(), "the tempo field and tap button step aside while the tempo is automated");
+        check (session.setTempoMap ({ { 0, 120 } }).wasOk(), "return to a constant tempo"); refresh();
+        check (tempo.isEditable() && tapButton.isEnabled(), "a constant tempo is editable again");
+        session.seek (0); refresh();
     }
 }
 

@@ -960,3 +960,7 @@ A first `ctest -j 4` attempt timed out on 19 suites. It was not caused by this c
 ## Automation in selection edits — 2026-10-20
 
 Root owns the change in `src/Session.cpp`, `tests/RangeEditTests.cpp` and documentation. Duplicate Selection now copies the selected tracks' automation with their clips, and Delete Selection clears it inside the selection while keeping the values at the edges. The range-edit suite checks the exact point layouts and undo.
+
+## Tempo automation — 2026-10-20
+
+Root owns the tempo map across `src/Session.*`, the UI's time conversions in `src/MainComponent.cpp`, the Song Tempo lane in `src/AutomationEditor.cpp`, `tests/TempoMapTests.cpp`, the editor and UI suites, the suite registration and documentation. The tempo can now drop or ramp across the timeline, while clips, notes and automation keep their beats. Rulers, grids, snapping and position fields follow the map. The new `tempo-map-acceptance` suite checks rendered onsets through a drop and a ramp. See [the tempo map contract](research/tempo-map-contract.md).

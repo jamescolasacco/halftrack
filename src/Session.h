@@ -293,6 +293,12 @@ public:
         bool mute = false, solo = false, folded = false;
         juce::StringArray memberIds; // Track order.
     };
+    // A point on the tempo map: the tempo ramps linearly from each point to the next and holds after the last.
+    struct TempoPoint
+    {
+        double beat = 0, bpm = 120;
+        bool operator== (const TempoPoint&) const = default;
+    };
     // The project meter. Beats are quarter notes at every meter, so a bar is numerator x 4 / denominator beats.
     struct TimeSignature
     {
@@ -315,6 +321,8 @@ public:
         bool dirty = false, playing = false, recording = false, looping = false;
         double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
         TimeSignature timeSignature;
+        // The tempo map; one point at beat 0 for a constant tempo. `tempo` is the tempo at the playhead.
+        std::vector<TempoPoint> tempoMap { TempoPoint {} };
         float masterPeakL = 0, masterPeakR = 0, masterGainDb = 0;
         float crossfader = 0; // -1 is fully A, +1 fully B.
         AutomationLane masterVolumeAutomation;
@@ -487,7 +495,13 @@ public:
     void stop();
     juce::Result record();
     void seek (double seconds);
-    void setTempo (double bpm);
+    void setTempo (double bpm); // Constant tempo only; ignored while the tempo is automated.
+    // Replaces the tempo map in one undo step: the first point at beat 0, beats increasing, 20-999 BPM.
+    // Clips, automation and the loop keep their beats. One point restores a constant tempo.
+    juce::Result setTempoMap (const std::vector<TempoPoint>&);
+    // Conversions through the tempo map.
+    double beatsAt (double seconds) const;
+    double secondsAt (double beats) const;
     // One project meter: numerator 1-99 over 1, 2, 4, 8 or 16. Tempo stays in quarter notes per minute.
     juce::Result setTimeSignature (int numerator, int denominator);
     juce::Result tapTempo (double monotonicSeconds); // Message-thread tap time, not project time.

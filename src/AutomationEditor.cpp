@@ -105,7 +105,7 @@ public:
             }
             if (owner.snapshot.playing)
             {
-                const auto x = position ({ owner.snapshot.position * owner.snapshot.tempo / 60, 0 }).x;
+                const auto x = position ({ owner.session.beatsAt (owner.snapshot.position), 0 }).x;
                 if (x >= bounds.getX() && x <= bounds.getRight())
                 { g.setColour (ink.withAlpha (.75f)); g.drawVerticalLine (juce::roundToInt (x), bounds.getY(), bounds.getBottom()); }
             }
@@ -259,6 +259,27 @@ public:
     }
     Session::AutomationTarget target() const
     { return ! editingMaster && targetChoice.getSelectedId() == 2 ? Session::AutomationTarget::pan : Session::AutomationTarget::volume; }
+    // Master's Song Tempo lane edits the tempo map, drawn on a logarithmic BPM scale.
+    static constexpr int tempoItem = 3;
+    bool tempoTarget() const { return editingMaster && targetChoice.getSelectedId() == tempoItem; }
+    static float tempoToProportion (float bpm) { return (float) (std::log (std::clamp ((double) bpm, 20.0, 999.0) / 20.0) / std::log (999.0 / 20.0)); }
+    static float tempoFromProportion (float p) { return (float) (20.0 * std::pow (999.0 / 20.0, std::clamp ((double) p, 0.0, 1.0))); }
+    // A constant tempo shows as an empty lane; otherwise every point of the map.
+    Session::AutomationLane tempoLane() const
+    {
+        Session::AutomationLane result;
+        if (snapshot.tempoMap.size() > 1) for (const auto& p : snapshot.tempoMap) result.points.push_back ({ p.beat, (float) p.bpm });
+        return result;
+    }
+    // The map for a lane: a first point at beat 0 holds the lane's first tempo; an empty lane keeps the current tempo.
+    std::vector<Session::TempoPoint> tempoMapFor (const Session::AutomationLane& next) const
+    {
+        std::vector<Session::TempoPoint> map;
+        if (next.points.empty()) return { { 0, snapshot.tempoMap.empty() ? 120.0 : snapshot.tempoMap.front().bpm } };
+        if (next.points.front().beat > 0) map.push_back ({ 0, next.points.front().value });
+        for (const auto& p : next.points) map.push_back ({ p.beat, p.value });
+        return map;
+    }
     // A native device control offered as a destination after Volume and Pan.
     struct DeviceTarget { juce::String pluginId; int parameter = -1; Session::EffectKind kind {}; juce::String label; };
     static constexpr int firstDeviceItem = 100;
@@ -290,15 +311,21 @@ public:
         return devices;
     }
     juce::String targetKey() const
-    { if (const auto* d = device()) return d->pluginId + ":" + juce::String (d->parameter); return target() == Session::AutomationTarget::pan ? "pan" : "volume"; }
+    {
+        if (tempoTarget()) return "tempo";
+        if (const auto* d = device()) return d->pluginId + ":" + juce::String (d->parameter);
+        return target() == Session::AutomationTarget::pan ? "pan" : "volume";
+    }
     void rememberTarget() { if (const auto* d = device()) { wantedPlugin = d->pluginId; wantedParameter = d->parameter; } else { wantedPlugin.clear(); wantedParameter = -1; } }
     float toProportion (float value) const
     {
+        if (tempoTarget()) return tempoToProportion (value);
         if (const auto* d = device()) return Session::deviceAutomationValueToProportion (d->kind, d->parameter, value);
         return Session::automationValueToProportion (target(), value);
     }
     float fromProportion (float proportion) const
     {
+        if (tempoTarget()) return tempoFromProportion (proportion);
         if (const auto* d = device()) return Session::deviceAutomationProportionToValue (d->kind, d->parameter, proportion);
         return Session::automationProportionToValue (target(), proportion);
     }
@@ -314,6 +341,7 @@ public:
     }
     float manualValue() const
     {
+        if (tempoTarget()) return (float) snapshot.tempo;
         if (editingMaster) return snapshot.masterGainDb;
         if (device() != nullptr) { const auto* plugin = devicePlugin(); return plugin != nullptr ? plugin->effect.values[(size_t) device()->parameter] : 0.0f; }
         if (const auto* current = track()) return target() == Session::AutomationTarget::volume ? current->gainDb : current->pan;
@@ -321,6 +349,7 @@ public:
     }
     std::optional<Session::AutomationLane> lane() const
     {
+        if (tempoTarget()) return tempoLane();
         if (editingMaster) return snapshot.masterVolumeAutomation;
         if (device() != nullptr)
         {
@@ -350,9 +379,14 @@ public:
         trackChoice.setSelectedId (editingMaster ? 1 : index >= 0 ? index + 2 : 0, juce::dontSendNotification);
         if (editingMaster)
         {
-            if (targetChoice.getNumItems() > 1)
-            { targetChoice.clear (juce::dontSendNotification); targetChoice.addItem ("Volume", 1); deviceTargets.clear(); targetSignature.clear(); }
-            targetChoice.setSelectedId (1, juce::dontSendNotification);
+            if (targetChoice.getNumItems() != 2 || targetChoice.indexOfItemId (tempoItem) < 0)
+            {
+                const auto keep = targetChoice.getSelectedId() == tempoItem ? tempoItem : 1;
+                targetChoice.clear (juce::dontSendNotification); targetChoice.addItem ("Volume", 1); targetChoice.addItem ("Song Tempo", tempoItem);
+                deviceTargets.clear(); targetSignature.clear();
+                targetChoice.setSelectedId (keep, juce::dontSendNotification);
+            }
+            if (targetChoice.getSelectedId() != tempoItem) targetChoice.setSelectedId (1, juce::dontSendNotification);
         }
         else
         {
@@ -368,7 +402,7 @@ public:
                     signature << plugin->id << plugin->name << (int) fields.size() << ";";
                 }
             }
-            if (signature != targetSignature || targetChoice.getNumItems() < 2)
+            if (signature != targetSignature || targetChoice.getNumItems() < 2 || targetChoice.indexOfItemId (2) < 0 || targetChoice.indexOfItemId (tempoItem) >= 0)
             {
                 const auto keep = targetChoice.getSelectedId() == 2 ? 2 : 1;
                 deviceTargets = std::move (targets); targetSignature = signature;
@@ -396,7 +430,8 @@ public:
             const auto unit = effectShowsPercent (*f) ? juce::String ("%") : juce::String (f->unit).trim();
             valueLabel.setText (juce::String (f->label).substring (0, 14) + (unit.isNotEmpty() ? " (" + unit + ")" : juce::String()), juce::dontSendNotification);
         }
-        else valueLabel.setText (target() == Session::AutomationTarget::volume ? "Level (dB)" : "Pan (%)", juce::dontSendNotification);
+        else valueLabel.setText (tempoTarget() ? "Tempo (BPM)" : target() == Session::AutomationTarget::volume ? "Level (dB)" : "Pan (%)", juce::dontSendNotification);
+        if (tempoTarget()) read.setEnabled (false); // A tempo map is always read.
         const bool samePoint = hasPoint && numericPoint && numericTrackId == trackId && numericTarget == targetKey()
             && numericSelection == selected && *numericPoint == current->points[static_cast<size_t> (selected)];
         if (! samePoint) numericDirty = false;
@@ -418,11 +453,12 @@ public:
         if (const auto previous = lane(); previous && *previous == next) return;
         if (! gesture)
         {
-            session.beginEditGesture (device() != nullptr ? "Edit " + device()->label + " automation"
+            session.beginEditGesture (tempoTarget() ? "Edit song tempo" : device() != nullptr ? "Edit " + device()->label + " automation"
                                       : target() == Session::AutomationTarget::volume ? "Edit volume automation" : "Edit pan automation");
             gesture = true;
         }
-        const auto result = editingMaster ? session.setMasterVolumeAutomation (next)
+        const auto result = tempoTarget() ? session.setTempoMap (tempoMapFor (next))
+                          : editingMaster ? session.setMasterVolumeAutomation (next)
                           : device() != nullptr ? session.setDeviceAutomation (device()->pluginId, device()->parameter, next)
                           : session.setTrackAutomation (trackId, target(), next);
         error = result.failed() ? result.getErrorMessage() : juce::String();
@@ -553,13 +589,13 @@ public:
     void zoom (double factor) { const auto next = std::clamp (viewBeats * factor, 1.0, maximumBeat); setView (viewStart + (viewBeats - next) / 2, next); }
     void fitView()
     {
-        synchronise(); double end = snapshot.duration * snapshot.tempo / 60;
+        synchronise(); double end = session.beatsAt (snapshot.duration);
         if (const auto current = lane(); current && ! current->points.empty()) end = std::max (end, current->points.back().beat + 1);
         setView (0, std::max (4.0, std::ceil (end / 4) * 4));
     }
     void updateScroll()
     {
-        double end = std::max ({ 16.0, snapshot.duration * snapshot.tempo / 60 + 4, viewStart + viewBeats });
+        double end = std::max ({ 16.0, session.beatsAt (snapshot.duration) + 4, viewStart + viewBeats });
         if (const auto current = lane(); current && ! current->points.empty()) end = std::max (end, current->points.back().beat + 4);
         scroll.setRangeLimits (0, std::min (maximumBeat, end), juce::dontSendNotification);
         scroll.setCurrentRange (viewStart, viewBeats, juce::dontSendNotification);
@@ -807,10 +843,24 @@ int runAutomationEditorTests (const juce::File& root)
             masterCurve.mouseDown (masterEvent (point, point)); masterCurve.mouseUp (masterEvent (point, point));
         };
         auto masterLane = [&] { return session.snapshot().masterVolumeAutomation; };
-        check (master.editingMaster && master.trackChoice.getText() == "Master" && master.targetChoice.getNumItems() == 1
-            && master.target() == Session::AutomationTarget::volume && std::abs (master.manualValue() + 9) < .001f,
-            "explicit master destination exposes only volume and its real manual baseline");
+        check (master.editingMaster && master.trackChoice.getText() == "Master" && master.targetChoice.getNumItems() == 2
+            && master.targetChoice.getSelectedId() == 1 && master.target() == Session::AutomationTarget::volume && std::abs (master.manualValue() + 9) < .001f,
+            "the master destination offers volume (selected, with its real manual baseline) and song tempo");
         check (masterEditor.createComponentSnapshot (masterEditor.getLocalBounds()).isValid(), "empty master lane paints without a track pointer");
+        {
+            // Song Tempo: an empty lane for a constant tempo; the first drawn point makes a map from beat 0.
+            master.targetChoice.setSelectedId (AutomationEditor::Impl::tempoItem, juce::sendNotificationSync);
+            check (master.tempoTarget() && master.lane()->points.empty() && std::abs (master.manualValue() - 120) < 1e-3 && ! master.read.isEnabled(),
+                   "Song Tempo starts empty at the constant 120 BPM, always read");
+            masterClick (4, 90);
+            const auto map = session.snapshot().tempoMap;
+            check (map.size() == 2 && map[0].beat == 0 && map[1].beat == 4 && std::abs (map[1].bpm - 90) < .5 && std::abs (map[0].bpm - map[1].bpm) < 1e-9,
+                   "a point at beat 4 makes a two-point map holding about 90 BPM from the start");
+            check (std::abs (AutomationEditor::Impl::tempoFromProportion (AutomationEditor::Impl::tempoToProportion (137)) - 137) < 1e-3, "the tempo scale round-trips");
+            session.undo(); master.synchronise();
+            check (session.snapshot().tempoMap.size() == 1 && master.lane()->points.empty(), "one undo returns to the constant tempo");
+            master.targetChoice.setSelectedId (1, juce::sendNotificationSync);
+        }
         masterClick (1.12, -6);
         check (masterLane().points.size() == 1 && masterLane().points[0].beat == 1
             && std::abs (masterLane().points[0].value + 6) < .001f && session.snapshot().tracks[0].volumeAutomation.points.empty(),
@@ -836,7 +886,7 @@ int runAutomationEditorTests (const juce::File& root)
         const auto firstTrackPan = session.snapshot().tracks[0].panAutomation;
         check (firstTrackPan.points.size() == 1 && masterLane() == beforeMasterTyped, "master window can independently edit a track pan lane");
         master.trackChoice.setSelectedId (1, juce::sendNotificationSync);
-        check (master.targetChoice.getNumItems() == 1 && master.targetChoice.getSelectedId() == 1
+        check (master.targetChoice.getNumItems() == 2 && master.targetChoice.getSelectedId() == 1
             && master.target() == Session::AutomationTarget::volume, "switching track pan to Master removes unsupported pan");
         masterDown = masterCurve.position (masterLane().points[0]); masterCurve.mouseDown (masterEvent (masterDown, masterDown));
         masterMove = masterCurve.position ({ 2, -12 }); masterCurve.mouseDrag (masterEvent (masterMove, masterDown, true));

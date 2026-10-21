@@ -260,3 +260,7 @@ There is one recovery copy, written every 30 seconds while there are unsaved cha
 ### Device preset defaults
 
 The user library lives in `~/Music/Halftrack/User Library`. Presets store control values only (no samples, automation or rack contents), and loading always adds a new device rather than replacing a selected one. The default set stores media by absolute path. These are simplest-default choices pending reference measurement.
+
+### Tempo automation defaults
+
+Tempo segments ramp linearly (applied by the engine in quarter-beat steps) and there are no curved segments. Locators keep their times when the tempo changes. Insert Silence and Delete Time are refused while the tempo is automated, and MIDI export writes tempo points as steps. These are simplest-default choices pending reference measurement.
