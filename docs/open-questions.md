@@ -264,3 +264,7 @@ The user library lives in `~/Music/Halftrack/User Library`. Presets store contro
 ### Tempo automation defaults
 
 Tempo segments ramp linearly (applied by the engine in quarter-beat steps) and there are no curved segments. Locators keep their times when the tempo changes. Insert Silence and Delete Time are refused while the tempo is automated, and MIDI export writes tempo points as steps. These are simplest-default choices pending reference measurement.
+
+### Exclusive solo and arm defaults
+
+Solo and arm are always exclusive, with Cmd/Ctrl-click adding, matching the reference's default preferences; there is no preference to change it yet.

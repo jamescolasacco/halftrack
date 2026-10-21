@@ -684,6 +684,31 @@ private:
     std::vector<Lane> lanes;
     int lanesHeight = 0;
     std::set<juce::String> multiSelectedTracks;
+    // Solo and arm are exclusive, as in the reference's defaults: a plain click releases every other
+    // track (and, for solo, group); Cmd/Ctrl-click adds to them. Each click is one undo step.
+    void soloFromUI (int trackIndex, const juce::String& groupId, bool on, bool additive)
+    {
+        const auto current = session.snapshot();
+        session.beginEditGesture ("Solo");
+        if (on && ! additive)
+        {
+            for (int t = 0; t < (int) current.tracks.size(); ++t) if (t != trackIndex && current.tracks[(size_t) t].solo) session.setTrackSolo (t, false);
+            for (const auto& g : current.groups) if (g.id != groupId && g.solo) session.setGroupSolo (g.id, false);
+        }
+        const auto result = groupId.isNotEmpty() ? session.setGroupSolo (groupId, on) : session.setTrackSolo (trackIndex, on);
+        session.endEditGesture(); report (result); refresh();
+    }
+    void armFromUI (int trackIndex, bool on, bool additive)
+    {
+        const auto current = session.snapshot();
+        session.beginEditGesture ("Arm");
+        juce::Result result = juce::Result::ok();
+        if (on && ! additive)
+            for (int t = 0; t < (int) current.tracks.size() && result.wasOk(); ++t)
+                if (t != trackIndex && current.tracks[(size_t) t].armed) result = session.setTrackArmed (t, false);
+        if (result.wasOk()) result = session.setTrackArmed (trackIndex, on);
+        session.endEditGesture(); report (result); refresh();
+    }
     // The Arrangement time selection: a range over a run of tracks; empty when end <= start.
     struct TimeSelection
     {
@@ -827,8 +852,8 @@ private:
             }
             // The numbered track activator is lit while the track is audible.
             mute.onClick = [this] { owner.selectTrack (index); owner.report (owner.session.setTrackMute (index, ! mute.getToggleState())); };
-            solo.onClick = [this] { owner.selectTrack (index); owner.report (owner.session.setTrackSolo (index, solo.getToggleState())); };
-            arm.onClick = [this] { owner.selectTrack (index); owner.report (owner.session.setTrackArmed (index, arm.getToggleState())); owner.refresh(); };
+            solo.onClick = [this] { owner.selectTrack (index); owner.soloFromUI (index, {}, solo.getToggleState(), juce::ModifierKeys::getCurrentModifiers().isCommandDown()); };
+            arm.onClick = [this] { owner.selectTrack (index); owner.armFromUI (index, arm.getToggleState(), juce::ModifierKeys::getCurrentModifiers().isCommandDown()); };
             mute.setTooltip ("Track activator: click to mute or unmute"); solo.setTooltip ("Solo track"); arm.setTooltip ("Arm track for audio recording");
             mute.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); mute.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
             solo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff57a7ff)); solo.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
@@ -1155,7 +1180,7 @@ private:
             activator.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); activator.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
             solo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff57a7ff)); solo.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
             activator.onClick = [this] { owner.report (owner.session.setGroupMute (groupId, ! activator.getToggleState())); owner.refresh(); };
-            solo.onClick = [this] { owner.report (owner.session.setGroupSolo (groupId, solo.getToggleState())); owner.refresh(); };
+            solo.onClick = [this] { owner.soloFromUI (-1, groupId, solo.getToggleState(), juce::ModifierKeys::getCurrentModifiers().isCommandDown()); };
             gain.setName ("Group volume"); gain.setSliderStyle (juce::Slider::LinearHorizontal); gain.setRange (-100, 6, .1); gain.setSkewFactorFromMidPoint (-12);
             gain.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 16); gain.setDoubleClickReturnValue (true, 0);
             gain.textFromValueFunction = [] (double v) { return v <= -100 ? juce::String ("-inf") : juce::String (v, 1) + " dB"; };
@@ -8794,6 +8819,31 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tempo == 97 && state.projectFile == juce::File() && ! state.dirty && state.tracks.size() == 3, "New starts from the default set, untitled and unchanged");
         setUserLibrary ({}); check (session.newProject().wasOk(), "leave the template behind"); refresh();
         library.deleteRecursively();
+    }
+    {
+        // Exclusive solo and arm: a plain click releases the others, Cmd/Ctrl-click adds, one undo each.
+        check (session.newProject().wasOk() && session.addAudioTrack ("Third").wasOk(), "three tracks for solo and arm"); refresh();
+        soloFromUI (0, {}, true, false); soloFromUI (1, {}, true, false);
+        check (! state.tracks[0].solo && state.tracks[1].solo, "soloing a second track releases the first");
+        soloFromUI (2, {}, true, true);
+        check (state.tracks[1].solo && state.tracks[2].solo, "Cmd/Ctrl-click adds a solo");
+        session.undo(); refresh();
+        check (state.tracks[1].solo && ! state.tracks[2].solo, "one undo removes the added solo");
+        session.undo(); refresh();
+        check (state.tracks[0].solo && ! state.tracks[1].solo, "another undo restores the first solo, in one step");
+        soloFromUI (0, {}, false, false); refresh();
+        // One input belongs to one track, so an audio track and a MIDI track each take their own.
+        const auto audioInputs = session.inputNames(), midiInputs = session.inputNames (true);
+        check (! audioInputs.isEmpty() && ! midiInputs.isEmpty(), "the test devices offer an audio and a MIDI input");
+        check (session.addMidiTrack ("Keys").wasOk(), "add a MIDI track"); refresh();
+        const int keys = (int) state.tracks.size() - 1;
+        check (session.setTrackInput (0, audioInputs[0]).wasOk() && session.setTrackInput (keys, midiInputs[0]).wasOk(), "give each track an input"); refresh();
+        armFromUI (0, true, false); armFromUI (keys, true, false);
+        check (! state.tracks[0].armed && state.tracks[(size_t) keys].armed, "arming another track disarms the first");
+        armFromUI (0, true, true);
+        check (state.tracks[0].armed && state.tracks[(size_t) keys].armed, "Cmd/Ctrl-click arms an additional track");
+        armFromUI (0, false, false); armFromUI (keys, false, false);
+        check (session.newProject().wasOk(), "reset after solo and arm"); refresh();
     }
     {
         // An automated tempo: positions, snapping and the tempo field follow the map.

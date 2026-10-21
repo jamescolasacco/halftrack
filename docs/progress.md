@@ -964,3 +964,7 @@ Root owns the change in `src/Session.cpp`, `tests/RangeEditTests.cpp` and docume
 ## Tempo automation — 2026-10-20
 
 Root owns the tempo map across `src/Session.*`, the UI's time conversions in `src/MainComponent.cpp`, the Song Tempo lane in `src/AutomationEditor.cpp`, `tests/TempoMapTests.cpp`, the editor and UI suites, the suite registration and documentation. The tempo can now drop or ramp across the timeline, while clips, notes and automation keep their beats. Rulers, grids, snapping and position fields follow the map. The new `tempo-map-acceptance` suite checks rendered onsets through a drop and a ramp. See [the tempo map contract](research/tempo-map-contract.md).
+
+## Exclusive solo and arm — 2026-10-20
+
+UI change in `src/MainComponent.cpp`. Solo and Arm are now exclusive: a click releases the other tracks (and groups, for solo), and Cmd/Ctrl-click adds. Each click is one undo step. The UI suite covers both. See [the solo and arm contract](research/solo-arm-contract.md).
