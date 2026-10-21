@@ -285,6 +285,10 @@ Tracks carry an undoable `halftrackCrossfade` side (0 none, 1 A, 2 B) and the ed
 
 The meter is the engine tempo sequence's first `TimeSigSetting`; `setTimeSignature` edits it in one transaction and `validateProjectTempo` rejects meter maps. The engine behaviour reports that a beat does not depend on the meter, so every Halftrack beat stays a quarter note. The UI derives bar lengths from `Snapshot::timeSignature`. See the [time signature contract](research/time-signature-contract.md).
 
+## MIDI note tools
+
+`src/NoteTools.*` holds each tool's field table and a pure `notetools::run` from notes to notes. `Session::applyNoteTool` validates the settings and every resulting note, then removes the chosen notes and adds the result in one transaction. The piano roll's `NoteToolPanel` edits a tool's settings and applies it to the selection. See the [note tool contract](research/midi-tools-contract.md).
+
 ## Audio warping
 
 `ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).

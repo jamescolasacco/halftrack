@@ -45,6 +45,7 @@ int runTrackDelayTests (const juce::File&);
 int runMidiControllerTests (const juce::File&);
 int runRangeEditTests (const juce::File&);
 int runTimeSignatureTests (const juce::File&);
+int runMidiToolTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -205,6 +206,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-groups");
             setApplicationReturnValue (runGroupTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-midi-tools"))
+        {
+            const int i = args.indexOf ("--self-test-midi-tools");
+            setApplicationReturnValue (runMidiToolTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-time-signature"))

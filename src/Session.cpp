@@ -4,6 +4,7 @@
 #include "UtilityEditor.h"
 #include "NativeEffects.h"
 #include "Racks.h"
+#include "NoteTools.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 #include <array>
@@ -3242,6 +3243,45 @@ Result Session::transformMidiNotes (const String& clipId, const juce::StringArra
     }
     // Existing batch validation rejects the complete edit before changing any note.
     return updateMidiNotes (clipId, notes);
+}
+Result Session::applyNoteTool (const String& clipId, const juce::StringArray& ids, const NoteToolSettings& settings, juce::StringArray& resultIds)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing notes.");
+    auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    if (auto frozen = impl->unfrozen (clip->getClipTrack()); frozen.failed()) return frozen;
+    if (! notetools::valid (settings)) return Result::fail ("The note tool's settings are outside their ranges.");
+    std::set<String> requested;
+    for (const auto& id : ids) if (id.isEmpty() || ! requested.insert (id).second) return Result::fail ("Each chosen note needs a unique identifier.");
+    std::vector<MidiNoteInfo> chosen;
+    juce::Array<te::MidiNote*> originals;
+    for (auto* note : clip->getSequence().getNotes())
+        if (const auto id = note->state.getProperty (midiNoteIDProperty).toString(); requested.contains (id))
+        {
+            chosen.push_back ({ id, note->getNoteNumber(), note->getStartBeat().inBeats(), note->getLengthBeats().inBeats(), note->getVelocity() / 127.0f, ! note->isMute() });
+            originals.add (note);
+        }
+    if (chosen.size() != requested.size()) return Result::fail ("A chosen note is missing or ambiguous.");
+    if (chosen.empty() && ! notetools::generates (settings.tool)) return Result::fail ("Choose the notes to transform.");
+    const auto length = clip->getLengthInBeats().inBeats();
+    const auto result = notetools::run (settings, chosen, length);
+    if (result.size() > 16384 || clip->getSequence().getNumNotes() - (int) chosen.size() + (int) result.size() > 100000)
+        return Result::fail ("The result has too many notes.");
+    for (const auto& note : result)
+        if (auto valid = impl->validateNote (*clip, note.pitch, note.startBeat, note.lengthBeats, note.velocity); valid.failed()) return valid;
+    impl->transaction (String (notetools::name (settings.tool)));
+    auto* undo = &impl->edit->getUndoManager();
+    for (auto* note : originals) clip->getSequence().removeNote (*note, undo);
+    resultIds.clear();
+    for (const auto& value : result)
+    {
+        auto* note = clip->getSequence().addNote (value.pitch, te::BeatPosition::fromBeats (value.startBeat), te::BeatDuration::fromBeats (value.lengthBeats),
+                                                 juce::jlimit (1, 127, juce::roundToInt (value.velocity * 127)), 0, undo);
+        const auto id = juce::Uuid().toString();
+        note->state.setProperty (midiNoteIDProperty, id, undo);
+        resultIds.add (id);
+    }
+    impl->changed(); return Result::ok();
 }
 Result Session::setMidiControllerLane (const String& clipId, int controller, const std::vector<ControllerPoint>& points)
 {

@@ -3,6 +3,7 @@
 #include "AutomationEditor.h"
 #include "NativeEffects.h"
 #include "RackEditor.h"
+#include "NoteTools.h"
 #include "Session.h"
 
 #include <algorithm>
@@ -210,13 +211,13 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
+                 &playButton, &stopButton, &recordButton, &followButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &ruler, &viewport,
                  &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &deviceChain })
             addAndMakeVisible (child);
 
-        for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
+        for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &followButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
                  &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton, &folderButton,
                  &upButton, &zoomIn, &zoomOut, &fitButton })
         {
@@ -303,6 +304,9 @@ public:
         playButton.onClick = [this] { togglePlay(); };
         stopButton.onClick = [this] { session.stop(); session.seek (0); refresh(); };
         recordButton.onClick = [this] { if (state.recording) session.stop(); else report (session.record()); refresh(); };
+        followButton.setName ("Follow"); followButton.setClickingTogglesState (true); followButton.setToggleState (true, juce::dontSendNotification);
+        followButton.setTooltip ("Follow: keep the playhead in view while playing. Scrolling by hand turns it off.  |  Cmd/Ctrl+F");
+        followButton.onClick = [this] { followPlayhead = followButton.getToggleState(); refresh(); };
         loopButton.setClickingTogglesState (true);
         loopButton.setTooltip ("Loop the marked time range. Shift-drag the ruler to change it.  |  Cmd/Ctrl+L");
         loopButton.onClick = [this] { session.setLoop (loopButton.getToggleState(), state.loopStart, state.loopEnd); refresh(); };
@@ -441,12 +445,13 @@ public:
         pianoTab.setBounds (bar.removeFromRight (40)); bar.removeFromRight (10);
         cpuBounds = bar.removeFromRight (56); bar.removeFromRight (8);
         // Transport is centred on the window, independent of the side groups.
-        constexpr int transportWidth = 92 + 6 + 3 * 28 + 14 + 78 + 3 + 48 + 3 + 78;
+        constexpr int transportWidth = 92 + 6 + 3 * 28 + 4 + 50 + 10 + 78 + 3 + 48 + 3 + 78;
         auto centre = juce::Rectangle<int> (juce::jmax (bar.getX(), getWidth() / 2 - transportWidth / 2), bar.getY(), transportWidth, bar.getHeight());
         positionLabel.setBounds (centre.removeFromLeft (92)); centre.removeFromLeft (6);
         playButton.setBounds (centre.removeFromLeft (28));
         stopButton.setBounds (centre.removeFromLeft (28));
-        recordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (14);
+        recordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4);
+        followButton.setBounds (centre.removeFromLeft (50)); centre.removeFromLeft (10);
         loopStartLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (3);
         loopButton.setBounds (centre.removeFromLeft (48)); centre.removeFromLeft (3);
         loopLengthLabel.setBounds (centre.removeFromLeft (78));
@@ -528,6 +533,7 @@ public:
             if (code == 'N') { ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) { safe->report (safe->session.newProject()); safe->resetView(); } }); return true; }
             if (code == 'T') { if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
             if (code == 'Z') { if (shift) session.redo(); else session.undo(); refresh(); return true; }
+            if (code == 'F' && ! shift) { setFollow (! followPlayhead); refresh(); return true; }
             if (code == 'L' && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (79); return true; }
             if (code == 'J' && ! shift && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (80); return true; }
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
@@ -582,6 +588,12 @@ public:
             else if(const auto* track=currentTrack();track && juce::isPositiveAndBelow(selectedClip,(int)track->clips.size()))
             {const auto& clip=track->clips[(size_t)selectedClip];setClipActiveFromUI(clip.id,!clip.active);return true;}
             return false;
+        }
+        if ((code == 'Z' || code == 'X') && ! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano)
+        {
+            for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused; focused = focused->getParentComponent())
+                if (dynamic_cast<juce::TextEditor*> (focused)) return false;
+            return code == 'Z' ? zoomToSelection() : zoomBackFromSelection();
         }
         if (code == juce::KeyPress::tabKey && shift) { if (showPiano) closeClipView(); else openPianoRoll(); return true; }
         if (code == juce::KeyPress::tabKey) { if (showSession) showArrangementView(); else showSessionView(); return true; }
@@ -1642,6 +1654,7 @@ private:
             if (event.mods.isShiftDown() || std::abs (wheel.deltaX) > std::abs (wheel.deltaY))
             {
                 const auto delta = event.mods.isShiftDown() ? wheel.deltaY : wheel.deltaX;
+                if (owner.state.playing) owner.setFollow (false);
                 owner.viewStart = juce::jmax (0.0, owner.viewStart - delta * 300.0 / owner.pixelsPerSecond);
                 owner.updateScroll(); owner.ruler.repaint(); repaint(); return;
             }
@@ -3378,9 +3391,110 @@ private:
         }
         void scrollBarMoved (juce::ScrollBar* bar, double start) override
         {
-            if (bar == &horizontal) viewBeat = start; else topPitch = 127 - (int) std::round (start);
+            if (bar == &horizontal) { if (owner.state.playing) owner.setFollow (false); viewBeat = start; } else topPitch = 127 - (int) std::round (start);
             repaint();
         }
+    public:
+        // Pages the note view to keep the playhead of the edited clip in sight.
+        void followPlayhead()
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr) return;
+            const auto* launched = owner.editedLauncherSlot();
+            if (owner.selectedLauncherClipId.isNotEmpty() && launched == nullptr) return;
+            const auto beat = launched != nullptr ? launched->playPositionBeats : (owner.state.position - clip->start) * owner.state.tempo / 60.0;
+            if (beat < 0 || beat > clip->lengthBeats) return;
+            const auto next = followedViewStart (beat, viewBeat, gridBounds().getWidth() / pixelsPerBeat);
+            if (next != viewBeat) { viewBeat = next; updateScroll(); repaint(); }
+        }
+        double visibleStartBeat() const noexcept { return viewBeat; }
+    private:
+    public:
+        // A note tool's settings, applied to the selected notes (or every note) each time Apply is pressed.
+        class NoteToolPanel final : public juce::Component
+        {
+        public:
+            NoteToolPanel (PianoRoll& r, Session::NoteTool tool) : roll (&r), settings (notetools::defaults (tool))
+            {
+                setName ("Note tool " + juce::String (notetools::name (tool)));
+                const auto fields = notetools::fields (tool);
+                for (size_t i = 0; i < fields.size(); ++i)
+                {
+                    const auto& f = fields[i];
+                    auto& label = labels[i]; label.setText (f.label, juce::dontSendNotification); label.setColour (juce::Label::textColourId, ink); addAndMakeVisible (label);
+                    if (f.choices)
+                    {
+                        auto& box = choices[i]; box.setName (f.label); box.addItemList (juce::StringArray::fromTokens (f.choices, "|", ""), 1);
+                        box.setSelectedId ((int) f.initial + 1, juce::dontSendNotification);
+                        box.onChange = [this, i] { settings.values[i] = choices[i].getSelectedId() - 1; };
+                        addAndMakeVisible (box);
+                    }
+                    else
+                    {
+                        auto& slider = sliders[i]; slider.setName (f.label); slider.setSliderStyle (juce::Slider::LinearBar);
+                        slider.setRange (f.minimum, f.maximum, f.integer ? 1.0 : 0.0); slider.setValue (f.initial, juce::dontSendNotification);
+                        slider.setTextValueSuffix (f.unit); slider.setNumDecimalPlacesToDisplay (f.integer ? 0 : 3); slider.updateText();
+                        slider.setColour (juce::Slider::trackColourId, juce::Colour (0xff59606a)); slider.setColour (juce::Slider::textBoxTextColourId, ink);
+                        slider.onValueChange = [this, i] { settings.values[i] = sliders[i].getValue(); };
+                        addAndMakeVisible (slider);
+                    }
+                }
+                rows = (int) fields.size();
+                apply.setName ("Apply note tool");
+                apply.setButtonText (notetools::generates (tool) ? "Generate" : "Transform");
+                apply.onClick = [this] { if (roll != nullptr) roll->applyNoteTool (settings); };
+                addAndMakeVisible (apply);
+                hint.setText (notetools::generates (tool) ? "Fills the clip, replacing any selected notes." : "Reshapes the selected notes, or every note when none is selected.",
+                              juce::dontSendNotification);
+                hint.setColour (juce::Label::textColourId, muted); hint.setFont (font (10.5f)); addAndMakeVisible (hint);
+            }
+            static int heightFor (Session::NoteTool tool) { return 78 + 28 * (int) notetools::fields (tool).size(); }
+            void resized() override
+            {
+                auto area = getLocalBounds().reduced (12, 10);
+                for (int i = 0; i < rows; ++i)
+                {
+                    auto row = area.removeFromTop (28).withTrimmedBottom (4);
+                    labels[(size_t) i].setBounds (row.removeFromLeft (90));
+                    choices[(size_t) i].setBounds (row); sliders[(size_t) i].setBounds (row);
+                }
+                area.removeFromTop (6);
+                auto buttons = area.removeFromBottom (26);
+                apply.setBounds (buttons.removeFromRight (110));
+                hint.setBounds (area);
+            }
+            Session::NoteToolSettings settings;
+            juce::TextButton apply;
+        private:
+            juce::Component::SafePointer<PianoRoll> roll;
+            std::array<juce::Label, 8> labels;
+            std::array<juce::ComboBox, 8> choices;
+            std::array<juce::Slider, 8> sliders;
+            juce::Label hint;
+            int rows = 0;
+        };
+        void openNoteTool (Session::NoteTool tool)
+        { owner.showDialog (juce::String (notetools::name (tool)), std::make_unique<NoteToolPanel> (*this, tool), 340, NoteToolPanel::heightFor (tool)); }
+        void applyNoteTool (const Session::NoteToolSettings& settings)
+        {
+            const auto* clip = owner.currentMidiClip(); if (! clip) return;
+            endGesture();
+            const bool generator = notetools::generates (settings.tool);
+            juce::StringArray ids;
+            for (const auto& note : clip->notes)
+                if (selectedNoteIds.empty() ? ! generator : selectedNoteIds.contains (note.id)) ids.add (note.id);
+            juce::StringArray created;
+            const auto result = owner.session.applyNoteTool (clip->id, ids, settings, created);
+            owner.report (result); owner.refresh();
+            if (result.wasOk())
+            {
+                clearSelection();
+                for (const auto& id : created) selectedNoteIds.insert (id);
+                if (! created.isEmpty()) selectedNoteId = created[0];
+            }
+            repaint();
+        }
+    private:
         void transformSelected (Session::NoteTransform operation)
         {
             const auto* clip = owner.currentMidiClip(); if (! clip) return;
@@ -3426,6 +3540,14 @@ private:
                                   "Compress Time by Half", "Stretch Time to Double", "Set Fixed Length" };
             for (int i=0;i<8;++i) popup.addItem (10+i, names[i], hasNotes);
             popup.addSeparator();
+            juce::PopupMenu transforms, generators;
+            for (int t = 0; t < Session::noteToolCount; ++t)
+            {
+                const auto tool = static_cast<Session::NoteTool> (t);
+                (notetools::generates (tool) ? generators : transforms).addItem (100 + t, juce::String (notetools::name (tool)) + "...", notetools::generates (tool) ? clip != nullptr : hasNotes);
+            }
+            popup.addSubMenu ("Transform", transforms, hasNotes); popup.addSubMenu ("Generate", generators, clip != nullptr);
+            popup.addSeparator();
             popup.addItem (2, "Copy Notes", hasSelectedNote()); popup.addItem (3, "Cut Notes", hasSelectedNote());
             popup.addItem (4, "Paste Notes at Marker", ! noteClipboard.empty()); popup.addItem (5, "Duplicate Notes");
             popup.addItem (7, "Split Notes at Marker", hasNotes);
@@ -3440,6 +3562,7 @@ private:
             {
                 if (safe == nullptr || safe->loadedClip != clipId || safe->selectedNoteIds != ids) return;
                 if (result >= 10 && result <= 17) safe->transformSelected (static_cast<Session::NoteTransform> (result-10));
+                if (result >= 100 && result < 100 + Session::noteToolCount) safe->openNoteTool (static_cast<Session::NoteTool> (result - 100));
                 if (result == 1) safe->deleteSelectedNote();
                 if (result == 7 && safe->insertionBeat==marker) safe->splitNotesAtMarker();
                 if (result == 8) safe->toggleSelectedNotes();
@@ -4178,7 +4301,7 @@ private:
     juce::AudioFormatManager formats;
     juce::AudioThumbnailCache thumbnailCache { 128 };
     TransportButton playButton { TransportButton::play }, stopButton { TransportButton::stop }, recordButton { TransportButton::record };
-    juce::TextButton tapButton { "TAP" }, loopButton { "Loop" }, clickButton { "Metro" }, clickSettingsButton { "..." }, audioButton { "Audio" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
+    juce::TextButton followButton { "Follow" }, tapButton { "TAP" }, loopButton { "Loop" }, clickButton { "Metro" }, clickSettingsButton { "..." }, audioButton { "Audio" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
                      sessionTab { "Session" }, arrangementTab { "Arrange" }, pianoTab { "Clip" }, importButton { "Import Audio" },
                      filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" },
                      zoomIn { "+" }, zoomOut { "-" }, fitButton { "Fit" };
@@ -4706,8 +4829,10 @@ private:
             const auto ids = trackDeviceIds();
             for (int i = selectedDevices.size(); --i >= 0;) if (std::find (ids.begin(), ids.end(), selectedDevices[i]) == ids.end()) selectedDevices.remove (i);
         }
+        followButton.setToggleState (followPlayhead, juce::dontSendNotification);
         ruler.sync(); deviceChain.sync(); repaint();
         updateScroll();
+        followView();
     }
     void timerCallback() override
     {
@@ -4757,6 +4882,40 @@ private:
         selectedTrack = -1; selectedClip = -1; selectedLauncherClipId.clear(); selectedSceneId.clear(); viewStart = 0; showPiano = false; resized();
         refresh(); fitTimeline();
     }
+    // Follow pages the view: once the playhead leaves the visible time, the view starts at the playhead.
+    static double followedViewStart (double position, double viewStart, double visible)
+    { return position >= viewStart && position < viewStart + visible ? viewStart : juce::jmax (0.0, position); }
+    bool followPlayhead = true;
+    void setFollow (bool on) { followPlayhead = on; followButton.setToggleState (on, juce::dontSendNotification); }
+    void followView()
+    {
+        if (! followPlayhead || ! state.playing) return;
+        if (showPiano) { pianoRoll.followPlayhead(); return; }
+        if (showSession) return;
+        const auto next = followedViewStart (state.position, viewStart, canvas.timelineWidth() / pixelsPerSecond);
+        if (next != viewStart) { viewStart = next; updateScroll(); canvas.repaint(); ruler.repaint(); }
+    }
+    // Z zooms to the time selection (or the selected clip); X returns to the view before it.
+    std::optional<std::pair<double, double>> zoomBack;
+    bool zoomToSelection()
+    {
+        double from = 0, to = 0;
+        if (timeSelection.active()) { from = timeSelection.start; to = timeSelection.end; }
+        else if (const auto* track = currentTrack(); track && juce::isPositiveAndBelow (selectedClip, (int) track->clips.size()))
+        { from = track->clips[(size_t) selectedClip].start; to = from + track->clips[(size_t) selectedClip].length; }
+        if (to - from < .001) return false;
+        zoomBack = { viewStart, pixelsPerSecond };
+        const auto span = to - from;
+        pixelsPerSecond = juce::jlimit (3.0, 650.0, canvas.timelineWidth() / (span * 1.1));
+        viewStart = juce::jmax (0.0, from - span * .05);
+        updateScroll(); canvas.repaint(); ruler.repaint(); return true;
+    }
+    bool zoomBackFromSelection()
+    {
+        if (! zoomBack) return false;
+        std::tie (viewStart, pixelsPerSecond) = *zoomBack; zoomBack.reset();
+        updateScroll(); canvas.repaint(); ruler.repaint(); return true;
+    }
     void zoom (double factor)
     {
         const auto center = viewStart + canvas.timelineWidth() / pixelsPerSecond * 0.5;
@@ -4778,7 +4937,8 @@ private:
         horizontalScroll.setCurrentRange (viewStart, visible, juce::dontSendNotification);
         horizontalScroll.setSingleStepSize (60.0 / state.tempo);
     }
-    void scrollBarMoved (juce::ScrollBar*, double start) override { viewStart = start; canvas.repaint(); ruler.repaint(); }
+    void scrollBarMoved (juce::ScrollBar*, double start) override
+    { if (state.playing) setFollow (false); viewStart = start; canvas.repaint(); ruler.repaint(); }
 
     juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Create", "View", "Session" }; }
     juce::PopupMenu getMenuForIndex (int index, const juce::String&) override
@@ -6138,6 +6298,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (! laneView->isVisible(), "Hide lane gives the notes the full height");
         laneMenu->setSelectedId (1, juce::sendNotificationSync);
     }
+    {
+        // Note tools open a settings window; Apply reshapes the selected note and keeps the window open.
+        const auto before = currentMidiClip()->notes;
+        pianoRoll.openNoteTool (Session::NoteTool::chop);
+        juce::Component* panel = nullptr;
+        for (int w = 0; w < juce::TopLevelWindow::getNumTopLevelWindows() && panel == nullptr; ++w)
+            if (auto* window = juce::TopLevelWindow::getTopLevelWindow (w)) panel = findNamed (*window, "Note tool Chop");
+        check (panel != nullptr, "Transform > Chop opens its settings window");
+        dynamic_cast<juce::Slider*> (findNamed (*panel, "Parts"))->setValue (2, juce::sendNotificationSync);
+        dynamic_cast<juce::Button*> (findNamed (*panel, "Apply note tool"))->onClick(); refresh();
+        const auto& chopped = currentMidiClip()->notes;
+        check (chopped.size() == before.size() + 1 && pianoRoll.hasSelectedNote(), "Apply chops the note into two and selects the parts");
+        pianoRoll.keyPressed (undo);
+        check (currentMidiClip()->notes.size() == before.size(), "one undo restores the note");
+        if (auto* window = panel->findParentComponentOfClass<juce::DialogWindow>()) delete window;
+    }
     withGeneratedMidiController(session,[&](const juce::String& controller)
     {
         refresh(); auto* row = canvas.getChildComponent(selectedTrack);
@@ -6550,6 +6726,40 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (starts() == before, "undo restores each step");
         timeSelection = {};
         check (session.removeTrack (t).wasOk(), "remove the selection track"); refresh();
+        selectTrack (previousTrack); refresh();
+    }
+    {
+        // Follow pages the Arrangement to the playhead and scrolling by hand turns it off; Z and X zoom to and back from the selection.
+        showArrangementView(); refresh();
+        check (followPlayhead && followButton.getToggleState(), "Follow is on by default");
+        check (followedViewStart (5, 0, 10) == 0 && followedViewStart (12, 0, 10) == 12 && followedViewStart (3, 4, 10) == 3,
+               "Follow keeps a visible playhead and pages to one outside the view");
+        viewStart = 0; updateScroll();
+        const auto visible = canvas.timelineWidth() / pixelsPerSecond;
+        check (session.play().wasOk(), "start the transport"); session.seek (visible * 1.5); refresh();
+        check (state.playing && std::abs (viewStart - state.position) < 1e-6 && state.position > visible, "while playing the view turns to the playhead's page");
+        scrollBarMoved (&horizontalScroll, 0);
+        check (! followPlayhead && ! followButton.getToggleState(), "scrolling by hand while playing turns Follow off");
+        session.seek (visible * 3); refresh();
+        check (viewStart == 0, "with Follow off the view stays put");
+        session.stop(); refresh();
+        check (handleKey (juce::KeyPress ('F', juce::ModifierKeys::commandModifier, 0)) && followPlayhead, "Cmd/Ctrl+F turns Follow back on");
+        const auto previousView = std::pair { viewStart, pixelsPerSecond };
+        timeSelection = { 1, 3, { state.tracks[0].id } };
+        check (handleKey (juce::KeyPress ('Z')) && std::abs (pixelsPerSecond - juce::jlimit (3.0, 650.0, canvas.timelineWidth() / 2.2)) < 1e-6 && std::abs (viewStart - .9) < 1e-6,
+               "Z zooms to the time selection");
+        check (handleKey (juce::KeyPress ('X')) && viewStart == previousView.first && pixelsPerSecond == previousView.second, "X returns to the view before it");
+        timeSelection = {}; session.seek (0); refresh();
+        // The piano roll follows its clip's playhead too.
+        const int previousTrack = selectedTrack;
+        check (session.addMidiTrack ("Follow").wasOk(), "add a MIDI track to follow"); refresh();
+        selectTrack ((int) state.tracks.size() - 1); refresh();
+        check (session.addMidiClip (currentTrack()->id, 0, 64).wasOk(), "a 64-beat clip"); refresh();
+        selectedClip = 0; openPianoRoll(); refresh(); pianoRoll.zoom (4);
+        check (session.play().wasOk(), "play"); session.seek (24 * 60 / state.tempo); refresh();
+        check (std::abs (pianoRoll.visibleStartBeat() - 24) < 1e-6, "the piano roll pages to the playhead at beat 24");
+        session.stop(); session.seek (0); closeClipView(); refresh();
+        check (session.removeTrack ((int) state.tracks.size() - 1).wasOk(), "remove the follow track"); refresh();
         selectTrack (previousTrack); refresh();
     }
     {
