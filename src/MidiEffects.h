@@ -56,6 +56,11 @@ private:
     void schedule (uint64_t time, int channel, int pitch, uint32_t source) noexcept;
     void step (int sample) noexcept;
     double stepSamples() const noexcept;
+    // CC Control: sends the controls that changed, or all of them when the transport starts.
+    void sendControls (double timelineSeconds) noexcept;
+    std::array<float, 30> sentControls {};
+    bool controlsKnown = false;
+    double lastTimeline = -1;
     Session::EffectSettings settings;
     double rate = 48000;
     uint64_t clock = 0, nextOrder = 0, arpStart = 0;

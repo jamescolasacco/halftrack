@@ -25,3 +25,33 @@ Every release uses the output pitches chosen at its note-on, so parameter change
 `tests/MidiEffectsTests.cpp` compares complete generated event lists (time, pitch, velocity) with hand-derived expectations for every device, block-size independence of the random arpeggiator, panic, and identity of channel/MPE source. Engine renders of Pitch, Chord, Scale, Velocity, Note Length, Arpeggiator and zero-chance Random through the built-in instrument match renders of the equivalent explicitly written notes within 2e-6 (24-bit). Device order, bypass, undo, removal, save/reopen and fractional-value rejection are checked through the production Session facade. The real-time fixture floods every kind with alternating notes at parameter extremes and both time bases with zero intercepted allocations and time-ordered output.
 
 Not implemented: CC Control, Expression Control, Note Echo, MPE-aware per-note expression, arpeggiator retrigger/repeat/transpose-step/swing options, scale fold/custom maps, and velocity "relative" (release velocity) operation. No numerical or timing comparison with the reference devices has been measured.
+
+## CC Control (2026-10-21)
+
+CC Control follows the manual's description in the [MIDI effect reference](https://www.ableton.com/en/live-manual/12/live-midi-effect-reference/), consulted 2026-10-21. It has:
+
+- Mod Wheel, Pitch Bend and Pressure;
+- Custom A, a button sending minimum or maximum on a chosen CC (sustain, CC 64, by default);
+- Custom B–M, twelve dials, each on a chosen CC;
+- a Send button that transmits every value, and Learn.
+
+Halftrack sends a control's message at the start of the block after it changes, before the block's notes:
+
+- **Mod Wheel** is CC 1.
+- **Pitch Bend** is a 14-bit pitch-wheel message centred at 8192.
+- **Pressure** is channel pressure.
+- **Custom A** is 127 or 0 on its CC.
+- **Custom B–M** default to CCs 20–31.
+- **On restarts.** Every control is sent again when the transport starts or jumps back, and when the channel changes.
+- **Notes** pass through unchanged.
+
+`tests/MidiEffectsTests.cpp` checks:
+
+- the exact bytes for each control, including bend extremes and centre;
+- reassigning a CC sends the value on the new one;
+- a channel change sends all sixteen messages on the new channel;
+- starting the transport sends all, while steady playback sends only changes;
+- notes pass through.
+
+The Send button, Learn, renaming, Push display and 1–8 / 9–16 pages are missing.
+

@@ -46,6 +46,33 @@ void Processor::reset() noexcept
     outputs = {}; refcount = {}; heldCount = latchedCount = pendingCount = 0;
     clock = nextOrder = arpStart = 0; seed = 0x2545f491u; alternate = arpStep = 0;
     arpRunning = false; arpChannel = arpPitch = -1;
+    controlsKnown = false; lastTimeline = -1;
+}
+// CC Control's controls: Mod Wheel, Pitch Bend, Pressure, Custom A (a switch and its CC), Custom B
+// to M (a value and a CC each), then the MIDI channel. Messages go out at the block start, before
+// the block's notes.
+void Processor::sendControls (double timelineSeconds) noexcept
+{
+    const auto& v = settings.values;
+    const bool started = timelineSeconds >= 0 && (lastTimeline < 0 || timelineSeconds + 1e-9 < lastTimeline);
+    lastTimeline = timelineSeconds >= 0 ? timelineSeconds + blockSamples / rate : -1;
+    if (! controlsKnown) { std::copy (v.begin(), v.begin() + sentControls.size(), sentControls.begin()); controlsKnown = true; if (! started) return; }
+    const bool all = started || v[29] != sentControls[29];
+    const auto channel = std::clamp (static_cast<int> (v[29]) - 1, 0, 15);
+    const auto changed = [&] (size_t i) { return all || v[i] != sentControls[i]; };
+    const auto cc = [&] (int number, int value)
+    { emit ({ 0, static_cast<uint8_t> (0xb0 | channel), static_cast<uint8_t> (std::clamp (number, 0, 127)), static_cast<uint8_t> (std::clamp (value, 0, 127)), 0 }); };
+    if (changed (0)) cc (1, static_cast<int> (v[0]));
+    if (changed (1))
+    {
+        const auto bend = std::clamp (static_cast<int> (v[1]) + 8192, 0, 16383);
+        emit ({ 0, static_cast<uint8_t> (0xe0 | channel), static_cast<uint8_t> (bend & 0x7f), static_cast<uint8_t> (bend >> 7), 0 });
+    }
+    if (changed (2)) emit ({ 0, static_cast<uint8_t> (0xd0 | channel), static_cast<uint8_t> (std::clamp (static_cast<int> (v[2]), 0, 127)), 0, 0 });
+    if (changed (3) || changed (4)) cc (static_cast<int> (v[4]), v[3] != 0 ? 127 : 0);
+    for (size_t k = 0; k < 12; ++k)
+        if (changed (5 + 2 * k) || changed (6 + 2 * k)) cc (static_cast<int> (v[6 + 2 * k]), static_cast<int> (v[5 + 2 * k]));
+    std::copy (v.begin(), v.begin() + sentControls.size(), sentControls.begin());
 }
 uint32_t Processor::random() noexcept
 { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; return seed; }
@@ -246,6 +273,7 @@ int Processor::process (const Event* in, int inCount, int samples, double timeli
 {
     target = out; written = 0; room = capacity; blockSamples = std::max (0, samples);
     const auto kind = settings.kind;
+    if (kind == Kind::ccControl) sendControls (timelineSeconds);
     if (kind == Kind::noteLength)
     {
         for (int i = 0; i < inCount; ++i)

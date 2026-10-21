@@ -259,12 +259,53 @@ void engineTests (const juce::File& root)
     ok (s.removePlugin (track, 0), "remove pitch"); s.undo(); check (s.snapshot().tracks.back().plugins.size() == 3, "undo restores a removed MIDI effect");
 }
 }
+// CC Control: each block, the controls that changed go out at its start, before its notes; all of
+// them go out when the transport starts. Raw events show the exact status and data bytes.
+void ccControlTests()
+{
+    midifx::Processor p; p.prepare (48000);
+    auto s = with (Kind::ccControl, {});
+    p.configure (s);
+    std::array<Event, 64> out {};
+    const auto block = [&] (double timeline, std::vector<Event> in = {})
+    {
+        const auto count = p.process (in.data(), (int) in.size(), 512, timeline, out.data(), (int) out.size());
+        return std::vector<Event> (out.begin(), out.begin() + count);
+    };
+    const auto bytes = [] (const Event& e) { return std::array<int, 3> { e.status, e.data1, e.data2 }; };
+    check (block (-1).empty() && block (-1).empty(), "a new CC Control sends nothing while nothing changes");
+    const auto set = [&] (const char* key, float value) { s.values[(size_t) effectParameterIndex (Kind::ccControl, key)] = value; p.configure (s); };
+    set ("modWheel", 64);
+    auto sent = block (-1);
+    check (sent.size() == 1 && bytes (sent[0]) == std::array { 0xb0, 1, 64 } && sent[0].sample == 0 && block (-1).empty(), "Mod Wheel sends CC 1 once when it changes");
+    set ("pitchBend", -8192); sent = block (-1);
+    check (sent.size() == 1 && bytes (sent[0]) == std::array { 0xe0, 0, 0 }, "full downward pitch bend");
+    set ("pitchBend", 8191); sent = block (-1);
+    check (sent.size() == 1 && bytes (sent[0]) == std::array { 0xe0, 0x7f, 0x7f }, "full upward pitch bend");
+    set ("pitchBend", 0); sent = block (-1);
+    check (sent.size() == 1 && bytes (sent[0]) == std::array { 0xe0, 0, 0x40 }, "centred pitch bend");
+    set ("pressure", 90); sent = block (-1);
+    check (sent.size() == 1 && sent[0].status == 0xd0 && sent[0].data1 == 90, "Pressure sends channel pressure");
+    set ("customA", 1); sent = block (-1);
+    check (sent.size() == 1 && bytes (sent[0]) == std::array { 0xb0, 64, 127 }, "Custom A switches sustain (CC 64) on");
+    set ("customACc", 66); sent = block (-1);
+    check (sent.size() == 1 && bytes (sent[0]) == std::array { 0xb0, 66, 127 }, "reassigning Custom A sends its value on the new CC");
+    set ("customB", 100); sent = block (-1);
+    check (sent.size() == 1 && bytes (sent[0]) == std::array { 0xb0, 20, 100 }, "Custom B sends its value on its CC");
+    set ("channel", 3); sent = block (-1);
+    check (sent.size() == 16 && std::all_of (sent.begin(), sent.end(), [] (const Event& e) { return (e.status & 0x0f) == 2; }), "a new channel sends every control on it");
+    check (block (0).size() == 16, "starting the transport sends all sixteen controls");
+    check (block (512 / 48000.0).empty(), "steady playback sends only changes");
+    sent = block (1024 / 48000.0, { Event::noteOn (10, 0, 60, 100, 0) });
+    check (sent.size() == 1 && sent[0].isNoteOn() && sent[0].data1 == 60 && sent[0].sample == 10, "notes pass through unchanged");
+    check (effectIsMidi (Kind::ccControl) && std::string (effectCategory (Kind::ccControl)) == "MIDI Effects", "CC Control is a MIDI effect");
+}
 int runMidiEffectsTests (const juce::File& artifacts)
 {
     try
     {
         const auto root = artifacts.getChildFile ("midi-effects-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
-        mappingTests(); lengthTests(); arpeggiatorTests(); engineTests (root);
+        mappingTests(); lengthTests(); arpeggiatorTests(); ccControlTests(); engineTests (root);
         std::cout << "MIDI effects passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL MIDI effects: " << e.what() << std::endl; return 1; }

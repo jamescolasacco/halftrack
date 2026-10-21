@@ -405,3 +405,7 @@ These are simplest-default choices pending reference measurement:
 - **Crackle:** clicks of about 1 ms at a density of 0–50 per second.
 - **Defaults:** Tracing at 1.2 kHz and Pinch at 3 kHz.
 
+### CC Control defaults
+
+Controls are sent on change and again at transport start or a jump back. Custom B–M default to CCs 20–31. These are simplest-default choices pending reference measurement.
+

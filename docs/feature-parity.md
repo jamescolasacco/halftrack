@@ -427,7 +427,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | ID | Reference target | Test profile (plus BASE) | Status |
 | --- | --- | --- | --- |
 | MFX-001 | Arpeggiator | PARTIAL — eight styles, 1–4 octaves, nine synced rates, gate, hold, fixed velocity; transport-grid and free timing; engine renders equal written notes. Retrigger/repeats/swing/transpose steps missing | PARTIAL |
-| MFX-002 | CC Control | MIDI | NOT IMPLEMENTED / UNVERIFIED |
+| MFX-002 | CC Control | PARTIAL — Mod Wheel, Pitch Bend, Pressure, Custom A switch and twelve assignable CC dials on a chosen channel, sent on change and at transport start; exact message bytes, reassignment, channel changes and pass-through tested ([contract](research/midi-effects-contract.md#cc-control-2026-10-21)). Send button, Learn, naming and Push pages missing | PARTIAL |
 | MFX-003 | Chord | PARTIAL — six shifts with per-shift velocity, merged duplicates, shared-tone ownership; render equals written chord | PARTIAL |
 | MFX-004 | Note Length | PARTIAL — time or tempo-division length with gate and note-off trigger; render equals written length. Decay/key-scale options missing | PARTIAL |
 | MFX-005 | Pitch | PARTIAL — ±48 semitones with input range blocking; release identity across parameter changes; render equals transposed note. Random/lowest-fold modes missing | PARTIAL |

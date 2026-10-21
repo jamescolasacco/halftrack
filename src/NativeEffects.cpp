@@ -263,6 +263,37 @@ constexpr EffectParameter vinylFields[] {
     { "hardness", "Mode", 0, 1, 1, 0, "", "Soft|Hard" },
     { "crackleDensity", "Crackle Density", 0, 50, 4, 0, " /s" },
     { "crackleDb", "Crackle Volume", -70, 0, -30, 0, " dB" } };
+constexpr EffectParameter ccControlFields[] {
+    { "modWheel", "Mod Wheel", 0, 127, 0, 0, "", nullptr, true },
+    { "pitchBend", "Pitch Bend", -8192, 8191, 0, 0, "", nullptr, true },
+    { "pressure", "Pressure", 0, 127, 0, 0, "", nullptr, true },
+    { "customA", "Custom A", 0, 1, 0, 0, "", "Off|On" },
+    { "customACc", "A CC", 0, 127, 64, 0, "", nullptr, true },
+    { "customB", "Custom B", 0, 127, 0, 0, "", nullptr, true },
+    { "customBCc", "B CC", 0, 127, 20, 0, "", nullptr, true },
+    { "customC", "Custom C", 0, 127, 0, 0, "", nullptr, true },
+    { "customCCc", "C CC", 0, 127, 21, 0, "", nullptr, true },
+    { "customD", "Custom D", 0, 127, 0, 0, "", nullptr, true },
+    { "customDCc", "D CC", 0, 127, 22, 0, "", nullptr, true },
+    { "customE", "Custom E", 0, 127, 0, 0, "", nullptr, true },
+    { "customECc", "E CC", 0, 127, 23, 0, "", nullptr, true },
+    { "customF", "Custom F", 0, 127, 0, 0, "", nullptr, true },
+    { "customFCc", "F CC", 0, 127, 24, 0, "", nullptr, true },
+    { "customG", "Custom G", 0, 127, 0, 0, "", nullptr, true },
+    { "customGCc", "G CC", 0, 127, 25, 0, "", nullptr, true },
+    { "customH", "Custom H", 0, 127, 0, 0, "", nullptr, true },
+    { "customHCc", "H CC", 0, 127, 26, 0, "", nullptr, true },
+    { "customI", "Custom I", 0, 127, 0, 0, "", nullptr, true },
+    { "customICc", "I CC", 0, 127, 27, 0, "", nullptr, true },
+    { "customJ", "Custom J", 0, 127, 0, 0, "", nullptr, true },
+    { "customJCc", "J CC", 0, 127, 28, 0, "", nullptr, true },
+    { "customK", "Custom K", 0, 127, 0, 0, "", nullptr, true },
+    { "customKCc", "K CC", 0, 127, 29, 0, "", nullptr, true },
+    { "customL", "Custom L", 0, 127, 0, 0, "", nullptr, true },
+    { "customLCc", "L CC", 0, 127, 30, 0, "", nullptr, true },
+    { "customM", "Custom M", 0, 127, 0, 0, "", nullptr, true },
+    { "customMCc", "M CC", 0, 127, 31, 0, "", nullptr, true },
+    { "channel", "Channel", 1, 16, 1, 0, "", nullptr, true } };
 constexpr EffectParameter glueFields[] {
     { "thresholdDb", "Threshold", -40, 0, -10, 0, " dB" },
     { "ratio", "Ratio", 0, 2, 0, 0, "", "2:1|4:1|10:1" },
@@ -437,7 +468,7 @@ const char* effectName (Kind kind) noexcept
         case Kind::sampler: return "Sampler"; case Kind::drumSampler: return "Drum Sampler";
         case Kind::instrumentRack: return "Instrument Rack"; case Kind::audioEffectRack: return "Audio Effect Rack";
         case Kind::midiEffectRack: return "MIDI Effect Rack"; case Kind::drumRack: return "Drum Rack";
-        case Kind::channelEq: return "Channel EQ"; case Kind::tuner: return "Tuner"; case Kind::spectrum: return "Spectrum"; case Kind::pedal: return "Pedal"; case Kind::beatRepeat: return "Beat Repeat"; case Kind::filterDelay: return "Filter Delay"; case Kind::erosion: return "Erosion"; case Kind::resonators: return "Resonators"; case Kind::vinylDistortion: return "Vinyl Distortion"; }
+        case Kind::channelEq: return "Channel EQ"; case Kind::tuner: return "Tuner"; case Kind::spectrum: return "Spectrum"; case Kind::pedal: return "Pedal"; case Kind::beatRepeat: return "Beat Repeat"; case Kind::filterDelay: return "Filter Delay"; case Kind::erosion: return "Erosion"; case Kind::resonators: return "Resonators"; case Kind::vinylDistortion: return "Vinyl Distortion"; case Kind::ccControl: return "CC Control"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
@@ -452,7 +483,7 @@ std::span<const EffectParameter> effectParameters (Kind kind) noexcept
         case Kind::polySynth: return polySynthFields; case Kind::fmSynth: return fmSynthFields; case Kind::drumKit: return drumKitFields; case Kind::wavetableSynth: return wavetableFields;
         case Kind::sampler: return samplerFields; case Kind::drumSampler: return drumSamplerFields;
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return rackFields;
-        case Kind::channelEq: return channelEqFields; case Kind::tuner: return tunerFields; case Kind::spectrum: return spectrumFields; case Kind::pedal: return pedalFields; case Kind::beatRepeat: return beatRepeatFields; case Kind::filterDelay: return filterDelayFields; case Kind::erosion: return erosionFields; case Kind::resonators: return resonatorFields; case Kind::vinylDistortion: return vinylFields; }
+        case Kind::channelEq: return channelEqFields; case Kind::tuner: return tunerFields; case Kind::spectrum: return spectrumFields; case Kind::pedal: return pedalFields; case Kind::beatRepeat: return beatRepeatFields; case Kind::filterDelay: return filterDelayFields; case Kind::erosion: return erosionFields; case Kind::resonators: return resonatorFields; case Kind::vinylDistortion: return vinylFields; case Kind::ccControl: return ccControlFields; }
     return {};
 }
 const char* effectCategory (Kind kind) noexcept
@@ -465,7 +496,7 @@ const char* effectCategory (Kind kind) noexcept
         case Kind::bitcrusher: case Kind::saturator: case Kind::overdrive: case Kind::pedal: case Kind::erosion: case Kind::vinylDistortion: return "Distortion";
         case Kind::autoPan: case Kind::chorus: case Kind::phaser: case Kind::flanger: case Kind::frequencyShifter: return "Modulation";
         case Kind::resonators: return "Resonance";
-        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return "MIDI Effects";
+        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: case Kind::ccControl: return "MIDI Effects";
         case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return "Instruments";
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return "Racks";
         case Kind::tuner: case Kind::spectrum: return "Utilities";
@@ -475,7 +506,7 @@ const char* effectCategory (Kind kind) noexcept
 bool effectUsesTempo (Kind kind) noexcept
 { return kind == Kind::delay || kind == Kind::autoFilter || kind == Kind::autoPan || kind == Kind::arpeggiator || kind == Kind::noteLength || kind == Kind::beatRepeat || kind == Kind::filterDelay; }
 bool effectIsMidi (Kind kind) noexcept
-{ return (static_cast<int> (kind) >= static_cast<int> (Kind::arpeggiator) && static_cast<int> (kind) <= static_cast<int> (Kind::noteLength)) || kind == Kind::midiEffectRack; }
+{ return (static_cast<int> (kind) >= static_cast<int> (Kind::arpeggiator) && static_cast<int> (kind) <= static_cast<int> (Kind::noteLength)) || kind == Kind::midiEffectRack || kind == Kind::ccControl; }
 bool effectIsInstrument (Kind kind) noexcept
 {
     return (static_cast<int> (kind) >= static_cast<int> (Kind::polySynth) && static_cast<int> (kind) <= static_cast<int> (Kind::drumSampler))
@@ -502,7 +533,7 @@ double effectTailSeconds (Kind kind, double rate) noexcept
         case Kind::beatRepeat: return effects::BeatRepeat::longestSliceSeconds;
         case Kind::filterDelay: return 1800.0; // Feedback can ring for a long time, as with the Stereo Delay.
         case Kind::resonators: return 25.0; // The longest Decay, plus room for the input filter.
-        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return 0.0;
+        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: case Kind::ccControl: return 0.0;
         case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return 0.0;
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return 0.0; // Racks report their chains.
     }
