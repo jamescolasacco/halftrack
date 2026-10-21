@@ -1157,3 +1157,7 @@ Engine and UI change in `src/MidiMonitor.*` (new), `src/NativeEffects.*`, `src/N
 Priority change: at the owner's request, core application work now comes before new stock devices.
 
 Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/TransportTests.cpp` (new), with documentation. The punch suite's automation check now uses the positions its moves were made at; it had failed about one run in six under load. See [the contract](research/transport-contract.md).
+
+## Missing plug-in placeholders — 2026-10-21
+
+Engine and UI change in `src/Session.*` and `src/MainComponent.cpp`, with the persistence suite and documentation. Opening a project no longer fails when an external plug-in cannot load. See [the contract](research/missing-plugins-contract.md).

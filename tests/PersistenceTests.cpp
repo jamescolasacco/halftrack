@@ -1,6 +1,7 @@
 #include "Session.h"
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <stdexcept>
 
@@ -240,10 +241,53 @@ int runPersistenceTests (const juce::File& destination)
             ok (session.saveProject (withPlugin), "save external effect identity and state");
             ok (session.newProject(), "clear before missing registry test");
             session.knownPlugins().clear();
-            auto unavailable = session.loadProject (withPlugin);
-            check (unavailable.failed() && unavailable.getErrorMessage().contains ("Scan / Manage")
-                   && session.snapshot().tracks.size() == 2, "unscanned plug-in load is actionable and preserves active project");
+            // As in the reference, a plug-in that cannot load stays as a placeholder keeping its state.
+            ok (session.loadProject (withPlugin), "a project whose plug-in is not scanned still opens");
+            // The external plug-in's track and position.
+            const auto locate = [&session] (int& track, int& position)
+            {
+                const auto snapshot = session.snapshot(); track = position = -1;
+                for (size_t t = 0; t < snapshot.tracks.size(); ++t)
+                    for (size_t p = 0; p < snapshot.tracks[t].plugins.size(); ++p)
+                        if (! snapshot.tracks[t].plugins[p].isNativeEffect && ! snapshot.tracks[t].plugins[p].isUtility) { track = (int) t; position = (int) p; }
+                return track >= 0 ? snapshot.tracks[(size_t) track].plugins[(size_t) position] : Session::PluginInfo {};
+            };
+            int pluginTrack = -1, pluginPosition = -1;
+            const auto placeholder = locate (pluginTrack, pluginPosition);
+            check (pluginTrack >= 0 && placeholder.missing && placeholder.name == descriptions[0]->name && placeholder.loadError.isNotEmpty(),
+                   "the unscanned plug-in is a named placeholder that says why it could not load");
+            check (session.showPluginEditor (pluginTrack, pluginPosition).failed() && session.setPluginParameter (pluginTrack, pluginPosition, 0, .5f).failed(),
+                   "its editor and parameters are unavailable");
+            const auto rendered = root.getChildFile ("Copper-placeholder.wav");
+            ok (session.exportWav (rendered, 48000, 24, .2), "render through the placeholder");
+            {
+                juce::AudioFormatManager formats; formats.registerBasicFormats();
+                std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (rendered));
+                juce::AudioBuffer<float> audio (2, reader ? (int) reader->lengthInSamples : 0);
+                if (reader) reader->read (&audio, 0, audio.getNumSamples(), 0, true, true);
+                check (reader && audio.getMagnitude (0, audio.getNumSamples()) > .001f, "audio passes through the placeholder");
+            }
+            const auto resaved = root.getChildFile ("Copper-placeholder.halftrack");
+            ok (session.saveProject (resaved), "save the project with its placeholder");
+            const auto pluginElement = [] (const juce::File& file)
+            {
+                juce::StringPairArray attributes;
+                const auto xml = juce::parseXML (file);
+                std::function<void (const juce::XmlElement&)> visit = [&] (const juce::XmlElement& e)
+                {
+                    if (e.getTagName() == "PLUGIN" && e.getStringAttribute ("type") == "vst")
+                        for (const auto* name : { "state", "uid", "filename", "name", "manufacturer" }) attributes.set (name, e.getStringAttribute (name));
+                    for (const auto* child : e.getChildIterator()) visit (*child);
+                };
+                if (xml) visit (*xml);
+                return attributes;
+            };
+            const auto original = pluginElement (withPlugin), kept = pluginElement (resaved);
+            check (original.size() == 5 && original["uid"].isNotEmpty() && original["filename"].isNotEmpty() && kept == original,
+                   "saving keeps the placeholder's identity and state unchanged");
             session.knownPlugins().addType (*descriptions[0]);
+            ok (session.loadProject (resaved), "once scanned, the re-saved project opens with the plug-in");
+            check (! locate (pluginTrack, pluginPosition).missing && pluginTrack >= 0, "and the plug-in loads from the kept state");
             ok (session.loadProject (withPlugin), "reopen after controlled plug-in has been registered");
             check (session.snapshot().tracks.back().id == trackId, "registered effect project retains MIDI identity");
         }

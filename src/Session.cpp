@@ -2698,6 +2698,12 @@ Session::Snapshot Session::snapshot() const
             PluginInfo device { p->itemID.toString(), p->getName(), p->isEnabled() };
             if (auto* utility = dynamic_cast<UtilityPlugin*> (p)) { device.isUtility = true; device.utility = utility->readSettings(); }
             if (auto* effect = dynamic_cast<NativeEffectPlugin*> (p)) device = describeDevice (*effect);
+            if (auto* external = dynamic_cast<te::ExternalPlugin*> (p); external && ! external->isInitialisingAsync() && external->getAudioPluginInstance() == nullptr)
+            {
+                device.missing = true; device.loadError = external->getLoadError();
+                // The engine's generic message says nothing useful.
+                if (device.loadError.isEmpty() || device.loadError.containsIgnoreCase ("couldn't be loaded")) device.loadError = "It is not installed, or has not been scanned.";
+            }
             info.plugins.push_back (std::move (device));
         }
         s.tracks.push_back (std::move (info));
@@ -2835,13 +2841,7 @@ Result Session::loadProject (const File& file)
     for (const auto target : { AutomationTarget::volume, AutomationTarget::pan })
         if (! validAutomationLane (target, automationLane (*candidate->getMasterVolumePlugin(), target)))
             return Result::fail ("Master automation exceeds the supported beat or value range.");
-    for (auto* t : te::getAudioTracks (*candidate))
-        for (auto* p : t->pluginList.getPlugins())
-            if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
-                if (! external->isInitialisingAsync() && external->getAudioPluginInstance() == nullptr)
-                    return Result::fail ("Could not load plug-in " + external->getName()
-                        + ". Open Scan / Manage Plug-ins and scan its installed format, then reopen this project. "
-                        + external->getLoadError());
+    // Plug-ins that cannot load stay as placeholders; the snapshot marks them missing.
     for (auto* t : te::getAudioTracks (*candidate))
         for (auto* c : allTrackClips (*t))
             if (c->usesSourceFile())

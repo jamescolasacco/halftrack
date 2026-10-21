@@ -4660,7 +4660,9 @@ private:
         {
             name = info.name; enabled = info.enabled; chains = (int) info.chains.size();
             midi = info.isNativeEffect && effectIsMidi (info.effect.kind);
+            missing = info.missing; loadError = info.loadError;
             power.setToggleState (info.enabled, juce::dontSendNotification);
+            open.setEnabled (! missing); open.setTooltip (missing ? "This plug-in is missing" : "Open this device in its own window");
             repaint();
         }
         void resized() override
@@ -4676,7 +4678,15 @@ private:
             g.setColour (selected ? juce::Colour (0xff5e5e5e) : enabled ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff383838)); g.fillRect (0, 0, getWidth(), titleHeight);
             g.setColour (enabled ? ink : muted); g.setFont (font (11.0f, true));
             g.drawText (name, 24, 0, getWidth() - 70, titleHeight, juce::Justification::centredLeft, true);
-            if (! native)
+            if (! native && missing)
+            {
+                g.setColour (red); g.setFont (font (10.5f, true));
+                auto area = getLocalBounds().withTrimmedTop (titleHeight).reduced (10);
+                g.drawText ("Missing plug-in", area.removeFromTop (18), juce::Justification::centred);
+                g.setColour (muted); g.setFont (font (10.0f));
+                g.drawFittedText ((loadError.isNotEmpty() ? loadError + "\n" : juce::String()) + "Its settings are kept. Scan it and reopen the project.", area, juce::Justification::centredTop, 5);
+            }
+            else if (! native)
             {
                 g.setColour (muted); g.setFont (font (10.5f));
                 g.drawFittedText (enabled ? juce::String (midi ? "Processing MIDI." : "Processing audio.") + "\nOpen its window for every control." : "Bypassed.",
@@ -4730,8 +4740,8 @@ private:
             return -1;
         }
         Impl& owner;
-        juce::String pluginId, name;
-        bool native = false, enabled = true, midi = false, rack = false;
+        juce::String pluginId, name, loadError;
+        bool native = false, enabled = true, midi = false, rack = false, missing = false;
         int chains = 0;
         juce::TextButton power { "" }, open { "^" }, remove { "x" };
         std::unique_ptr<juce::Component> body;
@@ -5596,6 +5606,15 @@ private:
         repaint();
     }
     void togglePlay() { if (state.playing) session.stop(); else report (session.play()); refresh(); }
+    // After opening a project, names the plug-ins kept as placeholders because they could not load.
+    juce::String missingPluginSummary() const
+    {
+        juce::StringArray names;
+        for (const auto& t : state.tracks) for (const auto& p : t.plugins) if (p.missing) names.addIfNotAlreadyThere (p.name);
+        return names.isEmpty() ? juce::String()
+                               : "Missing plug-ins kept as placeholders: " + names.joinIntoString (", ") + ". Scan them in Scan / Manage Plug-ins and reopen the project to use them.";
+    }
+    void reportOpened (const juce::Result& result) { if (result.wasOk()) { refresh(); report (result, missingPluginSummary()); } else report (result); }
     void addTrack()
     {
         showPiano = false;
@@ -5826,7 +5845,7 @@ private:
                 {
                     if (safe == nullptr || fc.getResult() == juce::File()) return;
                     safe->session.closePluginEditors();
-                    safe->report (safe->session.loadProject (fc.getResult())); safe->resetView();
+                    safe->reportOpened (safe->session.loadProject (fc.getResult())); safe->resetView();
                 });
         });
     }
@@ -6782,7 +6801,7 @@ private:
         if (files.size() == 1 && juce::File (files[0]).hasFileExtension ("halftrack"))
         {
             auto safe = juce::Component::SafePointer<Impl> (this); auto file = juce::File (files[0]);
-            ensureSaved ([safe, file] { if (safe != nullptr) { safe->report (safe->session.loadProject (file)); safe->resetView(); } }); return;
+            ensureSaved ([safe, file] { if (safe != nullptr) { safe->reportOpened (safe->session.loadProject (file)); safe->resetView(); } }); return;
         }
         if (showSession && showPiano)
         {

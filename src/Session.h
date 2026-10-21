@@ -274,6 +274,10 @@ public:
     {
         juce::String id, name;
         bool enabled = true, isUtility = false;
+        // An external plug-in that could not be loaded stays as a placeholder: it keeps its saved
+        // state, passes audio through and saves unchanged. `loadError` says why.
+        bool missing = false;
+        juce::String loadError;
         UtilitySettings utility;
         bool isNativeEffect = false;
         EffectSettings effect;
