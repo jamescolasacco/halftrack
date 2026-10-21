@@ -294,6 +294,18 @@ constexpr EffectParameter ccControlFields[] {
     { "customM", "Custom M", 0, 127, 0, 0, "", nullptr, true },
     { "customMCc", "M CC", 0, 127, 31, 0, "", nullptr, true },
     { "channel", "Channel", 1, 16, 1, 0, "", nullptr, true } };
+constexpr EffectParameter alignDelayFields[] {
+    { "delayMode", "Delay Mode", 0, 2, 0, 0, "", "Time|Samples|Distance" },
+    { "link", "Link L/R", 0, 1, 1, 0, "", "Off|On" },
+    { "leftMs", "Left", 0, 1000, 0, 0, " ms" },
+    { "rightMs", "Right", 0, 1000, 0, 0, " ms" },
+    { "leftSamples", "Left samples", 0, 96000, 0, 0, "", nullptr, true },
+    { "rightSamples", "Right samples", 0, 96000, 0, 0, "", nullptr, true },
+    { "leftDistance", "Left distance", 0, 300, 0, 0, "" },
+    { "rightDistance", "Right distance", 0, 300, 0, 0, "" },
+    { "distanceUnit", "Unit", 0, 1, 0, 0, "", "Meters|Feet" },
+    { "temperature", "Temperature", -40, 120, 20, 0, " deg" },
+    { "temperatureUnit", "Temp. unit", 0, 1, 0, 0, "", "Celsius|Fahrenheit" } };
 constexpr EffectParameter glueFields[] {
     { "thresholdDb", "Threshold", -40, 0, -10, 0, " dB" },
     { "ratio", "Ratio", 0, 2, 0, 0, "", "2:1|4:1|10:1" },
@@ -468,7 +480,7 @@ const char* effectName (Kind kind) noexcept
         case Kind::sampler: return "Sampler"; case Kind::drumSampler: return "Drum Sampler";
         case Kind::instrumentRack: return "Instrument Rack"; case Kind::audioEffectRack: return "Audio Effect Rack";
         case Kind::midiEffectRack: return "MIDI Effect Rack"; case Kind::drumRack: return "Drum Rack";
-        case Kind::channelEq: return "Channel EQ"; case Kind::tuner: return "Tuner"; case Kind::spectrum: return "Spectrum"; case Kind::pedal: return "Pedal"; case Kind::beatRepeat: return "Beat Repeat"; case Kind::filterDelay: return "Filter Delay"; case Kind::erosion: return "Erosion"; case Kind::resonators: return "Resonators"; case Kind::vinylDistortion: return "Vinyl Distortion"; case Kind::ccControl: return "CC Control"; }
+        case Kind::channelEq: return "Channel EQ"; case Kind::tuner: return "Tuner"; case Kind::spectrum: return "Spectrum"; case Kind::pedal: return "Pedal"; case Kind::beatRepeat: return "Beat Repeat"; case Kind::filterDelay: return "Filter Delay"; case Kind::erosion: return "Erosion"; case Kind::resonators: return "Resonators"; case Kind::vinylDistortion: return "Vinyl Distortion"; case Kind::ccControl: return "CC Control"; case Kind::alignDelay: return "Align Delay"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
@@ -483,7 +495,7 @@ std::span<const EffectParameter> effectParameters (Kind kind) noexcept
         case Kind::polySynth: return polySynthFields; case Kind::fmSynth: return fmSynthFields; case Kind::drumKit: return drumKitFields; case Kind::wavetableSynth: return wavetableFields;
         case Kind::sampler: return samplerFields; case Kind::drumSampler: return drumSamplerFields;
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return rackFields;
-        case Kind::channelEq: return channelEqFields; case Kind::tuner: return tunerFields; case Kind::spectrum: return spectrumFields; case Kind::pedal: return pedalFields; case Kind::beatRepeat: return beatRepeatFields; case Kind::filterDelay: return filterDelayFields; case Kind::erosion: return erosionFields; case Kind::resonators: return resonatorFields; case Kind::vinylDistortion: return vinylFields; case Kind::ccControl: return ccControlFields; }
+        case Kind::channelEq: return channelEqFields; case Kind::tuner: return tunerFields; case Kind::spectrum: return spectrumFields; case Kind::pedal: return pedalFields; case Kind::beatRepeat: return beatRepeatFields; case Kind::filterDelay: return filterDelayFields; case Kind::erosion: return erosionFields; case Kind::resonators: return resonatorFields; case Kind::vinylDistortion: return vinylFields; case Kind::ccControl: return ccControlFields; case Kind::alignDelay: return alignDelayFields; }
     return {};
 }
 const char* effectCategory (Kind kind) noexcept
@@ -499,7 +511,7 @@ const char* effectCategory (Kind kind) noexcept
         case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: case Kind::ccControl: return "MIDI Effects";
         case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return "Instruments";
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return "Racks";
-        case Kind::tuner: case Kind::spectrum: return "Utilities";
+        case Kind::tuner: case Kind::spectrum: case Kind::alignDelay: return "Utilities";
     }
     return "Effects";
 }
@@ -530,6 +542,7 @@ double effectTailSeconds (Kind kind, double rate) noexcept
         case Kind::phaser: return 1.0;
         case Kind::eqThree: case Kind::frequencyShifter: case Kind::channelEq: case Kind::erosion: case Kind::vinylDistortion: return .1;
         case Kind::compressor: case Kind::gate: case Kind::autoPan: case Kind::glueCompressor: case Kind::tuner: case Kind::spectrum: return 0.0;
+        case Kind::alignDelay: return effects::AlignDelay::longestSeconds;
         case Kind::beatRepeat: return effects::BeatRepeat::longestSliceSeconds;
         case Kind::filterDelay: return 1800.0; // Feedback can ring for a long time, as with the Stereo Delay.
         case Kind::resonators: return 25.0; // The longest Decay, plus room for the input filter.
@@ -606,6 +619,7 @@ void NativeEffectDSP::prepare (double sampleRate, Kind kind)
     erosion.prepare (rate);
     resonators.prepare (kind == Kind::resonators ? rate : 4);
     vinyl.prepare (rate);
+    alignDelay.prepare (kind == Kind::alignDelay ? rate : 1);
     processed = false; reset(); configure (settings);
 }
 void NativeEffectDSP::reset() noexcept
@@ -618,7 +632,7 @@ void NativeEffectDSP::reset() noexcept
     limiterFrame = 0; limiterHead = limiterSize = 0; limiterGain = 1;
     roomCursor = {}; roomTone = {}; delayTone = {}; cursor = 0; envelope = 0; processed = false; ramp = 0;
     saturator.reset(); overdrive.reset(); autoFilter.reset(); autoPan.reset(); modulatedDelay.reset();
-    phaser.reset(); eqThree.reset(); channelEq.reset(); pedal.reset(); glue.reset(); shifter.reset(); beatRepeat.reset(); filterDelay.reset(); erosion.reset(); resonators.reset(); vinyl.reset();
+    phaser.reset(); eqThree.reset(); channelEq.reset(); pedal.reset(); glue.reset(); shifter.reset(); beatRepeat.reset(); filterDelay.reset(); erosion.reset(); resonators.reset(); vinyl.reset(); alignDelay.reset();
     outputGain = gainTarget; wet = wetTarget; delayLeft = delayTargetLeft; delayRight = delayTargetRight;
 }
 std::array<double, 5> NativeEffectDSP::eqCoefficients (int type, double frequency, double gain, double q, double sampleRate) noexcept
@@ -726,6 +740,7 @@ void NativeEffectDSP::configure (const Settings& next) noexcept
         case Kind::erosion: erosion.configure (v.data()); wetTarget = 1; break;
         case Kind::resonators: resonators.configure (v.data()); wetTarget = v[28]; break;
         case Kind::vinylDistortion: vinyl.configure (v.data()); wetTarget = 1; break;
+        case Kind::alignDelay: alignDelay.configure (v.data()); wetTarget = 1; break;
         case Kind::glueCompressor: glue.configure (v.data(), immediate); wetTarget = v[7]; break;
         case Kind::frequencyShifter: shifter.configure (v.data(), immediate); wetTarget = v[3]; break;
         default: break;
@@ -879,6 +894,7 @@ void NativeEffectDSP::processSamples (float* left, float* right, int count) noex
             case Kind::erosion: erosion.tick (outL, outR); break;
             case Kind::resonators: resonators.tick (outL, outR); break;
             case Kind::vinylDistortion: vinyl.tick (outL, outR); break;
+            case Kind::alignDelay: alignDelay.tick (outL, outR); break;
             case Kind::glueCompressor: glue.tick (outL, outR); break;
             case Kind::frequencyShifter: shifter.tick (outL, outR); break;
             default: break; // MIDI kinds have no audio path.

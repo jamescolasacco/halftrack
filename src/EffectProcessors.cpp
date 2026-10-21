@@ -890,5 +890,46 @@ void VinylDistortion::tick (double& left, double& right) noexcept
     }
     ++sample;
 }
+
+double AlignDelay::delayFrames (const float* v, int channel, double rate) noexcept
+{
+    const auto side = v[1] != 0 ? 0 : channel; // Link: the left settings for both.
+    switch ((int) v[0])
+    {
+        case 0: return (double) v[2 + side] * .001 * rate;
+        case 1: return (double) v[4 + side];
+        default:
+        {
+            const auto metres = (double) v[6 + side] * (v[8] != 0 ? .3048 : 1.0);
+            const auto celsius = v[10] != 0 ? ((double) v[9] - 32) * 5 / 9 : (double) v[9];
+            return metres / speedOfSound (celsius) * rate;
+        }
+    }
+}
+void AlignDelay::prepare (double sampleRate) noexcept
+{
+    rate = sampleRate;
+    for (auto& b : buffer) b.assign ((size_t) std::ceil (rate * longestSeconds) + 4, 0.0f);
+    reset();
+}
+void AlignDelay::configure (const float* v) noexcept
+{
+    for (int c = 0; c < 2; ++c) delay[(size_t) c] = std::clamp (delayFrames (v, c, rate), 0.0, (double) buffer[0].size() - 3);
+}
+void AlignDelay::reset() noexcept { for (auto& b : buffer) std::fill (b.begin(), b.end(), 0.0f); write = 0; }
+void AlignDelay::tick (double& left, double& right) noexcept
+{
+    if (buffer[0].empty()) return;
+    double* channels[] { &left, &right };
+    const auto size = buffer[0].size();
+    for (size_t c = 0; c < 2; ++c)
+    {
+        buffer[c][write] = (float) *channels[c];
+        const auto whole = (size_t) delay[c]; const auto fraction = delay[c] - (double) whole;
+        const auto a = buffer[c][(write + size - whole) % size], b = buffer[c][(write + size - whole - 1) % size];
+        *channels[c] = fraction == 0 ? a : a + (b - a) * fraction;
+    }
+    write = (write + 1) % size;
+}
 }
 

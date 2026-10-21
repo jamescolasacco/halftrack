@@ -484,7 +484,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | MXL-007 | DS Sampler | DRUM | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-008 | DS Snare | DRUM | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-009 | DS Tom | DRUM | NOT IMPLEMENTED / UNVERIFIED |
-| MXL-010 | Align Delay | TIME | NOT IMPLEMENTED / UNVERIFIED |
+| MXL-010 | Align Delay | PARTIAL — native Time/Samples/Distance delay per channel with Link, metres/feet and Celsius/Fahrenheit speed of sound; exact sample, time and travel-time delays tested ([contract](research/native-effects-contract.md#align-delay-2026-10-21)). Reference comparison missing | PARTIAL |
 | MXL-011 | Envelope Follower | CONTROL | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-012 | LFO | CONTROL | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-013 | Shaper | CONTROL | NOT IMPLEMENTED / UNVERIFIED |

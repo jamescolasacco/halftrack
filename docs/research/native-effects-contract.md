@@ -348,3 +348,27 @@ Halftrack's model:
 - **Modes.** Soft rounds off heavy drive, and Global Drive 0 turns both off.
 - **Crackle.** Twenty clicks a second are counted within ±25%, renders repeat them, and −70 dB is off.
 
+## Align Delay (2026-10-21)
+
+Align Delay follows the manual's description in [Max for Live Devices](https://www.ableton.com/en/live-manual/12/max-for-live-devices/), consulted 2026-10-21. It delays each channel by:
+
+- a time in ms;
+- a number of samples;
+- or a distance in metres or feet, at the speed of sound for a room temperature in Celsius or Fahrenheit.
+
+Link applies the left delay to both channels. It is Halftrack's own native device.
+
+Halftrack's choices:
+
+- **Speed of sound:** 331.3·√(1 + T/273.15) m/s.
+- **Interpolation:** fractional delays are read with linear interpolation; whole samples are exact.
+- **Ranges:** up to 1,000 ms, 96,000 samples or 300 units, in a two-second buffer, with temperature from −40 to 120 degrees.
+- **Latency:** the delay is not reported as latency.
+
+`tests/ExtendedEffectsTests.cpp` checks:
+
+- **Bypass.** Zero delay passes audio unchanged.
+- **Samples.** Samples mode delays each side exactly, and Link copies the left delay.
+- **Time.** 10 ms is 480 samples at 48 kHz.
+- **Distance.** 34.3 m at 20 °C lands at the computed travel time, and the same distance in feet at 68 °F matches. A colder room delays more.
+

@@ -646,6 +646,33 @@ void vinylTests()
         check (processPlaying (silence, settings ({ { "crackleDb", -70 }, { "crackleDensity", 20 } })).getMagnitude (0, 10 * 48000) == 0, "at -70 dB the crackle is off");
     }
 }
+// Align Delay: impulses land exactly where each mode's arithmetic puts them.
+void alignDelayTests()
+{
+    const auto impulse = [] { juce::AudioBuffer<float> x (2, 96000); x.clear(); x.setSample (0, 0, 1); x.setSample (1, 0, 1); return x; };
+    const auto peakAt = [] (const juce::AudioBuffer<float>& x, int channel) { int at = 0; for (int n = 0; n < x.getNumSamples(); ++n) if (std::abs (x.getSample (channel, n)) > std::abs (x.getSample (channel, at))) at = n; return at; };
+    // The centroid of an interpolated impulse is its fractional delay.
+    const auto centroid = [] (const juce::AudioBuffer<float>& x, int channel) { double sum = 0, weight = 0; for (int n = 0; n < x.getNumSamples(); ++n) { sum += n * x.getSample (channel, n); weight += x.getSample (channel, n); } return sum / weight; };
+    {
+        const auto in = sine (440, .5, 4800, 48000, .3);
+        const auto out = process (in, defaultEffectSettings (Kind::alignDelay));
+        bool same = true; for (int c = 0; c < 2; ++c) for (int n = 0; n < in.getNumSamples(); ++n) same = same && out.getSample (c, n) == in.getSample (c, n);
+        check (same, "Align Delay at zero passes audio unchanged");
+    }
+    const auto samples = process (impulse(), with (Kind::alignDelay, { { "delayMode", 1 }, { "link", 0 }, { "leftSamples", 100 }, { "rightSamples", 37 } }));
+    check (peakAt (samples, 0) == 100 && peakAt (samples, 1) == 37 && samples.getSample (0, 100) == 1 && samples.getSample (1, 37) == 1, "Samples mode delays each side by whole samples");
+    const auto linked = process (impulse(), with (Kind::alignDelay, { { "delayMode", 1 }, { "link", 1 }, { "leftSamples", 100 }, { "rightSamples", 37 } }));
+    check (peakAt (linked, 1) == 100, "Link applies the left delay to the right");
+    const auto timed = process (impulse(), with (Kind::alignDelay, { { "delayMode", 0 }, { "leftMs", 10 } }));
+    check (peakAt (timed, 0) == 480 && timed.getSample (0, 480) == 1, "Time mode: 10 ms is 480 samples at 48 kHz");
+    const auto expected = 34.3 / effects::AlignDelay::speedOfSound (20) * 48000;
+    const auto metres = process (impulse(), with (Kind::alignDelay, { { "delayMode", 2 }, { "leftDistance", 34.3f }, { "temperature", 20 } }));
+    check (std::abs (centroid (metres, 0) - expected) < 1e-3, "Distance mode: 34.3 m at 20 C arrives after the sound's travel time");
+    const auto feet = process (impulse(), with (Kind::alignDelay, { { "delayMode", 2 }, { "leftDistance", (float) (34.3 / .3048) }, { "distanceUnit", 1 }, { "temperature", 68 }, { "temperatureUnit", 1 } }));
+    check (std::abs (centroid (feet, 0) - expected) < 1e-2, "feet and Fahrenheit give the same delay");
+    const auto cold = process (impulse(), with (Kind::alignDelay, { { "delayMode", 2 }, { "leftDistance", 34.3f }, { "temperature", -10 } }));
+    check (centroid (cold, 0) > expected, "sound travels slower in a colder room");
+}
 void eqThreeTests()
 {
     for (int steep = 0; steep < 2; ++steep)
@@ -720,6 +747,6 @@ void shifterTests()
 void runExtendedEffectsTests()
 {
     saturatorTests(); overdriveTests(); autoFilterTests(); autoPanTests(); modulatedDelayTests();
-    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); beatRepeatTests(); filterDelayTests(); erosionTests(); resonatorTests(); vinylTests(); glueTests(); shifterTests();
+    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); beatRepeatTests(); filterDelayTests(); erosionTests(); resonatorTests(); vinylTests(); alignDelayTests(); glueTests(); shifterTests();
 }
 }

@@ -426,5 +426,27 @@ private:
     std::array<Biquad, 2> tracingBand, pinchBand;
     std::array<double, 2> dcInput {}, dcOutput {};
 };
+
+// Align Delay after the reference's: each channel delayed by a time, a number of samples or a
+// distance at the speed of sound for the room temperature, with Link applying the left delay to
+// both. Controls: mode, link, left/right ms, left/right samples, left/right distance, distance
+// unit (metres or feet), temperature, temperature unit (Celsius or Fahrenheit).
+class AlignDelay
+{
+public:
+    static constexpr double longestSeconds = 2;
+    static double speedOfSound (double celsius) noexcept { return 331.3 * std::sqrt (1 + celsius / 273.15); }
+    // A channel's delay in samples (right = 1).
+    static double delayFrames (const float* values, int channel, double rate) noexcept;
+    void prepare (double rate) noexcept;
+    void configure (const float* values) noexcept;
+    void reset() noexcept;
+    void tick (double& left, double& right) noexcept;
+private:
+    double rate = 48000;
+    std::array<double, 2> delay {};
+    std::array<std::vector<float>, 2> buffer;
+    size_t write = 0;
+};
 }
 

@@ -107,6 +107,7 @@ private:
     effects::Erosion erosion;
     effects::Resonators resonators;
     effects::VinylDistortion vinyl;
+    effects::AlignDelay alignDelay;
     effects::GlueCompressor glue;
     effects::FrequencyShifter shifter;
     int ramp = 0;
