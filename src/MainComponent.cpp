@@ -5942,6 +5942,99 @@ private:
         std::vector<std::unique_ptr<SendRow>> rows;
     };
 
+    // A hosted plug-in's controls in its panel: Configure chooses which of its parameters show here,
+    // four to a column, where they can be automated and MIDI mapped like a device's own controls.
+    class PluginControls final : public juce::Component
+    {
+    public:
+        PluginControls (Impl& o, const juce::String& id) : owner (o), pluginId (id)
+        {
+            addAndMakeVisible (configure); configure.setName ("Configure plug-in");
+            configure.setWantsKeyboardFocus (false);
+            configure.setTooltip ("Choose which of this plug-in's parameters show here, where they can be automated and MIDI mapped.");
+            configure.onClick = [this] { showConfigureMenu(); };
+        }
+        void sync (const Session::PluginInfo& info)
+        {
+            const auto parameters = owner.session.pluginParameters (pluginId);
+            if (info.configured != shown || parameters.size() != parameterCount)
+            {
+                shown = info.configured; parameterCount = parameters.size(); controls.clear();
+                for (const auto parameter : shown)
+                {
+                    auto control = std::make_unique<Control>();
+                    control->parameter = parameter;
+                    auto& slider = control->slider;
+                    slider.setSliderStyle (juce::Slider::LinearBar); slider.setRange (0.0, 1.0, 0.0); slider.setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
+                    slider.setColour (juce::Slider::trackColourId, juce::Colour (0xff5a6f78)); slider.setWantsKeyboardFocus (false);
+                    slider.setName (juce::isPositiveAndBelow (parameter, (int) parameters.size()) ? parameters[(size_t) parameter].name : juce::String ("Parameter"));
+                    slider.getProperties().set ("midiMapTarget", "device:" + pluginId + ":" + juce::String (parameter));
+                    slider.onDragStart = [this] { owner.session.beginEditGesture ("Plug-in parameter"); };
+                    slider.onDragEnd = [this] { owner.session.endEditGesture(); };
+                    slider.onValueChange = [this, parameter, &slider] { owner.report (owner.session.setPluginParameterValue (pluginId, parameter, (float) slider.getValue())); };
+                    control->label.setFont (font (10.0f)); control->label.setColour (juce::Label::textColourId, juce::Colour (0xffb8b8b8));
+                    control->label.setInterceptsMouseClicks (false, false);
+                    addAndMakeVisible (slider); addAndMakeVisible (control->label);
+                    controls.push_back (std::move (control));
+                }
+                resized();
+            }
+            for (auto& control : controls)
+                if (juce::isPositiveAndBelow (control->parameter, (int) parameters.size()))
+                {
+                    const auto& parameter = parameters[(size_t) control->parameter];
+                    if (! control->slider.isMouseButtonDown()) control->slider.setValue (parameter.value, juce::dontSendNotification);
+                    control->label.setText (parameter.name + "  " + parameter.text, juce::dontSendNotification);
+                    control->slider.setTooltip (parameter.name + ": " + parameter.text);
+                }
+            repaint();
+        }
+        int preferredWidth() const { return juce::jmax (184, 8 + columns() * (controlWidth + 8)); }
+        void resized() override
+        {
+            configure.setBounds (6, 4, 76, 20);
+            for (size_t i = 0; i < controls.size(); ++i)
+            {
+                const int column = (int) i / rows, row = (int) i % rows, x = 6 + column * (controlWidth + 8), y = 30 + row * 36;
+                controls[i]->label.setBounds (x, y, controlWidth, 14); controls[i]->slider.setBounds (x, y + 15, controlWidth, 16);
+            }
+        }
+        void paint (juce::Graphics& g) override
+        {
+            if (! controls.empty()) return;
+            g.setColour (muted); g.setFont (font (10.5f));
+            g.drawFittedText ("Configure to show this plug-in's parameters here.\nOpen its window for every control.", getLocalBounds().withTrimmedTop (28).reduced (8), juce::Justification::centred, 4);
+        }
+        static constexpr int rows = 4, controlWidth = 148;
+    private:
+        struct Control { int parameter = 0; juce::Slider slider; juce::Label label; };
+        int columns() const { return ((int) controls.size() + rows - 1) / rows; }
+        void showConfigureMenu()
+        {
+            const auto parameters = owner.session.pluginParameters (pluginId);
+            juce::PopupMenu menu;
+            for (size_t i = 0; i < parameters.size(); ++i)
+                menu.addItem ((int) i + 1, parameters[i].name, true, std::find (shown.begin(), shown.end(), (int) i) != shown.end());
+            menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&configure),
+                                [safe = juce::Component::SafePointer<PluginControls> (this)] (int choice) { if (safe != nullptr && choice > 0) safe->toggle (choice - 1); });
+        }
+    public:
+        // Shows a parameter that is hidden, or hides one that shows.
+        void toggle (int parameter)
+        {
+            auto next = shown;
+            if (auto at = std::find (next.begin(), next.end(), parameter); at != next.end()) next.erase (at); else next.push_back (parameter);
+            owner.report (owner.session.setPluginConfiguration (pluginId, next)); owner.refresh();
+        }
+    private:
+        Impl& owner;
+        juce::String pluginId;
+        juce::TextButton configure { "Configure" };
+        std::vector<int> shown;
+        size_t parameterCount = 0;
+        std::vector<std::unique_ptr<Control>> controls;
+    };
+
     // One device in the inline chain: a title bar (on/off, name, window, remove)
     // over the device's own compact controls.
     class DevicePanel final : public juce::Component
@@ -5965,13 +6058,14 @@ private:
                                    : makeNativeEffectEditor (owner.session, info.id, true, [automation, id = info.id] (int parameter) { automation (id, parameter); });
                 addAndMakeVisible (*body);
             }
+            else if (! info.isUtility) { controls = std::make_unique<PluginControls> (owner, info.id); addChildComponent (*controls); }
             // The title selects the device for Cmd/Ctrl+G grouping and deletion.
             setWantsKeyboardFocus (true);
             rack = info.isRack; chains = (int) info.chains.size();
             sync (info);
         }
         const juce::String& getId() const noexcept { return pluginId; }
-        int preferredWidth() const { return native && body ? body->getWidth() + 2 : 184; }
+        int preferredWidth() const { return native && body ? body->getWidth() + 2 : controls != nullptr && ! missing ? controls->preferredWidth() + 2 : 184; }
         void sync (const Session::PluginInfo& info)
         {
             name = info.name; enabled = info.enabled; chains = (int) info.chains.size();
@@ -5979,6 +6073,7 @@ private:
             missing = info.missing; loadError = info.loadError;
             power.setToggleState (info.enabled, juce::dontSendNotification);
             open.setEnabled (! missing); open.setTooltip (missing ? "This plug-in is missing" : "Open this device in its own window");
+            if (controls != nullptr) { controls->setVisible (! missing); if (! missing) controls->sync (info); }
             repaint();
         }
         void resized() override
@@ -5986,6 +6081,7 @@ private:
             auto title = getLocalBounds().removeFromTop (titleHeight).reduced (2);
             power.setBounds (title.removeFromLeft (18)); remove.setBounds (title.removeFromRight (18)); open.setBounds (title.removeFromRight (22));
             if (body) body->setTopLeftPosition (1, titleHeight);
+            if (controls) controls->setBounds (1, titleHeight, getWidth() - 2, getHeight() - titleHeight - 1);
         }
         void paint (juce::Graphics& g) override
         {
@@ -6002,7 +6098,7 @@ private:
                 g.setColour (muted); g.setFont (font (10.0f));
                 g.drawFittedText ((loadError.isNotEmpty() ? loadError + "\n" : juce::String()) + "Its settings are kept. Scan it and reopen the project.", area, juce::Justification::centredTop, 5);
             }
-            else if (! native)
+            else if (! native && controls == nullptr)
             {
                 g.setColour (muted); g.setFont (font (10.5f));
                 g.drawFittedText (enabled ? juce::String (midi ? "Processing MIDI." : "Processing audio.") + "\nOpen its window for every control." : "Bypassed.",
@@ -6066,6 +6162,8 @@ private:
         int chains = 0;
         juce::TextButton power { "" }, open { "^" }, remove { "x" };
         std::unique_ptr<juce::Component> body;
+    public:
+        std::unique_ptr<PluginControls> controls; // A hosted plug-in's configured parameters.
     };
 
     class DeviceChain final : public juce::Component
@@ -9806,6 +9904,35 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tracks[0].plugins.empty(), "undo removes the inline test device");
         selectTrack (instrumentTrack); refresh();
     }
+    if (const auto* pluginPath = std::getenv ("HALFTRACK_TEST_PLUGIN"))
+    {
+        // Configure: a hosted plug-in's chosen parameters show in its panel as mappable controls.
+        const int instrumentTrack = selectedTrack;
+        juce::OwnedArray<juce::PluginDescription> descriptions;
+        for (auto* format : session.pluginFormats().getFormats())
+            if (format->getName() == "VST3") format->findAllTypesForFile (descriptions, juce::File (juce::String::fromUTF8 (pluginPath)).getFullPathName());
+        check (! descriptions.isEmpty(), "scan the gain fixture for Configure");
+        selectTrack (0); report (session.addPlugin (0, *descriptions[0])); refresh();
+        const auto pluginId = state.tracks[0].plugins.back().id;
+        auto* configure = findNamed (deviceChain, "Configure plug-in");
+        PluginControls* controls = nullptr;
+        for (auto* c = configure; c != nullptr && controls == nullptr; c = c->getParentComponent()) controls = dynamic_cast<PluginControls*> (c);
+        check (configure != nullptr && configure->isVisible() && controls != nullptr && findNamed (deviceChain, "Gain") == nullptr,
+               "a hosted plug-in's panel offers Configure and shows no parameters yet");
+        controls->toggle (0); refresh();
+        auto* gain = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "Gain"));
+        check (state.tracks[0].plugins.back().configured == std::vector<int> { 0 } && gain != nullptr && gain->isVisible(), "choosing Gain in Configure shows it in the panel");
+        const auto target = gain->getProperties()["midiMapTarget"].toString();
+        check (target == "device:" + pluginId + ":0" && session.midiTargetRange (target).has_value(), "the control can be MIDI mapped");
+        gain->setValue (.75, juce::sendNotificationSync); refresh();
+        check (std::abs (session.pluginParameters (pluginId)[0].value - .75f) < 1e-4f, "moving it sets the plug-in's Gain");
+        controls->toggle (0); refresh();
+        check (state.tracks[0].plugins.back().configured.empty() && findNamed (deviceChain, "Gain") == nullptr, "choosing it again hides it");
+        report (session.removePlugin (0, (int) state.tracks[0].plugins.size() - 1)); refresh();
+        check (state.tracks[0].plugins.empty(), "remove the Configure test plug-in");
+        selectTrack (instrumentTrack); refresh();
+    }
+    else std::cout << "SKIP UI Configure: HALFTRACK_TEST_PLUGIN is not set" << std::endl;
     {
         // Linked tracks: Link Tracks links the selected headers, which show the indicator; clicking it
         // selects the link, time selected on one track covers the other, and Unlink Tracks ends it.

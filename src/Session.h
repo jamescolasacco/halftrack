@@ -355,6 +355,8 @@ public:
         // Arrangement automation of native device controls, in the controls' own units.
         struct ControlAutomation { int parameter = 0; AutomationLane lane; bool operator== (const ControlAutomation&) const = default; };
         std::vector<ControlAutomation> automation;
+        // A hosted plug-in's configured parameters (see setPluginConfiguration), by index in pluginParameters.
+        std::vector<int> configured;
         // Racks: chains in order, a Drum Rack's return chains and the macro mappings.
         bool isRack = false;
         int visibleMacros = 8;
@@ -733,6 +735,14 @@ public:
     // plug-in's own text. Empty for an unknown id, a native device or a missing plug-in.
     struct PluginParameterInfo { juce::String name, text; float value = 0; };
     std::vector<PluginParameterInfo> pluginParameters (const juce::String& pluginId) const;
+    // Configure, after the reference: the hosted plug-in parameters its device panel shows as
+    // controls, which can be MIDI mapped. They are kept by the plug-in's own parameter IDs, so each
+    // follows its parameter if a version of the plug-in reorders them. At most 128; one undo step.
+    static constexpr int maximumConfiguredParameters = 128;
+    juce::Result setPluginConfiguration (const juce::String& pluginId, const std::vector<int>& parameters);
+    // Sets a hosted plug-in parameter (by index in pluginParameters) to a 0-1 value. Like a device
+    // control, it is recorded while automation is captured and otherwise overrides its automation.
+    juce::Result setPluginParameterValue (const juce::String& pluginId, int parameter, float value);
     // Sets a clip's envelope for its target and mode as one undo step; no points removes it.
     juce::Result setClipEnvelope (const juce::String& clipId, const ClipEnvelope&);
     // Automation Arm, after the reference. While it is on and the transport records, moving a track's

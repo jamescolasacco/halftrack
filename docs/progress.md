@@ -1456,3 +1456,13 @@ Engine-independent change in `src/BrowserIndex.*` (new), `src/MainComponent.cpp`
 - **Problems.** Unreadable folders, truncation and moved results are reported.
 
 See [the contract](research/browser-index-contract.md).
+
+## Parameter identity and Configure — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/ParameterIdentityTests.cpp` (new), with documentation.
+
+- **Configure.** A hosted plug-in's panel shows the parameters chosen in Configure as controls that can be automated and MIDI mapped.
+- **Identity.** Hosted mappings and configured parameters are kept by the plug-in's own parameter IDs, so a reordered or vanished parameter is never driven by mistake. An identity suite covers reordering, duplication, deletion, undo, reopening and unavailable plug-ins.
+- **A fix.** The identity suite found that edits made while a mapped controller moved joined its undo step. They are now steps of their own.
+
+See [the contract](research/parameter-identity-contract.md).

@@ -229,6 +229,10 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `BrowserIndex` (in `src/BrowserIndex.*`, independent of the engine) indexes a folder tree on a detached worker that owns only standard-library data and a shared `Scan` record, so a blocked filesystem call can outlive the browser. A global count limits outstanding scans to four. The UI starts it with each folder listing, polls its status from the window timer, and searches it on the message thread under the scan's mutex. See the [contract](research/browser-index-contract.md).
 
+## Parameter identity
+
+`Session::Impl::externalParameterId` gives a hosted parameter's own ID for its `device:` key. MIDI mappings of hosted parameters save it as `parameterID`. `mappingCurrent` hides a mapping whose index no longer names that ID, and `reconcileMidiMappings` moves it to the ID's new index after loading and from the remote-watch timer. Configured parameters are a `HALFTRACKCONFIGURE` child of the plug-in's state, holding parameter IDs. `Impl::transaction` ends a controller's gesture (`remoteGesture`) unless the edit comes from that controller (`applyingRemote`). See the [contract](research/parameter-identity-contract.md).
+
 ## Linked tracks
 
 A link is a `halftrackLink` property shared by tracks, set and cleared with undo by `linkTracks` and `unlinkTracks`. A link left with one track is cleared, and the snapshot reports a link only when two or more tracks share it. `Session::Impl::linkedTracks` and `linkedClips` find the counterparts, and each edit function validates and applies them inside its own transaction, so a linked edit is one undo step. Time-selection functions widen their track list with `withLinkedTracks`. Comping goes through `Impl::compLane`. See the [contract](research/linked-tracks-contract.md).

@@ -1845,6 +1845,10 @@ juce::Result runRangeExportTaskCancellationTests (const juce::File& directory)
 
 // MIDI mappings: a Halftrack child of the Edit with one MAPPING per controller.
 const juce::Identifier midiMapType { "HALFTRACKMIDIMAP" }, midiMappingType { "MAPPING" };
+// A hosted plug-in's configured parameters, by the plug-in's own IDs, in the order shown.
+const juce::Identifier configureType { "HALFTRACKCONFIGURE" }, configuredType { "PARAMETER" };
+// A MIDI mapping of a hosted plug-in parameter keeps that parameter's own ID beside its index.
+const juce::Identifier parameterIdProperty { "parameterID" };
 Session::MidiMapping readMidiMapping (const juce::ValueTree& v)
 {
     return { v["target"].toString(), static_cast<int> (v["channel"]), static_cast<int> (v["controller"]),
@@ -1872,10 +1876,28 @@ Result validateMidiMappings (const juce::ValueTree& state)
             const auto kind = target.upToFirstOccurrenceOf (":", false, false);
             if (! m.hasType (midiMappingType) || ! (kind == "mixer" || kind == "device" || target == "master") || ! whole ("channel", 1, 16) || ! whole ("controller", 0, 127)
                 || ! finiteProperty (m["minimum"], -1.0e6, 1.0e6) || ! finiteProperty (m["maximum"], -1.0e6, 1.0e6)
-                || ! targets.insert (target).second || ! controllers.insert (static_cast<int> (m["channel"]) * 128 + static_cast<int> (m["controller"])).second)
+                || ! targets.insert (target).second || ! controllers.insert (static_cast<int> (m["channel"]) * 128 + static_cast<int> (m["controller"])).second
+                || (m.hasProperty (parameterIdProperty) && (kind != "device" || m[parameterIdProperty].toString().isEmpty() || m[parameterIdProperty].toString().length() > 512)))
                 return Result::fail ("The project contains an invalid MIDI mapping.");
         }
     }
+    return Result::ok();
+}
+Result validateConfigurations (const juce::ValueTree& state)
+{
+    if (state.hasType (configureType))
+    {
+        std::set<String> ids;
+        if (! state.getParent().hasType (te::IDs::PLUGIN) || state.getNumChildren() > Session::maximumConfiguredParameters)
+            return Result::fail ("The project contains an invalid plug-in configuration.");
+        for (const auto& parameter : state)
+        {
+            const auto id = parameter[te::IDs::id].toString();
+            if (! parameter.hasType (configuredType) || id.isEmpty() || id.length() > 512 || ! ids.insert (id).second)
+                return Result::fail ("The project contains an invalid plug-in configuration.");
+        }
+    }
+    for (const auto& child : state) if (auto result = validateConfigurations (child); result.failed()) return result;
     return Result::ok();
 }
 // Defined with the range edits below.
@@ -2823,6 +2845,8 @@ struct Session::Impl
     void transaction (const String& name)
     {
         endAudition(); // Edits apply to the main lane, never to an audition.
+        // Any other edit ends a controller's gesture, so it is an undo step of its own.
+        if (remoteGesture && ! applyingRemote) { remoteGesture = false; owner.endEditGesture(); }
         flushStructuralUpdates();
         if (! gesture) edit->getUndoManager().beginNewTransaction (name);
     }
@@ -2954,6 +2978,44 @@ struct Session::Impl
     static String mixerKey (const te::AudioTrack& t, AutomationTarget target)
     { return "mixer:" + t.itemID.toString() + (target == AutomationTarget::volume ? ":volume" : ":pan"); }
     static String deviceKey (const String& pluginId, int parameter) { return "device:" + pluginId + ":" + String (parameter); }
+    // A hosted plug-in parameter's own ID for its "device:" key, or empty for any other target.
+    String externalParameterId (const String& target) const
+    {
+        const auto parts = juce::StringArray::fromTokens (target, ":", "");
+        if (parts.size() != 3 || parts[0] != "device") return {};
+        if (auto* external = externalPlugin (parts[1]); external != nullptr && external->getAudioPluginInstance() != nullptr)
+        {
+            const auto parameters = externalParameters (*external);
+            if (const int index = parts[2].getIntValue(); parts[2].containsOnly ("0123456789") && juce::isPositiveAndBelow (index, (int) parameters.size()))
+                return parameters[(size_t) index]->paramID;
+        }
+        return {};
+    }
+    // A mapping that names a parameter ID drives only that parameter: one a plug-in has moved does
+    // not drive whatever now sits at its old index.
+    bool mappingCurrent (const juce::ValueTree& m) const
+    { return ! m.hasProperty (parameterIdProperty) || externalParameterId (m["target"].toString()) == m[parameterIdProperty].toString(); }
+    // After a load: a mapping whose plug-in parameter has moved follows it to its new index.
+    void reconcileMidiMappings()
+    {
+        auto map = edit->state.getChildWithName (midiMapType);
+        for (auto m : map)
+        {
+            if (mappingCurrent (m)) continue;
+            const auto parts = juce::StringArray::fromTokens (m["target"].toString(), ":", "");
+            auto* external = externalPlugin (parts[1]);
+            if (external == nullptr || external->getAudioPluginInstance() == nullptr) continue;
+            const auto parameters = externalParameters (*external);
+            for (size_t i = 0; i < parameters.size(); ++i)
+                if (parameters[i]->paramID == m[parameterIdProperty].toString())
+                {
+                    const auto moved = deviceKey (parts[1], (int) i);
+                    if (std::none_of (map.begin(), map.end(), [&] (const auto& other) { return other["target"].toString() == moved; }))
+                        m.setProperty ("target", moved, nullptr);
+                    break;
+                }
+        }
+    }
     bool automationArmed() const { return edit->state.getProperty (automationArmProperty, false); }
     bool capturing() const { return automationArmed() && edit->getTransport().isRecording(); }
     LaneAccess mixerLane (te::VolumeAndPanPlugin& plugin, AutomationTarget target)
@@ -3379,7 +3441,7 @@ struct Session::Impl
         grooveWatcher.watch (edit->state);
         midiLearnTarget.clear();
         remote.attach (edit.get()); attachCapture();
-        if (useDevices && ! remoteWatch.isTimerRunning()) { remoteWatch.tick = [this] { remote.attach (edit.get()); attachCapture(); }; remoteWatch.startTimer (1000); }
+        if (useDevices && ! remoteWatch.isTimerRunning()) { remoteWatch.tick = [this] { remote.attach (edit.get()); attachCapture(); reconcileMidiMappings(); }; remoteWatch.startTimer (1000); }
         flushStructuralUpdates();
         edit->playInStopEnabled = true;
         edit->getAutomationRecordManager().setReadingAutomation (true);
@@ -3610,6 +3672,7 @@ struct Session::Impl
         void timerCallback() override { tick(); }
     } remoteRest;
     bool remoteGesture = false;
+    bool applyingRemote = false; // While a mapped controller's value is applied.
     uint32_t lastRemote = 0;
     // Input instances are rebuilt when devices come and go, so the remote reattaches each second.
     RemoteRest remoteWatch;
@@ -3695,7 +3758,7 @@ Session::Snapshot Session::snapshot() const
     s.previewing = impl->previewPlaying() ? impl->previewSource : File();
     s.previewVolumeDb = impl->previewVolumeDb;
     for (const auto& m : e.state.getChildWithName (midiMapType))
-        if (auto mapping = readMidiMapping (m); midiTargetRange (mapping.target)) s.midiMappings.push_back (mapping);
+        if (auto mapping = readMidiMapping (m); midiTargetRange (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
     s.midiLearnTarget = impl->midiLearnTarget;
     s.automationOverridden = ! impl->overriddenLanes().isEmpty();
     const auto quantisation = e.getLaunchQuantisation().type.get();
@@ -3797,7 +3860,14 @@ Session::Snapshot Session::snapshot() const
             PluginInfo device { p->itemID.toString(), p->getName(), p->isEnabled() };
             if (auto* utility = dynamic_cast<UtilityPlugin*> (p)) { device.isUtility = true; device.utility = utility->readSettings(); }
             if (auto* effect = dynamic_cast<NativeEffectPlugin*> (p)) device = describeDevice (*effect);
-            if (auto* external = dynamic_cast<te::ExternalPlugin*> (p)) device.automation = externalAutomation (*external);
+            if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
+            {
+                device.automation = externalAutomation (*external);
+                const auto parameters = externalParameters (*external);
+                for (const auto& configured : external->state.getChildWithName (configureType))
+                    for (size_t i = 0; i < parameters.size(); ++i)
+                        if (parameters[i]->paramID == configured[te::IDs::id].toString()) { device.configured.push_back ((int) i); break; }
+            }
             if (auto* external = dynamic_cast<te::ExternalPlugin*> (p); external && ! external->isInitialisingAsync() && external->getAudioPluginInstance() == nullptr)
             {
                 device.missing = true; device.loadError = external->getLoadError();
@@ -3925,6 +3995,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateClipScales (state); result.failed()) return result;
     if (auto result = validateGroovePool (state); result.failed()) return result;
     if (auto result = validateMidiMappings (state); result.failed()) return result;
+    if (auto result = validateConfigurations (state); result.failed()) return result;
     if (state.hasProperty (automationArmProperty) && ! (finiteProperty (state[automationArmProperty], 0, 1) && (state[automationArmProperty].toString().trim() == "0" || state[automationArmProperty].toString().trim() == "1")))
         return Result::fail ("The project's Automation Arm setting is invalid.");
     for (const auto& property : { punchInProperty, punchOutProperty })
@@ -3979,6 +4050,7 @@ Result Session::loadProject (const File& file)
         if (! scene->state.hasProperty ("halftrackSceneID"))
             scene->state.setProperty ("halftrackSceneID", juce::Uuid().toString(), nullptr);
     impl->prepareEdit();
+    impl->reconcileMidiMappings();
     impl->refreshInputs();
     for (auto* t : te::getAudioTracks (*impl->edit))
         if (auto* input = impl->input (*t))
@@ -7902,6 +7974,53 @@ std::vector<Session::PluginParameterInfo> Session::pluginParameters (const Strin
             result.push_back ({ p->getParameterName(), p->getCurrentValueAsString(), p->getCurrentNormalisedValue() });
     return result;
 }
+Result Session::setPluginConfiguration (const String& pluginId, const std::vector<int>& chosen)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    te::AudioTrack* owner = nullptr;
+    auto* external = impl->externalPlugin (pluginId, &owner);
+    if (external == nullptr || external->getAudioPluginInstance() == nullptr) return Result::fail ("Configure a loaded plug-in.");
+    if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
+    const auto parameters = externalParameters (*external);
+    if ((int) chosen.size() > maximumConfiguredParameters) return Result::fail ("A plug-in shows at most 128 configured parameters.");
+    juce::StringArray ids;
+    for (const auto index : chosen)
+    {
+        if (! juce::isPositiveAndBelow (index, (int) parameters.size())) return Result::fail ("That plug-in has no such parameter.");
+        if (ids.contains (parameters[(size_t) index]->paramID)) return Result::fail ("Each parameter can be configured once.");
+        ids.add (parameters[(size_t) index]->paramID);
+    }
+    juce::StringArray current;
+    for (const auto& configured : external->state.getChildWithName (configureType)) current.add (configured[te::IDs::id].toString());
+    if (current == ids) return Result::ok();
+    impl->transaction ("Configure plug-in");
+    auto* undo = &impl->edit->getUndoManager();
+    if (auto previous = external->state.getChildWithName (configureType); previous.isValid()) external->state.removeChild (previous, undo);
+    if (! ids.isEmpty())
+    {
+        juce::ValueTree configure (configureType);
+        for (const auto& id : ids) { juce::ValueTree parameter (configuredType); parameter.setProperty (te::IDs::id, id, nullptr); configure.appendChild (parameter, nullptr); }
+        external->state.appendChild (configure, undo);
+    }
+    impl->changed(); return Result::ok();
+}
+Result Session::setPluginParameterValue (const String& pluginId, int parameter, float value)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    te::AudioTrack* owner = nullptr;
+    auto* external = impl->externalPlugin (pluginId, &owner);
+    if (external == nullptr || external->getAudioPluginInstance() == nullptr || ! std::isfinite (value)) return Result::fail ("Plug-in parameter not found.");
+    if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
+    const auto parameters = externalParameters (*external);
+    if (! juce::isPositiveAndBelow (parameter, (int) parameters.size())) return Result::fail ("Plug-in parameter not found.");
+    value = juce::jlimit (0.0f, 1.0f, value);
+    auto* target = parameters[(size_t) parameter];
+    if (target->getCurrentNormalisedValue() == value) return Result::ok();
+    const auto key = Impl::deviceKey (pluginId, parameter);
+    if (impl->capturing()) impl->capture (key, value); else impl->overrideLane (key);
+    target->setNormalisedParameter (value, juce::sendNotificationSync);
+    impl->changed(); return Result::ok();
+}
 std::optional<std::pair<float, float>> Session::midiTargetRange (const String& target) const
 {
     const auto parts = juce::StringArray::fromTokens (target, ":", "");
@@ -7918,6 +8037,7 @@ std::optional<std::pair<float, float>> Session::midiTargetRange (const String& t
             const int index = parts[2].getIntValue();
             if (juce::isPositiveAndBelow (index, (int) fields.size())) return std::pair { fields[(size_t) index].minimum, fields[(size_t) index].maximum };
         }
+        else if (impl->externalParameterId (target).isNotEmpty()) return std::pair { 0.0f, 1.0f };
     return std::nullopt;
 }
 Result Session::setMidiLearnTarget (const String& target)
@@ -7978,12 +8098,14 @@ Result Session::handleMidiControl (int channel, int controller, int value)
             const auto existing = readMidiMapping (map.getChild (i));
             if (existing.target == mapping.target || (existing.channel == channel && existing.controller == controller)) map.removeChild (i, undo);
         }
-        map.appendChild (midiMappingTree (mapping), undo);
+        auto added = midiMappingTree (mapping);
+        if (const auto id = impl->externalParameterId (mapping.target); id.isNotEmpty()) added.setProperty (parameterIdProperty, id, nullptr);
+        map.appendChild (added, undo);
         impl->changed(); return Result::ok();
     }
     std::optional<MidiMapping> mapping;
     for (const auto& m : map)
-        if (const auto candidate = readMidiMapping (m); candidate.channel == channel && candidate.controller == controller) mapping = candidate;
+        if (const auto candidate = readMidiMapping (m); candidate.channel == channel && candidate.controller == controller && impl->mappingCurrent (m)) mapping = candidate;
     if (! mapping) return Result::ok();
     const auto lane = impl->laneFor (mapping->target);
     if (! lane) return Result::ok();
@@ -8003,6 +8125,7 @@ Result Session::handleMidiControl (int channel, int controller, int value)
         };
         impl->remoteRest.startTimer (100);
     }
+    const juce::ScopedValueSetter<bool> applying (impl->applyingRemote, true);
     const auto parts = juce::StringArray::fromTokens (mapping->target, ":", "");
     if (mapping->target == "master") return setMasterGain (target);
     if (parts[0] == "mixer")
@@ -8012,6 +8135,7 @@ Result Session::handleMidiControl (int channel, int controller, int value)
             if (tracks[i]->itemID.toString() == parts[1]) return parts[2] == "pan" ? setTrackPan (i, target) : setTrackGain (i, target);
         return Result::ok();
     }
+    if (impl->externalPlugin (parts[1]) != nullptr) return setPluginParameterValue (parts[1], parts[2].getIntValue(), target);
     auto* device = impl->nativeDevice (parts[1]);
     if (device == nullptr) return Result::ok();
     auto settings = device->readSettings();
@@ -8521,6 +8645,7 @@ Result Session::navigateLocator (bool forward)
 void Session::beginEditGesture (const String& name)
 {
     if (impl->exporting) return;
+    impl->remoteGesture = false; // A controller's resting no longer ends the gesture begun here.
     endEditGesture();
     impl->edit->getUndoManager().beginNewTransaction (name);
     impl->gesture = std::make_unique<te::Edit::UndoTransactionInhibitor> (*impl->edit);
