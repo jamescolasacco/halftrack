@@ -392,6 +392,21 @@ public:
         pluginsButton.onClick = [this] { setBrowserCategory (BrowserCategory::plugins); };
         folderButton.onClick = [this] { if (pluginBrowser()) showPlugins(); else chooseFolder(); };
         upButton.onClick = [this] { if (sampleBrowser()) { browserFolder = browserFolder.getParentDirectory(); updateBrowser(); } };
+        // Preview, as in the reference browser: with it on, selecting a sample plays it.
+        addAndMakeVisible (previewButton); addAndMakeVisible (previewVolume);
+        previewButton.setName ("Preview"); previewButton.setClickingTogglesState (true);
+        previewButton.setTooltip ("Preview: play samples as you select them, at the preview volume");
+        previewButton.setColour (juce::TextButton::buttonOnColourId, orange); previewButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+        previewButton.setWantsKeyboardFocus (false); previewButton.setMouseClickGrabsKeyboardFocus (false);
+        previewButton.onClick = [this] { if (! previewButton.getToggleState()) session.stopPreview(); else previewSelectedSample(); };
+        previewVolume.setName ("Preview volume"); previewVolume.setSliderStyle (juce::Slider::LinearBar);
+        previewVolume.setRange (-70, 6, .1); previewVolume.setValue (0, juce::dontSendNotification); previewVolume.setDoubleClickReturnValue (true, 0);
+        previewVolume.setColour (juce::Slider::trackColourId, juce::Colour (0xff4a4a4a)); previewVolume.setColour (juce::Slider::textBoxTextColourId, ink);
+        previewVolume.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " dB"; };
+        previewVolume.valueFromTextFunction = [] (const juce::String& t) { return t.retainCharacters ("-.0123456789").getDoubleValue(); };
+        previewVolume.updateText(); previewVolume.setWantsKeyboardFocus (false);
+        previewVolume.setTooltip ("Preview volume. Double-click for 0 dB.");
+        previewVolume.onValueChange = [this] { report (session.setPreviewVolume ((float) previewVolume.getValue())); };
         filesButton.setVisible (false); pluginsButton.setVisible (false); // The category list replaces these tabs.
         upButton.setTooltip ("Parent folder");
         browserSearch.setTextToShowWhenEmpty ("Search current folder", muted);
@@ -538,6 +553,12 @@ public:
         browser.removeFromLeft (4);
         auto actions = browser.removeFromBottom (24);
         upButton.setVisible (sampleBrowser()); folderButton.setVisible (sampleBrowser() || pluginBrowser());
+        previewButton.setVisible (sampleBrowser()); previewVolume.setVisible (sampleBrowser());
+        if (sampleBrowser())
+        {
+            auto previewRow = browser.removeFromBottom (22); browser.removeFromBottom (4);
+            previewButton.setBounds (previewRow.removeFromLeft (66)); previewRow.removeFromLeft (4); previewVolume.setBounds (previewRow);
+        }
         if (sampleBrowser()) upButton.setBounds (actions.removeFromLeft (29));
         folderButton.setBounds (actions);
         browser.removeFromBottom (4); browser.removeFromTop (22);
@@ -4689,7 +4710,7 @@ private:
     juce::TextButton punchInButton { "In" }, punchOutButton { "Out" };
     juce::TextButton followButton { "Follow" }, tapButton { "TAP" }, loopButton { "Loop" }, clickButton { "Metro" }, clickSettingsButton { "..." }, audioButton { "Audio" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
                      sessionTab { "Session" }, arrangementTab { "Arrange" }, pianoTab { "Clip" }, importButton { "Import Audio" },
-                     filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" },
+                     filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" }, previewButton { "Preview" },
                      zoomIn { "+" }, zoomOut { "-" }, fitButton { "Fit" };
     juce::Label tempo, meterLabel, positionLabel, projectLabel, loopStartLabel, loopLengthLabel;
     juce::ComboBox quantisation;
@@ -4697,6 +4718,7 @@ private:
     juce::Rectangle<int> meterBounds, cpuBounds;
     juce::TextEditor browserSearch;
     juce::ListBox browserList;
+    juce::Slider previewVolume;
     BrowserCategories browserCategories { *this };
     Canvas canvas;
     Ruler ruler;
@@ -6526,6 +6548,18 @@ private:
         }
     }
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { activateBrowserRow (row); }
+    void selectedRowsChanged (int) override { if (previewButton.getToggleState()) previewSelectedSample(); }
+    // With Preview on, the selected sample plays; a folder or no selection stops the preview.
+    void previewSelectedSample()
+    {
+        const int row = browserList.getSelectedRow();
+        if (sampleBrowser() && juce::isPositiveAndBelow (row, (int) browserItems.size()) && ! browserItems[(size_t) row].directory)
+        {
+            const auto file = browserItems[(size_t) row].file;
+            if (session.snapshot().previewing != file) report (session.previewFile (file));
+        }
+        else session.stopPreview();
+    }
     void returnKeyPressed (int row) override { activateBrowserRow (row); }
     bool isInterestedInFileDrag (const juce::StringArray& files) override
     {
@@ -6952,6 +6986,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         refresh();
         check (state.grooves.empty() && state.grooveAmount == 100 && currentMidiClip()->grooveId.isEmpty(), "undo returns the pool to empty");
         if (auto* window = groovePool->findParentComponentOfClass<juce::DialogWindow>()) delete window;
+        setBrowserCategory (category);
+    }
+    {
+        // Preview lives in the Samples browser: its switch and volume show only there.
+        const auto category = browserCategory;
+        setBrowserCategory (BrowserCategory::samples);
+        check (previewButton.isVisible() && previewVolume.isVisible() && ! previewButton.getToggleState() && previewButton.getBottom() <= folderButton.getY(),
+               "the Samples browser shows Preview, off, with its volume above the folder buttons");
+        previewVolume.setValue (-12, juce::sendNotificationSync);
+        check (session.snapshot().previewVolumeDb == -12, "the preview volume slider sets the preview volume");
+        previewVolume.setValue (0, juce::sendNotificationSync);
+        setBrowserCategory (BrowserCategory::audioEffects);
+        check (! previewButton.isVisible() && ! previewVolume.isVisible(), "other categories hide them");
         setBrowserCategory (category);
     }
     withGeneratedMidiController(session,[&](const juce::String& controller)

@@ -1029,3 +1029,13 @@ Engine and UI change. It touches:
 
 The Spectrum is a Utilities analyser with Live's documented controls. See [the contract](research/native-effects-contract.md#spectrum-2026-10-21).
 
+## Browser preview — 2026-10-21
+
+Root change. It touches:
+
+- the preview Edit, `previewFile`, `stopPreview` and `setPreviewVolume` in `src/Session.*`;
+- the Preview switch and volume in the Samples browser in `src/MainComponent.cpp`;
+- `tests/PreviewTests.cpp`, the UI suite, the suite registration and documentation.
+
+Samples can be auditioned from the browser without touching the project. See [the contract](research/preview-contract.md).
+

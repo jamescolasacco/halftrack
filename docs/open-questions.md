@@ -319,3 +319,11 @@ The manual gives no numbers, so these are simplest-default choices pending refer
 - **Ranges.** Refresh runs 10–500 ms. Min runs −120 to −1 dB and Max level −100 to +12 dB.
 - **Auto range.** The axis spans 96 dB below the loudest bin rounded up to 6 dB, plus 6 dB of headroom.
 
+### Preview defaults
+
+These are simplest-default choices pending reference measurement:
+
+- **Playback.** Preview plays files once at their own tempo, like the reference's Raw mode.
+- **Volume.** The preview volume runs from −70 to +6 dB and is not saved.
+- **Project changes.** Opening another project does not stop a preview.
+
