@@ -64,6 +64,9 @@ int runRecordingFormatTests (const juce::File& artifacts)
         assets.setReadOnly (false, false);
         check (refused.failed() && refused.getErrorMessage().isNotEmpty() && ! s.snapshot().recording,
                "recording into an unwritable folder is refused with the reason (" + refused.getErrorMessage() + ")");
+        // The engine's reason was once taken as a file name, recording into "The directory..." here.
+        check (juce::File::getCurrentWorkingDirectory().findChildFiles (juce::File::findFilesAndDirectories, false, "The directory*").isEmpty(),
+               "and nothing is written under a path made from the reason");
         s.stop();
         s.seek (0); ok (s.record(), "once writable, recording works again");
         pumpSyntheticTestDevice (s, blocksPerSecond / 4); s.stop();

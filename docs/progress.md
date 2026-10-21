@@ -1503,3 +1503,10 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **A hardware check.** A manual `--hardware-check` mode measures a real interface without touching the user's settings or opening inputs. It was run on a MOTU M4: output timing and level, an unplug and replug, and a MIDI take showing that the late start seen in a test was the simulated device's.
 
 See [the contract](research/audio-hardware-contract.md).
+
+## Dependency manifest and a recording errors patch — 2026-10-21
+
+Change in `cmake/PatchRecordingErrors.cmake` (new), `cmake/PatchWaveInputStart.cmake`, `CMakeLists.txt`, `scripts/dependency_index.py` (new), `tests/test_dependencies.py` (new), `tests/RecordingFormatTests.cpp` and `docs/dependencies.md`.
+
+- **Recording errors.** An empty folder tree called "The directory…" in the repository led to an engine bug: the take file lookup turned its own error messages into file paths. A new patch returns them as errors.
+- **Manifest.** The dependency manifest gains a generated index of the pinned archives and of every hash each patch accepts or writes. A CI unit test keeps the manifest matched to the build.
