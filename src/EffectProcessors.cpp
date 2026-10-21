@@ -843,5 +843,52 @@ void Resonators::tick (double& left, double& right) noexcept
     const auto mid = .5 * (out[0] + out[1]);
     left = (mid + width * (out[0] - mid)) * output; right = (mid + width * (out[1] - mid)) * output;
 }
+
+void VinylDistortion::prepare (double sampleRate) noexcept { rate = sampleRate; dcPole = std::exp (-2 * pi * 10 / rate); reset(); }
+void VinylDistortion::configure (const float* v) noexcept
+{
+    const auto global = (double) v[7];
+    tracing = 8 * (double) v[0] * global; pinch = 16 * (double) v[3] * global;
+    for (auto& s : tracingBand) s.c = bandPassOctaves (v[1], octavesForQ (v[2]), rate);
+    for (auto& s : pinchBand) s.c = bandPassOctaves (v[4], octavesForQ (v[5]), rate);
+    stereo = v[6] != 0; soft = v[8] == 0;
+    density = (double) v[9];
+    volume = v[10] <= -70 ? 0 : std::pow (10.0, (double) v[10] / 20);
+}
+void VinylDistortion::reset() noexcept
+{
+    for (auto* bands : { &tracingBand, &pinchBand }) for (auto& s : *bands) s.clear();
+    dcInput = {}; dcOutput = {}; sample = 0; clickLevel = 0;
+}
+void VinylDistortion::syncTo (double seconds) noexcept { sample = (int64_t) std::llround (seconds * rate); }
+// One sample of crackle: a click starts with probability Density / rate and decays over about a millisecond.
+double VinylDistortion::click() noexcept
+{
+    auto r = (uint64_t) sample * 0x9e3779b97f4a7c15ull + 0x632be59bd9b4e019ull;
+    r = (r ^ (r >> 30)) * 0xbf58476d1ce4e5b9ull; r = (r ^ (r >> 27)) * 0x94d049bb133111ebull; r ^= r >> 31;
+    const auto chance = (double) (r >> 11) * (1.0 / 9007199254740992.0);
+    if (chance < density / rate) clickLevel = (r & 1 ? 1.0 : -1.0) * (.5 + .5 * (double) ((r >> 1) & 1023) / 1023);
+    const auto out = clickLevel;
+    clickLevel *= std::exp (-1 / (.001 * rate));
+    return out;
+}
+void VinylDistortion::tick (double& left, double& right) noexcept
+{
+    double* channels[] { &left, &right };
+    const auto crackle = volume > 0 && density > 0 ? click() * volume : 0.0;
+    for (size_t c = 0; c < 2; ++c)
+    {
+        const auto x = *channels[c];
+        const auto t = tracingBand[c].tick (x), p = pinchBand[c].tick (x);
+        auto even = tracing * t * t, odd = pinch * p * p * p;
+        if (soft) { even = std::tanh (even); odd = std::tanh (odd); }
+        // The squared band carries DC; a 10 Hz high-pass removes it.
+        const auto blocked = even - dcInput[c] + dcPole * dcOutput[c];
+        dcInput[c] = even; dcOutput[c] = finite (blocked);
+        const auto phase = stereo && c == 1 ? -1.0 : 1.0;
+        *channels[c] = x + dcOutput[c] + phase * odd + crackle;
+    }
+    ++sample;
+}
 }
 

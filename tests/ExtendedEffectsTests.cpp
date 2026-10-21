@@ -595,6 +595,57 @@ void resonatorTests()
         check (same, "fully dry passes audio unchanged");
     }
 }
+// Vinyl Distortion: a band-passed tone at its band's centre passes at unity, so squaring and
+// cubing give exact harmonics: Tracing k·A²/2 at 2f, Pinch k·A³/4 at 3f.
+void vinylTests()
+{
+    const auto settings = [&] (std::initializer_list<std::pair<const char*, float>> more)
+    {
+        auto s = with (Kind::vinylDistortion, { { "crackleDb", -70 }, { "tracingDrive", 0 }, { "pinchDrive", 0 }, { "hardness", 1 } });
+        for (const auto& [key, value] : more) s.values[(size_t) effectParameterIndex (Kind::vinylDistortion, key)] = value;
+        return s;
+    };
+    {
+        const auto in = sine (1000, .3, 9600, 48000, .5);
+        const auto out = process (in, settings ({}));
+        bool same = true; for (int c = 0; c < 2; ++c) for (int n = 0; n < in.getNumSamples(); ++n) same = same && out.getSample (c, n) == in.getSample (c, n);
+        check (same, "with no drive and no crackle Vinyl Distortion passes audio unchanged");
+    }
+    const auto level = [] (const juce::AudioBuffer<float>& x, int channel, double hz) { return amplitudeAt (x, channel, hz, 24000, 48000); };
+    {
+        const auto traced = process (sine (1000, .3, 48000), settings ({ { "tracingDrive", .3f }, { "tracingHz", 1000 } }));
+        const auto k = 8 * .3 * .5;
+        check (std::abs (level (traced, 0, 2000) - k * .09 / 2) < .03 * k * .09 / 2 && level (traced, 0, 3000) < 1e-4, "Tracing adds an exact second harmonic and no third");
+        const auto pinched = process (sine (3000, .3, 48000), settings ({ { "pinchDrive", .2f }, { "pinchHz", 3000 } }));
+        const auto p = 16 * .2 * .5;
+        check (std::abs (level (pinched, 0, 9000) - p * .027 / 4) < .03 * p * .027 / 4 && level (pinched, 0, 6000) < 1e-4, "Pinch adds an exact third harmonic and no second");
+        double opposite = 0, same = 0;
+        const auto mono = process (sine (3000, .3, 48000), settings ({ { "pinchDrive", .2f }, { "pinchHz", 3000 }, { "pinchStereo", 0 } }));
+        const auto source = sine (3000, .3, 48000);
+        for (int n = 0; n < 48000; ++n)
+        {
+            opposite = std::max (opposite, (double) std::abs ((pinched.getSample (0, n) - source.getSample (0, n)) + (pinched.getSample (1, n) - source.getSample (1, n))));
+            same = std::max (same, (double) std::abs (mono.getSample (0, n) - mono.getSample (1, n)));
+        }
+        check (opposite < 1e-6 && same == 0, "stereo Pinch distorts the right channel in opposite phase, mono alike");
+        const auto hard = process (sine (1000, .9, 48000), settings ({ { "tracingDrive", 1 }, { "tracingHz", 1000 }, { "globalDrive", 1 } }));
+        const auto soft = process (sine (1000, .9, 48000), settings ({ { "tracingDrive", 1 }, { "tracingHz", 1000 }, { "globalDrive", 1 }, { "hardness", 0 } }));
+        check (level (soft, 0, 2000) < .8 * level (hard, 0, 2000), "Soft rounds off heavy distortion");
+        const auto off = process (sine (1000, .3, 48000), settings ({ { "tracingDrive", 1 }, { "pinchDrive", 1 }, { "globalDrive", 0 } }));
+        check (level (off, 0, 2000) < 1e-6 && level (off, 0, 3000) < 1e-6, "Global Drive 0 turns both off");
+    }
+    {
+        // Crackle: clicks at Density per second, the same in every render.
+        juce::AudioBuffer<float> silence (2, 10 * 48000); silence.clear();
+        const auto crackle = settings ({ { "crackleDb", 0 }, { "crackleDensity", 20 } });
+        const auto a = processPlaying (silence, crackle), b = processPlaying (silence, crackle);
+        int clicks = 0, since = 1000;
+        for (int n = 0; n < a.getNumSamples(); ++n) { if (std::abs (a.getSample (0, n)) > .45f && since > 240) { ++clicks; since = 0; } else ++since; }
+        bool same = true; for (int n = 0; n < a.getNumSamples(); ++n) same = same && a.getSample (0, n) == b.getSample (0, n);
+        check (clicks > 150 && clicks < 250 && same, "Crackle clicks about 20 times a second, the same way each render (" + juce::String (clicks) + " in 10 s)");
+        check (processPlaying (silence, settings ({ { "crackleDb", -70 }, { "crackleDensity", 20 } })).getMagnitude (0, 10 * 48000) == 0, "at -70 dB the crackle is off");
+    }
+}
 void eqThreeTests()
 {
     for (int steep = 0; steep < 2; ++steep)
@@ -669,6 +720,6 @@ void shifterTests()
 void runExtendedEffectsTests()
 {
     saturatorTests(); overdriveTests(); autoFilterTests(); autoPanTests(); modulatedDelayTests();
-    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); beatRepeatTests(); filterDelayTests(); erosionTests(); resonatorTests(); glueTests(); shifterTests();
+    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); beatRepeatTests(); filterDelayTests(); erosionTests(); resonatorTests(); vinylTests(); glueTests(); shifterTests();
 }
 }

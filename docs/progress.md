@@ -1128,3 +1128,7 @@ Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Sess
 
 Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Session.h` and `tests/ExtendedEffectsTests.cpp`, with documentation. Resonators opens a Resonance category. See [the contract](research/native-effects-contract.md#resonators-2026-10-21).
 
+## Vinyl Distortion — 2026-10-21
+
+Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Session.h` and `tests/ExtendedEffectsTests.cpp`, with documentation. See [the contract](research/native-effects-contract.md#vinyl-distortion-2026-10-21).
+

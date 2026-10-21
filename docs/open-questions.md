@@ -397,3 +397,11 @@ These are simplest-default choices pending reference measurement:
 - **Color:** a low-pass from 500 Hz to 20 kHz.
 - **Defaults:** a 50 Hz high-pass input filter, a C3 root, and II–V at +12, +7, +19 and +4 semitones.
 
+### Vinyl Distortion defaults
+
+These are simplest-default choices pending reference measurement:
+
+- **Distortion:** the polynomial gains (8 and 16) and the tanh used for Soft.
+- **Crackle:** clicks of about 1 ms at a density of 0–50 per second.
+- **Defaults:** Tracing at 1.2 kHz and Pinch at 3 kHz.
+

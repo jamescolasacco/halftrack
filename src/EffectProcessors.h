@@ -402,5 +402,29 @@ private:
     std::array<Comb, count> combs;
     bool halfPeriod = false;
 };
+
+// Vinyl Distortion after the reference's. The Tracing Model squares a band of the input (Freq, Q)
+// for even harmonics; Pinch cubes another band for odd harmonics, in opposite phase on the right
+// channel when Stereo. Global Drive scales both, Soft rounds them with tanh, and Hard leaves them
+// raw. Crackle adds clicks at Density per second, at Volume. While the transport plays the
+// crackle follows the transport position, so renders match.
+class VinylDistortion
+{
+public:
+    // A band-pass's octave width for a Q.
+    static double octavesForQ (double q) noexcept { return 2 / std::log (2.0) * std::asinh (1 / (2 * std::max (q, .05))); }
+    void prepare (double rate) noexcept;
+    void configure (const float* values) noexcept;
+    void reset() noexcept;
+    void syncTo (double seconds) noexcept;
+    void tick (double& left, double& right) noexcept;
+private:
+    double click() noexcept;
+    double rate = 48000, tracing = 0, pinch = 0, density = 0, volume = 0, clickLevel = 0, dcPole = 0;
+    bool stereo = true, soft = false;
+    int64_t sample = 0;
+    std::array<Biquad, 2> tracingBand, pinchBand;
+    std::array<double, 2> dcInput {}, dcOutput {};
+};
 }
 

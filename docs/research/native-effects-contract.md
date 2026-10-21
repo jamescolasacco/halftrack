@@ -322,3 +322,29 @@ Halftrack's model:
 
 Scale-aware and tuning-system notes, and measured comparison with the reference, are missing.
 
+## Vinyl Distortion (2026-10-21)
+
+Vinyl Distortion follows the manual's description in the [audio effect reference](https://www.ableton.com/en/live-manual/12/live-audio-effect-reference/), consulted 2026-10-21. The manual gives no numbers. It describes:
+
+- **Tracing Model:** even harmonics, with Drive, Freq and Q.
+- **Pinch:** odd harmonics with the same controls, applied 180° out of phase in Stereo or alike in Mono.
+- **Global Drive.**
+- **Soft (dub plate) or Hard (standard vinyl).**
+- **Crackle:** Density and Volume.
+
+Halftrack's model:
+
+- **Tracing** adds `8·Drive·Global·b²` of a band-pass of the input. The band is centred on Freq with a width from Q, and a 10 Hz high-pass removes its DC.
+- **Pinch** adds `16·Drive·Global·b³` of its own band, negated on the right channel in Stereo.
+- **Soft** passes both terms through tanh; **Hard** leaves them raw.
+- **Crackle** starts a click, decaying over about 1 ms, with probability Density / rate per sample. It uses a counter-based generator that follows the transport position while playing, so renders match. At −70 dB it is off.
+- **Ranges.** Density runs 0–50 per second.
+
+`tests/ExtendedEffectsTests.cpp` checks:
+
+- **Bypass.** With no drive and no crackle the device is bit-exact.
+- **Harmonics.** Tracing gives a second harmonic of exactly `k·A²/2` and no third, and Pinch a third of exactly `k·A³/4` and no second, both within 3%.
+- **Pinch phase.** Stereo Pinch is opposite in phase on the right, and Mono keeps the channels identical.
+- **Modes.** Soft rounds off heavy drive, and Global Drive 0 turns both off.
+- **Crackle.** Twenty clicks a second are counted within ±25%, renders repeat them, and −70 dB is off.
+
