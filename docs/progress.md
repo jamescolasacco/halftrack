@@ -1238,3 +1238,9 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **Audio Engine On** in the File menu (Cmd+Option+Shift+E) closes and reopens the audio device. Turning it off keeps any take, and nothing plays until it is on again.
 
 See [the contract](research/audio-engine-contract.md).
+
+## Audition graph fix — 2026-10-21
+
+Engine change in `src/Session.cpp`.
+
+- **Auditioning** a take lane, or ending it, rebuilt the graph on the engine's next timer tick. On the slower Windows CI machine the first blocks after ending an audition could still play the auditioned lane. Both now flush pending clip-list updates and rebuild the graph before returning.

@@ -2531,7 +2531,8 @@ struct Session::Impl
         if (t == nullptr) return;
         for (auto& v : stash.inserted) if (v.getParent().isValid()) v.getParent().removeChild (v, nullptr);
         for (auto& [index, v] : stash.main) t->state.addChild (v, std::min (index, t->state.getNumChildren()), nullptr);
-        edit->restartPlayback();
+        // The graph is rebuilt now, so the next block plays the main lane however busy the machine is.
+        flushStructuralUpdates(); edit->restartPlayback(); edit->dispatchPendingUpdatesSynchronously();
     }
     // Take lanes: the track's lanes, made when asked; a lane by id, with its track.
     juce::ValueTree takeLanes (te::AudioTrack& t, bool create)
@@ -4074,7 +4075,7 @@ Result Session::auditionTakeLane (const String& laneId)
     for (auto it = audition.main.rbegin(); it != audition.main.rend(); ++it) track->state.removeChild (it->second, nullptr);
     for (auto clip : lane) { auto copy = impl->freshClipCopy (clip); track->state.appendChild (copy, nullptr); audition.inserted.push_back (copy); }
     impl->audition = std::move (audition);
-    impl->edit->restartPlayback();
+    impl->flushStructuralUpdates(); impl->edit->restartPlayback(); impl->edit->dispatchPendingUpdatesSynchronously();
     sendChangeMessage(); return Result::ok();
 }
 void Session::stopAuditioning() { impl->endAudition(); sendChangeMessage(); }
