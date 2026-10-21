@@ -1353,6 +1353,7 @@ See [the contract](research/multi-clip-editing-contract.md).
 Engine change in `src/Session.*`, `src/NativeEffects.*` (cross-area: native devices read modulated controls), `cmake/PatchClipEnvelopes.cmake` (new), `CMakeLists.txt`, `src/Main.cpp` and `tests/ClipEnvelopeTests.cpp` (new), with documentation.
 
 - **Clip envelopes.** A clip can modulate its track's volume, pan, native device controls and plug-in parameters while it plays, and a Session clip can automate them. An envelope follows its clip or loops on its own length.
+- **The editor** (UI, in `src/MainComponent.cpp`). An audio clip's Envelope chooser shows the envelope over the waveform. A MIDI clip's envelopes show in the piano roll's lane. Points are added, dragged and deleted with the mouse.
 - **One-point automation under modulation.** Track automation of a single point held its value only until a clip modulated the same control; the audio thread then used the manual value. An engine patch keeps the held value.
 - **A crash after undoing a track duplicate.** A plug-in kept for undo still read the deleted clip's curve. The engine now detaches it.
 - **Test fixes.** On slow machines, the punch test now checks the MIDI note against where it was sent. Plug-in presets now load the scanned plug-in of the same identity, since Linux CI could not instantiate the stored location.

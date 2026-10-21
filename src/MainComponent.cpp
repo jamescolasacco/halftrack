@@ -3562,6 +3562,161 @@ private:
         juce::StringArray shown;
     };
 
+    // Clip envelope editing, shared by the piano roll's lane and the audio clip view: the controls
+    // a clip's envelopes can change, and the chosen envelope as a breakpoint line over the clip's
+    // content beats. Clicking adds a point and drags it; double-click or right-click deletes one.
+    struct EnvelopeChoice { Session::EnvelopeTarget target; Session::EnvelopeMode mode; juce::String device, control; };
+    class EnvelopeEditor
+    {
+    public:
+        explicit EnvelopeEditor (Impl& o) : owner (o) {}
+        std::optional<EnvelopeChoice> choice;
+        bool active() const { return choice.has_value(); }
+        // The track's mixer and device controls; Session clips can also automate them.
+        static std::vector<EnvelopeChoice> choices (const Impl& owner, const Session::TrackInfo& track, bool sessionClip)
+        {
+            std::vector<EnvelopeChoice> result;
+            for (const auto mode : { Session::EnvelopeMode::modulation, Session::EnvelopeMode::automation })
+            {
+                if (mode == Session::EnvelopeMode::automation && ! sessionClip) continue;
+                result.push_back ({ { {}, 0 }, mode, "Mixer", "Track Volume" });
+                result.push_back ({ { {}, 1 }, mode, "Mixer", "Track Pan" });
+                auto devices = track.plugins;
+                if (track.instrument.isNativeEffect) devices.insert (devices.begin(), track.instrument);
+                for (const auto& device : devices)
+                {
+                    if (device.isNativeEffect && ! device.isRack)
+                    {
+                        const auto fields = effectParameters (device.effect.kind);
+                        for (size_t i = 0; i < fields.size(); ++i) result.push_back ({ { device.id, (int) i }, mode, device.name, fields[i].label });
+                    }
+                    else if (! device.isNativeEffect && ! device.isUtility && ! device.missing)
+                    {
+                        const auto parameters = owner.session.pluginParameters (device.id);
+                        for (size_t i = 0; i < parameters.size(); ++i) result.push_back ({ { device.id, (int) i }, mode, device.name, parameters[i].name });
+                    }
+                }
+            }
+            return result;
+        }
+        juce::String label() const
+        {
+            if (! choice) return {};
+            return choice->control + (choice->mode == Session::EnvelopeMode::automation ? " (Automation)" : " (Modulation)");
+        }
+        // Position 0-1 from the bottom of the editor for an envelope value, and back.
+        float proportion (float value) const
+        {
+            if (! choice) return 0;
+            using Mode = Session::EnvelopeMode;
+            const bool mixer = choice->target.pluginId.isEmpty(), volume = mixer && choice->target.parameter == 0;
+            if (choice->mode == Mode::modulation) return volume ? value : (value + 1) / 2;
+            if (volume) return Session::automationValueToProportion (Session::AutomationTarget::volume, value);
+            if (mixer) return (value + 1) / 2;
+            if (const auto* d = device(); d != nullptr && d->isNativeEffect) return Session::deviceAutomationValueToProportion (d->effect.kind, choice->target.parameter, value);
+            return value;
+        }
+        float value (float position) const
+        {
+            if (! choice) return 0;
+            using Mode = Session::EnvelopeMode;
+            position = juce::jlimit (0.0f, 1.0f, position);
+            const bool mixer = choice->target.pluginId.isEmpty(), volume = mixer && choice->target.parameter == 0;
+            if (choice->mode == Mode::modulation) return volume ? position : position * 2 - 1;
+            if (volume) return juce::jlimit (-100.0f, 6.0f, Session::automationProportionToValue (Session::AutomationTarget::volume, position));
+            if (mixer) return position * 2 - 1;
+            if (const auto* d = device(); d != nullptr && d->isNativeEffect) return Session::deviceAutomationProportionToValue (d->effect.kind, choice->target.parameter, position);
+            return position;
+        }
+        // The level a control keeps where there are no points: unchanged by modulation.
+        float neutral() const
+        {
+            const bool volume = choice && choice->target.pluginId.isEmpty() && choice->target.parameter == 0;
+            return choice && choice->mode == Session::EnvelopeMode::modulation ? (volume ? 1.0f : 0.0f) : value (.5f);
+        }
+        std::vector<Session::AutomationPoint> points (const Session::ClipInfo& clip) const
+        {
+            if (preview) return *preview;
+            if (const auto* e = envelope (clip)) return e->points;
+            return {};
+        }
+        void paint (juce::Graphics& g, juce::Rectangle<float> area, const Session::ClipInfo& clip, const std::function<float (double)>& x, double endBeat) const
+        {
+            if (! choice) return;
+            const auto y = [&] (float v) { return area.getBottom() - proportion (v) * area.getHeight(); };
+            const auto list = points (clip);
+            g.setColour (juce::Colour (0x40ffffff)); g.drawHorizontalLine ((int) y (neutral()), area.getX(), area.getRight());
+            if (list.empty()) return;
+            juce::Path path;
+            path.startNewSubPath (x (0), y (list.front().value));
+            for (const auto& point : list) path.lineTo (x (point.beat), y (point.value));
+            path.lineTo (x (endBeat), y (list.back().value));
+            g.setColour (juce::Colour (0xffff5e5e)); g.strokePath (path, juce::PathStrokeType (1.5f));
+            for (size_t i = 0; i < list.size(); ++i)
+            {
+                g.setColour ((int) i == dragged ? juce::Colours::white : juce::Colour (0xffff5e5e));
+                g.fillEllipse (x (list[i].beat) - 3.5f, y (list[i].value) - 3.5f, 7, 7);
+            }
+        }
+        void mouseDown (const juce::MouseEvent& e, juce::Rectangle<float> area, const Session::ClipInfo& clip,
+                        const std::function<float (double)>& x, const std::function<double (float)>& beatAt, double endBeat)
+        {
+            dragged = -1; preview.reset();
+            if (! choice) return;
+            clipId = clip.id;
+            auto list = points (clip);
+            const auto y = [&] (float v) { return area.getBottom() - proportion (v) * area.getHeight(); };
+            int hit = -1;
+            for (int i = (int) list.size(); --i >= 0;)
+                if (std::abs (x (list[(size_t) i].beat) - e.position.x) <= 5 && std::abs (y (list[(size_t) i].value) - e.position.y) <= 6) { hit = i; break; }
+            if (hit >= 0 && (e.mods.isPopupMenu() || e.getNumberOfClicks() > 1)) { list.erase (list.begin() + hit); commit (clip, list); return; }
+            if (e.mods.isPopupMenu()) return;
+            if (hit < 0)
+            {
+                const Session::AutomationPoint point { juce::jlimit (0.0, endBeat, beatAt (e.position.x)), value ((area.getBottom() - e.position.y) / area.getHeight()) };
+                const auto at = std::lower_bound (list.begin(), list.end(), point.beat, [] (const auto& p, double b) { return p.beat < b; });
+                if (at != list.end() && std::abs (at->beat - point.beat) < 1e-6) return;
+                hit = (int) (at - list.begin()); list.insert (at, point);
+            }
+            preview = list; dragged = hit;
+        }
+        void mouseDrag (const juce::MouseEvent& e, juce::Rectangle<float> area, const std::function<double (float)>& beatAt, double endBeat)
+        {
+            if (! preview || dragged < 0) return;
+            auto& list = *preview;
+            const double low = dragged > 0 ? list[(size_t) dragged - 1].beat + 1.0 / 960 : 0;
+            const double high = (size_t) dragged + 1 < list.size() ? list[(size_t) dragged + 1].beat - 1.0 / 960 : endBeat;
+            list[(size_t) dragged] = { juce::jlimit (low, juce::jmax (low, high), beatAt (e.position.x)), value ((area.getBottom() - e.position.y) / area.getHeight()) };
+        }
+        void mouseUp (const Session::ClipInfo& clip)
+        {
+            if (preview) { auto list = *preview; preview.reset(); dragged = -1; commit (clip, list); }
+        }
+    private:
+        Impl& owner;
+        juce::String clipId;
+        std::optional<std::vector<Session::AutomationPoint>> preview;
+        int dragged = -1;
+        const Session::PluginInfo* device() const
+        {
+            const auto* track = owner.currentTrack();
+            if (track == nullptr || ! choice) return nullptr;
+            if (track->instrument.id == choice->target.pluginId) return &track->instrument;
+            for (const auto& p : track->plugins) if (p.id == choice->target.pluginId) return &p;
+            return nullptr;
+        }
+        const Session::ClipEnvelope* envelope (const Session::ClipInfo& clip) const
+        {
+            for (const auto& e : clip.envelopes) if (choice && e.target == choice->target && e.mode == choice->mode) return &e;
+            return nullptr;
+        }
+        void commit (const Session::ClipInfo& clip, const std::vector<Session::AutomationPoint>& list)
+        {
+            Session::ClipEnvelope next { choice->target, choice->mode, list };
+            if (const auto* e = envelope (clip)) { next.unlinked = e->unlinked; next.loopBeats = e->loopBeats; }
+            owner.report (owner.session.setClipEnvelope (clipId, next)); owner.refresh();
+        }
+    };
     class AudioClipView final : public juce::Component, private juce::ChangeListener
     {
     public:
@@ -3603,6 +3758,16 @@ private:
             };
             reverse.setName ("Clip reverse"); reverse.setClickingTogglesState (true);
             reverse.onClick = [this] { owner.report (owner.session.setAudioClipReversed (clip.id, reverse.getToggleState())); owner.refresh(); };
+            addAndMakeVisible (envelopeChoice);
+            envelopeChoice.setName ("Clip envelope");
+            envelopeChoice.setTooltip ("Clip envelope: a mixer or device control this clip changes while it plays, drawn over the waveform. Click to add a point; double-click or right-click one to delete it.");
+            envelopeChoice.onChange = [this]
+            {
+                const auto id = envelopeChoice.getSelectedId() - envelopeChoiceBase;
+                envelope.choice.reset();
+                if (juce::isPositiveAndBelow (id, (int) envelopeList.size())) envelope.choice = envelopeList[(size_t) id];
+                repaint();
+            };
             thumbnail.addChangeListener (this);
         }
         ~AudioClipView() override { thumbnail.removeChangeListener (this); if (gesture) owner.session.endEditGesture(); }
@@ -3623,7 +3788,42 @@ private:
             if (! gain.isMouseButtonDown()) gain.setValue (clip.audio.gainDb, juce::dontSendNotification);
             gain.updateText();
             reverse.setToggleState (clip.reversed, juce::dontSendNotification); reverse.setEnabled (clip.canReverse || clip.reversed);
+            refreshEnvelopeChoices();
             repaint(); return true;
+        }
+        // Rebuilt when the track's controls change; the shown envelope stays while its control remains.
+        void refreshEnvelopeChoices()
+        {
+            const auto* track = owner.currentTrack();
+            const auto list = track != nullptr ? EnvelopeEditor::choices (owner, *track, owner.showSession) : std::vector<EnvelopeChoice>();
+            juce::StringArray signature;
+            for (const auto& c : list) signature.add (c.target.pluginId + "|" + juce::String (c.target.parameter) + "|" + juce::String ((int) c.mode) + "|" + c.device + "|" + c.control);
+            if (signature == envelopeSignature && envelopeChoice.getNumItems() > 0) return;
+            envelopeSignature = signature; envelopeList = list;
+            envelopeChoice.clear (juce::dontSendNotification);
+            envelopeChoice.addItem ("No envelope", 1);
+            for (const auto mode : { Session::EnvelopeMode::modulation, Session::EnvelopeMode::automation })
+            {
+                juce::PopupMenu modeMenu, deviceMenu;
+                juce::String device;
+                for (size_t i = 0; i < list.size(); ++i)
+                {
+                    if (list[i].mode != mode) continue;
+                    if (list[i].device != device && deviceMenu.getNumItems() > 0) { modeMenu.addSubMenu (device, deviceMenu); deviceMenu = {}; }
+                    device = list[i].device;
+                    deviceMenu.addItem (envelopeChoiceBase + (int) i, list[i].control);
+                }
+                if (deviceMenu.getNumItems() > 0) modeMenu.addSubMenu (device, deviceMenu);
+                if (modeMenu.getNumItems() > 0) envelopeChoice.getRootMenu()->addSubMenu (mode == Session::EnvelopeMode::modulation ? "Modulation" : "Automation", modeMenu);
+            }
+            int keep = 1;
+            if (envelope.choice)
+            {
+                const auto shown = *envelope.choice;
+                const auto at = std::find_if (list.begin(), list.end(), [&] (const auto& c) { return c.target == shown.target && c.mode == shown.mode; });
+                if (at != list.end()) keep = envelopeChoiceBase + (int) (at - list.begin()); else envelope.choice.reset();
+            }
+            envelopeChoice.setSelectedId (keep, juce::dontSendNotification);
         }
         void resized() override
         {
@@ -3640,6 +3840,7 @@ private:
             row = sample.removeFromTop (70).reduced (6, 0);
             gain.setBounds (row.removeFromLeft (64)); row.removeFromLeft (6);
             reverse.setBounds (row.withSizeKeepingCentre (row.getWidth(), 22));
+            envelopeChoice.setBounds (clipBox().reduced (8, 0).removeFromBottom (32).withTrimmedBottom (8));
         }
         void paint (juce::Graphics& g) override
         {
@@ -3706,6 +3907,11 @@ private:
                     juce::Path handle; handle.addTriangle (x - 5, (float) wave.getY(), x + 5, (float) wave.getY(), x, (float) wave.getY() + 8);
                     g.fillPath (handle);
                 }
+            }
+            if (envelope.active())
+            {
+                const auto [first, length] = envelopeBeats();
+                envelope.paint (g, envelopeArea(), clip, [this] (double b) { return envelopeX (b); }, first + length);
             }
             g.setColour (line); g.drawRect (wave);
         }
@@ -3783,7 +3989,7 @@ private:
         // Double-clicking the warped waveform adds a marker where it is, or removes the one there.
         void mouseDoubleClick (const juce::MouseEvent& e) override
         {
-            if (! markersEditable() || ! waveBounds().contains (e.getPosition())) return;
+            if (envelope.active() || ! markersEditable() || ! waveBounds().contains (e.getPosition())) return;
             auto markers = clip.warpMarkers;
             if (const auto hit = markerAt (e.position.x); hit >= 0) markers.erase (markers.begin() + hit);
             else
@@ -3798,6 +4004,13 @@ private:
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
+            // With an envelope shown, the waveform edits it instead of the warp markers.
+            if (envelope.active() && waveBounds().contains (e.getPosition()))
+            {
+                const auto [first, length] = envelopeBeats();
+                envelope.mouseDown (e, envelopeArea(), clip, [this] (double b) { return envelopeX (b); }, [this] (float x) { return envelopeBeat (x); }, first + length);
+                editingEnvelope = true; repaint(); return;
+            }
             draggedMarker = markersEditable() && waveBounds().contains (e.getPosition()) ? markerAt (e.position.x) : -1;
             if (draggedMarker >= 0) { owner.session.beginEditGesture ("Move warp marker"); gesture = true; repaint(); }
         }
@@ -3815,6 +4028,12 @@ private:
         // Dragging a marker moves its beat between its neighbours, snapped to the grid unless Alt is held.
         void mouseDrag (const juce::MouseEvent& e) override
         {
+            if (editingEnvelope)
+            {
+                const auto [first, length] = envelopeBeats();
+                envelope.mouseDrag (e, envelopeArea(), [this] (float x) { return envelopeBeat (x); }, first + length);
+                repaint(); return;
+            }
             if (draggedMarker < 0 || draggedMarker >= (int) clip.warpMarkers.size()) return;
             auto markers = clip.warpMarkers;
             auto beat = xBeat (e.position.x);
@@ -3828,11 +4047,36 @@ private:
         }
         void mouseUp (const juce::MouseEvent&) override
         {
+            if (editingEnvelope) { editingEnvelope = false; envelope.mouseUp (clip); repaint(); return; }
             if (gesture) { owner.session.endEditGesture(); gesture = false; }
             draggedMarker = -1; repaint();
         }
+        // The clip's content beats over the waveform, where its envelopes' points lie: from its
+        // offset into the content, for its length.
+        std::pair<double, double> envelopeBeats() const
+        {
+            const auto first = owner.beatsAt (clip.start) - owner.beatsAt (std::max (0.0, clip.start - clip.sourceOffset));
+            return { first, std::max (1e-6, owner.beatsAt (clip.start + clip.length) - owner.beatsAt (clip.start)) };
+        }
+        juce::Rectangle<float> envelopeArea() const { return waveBounds().reduced (0, 6).toFloat(); }
+        float envelopeX (double beat) const
+        {
+            const auto [first, length] = envelopeBeats(); const auto area = envelopeArea();
+            return area.getX() + (float) ((beat - first) / length) * area.getWidth();
+        }
+        double envelopeBeat (float x) const
+        {
+            const auto [first, length] = envelopeBeats(); const auto area = envelopeArea();
+            return first + (x - area.getX()) / std::max (1.0f, area.getWidth()) * length;
+        }
+        EnvelopeEditor envelope { owner };
+        juce::ComboBox envelopeChoice;
     private:
         int draggedMarker = -1;
+        bool editingEnvelope = false;
+        static constexpr int envelopeChoiceBase = 1000;
+        std::vector<EnvelopeChoice> envelopeList;
+        juce::StringArray envelopeSignature;
     };
 
     class PianoRoll final : public juce::Component, private juce::ScrollBar::Listener
@@ -3857,7 +4101,9 @@ private:
             {
                 const auto id = laneChoice.getSelectedId();
                 laneView.setVisible (id != hiddenLane);
-                if (id != hiddenLane) laneView.lane = laneForChoice (id);
+                laneView.envelope.choice.reset();
+                if (juce::isPositiveAndBelow (id - envelopeChoiceBase, (int) envelopeChoices.size())) laneView.envelope.choice = envelopeChoices[(size_t) (id - envelopeChoiceBase)];
+                else if (id != hiddenLane) laneView.lane = laneForChoice (id);
                 resized(); repaint();
             };
             refreshLaneChoices (nullptr);
@@ -4304,7 +4550,9 @@ private:
     class LaneView final : public juce::Component
     {
     public:
-        explicit LaneView (PianoRoll& r) : roll (r) { setName ("Controller lane"); }
+        explicit LaneView (PianoRoll& r) : envelope (r.owner), roll (r) { setName ("Controller lane"); }
+        // A clip envelope when one is chosen; otherwise the lane below.
+        EnvelopeEditor envelope;
         // -1 shows velocities and chanceLane note chances; otherwise a controller number or
         // Session::pitchBendLane / channelPressureLane.
         int lane = -1;
@@ -4315,7 +4563,7 @@ private:
             g.setColour (line); g.drawHorizontalLine (0, 0.0f, (float) getWidth());
             g.setColour (raised); g.fillRect (0, 1, keysWidth, getHeight() - 1);
             g.setColour (muted); g.setFont (font (9.5f, true));
-            g.drawFittedText (laneName (lane).toUpperCase(), juce::Rectangle<int> (4, 4, keysWidth - 6, getHeight() - 8), juce::Justification::topLeft, 3);
+            g.drawFittedText ((envelope.active() ? envelope.label() : laneName (lane)).toUpperCase(), juce::Rectangle<int> (4, 4, keysWidth - 6, getHeight() - 8), juce::Justification::topLeft, 3);
             const auto* clip = roll.owner.currentMidiClip();
             if (clip == nullptr) return;
             const auto area = plot();
@@ -4325,8 +4573,10 @@ private:
                 g.setColour (std::fmod (beat, 4.0) == 0 ? juce::Colour (0xff4e4e4e) : juce::Colour (0xff353535));
                 g.drawVerticalLine ((int) x (beat), (float) area.getY(), (float) area.getBottom());
             }
-            if (lane == Session::pitchBendLane) { g.setColour (juce::Colour (0xff3d3d3d)); g.drawHorizontalLine ((int) y (0), (float) area.getX(), (float) area.getRight()); }
-            if (lane < 0)
+            if (envelope.active()) envelope.paint (g, area.toFloat(), *clip, [this] (double b) { return x (b); }, clip->lengthBeats);
+            else if (lane == Session::pitchBendLane) { g.setColour (juce::Colour (0xff3d3d3d)); g.drawHorizontalLine ((int) y (0), (float) area.getX(), (float) area.getRight()); }
+            if (envelope.active()) {}
+            else if (lane < 0)
             {
                 for (const auto& note : notes())
                 {
@@ -4373,6 +4623,11 @@ private:
             dragged = -1; velocityNote.clear(); preview.reset(); previewNotes.clear(); drawing = false;
             if (clip == nullptr || e.x < keysWidth) return;
             clipId = clip->id;
+            if (envelope.active())
+            {
+                envelope.mouseDown (e, plot().toFloat(), *clip, [this] (double b) { return x (b); }, [this] (float px) { return beatAt (px); }, clip->lengthBeats);
+                repaint(); return;
+            }
             if (lane < 0)
             {
                 // The nearest velocity bar within reach; selected notes follow it together.
@@ -4398,6 +4653,11 @@ private:
         }
         void mouseDrag (const juce::MouseEvent& e) override
         {
+            if (envelope.active())
+            {
+                if (const auto* clip = roll.owner.currentMidiClip()) envelope.mouseDrag (e, plot().toFloat(), [this] (float px) { return beatAt (px); }, clip->lengthBeats);
+                repaint(); return;
+            }
             if (lane < 0) { if (velocityNote.isNotEmpty()) dragVelocity (e); return; }
             if (! preview) return;
             if (drawing) { paintPoint (e); repaint(); return; }
@@ -4411,6 +4671,11 @@ private:
         }
         void mouseUp (const juce::MouseEvent&) override
         {
+            if (envelope.active())
+            {
+                if (const auto* clip = roll.owner.currentMidiClip()) envelope.mouseUp (*clip);
+                repaint(); return;
+            }
             if (lane < 0)
             {
                 if (velocityNote.isNotEmpty() && ! previewNotes.empty())
@@ -4553,9 +4818,21 @@ private:
             const auto common = [] (int lane) { return std::find (std::begin (commonLanes), std::end (commonLanes), lane) != std::end (commonLanes); };
             juce::Array<int> others;
             if (clip != nullptr) for (const auto& l : clip->controllers) if (! common (l.controller)) others.add (l.controller);
-            if (others == laneOthers && laneChoice.getNumItems() > 0) return;
-            laneOthers = others;
-            const auto keep = laneChoice.getSelectedId();
+            const auto* track = owner.currentTrack();
+            const auto envelopes = clip != nullptr && track != nullptr ? EnvelopeEditor::choices (owner, *track, owner.selectedLauncherClipId.isNotEmpty()) : std::vector<EnvelopeChoice>();
+            juce::StringArray signature;
+            for (const auto& c : envelopes) signature.add (c.target.pluginId + "|" + juce::String (c.target.parameter) + "|" + juce::String ((int) c.mode) + "|" + c.device + "|" + c.control);
+            if (others == laneOthers && signature == envelopeSignature && laneChoice.getNumItems() > 0) return;
+            laneOthers = others; envelopeSignature = signature; envelopeChoices = envelopes;
+            auto keep = laneChoice.getSelectedId();
+            // A shown envelope stays chosen while its control remains; otherwise the lane shows velocities.
+            if (laneView.envelope.choice)
+            {
+                const auto shown = *laneView.envelope.choice;
+                const auto at = std::find_if (envelopes.begin(), envelopes.end(), [&] (const auto& c) { return c.target == shown.target && c.mode == shown.mode; });
+                keep = at != envelopes.end() ? envelopeChoiceBase + (int) (at - envelopes.begin()) : 1;
+                if (at == envelopes.end()) laneView.envelope.choice.reset();
+            }
             laneChoice.clear (juce::dontSendNotification);
             laneChoice.addItem ("Velocity", 1); laneChoice.addItem ("Chance", chanceChoice);
             for (int i = 0; i < (int) std::size (commonLanes); ++i) laneChoice.addItem (LaneView::laneName (commonLanes[i]), 2 + i);
@@ -4563,10 +4840,29 @@ private:
             juce::PopupMenu more;
             for (int cc = 0; cc < 120; ++cc) if (! common (cc) && ! others.contains (cc)) more.addItem (100 + cc, "CC " + juce::String (cc));
             laneChoice.getRootMenu()->addSubMenu ("Other controller", more);
+            // Clip envelopes, by device, for modulation and, on Session clips, automation.
+            for (const auto mode : { Session::EnvelopeMode::modulation, Session::EnvelopeMode::automation })
+            {
+                juce::PopupMenu modeMenu, deviceMenu;
+                juce::String device;
+                for (size_t i = 0; i < envelopes.size(); ++i)
+                {
+                    if (envelopes[i].mode != mode) continue;
+                    if (envelopes[i].device != device && deviceMenu.getNumItems() > 0) { modeMenu.addSubMenu (device, deviceMenu); deviceMenu = {}; }
+                    device = envelopes[i].device;
+                    deviceMenu.addItem (envelopeChoiceBase + (int) i, envelopes[i].control);
+                }
+                if (deviceMenu.getNumItems() > 0) modeMenu.addSubMenu (device, deviceMenu);
+                if (modeMenu.getNumItems() > 0)
+                    laneChoice.getRootMenu()->addSubMenu (mode == Session::EnvelopeMode::modulation ? "Envelope" : "Envelope automation", modeMenu);
+            }
             laneChoice.addSeparator(); laneChoice.addItem ("Hide lane", hiddenLane);
             laneChoice.setSelectedId (keep > 0 && laneChoice.indexOfItemId (keep) >= 0 ? keep : 1, juce::dontSendNotification);
         }
         juce::Array<int> laneOthers;
+        static constexpr int envelopeChoiceBase = 1000;
+        std::vector<EnvelopeChoice> envelopeChoices;
+        juce::StringArray envelopeSignature;
         juce::Rectangle<float> noteBounds (const Session::MidiNoteInfo& note) const
         {
             return { (float) (keysWidth + (note.startBeat - viewBeat) * pixelsPerBeat), (float) (gridTop + (topPitch - note.pitch) * rowHeight + 1), (float) juce::jmax (3.0, note.lengthBeats * pixelsPerBeat), (float) rowHeight - 2 };
@@ -9938,6 +10234,93 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(state.tracks[0].clips.size()==3 && state.tracks[0].clips[(size_t)selectedClip].id!=splitAudio,
         "production duplicate command selects a fresh clip identity");
     session.undo();session.undo();refresh();check(state.tracks[0].clips.size()==1,"two undo steps restore split and duplicate");
+    {
+        // Clip envelopes: the audio clip view's chooser shows one over the waveform, where clicks add
+        // and drag points and a double-click deletes one; a MIDI clip's show in the piano roll's lane.
+        const auto findItem = [] (juce::ComboBox& box, const juce::String& menu, const juce::String& text)
+        {
+            int id = 0;
+            std::function<void (const juce::PopupMenu&, bool)> visit = [&] (const juce::PopupMenu& m, bool inside)
+            {
+                for (juce::PopupMenu::MenuItemIterator it (m); it.next();)
+                {
+                    const auto& item = it.getItem();
+                    if (item.subMenu != nullptr) visit (*item.subMenu, inside || item.text == menu);
+                    else if (inside && item.text == text && id == 0) id = item.itemID;
+                }
+            };
+            visit (*box.getRootMenu(), false);
+            return id;
+        };
+        const auto now = juce::Time::getCurrentTime();
+        const auto press = [&] (juce::Component& c, juce::Point<float> p, juce::Point<float> down, bool dragged, int clicks)
+        {
+            return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                     &c, &c, now, down, now, clicks, dragged);
+        };
+        showArrangementView(); selectedTrack = 0; selectedClip = 0; refresh();
+        const auto clipPoint = canvas.clipBounds (state.tracks[0].clips[0], 0).getCentre();
+        canvas.mouseDoubleClick (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), clipPoint, juce::ModifierKeys(), 1.0f, 0, 0, 0, 0,
+                                                   &canvas, &canvas, now, clipPoint, now, 2, false));
+        auto* chooser = dynamic_cast<juce::ComboBox*> (findNamed (audioClipView, "Clip envelope"));
+        const int volumeItem = chooser != nullptr ? findItem (*chooser, "Modulation", "Track Volume") : 0;
+        check (audioClipView.isVisible() && chooser != nullptr && chooser->isVisible() && volumeItem > 0 && findItem (*chooser, "Automation", "Track Volume") == 0,
+               "the audio clip view offers Arrangement clips modulation envelopes only");
+        chooser->setSelectedId (volumeItem, juce::sendNotificationSync);
+        const auto area = audioClipView.envelopeArea();
+        const auto [first, length] = audioClipView.envelopeBeats();
+        const juce::Point<float> at { area.getX() + area.getWidth() / 2, area.getBottom() - area.getHeight() * .25f };
+        audioClipView.mouseDown (press (audioClipView, at, at, false, 1)); audioClipView.mouseUp (press (audioClipView, at, at, false, 1)); refresh();
+        const auto envelopes = [&] { return state.tracks[0].clips[0].envelopes; };
+        check (envelopes().size() == 1 && envelopes()[0].target == Session::EnvelopeTarget { {}, 0 } && envelopes()[0].mode == Session::EnvelopeMode::modulation
+                   && envelopes()[0].points.size() == 1 && std::abs (envelopes()[0].points[0].beat - (first + length / 2)) < length / area.getWidth() * 2
+                   && std::abs (envelopes()[0].points[0].value - .25f) < .02f,
+               "clicking the waveform adds a volume modulation point where it is");
+        const juce::Point<float> from { area.getX() + area.getWidth() * .75f, area.getBottom() - area.getHeight() * .5f }, to = from - juce::Point<float> (0, area.getHeight() * .25f);
+        audioClipView.mouseDown (press (audioClipView, from, from, false, 1)); audioClipView.mouseDrag (press (audioClipView, to, from, true, 1));
+        audioClipView.mouseUp (press (audioClipView, to, from, true, 1)); refresh();
+        check (envelopes().size() == 1 && envelopes()[0].points.size() == 2 && std::abs (envelopes()[0].points[1].value - .75f) < .02f, "dragging places a second point at the pointer");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("clip-envelope.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (createComponentSnapshot (getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        audioClipView.mouseDown (press (audioClipView, at, at, false, 2)); audioClipView.mouseUp (press (audioClipView, at, at, false, 2)); refresh();
+        check (envelopes().size() == 1 && envelopes()[0].points.size() == 1 && std::abs (envelopes()[0].points[0].value - .75f) < .02f, "double-clicking a point deletes it");
+        session.undo(); session.undo(); session.undo(); refresh();
+        check (envelopes().empty(), "each edit is one undo step");
+        chooser->setSelectedId (1, juce::sendNotificationSync); closeClipView();
+
+        check (session.addMidiTrack ("Envelope").wasOk(), "add a MIDI track for clip envelopes"); refresh();
+        const int lane = (int) state.tracks.size() - 1;
+        selectTrack (lane); refresh();
+        check (session.addMidiClip (currentTrack()->id, 0, 4).wasOk(), "a MIDI clip to modulate"); refresh();
+        selectedClip = 0; openPianoRoll(); refresh(); pianoRoll.fit();
+        auto* laneBox = dynamic_cast<juce::ComboBox*> (findNamed (pianoRoll, "Lane"));
+        auto* laneComponent = findNamed (pianoRoll, "Controller lane");
+        const int panItem = laneBox != nullptr ? findItem (*laneBox, "Envelope", "Track Pan") : 0;
+        check (laneBox != nullptr && laneComponent != nullptr && panItem > 0, "the piano roll's lane chooser offers clip envelopes");
+        laneBox->setSelectedId (panItem, juce::sendNotificationSync);
+        const auto plotTop = 6.0f, plotBottom = (float) laneComponent->getHeight() - 4;
+        const juce::Point<float> point { 55.0f + (float) (laneComponent->getWidth() - 55) / 2, plotBottom - (plotBottom - plotTop) * .75f };
+        laneComponent->mouseDown (press (*laneComponent, point, point, false, 1)); laneComponent->mouseUp (press (*laneComponent, point, point, false, 1)); refresh();
+        const auto midi = currentMidiClip()->envelopes;
+        check (laneComponent->isVisible() && midi.size() == 1 && midi[0].target == Session::EnvelopeTarget { {}, 1 } && midi[0].points.size() == 1
+                   && std::abs (midi[0].points[0].value - .5f) < .03f,
+               "clicking the lane adds a pan modulation point to the MIDI clip");
+        session.undo(); refresh();
+        check (currentMidiClip()->envelopes.empty(), "undo removes it");
+        laneBox->setSelectedId (1, juce::sendNotificationSync); closeClipView();
+        check (session.addMidiClipToSlot (currentTrack()->id, 0, 4).wasOk(), "a Session MIDI clip"); refresh();
+        showSessionView(); selectLauncherSlot (lane, 0); openPianoRoll(); refresh();
+        check (findItem (*laneBox, "Envelope automation", "Track Volume") > 0, "a Session clip's lane offers automation envelopes too");
+        closeClipView(); showArrangementView(); refresh();
+        check (session.removeTrack (lane).wasOk(), "remove the envelope track"); refresh();
+        selectTrack (0); refresh();
+    }
     {
         // Audio clip view: double-click opens it in the detail area with warp, tempo and gain.
         showArrangementView(); selectedTrack = 0; selectedClip = 0; refresh();

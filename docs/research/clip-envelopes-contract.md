@@ -17,6 +17,10 @@ Halftrack's clip envelopes follow the reference's clip envelopes for mixer and d
   - A linked envelope follows the clip, its position and its loop.
   - An unlinked one loops on its own length of 1 to 1024 beats from the clip's start.
   - A control can have a modulation envelope and an automation envelope at once, each with its own points and timing.
+- **The editor.**
+  - In the clip view, an audio clip's Envelope chooser, at the foot of its Clip box, picks a control by device, under Modulation and, for Session clips, Automation. The chosen envelope is drawn over the waveform.
+  - A MIDI clip's envelopes are chosen in the piano roll's lane chooser, under Envelope and Envelope automation, and drawn in the lane.
+  - Clicking adds a point and drags it, and double-clicking or right-clicking a point deletes it. Each edit is one undo step.
 - **Editing.** `setClipEnvelope` sets one envelope as one undo step, and no points removes it. Envelopes are kept when a clip is split, duplicated, saved and reopened. A duplicated track's clips modulate the duplicate's own devices. Malformed envelope values in a project file are refused before the open project is replaced.
 
 ## Engine changes
@@ -42,9 +46,15 @@ Native devices read a modulated control's value even when no curve sets it. See 
 - reopening playing the same, and a doubled volume modulation in a saved file refused while keeping the open project;
 - a Session clip automating its track's volume to −12 dB, measured live against the same clip without it.
 
+The UI suite:
+- picks Track Volume in an audio clip's Envelope chooser, which offers an Arrangement clip modulation only;
+- clicks the waveform to add a point at the pointer's beat and level, drags out a second point and double-clicks the first to delete it, undoing each;
+- adds a pan modulation point to a MIDI clip from the piano roll's lane;
+- checks that a Session clip's lane also offers automation envelopes.
+
 ## Not yet covered
 
-- Clip envelopes have no editor in the clip view yet.
+- The editor sets no unlinked loop, has no draw mode, and does not show the reference's separate device and control choosers.
 - Audio clips' own envelopes (clip gain, pan, transposition and sample offset) are missing.
 - Sends, devices inside racks, and the reference's own envelope scaling are unmeasured.
 - A Session clip's automation stops applying when the clip stops; whether the reference keeps the last value is unmeasured.
