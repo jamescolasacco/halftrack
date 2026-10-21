@@ -7304,6 +7304,8 @@ private:
     void timerCallback() override
     {
         pollBrowserScan(); pollBrowserIndex(); releaseComputerKeys();
+        // An audio device that disappeared or came back says so for ten seconds.
+        if (const auto notice = session.takeDeviceNotice(); notice.isNotEmpty()) { status = notice; statusFrames = 240; repaint(); }
         if (statusFrames > 0 && --statusFrames == 0) status.clear();
         ++ticks;
         if (ticks % insertBlinkTicks == 0) canvas.repaint(); // The insert marker flashes.

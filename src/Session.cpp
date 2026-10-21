@@ -2090,13 +2090,18 @@ struct Session::Impl
         // JUCE treats a nonexistent base path as a directory when making relative paths.
         // Materialise the scratch edit location before Tracktion stores source references.
         scratch.getChildFile ("Untitled.halftrack").create();
-        if (useDevices) { deviceStops.attached = true; engine.getDeviceManager().deviceManager.addAudioCallback (&deviceStops); }
+        if (useDevices)
+        {
+            deviceStops.attached = true; engine.getDeviceManager().deviceManager.addAudioCallback (&deviceStops);
+            engine.getDeviceManager().deviceManager.addChangeListener (&deviceWatch); deviceChanged();
+        }
     }
     ~Impl()
     {
         // Removing the callback reports a device stop; the session is closing, so no take ends here.
         deviceStops.attached = false;
         engine.getDeviceManager().deviceManager.removeAudioCallback (&deviceStops);
+        engine.getDeviceManager().deviceManager.removeChangeListener (&deviceWatch);
         gesture.reset();
         meters.clear();
         grooveWatcher.watch ({});
@@ -3600,8 +3605,12 @@ struct Session::Impl
         }
         // Playback that the restart interrupted carries on once the device runs again, as it does
         // after an audio settings change in the reference. Takes are kept and not resumed.
-        void audioDeviceAboutToStart (juce::AudioIODevice*) override
-        { if (std::exchange (resumePlayback, false)) impl.deviceRestart.watch(); }
+        void audioDeviceAboutToStart (juce::AudioIODevice* device) override
+        {
+            // A fallback device standing in for a missing one does not resume playback.
+            const bool chosen = device == nullptr || impl.chosenDevice.isEmpty() || device->getName() == impl.chosenDevice;
+            if (std::exchange (resumePlayback, false) && chosen) impl.deviceRestart.watch();
+        }
         void audioDeviceStopped() override
         {
             if (juce::MessageManager::existsAndIsCurrentThread() && attached && impl.edit != nullptr)
@@ -3900,6 +3909,51 @@ struct Session::Impl
     std::unique_ptr<te::Edit::UndoTransactionInhibitor> gesture;
     mutable std::map<String, std::unique_ptr<Meter>> meters;
     DeviceRestart deviceRestart { *this };
+    // The audio device the user chose. When it disappears the device manager falls back to another,
+    // so playback stops instead of moving there; when it returns it is reopened.
+    struct DeviceWatch final : juce::ChangeListener
+    {
+        explicit DeviceWatch (Impl& i) : impl (i) {}
+        void changeListenerCallback (juce::ChangeBroadcaster*) override { impl.deviceChanged(); }
+        Impl& impl;
+    } deviceWatch { *this };
+    juce::AudioDeviceManager::AudioDeviceSetup chosenSetup;
+    String chosenDevice, deviceNotice;
+    bool chosenMissing = false;
+    bool chosenAvailable() const
+    {
+        auto* type = engine.getDeviceManager().deviceManager.getCurrentDeviceTypeObject();
+        return type != nullptr && (type->getDeviceNames (false).contains (chosenDevice) || type->getDeviceNames (true).contains (chosenDevice));
+    }
+    void deviceChanged()
+    {
+        auto& devices = engine.getDeviceManager().deviceManager;
+        auto* current = devices.getCurrentAudioDevice();
+        const auto name = current != nullptr ? current->getName() : String();
+        if (chosenDevice.isEmpty() || (! chosenMissing && chosenAvailable()))
+        {
+            // The first device, or one chosen while the previous choice is still there.
+            if (name.isNotEmpty()) { chosenDevice = name; chosenSetup = devices.getAudioDeviceSetup(); }
+            return;
+        }
+        if (! chosenAvailable())
+        {
+            if (chosenMissing) return;
+            chosenMissing = true;
+            deviceRestart.stopTimer(); deviceStops.resumePlayback = false;
+            if (edit != nullptr && edit->getTransport().isPlaying()) owner.stop();
+            deviceNotice = "\"" + chosenDevice + "\" was disconnected. Playback stopped"
+                         + (name.isNotEmpty() ? "; audio goes to \"" + name + "\" until \"" + chosenDevice + "\" returns." : String ("; it is reopened when it returns."));
+            owner.sendChangeMessage();
+            return;
+        }
+        // The chosen device is back.
+        chosenMissing = false;
+        if (name == chosenDevice) return;
+        const auto error = devices.setAudioDeviceSetup (chosenSetup, true);
+        deviceNotice = error.isEmpty() ? "\"" + chosenDevice + "\" is connected again." : "\"" + chosenDevice + "\" is back but could not be reopened: " + error;
+        owner.sendChangeMessage();
+    }
     DeviceStopWatch deviceStops { *this };
 };
 
@@ -8606,6 +8660,7 @@ Result Session::setTrackArmed (int index, bool value)
     for (auto* track : changing) te::getDestination (*impl->input (*track), *track, 0)->recordEnabled.setValue (value, &impl->edit->getUndoManager());
     impl->finishInputChange(monitored);impl->changed(); return Result::ok();
 }
+juce::String Session::takeDeviceNotice() { return std::exchange (impl->deviceNotice, {}); }
 Result Session::autoArmTrack (const String& id)
 {
     if (impl->exporting || impl->anyRecording() || id == impl->autoArmed) return Result::ok();

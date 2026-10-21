@@ -602,10 +602,14 @@ The keyboard starts off in each session and is not remembered. Its velocity step
 
 When a Session made with the synthetic test device has a second virtual MIDI input, an Arrangement MIDI take in the punch suite starts about 1.3 seconds late and loses its first note. That second input was the computer keyboard's, and an unused virtual input added in the test does the same.
 
-On record, the engine waits up to 100 ms for the audio thread to process a block. The synthetic device runs only when a test pumps it, so the wait times out and the punch-in is computed from an older sync point. A running audio device processes a block within that wait, so real recordings should not be affected, but this is not yet measured on hardware.
+On record, the engine waits up to 100 ms for the audio thread to process a block. The synthetic device runs only when a test pumps it, so the wait times out and the punch-in is computed from an older sync point. A running audio device processes a block within that wait. On a MOTU M4 a MIDI take with a second virtual input started at 0.000 s with both notes, so real recordings are not affected.
 
 Test Sessions therefore make the Computer Keyboard input only when the keyboard is first turned on. Whether the stale sync point can affect a stalled real device is open.
 
 ### Auto-Arm and single-track inputs
 
 The reference gives every MIDI track All Ins and arms the selected one. In Halftrack, each input feeds one track, so Auto-Arm lends All MIDI Ins to the selected track only while no other track holds it, and takes it back on release. Whether the reference auto-arms tracks whose input is a specific port has not been compared.
+
+### Audio device chosen while another is missing
+
+While the chosen interface is missing, choosing a different device by hand is not yet told apart from the system's fallback. So the chosen interface is still reopened when it returns. Whether the reference switches back in that case is unmeasured.

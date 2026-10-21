@@ -93,6 +93,8 @@ int runParameterIdentityTests (const juce::File&);
 int runComputerKeyboardTests (const juce::File&);
 int runKeyMapTests (const juce::File&);
 int runAutoArmTests (const juce::File&);
+int runDeviceLossTests (const juce::File&);
+int runHardwareCheck (const juce::File&, const juce::String& deviceName, const juce::String& mode);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -304,10 +306,25 @@ public:
             setApplicationReturnValue (runKeyMapTests (juce::File (args[i + 1])));
             quit(); return;
         }
+        // A manual check on a real audio interface, never run by CTest (see tests/HardwareCheck.cpp).
+        if (args.contains ("--hardware-check"))
+        {
+            const int i = args.indexOf ("--hardware-check");
+            const auto device = args[i + 2].isNotEmpty() && ! args[i + 2].startsWith ("-") && args[i + 2] != "loopback" && args[i + 2] != "unplug" ? args[i + 2] : juce::String ("M4");
+            const auto mode = args.contains ("loopback") ? juce::String ("loopback") : args.contains ("unplug") ? juce::String ("unplug") : juce::String();
+            setApplicationReturnValue (runHardwareCheck (juce::File (args[i + 1]), device, mode));
+            quit(); return;
+        }
         if (args.contains ("--self-test-auto-arm"))
         {
             const int i = args.indexOf ("--self-test-auto-arm");
             setApplicationReturnValue (runAutoArmTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-device-loss"))
+        {
+            const int i = args.indexOf ("--self-test-device-loss");
+            setApplicationReturnValue (runDeviceLossTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-large-session"))

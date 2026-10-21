@@ -888,6 +888,10 @@ public:
     void cancelExport();
 
     juce::AudioDeviceManager& audioDeviceManager();
+    // When the audio device in use disappears (an unplugged interface), playback stops instead of
+    // moving to the device the system falls back to, and that device is reopened when it returns.
+    // Each such change leaves a notice for the user, returned once.
+    juce::String takeDeviceNotice();
     // The file type and bit depth audio takes are written in, for every input. The inputs keep it
     // in the engine's settings, so it lasts between launches.
     enum class RecordingFileType { wav, aiff, flac };

@@ -1494,3 +1494,12 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **Moving and ending it.** Selecting another track moves the arm. Arming by hand ends it. It is not an undo step.
 
 See [the contract](research/computer-keyboard-contract.md#auto-arm).
+
+## Audio device loss and a hardware check — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt`, `tests/DeviceLossTests.cpp` (new) and `tests/HardwareCheck.cpp` (new, manual), with documentation.
+
+- **Device loss.** When the chosen audio interface disappears, playback stops instead of moving to the system's fallback output, and a notice says so. The interface is reopened when it returns.
+- **A hardware check.** A manual `--hardware-check` mode measures a real interface without touching the user's settings or opening inputs. It was run on a MOTU M4: output timing and level, an unplug and replug, and a MIDI take showing that the late start seen in a test was the simulated device's.
+
+See [the contract](research/audio-hardware-contract.md).
