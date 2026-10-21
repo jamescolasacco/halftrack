@@ -102,6 +102,7 @@ private:
     effects::ThreeBandEq eqThree;
     effects::ChannelEq channelEq;
     effects::Pedal pedal;
+    effects::BeatRepeat beatRepeat;
     effects::GlueCompressor glue;
     effects::FrequencyShifter shifter;
     int ramp = 0;

@@ -357,3 +357,14 @@ The manual does not give these, so they are simplest-default choices pending ref
 - **EQ:** ±12 dB bands, the resonance slope, and a +6 dB Sub shelf.
 - **Output:** −36 to +12 dB, defaulting to −12 dB.
 
+### Beat Repeat defaults
+
+These are simplest-default choices pending reference measurement:
+
+- **Slices.** The first slice is the live input. Gate mode includes it.
+- **Pitch.** Pitch Decay lowers each further repeat by up to 12 semitones.
+- **Variation.** It moves the grid by up to Variation/2.5 steps.
+- **Timing.** Beats are counted at the first tempo in 4/4.
+- **Randomness.** Random choices are seeded at reset.
+- **Defaults.** 1 Bar, Gate 8/16, Grid 1/16, Mix, filter off.
+

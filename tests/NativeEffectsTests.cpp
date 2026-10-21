@@ -287,6 +287,12 @@ void limiterTests()
 }
 juce::AudioBuffer<float> engineReference (const juce::AudioBuffer<float>& input, const Settings& settings)
 {
+    if (settings.kind == Kind::beatRepeat)
+    {
+        // Beat Repeat follows the transport, which the render plays from zero; its output does not depend on block size.
+        auto out = input; NativeEffectDSP dsp; dsp.prepare (48000, settings.kind); dsp.configure (settings); dsp.setTimelinePosition (0);
+        dsp.processSamples (out.getWritePointer (0), out.getWritePointer (1), out.getNumSamples()); return out;
+    }
     if (settings.kind != Kind::limiter) return run (input, settings);
     juce::AudioBuffer<float> padded (2, input.getNumSamples()+48); padded.clear();
     for (int c = 0; c < 2; ++c) padded.copyFrom (c, 0, input, c, 0, input.getNumSamples());

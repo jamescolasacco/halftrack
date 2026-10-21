@@ -524,5 +524,124 @@ void Pedal::tick (double& left, double& right) noexcept
         *channels[c] = x;
     }
 }
+
+void BeatRepeat::prepare (double sampleRate) noexcept
+{
+    rate = sampleRate;
+    for (auto& channel : capture) channel.assign ((size_t) std::ceil (rate * longestSliceSeconds) + 4, 0.0f);
+    reset();
+}
+void BeatRepeat::configure (const float* values, double tempo) noexcept
+{
+    const bool wasHeld = v[0] != 0;
+    std::copy (values, values + v.size(), v.begin());
+    bpm = std::clamp (tempo, 20.0, 999.0);
+    const auto centre = (double) v[12], half = std::pow (2.0, (double) v[13] / 2);
+    for (auto& channel : filter)
+    {
+        channel[0].c = highPassSection (std::max (20.0, centre / half), .70710678118654752, rate);
+        channel[1].c = lowPassSection (std::min (rate * .45, centre * half), .70710678118654752, rate);
+    }
+    if (wasHeld && v[0] == 0 && held) { active = false; held = false; }
+}
+void BeatRepeat::reset() noexcept
+{
+    active = held = synced = false; frame = sliceIndex = 0; random = 0x9e3779b97f4a7c15ull;
+    for (auto& channel : capture) std::fill (channel.begin(), channel.end(), 0.0f);
+    for (auto& channel : filter) for (auto& s : channel) s.clear();
+}
+void BeatRepeat::syncTo (double seconds) noexcept
+{
+    const auto now = seconds * bpm / 60;
+    const auto interval = intervalBeats[(size_t) std::clamp ((int) v[1], 0, 7)];
+    const auto offset = std::fmod ((double) v[2] / 4, interval);
+    // A start, seek or loop jump schedules the next trigger afresh and ends a timed repeat;
+    // steady playback keeps its schedule.
+    const bool jumped = beatStep == 0 || std::abs (now - beat) > beatStep * 2 + 1e-9;
+    beatStep = bpm / 60 / rate;
+    if (jumped)
+    {
+        nextTrigger = std::ceil ((now - offset) / interval - 1e-9) * interval + offset;
+        if (! held) active = false;
+    }
+    beat = now; synced = true;
+}
+double BeatRepeat::nextUniform() noexcept
+{
+    random ^= random << 13; random ^= random >> 7; random ^= random << 17;
+    return (double) (random >> 11) * (1.0 / 9007199254740992.0);
+}
+// The grid for a new slice: the chosen size, or with Variation one up to Variation/2.5 steps away.
+int BeatRepeat::pickGrid() noexcept
+{
+    int grid = std::clamp ((int) v[5], 0, 7);
+    if (v[7] > 0)
+    {
+        const int reach = (int) std::lround (v[7] / 2.5);
+        grid = std::clamp (grid + (int) std::lround ((nextUniform() * 2 - 1) * reach), 0, 7);
+    }
+    if (v[6] != 0 && grid % 2 == 1) grid -= 1; // No Triplets keeps binary sizes.
+    return grid;
+}
+void BeatRepeat::start (double at, bool hold) noexcept
+{
+    active = true; held = hold; frame = 0; sliceIndex = 0; sliceStart = 0; capturedFrames = 0;
+    episodeEnd = at + (double) v[4] / 4;
+    sliceFrames = std::min (gridBeats[(size_t) pickGrid()] * 60 / bpm * rate, (double) capture[0].size() - 2);
+    for (auto& channel : filter) for (auto& s : channel) s.clear();
+}
+void BeatRepeat::tick (double& left, double& right) noexcept
+{
+    const auto mode = (int) v[14];
+    const double in[] { left, right };
+    if (! synced) { if (mode == 2) left = right = 0; active = active && held; return; }
+    const auto interval = intervalBeats[(size_t) std::clamp ((int) v[1], 0, 7)];
+    if (v[0] != 0 && ! held) start (beat, true);
+    else if (! held && beat >= nextTrigger - 1e-9)
+    {
+        if (nextUniform() < v[3]) start (nextTrigger, false);
+        while (nextTrigger <= beat + 1e-9) nextTrigger += interval;
+    }
+    if (active && ! held && beat >= episodeEnd - 1e-9) active = false;
+    if (! active)
+    {
+        if (mode == 2) left = right = 0;
+        beat += beatStep; return;
+    }
+    // Slice boundaries: Auto picks a new size after each repeat, and the 1/4, 1/8 and 1/16 modes at those notes.
+    if (frame - sliceStart >= sliceFrames - 1e-9)
+    {
+        sliceStart += sliceFrames; ++sliceIndex;
+        const auto variationMode = (int) v[8];
+        const bool vary = variationMode == 4 || (variationMode >= 1 && variationMode <= 3
+            && std::fmod (beat + 1e-9, std::array { 1.0, .5, .25 }[(size_t) variationMode - 1]) < beatStep * 1.5);
+        if (vary && v[7] > 0) sliceFrames = std::min (gridBeats[(size_t) pickGrid()] * 60 / bpm * rate, capturedFrames);
+    }
+    const auto within = (double) frame - sliceStart;
+    double out[2];
+    if (sliceIndex == 0)
+    {
+        // The first slice is the input itself, captured as it passes.
+        for (size_t c = 0; c < 2; ++c) { if ((size_t) frame < capture[c].size()) capture[c][(size_t) frame] = (float) in[c]; out[c] = in[c]; }
+        capturedFrames = std::max (capturedFrames, (double) frame + 1);
+    }
+    else
+    {
+        const auto semitones = (double) v[9] - (double) v[10] * 12 * (double) (sliceIndex - 1);
+        const auto read = within * std::pow (2.0, semitones / 12);
+        const auto gain = std::pow (10.0, (double) v[15] / 20) * std::pow (1.0 - (double) v[16], (double) sliceIndex);
+        for (size_t c = 0; c < 2; ++c)
+        {
+            const auto whole = (size_t) read; const auto fraction = read - (double) whole;
+            const auto a = whole < (size_t) capturedFrames ? capture[c][whole] : 0.0f, b = whole + 1 < (size_t) capturedFrames ? capture[c][whole + 1] : a;
+            auto x = (a + (b - a) * fraction) * gain;
+            if (v[11] != 0) x = filter[c][1].tick (filter[c][0].tick (x));
+            out[c] = x;
+        }
+    }
+    if (mode == 0) { left = in[0] + (sliceIndex > 0 ? out[0] : 0); right = in[1] + (sliceIndex > 0 ? out[1] : 0); }
+    else { left = out[0]; right = out[1]; }
+    ++frame; beat += beatStep;
+}
 }
 

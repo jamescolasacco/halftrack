@@ -350,6 +350,95 @@ void pedalTests()
         check (same && worst < 1e-6, "fully dry passes audio unchanged and Output scales exactly");
     }
 }
+// Beat Repeat with the transport running at 120 BPM and 48 kHz: a beat is 24000 samples, a 1/16
+// slice 6000. The input is a unique sequence, so every output sample names the input it repeats.
+juce::AudioBuffer<float> processPlaying (const juce::AudioBuffer<float>& source, const Settings& s, int block = 512)
+{
+    auto out = source; NativeEffectDSP dsp; dsp.prepare (48000, s.kind); dsp.configure (s);
+    for (int start = 0; start < out.getNumSamples(); start += block)
+    {
+        dsp.setTimelinePosition (start / 48000.0);
+        dsp.processSamples (out.getWritePointer (0, start), out.getWritePointer (1, start), std::min (block, out.getNumSamples() - start));
+    }
+    return out;
+}
+void beatRepeatTests()
+{
+    constexpr int bar = 96000, beat = 24000, slice = 6000, frames = 2 * bar;
+    juce::AudioBuffer<float> in (2, frames);
+    for (int n = 0; n < frames; ++n) { const auto x = (float) (((n * 7919LL) % 10007) / 10007.0 - .5) * .5f; in.setSample (0, n, x); in.setSample (1, n, -x); }
+    // Interval 1 Bar, Offset 8/16 (beat 3), Gate 4/16 (one beat) and a 1/16 grid repeat slice 0 of
+    // each bar's third beat four times.
+    const auto timed = [] (float mode, std::initializer_list<std::pair<const char*, float>> more = {})
+    {
+        auto s = with (Kind::beatRepeat, { { "interval", 5 }, { "offset", 8 }, { "gate", 4 }, { "grid", 4 }, { "mixMode", mode } });
+        for (const auto& [key, value] : more) s.values[(size_t) effectParameterIndex (Kind::beatRepeat, key)] = value;
+        return s;
+    };
+    const auto expect = [&] (int mode, int n, double gain = 1, double decay = 0) -> double
+    {
+        const auto x = (double) in.getSample (0, n);
+        const int at = n % bar - 2 * beat;
+        if (at < 0 || at >= beat) return mode == 2 ? 0 : x;
+        const int index = at / slice;
+        const auto repeated = (double) in.getSample (0, n - at + at % slice) * (index == 0 ? 1 : gain * std::pow (1 - decay, index));
+        if (mode == 0) return x + (index > 0 ? repeated : 0);
+        return index == 0 ? x : repeated;
+    };
+    const auto matches = [&] (const juce::AudioBuffer<float>& out, int mode, double gain = 1, double decay = 0)
+    {
+        double worst = 0;
+        for (int n = 0; n < frames; ++n)
+            worst = std::max ({ worst, std::abs (out.getSample (0, n) - expect (mode, n, gain, decay)), std::abs (out.getSample (1, n) + expect (mode, n, gain, decay)) });
+        return worst;
+    };
+    check (matches (processPlaying (in, timed (2)), 2) < 1e-6, "Gate passes only the third beat of each bar: its first sixteenth, four times");
+    check (matches (processPlaying (in, timed (1)), 1) < 1e-6, "Insert keeps the input outside the repeats and mutes it inside");
+    check (matches (processPlaying (in, timed (0)), 0) < 1e-6, "Mix adds the repeats after the captured slice");
+    check (matches (processPlaying (in, timed (0, { { "decay", .5f } })), 0, 1, .5) < 1e-6, "Decay halves each repeat after the last");
+    check (matches (processPlaying (in, timed (1, { { "volumeDb", -6 } })), 1, std::pow (10.0, -6 / 20.0)) < 1e-6, "Volume scales the repeats");
+    check (matches (processPlaying (in, timed (0, { { "chance", 0 } })), 2) > .1 && matches (processPlaying (in, timed (1, { { "chance", 0 } })), 1) > .01
+           && [&] { const auto dry = processPlaying (in, timed (1, { { "chance", 0 } })); double worst = 0;
+                    for (int n = 0; n < frames; ++n) worst = std::max (worst, (double) std::abs (dry.getSample (0, n) - in.getSample (0, n))); return worst < 1e-7; } (),
+           "Chance 0 never repeats");
+    check (matches (processPlaying (in, timed (2), 333), 2) < 1e-6, "the repeats land on the same samples with any block size");
+    {
+        // A half-chance pass repeats some bars and not others, and the same render repeats its choices.
+        const auto quarter = with (Kind::beatRepeat, { { "interval", 3 }, { "gate", 1 }, { "grid", 4 }, { "mixMode", 2 }, { "chance", .5f } });
+        const auto a = processPlaying (in, quarter), b = processPlaying (in, quarter);
+        int repeated = 0;
+        for (int q = 0; q < frames / beat; ++q) if (a.getMagnitude (0, q * beat, slice) > 0) ++repeated;
+        bool same = true; for (int n = 0; n < frames; ++n) same = same && a.getSample (0, n) == b.getSample (0, n);
+        check (repeated > 0 && repeated < frames / beat && same, "Chance 50% repeats some beats and not others, the same way in each render");
+    }
+    {
+        const auto held = processPlaying (in, with (Kind::beatRepeat, { { "repeat", 1 }, { "grid", 4 }, { "mixMode", 2 } }));
+        double worst = 0;
+        for (int n = 0; n < frames; ++n) worst = std::max (worst, (double) std::abs (held.getSample (0, n) - in.getSample (0, n % slice)));
+        check (worst < 1e-6, "the Repeat switch repeats the first slice for as long as it is on");
+    }
+    {
+        const auto low = processPlaying (in, timed (2, { { "pitch", -12 } }));
+        double worst = 0;
+        for (int n = 0; n < frames; ++n)
+        {
+            const int at = n % bar - 2 * beat;
+            if (at < slice || at >= beat) continue;
+            const auto read = (at % slice) * .5;
+            const int start = n - at, whole = (int) read;
+            const auto a = in.getSample (0, start + whole), b = in.getSample (0, start + whole + 1);
+            worst = std::max (worst, std::abs (low.getSample (0, n) - (a + (b - a) * (read - whole))));
+        }
+        check (worst < 1e-6, "Pitch -12 plays the repeats an octave down, at half speed through the slice");
+    }
+    {
+        // Stopped, Beat Repeat passes the input in Mix and Insert, and nothing in Gate.
+        const auto mixed = process (in, timed (0)), gated = process (in, timed (2));
+        double worst = 0;
+        for (int n = 0; n < frames; ++n) worst = std::max (worst, (double) std::abs (mixed.getSample (0, n) - in.getSample (0, n)));
+        check (worst < 1e-7 && gated.getMagnitude (0, frames) == 0, "stopped, it passes the input in Mix and nothing in Gate");
+    }
+}
 void eqThreeTests()
 {
     for (int steep = 0; steep < 2; ++steep)
@@ -424,6 +513,6 @@ void shifterTests()
 void runExtendedEffectsTests()
 {
     saturatorTests(); overdriveTests(); autoFilterTests(); autoPanTests(); modulatedDelayTests();
-    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); glueTests(); shifterTests();
+    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); beatRepeatTests(); glueTests(); shifterTests();
 }
 }

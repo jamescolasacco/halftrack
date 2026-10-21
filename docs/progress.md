@@ -1112,3 +1112,7 @@ UI change in `src/MainComponent.cpp` and `src/NativeEffectEditor.cpp`, with the 
 
 Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Session.h` and `tests/ExtendedEffectsTests.cpp`, with documentation. Pedal joins the Distortion devices. See [the contract](research/native-effects-contract.md#pedal-2026-10-21).
 
+## Beat Repeat — 2026-10-21
+
+Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Session.h`, `tests/ExtendedEffectsTests.cpp` and the shared device test's render reference, with documentation. Beat Repeat joins the Delay & Reverb devices. See [the contract](research/native-effects-contract.md#beat-repeat-2026-10-21).
+

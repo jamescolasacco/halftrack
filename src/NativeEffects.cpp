@@ -162,6 +162,24 @@ constexpr EffectParameter pedalFields[] {
     { "trebleDb", "Treble", -12, 12, 0, 0, " dB" },
     { "sub", "Sub", 0, 1, 0, 0, "", "Off|On" },
     { "mix", "Dry / Wet", 0, 1, 1, 0, "" } };
+constexpr EffectParameter beatRepeatFields[] {
+    { "repeat", "Repeat", 0, 1, 0, 0, "", "Off|On" },
+    { "interval", "Interval", 0, 7, 5, 0, "", "1/32|1/16|1/8|1/4|1/2|1 Bar|2 Bars|4 Bars" },
+    { "offset", "Offset", 0, 15, 0, 0, "/16", nullptr, true },
+    { "chance", "Chance", 0, 1, 1, 0, "%" },
+    { "gate", "Gate", 1, 64, 8, 0, "/16", nullptr, true },
+    { "grid", "Grid", 0, 7, 4, 0, "", "1/4|1/4T|1/8|1/8T|1/16|1/16T|1/32|1/32T" },
+    { "noTriplets", "No Triplets", 0, 1, 0, 0, "", "Off|On" },
+    { "variation", "Variation", 0, 10, 0, 0, "" },
+    { "variationMode", "Var. mode", 0, 4, 0, 0, "", "Trigger|1/4|1/8|1/16|Auto" },
+    { "pitch", "Pitch", -48, 0, 0, 0, " st", nullptr, true },
+    { "pitchDecay", "Pitch Decay", 0, 1, 0, 0, "%" },
+    { "filter", "Filter", 0, 1, 0, 0, "", "Off|On" },
+    { "filterHz", "Frequency", 50, 18000, 1000, 1000, " Hz" },
+    { "filterWidth", "Width", .5f, 9, 4, 0, " oct" },
+    { "mixMode", "Mix mode", 0, 2, 0, 0, "", "Mix|Insert|Gate" },
+    { "volumeDb", "Volume", -36, 0, 0, 0, " dB" },
+    { "decay", "Decay", 0, 1, 0, 0, "%" } };
 constexpr EffectParameter glueFields[] {
     { "thresholdDb", "Threshold", -40, 0, -10, 0, " dB" },
     { "ratio", "Ratio", 0, 2, 0, 0, "", "2:1|4:1|10:1" },
@@ -336,7 +354,7 @@ const char* effectName (Kind kind) noexcept
         case Kind::sampler: return "Sampler"; case Kind::drumSampler: return "Drum Sampler";
         case Kind::instrumentRack: return "Instrument Rack"; case Kind::audioEffectRack: return "Audio Effect Rack";
         case Kind::midiEffectRack: return "MIDI Effect Rack"; case Kind::drumRack: return "Drum Rack";
-        case Kind::channelEq: return "Channel EQ"; case Kind::tuner: return "Tuner"; case Kind::spectrum: return "Spectrum"; case Kind::pedal: return "Pedal"; }
+        case Kind::channelEq: return "Channel EQ"; case Kind::tuner: return "Tuner"; case Kind::spectrum: return "Spectrum"; case Kind::pedal: return "Pedal"; case Kind::beatRepeat: return "Beat Repeat"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
@@ -351,7 +369,7 @@ std::span<const EffectParameter> effectParameters (Kind kind) noexcept
         case Kind::polySynth: return polySynthFields; case Kind::fmSynth: return fmSynthFields; case Kind::drumKit: return drumKitFields; case Kind::wavetableSynth: return wavetableFields;
         case Kind::sampler: return samplerFields; case Kind::drumSampler: return drumSamplerFields;
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return rackFields;
-        case Kind::channelEq: return channelEqFields; case Kind::tuner: return tunerFields; case Kind::spectrum: return spectrumFields; case Kind::pedal: return pedalFields; }
+        case Kind::channelEq: return channelEqFields; case Kind::tuner: return tunerFields; case Kind::spectrum: return spectrumFields; case Kind::pedal: return pedalFields; case Kind::beatRepeat: return beatRepeatFields; }
     return {};
 }
 const char* effectCategory (Kind kind) noexcept
@@ -360,7 +378,7 @@ const char* effectCategory (Kind kind) noexcept
     {
         case Kind::compressor: case Kind::gate: case Kind::limiter: case Kind::glueCompressor: return "Dynamics";
         case Kind::equalizer: case Kind::eqThree: case Kind::autoFilter: case Kind::channelEq: return "EQ & Filters";
-        case Kind::delay: case Kind::reverb: return "Delay & Reverb";
+        case Kind::delay: case Kind::reverb: case Kind::beatRepeat: return "Delay & Reverb";
         case Kind::bitcrusher: case Kind::saturator: case Kind::overdrive: case Kind::pedal: return "Distortion";
         case Kind::autoPan: case Kind::chorus: case Kind::phaser: case Kind::flanger: case Kind::frequencyShifter: return "Modulation";
         case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return "MIDI Effects";
@@ -371,7 +389,7 @@ const char* effectCategory (Kind kind) noexcept
     return "Effects";
 }
 bool effectUsesTempo (Kind kind) noexcept
-{ return kind == Kind::delay || kind == Kind::autoFilter || kind == Kind::autoPan || kind == Kind::arpeggiator || kind == Kind::noteLength; }
+{ return kind == Kind::delay || kind == Kind::autoFilter || kind == Kind::autoPan || kind == Kind::arpeggiator || kind == Kind::noteLength || kind == Kind::beatRepeat; }
 bool effectIsMidi (Kind kind) noexcept
 { return (static_cast<int> (kind) >= static_cast<int> (Kind::arpeggiator) && static_cast<int> (kind) <= static_cast<int> (Kind::noteLength)) || kind == Kind::midiEffectRack; }
 bool effectIsInstrument (Kind kind) noexcept
@@ -397,6 +415,7 @@ double effectTailSeconds (Kind kind, double rate) noexcept
         case Kind::phaser: return 1.0;
         case Kind::eqThree: case Kind::frequencyShifter: case Kind::channelEq: return .1;
         case Kind::compressor: case Kind::gate: case Kind::autoPan: case Kind::glueCompressor: case Kind::tuner: case Kind::spectrum: return 0.0;
+        case Kind::beatRepeat: return effects::BeatRepeat::longestSliceSeconds;
         case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return 0.0;
         case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return 0.0;
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return 0.0; // Racks report their chains.
@@ -465,6 +484,7 @@ void NativeEffectDSP::prepare (double sampleRate, Kind kind)
     modulatedDelay.prepare (rate, kind == Kind::chorus ? 40 : kind == Kind::flanger ? 30 : 0);
     saturator.prepare (rate); overdrive.prepare (rate); autoFilter.prepare (rate); autoPan.prepare (rate);
     phaser.prepare (rate); eqThree.prepare (rate); channelEq.prepare (rate); pedal.prepare (rate); glue.prepare (rate); shifter.prepare (rate);
+    beatRepeat.prepare (kind == Kind::beatRepeat ? rate : 1);
     processed = false; reset(); configure (settings);
 }
 void NativeEffectDSP::reset() noexcept
@@ -477,7 +497,7 @@ void NativeEffectDSP::reset() noexcept
     limiterFrame = 0; limiterHead = limiterSize = 0; limiterGain = 1;
     roomCursor = {}; roomTone = {}; delayTone = {}; cursor = 0; envelope = 0; processed = false; ramp = 0;
     saturator.reset(); overdrive.reset(); autoFilter.reset(); autoPan.reset(); modulatedDelay.reset();
-    phaser.reset(); eqThree.reset(); channelEq.reset(); pedal.reset(); glue.reset(); shifter.reset();
+    phaser.reset(); eqThree.reset(); channelEq.reset(); pedal.reset(); glue.reset(); shifter.reset(); beatRepeat.reset();
     outputGain = gainTarget; wet = wetTarget; delayLeft = delayTargetLeft; delayRight = delayTargetRight;
 }
 std::array<double, 5> NativeEffectDSP::eqCoefficients (int type, double frequency, double gain, double q, double sampleRate) noexcept
@@ -580,6 +600,7 @@ void NativeEffectDSP::configure (const Settings& next) noexcept
         case Kind::eqThree: eqThree.configure (v.data(), immediate); wetTarget = 1; break;
         case Kind::channelEq: channelEq.configure (v.data()); gainTarget = std::pow (10.0, v[5] / 20.0); wetTarget = 1; break;
         case Kind::pedal: pedal.configure (v.data()); gainTarget = std::pow (10.0, v[2] / 20.0); wetTarget = v[8]; break;
+        case Kind::beatRepeat: beatRepeat.configure (v.data(), settings.tempoBpm); wetTarget = 1; break;
         case Kind::glueCompressor: glue.configure (v.data(), immediate); wetTarget = v[7]; break;
         case Kind::frequencyShifter: shifter.configure (v.data(), immediate); wetTarget = v[3]; break;
         default: break;
@@ -728,6 +749,7 @@ void NativeEffectDSP::processSamples (float* left, float* right, int count) noex
             case Kind::eqThree: eqThree.tick (outL, outR); break;
             case Kind::channelEq: channelEq.tick (outL, outR); break;
             case Kind::pedal: pedal.tick (outL, outR); break;
+            case Kind::beatRepeat: beatRepeat.tick (outL, outR); break;
             case Kind::glueCompressor: glue.tick (outL, outR); break;
             case Kind::frequencyShifter: shifter.tick (outL, outR); break;
             default: break; // MIDI kinds have no audio path.
@@ -735,6 +757,8 @@ void NativeEffectDSP::processSamples (float* left, float* right, int count) noex
         left[frame] = static_cast<float> (finiteSample (l*(1-wet) + wet*outL*outputGain));
         if (right) right[frame] = static_cast<float> (finiteSample (r*(1-wet) + wet*outR*outputGain));
     }
+    // Beat Repeat needs the transport position each block; a block without it is a stopped one.
+    if (settings.kind == Kind::beatRepeat) beatRepeat.endBlock();
 }
 void NativeEffectDSP::setTimelinePosition (double seconds) noexcept
 {
@@ -745,6 +769,7 @@ void NativeEffectDSP::setTimelinePosition (double seconds) noexcept
         case Kind::chorus: case Kind::flanger: modulatedDelay.syncTo (seconds); break;
         case Kind::phaser: phaser.syncTo (seconds); break;
         case Kind::frequencyShifter: shifter.syncTo (seconds); break;
+        case Kind::beatRepeat: beatRepeat.syncTo (seconds); break;
         default: break;
     }
 }

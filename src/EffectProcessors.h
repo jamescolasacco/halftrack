@@ -273,5 +273,40 @@ private:
     std::array<std::array<Biquad, 4>, 2> eq; // Bass, mid, treble, sub.
     std::array<double, 2> dcInput {}, dcOutput {};
 };
+
+// Beat Repeat after the reference's. At every Interval (plus Offset) of the transport, with the
+// given Chance, it captures one Grid slice of the input and repeats it for Gate sixteenths, each
+// repeat Decay quieter and, with Pitch and Pitch Decay, resampled lower. The Repeat switch holds
+// a repeat for as long as it is on. Mix adds the repeats to the input, Insert mutes the input
+// while repeating and Gate passes only the repeats. Variation picks nearby grid sizes. Timing is
+// taken from the transport position at each block, so renders and playback agree; the random
+// choices are seeded at reset, so each render repeats them and live passes vary.
+class BeatRepeat
+{
+public:
+    static constexpr std::array<double, 8> intervalBeats { .125, .25, .5, 1, 2, 4, 8, 16 }; // 1/32 to 4 bars of 4/4.
+    static constexpr std::array<double, 8> gridBeats { 1, 2.0 / 3, .5, 1.0 / 3, .25, 1.0 / 6, .125, 1.0 / 12 }; // 1/4, 1/4T ... 1/32T.
+    static constexpr double longestSliceSeconds = 3; // A quarter note at 20 BPM.
+    void prepare (double rate) noexcept; // Allocates the capture buffer, as all preparation may.
+    void configure (const float* values, double bpm) noexcept;
+    void reset() noexcept;
+    // Called at a block start while the transport plays or renders; without it a block is stopped.
+    void syncTo (double seconds) noexcept;
+    void endBlock() noexcept { synced = false; }
+    void tick (double& left, double& right) noexcept;
+private:
+    double nextUniform() noexcept;
+    int pickGrid() noexcept;
+    void start (double beat, bool held) noexcept;
+    double rate = 48000, bpm = 120, beat = 0, beatStep = 0, nextTrigger = 0;
+    std::array<float, 17> v {};
+    bool synced = false, active = false, held = false;
+    double episodeEnd = 0;
+    int64_t frame = 0, sliceIndex = 0;
+    double sliceFrames = 0, sliceStart = 0, capturedFrames = 0;
+    uint64_t random = 0;
+    std::array<std::vector<float>, 2> capture;
+    std::array<std::array<Biquad, 2>, 2> filter; // High-pass and low-pass per channel.
+};
 }
 

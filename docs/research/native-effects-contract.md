@@ -198,3 +198,40 @@ Halftrack's own choices:
 
 The Hi-Quality (oversampling) mode and measured comparison with the reference are missing.
 
+## Beat Repeat (2026-10-21)
+
+Beat Repeat follows the manual's description in the [audio effect reference](https://www.ableton.com/en/live-manual/12/live-audio-effect-reference/), consulted 2026-10-21. The manual describes these controls:
+
+- **Interval and Offset** (1/32 to 4 bars, in sixteenths) set when a slice is captured.
+- **Chance** gives the probability of a repeat.
+- **Gate** sets the total length of the repeats in sixteenths.
+- **Repeat** holds a repeat for as long as it is on.
+- **Grid** sets the slice size, with **No Triplets** and **Variation** (Trigger, 1/4, 1/8, 1/16 or Auto).
+- **Pitch and Pitch Decay** lower the repeats by resampling.
+- **A band filter** acts on the repeats.
+- **Mix, Insert and Gate** decide how the repeats combine with the input.
+- **Volume and Decay** set the repeats' level.
+
+Halftrack's behaviour, where the manual gives no detail:
+
+- **Timing.** Triggers follow the transport position given at each block (`setTimelinePosition`), so renders and playback place repeats on the same samples whatever the block size. A start, seek or loop jump schedules the next trigger afresh and ends a timed repeat. Beats are counted at the project's first tempo, with 4/4 bars.
+- **Slices.** The first slice of a repeat is the input itself, captured as it passes. Later slices replay it, each `(1 − Decay)` quieter than the last and scaled by Volume.
+- **Pitch.** Pitch reads the slice at `2^(semitones/12)` speed with linear interpolation, and Pitch Decay lowers each further repeat by up to 12 semitones.
+- **Mix modes.** Mix adds the replays to the input; Insert plays the repeat in place of the input; Gate plays only the repeat. Stopped, Beat Repeat passes the input in Mix and Insert and silence in Gate.
+- **Filter.** The filter is a 12 dB/oct high-pass and low-pass around its frequency, Width octaves apart, on the replays.
+- **Variation.** Variation moves the grid up to Variation/2.5 steps. No Triplets rounds triplet sizes to binary ones.
+- **Randomness.** The random choices (Chance and Variation) come from a generator seeded at reset, so each render repeats them while live passes vary.
+- **Capture length.** The capture buffer holds three seconds, a quarter note at 20 BPM.
+
+`tests/ExtendedEffectsTests.cpp` checks, on a unique pseudo-random input at 120 BPM:
+
+- **Gate, Insert and Mix.** Each reproduces the exact expected sample layout: the third beat of each bar repeats its first sixteenth four times.
+- **Decay, Volume and Chance.** Decay and Volume scale the repeats exactly, and Chance 0 never repeats.
+- **Block size.** Any block size gives the same samples.
+- **Repeatable randomness.** Chance 50% repeats some beats and not others, identically in each render.
+- **Repeat switch.** It holds the first slice.
+- **Pitch.** −12 semitones reads the slice at half speed.
+- **Stopped transport.** Mix and Gate behave as described above.
+
+The shared device checks compare an engine render with the processor run from position 0, sample for sample. Tempo maps, time signatures other than 4/4 and measured comparison with the reference are missing.
+
