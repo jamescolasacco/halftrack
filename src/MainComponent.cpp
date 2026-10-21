@@ -2,6 +2,7 @@
 #include "AudioClipEditor.h"
 #include "AutomationEditor.h"
 #include "BrowserIndex.h"
+#include "ComputerKeyboard.h"
 #include "ArrangementAutomation.h"
 #include "Collections.h"
 #include "NativeEffects.h"
@@ -372,6 +373,11 @@ public:
         captureButton.setTooltip ("Capture MIDI: turn the notes just played into armed or monitored MIDI tracks into clips  |  Shift+Cmd+C");
         captureButton.onClick = [this] { captureFromUI(); };
         addAndMakeVisible (midiMapButton); addChildComponent (mapOverlay); addChildComponent (mappingList);
+        addAndMakeVisible (keysButton); keysButton.setName ("Computer MIDI Keyboard"); keysButton.setClickingTogglesState (true);
+        keysButton.setTooltip ("Computer MIDI Keyboard: play notes from A to ' (black keys W to P), Z and X for the octave, C and V for the velocity  |  M");
+        keysButton.setColour (juce::TextButton::buttonOnColourId, orange); keysButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+        keysButton.setWantsKeyboardFocus (false); keysButton.setMouseClickGrabsKeyboardFocus (false);
+        keysButton.onClick = [this] { setComputerKeyboard (keysButton.getToggleState()); };
         midiMapButton.setName ("MIDI Map Mode"); midiMapButton.setClickingTogglesState (true);
         midiMapButton.setTooltip ("MIDI Map Mode: click a blue control, then move a controller to map it  |  Cmd/Ctrl+M");
         midiMapButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d8bff)); midiMapButton.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
@@ -549,7 +555,8 @@ public:
         clickButton.setBounds (bar.removeFromLeft (46)); clickSettingsButton.setBounds (bar.removeFromLeft (20));
         bar.removeFromLeft (8); quantisation.setBounds (bar.removeFromLeft (64));
         audioButton.setBounds (bar.removeFromRight (52)); bar.removeFromRight (8);
-        midiMapButton.setBounds (bar.removeFromRight (46)); bar.removeFromRight (8);
+        midiMapButton.setBounds (bar.removeFromRight (46)); bar.removeFromRight (4);
+        keysButton.setBounds (bar.removeFromRight (46)); bar.removeFromRight (8);
         arrangementTab.setBounds (bar.removeFromRight (62)); sessionTab.setBounds (bar.removeFromRight (62));
         pianoTab.setBounds (bar.removeFromRight (40)); bar.removeFromRight (10);
         cpuBounds = bar.removeFromRight (56); bar.removeFromRight (8);
@@ -669,6 +676,7 @@ public:
     bool handleKey (const juce::KeyPress& key)
     {
         if (session.isExporting()) return true;
+        if (computerKeyboardKey (key)) return true;
         const auto code = key.getKeyCode();
         const auto cmd = key.getModifiers().isCommandDown();
         const auto shift = key.getModifiers().isShiftDown();
@@ -735,6 +743,12 @@ public:
         if (key.getTextCharacter() == '?' && ! cmd)
         {
             showInfo = ! showInfo; resized(); return true;
+        }
+        if ((key.getTextCharacter() == 'm' || key.getTextCharacter() == 'M') && ! cmd && ! shift && ! key.getModifiers().isAltDown())
+        {
+            for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused; focused = focused->getParentComponent())
+                if (dynamic_cast<juce::TextEditor*> (focused)) return false;
+            setComputerKeyboard (! session.isComputerKeyboardEnabled()); return true;
         }
         if((code=='R'||code=='r')&&cmd&&!shift&&!showPiano)
         {
@@ -6354,6 +6368,43 @@ private:
     MapOverlay mapOverlay { *this };
     MappingList mappingList { *this };
     juce::TextButton midiMapButton { "MIDI" };
+    // The computer MIDI keyboard: M or the KEYS switch turns it on; then the note keys play the
+    // Computer Keyboard input and are released when the key comes up.
+    juce::TextButton keysButton { "KEYS" };
+    ComputerKeyboard computerKeys;
+    void setComputerKeyboard (bool on)
+    {
+        if (! on) computerKeys.releaseAll();
+        report (session.setComputerKeyboardEnabled (on));
+        keysButton.setToggleState (session.isComputerKeyboardEnabled(), juce::dontSendNotification);
+        if (session.isComputerKeyboardEnabled()) showComputerKeyboardRange();
+    }
+    void showComputerKeyboardRange()
+    {
+        status = "Computer MIDI Keyboard: A plays C" + juce::String (computerKeys.octave()) + ", velocity " + juce::String (computerKeys.velocity());
+        statusFrames = 72; repaint();
+    }
+    // A key while the computer keyboard is on: a note key or Z X C V is played and kept from
+    // other shortcuts, as in the reference.
+    bool computerKeyboardKey (const juce::KeyPress& key)
+    {
+        if (! session.isComputerKeyboardEnabled() || key.getModifiers().isCommandDown() || key.getModifiers().isAltDown() || key.getModifiers().isCtrlDown()) return false;
+        const auto character = key.getTextCharacter();
+        if (! ComputerKeyboard::handles (character)) return false;
+        for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused; focused = focused->getParentComponent())
+            if (dynamic_cast<juce::TextEditor*> (focused)) return false;
+        const auto octave = computerKeys.octave(), velocity = computerKeys.velocity();
+        if (const auto event = computerKeys.press (key.getKeyCode(), character)) report (session.computerKeyboardNote (event->note, event->velocity, true));
+        if (octave != computerKeys.octave() || velocity != computerKeys.velocity()) showComputerKeyboardRange();
+        return true;
+    }
+    void releaseComputerKeys()
+    {
+        if (! computerKeys.holding()) return;
+        for (const auto& event : computerKeys.release ([] (int code) { return juce::KeyPress::isKeyCurrentlyDown (code); }))
+            session.computerKeyboardNote (event.note, 0, false);
+    }
+    bool keyStateChanged (bool) override { releaseComputerKeys(); return false; }
     void setMidiMapMode (bool on)
     {
         midiMapMode = on;
@@ -7147,7 +7198,7 @@ private:
     }
     void timerCallback() override
     {
-        pollBrowserScan(); pollBrowserIndex();
+        pollBrowserScan(); pollBrowserIndex(); releaseComputerKeys();
         if (statusFrames > 0 && --statusFrames == 0) status.clear();
         ++ticks;
         if (ticks % insertBlinkTicks == 0) canvas.repaint(); // The insert marker flashes.
@@ -9933,6 +9984,27 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         selectTrack (instrumentTrack); refresh();
     }
     else std::cout << "SKIP UI Configure: HALFTRACK_TEST_PLUGIN is not set" << std::endl;
+    {
+        // The computer MIDI keyboard: M turns it on; a note key plays instead of its shortcut and its
+        // release ends the note; X and Z move the octave and say so; M again turns it off.
+        showArrangementView(); refresh();
+        const bool automation = automationMode;
+        check (! session.isComputerKeyboardEnabled() && ! keysButton.getToggleState() && keysButton.isVisible(), "the computer MIDI keyboard starts off, its KEYS switch in the control bar");
+        check (handleKey (juce::KeyPress ('M', {}, 'm')) && session.isComputerKeyboardEnabled() && keysButton.getToggleState(), "M turns it on and lights KEYS");
+        check (handleKey (juce::KeyPress ('A', {}, 'a')) && automationMode == automation && computerKeys.holding(), "A plays a note instead of switching Automation Mode");
+        keyStateChanged (false);
+        check (! computerKeys.holding(), "the key's release ends it");
+        handleKey (juce::KeyPress ('X', {}, 'x'));
+        check (computerKeys.octave() == 4 && status.contains ("C4"), "X moves the octave up and says so");
+        handleKey (juce::KeyPress ('Z', {}, 'z'));
+        check (computerKeys.octave() == 3, "Z moves it back instead of zooming");
+        handleKey (juce::KeyPress ('A', {}, 'a'));
+        keysButton.setToggleState (false, juce::dontSendNotification); keysButton.onClick();
+        check (! session.isComputerKeyboardEnabled() && ! computerKeys.holding(), "the KEYS switch turns it off, ending the held note");
+        handleKey (juce::KeyPress ('A', {}, 'a')); refresh();
+        check (automationMode != automation, "then A switches Automation Mode again");
+        handleKey (juce::KeyPress ('A', {}, 'a')); refresh();
+    }
     {
         // Linked tracks: Link Tracks links the selected headers, which show the indicator; clicking it
         // selects the link, time selected on one track covers the other, and Unlink Tracks ends it.

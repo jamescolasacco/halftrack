@@ -1466,3 +1466,12 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **A fix.** The identity suite found that edits made while a mapped controller moved joined its undo step. They are now steps of their own.
 
 See [the contract](research/parameter-identity-contract.md).
+
+## Computer MIDI keyboard — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/ComputerKeyboard.h` (new), `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/ComputerKeyboardTests.cpp` (new), with documentation.
+
+- **Playing.** M or the KEYS switch turns on the computer MIDI keyboard. A to ' play notes into a Computer Keyboard input, and Z X C V set the octave and velocity.
+- **The input.** Tracks choose Computer Keyboard like any MIDI input, and All MIDI Ins includes it. Turning the keyboard off ends its notes.
+
+See [the contract](research/computer-keyboard-contract.md).

@@ -593,3 +593,15 @@ The reference's manual lists the edits that apply across linked tracks but not h
 - take lanes and comps follow lane position, and comping skips a linked lane with no material in the range.
 
 A move to another track, a duplicated track and a MIDI clip beside a trimmed audio clip are left out of the link. Auditioning stays on one track. All of these are unmeasured against the reference.
+
+### Computer MIDI keyboard defaults
+
+The keyboard starts off in each session and is not remembered. Its velocity steps of 20 and its octave limits are taken from the reference's documented behaviour, not measured. The reference may start with it on in a new installation; Halftrack keeps it off so its letter shortcuts work until it is turned on.
+
+### A second virtual MIDI input and test recordings
+
+When a Session made with the synthetic test device has a second virtual MIDI input, an Arrangement MIDI take in the punch suite starts about 1.3 seconds late and loses its first note. That second input was the computer keyboard's, and an unused virtual input added in the test does the same.
+
+On record, the engine waits up to 100 ms for the audio thread to process a block. The synthetic device runs only when a test pumps it, so the wait times out and the punch-in is computed from an older sync point. A running audio device processes a block within that wait, so real recordings should not be affected, but this is not yet measured on hardware.
+
+Test Sessions therefore make the Computer Keyboard input only when the keyboard is first turned on. Whether the stale sync point can affect a stalled real device is open.

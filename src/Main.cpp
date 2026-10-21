@@ -90,6 +90,7 @@ int runPreferencesTests (const juce::File&);
 int runLinkedTrackTests (const juce::File&);
 int runBrowserIndexTests (const juce::File&);
 int runParameterIdentityTests (const juce::File&);
+int runComputerKeyboardTests (const juce::File&);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -287,6 +288,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-parameter-identity");
             setApplicationReturnValue (runParameterIdentityTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-computer-keyboard"))
+        {
+            const int i = args.indexOf ("--self-test-computer-keyboard");
+            setApplicationReturnValue (runComputerKeyboardTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-large-session"))

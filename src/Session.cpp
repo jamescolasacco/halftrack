@@ -13,6 +13,7 @@
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 #include <array>
+#include <bitset>
 #include <set>
 #include <cstdlib>
 #include <filesystem>
@@ -3673,6 +3674,39 @@ struct Session::Impl
     } remoteRest;
     bool remoteGesture = false;
     bool applyingRemote = false; // While a mapped controller's value is applied.
+    // The computer MIDI keyboard's input, made when the Session starts; whether keys play it; its held notes.
+    std::shared_ptr<te::VirtualMidiInputDevice> computerKeyboard;
+    bool computerKeys = false;
+    std::bitset<128> keyboardHeld;
+    void ensureComputerKeyboard()
+    {
+        auto& devices = engine.getDeviceManager();
+        const auto find = [&devices]
+        {
+            for (auto device : devices.getMidiInDevices())
+                if (device->getName() == Session::computerKeyboardName)
+                    if (auto keyboard = std::dynamic_pointer_cast<te::VirtualMidiInputDevice> (device)) return keyboard;
+            return std::shared_ptr<te::VirtualMidiInputDevice>();
+        };
+        computerKeyboard = find();
+        if (computerKeyboard == nullptr && devices.createVirtualMidiDevice (Session::computerKeyboardName).wasOk())
+        { devices.rescanMidiDeviceListSynchronously(); computerKeyboard = find(); }
+        if (computerKeyboard == nullptr) return;
+        computerKeyboard->setMIDIInputSourceDevices ({}); // Only the keys play it.
+        computerKeyboard->setEnabled (true);
+    }
+    // Plays a message from the keys into the Computer Keyboard input and All MIDI Ins.
+    void playComputerKeyboard (juce::MidiMessage message)
+    {
+        auto& devices = engine.getDeviceManager();
+        for (auto device : devices.getMidiInDevices())
+            if (auto input = std::dynamic_pointer_cast<te::VirtualMidiInputDevice> (device);
+                input != nullptr && input->isEnabled() && (input == computerKeyboard || input->useAllInputs))
+            {
+                message.setTimeStamp (devices.getCurrentStreamTime() - input->getAdjustSecs());
+                input->handleIncomingMidiMessage (message, input->getMPESourceID());
+            }
+    }
     uint32_t lastRemote = 0;
     // Input instances are rebuilt when devices come and go, so the remote reattaches each second.
     RemoteRest remoteWatch;
@@ -3705,7 +3739,7 @@ struct Session::Impl
 };
 
 Session::Session (bool enableAudioDevices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType)
-    : impl (std::make_unique<Impl> (*this, enableAudioDevices, std::move (customDeviceType))) { warp::registerStretchers(); impl->loadPreferences(); newProject(); }
+    : impl (std::make_unique<Impl> (*this, enableAudioDevices, std::move (customDeviceType))) { warp::registerStretchers(); impl->loadPreferences(); if (enableAudioDevices) impl->ensureComputerKeyboard(); newProject(); }
 Session::~Session() { closePluginEditors(); }
 
 Session::Snapshot Session::snapshot() const
@@ -4420,6 +4454,28 @@ Result Session::setPreferences (const Preferences& next)
     impl->changed(); return Result::ok();
 }
 Result Session::resetPreferences() { return setPreferences ({}); }
+Result Session::setComputerKeyboardEnabled (bool on)
+{
+    if (on && impl->computerKeyboard == nullptr) impl->ensureComputerKeyboard();
+    if (on && impl->computerKeyboard == nullptr) return Result::fail ("The computer MIDI keyboard's input could not be made.");
+    if (impl->computerKeys == on) return Result::ok();
+    if (! on)
+        for (int note = 0; note < 128; ++note)
+            if (impl->keyboardHeld[(size_t) note]) impl->playComputerKeyboard (juce::MidiMessage::noteOff (1, note));
+    impl->keyboardHeld.reset();
+    impl->computerKeys = on;
+    sendChangeMessage(); return Result::ok();
+}
+bool Session::isComputerKeyboardEnabled() const { return impl->computerKeys; }
+Result Session::computerKeyboardNote (int note, float velocity, bool on)
+{
+    if (! impl->computerKeys) return Result::fail ("Turn on the computer MIDI keyboard first.");
+    if (! juce::isPositiveAndBelow (note, 128) || ! (velocity >= 0 && velocity <= 1)) return Result::fail ("Choose a note from 0 to 127 and a velocity from 0 to 1.");
+    if (impl->keyboardHeld[(size_t) note] == on) return Result::ok();
+    impl->keyboardHeld[(size_t) note] = on;
+    impl->playComputerKeyboard (on ? juce::MidiMessage::noteOn (1, note, velocity) : juce::MidiMessage::noteOff (1, note));
+    return Result::ok();
+}
 Result Session::setMidiInputMpe (const String& inputName, bool on)
 {
     for (auto device : impl->engine.getDeviceManager().getMidiInDevices())

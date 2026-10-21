@@ -792,6 +792,16 @@ public:
     // device settings.
     juce::Result setMidiInputMpe (const juce::String& inputName, bool);
     bool isMidiInputMpe (const juce::String& inputName) const;
+    // The computer MIDI keyboard, after the reference: a MIDI input named Computer Keyboard, which
+    // tracks choose like any input and which All MIDI Ins includes. While it is on, the UI plays it
+    // from the keys (see ComputerKeyboard.h). Turning it off ends its held notes. The input is made
+    // when the Session starts with audio devices, and otherwise (in tests) when first turned on.
+    static constexpr const char* computerKeyboardName = "Computer Keyboard";
+    juce::Result setComputerKeyboardEnabled (bool);
+    bool isComputerKeyboardEnabled() const;
+    // A note from the computer keyboard on channel 1, velocity 0-1; refused while it is off. A
+    // repeated note-on or a note-off for a note not held does nothing.
+    juce::Result computerKeyboardNote (int note, float velocity, bool on);
     juce::Result setTrackInput (int trackIndex, const juce::String& inputName);
     juce::Result setTrackArmed (int trackIndex, bool);
     juce::Result setTrackMonitor (int trackIndex, MonitorMode);

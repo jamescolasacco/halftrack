@@ -229,6 +229,10 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `BrowserIndex` (in `src/BrowserIndex.*`, independent of the engine) indexes a folder tree on a detached worker that owns only standard-library data and a shared `Scan` record, so a blocked filesystem call can outlive the browser. A global count limits outstanding scans to four. The UI starts it with each folder listing, polls its status from the window timer, and searches it on the message thread under the scan's mutex. See the [contract](research/browser-index-contract.md).
 
+## Computer MIDI keyboard
+
+`Session::Impl::ensureComputerKeyboard` makes or finds the engine virtual MIDI input named Computer Keyboard when the Session starts, with no source devices. `playComputerKeyboard` delivers a message to it and to the All MIDI Ins aggregate, stamped with the current stream time, on the message thread. The UI owns the key layout (`ComputerKeyboard`, header-only), and finds releases from `keyStateChanged` and the window timer. See the [contract](research/computer-keyboard-contract.md).
+
 ## Parameter identity
 
 `Session::Impl::externalParameterId` gives a hosted parameter's own ID for its `device:` key. MIDI mappings of hosted parameters save it as `parameterID`. `mappingCurrent` hides a mapping whose index no longer names that ID, and `reconcileMidiMappings` moves it to the ID's new index after loading and from the remote-watch timer. Configured parameters are a `HALFTRACKCONFIGURE` child of the plug-in's state, holding parameter IDs. `Impl::transaction` ends a controller's gesture (`remoteGesture`) unless the edit comes from that controller (`applyingRemote`). See the [contract](research/parameter-identity-contract.md).
