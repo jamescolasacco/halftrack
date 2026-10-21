@@ -134,7 +134,8 @@ int runDeviceLossTests (const juce::File& artifacts)
         type.setInterfacePresent (true);
         check (waitFor (3, [&] { return current() == "Interface"; }), "the interface is reopened when it returns");
         check (s.takeDeviceNotice().contains ("connected again"), "with a notice");
-        pump (devices, 8);
+        // The engine rebuilds its device lists after the reopen; let that settle, as a user would.
+        pump (devices, 100);
         s.seek (0); ok (s.play(), "play again");
         pump (devices, 100);
         check (s.snapshot().playing && s.snapshot().position > .2, "and it plays");

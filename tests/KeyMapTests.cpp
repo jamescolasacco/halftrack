@@ -134,7 +134,8 @@ int runKeyMapTests (const juce::File& artifacts)
         ok (s.setMidiLearnTarget (mute), "learn the activator for a controller");
         ok (s.handleMidiControl (1, 40, 127), "move controller 40");
         ok (s.setMidiLearnTarget ({}), "leave learning");
-        check (std::any_of (s.snapshot().midiMappings.begin(), s.snapshot().midiMappings.end(), [&] (const auto& m) { return m.target == mute && m.controller == 40; }),
+        const auto mappings = s.snapshot().midiMappings; // One snapshot for both ends of the range.
+        check (std::any_of (mappings.begin(), mappings.end(), [&] (const auto& m) { return m.target == mute && m.controller == 40; }),
                "the button has a controller mapping");
         const bool before = track (0).mute;
         ok (s.handleMidiControl (1, 40, 127), "press");
