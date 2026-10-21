@@ -125,6 +125,8 @@ int ReadAheadTimeStretcher::getOutputLatencySamples() const
     set(source4 "${source_dir}/modules/tracktion_engine/playback/graph/tracktion_WaveNode.cpp")
     set(original4 "a723324379bc424d352772f91f538f6a457a9559caa34fd80b9699484e3f7fc2")
     set(patched4 "2f2a0038be5991510a1d0222f166d831fa9865dfe6f9d42e4dbbe4e20c6b2cd0")
+    # The later warp-timing patch builds on this WaveNode result.
+    set(downstream4 "04ccc34aa76ca5f81534007a7d68da4e595b6680b323879d7ffe6b69d947b269")
     set(count4 7)
     set(before4_0 [=[        latencySamples = timeStretcher.getLatencySamples();]=])
     set(after4_0 [=[        latencySamples = timeStretcher.getLatencySamples();
@@ -180,7 +182,7 @@ int ReadAheadTimeStretcher::getOutputLatencySamples() const
     bool awaitingFirstRead = true;]=])
     foreach(index RANGE 0 4)
         file(SHA256 "${source${index}}" hash)
-        if(hash STREQUAL "${patched${index}}")
+        if(hash STREQUAL "${patched${index}}" OR (DEFINED downstream${index} AND hash STREQUAL "${downstream${index}}"))
             set(write${index} FALSE)
             continue()
         endif()

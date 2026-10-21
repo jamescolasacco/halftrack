@@ -147,6 +147,58 @@ int runWarpTests (const juce::File& artifacts)
         check (slots.setAudioClipWarp (slotClip.id, { Mode::off, 120 }).failed(), "Session clips cannot turn warping off");
         ok (slots.setAudioClipWarp (slotClip.id, { Mode::stretch, 120 }), "set the Session clip tempo");
         check (slots.snapshot().tracks[0].slots[0].clip.warp == Warp { Mode::stretch, 120 }, "Session clip tempo is reported");
+        // Warp markers: pinning source second 1 to beat 1 squeezes the first two beats of clicks
+        // into one; after the marker the clip's own tempo resumes.
+        {
+            const auto markedSource = root.getChildFile ("marked.wav"); write (markedSource, clicks (4, .5));
+            Session m (false); ok (m.importAudio (markedSource, 0), "import clicks for warp markers");
+            const auto id = clip (m).id;
+            const std::vector<Session::WarpMarker> squeeze { { 0, 0 }, { 1, 1 } };
+            check (m.setAudioClipWarpMarkers (id, squeeze).failed(), "an unwarped clip takes no warp markers");
+            ok (m.setAudioClipWarp (id, { Mode::stretch, 120 }), "warp it at the project tempo");
+            const auto out = root.getChildFile ("marked-render.wav");
+            ok (m.exportWav (out), "render without markers"); const auto before = read (out);
+            check (m.setAudioClipWarpMarkers (id, { { 0, 0 }, { 1, 0 } }).failed() && m.setAudioClipWarpMarkers (id, { { 1, 1 }, { .5, 2 } }).failed()
+                   && m.setAudioClipWarpMarkers (id, { { 0, 0 }, { 5, 9 } }).failed() && clip (m).warpMarkers.empty(),
+                   "markers must increase in source time and beat and lie within the source");
+            // Onsets against expected times; returns the worst error.
+            const auto measure = [&] (const std::vector<double>& expected)
+            {
+                ok (m.exportWav (out), "render with the markers");
+                const auto found = onsets (read (out));
+                double worst = 1e9;
+                if (found.size() == expected.size()) { worst = 0; for (size_t i = 0; i < found.size(); ++i) worst = std::max (worst, std::abs (found[i] - expected[i])); }
+                juce::String list; for (auto t : found) list << juce::String (t, 4) << " ";
+                std::cout << "  onsets: " << list << std::endl;
+                return worst;
+            };
+            // A gentle nudge, as when lining a transient up: source second 2 at beat 3.8.
+            const std::vector<Session::WarpMarker> nudge { { 0, 0 }, { 2, 3.8 } };
+            ok (m.setAudioClipWarpMarkers (id, nudge), "pin source second 2 to beat 3.8");
+            check (clip (m).warpMarkers == nudge, "the clip reports its markers, the start first");
+            auto worst = measure ({ 0, .475, .95, 1.425, 1.9, 2.4, 2.9, 3.4 });
+            check (worst <= .003, "clicks follow the nudged grid, then the clip's tempo (worst " + juce::String (worst * 1000, 2) + " ms)");
+            ok (m.setAudioClipWarpMarkers (id, squeeze), "pin source second 1 to beat 1");
+            check (clip (m).warpMarkers == squeeze, "markers can be replaced");
+            worst = measure ({ 0, .25, .5, 1, 1.5, 2, 2.5, 3 });
+            check (worst <= .004, "a 2x squeeze places every click, before and after the marker (worst " + juce::String (worst * 1000, 2) + " ms)");
+            check (dominant (read (out), .5) > 950 && dominant (read (out), .5) < 1050, "stretching keeps the clicks' pitch");
+            m.undo();
+            check (clip (m).warpMarkers == nudge, "one undo restores the previous markers");
+            m.undo();
+            check (clip (m).warpMarkers.empty(), "and another removes them"); m.redo(); m.redo();
+            const auto project = root.getChildFile ("Marked").getChildFile ("Marked.halftrack");
+            ok (m.saveProject (project), "save the markers"); ok (m.loadProject (project), "reopen them");
+            check (clip (m).warpMarkers == squeeze, "the markers reopen");
+            ok (m.setAudioClipWarp (clip (m).id, { Mode::off, 120 }), "turn Warp off");
+            check (clip (m).warpMarkers.empty(), "with Warp off the markers rest");
+            ok (m.setAudioClipWarp (clip (m).id, { Mode::stretch, 120 }), "turn Warp back on");
+            check (clip (m).warpMarkers == squeeze, "and they return");
+            ok (m.setAudioClipWarpMarkers (clip (m).id, {}), "remove the markers");
+            ok (m.exportWav (out), "render after removing them");
+            check (onGrid (onsets (read (out)), .5, 8, .003, worst), "without markers the clicks are back on the beat grid");
+            juce::ignoreUnused (before);
+        }
         std::cout << "Warp passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL warp: " << e.what() << std::endl; return 1; }

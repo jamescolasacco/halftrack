@@ -25,6 +25,9 @@ using juce::File;
 using juce::Result;
 using juce::String;
 const juce::Identifier monitorProperty { "halftrackMonitor" };
+// The clip's last engine warp marker is Halftrack's end marker, not one of the clip's own; markers
+// paused while warp is off resume with it.
+const juce::Identifier implicitWarpEndProperty { "halftrackWarpEnd" }, warpMarkersPausedProperty { "halftrackWarpMarkersPaused" };
 const juce::Identifier recordQuantisationProperty { "halftrackRecordQuantisation" };
 const juce::Identifier countInProperty { "halftrackCountInBars" };
 const juce::Identifier midiTrackProperty { "halftrackMidiTrack" };
@@ -895,6 +898,22 @@ Result validateLocators (const juce::ValueTree& state)
     return Result::ok();
 }
 
+// A warp marker's engine time is the clip's content time at its own tempo: beat * 60 / bpm.
+// Halftrack adds a final marker at the source's end that keeps the clip's tempo after the last
+// marker; it is not one of the clip's markers.
+std::vector<Session::WarpMarker> warpMarkers (te::WaveAudioClip& clip)
+{
+    std::vector<Session::WarpMarker> result;
+    if (! clip.getWarpTime()) return result;
+    const auto bpm = std::max (1.0, clip.getLoopInfo().getBpm (clip.getWaveInfo()));
+    const auto& markers = clip.getWarpTimeManager().getMarkers();
+    for (int i = 0; i < markers.size(); ++i)
+    {
+        if (i == markers.size() - 1 && static_cast<bool> (clip.state.getProperty (implicitWarpEndProperty, false))) break;
+        result.push_back ({ markers[i]->sourceTime.inSeconds(), markers[i]->warpTime.inSeconds() * bpm / 60 });
+    }
+    return result;
+}
 Session::WarpSettings warpSettings (te::WaveAudioClip& clip)
 {
     Session::WarpSettings result;
@@ -1069,6 +1088,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
         result.canEditAudioFades = audio->getClipSlot() == nullptr;
         result.reversed = audio->getIsReversed(); result.canReverse = canReverseAudio (*audio);
         result.warp = warpSettings (*audio); result.canWarp = ! audio->getIsReversed() && ! audio->isUsingARA() && ! audio->isGrouped();
+        result.warpMarkers = warpMarkers (*audio);
     }
     if (auto* midi = dynamic_cast<te::MidiClip*> (&clip))
     {
@@ -5043,6 +5063,55 @@ double Session::estimateClipTempo (double seconds)
     while (bpm >= 160 && beats > .25) { beats /= 2; bpm /= 2; }
     return juce::jlimit (20.0, 999.0, bpm);
 }
+Result Session::setAudioClipWarpMarkers (const String& id, const std::vector<WarpMarker>& markers)
+{
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing warp markers.");
+    auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
+    const auto settings = warpSettings (*clip);
+    if (settings.mode == WarpMode::off) return Result::fail ("Turn Warp on before adding warp markers.");
+    const auto source = clip->getSourceLength().inSeconds();
+    if (source <= 0) return Result::fail ("The clip's audio is not available.");
+    if (markers.size() > 1024) return Result::fail ("A clip can hold at most 1024 warp markers.");
+    for (size_t i = 0; i < markers.size(); ++i)
+    {
+        const auto& m = markers[i];
+        if (! std::isfinite (m.sourceSeconds) || ! std::isfinite (m.beat) || m.sourceSeconds < 0 || m.sourceSeconds > source || m.beat < 0 || m.beat > 1000000
+            || (i > 0 && (m.sourceSeconds <= markers[i - 1].sourceSeconds + 1e-6 || m.beat <= markers[i - 1].beat + 1e-6)))
+            return Result::fail ("Warp markers must increase in source time and beat and lie within the source.");
+    }
+    if (markers == warpMarkers (*clip)) return Result::ok();
+    impl->transaction ("Edit warp markers");
+    auto* undo = &impl->edit->getUndoManager();
+    if (markers.empty())
+    {
+        if (clip->getWarpTime()) { clip->getWarpTimeManager().removeAllMarkers(); clip->setWarpTime (false); }
+        clip->state.removeProperty (warpMarkersPausedProperty, undo);
+        clip->state.removeProperty (implicitWarpEndProperty, undo);
+        impl->changed(); return Result::ok();
+    }
+    clip->setWarpTime (true);
+    auto& manager = clip->getWarpTimeManager();
+    // The engine keeps a start marker at (0, 0); the clip's markers follow it, and Halftrack's end
+    // marker keeps the clip's tempo after the last of them.
+    auto tree = clip->state.getChildWithName (te::IDs::WARPTIME).getChildWithName (te::IDs::WARPMARKERS);
+    if (! tree.isValid()) return Result::fail ("The clip's warp markers are unavailable.");
+    const auto secondsPerBeat = 60.0 / settings.bpm;
+    std::vector<std::pair<double, double>> points { { 0.0, 0.0 } };
+    for (const auto& m : markers) if (m.sourceSeconds > 1e-9 || m.beat > 1e-9) points.push_back ({ m.sourceSeconds, m.beat * secondsPerBeat });
+    if (points.size() > 1 && (points[1].first <= 1e-6 || points[1].second <= 1e-6)) return Result::fail ("Warp markers after the start must have a later source time and beat.");
+    auto end = points.back().second;
+    const bool implicitEnd = points.back().first < source - 1e-6;
+    if (implicitEnd) { end += source - points.back().first; points.push_back ({ source, end }); }
+    tree.removeAllChildren (undo);
+    for (const auto& [sourceTime, warpTime] : points)
+        tree.appendChild (juce::ValueTree (te::IDs::WARPMARKER, { { te::IDs::sourceTime, sourceTime }, { te::IDs::warpTime, warpTime } }), undo);
+    if (implicitEnd) clip->state.setProperty (implicitWarpEndProperty, true, undo); else clip->state.removeProperty (implicitWarpEndProperty, undo);
+    manager.setWarpEndMarkerTime (te::TimePosition::fromSeconds (end));
+    impl->edit->restartPlayback();
+    impl->changed(); return Result::ok();
+}
 Result Session::setAudioClipWarp (const String& id, const WarpSettings& settings)
 {
     if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
@@ -5067,11 +5136,15 @@ Result Session::setAudioClipWarp (const String& id, const WarpSettings& settings
         length *= scale; offset *= scale;
         offset = juce::jlimit (0.0, source, offset); length = juce::jlimit (0.001, source - offset, length);
         clip->setAutoTempo (false); clip->setTimeStretchMode (te::TimeStretcher::disabled);
+        // Markers rest while warp is off.
+        if (clip->getWarpTime()) { clip->state.setProperty (warpMarkersPausedProperty, true, &impl->edit->getUndoManager()); clip->setWarpTime (false); }
         clip->setPosition ({ { start, start + te::TimeDuration::fromSeconds (length) }, te::TimeDuration::fromSeconds (offset) });
         impl->changed(); return Result::ok();
     }
     clip->setTimeStretchMode (settings.mode == WarpMode::efficient ? te::TimeStretcher::signalsmithCheaper : te::TimeStretcher::signalsmithDefault);
     clip->setUsesProxy (false);
+    if (static_cast<bool> (clip->state.getProperty (warpMarkersPausedProperty, false)))
+    { clip->state.removeProperty (warpMarkersPausedProperty, &impl->edit->getUndoManager()); clip->setWarpTime (true); }
     const auto scale = previous.mode == WarpMode::off ? settings.bpm / tempo : settings.bpm / previous.bpm;
     clip->getLoopInfo().setNumBeats (settings.bpm * source / 60);
     if (slot)

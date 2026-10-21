@@ -199,3 +199,12 @@ Exact input/output SHA-256 values are in the module; it validates every file bef
 ## Tracktion follow-action no-action patch
 
 `cmake/PatchFollowNoAction.cmake` patches the pinned `tracktion_FollowActions.cpp` (original SHA-256 `02b464d6810afd73e644fddce42c3b5a9ee63850bb7b2c56427b50337ea8c846`, patched `e09f9b565661defe66fea39d770f53b9efc8f74f6a78c8d5a91babc51d08d286`). The engine stops a clip at its follow-action time and then runs the weighted choice. When the choice was "no action", the clip stayed stopped. Weighted containers now record whether their action is `none`, and that choice continues the clip in phase through `LaunchHandle::playSynced` from its own state, matching the reference workflow where No Action leaves the clip playing. Actions whose engine function is empty for other reasons (Stop) still stop. `follow-actions-acceptance` reaches both outcomes of a 50% stop/no-action pair only with the patch (all 24 trials stopped without it).
+
+## Tracktion warp-marker timing patch
+
+`cmake/PatchWarpTiming.cmake` patches the pinned `tracktion_WaveNode.cpp` after the clip-gain, clip-activation and stretch-alignment patches (input SHA-256 `2f2a0038be5991510a1d0222f166d831fa9865dfe6f9d42e4dbbe4e20c6b2cd0`, patched `04ccc34aa76ca5f81534007a7d68da4e595b6680b323879d7ffe6b69d947b269`). The earlier patches accept the new hash on reconfigure. Two bugs in `WarpReader` placed warped audio out of time:
+
+- **The first segment.** It set each block's stretch ratio from `warpTime()`, which gives a time on the first marker the ratio 1. Playback from a clip's start therefore primed the stretcher and ran its first segment at the wrong ratio. That is a constant error of the stretcher's input latency (60 ms at 48 kHz) times (1 − 1/ratio): about 5 ms for a 5% nudge and 50 ms for a 2x squeeze.
+- **After a marker.** A ratio set now is first heard after the stretcher's output latency (90 ms), so the change came late.
+
+The reader now takes the ratio of the segment holding the read position plus the output latency, with a marker starting its own segment, when it primes, seeks and reads. Measured by the warp suite: clicks follow a 5% nudge within 0.35 ms and a 2x squeeze within 3.3 ms, before and after the marker.

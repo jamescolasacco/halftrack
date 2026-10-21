@@ -232,6 +232,10 @@ public:
         double bpm = 120; // The source's own tempo.
         bool operator== (const WarpSettings&) const = default;
     };
+    // A warp marker pins a point of a warped clip's source to a beat, counted from the source's start
+    // at the clip's own tempo. Between markers the audio stretches to fit; before the first it runs
+    // from the source's start, and after the last it keeps the clip's tempo.
+    struct WarpMarker { double sourceSeconds = 0, beat = 0; bool operator== (const WarpMarker&) const = default; };
     // Tempo guess for a source: whole 4/4 bars, doubled or halved into 80-160 BPM.
     static double estimateClipTempo (double sourceSeconds);
     struct AudioClipSettings
@@ -259,6 +263,7 @@ public:
         std::vector<ControllerLane> controllers; // Lanes with points, by controller number.
         ScaleSettings scale;
         juce::String grooveId; // The pool groove a MIDI clip plays with; empty for None.
+        std::vector<WarpMarker> warpMarkers; // A warped audio clip's markers, in order.
         bool mediaMissing = false; // An audio clip whose file is not on disk plays silence.
     };
     struct LocatorInfo { juce::String id, name; double position = 0; };
@@ -514,6 +519,10 @@ public:
     juce::Result setAudioClipReversed (const juce::String& clipId, bool reversed);
     // Arrangement clips may turn warping off; Session slots always follow the tempo.
     juce::Result setAudioClipWarp (const juce::String& clipId, const WarpSettings&);
+    // Replaces a warped audio clip's warp markers, which must increase in both source time and beat
+    // and lie within the source; an empty list removes them. One undo step. Turning warp off keeps
+    // them for when it is turned back on.
+    juce::Result setAudioClipWarpMarkers (const juce::String& clipId, const std::vector<WarpMarker>&);
     juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
     juce::Result splitAudioClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
     // Splits an unlooped Arrangement MIDI clip; notes crossing the split become two notes and each
