@@ -558,8 +558,13 @@ public:
     juce::Result setTrackPan (int trackIndex, float pan);
     // Atomic, strictly ordered beat points. Empty points restore manual control.
     juce::Result setTrackAutomation (const juce::String& trackId, AutomationTarget, const AutomationLane&);
-    // Automates one native device control (by parameter index) with values in the control's own units.
+    // Automates one native device control (by parameter index) with values in the control's own units,
+    // or one of an external plug-in's parameters (by its index in pluginParameters) with values 0-1.
     juce::Result setDeviceAutomation (const juce::String& pluginId, int parameter, const AutomationLane&);
+    // An external plug-in's automatable parameters in order, with normalised 0-1 values and the
+    // plug-in's own text. Empty for an unknown id, a native device or a missing plug-in.
+    struct PluginParameterInfo { juce::String name, text; float value = 0; };
+    std::vector<PluginParameterInfo> pluginParameters (const juce::String& pluginId) const;
     // Automation Arm, after the reference. While it is on and the transport records, moving a track's
     // volume or pan, the master volume or a native device control writes that lane at the playhead:
     // while an edit gesture holds the control (then the earlier automation resumes), or until recording

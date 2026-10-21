@@ -446,3 +446,11 @@ These are simplest defaults pending a comparison with the reference:
 ### Missing media matching
 
 Locate Missing Media matches files by name only, case-insensitively, taking the first readable audio file found. The reference also compares size and checksums; Halftrack does not yet store them. A file moved while the project is open may keep playing from the engine's open handle until the project is reopened, even though it is reported missing.
+
+### Plug-in parameter lanes
+
+These are simplest defaults pending a comparison with the reference:
+
+- **Bypass.** The parameter list includes any Bypass parameter a plug-in wrapper exposes; the reference ties that to the device's on switch.
+- **Switching a lane off** leaves the plug-in where its last value put it; nothing restores an earlier manual value.
+- **Moves in a plug-in's own editor** neither override its lanes nor record with Automation Arm yet.

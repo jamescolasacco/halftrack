@@ -280,8 +280,10 @@ public:
         for (const auto& p : next.points) map.push_back ({ p.beat, p.value });
         return map;
     }
-    // A native device control offered as a destination after Volume and Pan.
-    struct DeviceTarget { juce::String pluginId; int parameter = -1; Session::EffectKind kind {}; juce::String label; };
+    // A native device control, or an external plug-in parameter, offered as a destination after
+    // Volume and Pan. External parameters run from 0 to 1 and show as percentages.
+    struct DeviceTarget { juce::String pluginId; int parameter = -1; Session::EffectKind kind {}; juce::String label; bool external = false; };
+    static constexpr EffectParameter externalField { "value", "Value", 0, 1, .5f, 0, "%" };
     static constexpr int firstDeviceItem = 100;
     const DeviceTarget* device() const
     {
@@ -289,12 +291,12 @@ public:
         return ! editingMaster && item >= 0 && item < (int) deviceTargets.size() ? &deviceTargets[(size_t) item] : nullptr;
     }
     const EffectParameter* field() const
-    { if (const auto* d = device()) return &effectParameters (d->kind)[(size_t) d->parameter]; return nullptr; }
+    { if (const auto* d = device()) return d->external ? &externalField : &effectParameters (d->kind)[(size_t) d->parameter]; return nullptr; }
     const Session::PluginInfo* devicePlugin() const
     {
         const auto* d = device(); const auto* current = track();
         if (d == nullptr || current == nullptr) return nullptr;
-        for (const auto* plugin : nativeDevices (*current)) if (plugin->id == d->pluginId) return plugin;
+        for (const auto* plugin : d->external ? externalDevices (*current) : nativeDevices (*current)) if (plugin->id == d->pluginId) return plugin;
         return nullptr;
     }
     // The track's native devices, with the devices inside its racks after each rack.
@@ -310,6 +312,13 @@ public:
         for (const auto& plugin : current.plugins) if (plugin.isNativeEffect) add (plugin);
         return devices;
     }
+    // The track's loaded external plug-ins.
+    static std::vector<const Session::PluginInfo*> externalDevices (const Session::TrackInfo& current)
+    {
+        std::vector<const Session::PluginInfo*> devices;
+        for (const auto& plugin : current.plugins) if (! plugin.isNativeEffect && ! plugin.isUtility && ! plugin.missing) devices.push_back (&plugin);
+        return devices;
+    }
     juce::String targetKey() const
     {
         if (tempoTarget()) return "tempo";
@@ -320,13 +329,13 @@ public:
     float toProportion (float value) const
     {
         if (tempoTarget()) return tempoToProportion (value);
-        if (const auto* d = device()) return Session::deviceAutomationValueToProportion (d->kind, d->parameter, value);
+        if (const auto* d = device()) return d->external ? value : Session::deviceAutomationValueToProportion (d->kind, d->parameter, value);
         return Session::automationValueToProportion (target(), value);
     }
     float fromProportion (float proportion) const
     {
         if (tempoTarget()) return tempoFromProportion (proportion);
-        if (const auto* d = device()) return Session::deviceAutomationProportionToValue (d->kind, d->parameter, proportion);
+        if (const auto* d = device()) return d->external ? proportion : Session::deviceAutomationProportionToValue (d->kind, d->parameter, proportion);
         return Session::automationProportionToValue (target(), proportion);
     }
     // Values typed and shown in the numeric field: percent controls as 0-100.
@@ -343,6 +352,11 @@ public:
     {
         if (tempoTarget()) return (float) snapshot.tempo;
         if (editingMaster) return snapshot.masterGainDb;
+        if (const auto* d = device(); d != nullptr && d->external)
+        {
+            const auto parameters = session.pluginParameters (d->pluginId);
+            return juce::isPositiveAndBelow (d->parameter, (int) parameters.size()) ? parameters[(size_t) d->parameter].value : 0.0f;
+        }
         if (device() != nullptr) { const auto* plugin = devicePlugin(); return plugin != nullptr ? plugin->effect.values[(size_t) device()->parameter] : 0.0f; }
         if (const auto* current = track()) return target() == Session::AutomationTarget::volume ? current->gainDb : current->pan;
         return 0;
@@ -390,7 +404,7 @@ public:
         }
         else
         {
-            // Volume and Pan, then every control of the track's native devices.
+            // Volume and Pan, then every control of the track's native devices, then its plug-ins' parameters.
             std::vector<DeviceTarget> targets; juce::String signature;
             if (const auto* current = track())
             {
@@ -400,6 +414,13 @@ public:
                     for (size_t i = 0; i < fields.size(); ++i)
                         targets.push_back ({ plugin->id, (int) i, plugin->effect.kind, plugin->name + ": " + fields[i].label });
                     signature << plugin->id << plugin->name << (int) fields.size() << ";";
+                }
+                for (const auto* plugin : externalDevices (*current))
+                {
+                    const auto parameters = session.pluginParameters (plugin->id);
+                    for (size_t i = 0; i < parameters.size(); ++i)
+                        targets.push_back ({ plugin->id, (int) i, {}, plugin->name + ": " + parameters[i].name, true });
+                    signature << plugin->id << plugin->name << (int) parameters.size() << "+;";
                 }
             }
             if (signature != targetSignature || targetChoice.getNumItems() < 2 || targetChoice.indexOfItemId (2) < 0 || targetChoice.indexOfItemId (tempoItem) >= 0)

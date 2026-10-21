@@ -1165,3 +1165,7 @@ Engine and UI change in `src/Session.*` and `src/MainComponent.cpp`, with the pe
 ## Missing media — 2026-10-21
 
 Engine and UI change in `src/Session.*`, `src/NativeEffects.cpp`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/MissingMediaTests.cpp` (new), with documentation. Opening and saving no longer fail when audio files or samples are missing. See [the contract](research/missing-media-contract.md).
+
+## Plug-in automation — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/AutomationEditor.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/PluginAutomationTests.cpp` (new), with documentation. See [the contract](research/plugin-automation-contract.md).

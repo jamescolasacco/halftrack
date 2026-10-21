@@ -74,6 +74,31 @@ Session::AutomationLane automationLane (te::VolumeAndPanPlugin& plugin, Session:
     }
     return lane;
 }
+// An external plug-in's own automatable parameters, in order; the engine's dry and wet levels are left out.
+std::vector<te::AutomatableParameter*> externalParameters (te::Plugin& plugin)
+{
+    std::vector<te::AutomatableParameter*> result;
+    for (auto* p : plugin.getAutomatableParameters())
+        if (p->paramID != "dry level" && p->paramID != "wet level") result.push_back (p);
+    return result;
+}
+// Lanes of an external plug-in's parameters that have points or are switched off, in 0-1 values.
+std::vector<Session::PluginInfo::ControlAutomation> externalAutomation (te::Plugin& plugin)
+{
+    std::vector<Session::PluginInfo::ControlAutomation> result;
+    const auto parameters = externalParameters (plugin);
+    for (size_t i = 0; i < parameters.size(); ++i)
+    {
+        auto& curve = parameters[i]->getCurve();
+        if (curve.getNumPoints() == 0 && ! curve.bypass.get()) continue;
+        Session::PluginInfo::ControlAutomation entry { (int) i, {} };
+        entry.lane.enabled = ! curve.bypass.get();
+        for (int p = 0; p < curve.getNumPoints(); ++p)
+            entry.lane.points.push_back ({ plugin.edit.tempoSequence.toBeats (curve.getPointTime (p)).inBeats(), curve.getPointValue (p) });
+        result.push_back (std::move (entry));
+    }
+    return result;
+}
 // Lanes of a native device's controls that have points or are switched off.
 std::vector<Session::PluginInfo::ControlAutomation> deviceAutomation (NativeEffectPlugin& plugin)
 {
@@ -1923,6 +1948,15 @@ struct Session::Impl
         visitDevices ([&] (te::AudioTrack& t, NativeEffectPlugin& d) { if (! found && d.itemID.toString() == id) { found = &d; if (owner) *owner = &t; } });
         return found;
     }
+    // A loaded external plug-in on a track, by id.
+    te::ExternalPlugin* externalPlugin (const String& id, te::AudioTrack** owner = nullptr) const
+    {
+        for (auto* t : te::getAudioTracks (*edit))
+            for (auto* p : t->pluginList.getPlugins())
+                if (auto* external = dynamic_cast<te::ExternalPlugin*> (p); external != nullptr && p->itemID.toString() == id)
+                { if (owner) *owner = t; return external; }
+        return nullptr;
+    }
     NativeEffectPlugin* rack (const String& id, te::AudioTrack** owner = nullptr) const
     {
         auto* device = nativeDevice (id, owner);
@@ -2240,7 +2274,47 @@ struct Session::Impl
                                     [kind, parameter] (float v) { return effectValueToProportion (kind, parameter, v); },
                                     [kind, parameter] (float p) { return effectProportionToValue (kind, parameter, p); } };
             }
+            else if (auto* external = externalPlugin (parts[1]))
+            {
+                const auto id = parts[1]; const int parameter = parts[2].getIntValue();
+                if (! juce::isPositiveAndBelow (parameter, (int) externalParameters (*external).size())) return std::nullopt;
+                return LaneAccess { [external, parameter] { for (const auto& a : externalAutomation (*external)) if (a.parameter == parameter) return a.lane; return AutomationLane {}; },
+                                    [this, id, parameter] (const AutomationLane& lane) { return owner.setDeviceAutomation (id, parameter, lane); },
+                                    [] (float v) { return v; }, [] (float p) { return p; } };
+            }
         return std::nullopt;
+    }
+    // An external plug-in parameter's lane, in 0-1 values; one undo step unless written internally.
+    Result setExternalAutomation (te::ExternalPlugin& plugin, int parameter, const AutomationLane& lane)
+    {
+        const auto parameters = externalParameters (plugin);
+        if (! juce::isPositiveAndBelow (parameter, (int) parameters.size())) return Result::fail ("That plug-in has no such parameter.");
+        if (lane.points.size() > 4096) return Result::fail ("A lane can contain at most 4096 points.");
+        double previousBeat = -1, previousTime = -1;
+        for (const auto& point : lane.points)
+        {
+            const double time = std::isfinite (point.beat) ? edit->tempoSequence.toTime (te::BeatPosition::fromBeats (point.beat)).inSeconds() : -1;
+            if (! std::isfinite (point.beat) || point.beat < 0 || point.beat > 1000000 || point.beat <= previousBeat || (previousBeat >= 0 && point.beat - previousBeat < 0.999e-6)
+                || ! std::isfinite (point.value) || point.value < 0 || point.value > 1 || ! std::isfinite (time) || time <= previousTime)
+                return Result::fail ("Automation requires up to 4096 ordered beat points with values from 0 to 1.");
+            previousBeat = point.beat; previousTime = time;
+        }
+        auto* parameterObject = parameters[(size_t) parameter];
+        auto& curve = parameterObject->getCurve();
+        bool same = lane.enabled == ! curve.bypass.get() && lane.points.size() == static_cast<size_t> (curve.getNumPoints());
+        for (size_t i = 0; same && i < lane.points.size(); ++i)
+            same = std::abs (edit->tempoSequence.toBeats (curve.getPointTime ((int) i)).inBeats() - lane.points[i].beat) < 1e-9
+                && std::abs (curve.getPointValue ((int) i) - lane.points[i].value) < 1e-6f;
+        if (same) return Result::ok();
+        if (! internalAutomationWrite) transaction ("Edit " + parameterObject->getParameterName() + " automation");
+        auto* undo = &edit->getUndoManager();
+        plugin.remapOnTempoChange = true;
+        curve.clear (undo);
+        curve.state.setProperty (te::IDs::bypass, ! lane.enabled, undo);
+        for (const auto& point : lane.points) curve.addPoint (te::EditPosition (te::BeatPosition::fromBeats (point.beat)), point.value, 0, undo);
+        parameterObject->updateStream();
+        edit->dispatchPendingUpdatesSynchronously();
+        changed(); return Result::ok();
     }
     void writeLane (const LaneAccess& lane, const AutomationLane& points)
     {
@@ -2258,6 +2332,10 @@ struct Session::Impl
                     if (off (automationLane (*mixer, target))) keys.add (mixerKey (*t, target));
         visitDevices ([&] (te::AudioTrack&, NativeEffectPlugin& d)
         { for (const auto& a : deviceAutomation (d)) if (off (a.lane)) keys.add (deviceKey (d.itemID.toString(), a.parameter)); });
+        for (auto* t : te::getAudioTracks (*edit))
+            for (auto* p : t->pluginList.getPlugins())
+                if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
+                    for (const auto& a : externalAutomation (*external)) if (off (a.lane)) keys.add (deviceKey (external->itemID.toString(), a.parameter));
         return keys;
     }
     // Moving a control whose lane plays automation switches the lane off until Re-Enable Automation.
@@ -2699,6 +2777,7 @@ Session::Snapshot Session::snapshot() const
             PluginInfo device { p->itemID.toString(), p->getName(), p->isEnabled() };
             if (auto* utility = dynamic_cast<UtilityPlugin*> (p)) { device.isUtility = true; device.utility = utility->readSettings(); }
             if (auto* effect = dynamic_cast<NativeEffectPlugin*> (p)) device = describeDevice (*effect);
+            if (auto* external = dynamic_cast<te::ExternalPlugin*> (p)) device.automation = externalAutomation (*external);
             if (auto* external = dynamic_cast<te::ExternalPlugin*> (p); external && ! external->isInitialisingAsync() && external->getAudioPluginInstance() == nullptr)
             {
                 device.missing = true; device.loadError = external->getLoadError();
@@ -5787,7 +5866,13 @@ Result Session::setDeviceAutomation (const String& pluginId, int parameter, cons
     if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
     if (impl->exporting || (impl->edit->getTransport().isRecording() && ! impl->internalAutomationWrite))
         return Result::fail ("Stop recording or finish exporting before editing automation.");
-    if (device == nullptr) return Result::fail ("Native device not found.");
+    if (device == nullptr)
+        if (auto* external = impl->externalPlugin (pluginId, &owner))
+        {
+            if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
+            return impl->setExternalAutomation (*external, parameter, lane);
+        }
+    if (device == nullptr) return Result::fail ("Device not found.");
     auto* control = device->control (parameter);
     if (control == nullptr) return Result::fail ("That device has no such control.");
     const auto& field = effectParameters (device->getKind())[(size_t) parameter];
@@ -5820,6 +5905,14 @@ Result Session::setDeviceAutomation (const String& pluginId, int parameter, cons
     device->refreshAutomation();
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->changed(); return Result::ok();
+}
+std::vector<Session::PluginParameterInfo> Session::pluginParameters (const String& pluginId) const
+{
+    std::vector<PluginParameterInfo> result;
+    if (auto* external = impl->externalPlugin (pluginId); external != nullptr && external->getAudioPluginInstance() != nullptr)
+        for (auto* p : externalParameters (*external))
+            result.push_back ({ p->getParameterName(), p->getCurrentValueAsString(), p->getCurrentNormalisedValue() });
+    return result;
 }
 std::optional<std::pair<float, float>> Session::midiTargetRange (const String& target) const
 {
