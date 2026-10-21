@@ -434,3 +434,11 @@ The device's patch is encrypted and was not opened, and the manual describes onl
 - **The flow** is a timed text list of the last 64 messages, not a graphical stream.
 - **Chord names** come from a table of 20 chord types. They are named from the lowest note when it can be the root, otherwise as a slash chord.
 - **Freeze and Clear** belong to the display; they are not saved or automatable.
+
+### Insert marker display and scrubbing
+
+These are simplest defaults pending a comparison with the reference:
+
+- **The marker** flashes across every lane. The reference shows it on the track that was clicked.
+- **Clicks** snap the marker to the grid, unless Alt is held.
+- **Scrubbing.** Clicks in the ruler jump immediately. Quantized scrub jumps and holding to loop a section are not implemented.

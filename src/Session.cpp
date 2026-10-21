@@ -2590,6 +2590,7 @@ Session::Snapshot Session::snapshot() const
     s.playing = transport.isPlaying(); s.recording = transport.isRecording();
     s.looping = transport.looping;
     s.position = transport.getPosition().inSeconds();
+    s.insertMarker = transport.startPosition.get().inSeconds();
     s.duration = e.getLength().inSeconds();
     s.tempo = e.tempoSequence.getBpmAt (te::TimePosition::fromSeconds (juce::jmax (0.0, s.position)));
     s.tempoMap.clear();
@@ -6047,6 +6048,14 @@ Result Session::play()
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio output in Audio Settings.");
+    auto& transport = impl->edit->getTransport();
+    if (! transport.isPlaying()) transport.setPosition (transport.startPosition);
+    transport.play (false); sendChangeMessage(); return Result::ok();
+}
+Result Session::continuePlayback()
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio output in Audio Settings.");
     impl->edit->getTransport().play (false); sendChangeMessage(); return Result::ok();
 }
 void Session::stop()
@@ -6120,6 +6129,8 @@ Result Session::record()
     for(auto* input:impl->edit->getAllInputDevices()) if(input->isRecordingActive())
         if(auto* midi=dynamic_cast<te::MidiInputDevice*>(&input->getInputDevice())) midi->quantisation.setType("(none)");
     impl->edit->setClickTrackRange ({});
+    // Recording starts from the insert marker unless the transport is already playing.
+    if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().setPosition (impl->edit->getTransport().startPosition);
     // With Automation Arm on, recording runs for automation alone when no track is armed.
     impl->edit->getTransport().record (false, ! armed);
     if (! impl->edit->getTransport().isRecording()) return Result::fail ("Recording could not start. Check the selected input and device settings.");
@@ -6133,9 +6144,25 @@ void Session::seek (double seconds)
         // Takes are timed by the play head, so any recording ends where it is first.
         if (impl->anyRecording()) stop();
         impl->cancelLaunches();
-        impl->edit->getTransport().setPosition (te::TimePosition::fromSeconds (juce::jmax (0.0, seconds)));
+        auto& transport = impl->edit->getTransport();
+        const auto target = te::TimePosition::fromSeconds (juce::jmax (0.0, seconds));
+        transport.startPosition = target;
+        // The cached position follows the play head by a timer, so it can read the target while
+        // the play head is elsewhere; locate even then.
+        const bool unchanged = transport.getPosition() == target;
+        transport.setPosition (target);
+        if (unchanged) transport.state.sendPropertyChangeMessage (te::IDs::position);
     }
 }
+void Session::setInsertMarker (double seconds)
+{
+    if (impl->exporting || ! std::isfinite (seconds)) return;
+    auto& transport = impl->edit->getTransport();
+    if (! transport.isPlaying()) { seek (seconds); return; }
+    transport.startPosition = te::TimePosition::fromSeconds (juce::jmax (0.0, seconds));
+    sendChangeMessage();
+}
+void Session::returnToStart() { setInsertMarker (0); }
 Result Session::setTimeSignature (int numerator, int denominator)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

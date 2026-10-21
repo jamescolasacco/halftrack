@@ -37,7 +37,7 @@ namespace
 // Neutral studio grays with one warm selection accent.
 const juce::Colour background { 0xff1d1d1d }, panel { 0xff2d2d2d }, raised { 0xff3e3e3e },
                    line { 0xff141414 }, ink { 0xffdadada }, muted { 0xff8e8e8e },
-                   orange { 0xffffab3d }, red { 0xffed5249 }, green { 0xff48d17e };
+                   orange { 0xffffab3d }, red { 0xffed5249 }, green { 0xff48d17e }, insertBlue { 0xff7fb4ff };
 
 juce::Font font (float size = 12.0f, bool bold = false)
 {
@@ -344,11 +344,11 @@ public:
         };
         projectLabel.setFont (font (12.0f));
         projectLabel.setJustificationType (juce::Justification::centredRight);
-        playButton.setTooltip ("Play / pause  |  Space");
-        stopButton.setTooltip ("Stop and return to the beginning  |  Escape");
+        playButton.setTooltip ("Play from the insert marker  |  Space;  continue  |  Shift+Space");
+        stopButton.setTooltip ("Stop; again to return to the start  |  Home");
         recordButton.setTooltip ("Record into armed audio or MIDI tracks  |  F9");
         playButton.onClick = [this] { togglePlay(); };
-        stopButton.onClick = [this] { session.stop(); session.seek (0); refresh(); };
+        stopButton.onClick = [this] { if (state.playing || state.recording) session.stop(); else session.returnToStart(); refresh(); };
         recordButton.onClick = [this] { if (state.recording) session.stop(); else report (session.record()); refresh(); };
         automationArmButton.setTooltip ("Automation Arm: while recording, moving a fader or device control records its automation");
         automationArmButton.onClick = [this] { report (session.setAutomationArm (! state.automationArm)); refresh(); };
@@ -383,7 +383,7 @@ public:
         audioButton.setTooltip ("Audio devices, input/output channels, sample rate and buffer size");
         addTrackButton.onClick = [this] { showPiano = false; addTrack(); resized(); };
         addMidiButton.onClick = [this] { addMidiTrack(); };
-        newMidiClipButton.onClick = [this] { if (showSession) createLauncherMidiClip(); else createMidiClip (state.position); };
+        newMidiClipButton.onClick = [this] { if (showSession) createLauncherMidiClip(); else createMidiClip (state.insertMarker); };
         sessionTab.onClick = [this] { showSessionView(); };
         arrangementTab.onClick = [this] { showArrangementView(); };
         pianoTab.onClick = [this] { if (showPiano) closeClipView(); else openPianoRoll(); };
@@ -656,7 +656,7 @@ public:
                 }
                 if (const auto* track = currentTrack(); track && juce::isPositiveAndBelow(selectedClip,(int)track->clips.size())
                     && track->clips[(size_t)selectedClip].isMidi && code=='E')
-                { juce::String right; report (session.splitMidiClip (track->clips[(size_t) selectedClip].id, state.position, right)); refresh(); return true; }
+                { juce::String right; report (session.splitMidiClip (track->clips[(size_t) selectedClip].id, state.insertMarker, right)); refresh(); return true; }
                 if (const auto* track = currentTrack(); track && juce::isPositiveAndBelow(selectedClip,(int)track->clips.size())
                     && track->clips[(size_t)selectedClip].isMidi && code!='E')
                 {midiClipCommand(code=='D'?4:code=='C'?5:6,track->clips[(size_t)selectedClip].id);return true;}
@@ -698,8 +698,10 @@ public:
         }
         if (code == juce::KeyPress::tabKey && shift) { if (showPiano) closeClipView(); else openPianoRoll(); return true; }
         if (code == juce::KeyPress::tabKey) { if (showSession) showArrangementView(); else showSessionView(); return true; }
+        if (code == juce::KeyPress::spaceKey && shift) { if (state.playing) session.stop(); else report (session.continuePlayback()); refresh(); return true; }
         if (code == juce::KeyPress::spaceKey) { togglePlay(); return true; }
-        if (code == juce::KeyPress::escapeKey) { session.stop(); session.seek (0); refresh(); return true; }
+        if (code == juce::KeyPress::homeKey) { session.returnToStart(); refresh(); return true; }
+        if (code == juce::KeyPress::escapeKey) { session.stop(); session.returnToStart(); refresh(); return true; }
         if (code == juce::KeyPress::F9Key) { if (state.recording) session.stop(); else report (session.record()); refresh(); return true; }
         if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)
         {
@@ -1618,9 +1620,20 @@ private:
                         g.setColour (juce::Colour (0xffb9d3ff).withAlpha (.7f)); g.drawVerticalLine ((int) x0, area.getY(), area.getBottom()); g.drawVerticalLine ((int) x1, area.getY(), area.getBottom());
                     }
             }
-            auto x = (float) ((owner.state.position - owner.viewStart) * owner.pixelsPerSecond);
-            g.setColour (owner.state.recording ? red : juce::Colour (0xffeeeeee));
-            g.drawLine (x, 0, x, (float) getHeight(), 1.3f);
+            // The insert marker, where Play starts, flashes; the play position shows while playing
+            // or where playback stopped away from the marker.
+            const bool atMarker = std::abs (owner.state.position - owner.state.insertMarker) < 1e-6;
+            if (owner.insertMarkerLit())
+            {
+                const auto ix = (float) ((owner.state.insertMarker - owner.viewStart) * owner.pixelsPerSecond);
+                g.setColour (insertBlue); g.drawLine (ix, 0, ix, (float) getHeight(), 1.0f);
+            }
+            if (owner.state.playing || owner.state.recording || ! atMarker)
+            {
+                auto x = (float) ((owner.state.position - owner.viewStart) * owner.pixelsPerSecond);
+                g.setColour (owner.state.recording ? red : juce::Colour (0xffeeeeee));
+                g.drawLine (x, 0, x, (float) getHeight(), 1.3f);
+            }
             if (dragHover)
             {
                 g.setColour (orange.withAlpha (0.1f)); g.fillRect (0, 0, tw, getHeight());
@@ -1681,13 +1694,13 @@ private:
                 else { owner.timeSelection = {}; selectionAnchorTime = at; selectionAnchorTrack = track; }
                 selecting = true;
             }
-            owner.session.seek (juce::jmax (0.0, owner.viewStart + e.x / owner.pixelsPerSecond));
+            owner.session.setInsertMarker (owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods));
             owner.refresh();
             if (e.mods.isPopupMenu())
                 if (const auto* target = owner.currentTrack(); target && ! target->isReturn)
                 {
                     const auto trackId = target->id;
-                    const auto position = owner.state.position;
+                    const auto position = owner.state.insertMarker;
                     juce::PopupMenu popup;
                     const bool midi=target->isMidi;
                     popup.addItem (7, midi?"Paste MIDI here":"Paste audio here", midi?owner.session.hasMidiClipClipboard():owner.session.hasAudioClipClipboard());
@@ -1794,7 +1807,7 @@ private:
             const int last = juce::jlimit (0, count - 1, juce::jmax (selectionAnchorTrack, track < 0 ? count - 1 : track));
             Impl::TimeSelection next { juce::jmin (selectionAnchorTime, at), juce::jmax (selectionAnchorTime, at), {} };
             for (int t = first; t <= last; ++t) next.trackIds.add (owner.state.tracks[(size_t) t].id);
-            owner.timeSelection = next; repaint(); owner.ruler.repaint();
+            owner.timeSelection = next; owner.session.setInsertMarker (next.start); repaint(); owner.ruler.repaint();
         }
         void mouseMove (const juce::MouseEvent& e) override
         {
@@ -1871,13 +1884,13 @@ private:
             {
                 popup.addItem(4,"Duplicate MIDI after clip",clip->canEditMidiClip);
                 popup.addItem(5,"Copy MIDI clip",clip->canEditMidiClip);popup.addItem(6,"Cut MIDI clip",clip->canEditMidiClip);
-                popup.addItem(7,"Paste MIDI at playhead",owner.session.hasMidiClipClipboard());
+                popup.addItem(7,"Paste MIDI at insert marker",owner.session.hasMidiClipClipboard());
                 popup.addSeparator();popup.addItem(10,"Extract Groove");
             }
             const bool midi=clip&&clip->isMidi;
             auto safe = juce::Component::SafePointer<Impl> (&owner);
             const auto trackId = track ? track->id : juce::String();
-            const auto position = owner.state.position;
+            const auto position = owner.state.insertMarker;
             popup.showMenuAsync (juce::PopupMenu::Options(), [safe, id, trackId, position, midi, activate] (int choice)
             {
                 if (safe == nullptr) return;
@@ -4939,6 +4952,8 @@ private:
     juce::File browserFolder;
     juce::String status;
     int selectedTrack = -1, selectedClip = -1, statusFrames = 0, ticks = 0;
+    static constexpr int insertBlinkTicks = 12; // Half a second at the 24 Hz refresh.
+    bool insertMarkerLit() const noexcept { return (ticks / insertBlinkTicks) % 2 == 0; }
     BrowserCategory browserCategory = BrowserCategory::instruments;
     bool pluginBrowser() const noexcept { return browserCategory == BrowserCategory::plugins; }
     bool sampleBrowser() const noexcept { return browserCategory == BrowserCategory::samples; }
@@ -5391,7 +5406,7 @@ private:
     {
         session.beginEditGesture ("Create MIDI track");
         const auto result = session.addMidiTrack(); report (result); refresh();
-        if (result.wasOk()) { selectTrack ((int) state.tracks.size() - 1); if (showSession) createLauncherMidiClip(); else createMidiClip (state.position); }
+        if (result.wasOk()) { selectTrack ((int) state.tracks.size() - 1); if (showSession) createLauncherMidiClip(); else createMidiClip (state.insertMarker); }
         session.endEditGesture();
     }
     // The Arrangement grid in beats, chosen from the beat width at the playhead's tempo.
@@ -5558,6 +5573,7 @@ private:
         pollBrowserScan();
         if (statusFrames > 0 && --statusFrames == 0) status.clear();
         ++ticks;
+        if (ticks % insertBlinkTicks == 0) canvas.repaint(); // The insert marker flashes.
         refresh();
         if (recoveryFile != juce::File() && ++recoveryTicks >= recoveryIntervalTicks) { recoveryTicks = 0; autosave(); }
     }
@@ -5748,7 +5764,7 @@ private:
             case 30: showPiano = false; addTrack(); resized(); break;
             case 33: addMidiTrack(); break;
             case 35: addReturnTrack(); break;
-            case 34: if (showSession) createLauncherMidiClip(); else createMidiClip (state.position); break;
+            case 34: if (showSession) createLauncherMidiClip(); else createMidiClip (state.insertMarker); break;
             case 31: if (selectedTrack >= 0) { session.closePluginEditors(); report (session.removeTrack (selectedTrack)); selectedClip = -1; } break;
             case 32: addPluginMenu(); break;
             case 36: case 37: if (const auto* track = currentTrack()) reorderTrack (track->id, id == 36 ? -1 : 1); break;
@@ -5864,7 +5880,7 @@ private:
                 if (safe == nullptr) return;
                 juce::StringArray files;
                 for (const auto& file : fc.getResults()) files.add (file.getFullPathName());
-                safe->importFiles (files, safe->selectedTrack, safe->state.position);
+                safe->importFiles (files, safe->selectedTrack, safe->state.insertMarker);
             });
     }
     void importFiles (const juce::StringArray& files, int track, double at)
@@ -6248,7 +6264,7 @@ private:
     void midiClipCommand (int choice,const juce::String& id)
     {
         if(choice==10){extractGrooveFromUI(id);return;}
-        if(choice==7){if(const auto* track=currentTrack())pasteMidi(track->id,session.snapshot().position);return;}
+        if(choice==7){if(const auto* track=currentTrack())pasteMidi(track->id,session.snapshot().insertMarker);return;}
         if(choice==5||choice==6)
         {
             const auto result=session.copyMidiClip(id,choice==6);if(result.wasOk()&&choice==6)selectedClip=-1;
@@ -6271,7 +6287,7 @@ private:
         }
         if (choice == 7)
         {
-            if (const auto* track = currentTrack()) pasteAudio (track->id, session.snapshot().position);
+            if (const auto* track = currentTrack()) pasteAudio (track->id, session.snapshot().insertMarker);
             return;
         }
         if (choice != 3 && choice != 4) return;
@@ -6716,7 +6732,7 @@ private:
                 refresh();
             }
             else if (showSession) importLauncherFiles ({ item.file.getFullPathName() }, selectedTrack, selectedSceneIndex());
-            else importFiles ({ item.file.getFullPathName() }, selectedTrack, state.position);
+            else importFiles ({ item.file.getFullPathName() }, selectedTrack, state.insertMarker);
         }
         else
         {
@@ -6782,7 +6798,7 @@ private:
         const auto p = canvas.getLocalPoint (this, juce::Point<int> (x, y));
         const auto inside = viewport.getBounds().contains (x, y) && p.x < canvas.timelineWidth();
         const auto index = inside ? trackAtY (p.y) : -1;
-        const auto time = inside ? juce::jmax (0.0, viewStart + p.x / pixelsPerSecond) : state.position;
+        const auto time = inside ? juce::jmax (0.0, viewStart + p.x / pixelsPerSecond) : state.insertMarker;
         importFiles (files, index, snapSeconds (time));
     }
 };
@@ -7680,6 +7696,43 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "Z zooms to the time selection");
         check (handleKey (juce::KeyPress ('X')) && viewStart == previousView.first && pixelsPerSecond == previousView.second, "X returns to the view before it");
         timeSelection = {}; session.seek (0); refresh();
+    }
+    {
+        // Play starts from the insert marker; Stop leaves the play position and a second Stop, or
+        // Home, returns to the start; Shift+Space continues; a lane click while playing moves only
+        // the insert marker.
+        showArrangementView(); refresh();
+        check (session.addAudioTrack().wasOk(), "add an empty track for transport clicks"); refresh();
+        const int lane = (int) state.tracks.size() - 1;
+        viewStart = 0; updateScroll(); refresh();
+        const auto now = juce::Time::getCurrentTime();
+        const juce::ModifierKeys alt (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::altModifier);
+        auto laneClick = [&] (double seconds)
+        {
+            const juce::Point<float> at { (float) ((seconds - viewStart) * pixelsPerSecond), (float) (laneY (lane) + laneHeight (lane) / 2) };
+            const auto event = juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, alt, 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, at, now, 1, false);
+            canvas.mouseDown (event); canvas.mouseUp (event); refresh();
+        };
+        const auto tolerance = 1.5 / pixelsPerSecond;
+        laneClick (2);
+        check (std::abs (state.insertMarker - 2) < tolerance && std::abs (state.position - state.insertMarker) < 1e-6, "clicking a lane while stopped places the insert marker and play position");
+        check (handleKey (juce::KeyPress (juce::KeyPress::spaceKey)) && state.playing && std::abs (state.position - state.insertMarker) < 1e-6, "Space plays from the insert marker");
+        pumpSyntheticTestDevice (session, 100); refresh();
+        const auto played = state.position;
+        laneClick (1); pumpSyntheticTestDevice (session, 4); refresh();
+        check (state.playing && state.position >= played && std::abs (state.insertMarker - 1) < tolerance, "clicking a lane while playing moves only the insert marker");
+        stopButton.onClick();
+        const auto stopped = state.position;
+        check (! state.playing && stopped >= played && std::abs (state.insertMarker - 1) < tolerance, "Stop leaves the play position where playback stopped");
+        check (handleKey (juce::KeyPress (juce::KeyPress::spaceKey, juce::ModifierKeys::shiftModifier, 0)) && state.playing && state.position >= stopped - 1e-6,
+               "Shift+Space continues from there");
+        check (handleKey (juce::KeyPress (juce::KeyPress::spaceKey)) && ! state.playing, "Space stops");
+        check (handleKey (juce::KeyPress (juce::KeyPress::spaceKey)) && state.playing && std::abs (state.position - state.insertMarker) < 1e-6, "Space plays from the insert marker again");
+        stopButton.onClick(); stopButton.onClick();
+        check (! state.playing && state.insertMarker == 0 && state.position == 0, "a second Stop returns to the start");
+        session.setInsertMarker (3); refresh();
+        check (handleKey (juce::KeyPress (juce::KeyPress::homeKey)) && state.insertMarker == 0 && state.position == 0, "Home returns to the start");
+        check (session.removeTrack (lane).wasOk(), "remove the transport track"); refresh();
         // The piano roll follows its clip's playhead too.
         const int previousTrack = selectedTrack;
         check (session.addMidiTrack ("Follow").wasOk(), "add a MIDI track to follow"); refresh();

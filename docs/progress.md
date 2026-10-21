@@ -1151,3 +1151,9 @@ Engine-area change in `src/MidiEffects.*`, `src/NativeEffects.cpp`, `src/NativeE
 ## MIDI Monitor — 2026-10-21
 
 Engine and UI change in `src/MidiMonitor.*` (new), `src/NativeEffects.*`, `src/NativeEffectEditor.cpp`, `src/Session.*`, `src/Main.cpp`, `CMakeLists.txt` and `tests/MidiMonitorTests.cpp` (new), with documentation. A device without controls is now valid. Adding a device and validating its settings check the kind's range instead of treating an empty control list as unknown. The editor suite skips the control checks for such a device. The suite's flag is `--self-test-midi-monitor-device`, because `--self-test-midi-monitor` already runs the MIDI input-monitoring suite. See [the contract](research/midi-effects-contract.md#midi-monitor-2026-10-21).
+
+## Transport and insert marker — 2026-10-21
+
+Priority change: at the owner's request, core application work now comes before new stock devices.
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/TransportTests.cpp` (new), with documentation. The punch suite's automation check now uses the positions its moves were made at; it had failed about one run in six under load. See [the contract](research/transport-contract.md).

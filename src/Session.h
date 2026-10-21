@@ -362,6 +362,7 @@ public:
         uint64_t projectGeneration = 0; // Transient identity; changes only on successful New/Load.
         bool dirty = false, playing = false, recording = false, looping = false;
         double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
+        double insertMarker = 0; // Seconds: where Play starts.
         TimeSignature timeSignature;
         // The tempo map; one point at beat 0 for a constant tempo. `tempo` is the tempo at the playhead.
         std::vector<TempoPoint> tempoMap { TempoPoint {} };
@@ -585,10 +586,17 @@ public:
     juce::Result setTrackInput (int trackIndex, const juce::String& inputName);
     juce::Result setTrackArmed (int trackIndex, bool);
     juce::Result setTrackMonitor (int trackIndex, MonitorMode);
+    // Play and Record start from the insert marker when stopped; Stop leaves the play position
+    // where it stopped. Continue plays on from there. Return to Start puts the insert marker at the
+    // beginning. Locating (seek) moves the play position and the insert marker together; placing the
+    // insert marker moves the play position too only while stopped.
     juce::Result play();
+    juce::Result continuePlayback();
     void stop();
     juce::Result record();
     void seek (double seconds);
+    void setInsertMarker (double seconds);
+    void returnToStart();
     void setTempo (double bpm); // Constant tempo only; ignored while the tempo is automated.
     // Replaces the tempo map in one undo step: the first point at beat 0, beats increasing, 20-999 BPM.
     // Clips, automation and the loop keep their beats. One point restores a constant tempo.
