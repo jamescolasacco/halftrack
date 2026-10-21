@@ -226,8 +226,9 @@ public:
     static juce::Result readGrooveFile (const juce::File&, GrooveInfo&);
     static const char* grooveBaseName (GrooveBase) noexcept;
     enum class FadeCurve { linear = 1, convex, concave, sCurve };
-    // Warped audio follows the project tempo; its length is fixed in beats.
-    enum class WarpMode { off, stretch, efficient };
+    // Warped audio follows the project tempo; its length is fixed in beats. The stretching modes keep
+    // its pitch; Re-Pitch plays it faster or slower, so its pitch follows the tempo.
+    enum class WarpMode { off, stretch, efficient, repitch };
     struct WarpSettings
     {
         WarpMode mode = WarpMode::off;

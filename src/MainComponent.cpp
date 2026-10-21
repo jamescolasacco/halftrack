@@ -3531,7 +3531,7 @@ private:
             warp.setName ("Clip warp"); warp.setClickingTogglesState (true); warp.setTooltip ("Warp: follow the project tempo (length fixed in beats)");
             warp.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); warp.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
             warp.onClick = [this] { apply (warp.getToggleState() ? selectedMode() : Session::WarpMode::off, clip.warp.bpm); };
-            mode.setName ("Warp mode"); mode.addItem ("Stretch", 1); mode.addItem ("Efficient", 2);
+            mode.setName ("Warp mode"); mode.addItem ("Stretch", 1); mode.addItem ("Efficient", 2); mode.addItem ("Re-Pitch", 3);
             mode.setTooltip ("Stretch quality: Stretch (default) or Efficient (lower CPU)");
             mode.onChange = [this] { if (clip.warp.mode != Session::WarpMode::off) apply (selectedMode(), clip.warp.bpm); };
             bpm.setName ("Clip tempo"); bpm.setEditable (false, true, false); bpm.setJustificationType (juce::Justification::centred);
@@ -3574,7 +3574,7 @@ private:
             if (clip.file != shownFile) { shownFile = clip.file; thumbnail.setSource (clip.file.existsAsFile() ? new juce::FileInputSource (clip.file) : nullptr); }
             const bool warped = clip.warp.mode != Session::WarpMode::off;
             warp.setToggleState (warped, juce::dontSendNotification); warp.setEnabled (clip.canWarp && ! owner.session.isExporting());
-            mode.setSelectedId (clip.warp.mode == Session::WarpMode::efficient ? 2 : 1, juce::dontSendNotification); mode.setEnabled (warped);
+            mode.setSelectedId (clip.warp.mode == Session::WarpMode::efficient ? 2 : clip.warp.mode == Session::WarpMode::repitch ? 3 : 1, juce::dontSendNotification); mode.setEnabled (warped);
             if (! bpm.isBeingEdited()) bpm.setText (juce::String (clip.warp.bpm, 2), juce::dontSendNotification);
             for (auto* c : std::initializer_list<juce::Component*> { &bpm, &halve, &twice }) c->setEnabled (clip.canWarp);
             if (! gain.isMouseButtonDown()) gain.setValue (clip.audio.gainDb, juce::dontSendNotification);
@@ -3681,7 +3681,10 @@ private:
         juce::Rectangle<int> clipBox() const { return { 6, 6, 170, getHeight() - 12 }; }
         juce::Rectangle<int> sampleBox() const { return { 182 + launchSpace(), 6, 200, getHeight() - 12 }; }
         juce::Rectangle<int> waveBounds() const { return { 390 + launchSpace(), 6, juce::jmax (40, getWidth() - 396 - launchSpace()), getHeight() - 12 }; }
-        Session::WarpMode selectedMode() const { return mode.getSelectedId() == 2 ? Session::WarpMode::efficient : Session::WarpMode::stretch; }
+        Session::WarpMode selectedMode() const
+        { return mode.getSelectedId() == 2 ? Session::WarpMode::efficient : mode.getSelectedId() == 3 ? Session::WarpMode::repitch : Session::WarpMode::stretch; }
+        // Warp markers are edited in the stretching modes.
+        bool markersEditable() const { return clip.warp.mode != Session::WarpMode::off && clip.warp.mode != Session::WarpMode::repitch; }
         void apply (Session::WarpMode warpMode, double tempo)
         {
             owner.report (owner.session.setAudioClipWarp (clip.id, { warpMode, tempo })); owner.refresh(); sync();
@@ -3737,7 +3740,7 @@ private:
         // Double-clicking the warped waveform adds a marker where it is, or removes the one there.
         void mouseDoubleClick (const juce::MouseEvent& e) override
         {
-            if (clip.warp.mode == Session::WarpMode::off || ! waveBounds().contains (e.getPosition())) return;
+            if (! markersEditable() || ! waveBounds().contains (e.getPosition())) return;
             auto markers = clip.warpMarkers;
             if (const auto hit = markerAt (e.position.x); hit >= 0) markers.erase (markers.begin() + hit);
             else
@@ -3752,7 +3755,7 @@ private:
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
-            draggedMarker = clip.warp.mode != Session::WarpMode::off && waveBounds().contains (e.getPosition()) ? markerAt (e.position.x) : -1;
+            draggedMarker = markersEditable() && waveBounds().contains (e.getPosition()) ? markerAt (e.position.x) : -1;
             if (draggedMarker >= 0) { owner.session.beginEditGesture ("Move warp marker"); gesture = true; repaint(); }
         }
         // The snapping grid follows the zoom, as the reference's does: the coarsest power-of-two
@@ -9661,6 +9664,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "a slower source tempo makes the warped clip play twice as fast");
         clipGain->setValue (-6, juce::sendNotificationSync);
         check (std::abs (state.tracks[0].clips[0].audio.gainDb + 6) < 1e-4, "the clip view gain knob edits clip gain");
+        {
+            auto* warpMode = dynamic_cast<juce::ComboBox*> (findNamed (audioClipView, "Warp mode"));
+            check (warpMode != nullptr && warpMode->getItemText (2) == "Re-Pitch", "the warp mode chooser offers Re-Pitch");
+            warpMode->setSelectedId (3, juce::sendNotificationSync); refresh();
+            check (state.tracks[0].clips[0].warp.mode == Session::WarpMode::repitch, "choosing it warps the clip Re-Pitch");
+            session.undo(); refresh();
+            check (state.tracks[0].clips[0].warp.mode == Session::WarpMode::stretch && warpMode->getSelectedId() == 1, "undo returns the clip and chooser to Stretch");
+        }
         {
             // Warp markers: double-clicking the warped waveform adds one where it is, dragging moves
             // its beat on a sixteenth grid, and double-clicking it removes it.

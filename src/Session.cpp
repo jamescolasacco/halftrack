@@ -30,6 +30,7 @@ const juce::Identifier monitorProperty { "halftrackMonitor" };
 // Take lanes: a track's lanes of takes, each holding clip states that do not play, and the lane a
 // comped main-lane clip was copied from.
 const juce::Identifier takeLanesType { "HALFTRACKTAKELANES" }, takeLaneType { "TAKELANE" }, compSourceProperty { "halftrackCompSource" };
+const juce::Identifier repitchProperty { "halftrackRepitch" }; // Read by the Re-Pitch engine patch.
 const juce::Identifier implicitWarpEndProperty { "halftrackWarpEnd" }, warpMarkersPausedProperty { "halftrackWarpMarkersPaused" };
 const juce::Identifier recordQuantisationProperty { "halftrackRecordQuantisation" };
 const juce::Identifier countInProperty { "halftrackCountInBars" };
@@ -954,7 +955,8 @@ Session::WarpSettings warpSettings (te::WaveAudioClip& clip)
     const auto source = clip.getSourceLength().inSeconds();
     result.bpm = Session::estimateClipTempo (source);
     if (! clip.getAutoTempo()) return result;
-    result.mode = clip.getTimeStretchMode() == te::TimeStretcher::signalsmithCheaper ? Session::WarpMode::efficient : Session::WarpMode::stretch;
+    result.mode = static_cast<bool> (clip.state.getProperty (repitchProperty, false)) ? Session::WarpMode::repitch
+                : clip.getTimeStretchMode() == te::TimeStretcher::signalsmithCheaper ? Session::WarpMode::efficient : Session::WarpMode::stretch;
     if (const auto bpm = clip.getLoopInfo().getBpm (clip.getWaveInfo()); std::isfinite (bpm) && bpm > 0) result.bpm = bpm;
     return result;
 }
@@ -5759,6 +5761,7 @@ Result Session::setAudioClipWarpMarkers (const String& id, const std::vector<War
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
     const auto settings = warpSettings (*clip);
     if (settings.mode == WarpMode::off) return Result::fail ("Turn Warp on before adding warp markers.");
+    if (settings.mode == WarpMode::repitch) return Result::fail ("Warp markers need a stretching warp mode; Re-Pitch does not use them.");
     const auto source = clip->getSourceLength().inSeconds();
     if (source <= 0) return Result::fail ("The clip's audio is not available.");
     if (markers.size() > 1024) return Result::fail ("A clip can hold at most 1024 warp markers.");
@@ -5825,14 +5828,23 @@ Result Session::setAudioClipWarp (const String& id, const WarpSettings& settings
         length *= scale; offset *= scale;
         offset = juce::jlimit (0.0, source, offset); length = juce::jlimit (0.001, source - offset, length);
         clip->setAutoTempo (false); clip->setTimeStretchMode (te::TimeStretcher::disabled);
+        clip->state.removeProperty (repitchProperty, &impl->edit->getUndoManager());
         // Markers rest while warp is off.
         if (clip->getWarpTime()) { clip->state.setProperty (warpMarkersPausedProperty, true, &impl->edit->getUndoManager()); clip->setWarpTime (false); }
         clip->setPosition ({ { start, start + te::TimeDuration::fromSeconds (length) }, te::TimeDuration::fromSeconds (offset) });
         impl->changed(); return Result::ok();
     }
-    clip->setTimeStretchMode (settings.mode == WarpMode::efficient ? te::TimeStretcher::signalsmithCheaper : te::TimeStretcher::signalsmithDefault);
+    // Re-Pitch resamples with no time stretcher, which the engine's warp markers need, so they rest
+    // as with Warp off and return with a stretching mode.
+    const bool repitch = settings.mode == WarpMode::repitch;
+    // Set first: the stretch mode's change rebuilds the graph, which reads it.
+    if (repitch) clip->state.setProperty (repitchProperty, true, &impl->edit->getUndoManager());
+    else clip->state.removeProperty (repitchProperty, &impl->edit->getUndoManager());
+    clip->setTimeStretchMode (repitch ? te::TimeStretcher::disabled
+                              : settings.mode == WarpMode::efficient ? te::TimeStretcher::signalsmithCheaper : te::TimeStretcher::signalsmithDefault);
     clip->setUsesProxy (false);
-    if (static_cast<bool> (clip->state.getProperty (warpMarkersPausedProperty, false)))
+    if (repitch && clip->getWarpTime()) { clip->state.setProperty (warpMarkersPausedProperty, true, &impl->edit->getUndoManager()); clip->setWarpTime (false); }
+    if (! repitch && static_cast<bool> (clip->state.getProperty (warpMarkersPausedProperty, false)))
     { clip->state.removeProperty (warpMarkersPausedProperty, &impl->edit->getUndoManager()); clip->setWarpTime (true); }
     const auto scale = previous.mode == WarpMode::off ? settings.bpm / tempo : settings.bpm / previous.bpm;
     clip->getLoopInfo().setNumBeats (settings.bpm * source / 60);

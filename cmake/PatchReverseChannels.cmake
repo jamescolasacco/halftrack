@@ -2,7 +2,8 @@
 function(halftrack_patch_reverse_channels source_dir)
     set(source "${source_dir}/modules/tracktion_engine/model/clips/tracktion_AudioClipBase.cpp")
     file(SHA256 "${source}" source_hash)
-    if(source_hash STREQUAL "1902c1ad6fd72e5a62c9f83778bf190d239e7e8ae8f77229d66ff8ba6de2df57")
+    if(source_hash STREQUAL "1902c1ad6fd72e5a62c9f83778bf190d239e7e8ae8f77229d66ff8ba6de2df57"
+       OR source_hash STREQUAL "63336ba34baf1de28fce2e8bc0aff7b06d015ba45f9776cc62b0e7716449c455") # Or after the later Re-Pitch patch.
         return()
     endif()
     if(NOT source_hash STREQUAL "e87f781fd11f8f90236b416bd762577105439ef11eb13f63f1d9770b7ac49826")

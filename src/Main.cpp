@@ -69,6 +69,7 @@ int runAudioEngineTests (const juce::File&);
 int runMultitrackRecordingTests (const juce::File&);
 int runSessionRecordTests (const juce::File&);
 int runNoteChanceTests (const juce::File&);
+int runRepitchTests (const juce::File&);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -242,6 +243,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-routing");
             setApplicationReturnValue (runRoutingTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-repitch"))
+        {
+            const int i = args.indexOf ("--self-test-repitch");
+            setApplicationReturnValue (runRepitchTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-note-chance"))

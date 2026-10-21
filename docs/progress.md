@@ -1288,3 +1288,12 @@ Engine and test change in `src/Session.cpp`, `tests/SessionRecordTests.cpp` and 
 
 - **A released note was lost.** Pressing Session Record again, or capturing MIDI, right after a key was released could leave its note-off waiting for the message thread, so the overdubbed or captured note was dropped. Both now hand on pending notes first.
 - **Two tests assumed timing.** The punch test placed its MIDI notes by a block count from the lagging snapshot position, and the Session Record test waited a fixed 400 blocks for a take. Both now wait until the state under test is reached. They failed on Linux CI.
+
+## Re-Pitch warping — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt`, `cmake/PatchRepitch.cmake` (new), `cmake/PatchReverseChannels.cmake` and `tests/RepitchTests.cpp` (new), with documentation.
+
+- **Re-Pitch** in the clip view's warp mode chooser plays a clip faster or slower to follow the tempo, so its pitch moves with it.
+- **An engine fix.** The engine gave every tempo-following clip a time stretcher, so Re-Pitch clips need a property that keeps it off.
+
+See [the contract](research/repitch-contract.md).

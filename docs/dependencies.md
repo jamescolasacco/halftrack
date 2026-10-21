@@ -231,3 +231,7 @@ The reader now takes the ratio of the segment holding the read position plus the
 - **Empty passes.** An empty sequence is exhausted at once, and only `advance()`, which an exhausted generator never reaches, moved on to the next loop, so playback stopped for good. The looping generator now skips up to 64 empty loops when it seeks and advances.
 
 `note-chance-acceptance` renders the per-pass outcomes.
+
+## Tracktion Re-Pitch patch
+
+`cmake/PatchRepitch.cmake` patches the pinned `tracktion_AudioClipBase.cpp` after the reverse-channels patch (input SHA-256 `1902c1ad6fd72e5a62c9f83778bf190d239e7e8ae8f77229d66ff8ba6de2df57`, patched `63336ba34baf1de28fce2e8bc0aff7b06d015ba45f9776cc62b0e7716449c455`). The reverse-channels patch accepts the new hash on reconfigure. `getActualTimeStretchMode` gave any clip that follows the tempo the default time stretcher when its own mode was disabled. That kept its pitch, so no clip could follow the tempo by resampling. A clip with the `halftrackRepitch` property now keeps the stretcher disabled, and the wave node's resampler then plays it at the tempo ratio. `repitch-acceptance` measures the rendered pitch.

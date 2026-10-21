@@ -526,3 +526,7 @@ These are simplest defaults pending a comparison with the reference:
 
 - **Passes.** Chance and velocity range vary over 64 deterministic passes that repeat, decided from each note's identity, so a project plays the same way each time it is opened.
 - **Unlooped clips** play their first pass every time until their graph is rebuilt.
+
+### Re-Pitch warp markers
+
+Warp markers rest while a clip is in Re-Pitch and new ones are refused, since the engine's warp reader always stretches. The reference lets Re-Pitch clips keep their markers. This is the simplest default until a resampling warp reader exists.
