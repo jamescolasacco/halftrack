@@ -22,6 +22,7 @@ Session recording follows the reference workflow of recording into an empty clip
 - Seeking, including locator navigation, ends every take where the play head was and stops the transport, as during Arrangement recording. Each take keeps its keys and stays silent.
 - The recording track cannot be disarmed during its take ("End this track's Session recording before disarming it."). Arming, disarming and monitoring other tracks, and monitoring the recording track itself, keep the take.
 - Changing the recording track's instrument keeps the take. Arrangement clip edits (trim, reverse, split, duplicate, cut, copy, paste and move) and Insert or Delete Time keep it too, on any track. So do track, device and master automation, follow actions, count-in and recording quantization. Count-in and recording quantization do not apply to Session takes.
+- An audio-device stop (an Audio Settings change, a driver restart, a removed device) ends Session and Arrangement takes where the device stopped, keeps them and stops the transport, as Stop does. Before this, the engine's device rebuild discarded the takes.
 
 The finished take:
 
@@ -69,6 +70,8 @@ A fourth MIDI input test, `playbackAndArrangementEditsDuringSessionTakes`, uses 
 With the fixes, the seek ends the take with both keys played before it, and the transport is stopped at 3 s. Disarming is refused, the monitored key is heard during the take (peak about 0.11), and the take ends with all three keys. Every edit in the last item keeps both keys, and its own change is in place afterwards.
 
 `tests/SessionTests.cpp` records the synthetic device's generated audio input into a slot: a one-second, two-beat, tempo-following take in the project Assets that contains the signal and plays. A UI check records and ends a take from the grid buttons.
+
+The same file runs four device-change scenarios: an Arrangement or slot take, then an input-channel change through the `AudioDeviceManager` or a same-layout driver restart. Each records 94 generated blocks before the change. Before the fix, all four lost the take: no clip after Stop, and slot takes still reported `recording`. Now each keeps a 23,808-frame take containing the signal (every block but the first), stops the transport, and records a further take on the rebuilt devices. The channel change is applied without storing it as the chosen setup, because the engine saves that to the shared test settings that later sessions load.
 
 ## Not implemented
 

@@ -188,6 +188,10 @@ A group slot launches its members' clips in that row on the global grid, and mem
 
 Takes start on the global launch grid (immediately from a stopped transport) and end on it; per-clip grids do not apply to recording. Pressing another filled slot on a recording track ends the take without playing it and launches that slot. Track and global stops and transport stop keep the take silent. An empty MIDI take still creates a clip of its length. Audio takes follow tempo at the tempo they were recorded at. Recording while the transport loops is not handled specially. These are simplest-default choices pending reference measurement.
 
+### Audio-device changes during takes
+
+Default: any audio-device stop while a take records ends Arrangement and Session takes where the device stopped. It keeps them and stops the transport, as Stop does. This covers an Audio Settings change, a driver-initiated restart and a removed device. Audio Settings stays available during recording; refusing it would not protect against driver restarts. A device change is not deferred until the take ends, because a new sample rate or buffer size cannot continue the open recording. This is the simplest safe choice, not a measured match with the reference application, whose behavior on device changes during recording has not been observed. Stops reported on a non-message thread end the takes asynchronously. An interleaved engine device query on the message thread could still run the rebuild first; this is unverified and not covered by tests. Physical drivers and hot-unplug are not tested.
+
 ### Drum Sampler defaults
 
 Pads are one-shot at unity level and velocity scales linearly; length cuts fade over 5 ms and choke groups release over 5 ms. Sixteen pads cover C1 to D#2 with no bank switching. The kit shares 32 voices with oldest-voice stealing. Browser samples load into the selected pad. These are simplest-default choices pending reference measurement.
@@ -227,7 +231,7 @@ Controller lanes are step-wise (a value holds until the next point) rather than 
 
 ### Input changes during Session takes
 
-While a Session slot take records, input assignment is refused on every track, as during Arrangement recording. Enabling a device would discard the take, and replacing or disconnecting the recording track's input would leave the take without the input that stops it. A narrower rule could still allow assigning already-enabled inputs to other tracks; the reference application's behavior is unmeasured. Arming and monitoring stay available during a take. A MIDI device that appears during a take is discovered when the take ends. Audio-device changes in Audio Settings take the same device-list rebuild during any recording, Arrangement or Session. Code inspection shows the rebuild discards the take, but this is unmeasured, and refusing versus deferring those changes is undecided. Other edits during a take are covered under [edits during Session takes](#edits-during-session-takes).
+While a Session slot take records, input assignment is refused on every track, as during Arrangement recording. Enabling a device would discard the take, and replacing or disconnecting the recording track's input would leave the take without the input that stops it. A narrower rule could still allow assigning already-enabled inputs to other tracks; the reference application's behavior is unmeasured. Arming and monitoring stay available during a take. A MIDI device that appears during a take is discovered when the take ends. Audio-device changes during any recording are covered under [audio-device changes during takes](#audio-device-changes-during-takes). Other edits during a take are covered under [edits during Session takes](#edits-during-session-takes).
 
 ### Edits during Session takes
 
