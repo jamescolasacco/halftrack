@@ -1510,3 +1510,11 @@ Change in `cmake/PatchRecordingErrors.cmake` (new), `cmake/PatchWaveInputStart.c
 
 - **Recording errors.** An empty folder tree called "The directory…" in the repository led to an engine bug: the take file lookup turned its own error messages into file paths. A new patch returns them as errors.
 - **Manifest.** The dependency manifest gains a generated index of the pinned archives and of every hash each patch accepts or writes. A CI unit test keeps the manifest matched to the build.
+
+## Control audit — 2026-10-21
+
+Test change in `src/MainComponent.cpp`, with documentation.
+
+- **Audit.** The UI suite walks the main window in three views: the Arrangement View, the Session View and the MIDI clip editor. Every visible, enabled control must have a handler. One control, the note length the editor reads when drawing, is a marked exception.
+
+See [the contract](research/control-audit-contract.md).

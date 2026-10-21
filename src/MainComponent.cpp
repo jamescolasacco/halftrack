@@ -10,6 +10,7 @@
 #include "NoteTools.h"
 #include "Session.h"
 
+#include <typeinfo>
 #include <algorithm>
 #include <string_view>
 #include <atomic>
@@ -4387,6 +4388,7 @@ private:
             snap.setTooltip ("Note grid resolution. Hold Alt/Option while dragging to bypass snapping.");
             noteLength.addItem ("1/16", 1); noteLength.addItem ("1/8", 2); noteLength.addItem ("1/4", 3); noteLength.addItem ("1/2", 4); noteLength.addItem ("1 bar", 5);
             noteLength.setName ("New note length");
+            noteLength.getProperties().set ("readWhenUsed", true); // Drawing a note reads it (defaultLength).
             noteLength.setSelectedId (3); noteLength.setTooltip ("Default length for newly drawn notes");
             velocity.setName ("Note velocity");
             velocity.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -12408,6 +12410,44 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (session.setTempoMap ({ { 0, 120 } }).wasOk(), "return to a constant tempo"); refresh();
         check (tempo.isEditable() && tapButton.isEnabled(), "a constant tempo is editable again");
         session.seek (0); refresh();
+    }
+    {
+        // No false controls: in each main view, every visible and enabled button, menu, slider and
+        // editable text does something when used. The parts of JUCE's composite controls (a slider's
+        // text box, a menu's label, scroll bars) belong to their owner and are not checked apart.
+        const auto audit = [&] (const juce::String& view)
+        {
+            juce::StringArray idle;
+            const std::function<void (juce::Component&, const juce::String&)> visit = [&] (juce::Component& c, const juce::String& path)
+            {
+                if (! c.isVisible()) return;
+                const auto here = path + "/" + (c.getName().isNotEmpty() ? c.getName() : juce::String (typeid (c).name()));
+                // A control marked readWhenUsed has no handler because the action it sets up reads it.
+                const bool enabled = c.isEnabled() && ! static_cast<bool> (c.getProperties()["readWhenUsed"]);
+                if (auto* button = dynamic_cast<juce::Button*> (&c))
+                { if (enabled && ! button->onClick && ! button->onStateChange) idle.add (here + " \"" + button->getButtonText() + "\""); return; }
+                if (auto* box = dynamic_cast<juce::ComboBox*> (&c)) { if (enabled && ! box->onChange) idle.add (here); return; }
+                if (auto* slider = dynamic_cast<juce::Slider*> (&c)) { if (enabled && ! slider->onValueChange && ! slider->onDragEnd) idle.add (here); return; }
+                if (auto* editor = dynamic_cast<juce::TextEditor*> (&c))
+                { if (enabled && ! editor->isReadOnly() && ! editor->onTextChange && ! editor->onReturnKey) idle.add (here); return; }
+                if (auto* label = dynamic_cast<juce::Label*> (&c)) { if (enabled && (label->isEditableOnSingleClick() || label->isEditableOnDoubleClick()) && ! label->onTextChange) idle.add (here); return; }
+                if (dynamic_cast<juce::ScrollBar*> (&c) != nullptr) return;
+                for (auto* child : c.getChildren()) visit (*child, here);
+            };
+            visit (*this, {});
+            check (idle.isEmpty(), "in " + view + ", every visible control works or is disabled" + (idle.isEmpty() ? juce::String() : ": " + idle.joinIntoString (", ")));
+        };
+        check (session.newProject().wasOk() && session.importAudio (audioFixture, 0).wasOk(), "a project to audit"); refresh();
+        check (session.addNativeEffect (0, Session::EffectKind::eqThree).wasOk() && session.addMidiTrack ("Audit").wasOk(), "with a device and a MIDI track"); refresh();
+        const int midi = (int) state.tracks.size() - 1;
+        check (session.addMidiClip (state.tracks[(size_t) midi].id, 0, 4).wasOk() && session.addMidiClipToSlot (state.tracks[(size_t) midi].id, 0, 4).wasOk(), "and clips"); refresh();
+        showArrangementView(); selectTrack (0); refresh();
+        audit ("the Arrangement View with a device");
+        showSessionView(); refresh();
+        audit ("the Session View");
+        showArrangementView(); selectTrack (midi); selectedClip = 0; refresh(); openPianoRoll(); refresh();
+        audit ("the MIDI clip editor");
+        closeClipView(); showArrangementView(); refresh();
     }
 }
 
