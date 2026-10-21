@@ -2231,6 +2231,16 @@ struct Session::Impl
     }
     File editLocation() const { return projectFile == File() ? scratch.getChildFile ("Untitled.halftrack") : projectFile; }
     File assets() const { auto f = editLocation(); return f.getSiblingFile (f.getFileNameWithoutExtension() + " Assets"); }
+    // Audio takes are written into the assets; a folder that cannot take a file is refused before
+    // recording starts, so no take is lost to it.
+    Result takeFolderReady() const
+    {
+        const auto folder = assets();
+        if (auto r = folder.createDirectory(); r.failed()) return r;
+        if (! folder.hasWriteAccess())
+            return Result::fail ("Halftrack cannot write takes into \"" + folder.getFullPathName() + "\". Make it writable, or save the project somewhere writable.");
+        return Result::ok();
+    }
     void configureMidiPlayback()
     {
         // The beat sequencer reconciles edited notes against shared active-note
@@ -3025,6 +3035,7 @@ struct Session::Impl
     }
     void refreshInputs()
     {
+        applyRecordingFormat();
         if (! useDevices) return;
         edit->getTransport().ensureContextAllocated();
         remote.attach (edit.get()); attachCapture();
@@ -3068,6 +3079,20 @@ struct Session::Impl
         bool attached = false; // Message thread only.
     };
     bool engineOff = false; // Audio Engine Off closed the device.
+    // The recording format chosen here, given to inputs that appear later too.
+    std::optional<Session::RecordingFormat> chosenRecordingFormat;
+    juce::AudioFormat* recordingAudioFormat (Session::RecordingFileType type) const
+    {
+        auto& formats = engine.getAudioFileFormatManager();
+        return type == Session::RecordingFileType::aiff ? formats.getAiffFormat() : type == Session::RecordingFileType::flac ? formats.getFlacFormat() : formats.getWavFormat();
+    }
+    void applyRecordingFormat()
+    {
+        if (! chosenRecordingFormat) return;
+        const auto name = recordingAudioFormat (chosenRecordingFormat->type)->getFormatName();
+        for (auto* device : engine.getDeviceManager().getWaveInputDevices())
+        { device->setOutputFormat (name); device->setBitDepth (chosenRecordingFormat->bitDepth); }
+    }
     String noDeviceMessage() const
     { return engineOff ? "Turn the audio engine on first (File > Audio Engine On)." : "Choose an audio output in Audio Settings."; }
     void endTakesForDeviceStop()
@@ -3360,7 +3385,8 @@ Result Session::newProject()
     auto state = te::createEmptyEdit (impl->engine);
     auto options = te::Edit::Options { impl->engine, state, te::ProjectItemID::fromProperty (state, te::IDs::projectID) };
     options.numAudioTracks = 0; options.defaultMasterVolumedB = 0;
-    options.editFileRetriever = [this] { return impl->editLocation(); };
+    // The Impl, not Session::impl: the Edit is destroyed inside ~Impl, when impl is already null.
+    options.editFileRetriever = [owner = impl.get()] { return owner->editLocation(); };
     impl->audition.reset(); // Its states belong to the replaced Edit.
     impl->edit = std::make_unique<te::Edit> (std::move (options));
     ++impl->projectGeneration;
@@ -3759,7 +3785,7 @@ Result Session::saveProject (const File& destination)
     if (! document.writeTo (temp.getFile()) || ! temp.overwriteTargetFileWithTemporary())
         return Result::fail ("Could not write the project file.");
     impl->projectFile = file;
-    impl->edit->editFileRetriever = [this] { return impl->editLocation(); };
+    impl->edit->editFileRetriever = [owner = impl.get()] { return owner->editLocation(); };
     for (auto& [clip, source] : sources)
         // Keep running and undo-retained sources independent of the project
         // directory. The written copy above remains relative and portable.
@@ -4665,7 +4691,7 @@ Result Session::recordSlot (int trackIndex, int sceneIndex)
     auto* input = impl->input (*track);
     if (input == nullptr || ! input->isRecordingEnabled (track->itemID)) return Result::fail ("Arm the track to record into a Session slot.");
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
-    if (auto r = impl->assets().createDirectory(); r.failed()) return r;
+    if (auto r = input->getInputDevice().isMidi() ? impl->assets().createDirectory() : impl->takeFolderReady(); r.failed()) return r;
     auto& transport = impl->edit->getTransport();
     transport.ensureContextAllocated();
     auto destination = input->setTarget (slot->itemID, false, nullptr);
@@ -7322,7 +7348,10 @@ Result Session::record()
                     if(!canCopyMidiClip(*midi)) return Result::fail("Recording quantization requires unlooped, ungrouped, single-take MIDI clips at normal speed without source offsets.");
             }
     }
-    auto r = impl->assets().createDirectory(); if (r.failed()) return r;
+    bool audioArmed = false;
+    for (auto* t : te::getAudioTracks (*impl->edit))
+        if (auto* d = impl->input (*t); d != nullptr && ! d->getInputDevice().isMidi() && d->isRecordingEnabled (t->itemID)) audioArmed = true;
+    auto r = audioArmed ? impl->takeFolderReady() : impl->assets().createDirectory(); if (r.failed()) return r;
     for (auto* input : impl->edit->getAllInputDevices()) input->flushRecordingStateUpdates();
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->edit->setCountInMode (static_cast<te::Edit::CountIn> (snapshot().metronome.countInBars));
@@ -7733,6 +7762,35 @@ bool Session::isExporting() const { return impl->exporting; }
 void Session::cancelExport() { static_cast<UIBehaviour&> (impl->engine.getUIBehaviour()).cancelTask(); }
 
 juce::AudioDeviceManager& Session::audioDeviceManager() { return impl->engine.getDeviceManager().deviceManager; }
+Session::RecordingFormat Session::recordingFormat() const
+{
+    if (impl->chosenRecordingFormat) return *impl->chosenRecordingFormat;
+    RecordingFormat format;
+    auto& formats = impl->engine.getAudioFileFormatManager();
+    for (auto* device : impl->engine.getDeviceManager().getWaveInputDevices())
+    {
+        const auto name = device->getOutputFormat();
+        format.type = name == formats.getAiffFormat()->getFormatName() ? RecordingFileType::aiff
+                    : name == formats.getFlacFormat()->getFormatName() ? RecordingFileType::flac : RecordingFileType::wav;
+        if (device->getBitDepth() > 0) format.bitDepth = device->getBitDepth();
+        break;
+    }
+    return format;
+}
+Result Session::setRecordingFormat (const RecordingFormat& format)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before changing the recording format.");
+    auto* audioFormat = impl->recordingAudioFormat (format.type);
+    if (audioFormat == nullptr || ! audioFormat->getPossibleBitDepths().contains (format.bitDepth))
+    {
+        juce::StringArray depths; if (audioFormat != nullptr) for (auto d : audioFormat->getPossibleBitDepths()) depths.add (String (d));
+        return Result::fail ("This file type records at " + depths.joinIntoString (", ") + " bits.");
+    }
+    impl->chosenRecordingFormat = format;
+    impl->applyRecordingFormat();
+    sendChangeMessage(); return Result::ok();
+}
 Result Session::setAudioEngineEnabled (bool on)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

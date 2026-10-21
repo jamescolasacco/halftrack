@@ -7100,11 +7100,47 @@ private:
                                             : std::make_unique<AutomationEditor> (session, track->id);
         automationWindows.emplace_back (new Window (std::move (editor), theme, *this));
     }
-    void showAudioSettings()
+    // Audio & MIDI Setup: the device selector, then the file type and bit depth takes are recorded in.
+    class AudioSetupPanel final : public juce::Component
     {
-        auto settings = std::make_unique<juce::AudioDeviceSelectorComponent> (session.audioDeviceManager(), 0, 128, 0, 128, true, true, true, false);
-        showDialog ("Halftrack - Audio & MIDI Setup", std::move (settings), 660, 600);
-    }
+    public:
+        explicit AudioSetupPanel (Impl& o) : owner (o), devices (o.session.audioDeviceManager(), 0, 128, 0, 128, true, true, true, false)
+        {
+            addAndMakeVisible (devices);
+            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth }) addAndMakeVisible (c);
+            typeLabel.setText ("Record File Type", juce::dontSendNotification); depthLabel.setText ("Bit Depth", juce::dontSendNotification);
+            type.setName ("Record file type"); depth.setName ("Record bit depth");
+            type.addItem ("WAV", 1); type.addItem ("AIFF", 2); type.addItem ("FLAC", 3);
+            depth.addItem ("16", 16); depth.addItem ("24", 24); depth.addItem ("32", 32);
+            type.onChange = depth.onChange = [this]
+            {
+                const auto chosen = Session::RecordingFormat { static_cast<Session::RecordingFileType> (type.getSelectedId() - 1), depth.getSelectedId() };
+                owner.report (owner.session.setRecordingFormat (chosen));
+                sync();
+            };
+            sync();
+        }
+        void sync()
+        {
+            const auto format = owner.session.recordingFormat();
+            type.setSelectedId (static_cast<int> (format.type) + 1, juce::dontSendNotification);
+            depth.setSelectedId (format.bitDepth, juce::dontSendNotification);
+        }
+        void resized() override
+        {
+            auto area = getLocalBounds();
+            auto row = area.removeFromBottom (40).reduced (16, 8);
+            typeLabel.setBounds (row.removeFromLeft (120)); type.setBounds (row.removeFromLeft (90)); row.removeFromLeft (24);
+            depthLabel.setBounds (row.removeFromLeft (80)); depth.setBounds (row.removeFromLeft (70));
+            devices.setBounds (area);
+        }
+    private:
+        Impl& owner;
+        juce::AudioDeviceSelectorComponent devices;
+        juce::Label typeLabel, depthLabel;
+        juce::ComboBox type, depth;
+    };
+    void showAudioSettings() { showDialog ("Halftrack - Audio & MIDI Setup", std::make_unique<AudioSetupPanel> (*this), 660, 640); }
     void showPlugins()
     {
         auto list = std::make_unique<juce::PluginListComponent> (session.pluginFormats(), session.knownPlugins(), session.pluginScanDeadMansFile(), nullptr, false);
@@ -10358,6 +10394,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (! session.isAudioEngineEnabled() && status.contains ("Audio engine off"), "File > Audio Engine On turns the engine off");
         menuItemSelected (13, 1);
         check (session.isAudioEngineEnabled() && session.audioDeviceManager().getCurrentAudioDevice() != nullptr, "and on again");
+        {
+            // Audio & MIDI Setup's Recording row sets the take file type and bit depth.
+            AudioSetupPanel setup (*this);
+            auto* fileType = dynamic_cast<juce::ComboBox*> (findNamed (setup, "Record file type"));
+            auto* bitDepth = dynamic_cast<juce::ComboBox*> (findNamed (setup, "Record bit depth"));
+            check (fileType != nullptr && bitDepth != nullptr && fileType->getText() == "WAV", "Audio Setup shows the recording file type");
+            fileType->setSelectedId (2, juce::sendNotificationSync); bitDepth->setSelectedId (16, juce::sendNotificationSync);
+            check (session.recordingFormat() == Session::RecordingFormat { Session::RecordingFileType::aiff, 16 }, "and sets it with the bit depth");
+            fileType->setSelectedId (3, juce::sendNotificationSync); bitDepth->setSelectedId (32, juce::sendNotificationSync);
+            check (session.recordingFormat().type == Session::RecordingFileType::flac && session.recordingFormat().bitDepth == 16 && bitDepth->getSelectedId() == 16,
+                   "a depth the type cannot hold is refused and the chooser shows the kept one");
+            check (session.setRecordingFormat ({}).wasOk(), "back to WAV at 24 bits");
+        }
     }
     check (session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "prepare follow-action UI clip"); refresh(); showSessionView(); selectLauncherSlot (0, 0);
     const auto followClipId = selectedSlot()->clip.id;

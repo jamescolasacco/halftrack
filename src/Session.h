@@ -726,6 +726,17 @@ public:
     void cancelExport();
 
     juce::AudioDeviceManager& audioDeviceManager();
+    // The file type and bit depth audio takes are written in, for every input. The inputs keep it
+    // in the engine's settings, so it lasts between launches.
+    enum class RecordingFileType { wav, aiff, flac };
+    struct RecordingFormat
+    {
+        RecordingFileType type = RecordingFileType::wav;
+        int bitDepth = 24;
+        bool operator== (const RecordingFormat&) const = default;
+    };
+    RecordingFormat recordingFormat() const;
+    juce::Result setRecordingFormat (const RecordingFormat&);
     // Audio Engine Off stops the transport, keeping any takes, and closes the audio device; On
     // reopens the last device. While it is off nothing plays, records or launches.
     juce::Result setAudioEngineEnabled (bool);

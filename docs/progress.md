@@ -1305,3 +1305,13 @@ Test change in `tests/SharedMediaTests.cpp`, `tests/WavDecoderTests.cpp` and `te
 - **Shared media.** Editing copies of a clip, consolidating, and editing a project saved elsewhere rewrite no existing audio file.
 - **Independent decoding.** Exports at 16, 24 and 32 bits parse correctly in a decoder written in the test, and match an analytic sine within 1.5 LSB.
 - **Realtime and offline agreement.** Playback through the synthetic device matches the offline export exactly, apart from the 39-sample ramp that starting playback applies.
+
+## Recording format — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/RecordingFormatTests.cpp` (new), with documentation.
+
+- **File type and bit depth.** Audio takes record as WAV, AIFF or FLAC at a chosen bit depth, set in Audio & MIDI Setup.
+- **A lost-take fix.** Recording into an unwritable project folder started and lost the take without a warning. It is now refused with the reason.
+- **A teardown crash.** Destroying a Session whose clips the engine resolved on its way out read through `Session::impl` after it was cleared. The Edit's file callbacks now hold the Impl itself.
+
+See [the contract](research/recording-format-contract.md).
