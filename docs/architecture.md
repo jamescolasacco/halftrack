@@ -674,3 +674,15 @@ Hosted automation tests prepare the native playback context and wait for the act
 
 An analysis device (`effectIsAnalysis`, now the Tuner) passes audio unchanged. Its `NativeEffectPlugin` audio callback writes the mono mix it processed into a preallocated ring of atomic samples with a release-ordered frame count. `latestInput` copies the newest frames on the message thread and rejects a copy the writer lapped. `Session::tunerReading` runs the pure detector in `src/Tuner.*` on that copy, and the device editor polls it.
 
+## Automation capture and override
+
+Mixer and native-device setters check `Impl::capturing()` (Automation Arm while the transport records). When capturing, they write the move into the control's lane through `Impl::capture`. Otherwise they override a playing lane with `Impl::overrideLane`, inside their own transaction.
+
+Lanes are named by key and resolved again at each use, so a pass never holds a device pointer:
+
+- `mixer:<track>:volume|pan`;
+- `master`;
+- `device:<plugin>:<parameter>`.
+
+A pass keeps the lane's original points and its recorded points, and rewrites the whole lane through the ordinary lane writers with `internalAutomationWrite` set. Touch passes end in `endEditGesture`, and every pass ends in `stop()`. `overriddenLanes()` feeds `Snapshot::automationOverridden` and `reEnableAutomation`.
+

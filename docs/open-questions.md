@@ -298,3 +298,12 @@ These are simplest-default choices pending reference measurement:
 - **Range.** It detects 30 Hz–4.2 kHz with YIN's 0.1 threshold.
 - **Held reading.** It keeps showing its last reading while no audio is processed.
 
+### Automation capture defaults
+
+These are simplest-default choices pending reference measurement:
+
+- **Touch.** A held control records a touch pass and the earlier automation resumes 1/960 beat after release. Moves without a gesture latch until recording stops.
+- **Density.** Recorded points are at least 1/64 beat apart.
+- **Persistence.** Automation Arm is saved with the project and is not undoable.
+- **Read switch.** An override and the automation editor's Read switch are the same state.
+

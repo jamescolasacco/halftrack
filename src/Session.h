@@ -364,6 +364,8 @@ public:
         std::vector<SceneInfo> scenes;
         std::vector<LocatorInfo> locators;
         std::vector<GrooveInfo> grooves; // The groove pool, in pool order.
+        bool automationArm = false;
+        bool automationOverridden = false; // Some lane with points is switched off.
         float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
         MetronomeSettings metronome;
@@ -528,6 +530,13 @@ public:
     juce::Result setTrackAutomation (const juce::String& trackId, AutomationTarget, const AutomationLane&);
     // Automates one native device control (by parameter index) with values in the control's own units.
     juce::Result setDeviceAutomation (const juce::String& pluginId, int parameter, const AutomationLane&);
+    // Automation Arm, after the reference. While it is on and the transport records, moving a track's
+    // volume or pan, the master volume or a native device control writes that lane at the playhead:
+    // while an edit gesture holds the control (then the earlier automation resumes), or until recording
+    // stops. Otherwise, moving a control whose lane plays automation overrides the lane: it stops
+    // reading until reEnableAutomation, which re-enables every overridden lane in one undo step.
+    juce::Result setAutomationArm (bool);
+    juce::Result reEnableAutomation();
     // Knob-position mapping of a native control, used by automation editors; integer controls round.
     static float deviceAutomationValueToProportion (EffectKind, int parameter, float value);
     static float deviceAutomationProportionToValue (EffectKind, int parameter, float proportion);

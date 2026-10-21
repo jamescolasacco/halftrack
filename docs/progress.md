@@ -998,3 +998,13 @@ Engine and UI change. It touches:
 
 The Tuner is a Utilities device that passes audio unchanged and shows the nearest note, with cents or Hz and a target meter. The new `tuner-acceptance` suite checks detection accuracy and offline and live readings. See [the contract](research/native-effects-contract.md#tuner-2026-10-20).
 
+## Automation capture and override — 2026-10-21
+
+Root change. It touches:
+
+- the override and capture machinery, `setAutomationArm`, `reEnableAutomation` and automation-only recording in `src/Session.*`;
+- the control-bar buttons and live faders in `src/MainComponent.cpp`;
+- `tests/AutomationCaptureTests.cpp`, updated checks in `tests/AutomationTests.cpp` and the UI suite, the suite registration and documentation.
+
+Automated faders were locked until their points were cleared. Now moving one overrides its automation, as in Live, until Re-Enable Automation. With Automation Arm on, recording writes moves into the lanes. See [the contract](research/automation-capture-contract.md).
+

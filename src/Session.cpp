@@ -53,6 +53,7 @@ const juce::Identifier manualVolumeProperty { "halftrackManualVolume" };
 const juce::Identifier crossfadeProperty { "halftrackCrossfade" };
 const juce::Identifier crossfaderProperty { "halftrackCrossfader" };
 const juce::Identifier manualPanProperty { "halftrackManualPan" };
+const juce::Identifier automationArmProperty { "halftrackAutomationArm" };
 
 const juce::Identifier& manualAutomationProperty (Session::AutomationTarget target)
 { return target == Session::AutomationTarget::volume ? manualVolumeProperty : manualPanProperty; }
@@ -2052,7 +2053,7 @@ struct Session::Impl
     }
     Result setMixerAutomation (te::VolumeAndPanPlugin& plugin, AutomationTarget target, const AutomationLane& lane)
     {
-        if (exporting || edit->getTransport().isRecording())
+        if (exporting || (edit->getTransport().isRecording() && ! internalAutomationWrite))
             return Result::fail ("Stop recording or finish exporting before editing automation.");
         if (! validAutomationLane (target, lane)) return Result::fail ("Automation requires up to 4096 ordered beat points, volume -100 to +6 dB, or pan -1 to +1.");
         double previousTime = -1;
@@ -2069,8 +2070,9 @@ struct Session::Impl
             same = std::abs (edit->tempoSequence.toBeats (curve.getPointTime ((int) i)).inBeats() - lane.points[i].beat) < 1e-9
                 && std::abs (curve.getPointValue ((int) i) - nativeValue (lane.points[i].value)) < 1e-6f;
         if (same) return Result::ok();
-        transaction (plugin.isMasterVolAndPan() ? "Edit master volume automation"
-            : target == AutomationTarget::volume ? "Edit volume automation" : "Edit pan automation");
+        if (! internalAutomationWrite)
+            transaction (plugin.isMasterVolAndPan() ? "Edit master volume automation"
+                : target == AutomationTarget::volume ? "Edit volume automation" : "Edit pan automation");
         auto* undo = &edit->getUndoManager();
         const auto& property = manualAutomationProperty (target);
         // This baseline must survive Undo of the first envelope. Native automation
@@ -2095,6 +2097,141 @@ struct Session::Impl
         }
         edit->dispatchPendingUpdatesSynchronously();
         changed(); return Result::ok();
+    }
+    // Automation capture and override. Lanes are named by key ("mixer:<track>:volume|pan", "master",
+    // "device:<plugin>:<parameter>") and resolved again at each use, so a pass never holds a device.
+    bool internalAutomationWrite = false, captureTransaction = false;
+    struct LaneAccess
+    {
+        std::function<AutomationLane()> read;
+        std::function<Result (const AutomationLane&)> write;
+        std::function<float (float)> proportion, value; // Lane units to the engine's linear curve units, and back.
+    };
+    struct CapturePass { std::vector<AutomationPoint> original, recorded; bool touch = false; };
+    std::map<String, CapturePass> captures;
+    static String mixerKey (const te::AudioTrack& t, AutomationTarget target)
+    { return "mixer:" + t.itemID.toString() + (target == AutomationTarget::volume ? ":volume" : ":pan"); }
+    static String deviceKey (const String& pluginId, int parameter) { return "device:" + pluginId + ":" + String (parameter); }
+    bool automationArmed() const { return edit->state.getProperty (automationArmProperty, false); }
+    bool capturing() const { return automationArmed() && edit->getTransport().isRecording(); }
+    LaneAccess mixerLane (te::VolumeAndPanPlugin& plugin, AutomationTarget target)
+    {
+        return { [&plugin, target] { return automationLane (plugin, target); },
+                 [this, &plugin, target] (const AutomationLane& lane) { return setMixerAutomation (plugin, target, lane); },
+                 [target] (float v) { return Session::automationValueToProportion (target, v); },
+                 [target] (float p) { return Session::automationProportionToValue (target, p); } };
+    }
+    std::optional<LaneAccess> laneFor (const String& key)
+    {
+        const auto parts = juce::StringArray::fromTokens (key, ":", "");
+        if (parts[0] == "master") return mixerLane (*edit->getMasterVolumePlugin(), AutomationTarget::volume);
+        if (parts[0] == "mixer")
+            if (auto* t = track (parts[1])) if (auto* mixer = t->getVolumePlugin())
+                return mixerLane (*mixer, parts[2] == "pan" ? AutomationTarget::pan : AutomationTarget::volume);
+        if (parts[0] == "device")
+            if (auto* device = nativeDevice (parts[1]))
+            {
+                const auto id = parts[1]; const int parameter = parts[2].getIntValue(); const auto kind = device->getKind();
+                if (device->control (parameter) == nullptr) return std::nullopt;
+                return LaneAccess { [device, parameter] { for (const auto& a : deviceAutomation (*device)) if (a.parameter == parameter) return a.lane; return AutomationLane {}; },
+                                    [this, id, parameter] (const AutomationLane& lane) { return owner.setDeviceAutomation (id, parameter, lane); },
+                                    [kind, parameter] (float v) { return effectValueToProportion (kind, parameter, v); },
+                                    [kind, parameter] (float p) { return effectProportionToValue (kind, parameter, p); } };
+            }
+        return std::nullopt;
+    }
+    void writeLane (const LaneAccess& lane, const AutomationLane& points)
+    {
+        internalAutomationWrite = true; lane.write (points); internalAutomationWrite = false;
+    }
+    // Every lane with points that is switched off.
+    juce::StringArray overriddenLanes()
+    {
+        juce::StringArray keys;
+        const auto off = [] (const AutomationLane& lane) { return ! lane.enabled && ! lane.points.empty(); };
+        if (off (automationLane (*edit->getMasterVolumePlugin(), AutomationTarget::volume))) keys.add ("master");
+        for (auto* t : te::getAudioTracks (*edit))
+            if (auto* mixer = t->getVolumePlugin())
+                for (const auto target : { AutomationTarget::volume, AutomationTarget::pan })
+                    if (off (automationLane (*mixer, target))) keys.add (mixerKey (*t, target));
+        visitDevices ([&] (te::AudioTrack&, NativeEffectPlugin& d)
+        { for (const auto& a : deviceAutomation (d)) if (off (a.lane)) keys.add (deviceKey (d.itemID.toString(), a.parameter)); });
+        return keys;
+    }
+    // Moving a control whose lane plays automation switches the lane off until Re-Enable Automation.
+    void overrideLane (const String& key)
+    {
+        const auto lane = laneFor (key); if (! lane) return;
+        auto current = lane->read();
+        if (current.points.empty() || ! current.enabled) return;
+        current.enabled = false; writeLane (*lane, current);
+    }
+    double playheadBeat() const { return std::max (0.0, edit->tempoSequence.toBeats (edit->getTransport().getPosition()).inBeats()); }
+    // A capture pass replaces the lane from its first written beat. While it runs the lane holds its
+    // last value ahead; when it finishes at `end`, the earlier automation resumes just after.
+    void writePass (const CapturePass& pass, const LaneAccess& lane, std::optional<double> end)
+    {
+        constexpr double gap = 1.0 / 960;
+        const auto& o = pass.original; const auto& r = pass.recorded;
+        if (r.empty()) return;
+        const auto first = r.front().beat, last = end ? std::max (*end, r.back().beat) : r.back().beat;
+        // The original lane at a beat: linear in curve units, holding before its first point and after its last.
+        const auto originalAt = [&] (double beat)
+        {
+            if (beat <= o.front().beat) return o.front().value;
+            for (size_t i = 1; i < o.size(); ++i)
+                if (beat <= o[i].beat)
+                {
+                    const auto t = (beat - o[i - 1].beat) / (o[i].beat - o[i - 1].beat);
+                    const auto a = lane.proportion (o[i - 1].value), b = lane.proportion (o[i].value);
+                    return lane.value ((float) (a + t * (b - a)));
+                }
+            return o.back().value;
+        };
+        AutomationLane out;
+        for (const auto& p : o) if (p.beat < first - gap - 1e-6) out.points.push_back (p);
+        if (! o.empty() && first - gap >= 0) out.points.push_back ({ first - gap, originalAt (first - gap) });
+        out.points.insert (out.points.end(), r.begin(), r.end());
+        if (end)
+        {
+            if (last - r.back().beat >= gap) out.points.push_back ({ last, r.back().value });
+            if (! o.empty()) out.points.push_back ({ last + gap, originalAt (last + gap) });
+            for (const auto& p : o) if (p.beat > last + gap + 1e-6) out.points.push_back (p);
+        }
+        if (out.points.size() > 4096) out.points.erase (out.points.begin(), out.points.end() - 4096);
+        writeLane (lane, out);
+    }
+    void finishPass (const String& key, const CapturePass& pass)
+    { if (const auto lane = laneFor (key)) writePass (pass, *lane, playheadBeat()); }
+    // Writes `value` into the lane at the playhead. Moves within 1/64 beat replace the last point.
+    void capture (const String& key, float value)
+    {
+        const auto lane = laneFor (key); if (! lane) return;
+        const auto beat = playheadBeat();
+        auto found = captures.find (key);
+        // A loop wrap ends the pass at the loop end and starts another at the loop start.
+        if (found != captures.end() && ! found->second.recorded.empty() && beat < found->second.recorded.back().beat - 1e-9)
+        { writePass (found->second, *lane, found->second.recorded.back().beat); captures.erase (found); found = captures.end(); }
+        if (found == captures.end())
+        {
+            found = captures.emplace (key, CapturePass {}).first;
+            found->second.original = lane->read().points; found->second.touch = gesture != nullptr;
+        }
+        // Moves inside an edit gesture join its transaction; others share one per recording stretch.
+        if (! gesture && ! captureTransaction) { transaction ("Record automation"); captureTransaction = true; }
+        auto& r = found->second.recorded;
+        if (! r.empty() && beat - r.back().beat < 1.0 / 64) r.back().value = value;
+        else if (r.size() < 4000) r.push_back ({ beat, value });
+        else r.back() = { beat, value };
+        writePass (found->second, *lane, std::nullopt);
+    }
+    // Ends touch passes when their gesture ends, or every pass when recording stops.
+    void finishCaptures (bool touchOnly)
+    {
+        for (auto it = captures.begin(); it != captures.end();)
+            if (! touchOnly || it->second.touch) { finishPass (it->first, it->second); it = captures.erase (it); }
+            else ++it;
+        if (! touchOnly) captureTransaction = false;
     }
     void refreshParameterValues()
     {
@@ -2274,6 +2411,8 @@ Session::Snapshot Session::snapshot() const
         s.scenes.push_back ({ scene->state.getProperty ("halftrackSceneID").toString(), scene->name.get() });
     for (const auto& groove : e.state.getChildWithName (groovePoolType)) s.grooves.push_back (readGroove (groove));
     s.grooveAmount = grooveAmount (e.state);
+    s.automationArm = impl->automationArmed();
+    s.automationOverridden = ! impl->overriddenLanes().isEmpty();
     const auto quantisation = e.getLaunchQuantisation().type.get();
     s.launchQuantisation = quantisation == te::LaunchQType::none ? LaunchQuantisation::none
         : quantisation == te::LaunchQType::quarter ? LaunchQuantisation::beat : LaunchQuantisation::bar;
@@ -2464,6 +2603,8 @@ Result Session::loadProject (const File& file)
     if (auto result = validateTrackDelays (state); result.failed()) return result;
     if (auto result = validateClipScales (state); result.failed()) return result;
     if (auto result = validateGroovePool (state); result.failed()) return result;
+    if (state.hasProperty (automationArmProperty) && ! (finiteProperty (state[automationArmProperty], 0, 1) && (state[automationArmProperty].toString().trim() == "0" || state[automationArmProperty].toString().trim() == "1")))
+        return Result::fail ("The project's Automation Arm setting is invalid.");
     restoreManualMixerState (state);
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
@@ -5253,11 +5394,12 @@ Result Session::setMasterGain(float value)
     if(!std::isfinite(value)) return Result::fail("Enter a finite master level.");
     value=juce::jlimit(-100.0f,6.0f,value);
     auto master=impl->edit->getMasterVolumePlugin();
-    if (master->volParam->hasAutomationPoints()) return Result::fail ("Clear the master volume automation lane before changing its manual fader.");
-    if(master->getSliderPos()==te::decibelsToVolumeFaderPosition(value)) return Result::ok();
+    if (impl->capturing()) { impl->capture ("master", value); impl->changed(); return Result::ok(); }
+    const bool automated = master->volParam->hasAutomationPoints() && ! master->volParam->getCurve().bypass.get();
+    if(! automated && master->getSliderPos()==te::decibelsToVolumeFaderPosition(value)) return Result::ok();
     if (! master->state.hasProperty (manualVolumeProperty))
         master->state.setProperty (manualVolumeProperty, master->volParam->getCurrentExplicitValue(), nullptr);
-    impl->transaction("Master volume"); master->setVolumeDb(value);
+    impl->transaction("Master volume"); impl->overrideLane ("master"); master->setVolumeDb(value);
     master->state.setProperty (manualVolumeProperty, te::decibelsToVolumeFaderPosition (value), &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
@@ -5267,11 +5409,12 @@ Result Session::setTrackGain (int index, float value)
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (! std::isfinite (value)) return Result::fail ("Invalid gain.");
     auto* volume = t->getVolumePlugin();
-    if (volume->volParam->hasAutomationPoints()) return Result::fail ("Clear the volume automation lane before changing its manual fader.");
     value = juce::jlimit (-100.0f, 6.0f, value);
+    const auto key = Impl::mixerKey (*t, AutomationTarget::volume);
+    if (impl->capturing()) { impl->capture (key, value); impl->changed(); return Result::ok(); }
     if (! volume->state.hasProperty (manualVolumeProperty))
         volume->state.setProperty (manualVolumeProperty, volume->volParam->getCurrentExplicitValue(), nullptr);
-    impl->transaction ("Track gain"); volume->setVolumeDb (value);
+    impl->transaction ("Track gain"); impl->overrideLane (key); volume->setVolumeDb (value);
     volume->state.setProperty (manualVolumeProperty, te::decibelsToVolumeFaderPosition (value), &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
@@ -5281,11 +5424,12 @@ Result Session::setTrackPan (int index, float value)
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (! std::isfinite (value)) return Result::fail ("Invalid pan.");
     auto* volume = t->getVolumePlugin();
-    if (volume->panParam->hasAutomationPoints()) return Result::fail ("Clear the pan automation lane before changing its manual fader.");
     value = juce::jlimit (-1.0f, 1.0f, value);
+    const auto key = Impl::mixerKey (*t, AutomationTarget::pan);
+    if (impl->capturing()) { impl->capture (key, value); impl->changed(); return Result::ok(); }
     if (! volume->state.hasProperty (manualPanProperty))
         volume->state.setProperty (manualPanProperty, volume->panParam->getCurrentExplicitValue(), nullptr);
-    impl->transaction ("Track pan"); volume->setPan (value);
+    impl->transaction ("Track pan"); impl->overrideLane (key); volume->setPan (value);
     volume->state.setProperty (manualPanProperty, value, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
@@ -5318,7 +5462,7 @@ Result Session::setDeviceAutomation (const String& pluginId, int parameter, cons
     te::AudioTrack* owner = nullptr;
     auto* device = impl->nativeDevice (pluginId, &owner);
     if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
-    if (impl->exporting || impl->edit->getTransport().isRecording())
+    if (impl->exporting || (impl->edit->getTransport().isRecording() && ! impl->internalAutomationWrite))
         return Result::fail ("Stop recording or finish exporting before editing automation.");
     if (device == nullptr) return Result::fail ("Native device not found.");
     auto* control = device->control (parameter);
@@ -5341,7 +5485,7 @@ Result Session::setDeviceAutomation (const String& pluginId, int parameter, cons
         same = std::abs (impl->edit->tempoSequence.toBeats (curve.getPointTime ((int) i)).inBeats() - lane.points[i].beat) < 1e-9
             && std::abs (curve.getPointValue ((int) i) - effectValueToProportion (kind, parameter, lane.points[i].value)) < 1e-6f;
     if (same) return Result::ok();
-    impl->transaction ("Edit " + String (field.label) + " automation");
+    if (! impl->internalAutomationWrite) impl->transaction ("Edit " + String (field.label) + " automation");
     auto* undo = &impl->edit->getUndoManager();
     device->remapOnTempoChange = true;
     // Keep the curve container attached across Undo; the parameter caches that exact tree.
@@ -5352,6 +5496,26 @@ Result Session::setDeviceAutomation (const String& pluginId, int parameter, cons
         curve.addPoint (te::EditPosition (te::BeatPosition::fromBeats (point.beat)), effectValueToProportion (kind, parameter, point.value), 0, undo);
     device->refreshAutomation();
     impl->edit->dispatchPendingUpdatesSynchronously();
+    impl->changed(); return Result::ok();
+}
+Result Session::setAutomationArm (bool on)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->automationArmed() == on) return Result::ok();
+    if (! on) impl->finishCaptures (false);
+    // A transport setting, saved with the project but outside the undo history.
+    impl->edit->state.setProperty (automationArmProperty, on, nullptr);
+    impl->changed(); return Result::ok();
+}
+Result Session::reEnableAutomation()
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    const auto keys = impl->overriddenLanes();
+    if (keys.isEmpty()) return Result::ok();
+    impl->transaction ("Re-enable automation");
+    for (const auto& key : keys)
+        if (const auto lane = impl->laneFor (key)) { auto points = lane->read(); points.enabled = true; impl->writeLane (*lane, points); }
+    impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }
 Result Session::setMasterVolumeAutomation (const AutomationLane& lane)
@@ -5484,7 +5648,7 @@ void Session::stop()
         endEditGesture();
         impl->finishSlotRecording (impl->slotRecordings.front(), false, true);
     }
-    if (recording) { endEditGesture(); impl->transaction ("Record take"); }
+    if (recording) { impl->finishCaptures (false); endEditGesture(); impl->transaction ("Record take"); }
     te::Edit::UndoTransactionInhibitor stopping (*impl->edit);
     impl->cancelLaunches();
     impl->edit->getTransport().stop (false, false);
@@ -5522,7 +5686,8 @@ Result Session::record()
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio device in Audio Settings.");
     bool armed = false;
     for (auto* t : te::getAudioTracks (*impl->edit)) if (auto* d = impl->input (*t)) armed |= d->isRecordingEnabled (t->itemID);
-    if (! armed) return Result::fail ("Assign an input and arm at least one track before recording.");
+    if (! armed && ! impl->automationArmed()) return Result::fail ("Assign an input and arm at least one track, or turn on Automation Arm, before recording.");
+    impl->captures.clear(); impl->captureTransaction = false;
     const auto quantisation=snapshot().recordQuantisation;
     if(quantisation!=RecordQuantisation::none)
     {
@@ -5541,7 +5706,8 @@ Result Session::record()
     for(auto* input:impl->edit->getAllInputDevices()) if(input->isRecordingActive())
         if(auto* midi=dynamic_cast<te::MidiInputDevice*>(&input->getInputDevice())) midi->quantisation.setType("(none)");
     impl->edit->setClickTrackRange ({});
-    impl->edit->getTransport().record (false);
+    // With Automation Arm on, recording runs for automation alone when no track is armed.
+    impl->edit->getTransport().record (false, ! armed);
     if (! impl->edit->getTransport().isRecording()) return Result::fail ("Recording could not start. Check the selected input and device settings.");
     impl->changed(); return Result::ok();
 }
@@ -5729,6 +5895,7 @@ void Session::beginEditGesture (const String& name)
 void Session::endEditGesture()
 {
     if (impl->exporting) return;
+    if (impl->gesture) { impl->finishCaptures (true); impl->captureTransaction = false; }
     impl->flushStructuralUpdates();
     if (! impl->gesture) return;
     impl->gesture.reset();
@@ -5961,7 +6128,16 @@ Result Session::setNativeEffectSettings (const String& id, const EffectSettings&
     const auto previous = effect->readSettings();
     if (previous.kind != settings.kind) return Result::fail ("Effect type cannot change during an edit.");
     if (previous.values == settings.values) return Result::ok();
+    const auto controls = effectParameters (settings.kind).size();
+    if (impl->capturing())
+    {
+        for (size_t i = 0; i < controls; ++i)
+            if (previous.values[i] != settings.values[i]) impl->capture (Impl::deviceKey (id, (int) i), settings.values[i]);
+        effect->writeSettings (settings); impl->changed(); return Result::ok();
+    }
     impl->transaction ("Edit " + String (effectName (settings.kind)));
+    for (size_t i = 0; i < controls; ++i)
+        if (previous.values[i] != settings.values[i]) impl->overrideLane (Impl::deviceKey (id, (int) i));
     effect->writeSettings (settings); impl->changed(); return Result::ok();
 }
 Result Session::addUtility (int index)

@@ -52,6 +52,7 @@ int runPresetTests (const juce::File&);
 int runTempoMapTests (const juce::File&);
 int runGrooveTests (const juce::File&);
 int runTunerTests (const juce::File&);
+int runAutomationCaptureTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -212,6 +213,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-groups");
             setApplicationReturnValue (runGroupTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-automation-capture"))
+        {
+            const int i = args.indexOf ("--self-test-automation-capture");
+            setApplicationReturnValue (runAutomationCaptureTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-tuner"))

@@ -185,6 +185,52 @@ private:
     Kind kind;
 };
 
+// Automation Arm and Re-Enable Automation, beside the transport as in the reference.
+class AutomationButton final : public juce::Button
+{
+public:
+    enum Kind { arm, reEnable };
+    explicit AutomationButton (Kind k) : juce::Button (k == arm ? "Automation Arm" : "Re-Enable Automation"), kind (k) {}
+    void paintButton (juce::Graphics& g, bool over, bool down) override
+    {
+        g.setColour ((over || down) && isEnabled() ? raised.brighter (0.08f) : raised);
+        g.fillRect (getLocalBounds().reduced (1));
+        g.setColour (line); g.drawRect (getLocalBounds().reduced (1));
+        const auto r = getLocalBounds().toFloat().reduced (getWidth() * .26f, getHeight() * .3f);
+        const auto on = getToggleState();
+        g.setColour (kind == arm ? (on ? red.brighter (0.3f) : ink) : (on && isEnabled() ? orange : muted.withAlpha (0.6f)));
+        juce::Path p;
+        if (kind == arm)
+        {
+            // An envelope with a breakpoint.
+            p.startNewSubPath (r.getX(), r.getBottom()); p.lineTo (r.getX() + r.getWidth() * .35f, r.getY() + r.getHeight() * .25f);
+            p.lineTo (r.getX() + r.getWidth() * .65f, r.getY() + r.getHeight() * .7f); p.lineTo (r.getRight(), r.getY());
+            g.strokePath (p, juce::PathStrokeType (1.6f));
+            g.fillEllipse (r.getX() + r.getWidth() * .35f - 2.5f, r.getY() + r.getHeight() * .25f - 2.5f, 5, 5);
+        }
+        else
+        {
+            // A returning arrow.
+            p.addCentredArc (r.getCentreX(), r.getCentreY(), r.getWidth() * .5f, r.getHeight() * .5f, 0, -2.4f, 1.6f, true);
+            g.strokePath (p, juce::PathStrokeType (1.6f));
+            juce::Path head; const auto tip = juce::Point<float> (r.getCentreX() - r.getWidth() * .5f * std::sin (2.4f), r.getCentreY() - r.getHeight() * .5f * std::cos (2.4f));
+            head.addTriangle (tip.translated (-3.5f, -1), tip.translated (3, -2.5f), tip.translated (0, 3.5f)); g.fillPath (head);
+        }
+    }
+private:
+    Kind kind;
+};
+
+// A mixer control's look for its lane: automated controls show a red thumb, overridden ones a grey one.
+void showAutomationState (juce::Slider& slider, const Session::AutomationLane& lane, const juce::String& manualTip, const juce::String& what)
+{
+    const bool automated = ! lane.points.empty();
+    slider.setColour (juce::Slider::thumbColourId, ! automated ? orange : lane.enabled ? red : muted);
+    slider.setTooltip (! automated ? manualTip
+        : lane.enabled ? what + " follows its automation. Moving it overrides the automation until Re-Enable Automation."
+        : what + " automation is overridden. Re-Enable Automation (beside the transport) to follow it again.");
+}
+
 bool isAudio (const juce::File& file)
 {
     return file.hasFileExtension ("wav;aif;aiff;flac;ogg;mp3;wave");
@@ -211,13 +257,13 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &followButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
+                 &playButton, &stopButton, &recordButton, &automationArmButton, &reEnableButton, &followButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &ruler, &viewport,
                  &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipGroove, &deviceChain })
             addAndMakeVisible (child);
 
-        for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &followButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
+        for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &automationArmButton, &reEnableButton, &followButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
                  &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton, &folderButton,
                  &upButton, &zoomIn, &zoomOut, &fitButton })
         {
@@ -304,6 +350,10 @@ public:
         playButton.onClick = [this] { togglePlay(); };
         stopButton.onClick = [this] { session.stop(); session.seek (0); refresh(); };
         recordButton.onClick = [this] { if (state.recording) session.stop(); else report (session.record()); refresh(); };
+        automationArmButton.setTooltip ("Automation Arm: while recording, moving a fader or device control records its automation");
+        automationArmButton.onClick = [this] { report (session.setAutomationArm (! state.automationArm)); refresh(); };
+        reEnableButton.setTooltip ("Re-Enable Automation: overridden controls follow their automation again");
+        reEnableButton.onClick = [this] { report (session.reEnableAutomation()); refresh(); };
         followButton.setName ("Follow"); followButton.setClickingTogglesState (true); followButton.setToggleState (true, juce::dontSendNotification);
         followButton.setTooltip ("Follow: keep the playhead in view while playing. Scrolling by hand turns it off.  |  Cmd/Ctrl+F");
         followButton.onClick = [this] { followPlayhead = followButton.getToggleState(); refresh(); };
@@ -445,12 +495,13 @@ public:
         pianoTab.setBounds (bar.removeFromRight (40)); bar.removeFromRight (10);
         cpuBounds = bar.removeFromRight (56); bar.removeFromRight (8);
         // Transport is centred on the window, independent of the side groups.
-        constexpr int transportWidth = 92 + 6 + 3 * 28 + 4 + 50 + 10 + 78 + 3 + 48 + 3 + 78;
+        constexpr int transportWidth = 92 + 6 + 3 * 28 + 2 + 2 * 28 + 4 + 50 + 10 + 78 + 3 + 48 + 3 + 78;
         auto centre = juce::Rectangle<int> (juce::jmax (bar.getX(), getWidth() / 2 - transportWidth / 2), bar.getY(), transportWidth, bar.getHeight());
         positionLabel.setBounds (centre.removeFromLeft (92)); centre.removeFromLeft (6);
         playButton.setBounds (centre.removeFromLeft (28));
         stopButton.setBounds (centre.removeFromLeft (28));
-        recordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4);
+        recordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (2);
+        automationArmButton.setBounds (centre.removeFromLeft (28)); reEnableButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4);
         followButton.setBounds (centre.removeFromLeft (50)); centre.removeFromLeft (10);
         loopStartLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (3);
         loopButton.setBounds (centre.removeFromLeft (48)); centre.removeFromLeft (3);
@@ -947,12 +998,9 @@ private:
             if (! name.isBeingEdited()) name.setText (track.name, juce::dontSendNotification);
             if (! gain.isMouseButtonDown()) gain.setValue (track.gainDb, juce::dontSendNotification);
             if (! pan.isMouseButtonDown()) pan.setValue (track.pan, juce::dontSendNotification);
-            gain.setEnabled (track.volumeAutomation.points.empty() && !owner.session.isExporting());
-            pan.setEnabled (track.panAutomation.points.empty() && !owner.session.isExporting());
-            gain.setTooltip (track.volumeAutomation.points.empty() ? "Track volume. Double-click to reset to 0 dB."
-                : "Volume has automation. Edit or clear its lane in Automation.");
-            pan.setTooltip (track.panAutomation.points.empty() ? "Track pan. Double-click to center."
-                : "Pan has automation. Edit or clear its lane in Automation.");
+            gain.setEnabled (! owner.session.isExporting()); pan.setEnabled (! owner.session.isExporting());
+            showAutomationState (gain, track.volumeAutomation, "Track volume. Double-click to reset to 0 dB.", "Volume");
+            showAutomationState (pan, track.panAutomation, "Track pan. Double-click to center.", "Pan");
             mute.setToggleState (! track.mute, juce::dontSendNotification);
             mute.setButtonText (juce::String (position + 1));
             solo.setToggleState (track.solo, juce::dontSendNotification);
@@ -2399,7 +2447,8 @@ private:
                 if (! crossfader.isMouseButtonDown()) crossfader.setValue (owner.state.crossfader, juce::dontSendNotification);
                 crossfader.setEnabled (! owner.session.isExporting());
                 if (! gain.isMouseButtonDown()) gain.setValue (owner.state.masterGainDb, juce::dontSendNotification);
-                gain.setEnabled (owner.state.masterVolumeAutomation.points.empty() && ! owner.session.isExporting());
+                gain.setEnabled (! owner.session.isExporting());
+                showAutomationState (gain, owner.state.masterVolumeAutomation, "Master output level. Double-click for 0 dB.", "Master volume");
                 peakL = owner.state.masterPeakL; peakR = owner.state.masterPeakR; repaint();
             }
             void resized() override { gain.setBounds (6, 106, 54, getHeight() - 162); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22); }
@@ -4494,7 +4543,7 @@ private:
             {
                 const auto current = owner.session.snapshot();
                 if (masterProjectGeneration != current.projectGeneration) { owner.refresh(); return; }
-                if (! current.masterVolumeAutomation.points.empty() || owner.session.isExporting()) return;
+                if (owner.session.isExporting()) return;
                 masterGestureGeneration = current.projectGeneration; owner.session.beginEditGesture ("Master volume");
             };
             masterGain.onDragEnd = [this]
@@ -4528,10 +4577,8 @@ private:
             if (projectChanged) masterGain.hideTextBox (true);
             masterProjectGeneration = owner.state.projectGeneration;
             if (projectChanged || ! masterGain.isMouseButtonDown()) masterGain.setValue (owner.state.masterGainDb, juce::dontSendNotification);
-            masterGain.setEnabled (owner.state.masterVolumeAutomation.points.empty() && ! owner.session.isExporting());
-            masterGain.setTooltip (owner.state.masterVolumeAutomation.points.empty()
-                ? "Master output level. Double-click for 0 dB. The bottom of the fader is silence."
-                : "Master volume has automation. Choose Master in Automation and clear its points to edit this fader.");
+            masterGain.setEnabled (! owner.session.isExporting());
+            showAutomationState (masterGain, owner.state.masterVolumeAutomation, "Master output level. Double-click for 0 dB. The bottom of the fader is silence.", "Master volume");
             automationButton.setEnabled (! owner.session.isExporting());
             addButton.setEnabled (track != nullptr);
             // Rebuild panels only when the device list itself changes.
@@ -4628,6 +4675,7 @@ private:
     juce::AudioFormatManager formats;
     juce::AudioThumbnailCache thumbnailCache { 128 };
     TransportButton playButton { TransportButton::play }, stopButton { TransportButton::stop }, recordButton { TransportButton::record };
+    AutomationButton automationArmButton { AutomationButton::arm }, reEnableButton { AutomationButton::reEnable };
     juce::TextButton followButton { "Follow" }, tapButton { "TAP" }, loopButton { "Loop" }, clickButton { "Metro" }, clickSettingsButton { "..." }, audioButton { "Audio" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
                      sessionTab { "Session" }, arrangementTab { "Arrange" }, pianoTab { "Clip" }, importButton { "Import Audio" },
                      filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" },
@@ -5231,6 +5279,8 @@ private:
         if (const auto* track = currentTrack(); track == nullptr || selectedClip >= (int) track->clips.size()) selectedClip = -1;
         playButton.setToggleState (state.playing, juce::dontSendNotification);
         recordButton.setToggleState (state.recording, juce::dontSendNotification);
+        automationArmButton.setToggleState (state.automationArm, juce::dontSendNotification);
+        reEnableButton.setToggleState (state.automationOverridden, juce::dontSendNotification); reEnableButton.setEnabled (state.automationOverridden);
         loopButton.setToggleState (state.looping, juce::dontSendNotification);
         clickButton.setToggleState(state.metronome.enabled,juce::dontSendNotification);
         quantisation.setSelectedId (state.launchQuantisation == Session::LaunchQuantisation::none ? 1 : state.launchQuantisation == Session::LaunchQuantisation::beat ? 2 : 3, juce::dontSendNotification);
@@ -9047,17 +9097,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     const auto automationTrackId = state.tracks[0].id;
     check (session.setTrackAutomation (automationTrackId, Session::AutomationTarget::volume,
         { true, {{0, -18}, {4, 0}} }).wasOk(), "prepare a real automation lane for mixer integration"); refresh();
-    check (!automatedGain->isEnabled() && automatedPan->isEnabled(), "volume automation protects only its matching manual fader");
-    check (session.setTrackAutomation (automationTrackId, Session::AutomationTarget::volume,
-        { false, {{0, -18}, {4, 0}} }).wasOk(), "bypass automation without deleting its points"); refresh();
-    check (!automatedGain->isEnabled(), "bypassed lane remains protected until its points are cleared");
+    check (automatedGain->isEnabled() && automatedGain->findColour (juce::Slider::thumbColourId) == red && automatedPan->findColour (juce::Slider::thumbColourId) == orange,
+           "an automated fader stays live and shows a red thumb; its neighbour is unaffected");
+    automatedGain->setValue (-6, juce::sendNotificationSync); refresh();
+    check (! state.tracks[0].volumeAutomation.enabled && state.tracks[0].volumeAutomation.points.size() == 2 && automatedGain->findColour (juce::Slider::thumbColourId) == muted
+           && state.automationOverridden && reEnableButton.isEnabled() && reEnableButton.getToggleState(), "moving it overrides the lane, greys its thumb and lights Re-Enable Automation");
+    reEnableButton.onClick(); refresh();
+    check (state.tracks[0].volumeAutomation.enabled && ! state.automationOverridden && ! reEnableButton.isEnabled() && automatedGain->findColour (juce::Slider::thumbColourId) == red,
+           "Re-Enable Automation lets the fader follow its lane again");
+    session.undo(); refresh(); check (! state.tracks[0].volumeAutomation.enabled, "undo returns to the override");
+    session.undo(); refresh(); check (state.tracks[0].volumeAutomation.enabled && std::abs (state.tracks[0].gainDb + 6) > .01f, "a second undo removes the override and its manual move");
+    check (! state.automationArm && ! automationArmButton.getToggleState(), "Automation Arm starts off");
+    automationArmButton.onClick(); refresh(); check (state.automationArm && automationArmButton.getToggleState(), "the Automation Arm button arms automation recording");
+    automationArmButton.onClick(); refresh(); check (! state.automationArm, "and disarms it");
     check (session.setTrackAutomation (automationTrackId, Session::AutomationTarget::volume, {}).wasOk(),
         "clear automation from the selected mixer"); refresh();
-    check (automatedGain->isEnabled(), "clearing the lane restores manual volume editing");
-    session.undo(); refresh();
-    check (!automatedGain->isEnabled(), "undo clear restores the matching fader protection");
-    session.redo(); refresh();
-    check (automatedGain->isEnabled(), "redo clear restores manual control");
+    check (automatedGain->isEnabled() && automatedGain->findColour (juce::Slider::thumbColourId) == orange, "clearing the lane restores the plain fader");
     menuItemSelected (46, 3);
     check (!automationWindows.empty() && automationWindows.back() != nullptr,
         "View menu opens an automation editor for the selected track");
@@ -9078,19 +9133,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     master->setValue (-9, juce::sendNotificationSync); refresh();
     const Session::AutomationLane masterAutomation { true, {{0, -18}, {4, 0}} };
     check (session.setMasterVolumeAutomation (masterAutomation).wasOk(), "prepare master automation for its output fader"); refresh();
-    check (! master->isEnabled() && master->getTooltip().contains ("Master volume has automation"),
-        "master automation protects its fader and explains how to restore manual editing");
+    check (master->isEnabled() && master->getTooltip().contains ("follows its automation"),
+        "the automated master fader stays live and explains the override");
     const auto protectedMaster = state.masterVolumeAutomation;
     master->setValue (-3, juce::sendNotificationSync); refresh();
-    check (state.masterVolumeAutomation == protectedMaster, "a forced manual fader callback cannot rewrite master automation");
+    check (state.masterVolumeAutomation.points == protectedMaster.points && ! state.masterVolumeAutomation.enabled, "moving it overrides master automation and keeps its points");
     auto bypassedMaster = masterAutomation; bypassedMaster.enabled = false;
     check (session.setMasterVolumeAutomation (bypassedMaster).wasOk(), "bypass master automation with its points retained"); refresh();
-    check (! master->isEnabled(), "master fader remains protected while Read is off");
+    check (master->isEnabled() && master->getTooltip().contains ("overridden"), "an overridden master fader says how to follow the lane again");
     check (session.setMasterVolumeAutomation ({}).wasOk(), "clear master automation for manual mixing"); refresh();
-    check (master->isEnabled() && std::abs (state.masterGainDb + 9) < .001f,
-        "Clear restores the retained manual master level and enabled fader");
-    session.undo(); refresh(); check (! master->isEnabled(), "undo master Clear restores fader protection");
-    session.redo(); refresh(); check (master->isEnabled(), "redo master Clear restores manual control");
+    check (master->isEnabled() && std::abs (state.masterGainDb + 3) < .001f,
+        "Clear keeps the manual master level set during the override");
+    session.undo(); refresh(); check (! state.masterVolumeAutomation.enabled && state.masterVolumeAutomation.points.size() == 2 && master->findColour (juce::Slider::thumbColourId) == muted, "undo master Clear restores the overridden lane");
+    session.redo(); refresh(); check (state.masterVolumeAutomation.points.empty() && master->findColour (juce::Slider::thumbColourId) == orange, "redo master Clear restores the plain fader");
     menuItemSelected (47, 3);
     auto* masterWindow = automationWindows.back().getComponent();
     auto* masterDestination = dynamic_cast<juce::ComboBox*> (findNamed (*masterWindow, "automation-track"));
