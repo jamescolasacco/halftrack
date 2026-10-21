@@ -326,7 +326,7 @@ public:
         deviceView.setViewedComponent (&deviceContent, false); deviceView.setScrollBarsShown (true, true); deviceView.setScrollBarThickness (6);
         deviceContent.setName ("Chain devices"); addAndMakeVisible (deviceView);
         addChildComponent (zones); addChildComponent (pads); addChildComponent (padControls); addChildComponent (mappings);
-        error.setColour (juce::Label::textColourId, juce::Colour (0xfff4ab84)); error.setFont (font (9.5f)); addAndMakeVisible (error);
+        error.setName ("Rack error"); error.setColour (juce::Label::textColourId, juce::Colour (0xfff4ab84)); error.setFont (font (9.5f)); addAndMakeVisible (error);
         session.addChangeListener (this);
         sync(); startTimerHz (15);
     }
