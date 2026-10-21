@@ -511,3 +511,11 @@ These are simplest defaults pending a comparison with the reference:
 - **Timing.** A quantized launch changes the tempo and meter at its launch boundary, not on the click.
 - **History.** Each change a launch makes is one undo step named "Launch scene", since the tempo is project content; the reference's handling is unknown.
 - **Exceptions.** An automated tempo or a meter with several changes is left as it is, and nothing changes while the Arrangement records.
+
+### Audio From scope
+
+These are simplest defaults pending a comparison with the reference:
+
+- **Tap.** A track takes another track's output after its devices and mixer (the reference's Post Mixer); Pre FX and Post FX are not offered yet.
+- **One destination.** As with hardware inputs, a source feeds one track at a time; choosing it for another track moves it.
+- **Exports** include a routed input while it is monitored In, or Auto and armed, as playback hears it.

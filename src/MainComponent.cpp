@@ -1119,7 +1119,15 @@ private:
                 owner.report (owner.session.setTrackMonitor (index, mode));
             };
             monitor.setTooltip ("Input monitoring: Off, Auto while armed, or always In");
-            input.onChange = [this] { owner.report (owner.session.setTrackInput (index, input.getSelectedId() == 1 ? juce::String() : input.getText())); };
+            input.onChange = [this]
+            {
+                // Tracks follow the devices, from item firstSourceItem on.
+                const int item = input.getSelectedId();
+                if (juce::isPositiveAndBelow (item - firstSourceItem, inputSourceIds.size()))
+                    owner.report (owner.session.setTrackInputTrack (trackId, inputSourceIds[item - firstSourceItem]));
+                else owner.report (owner.session.setTrackInput (index, item == 1 ? juce::String() : input.getText()));
+                owner.refresh();
+            };
             input.setTooltip ("Choose an input before arming. Each input is assigned to one track; choosing it here moves its previous assignment.");
             if (! columnLayout)
             {
@@ -1164,16 +1172,26 @@ private:
             solo.setToggleState (track.solo, juce::dontSendNotification);
             arm.setToggleState (track.armed, juce::dontSendNotification);
             auto names = owner.session.inputNames (midi);
-            if (names != inputNames)
+            // Audio From another track: the tracks this one may take audio from, by name.
+            juce::StringArray sources, sourceLabels;
+            if (! midi && ! returnTrack)
+                for (const auto& id : owner.session.inputSources (track.id))
+                    for (const auto& other : owner.state.tracks) if (other.id == id) { sources.add (id); sourceLabels.add (other.name); }
+            if (names != inputNames || sourceLabels != inputSourceLabels)
             {
-                inputNames = names;
+                inputNames = names; inputSourceLabels = sourceLabels;
                 input.clear (juce::dontSendNotification);
                 input.addItem ("No input", 1);
                 for (int n = 0; n < inputNames.size(); ++n) input.addItem (inputNames[n], n + 2);
+                if (! sourceLabels.isEmpty()) input.addSectionHeading ("Tracks");
+                for (int n = 0; n < sourceLabels.size(); ++n) input.addItem (sourceLabels[n], firstSourceItem + n);
             }
+            inputSourceIds = sources;
             if (input.getNumItems() == 0) input.addItem ("No input", 1);
             input.setSelectedId (inputNames.indexOf (track.inputName) + 2, juce::dontSendNotification);
-            if (track.inputName.isEmpty()) input.setSelectedId (1, juce::dontSendNotification);
+            if (track.inputTrackId.isNotEmpty() && sources.contains (track.inputTrackId))
+                input.setSelectedId (firstSourceItem + sources.indexOf (track.inputTrackId), juce::dontSendNotification);
+            if (track.inputName.isEmpty() && track.inputTrackId.isEmpty()) input.setSelectedId (1, juce::dontSendNotification);
             monitor.setSelectedId (track.monitor == Session::MonitorMode::on ? 3 : track.monitor == Session::MonitorMode::automatic ? 2 : 1, juce::dontSendNotification);
             if (columnLayout) { syncSends (track); syncOutput (track); }
             if (! columnLayout) syncAutomation (track);
@@ -1405,7 +1423,8 @@ private:
         std::vector<juce::String> controlKeys;
         juce::StringArray controlLabels;
         juce::String shownKey, deviceSignature;
-        juce::StringArray inputNames, sendReturnIds, outputIds, outputLabels;
+        juce::StringArray inputNames, sendReturnIds, outputIds, outputLabels, inputSourceIds, inputSourceLabels;
+        static constexpr int firstSourceItem = 1000;
         std::vector<std::unique_ptr<juce::Slider>> sends;
         std::unique_ptr<juce::TextButton> sideA, sideB;
         juce::Rectangle<int> meterBounds() const { return { 66, 110 + outputRow + sendOffset(), 10, juce::jmax (10, getHeight() - 204 - outputRow - sendOffset()) }; }
@@ -10196,6 +10215,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check ((state.tracks[0].output == Session::TrackOutput { Session::OutputKind::track, state.tracks[1].id }), "choosing a track routes into it");
         session.undo(); session.undo(); refresh();
         check (state.tracks[0].output == Session::TrackOutput {} && output->getText() == "Master", "undo returns the strip to Master");
+        // Audio From another track, from the input chooser's Tracks section.
+        auto* inputChooser = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Track audio input"));
+        check (inputChooser != nullptr && inputChooser->indexOfItemId (1000) >= 0 && inputChooser->getItemText (inputChooser->indexOfItemId (1000)) == state.tracks[1].name,
+               "the input chooser lists the other track");
+        const int inputBefore = inputChooser->getSelectedId();
+        inputChooser->setSelectedId (1000, juce::sendNotificationSync); refresh();
+        check (state.tracks[0].inputTrackId == state.tracks[1].id && inputChooser->getText() == state.tracks[1].name, "choosing it takes that track's audio");
+        session.undo(); refresh();
+        check (state.tracks[0].inputTrackId.isEmpty() && inputChooser->getSelectedId() == inputBefore, "undo returns the chooser to the earlier input");
         // Scene tempo and time signature, from the scene menu's dialogs.
         const auto answer = [&] (const juce::String& text)
         {

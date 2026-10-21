@@ -2837,9 +2837,32 @@ struct Session::Impl
     {
         const bool midi = t.state.getProperty (midiTrackProperty, false);
         for (auto* instance : edit->getAllInputDevices())
-            if (instance->getInputDevice().isMidi() == midi && !instance->getInputDevice().isTrackDevice()
-                && instance->getTargets().contains (t.itemID)) return instance;
+            if (instance->getInputDevice().isMidi() == midi && instance->getTargets().contains (t.itemID)) return instance;
         return nullptr;
+    }
+    // The track whose output a track device carries.
+    te::AudioTrack* sourceOf (const te::InputDevice& device) const
+    {
+        for (auto* t : te::getAudioTracks (*edit)) if (&t->getWaveInputDevice() == &device) return t;
+        return nullptr;
+    }
+    // Whether a's audio reaches b, through track outputs and track-sourced inputs.
+    bool feeds (te::AudioTrack& a, te::AudioTrack& b) const
+    {
+        std::vector<te::AudioTrack*> pending { &a };
+        std::set<te::AudioTrack*> seen;
+        while (! pending.empty())
+        {
+            auto* t = pending.back(); pending.pop_back();
+            if (t == &b) return true;
+            if (! seen.insert (t).second) continue;
+            if (auto* destination = t->getOutput().getDestinationTrack()) pending.push_back (destination);
+            for (auto* in : edit->getAllInputDevices())
+                if (&in->getInputDevice() == &t->getWaveInputDevice())
+                    for (auto target : in->getTargets())
+                        if (auto* fed = dynamic_cast<te::AudioTrack*> (te::findTrackForID (*edit, target))) pending.push_back (fed);
+        }
+        return false;
     }
     juce::StringArray monitoredMidiTracks() const
     {
@@ -3092,7 +3115,8 @@ Session::Snapshot Session::snapshot() const
         }
         if (auto* input = impl->input (*t))
         {
-            info.inputName = input->getInputDevice().getName();
+            if (! input->getInputDevice().isTrackDevice()) info.inputName = input->getInputDevice().getName();
+            else if (auto* source = impl->sourceOf (input->getInputDevice())) info.inputTrackId = source->itemID.toString();
             info.armed = input->isRecordingEnabled (t->itemID);
             info.monitor = static_cast<MonitorMode> (input->getInputDevice().getMonitorMode());
         }
@@ -3961,9 +3985,50 @@ juce::StringArray Session::outputDestinations (const String& trackId) const
     auto* source = impl->track (trackId);
     if (source == nullptr || isReturn (*source) || source->getParentFolderTrack() != nullptr) return result;
     for (auto* t : te::getAudioTracks (*impl->edit))
-        if (t != source && ! isReturn (*t) && ! static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) && ! t->getOutput().feedsInto (source))
+        if (t != source && ! isReturn (*t) && ! static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) && ! impl->feeds (*t, *source))
             result.add (t->itemID.toString());
     return result;
+}
+juce::StringArray Session::inputSources (const String& trackId) const
+{
+    juce::StringArray result;
+    auto* destination = impl->track (trackId);
+    if (destination == nullptr || isReturn (*destination) || static_cast<bool> (destination->state.getProperty (midiTrackProperty, false))) return result;
+    for (auto* t : te::getAudioTracks (*impl->edit))
+        if (t != destination && ! isReturn (*t) && ! impl->feeds (*destination, *t)) result.add (t->itemID.toString());
+    return result;
+}
+Result Session::setTrackInputTrack (const String& trackId, const String& sourceTrackId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* t = impl->track (trackId); if (t == nullptr) return Result::fail ("Track not found.");
+    if (isReturn (*t)) return Result::fail ("Return tracks cannot receive recording inputs.");
+    if (static_cast<bool> (t->state.getProperty (midiTrackProperty, false))) return Result::fail ("MIDI tracks take MIDI, not another track's audio.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before changing inputs.");
+    if (! inputSources (trackId).contains (sourceTrackId))
+        return Result::fail ("That track cannot feed this one: choose a track with audio output that this track does not play into.");
+    auto* source = impl->track (sourceTrackId);
+    auto& device = source->getWaveInputDevice();
+    if (auto* current = impl->input (*t); current != nullptr && &current->getInputDevice() == &device) return Result::ok();
+    const auto monitored = impl->monitoredMidiTracks();
+    const bool playing = impl->edit->getTransport().isPlaying();
+    // The track device and its instance exist while some track takes its audio.
+    device.setEnabled (true);
+    impl->edit->getTransport().ensureContextAllocated();
+    [[maybe_unused]] auto deviceState = impl->edit->getEditInputDevices().getInstanceStateForInputDevice (device);
+    impl->resumePlayback (playing);
+    te::InputDeviceInstance* selected = nullptr;
+    for (auto* d : impl->edit->getAllInputDevices()) if (&d->getInputDevice() == &device) selected = d;
+    if (selected == nullptr) return Result::fail ("That track's output could not be opened as an input.");
+    impl->transaction ("Assign input");
+    auto* undo = &impl->edit->getUndoManager();
+    t->state.setProperty (monitorProperty, static_cast<int> (MonitorMode::off), undo);
+    for (auto* d : impl->edit->getAllInputDevices())
+        if (d->getTargets().contains (t->itemID)) { [[maybe_unused]] auto r = d->removeTarget (t->itemID, undo); }
+    if (auto result = selected->setTarget (t->itemID, true, undo, 0); ! result) return Result::fail (result.error());
+    selected->setRecordingEnabled (t->itemID, false);
+    device.setMonitorMode (te::InputDevice::MonitorMode::off);
+    impl->finishInputChange (monitored); impl->changed(); return Result::ok();
 }
 Result Session::setTrackOutput (const String& trackId, const TrackOutput& output)
 {

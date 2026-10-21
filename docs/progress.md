@@ -1220,3 +1220,13 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **Launching** such a scene makes them the project's: at once when stopped, otherwise at its launch boundary, as its clips start.
 
 See [the contract](research/scene-tempo-contract.md).
+
+## Audio From another track — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt`, `cmake/PatchClipLauncher.cmake`, `cmake/PatchRenderSendsOnly.cmake`, `cmake/PatchRenderTrackInputs.cmake` (new) and `tests/AudioFromTests.cpp` (new), with documentation.
+
+- **Audio From.** An audio track can take another track's output as its input, from the input chooser's Tracks section. It is heard as the track monitors it, and it can be recorded.
+- **An engine fix.** Renders left out the routed audio; they now include it while it is monitored.
+- **Loops.** Track outputs and track inputs both refuse routes that would feed back.
+
+See [the contract](research/audio-from-contract.md).
