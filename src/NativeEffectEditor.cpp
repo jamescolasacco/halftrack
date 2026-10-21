@@ -253,6 +253,7 @@ public:
             if (kind == Session::EffectKind::arpeggiator) sliders[6].setEnabled (enabled && v[5] != 0);
             if (kind == Session::EffectKind::velocity) { sliders[6].setEnabled (enabled && v[0] == 2); for (size_t i = 3; i <= 5; ++i) sliders[i].setEnabled (enabled && v[0] != 2); }
             if (kind == Session::EffectKind::noteLength) { sliders[2].setEnabled (enabled && v[1] == 0); choices[3].setEnabled (enabled && v[1] != 0); }
+            if (kind == Session::EffectKind::noteEcho) { choices[2].setEnabled (enabled && v[1] != 0); sliders[3].setEnabled (enabled && v[1] != 0); sliders[4].setEnabled (enabled && v[1] == 0); }
         }
         repaint();
     }

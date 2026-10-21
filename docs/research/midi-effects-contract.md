@@ -24,7 +24,7 @@ Every release uses the output pitches chosen at its note-on, so parameter change
 
 `tests/MidiEffectsTests.cpp` compares complete generated event lists (time, pitch, velocity) with hand-derived expectations for every device, block-size independence of the random arpeggiator, panic, and identity of channel/MPE source. Engine renders of Pitch, Chord, Scale, Velocity, Note Length, Arpeggiator and zero-chance Random through the built-in instrument match renders of the equivalent explicitly written notes within 2e-6 (24-bit). Device order, bypass, undo, removal, save/reopen and fractional-value rejection are checked through the production Session facade. The real-time fixture floods every kind with alternating notes at parameter extremes and both time bases with zero intercepted allocations and time-ordered output.
 
-Not implemented: CC Control, Expression Control, Note Echo, MPE-aware per-note expression, arpeggiator retrigger/repeat/transpose-step/swing options, scale fold/custom maps, and velocity "relative" (release velocity) operation. No numerical or timing comparison with the reference devices has been measured.
+Not implemented: Expression Control, MPE-aware per-note expression, arpeggiator retrigger/repeat/transpose-step/swing options, scale fold/custom maps, and velocity "relative" (release velocity) operation. No numerical or timing comparison with the reference devices has been measured.
 
 ## CC Control (2026-10-21)
 
@@ -55,3 +55,41 @@ Halftrack sends a control's message at the start of the block after it changes, 
 
 The Send button, Learn, renaming, Push display and 1–8 / 9–16 pages are missing.
 
+## Note Echo (2026-10-21)
+
+Note Echo follows the manual's description in [Max for Live Devices](https://www.ableton.com/en/live-manual/12/max-for-live-devices/), consulted 2026-10-21. The reference's Core Library presets are plain XML. They give its eight controls with their ranges and defaults, and Halftrack uses the same:
+
+| Control | Range | Default |
+| --- | --- | --- |
+| Input | Thru or Mute | Thru |
+| Delay Mode | Time or Sync | Sync |
+| Beat Division | 1, 2, 3, 4, 5, 6, 8 or 16 sixteenths | 2 (an eighth note) |
+| Offset | −33.33% to +33.33% | 0% |
+| Time | 1–2000 ms | 500 ms |
+| Pitch | −12 to +12 semitones | 0 |
+| Delay | 0–100% | 100% |
+| Feedback | 0–100% | 50% |
+
+The device's patch is encrypted and was not opened, so Halftrack's rules are its own:
+
+- **Echoes.** A note's k-th echo starts k delays after it and is transposed by k × Pitch. Its velocity is v · Delay · Feedback^(k−1), rounded. It lasts as long as the note.
+- **The end.** The echoes end at the first one below velocity 1 or outside 0–127. Delay 0 makes none.
+- **Thru and Mute.** Thru plays the original note too; Mute plays only the echoes.
+- **The delay.** In Sync mode it is the division at the project tempo, scaled by (1 + Offset). In Time mode it is Time, and Offset does nothing.
+- **Settings in flight.** Each note keeps the delay, Pitch and levels it was played with.
+- **Overlaps.** An echo on a key that is still sounding retriggers it. The key ends after its last owner, as with the Chord device.
+- **Timing.** Echoes run on the processor's sample clock, so they don't depend on the block size or on the transport. All Notes Off ends every sounding and pending echo.
+- **Limits.** Up to 128 notes echo at once. Notes beyond that still play through without echoes.
+
+`tests/MidiEffectsTests.cpp` checks:
+
+- the complete event list for the defaults (eight echoes, halving in velocity) at block sizes of 1, 64, 512 and 4096 samples, with the transport playing and stopped;
+- Mute with Pitch climbing out of range, Feedback 0, Delay 0, Offset, tempo, and Time mode ignoring Offset;
+- a held note's overlapping echoes;
+- a zero-length note;
+- settings changed while a note echoes;
+- channel and source identity, and All Notes Off.
+
+Two engine renders through the built-in instrument equal renders of the echoes written as notes.
+
+The MPE switch, the Press, Slide and Note PB feedback controls, and measured reference timing and velocity are missing.

@@ -294,6 +294,16 @@ constexpr EffectParameter ccControlFields[] {
     { "customM", "Custom M", 0, 127, 0, 0, "", nullptr, true },
     { "customMCc", "M CC", 0, 127, 31, 0, "", nullptr, true },
     { "channel", "Channel", 1, 16, 1, 0, "", nullptr, true } };
+// Note Echo's controls, ranges and defaults are those its reference presets store.
+constexpr EffectParameter noteEchoFields[] {
+    { "input", "Input", 0, 1, 0, 0, "", "Thru|Mute" },
+    { "sync", "Delay Mode", 0, 1, 1, 0, "", "Time|Sync" },
+    { "division", "Beat Division", 0, 7, 1, 0, "", "1|2|3|4|5|6|8|16" },
+    { "offset", "Offset", -.3333f, .3333f, 0, 0, "%" },
+    { "timeMs", "Time", 1, 2000, 500, 250, " ms" },
+    { "pitch", "Pitch", -12, 12, 0, 0, " st", nullptr, true },
+    { "feed", "Delay", 0, 1, 1, 0, "%" },
+    { "feedback", "Feedback", 0, 1, .5f, 0, "%" } };
 constexpr EffectParameter alignDelayFields[] {
     { "delayMode", "Delay Mode", 0, 2, 0, 0, "", "Time|Samples|Distance" },
     { "link", "Link L/R", 0, 1, 1, 0, "", "Off|On" },
@@ -490,7 +500,7 @@ const char* effectName (Kind kind) noexcept
         case Kind::sampler: return "Sampler"; case Kind::drumSampler: return "Drum Sampler";
         case Kind::instrumentRack: return "Instrument Rack"; case Kind::audioEffectRack: return "Audio Effect Rack";
         case Kind::midiEffectRack: return "MIDI Effect Rack"; case Kind::drumRack: return "Drum Rack";
-        case Kind::channelEq: return "Channel EQ"; case Kind::tuner: return "Tuner"; case Kind::spectrum: return "Spectrum"; case Kind::pedal: return "Pedal"; case Kind::beatRepeat: return "Beat Repeat"; case Kind::filterDelay: return "Filter Delay"; case Kind::erosion: return "Erosion"; case Kind::resonators: return "Resonators"; case Kind::vinylDistortion: return "Vinyl Distortion"; case Kind::ccControl: return "CC Control"; case Kind::alignDelay: return "Align Delay"; case Kind::dynamicTube: return "Dynamic Tube"; }
+        case Kind::channelEq: return "Channel EQ"; case Kind::tuner: return "Tuner"; case Kind::spectrum: return "Spectrum"; case Kind::pedal: return "Pedal"; case Kind::beatRepeat: return "Beat Repeat"; case Kind::filterDelay: return "Filter Delay"; case Kind::erosion: return "Erosion"; case Kind::resonators: return "Resonators"; case Kind::vinylDistortion: return "Vinyl Distortion"; case Kind::ccControl: return "CC Control"; case Kind::noteEcho: return "Note Echo"; case Kind::alignDelay: return "Align Delay"; case Kind::dynamicTube: return "Dynamic Tube"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
@@ -505,7 +515,7 @@ std::span<const EffectParameter> effectParameters (Kind kind) noexcept
         case Kind::polySynth: return polySynthFields; case Kind::fmSynth: return fmSynthFields; case Kind::drumKit: return drumKitFields; case Kind::wavetableSynth: return wavetableFields;
         case Kind::sampler: return samplerFields; case Kind::drumSampler: return drumSamplerFields;
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return rackFields;
-        case Kind::channelEq: return channelEqFields; case Kind::tuner: return tunerFields; case Kind::spectrum: return spectrumFields; case Kind::pedal: return pedalFields; case Kind::beatRepeat: return beatRepeatFields; case Kind::filterDelay: return filterDelayFields; case Kind::erosion: return erosionFields; case Kind::resonators: return resonatorFields; case Kind::vinylDistortion: return vinylFields; case Kind::ccControl: return ccControlFields; case Kind::alignDelay: return alignDelayFields; case Kind::dynamicTube: return dynamicTubeFields; }
+        case Kind::channelEq: return channelEqFields; case Kind::tuner: return tunerFields; case Kind::spectrum: return spectrumFields; case Kind::pedal: return pedalFields; case Kind::beatRepeat: return beatRepeatFields; case Kind::filterDelay: return filterDelayFields; case Kind::erosion: return erosionFields; case Kind::resonators: return resonatorFields; case Kind::vinylDistortion: return vinylFields; case Kind::ccControl: return ccControlFields; case Kind::noteEcho: return noteEchoFields; case Kind::alignDelay: return alignDelayFields; case Kind::dynamicTube: return dynamicTubeFields; }
     return {};
 }
 const char* effectCategory (Kind kind) noexcept
@@ -518,7 +528,7 @@ const char* effectCategory (Kind kind) noexcept
         case Kind::bitcrusher: case Kind::saturator: case Kind::overdrive: case Kind::pedal: case Kind::erosion: case Kind::vinylDistortion: case Kind::dynamicTube: return "Distortion";
         case Kind::autoPan: case Kind::chorus: case Kind::phaser: case Kind::flanger: case Kind::frequencyShifter: return "Modulation";
         case Kind::resonators: return "Resonance";
-        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: case Kind::ccControl: return "MIDI Effects";
+        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: case Kind::ccControl: case Kind::noteEcho: return "MIDI Effects";
         case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return "Instruments";
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return "Racks";
         case Kind::tuner: case Kind::spectrum: case Kind::alignDelay: return "Utilities";
@@ -526,9 +536,9 @@ const char* effectCategory (Kind kind) noexcept
     return "Effects";
 }
 bool effectUsesTempo (Kind kind) noexcept
-{ return kind == Kind::delay || kind == Kind::autoFilter || kind == Kind::autoPan || kind == Kind::arpeggiator || kind == Kind::noteLength || kind == Kind::beatRepeat || kind == Kind::filterDelay; }
+{ return kind == Kind::delay || kind == Kind::autoFilter || kind == Kind::autoPan || kind == Kind::arpeggiator || kind == Kind::noteLength || kind == Kind::beatRepeat || kind == Kind::filterDelay || kind == Kind::noteEcho; }
 bool effectIsMidi (Kind kind) noexcept
-{ return (static_cast<int> (kind) >= static_cast<int> (Kind::arpeggiator) && static_cast<int> (kind) <= static_cast<int> (Kind::noteLength)) || kind == Kind::midiEffectRack || kind == Kind::ccControl; }
+{ return (static_cast<int> (kind) >= static_cast<int> (Kind::arpeggiator) && static_cast<int> (kind) <= static_cast<int> (Kind::noteLength)) || kind == Kind::midiEffectRack || kind == Kind::ccControl || kind == Kind::noteEcho; }
 bool effectIsInstrument (Kind kind) noexcept
 {
     return (static_cast<int> (kind) >= static_cast<int> (Kind::polySynth) && static_cast<int> (kind) <= static_cast<int> (Kind::drumSampler))
@@ -556,7 +566,7 @@ double effectTailSeconds (Kind kind, double rate) noexcept
         case Kind::beatRepeat: return effects::BeatRepeat::longestSliceSeconds;
         case Kind::filterDelay: return 1800.0; // Feedback can ring for a long time, as with the Stereo Delay.
         case Kind::resonators: return 25.0; // The longest Decay, plus room for the input filter.
-        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: case Kind::ccControl: return 0.0;
+        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: case Kind::ccControl: case Kind::noteEcho: return 0.0;
         case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return 0.0;
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return 0.0; // Racks report their chains.
     }

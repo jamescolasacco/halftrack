@@ -1,6 +1,7 @@
 #include "MidiEffects.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace halftrack::midifx
 {
@@ -10,6 +11,8 @@ using Kind = Session::EffectKind;
 int clampNote (int v) noexcept { return std::clamp (v, 0, 127); }
 bool validNote (int v) noexcept { return v >= 0 && v <= 127; }
 int rounded (float v) noexcept { return static_cast<int> (std::lround (v)); }
+// Note Echo's beat divisions, in sixteenth notes.
+constexpr std::array<int, 8> echoSixteenths { 1, 2, 3, 4, 5, 6, 8, 16 };
 }
 
 Event Event::noteOn (int sample, int channel, int pitch, int velocity, uint32_t source) noexcept
@@ -46,7 +49,7 @@ void Processor::reset() noexcept
     outputs = {}; refcount = {}; heldCount = latchedCount = pendingCount = 0;
     clock = nextOrder = arpStart = 0; seed = 0x2545f491u; alternate = arpStep = 0;
     arpRunning = false; arpChannel = arpPitch = -1;
-    controlsKnown = false; lastTimeline = -1;
+    controlsKnown = false; lastTimeline = -1; echoCount = 0;
 }
 // CC Control's controls: Mod Wheel, Pitch Bend, Pressure, Custom A (a switch and its CC), Custom B
 // to M (a value and a CC each), then the MIDI channel. Messages go out at the block start, before
@@ -259,6 +262,71 @@ void Processor::step (int sample) noexcept
     schedule (clock + static_cast<uint64_t> (sample) + static_cast<uint64_t> (gate), note.channel, outPitch, note.source);
 }
 
+// Note Echo. A played note's k-th echo starts k delays after it, transposed k times by Pitch, at
+// velocity v * Delay * Feedback^(k-1), and lasts as long as the note. Echoes end at the first one
+// below velocity 1 or outside 0-127. Each note keeps the delay, Pitch and levels it was played with.
+void Processor::echoInput (const Event& e) noexcept
+{
+    const auto& v = settings.values;
+    const auto channel = e.channel(), pitch = static_cast<int> (e.data1);
+    auto& through = outputs[static_cast<size_t> (channel * 128 + pitch)].count; // Originals sounding on this key.
+    if (e.isNoteOn())
+    {
+        if (v[0] == 0) { sounding (e.sample, channel, pitch, e.data2, e.source); ++through; }
+        if (v[6] <= 0 || echoCount >= maximumEchoes) return;
+        const double bpm = std::clamp (static_cast<double> (settings.tempoBpm), 20.0, 999.0);
+        const auto seconds = v[1] != 0 ? echoSixteenths[static_cast<size_t> (v[2])] * 15.0 / bpm * (1.0 + v[3]) : v[4] * .001;
+        auto& echo = echoes[static_cast<size_t> (echoCount++)];
+        echo = { channel, pitch, rounded (v[5]), 0, 0, e.source, e.data2 * static_cast<double> (v[6]), v[7], std::max (1.0, seconds * rate), clock + static_cast<uint64_t> (e.sample), 0, true, false };
+        return;
+    }
+    if (through > 0) { --through; silence (e.sample, channel, pitch, e.source); }
+    // A release ends the earliest held note on its key.
+    for (int i = 0; i < echoCount; ++i)
+        if (auto& echo = echoes[static_cast<size_t> (i)]; echo.held && echo.channel == channel && echo.pitch == pitch)
+        { echo.held = false; echo.off = clock + static_cast<uint64_t> (e.sample); return; }
+}
+void Processor::echo (const Event* in, int inCount) noexcept
+{
+    constexpr auto never = std::numeric_limits<uint64_t>::max();
+    const auto end = clock + static_cast<uint64_t> (blockSamples);
+    const auto inputTime = [&] (int i) { return clock + static_cast<uint64_t> (std::clamp (in[i].sample, 0, std::max (0, blockSamples - 1))); };
+    const auto after = [] (const Echo& e, uint64_t from, int k) { return from + static_cast<uint64_t> (std::llround (k * e.delay)); };
+    const auto nextOn = [&] (const Echo& e) { return e.ended ? never : after (e, e.on, e.started + 1); };
+    const auto nextOff = [&] (const Echo& e) { return e.held || e.stopped >= e.started ? never : after (e, e.off, e.stopped + 1); };
+    int next = 0;
+    for (;;)
+    {
+        auto now = next < inCount ? inputTime (next) : never;
+        for (int i = 0; i < echoCount; ++i) now = std::min ({ now, nextOn (echoes[static_cast<size_t> (i)]), nextOff (echoes[static_cast<size_t> (i)]) });
+        if (now >= end) return;
+        const auto sample = static_cast<int> (now - clock);
+        // Releases come first at a sample, except for an echo that starts there.
+        const auto release = [&]
+        {
+            for (int i = 0; i < echoCount; ++i)
+                if (auto& e = echoes[static_cast<size_t> (i)]; nextOff (e) == now) { ++e.stopped; silence (sample, e.channel, e.pitch + e.stopped * e.step, e.source); }
+        };
+        release();
+        for (; next < inCount && inputTime (next) == now; ++next)
+            if (in[next].isNoteOn() || in[next].isNoteOff()) { auto event = in[next]; event.sample = sample; echoInput (event); }
+        for (int i = 0; i < echoCount; ++i)
+            if (auto& e = echoes[static_cast<size_t> (i)]; nextOn (e) == now)
+            {
+                const int k = e.started + 1, pitch = e.pitch + k * e.step, velocity = static_cast<int> (std::lround (e.level));
+                if (! validNote (pitch) || velocity < 1) { e.ended = true; continue; }
+                sounding (sample, e.channel, pitch, std::min (velocity, 127), e.source);
+                e.started = k; e.level *= e.feedback;
+            }
+        release();
+        // Finished notes leave; the rest keep the order they were played in.
+        int kept = 0;
+        for (int i = 0; i < echoCount; ++i)
+            if (const auto& e = echoes[static_cast<size_t> (i)]; ! (e.ended && ! e.held && e.stopped == e.started)) echoes[static_cast<size_t> (kept++)] = e;
+        echoCount = kept;
+    }
+}
+
 int Processor::allNotesOff (int sample, Event* out, int capacity) noexcept
 {
     target = out; written = 0; room = capacity;
@@ -327,6 +395,7 @@ int Processor::process (const Event* in, int inCount, int samples, double timeli
         }
         if (blockSamples > 0) flushPending (clock + static_cast<uint64_t> (blockSamples - 1));
     }
+    else if (kind == Kind::noteEcho) echo (in, inCount);
     else
         for (int i = 0; i < inCount; ++i) if (in[i].isNoteOn() || in[i].isNoteOff()) mapped (in[i]);
     clock += static_cast<uint64_t> (blockSamples);

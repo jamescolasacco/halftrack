@@ -1144,3 +1144,6 @@ Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Sess
 
 Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Session.h` and `tests/ExtendedEffectsTests.cpp`, with documentation. See [the contract](research/native-effects-contract.md#dynamic-tube-2026-10-21).
 
+## Note Echo — 2026-10-21
+
+Engine-area change in `src/MidiEffects.*`, `src/NativeEffects.cpp`, `src/NativeEffectEditor.cpp`, `src/Session.h`, `tests/MidiEffectsTests.cpp` and `tests/RealtimeTests.cpp`, with documentation. The real-time test now covers every MIDI effect kind, not only kinds 17–23. See [the contract](research/midi-effects-contract.md#note-echo-2026-10-21).

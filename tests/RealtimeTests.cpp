@@ -222,8 +222,9 @@ void nativeEffectsRealtimeTests()
         noHeapCalls (calls, "native effect parameter extremes, processing and reset allocate/free nothing");
         requireRealtime (finite, "native effect extrema and variable mono/stereo blocks remain finite");
     }
-    for (int kind = static_cast<int> (Session::EffectKind::arpeggiator); kind <= static_cast<int> (Session::EffectKind::noteLength); ++kind)
+    for (int kind = 0; kind < Session::deviceKindCount; ++kind)
     {
+        if (! effectIsMidi (static_cast<Session::EffectKind> (kind)) || Session::isRackKind (static_cast<Session::EffectKind> (kind))) continue;
         midifx::Processor processor; processor.prepare (48000);
         auto settings = defaultEffectSettings (static_cast<Session::EffectKind> (kind));
         const auto fields = effectParameters (settings.kind);

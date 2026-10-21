@@ -417,3 +417,12 @@ These are simplest-default choices pending reference measurement:
 - **Tone:** a ±12 dB, 1 kHz tilt.
 - **Ranges:** Drive from −12 to +36 dB and Output from −36 to +12 dB.
 
+### Note Echo timing and velocity
+
+The reference presets give the controls, ranges and defaults; the device's patch is encrypted and was not opened. These are simplest-default choices pending reference measurement:
+
+- **Offset** scales every synced delay by (1 + Offset) and does nothing in Time mode. The reference may instead alternate long and short delays to swing them.
+- **Velocity:** echo k plays at v · Delay · Feedback^(k−1), rounded, and the echoes end at the first one below 1.
+- **Pitch** moves each echo one more step; the echoes end at the first one outside 0–127.
+- **Settings in flight:** each note keeps the delay, Pitch and levels it was played with; changes apply to later notes.
+- **Endless echoes:** at Feedback 100% the echoes continue until All Notes Off, a transport stop, or Pitch takes them out of range.

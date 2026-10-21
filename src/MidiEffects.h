@@ -58,6 +58,18 @@ private:
     double stepSamples() const noexcept;
     // CC Control: sends the controls that changed, or all of them when the transport starts.
     void sendControls (double timelineSeconds) noexcept;
+    // Note Echo: each played note's echoes, using the settings it was played with.
+    struct Echo
+    {
+        int channel = 0, pitch = 0, step = 0, started = 0, stopped = 0; uint32_t source = 0;
+        double level = 0, feedback = 0, delay = 0; // The next echo's velocity, its decay and the delay in samples.
+        uint64_t on = 0, off = 0; bool held = true, ended = false;
+    };
+    static constexpr int maximumEchoes = 128;
+    void echo (const Event* in, int inCount) noexcept;
+    void echoInput (const Event&) noexcept;
+    std::array<Echo, maximumEchoes> echoes {};
+    int echoCount = 0;
     std::array<float, 30> sentControls {};
     bool controlsKnown = false;
     double lastTimeline = -1;

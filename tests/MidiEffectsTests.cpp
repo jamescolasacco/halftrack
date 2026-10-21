@@ -174,6 +174,68 @@ void arpeggiatorTests()
     check (p.allNotesOff (5, out.data(), 32) == 3 && out[0].isNoteOff() && out[0].sample == 5, "all-notes-off releases every generated output");
 }
 
+// Note Echo: echo k of a note starts k delays after it, k Pitch steps away, at velocity
+// v * Delay * Feedback^(k-1) rounded, until one would fall below 1 or outside 0-127.
+void noteEchoTests()
+{
+    const auto sorted = [] (std::vector<Note> notes)
+    { std::stable_sort (notes.begin(), notes.end(), [] (const Note& a, const Note& b) { return a.time < b.time; }); return notes; };
+    // Defaults at 120 BPM: Thru, an eighth-note (12000-sample) delay, Delay 100%, Feedback 50%.
+    std::vector<Note> expected { { 0, 60, 100 }, { 6000, 60, 0 } };
+    long long k = 1;
+    for (const int velocity : { 100, 50, 25, 13, 6, 3, 2, 1 }) { expected.push_back ({ 12000 * k, 60, velocity }); expected.push_back ({ 6000 + 12000 * k, 60, 0 }); ++k; }
+    const std::vector<Input> one { { 0, 60, 100 }, { 6000, 60, 0 } };
+    expect (run (with (Kind::noteEcho, {}), one, 130000), sorted (expected), "eight echoes an eighth note apart halve in velocity until one would be 0");
+    const auto blocks = [&] (int size) { return run (with (Kind::noteEcho, {}), one, 130000, size); };
+    check (blocks (1) == blocks (64) && blocks (64) == blocks (4096) && blocks (4096) == sorted (expected), "the echoes do not depend on the block size");
+    check (run (with (Kind::noteEcho, {}), one, 130000, 512, false) == sorted (expected), "they run with the transport stopped as well");
+
+    // Mute, 10 ms, Pitch +12, Delay 50%, Feedback 100%: only echoes, an octave up each time, until above 127.
+    expect (run (with (Kind::noteEcho, { { "input", 1 }, { "sync", 0 }, { "timeMs", 10 }, { "pitch", 12 }, { "feed", .5f }, { "feedback", 1 } }), { { 0, 60, 100 }, { 100, 60, 0 } }, 4000),
+            { { 480, 72, 50 }, { 580, 72, 0 }, { 960, 84, 50 }, { 1060, 84, 0 }, { 1440, 96, 50 }, { 1540, 96, 0 }, { 1920, 108, 50 }, { 2020, 108, 0 }, { 2400, 120, 50 }, { 2500, 120, 0 } },
+            "Mute leaves only the echoes, which climb by Pitch and stop above 127");
+    expect (run (with (Kind::noteEcho, { { "feedback", 0 } }), one, 60000), { { 0, 60, 100 }, { 6000, 60, 0 }, { 12000, 60, 100 }, { 18000, 60, 0 } }, "Feedback 0 leaves one echo");
+    expect (run (with (Kind::noteEcho, { { "feed", 0 } }), one, 60000), { { 0, 60, 100 }, { 6000, 60, 0 } }, "Delay 0 leaves no echoes");
+    check (run (with (Kind::noteEcho, { { "feed", 0 }, { "input", 1 } }), one, 60000).empty(), "and with Mute, nothing");
+    // A quarter note, lengthened 25%, is 30000 samples at 120 BPM; at 90 BPM an eighth note is 16000.
+    expect (run (with (Kind::noteEcho, { { "division", 3 }, { "offset", .25f }, { "feedback", 0 } }), one, 60000),
+            { { 0, 60, 100 }, { 6000, 60, 0 }, { 30000, 60, 100 }, { 36000, 60, 0 } }, "Offset lengthens the synced delay");
+    expect (run (with (Kind::noteEcho, { { "feedback", 0 } }, 90), one, 60000), { { 0, 60, 100 }, { 6000, 60, 0 }, { 16000, 60, 100 }, { 22000, 60, 0 } }, "the synced delay follows the tempo");
+    expect (run (with (Kind::noteEcho, { { "sync", 0 }, { "timeMs", 250 }, { "offset", .25f }, { "feedback", 0 } }), one, 60000),
+            { { 0, 60, 100 }, { 6000, 60, 0 }, { 12000, 60, 100 }, { 18000, 60, 0 } }, "Offset leaves a delay in milliseconds alone");
+    // A note held past its echoes: each echo retriggers the key, which ends after the last echo.
+    const auto held = run (with (Kind::noteEcho, {}), { { 0, 60, 100 }, { 30000, 60, 0 } }, 140000);
+    const auto ons = std::count_if (held.begin(), held.end(), [] (const Note& n) { return n.velocity > 0; });
+    check (ons == 9 && held[1] == Note { 12000, 60, 0 } && held[2] == Note { 12000, 60, 100 } && held.back() == Note { 30000 + 8 * 12000, 60, 0 }
+           && std::count_if (held.begin(), held.end(), [] (const Note& n) { return n.velocity == 0; }) == 9, "overlapping echoes retrigger the key, which ends after the last echo");
+    // Zero-length notes still end each echo.
+    const auto instant = run (with (Kind::noteEcho, { { "feedback", 0 } }), { { 0, 60, 100 }, { 0, 60, 0 } }, 30000);
+    expect (instant, { { 0, 60, 100 }, { 0, 60, 0 }, { 12000, 60, 100 }, { 12000, 60, 0 } }, "a zero-length note's echo ends where it starts");
+    {
+        // Settings changed after a note is played apply to the next note only.
+        midifx::Processor p; p.prepare (48000); auto s = with (Kind::noteEcho, { { "feedback", 0 }, { "pitch", 2 } }); p.configure (s);
+        std::array<Event, 32> out {};
+        const auto on = Event::noteOn (0, 4, 60, 100, 9), off = Event::noteOff (100, 4, 60, 9);
+        const Event both[] { on, off };
+        check (p.process (both, 2, 512, 0, out.data(), 32) == 2, "the original sounds through");
+        s.values[(size_t) effectParameterIndex (Kind::noteEcho, "pitch")] = -5; s.values[(size_t) effectParameterIndex (Kind::noteEcho, "sync")] = 0; p.configure (s);
+        std::vector<Event> later;
+        for (int block = 1; block < 30; ++block) { const auto n = p.process (nullptr, 0, 512, -1, out.data(), 32); later.insert (later.end(), out.begin(), out.begin() + n); }
+        check (later.size() == 2 && later[0].isNoteOn() && later[0].data1 == 62 && later[0].channel() == 4 && later[0].source == 9 && later[1].isNoteOff() && later[1].data1 == 62,
+               "a played note's echo keeps the Pitch it was played with, and its channel and source");
+        // All Notes Off ends a sounding echo and every echo still to come.
+        const Event again { Event::noteOn (0, 0, 64, 100, 0) };
+        p.process (&again, 1, 512, -1, out.data(), 32);
+        int sounded = 0; for (int block = 0; block < 60; ++block) sounded += p.process (nullptr, 0, 512, -1, out.data(), 32);
+        check (sounded == 1, "with the key still held its echo starts 500 ms later");
+        check (p.allNotesOff (3, out.data(), 32) == 2 && out[0].isNoteOff() && out[1].isNoteOff(), "All Notes Off releases the key and its echo");
+        int after = 0; for (int block = 0; block < 300; ++block) after += p.process (nullptr, 0, 512, -1, out.data(), 32);
+        check (after == 0, "and nothing echoes afterwards");
+    }
+    check (effectIsMidi (Kind::noteEcho) && effectUsesTempo (Kind::noteEcho) && std::string (effectCategory (Kind::noteEcho)) == "MIDI Effects"
+           && std::string (effectName (Kind::noteEcho)) == "Note Echo", "Note Echo is a tempo-aware MIDI effect");
+}
+
 void writeNotes (Session& s, const juce::String& trackId, const std::vector<Session::MidiNoteInfo>& notes)
 {
     ok (s.addMidiClip (trackId, 0, 4), "add MIDI clip");
@@ -225,6 +287,11 @@ void engineTests (const juce::File& root)
     same ({ note (60, 0, 1), note (64, 0, 1), note (67, 0, 1) }, with (Kind::arpeggiator, {}),
           { note (60, 0, .125), note (64, .25, .125), note (67, .5, .125), note (60, .75, .125) }, "rendered arpeggio equals written sixteenth notes");
     same ({ note (60, 0, 1) }, with (Kind::random, { { "chance", 0 } }), { note (60, 0, 1) }, "rendered zero-chance random is transparent");
+    same ({ note (60, 0, .25, 100.0f / 127) }, with (Kind::noteEcho, { { "input", 1 }, { "pitch", 12 } }),
+          { note (72, .5, .25, 100.0f / 127), note (84, 1, .25, 50.0f / 127), note (96, 1.5, .25, 25.0f / 127), note (108, 2, .25, 13.0f / 127), note (120, 2.5, .25, 6.0f / 127) },
+          "rendered Note Echo equals its echoes written out");
+    same ({ note (60, 0, .5, 100.0f / 127) }, with (Kind::noteEcho, { { "feedback", 0 } }), { note (60, 0, .5, 100.0f / 127), note (60, .5, .5, 100.0f / 127) },
+         "an echo that starts as its note ends equals two written notes");
 
     Session s (false); ok (s.addMidiTrack ("Chain"), "add chain track"); const int track = (int) s.snapshot().tracks.size() - 1;
     writeNotes (s, s.snapshot().tracks.back().id, { note (61, 0, 1) });
@@ -305,7 +372,7 @@ int runMidiEffectsTests (const juce::File& artifacts)
     try
     {
         const auto root = artifacts.getChildFile ("midi-effects-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
-        mappingTests(); lengthTests(); arpeggiatorTests(); ccControlTests(); engineTests (root);
+        mappingTests(); lengthTests(); arpeggiatorTests(); ccControlTests(); noteEchoTests(); engineTests (root);
         std::cout << "MIDI effects passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL MIDI effects: " << e.what() << std::endl; return 1; }

@@ -493,7 +493,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | MXL-016 | Expression Control Legacy | MIDI | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-017 | MIDI Monitor | MIDI | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-018 | MPE Control | MIDI | NOT IMPLEMENTED / UNVERIFIED |
-| MXL-019 | Note Echo | MIDI | NOT IMPLEMENTED / UNVERIFIED |
+| MXL-019 | Note Echo | PARTIAL — native Note Echo MIDI effect with Thru/Mute, a millisecond or synced delay (1–16 sixteenths, ±33% offset), Pitch per echo, Delay (velocity into the echoes) and Feedback, using the ranges and defaults the reference presets store; exact event lists, block-size independence and engine renders against written notes tested ([contract](research/midi-effects-contract.md#note-echo-2026-10-21)). MPE echoing, Press/Slide/Note PB feedback and measured reference timing and velocity are missing | PARTIAL |
 | MXL-020 | Shaper MIDI | MIDI | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-021 | Velocity Shaper (MIDI Tool) | PARTIAL — the Velocity Shaper note tool ramps velocities from Start to End with a Curve across note starts, with hand-computed results (see MID-007 and the [note tool contract](research/midi-tools-contract.md)); the reference's drawn breakpoint envelope and exact algorithm missing | PARTIAL |
 | MXL-022 | Euclidean (MIDI Tool) | PARTIAL — the Euclidean note generator (Steps, Pulses, Rotation, Pitch, Rate, Gate, Velocity) with exact pattern tests (see MID-008 and the [note tool contract](research/midi-tools-contract.md)); the reference's multiple voices and exact algorithm missing | PARTIAL |
