@@ -304,9 +304,10 @@ int runNativeEffectEditorTests (const juce::File& root)
     auto check = [] (bool v, const char* text) { if (! v) throw std::runtime_error (text); std::cout << "PASS effect editor: " << text << std::endl; };
     Session s (false); check (s.addMidiTrack().wasOk(), "create editor track");
     const int track = (int) s.snapshot().tracks.size() - 1; // New projects begin with two audio tracks.
-    for (int type = 0; type < Session::effectKindCount; ++type)
+    for (int type = 0; type < Session::deviceKindCount; ++type)
     {
         const auto kind = static_cast<Session::EffectKind> (type);
+        if (Session::isRackKind (kind)) continue;
         const bool instrument = effectIsInstrument (kind);
         const auto before = s.snapshot().tracks[(size_t) track].plugins;
         if (instrument) check (s.setTrackInstrument (s.snapshot().tracks[(size_t) track].id, kind).wasOk(), "choose editor instrument");

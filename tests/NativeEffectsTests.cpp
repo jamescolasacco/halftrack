@@ -298,8 +298,9 @@ juce::AudioBuffer<float> engineReference (const juce::AudioBuffer<float>& input,
 void lifecycleTests()
 {
     auto input=signal(14000);
-    for(int kind=0;kind<Session::effectKindCount;++kind)
+    for(int kind=0;kind<Session::deviceKindCount;++kind)
     {
+        if(Session::isRackKind(static_cast<Kind>(kind)))continue;
         auto s=defaultEffectSettings(static_cast<Kind>(kind));if(kind==0){s.values[2]=8;s.values[1]=400;}
         const auto expected=run(input,s);auto split=input;NativeEffectDSP dsp;dsp.prepare(48000,s.kind);dsp.configure(s);
         for(int offset=0;offset<split.getNumSamples();){const auto count=std::min(1+offset%311,split.getNumSamples()-offset);dsp.processSamples(split.getWritePointer(0,offset),split.getWritePointer(1,offset),count);offset+=count;}
@@ -326,8 +327,9 @@ juce::ValueTree effectState(juce::ValueTree root)
 void projectTests(const juce::File& root)
 {
     const auto input=signal(20000);const auto file=root.getChildFile("source.wav");writeAudio(file,input);
-    for(int type=0;type<Session::effectKindCount;++type)
+    for(int type=0;type<Session::deviceKindCount;++type)
     {
+        if(Session::isRackKind(static_cast<Kind>(type)))continue;
         if (effectIsMidi (static_cast<Kind> (type)) || effectIsInstrument (static_cast<Kind> (type))) continue; // Covered by the MIDI/instrument suites.
         const auto kind=static_cast<Kind>(type);Session s(false);ok(s.importAudio(file,0),"import effect fixture");ok(s.addNativeEffect(0,kind),"insert "+juce::String(effectName(kind)));
         const auto id=s.snapshot().tracks[0].plugins[0].id;auto settings=defaultEffectSettings(kind);
@@ -452,9 +454,9 @@ void projectTests(const juce::File& root)
     auto first=chain.snapshot().tracks[0].plugins[0];auto gain=first.effect;gain.values[32]=12;ok(chain.setNativeEffectSettings(first.id,gain),"set pre-compression gain");
     const auto one=root.getChildFile("gain-first.wav"),two=root.getChildFile("gain-last.wav");ok(chain.exportWav(one),"render gain before compressor");ok(chain.movePlugin(0,0,1),"move actual effect order");ok(chain.exportWav(two),"render gain after compressor");check(difference(readAudio(one),readAudio(two))>.01,"order changes nonlinear output");chain.undo();ok(chain.exportWav(two),"undo device order");check(difference(readAudio(one),readAudio(two))==0,"undo order restores bit-identical output");
     Session midi(false);ok(midi.addMidiTrack("Effect instrument"),"add MIDI track");const auto tracks=midi.snapshot().tracks;const int track=(int)tracks.size()-1;ok(midi.addMidiClip(tracks.back().id,0,1),"add MIDI fixture");const auto clip=midi.snapshot().tracks.back().clips[0].id;ok(midi.addMidiNote(clip,60,0,1,.6f),"add generated note");
-    for(int k=0;k<Session::effectKindCount;++k)if(!effectIsInstrument(static_cast<Kind>(k)))ok(midi.addNativeEffect(track,static_cast<Kind>(k)),"insert device after instrument");
+    for(int k=0;k<Session::deviceKindCount;++k)if(!Session::isRackKind(static_cast<Kind>(k))&&!effectIsInstrument(static_cast<Kind>(k)))ok(midi.addNativeEffect(track,static_cast<Kind>(k)),"insert device after instrument");
     check(midi.addNativeEffect(track,Kind::polySynth).failed(),"instruments are not inserted as chain devices");const auto result=root.getChildFile("midi-effects.wav");ok(midi.exportWav(result,48000,24,1),"render instrument through all native devices and tail");auto rendered=readAudio(result);check(rendered.getMagnitude(0,rendered.getNumSamples())>.001,"instrument chain remains audible");
-    ok(midi.addReturnTrack("Effect return"),"create return");const int ret=(int)midi.snapshot().tracks.size()-1;for(int k=0;k<Session::effectKindCount;++k)if(!effectIsMidi(static_cast<Kind>(k))&&!effectIsInstrument(static_cast<Kind>(k)))ok(midi.addNativeEffect(ret,static_cast<Kind>(k)),"insert device after return input");
+    ok(midi.addReturnTrack("Effect return"),"create return");const int ret=(int)midi.snapshot().tracks.size()-1;for(int k=0;k<Session::deviceKindCount;++k)if(!Session::isRackKind(static_cast<Kind>(k))&&!effectIsMidi(static_cast<Kind>(k))&&!effectIsInstrument(static_cast<Kind>(k)))ok(midi.addNativeEffect(ret,static_cast<Kind>(k)),"insert device after return input");
     check(midi.addNativeEffect(ret,Kind::arpeggiator).failed()&&midi.addNativeEffect(0,Kind::chord).failed(),"MIDI effects reject return and audio tracks");
 }
 }

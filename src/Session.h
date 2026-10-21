@@ -81,8 +81,11 @@ public:
         // Racks hold parallel chains of devices. Instrument and Drum Racks are instruments; a MIDI
         // Effect Rack is a MIDI effect; an Audio Effect Rack is an audio device.
         instrumentRack, audioEffectRack, midiEffectRack, drumRack };
-    static constexpr int effectKindCount = 30; // Plain devices; the rack kinds follow them.
-    static constexpr int deviceKindCount = 34; // Every persisted kind, racks included.
+    // Every persisted kind, racks included. Devices added after the racks follow them, so loop over
+    // all kinds and skip racks rather than assuming plain devices come first.
+    static constexpr int deviceKindCount = 34;
+    static constexpr bool isRackKind (EffectKind kind) noexcept
+    { return kind == EffectKind::instrumentRack || kind == EffectKind::audioEffectRack || kind == EffectKind::midiEffectRack || kind == EffectKind::drumRack; }
     static constexpr int drumPadCount = 16; // Drum Sampler pads play notes 36 (C1) to 51.
     // A rack's EffectSettings hold its macros (0-127) and then its chain selector (0-127), so the
     // ordinary device commands set and automate them.

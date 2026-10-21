@@ -198,8 +198,9 @@ void utilityRealtimeTests()
 
 void nativeEffectsRealtimeTests()
 {
-    for (int kind = 0; kind < Session::effectKindCount; ++kind)
+    for (int kind = 0; kind < Session::deviceKindCount; ++kind)
     {
+        if (Session::isRackKind (static_cast<Session::EffectKind> (kind))) continue;
         NativeEffectDSP dsp; dsp.prepare (48000, static_cast<Session::EffectKind> (kind));
         auto settings = defaultEffectSettings (static_cast<Session::EffectKind> (kind));
         const auto fields = effectParameters (settings.kind);
@@ -251,8 +252,9 @@ void nativeEffectsRealtimeTests()
                           + juce::String (generated) + (ordered ? ", ordered)" : ", unordered)");
         requireRealtime (generated > 0 && ordered, text.toRawUTF8());
     }
-    for (int kind = static_cast<int> (Session::EffectKind::polySynth); kind < Session::effectKindCount; ++kind)
+    for (int kind = 0; kind < Session::deviceKindCount; ++kind)
     {
+        if (! effectIsInstrument (static_cast<Session::EffectKind> (kind)) || Session::isRackKind (static_cast<Session::EffectKind> (kind))) continue;
         instruments::InstrumentDSP instrument; instrument.prepare (48000, static_cast<Session::EffectKind> (kind));
         auto settings = defaultEffectSettings (static_cast<Session::EffectKind> (kind));
         const auto fields = effectParameters (settings.kind);

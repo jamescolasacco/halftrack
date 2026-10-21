@@ -60,7 +60,7 @@ bool utilityDevice (const juce::ValueTree& tree)
 { return tree.hasType (te::IDs::PLUGIN) && tree[te::IDs::type].toString() == UtilityPlugin::xmlTypeName; }
 }
 
-bool isRack (Kind kind) noexcept { return static_cast<int> (kind) >= static_cast<int> (Kind::instrumentRack) && static_cast<int> (kind) < Session::deviceKindCount; }
+bool isRack (Kind kind) noexcept { return Session::isRackKind (kind); }
 int deviceStage (Kind kind) noexcept { return effectIsMidi (kind) ? 0 : effectIsInstrument (kind) ? 1 : 2; }
 bool chainAccepts (Kind rack, Kind device) noexcept
 {

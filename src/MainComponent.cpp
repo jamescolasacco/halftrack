@@ -4140,8 +4140,9 @@ private:
             for (int i = 0; i < 8; ++i) controls[(size_t) i].onValueChange = [this, i] { changeParameter (i, (float) controls[(size_t) i].getValue()); };
             instrument.setName ("Track instrument"); instrument.setTooltip ("Choose the sound source for this MIDI track. Changing it is one undo step.");
             instrument.addItem ("Halftrack Synth", 1);
-            for (int kind = (int) Session::EffectKind::polySynth; kind < Session::effectKindCount; ++kind)
-                instrument.addItem (effectName ((Session::EffectKind) kind), 2 + kind - (int) Session::EffectKind::polySynth);
+            for (int kind = 0; kind < Session::deviceKindCount; ++kind)
+                if (effectIsInstrument ((Session::EffectKind) kind) && ! Session::isRackKind ((Session::EffectKind) kind))
+                    instrument.addItem (effectName ((Session::EffectKind) kind), 2 + kind - (int) Session::EffectKind::polySynth);
             for (const auto kind : { Session::EffectKind::instrumentRack, Session::EffectKind::drumRack })
                 instrument.addItem (effectName (kind), 2 + (int) kind - (int) Session::EffectKind::polySynth);
             instrument.onChange = [this]
@@ -6129,13 +6130,15 @@ private:
         popup.addItem (100001, "Utility  (Built-in)");
         juce::StringArray categories;
         const bool midiTrack = state.tracks[static_cast<size_t> (selectedTrack)].isMidi;
-        for (int i = 0; i < Session::effectKindCount; ++i)
-            if (midiTrack || ! effectIsMidi (static_cast<Session::EffectKind> (i))) categories.addIfNotAlreadyThere (effectCategory (static_cast<Session::EffectKind> (i)));
+        for (int i = 0; i < Session::deviceKindCount; ++i)
+            if (! Session::isRackKind (static_cast<Session::EffectKind> (i)) && (midiTrack || ! effectIsMidi (static_cast<Session::EffectKind> (i))))
+                categories.addIfNotAlreadyThere (effectCategory (static_cast<Session::EffectKind> (i)));
         for (const auto& category : categories)
         {
             juce::PopupMenu group;
-            for (int i = 0; i < Session::effectKindCount; ++i)
-                if (category == effectCategory (static_cast<Session::EffectKind> (i))) group.addItem (100002+i, effectName (static_cast<Session::EffectKind> (i)));
+            for (int i = 0; i < Session::deviceKindCount; ++i)
+                if (! Session::isRackKind (static_cast<Session::EffectKind> (i)) && category == effectCategory (static_cast<Session::EffectKind> (i)))
+                    group.addItem (100002+i, effectName (static_cast<Session::EffectKind> (i)));
             popup.addSubMenu (category + "  (Built-in)", group);
         }
         {
@@ -6311,8 +6314,9 @@ private:
         else if (browserCategory == BrowserCategory::instruments)
         {
             if (matches ("Halftrack Synth")) deviceItems.push_back ({ "Halftrack Synth", false, -2 });
-            for (int kind = (int) Session::EffectKind::polySynth; kind < Session::effectKindCount; ++kind)
+            for (int kind = 0; kind < Session::deviceKindCount; ++kind)
             {
+                if (! effectIsInstrument ((Session::EffectKind) kind) || Session::isRackKind ((Session::EffectKind) kind)) continue;
                 const juce::String device = effectName ((Session::EffectKind) kind);
                 std::vector<DeviceRow> presets; addPresetRows (presets, device, kind, matches);
                 if (matches (device) || ! presets.empty()) deviceItems.push_back ({ device, false, kind });
@@ -6325,14 +6329,15 @@ private:
         {
             const bool midi = browserCategory == BrowserCategory::midiEffects;
             juce::StringArray groups;
-            for (int kind = 0; kind < Session::effectKindCount; ++kind)
-                if (effectIsMidi ((Session::EffectKind) kind) == midi && ! effectIsInstrument ((Session::EffectKind) kind)) groups.addIfNotAlreadyThere (effectCategory ((Session::EffectKind) kind));
+            for (int kind = 0; kind < Session::deviceKindCount; ++kind)
+                if (! Session::isRackKind ((Session::EffectKind) kind) && effectIsMidi ((Session::EffectKind) kind) == midi && ! effectIsInstrument ((Session::EffectKind) kind))
+                    groups.addIfNotAlreadyThere (effectCategory ((Session::EffectKind) kind));
             if (! midi) { groups.add ("Racks"); groups.add ("Utilities"); }
             for (const auto& group : groups)
             {
                 std::vector<DeviceRow> rows;
-                for (int kind = 0; kind < Session::effectKindCount; ++kind)
-                    if (group == effectCategory ((Session::EffectKind) kind))
+                for (int kind = 0; kind < Session::deviceKindCount; ++kind)
+                    if (! Session::isRackKind ((Session::EffectKind) kind) && group == effectCategory ((Session::EffectKind) kind))
                     {
                         const juce::String device = effectName ((Session::EffectKind) kind);
                         std::vector<DeviceRow> presets; addPresetRows (presets, device, kind, matches);
@@ -6940,7 +6945,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
            "native width edit redo restores both UI and model");
     auto* chooser = dynamic_cast<juce::ComboBox*> (findNamed (deviceChain, "Track instrument"));
     auto* editInstrument = dynamic_cast<juce::Button*> (findNamed (deviceChain, "Edit instrument"));
-    check (chooser != nullptr && editInstrument != nullptr && chooser->getNumItems() == 3 + Session::effectKindCount - (int) Session::EffectKind::polySynth,
+    int nativeInstruments = 0;
+    for (int kind = 0; kind < Session::deviceKindCount; ++kind)
+        if (effectIsInstrument ((Session::EffectKind) kind) && ! Session::isRackKind ((Session::EffectKind) kind)) ++nativeInstruments;
+    check (chooser != nullptr && editInstrument != nullptr && chooser->getNumItems() == 3 + nativeInstruments,
            "instrument chooser lists the built-in synth, every native instrument and both instrument racks");
     chooser->setSelectedId (3, juce::sendNotificationSync); refresh();
     check (currentTrack()->instrument.isNativeEffect && currentTrack()->instrument.effect.kind == Session::EffectKind::fmSynth

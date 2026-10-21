@@ -286,8 +286,9 @@ void engineTests (const juce::File& root)
     const auto beat = root.getChildFile ("beat.wav"); ok (drums.exportWav (beat, 48000, 24, .5), "render drum pattern");
     const auto pattern = read (beat);
     check (pattern.getMagnitude (0, 0, 2400) > .05 && pattern.getMagnitude (0, 12000, 2400) > .01, "drum kit renders kicks and hats through the engine");
-    for (int kind = static_cast<int> (Kind::polySynth); kind < Session::effectKindCount; ++kind)
+    for (int kind = 0; kind < Session::deviceKindCount; ++kind)
     {
+        if (! effectIsInstrument (static_cast<Kind> (kind)) || Session::isRackKind (static_cast<Kind> (kind))) continue;
         ok (drums.setTrackInstrument (drumId, static_cast<Kind> (kind)), "choose " + juce::String (effectName (static_cast<Kind> (kind))));
         ok (drums.exportWav (beat, 48000, 24, .5), "render with every instrument");
         // Samplers without samples are silent by design; the sampler suite covers loaded playback.
