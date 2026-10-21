@@ -605,3 +605,7 @@ When a Session made with the synthetic test device has a second virtual MIDI inp
 On record, the engine waits up to 100 ms for the audio thread to process a block. The synthetic device runs only when a test pumps it, so the wait times out and the punch-in is computed from an older sync point. A running audio device processes a block within that wait, so real recordings should not be affected, but this is not yet measured on hardware.
 
 Test Sessions therefore make the Computer Keyboard input only when the keyboard is first turned on. Whether the stale sync point can affect a stalled real device is open.
+
+### Auto-Arm and single-track inputs
+
+The reference gives every MIDI track All Ins and arms the selected one. In Halftrack, each input feeds one track, so Auto-Arm lends All MIDI Ins to the selected track only while no other track holds it, and takes it back on release. Whether the reference auto-arms tracks whose input is a specific port has not been compared.

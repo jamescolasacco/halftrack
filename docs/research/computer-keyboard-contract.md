@@ -18,6 +18,29 @@ Halftrack's computer MIDI keyboard follows the reference's Computer MIDI Keyboar
 - **Releasing.** A held key repeating plays nothing more. Releasing a key ends the note it began, even if the octave changed meanwhile. Releases are found from the key state when it changes, and from the window timer.
 - **Other shortcuts.** While the keyboard is on, these keys play instead of their shortcuts, as in the reference: A for Automation Mode, Z and X for zoom, T for audition. Command, Option and Control combinations and typing in text fields are left alone.
 
+## Auto-Arm
+
+As in the reference, selecting a MIDI track arms it while Exclusive Arm is on and no track is armed by hand, so the keyboard or a controller plays it at once.
+
+- **Its input.** A track with no input is given All MIDI Ins with Auto monitoring, unless another track has All MIDI Ins.
+- **Moving the arm.** Selecting another track moves the arm, and takes back the input auto-arm gave. Selecting an audio track only releases it.
+- **Showing it.** An auto-armed track's arm button is a lighter red, and its tooltip says why it is armed.
+- **By hand.** Arming, disarming or choosing an input by hand ends auto-arm for that track; the track keeps what it has. Arming another track by hand releases the auto-armed one.
+- **Limits.** Auto-arm is not an undo step and is not saved. It does not change while recording or exporting. A Session that has not yet scanned its MIDI devices scans them before giving All MIDI Ins.
+
+`tests/AutoArmTests.cpp` checks that:
+
+- selecting a MIDI track gives it All MIDI Ins, Auto monitoring and the arm, and the computer keyboard then plays it;
+- selecting another MIDI track moves the arm and the input, and undo skips auto-arm;
+- selecting an audio track releases it;
+- a track's own input is kept while armed and after release;
+- disarming by hand ends auto-arm, and arming another track by hand keeps it off;
+- All MIDI Ins held by another track is not taken;
+- nothing arms with Exclusive Arm off;
+- an auto-armed track records, and the arm moves again afterwards.
+
+The UI suite checks that selecting a MIDI track auto-arms it with All MIDI Ins and a marked arm button, and that selecting an audio track releases it.
+
 ## Evidence
 
 `tests/ComputerKeyboardTests.cpp` checks the key layout and the octave and velocity keys with their limits. It also checks that a repeating held key plays nothing more and that a key held across an octave change ends its own note.

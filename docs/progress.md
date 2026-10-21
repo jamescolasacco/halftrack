@@ -1485,3 +1485,12 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **Test fixes.** The suite found the snapshot recursing through a device button's existence check, now read from the engine. The UI suite's text-focus check waits up to a second for the app to activate.
 
 See [the contract](research/key-map-contract.md).
+
+## Auto-Arm — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/AutoArmTests.cpp` (new), with documentation.
+
+- **Auto-Arm.** Selecting a MIDI track arms it, giving it All MIDI Ins and Auto monitoring when it has no input, so the computer keyboard or a controller plays it at once.
+- **Moving and ending it.** Selecting another track moves the arm. Arming by hand ends it. It is not an undo step.
+
+See [the contract](research/computer-keyboard-contract.md#auto-arm).

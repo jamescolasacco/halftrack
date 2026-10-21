@@ -405,6 +405,7 @@ public:
         bool launcherActive = false;
         juce::String groupId; // Empty for ungrouped tracks.
         juce::String linkId;  // The tracks sharing it are linked for editing; empty when unlinked.
+        bool autoArmed = false; // Armed by Auto-Arm because it is selected, rather than by hand.
     };
     // A group sums its member tracks through its own mixer, like a bus.
     struct GroupInfo
@@ -832,6 +833,13 @@ public:
     juce::Result computerKeyboardNote (int note, float velocity, bool on);
     juce::Result setTrackInput (int trackIndex, const juce::String& inputName);
     juce::Result setTrackArmed (int trackIndex, bool);
+    // Auto-Arm, after the reference: with Exclusive Arm on and no track armed by hand, the selected
+    // MIDI track is armed, and given All MIDI Ins with Auto monitoring when it has no input and no
+    // other track has All MIDI Ins. Selecting another track (an empty id for none) releases it,
+    // taking back an input it gave. Arming, disarming or choosing an input by hand ends it. It is
+    // not an undo step, is not saved, and does not change while recording or exporting.
+    juce::Result autoArmTrack (const juce::String& trackId);
+    juce::String autoArmedTrack() const;
     juce::Result setTrackMonitor (int trackIndex, MonitorMode);
     // Play and Record start from the insert marker when stopped; Stop leaves the play position
     // where it stopped. Continue plays on from there. Return to Start puts the insert marker at the

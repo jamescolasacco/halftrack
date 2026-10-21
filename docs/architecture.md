@@ -235,7 +235,7 @@ Key mappings are a `HALFTRACKKEYMAP` child of the Edit, beside the MIDI map, and
 
 ## Computer MIDI keyboard
 
-`Session::Impl::ensureComputerKeyboard` makes or finds the engine virtual MIDI input named Computer Keyboard when the Session starts, with no source devices. `playComputerKeyboard` delivers a message to it and to the All MIDI Ins aggregate, stamped with the current stream time, on the message thread. The UI owns the key layout (`ComputerKeyboard`, header-only), and finds releases from `keyStateChanged` and the window timer. See the [contract](research/computer-keyboard-contract.md).
+Auto-Arm lives in `Session::autoArmTrack`, which the UI calls from `selectTrack`. `Impl::autoArmed` and `autoInput` record the armed track and whether its input was given, and `releaseAutoArm` undoes both without undo history. `setTrackArmed` and `setTrackInput` end it. `Session::Impl::ensureComputerKeyboard` makes or finds the engine virtual MIDI input named Computer Keyboard when the Session starts, with no source devices. `playComputerKeyboard` delivers a message to it and to the All MIDI Ins aggregate, stamped with the current stream time, on the message thread. The UI owns the key layout (`ComputerKeyboard`, header-only), and finds releases from `keyStateChanged` and the window timer. See the [contract](research/computer-keyboard-contract.md).
 
 ## Parameter identity
 

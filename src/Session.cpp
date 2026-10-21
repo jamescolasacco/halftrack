@@ -3484,7 +3484,7 @@ struct Session::Impl
         resetTapTempo();
         edit->editFileRetriever = [this] { return editLocation(); };
         grooveWatcher.watch (edit->state);
-        midiLearnTarget.clear(); keyLearnTarget.clear(); buttonValues.clear();
+        midiLearnTarget.clear(); keyLearnTarget.clear(); buttonValues.clear(); autoArmed.clear(); autoInput = false;
         remote.attach (edit.get()); attachCapture();
         if (useDevices && ! remoteWatch.isTimerRunning()) { remoteWatch.tick = [this] { remote.attach (edit.get()); attachCapture(); reconcileMidiMappings(); }; remoteWatch.startTimer (1000); }
         flushStructuralUpdates();
@@ -3718,6 +3718,24 @@ struct Session::Impl
     } remoteRest;
     bool remoteGesture = false;
     bool applyingRemote = false; // While a mapped controller's value is applied.
+    // Auto-Arm: the track it armed, and whether it also gave that track its input.
+    String autoArmed;
+    bool autoInput = false;
+    void releaseAutoArm()
+    {
+        if (autoArmed.isEmpty()) return;
+        if (auto* t = track (autoArmed))
+            if (auto* in = input (*t))
+            {
+                if (auto* destination = te::getDestination (*in, *t, 0)) destination->recordEnabled.setValue (false, nullptr);
+                if (autoInput)
+                {
+                    [[maybe_unused]] auto removed = in->removeTarget (t->itemID, nullptr);
+                    t->state.setProperty (monitorProperty, static_cast<int> (MonitorMode::off), nullptr);
+                }
+            }
+        autoArmed.clear(); autoInput = false;
+    }
     // Key Map Mode's learn target, and each button-mapped controller's last value (rising past 63 presses).
     String keyLearnTarget;
     std::map<String, int> buttonValues;
@@ -3956,6 +3974,7 @@ Session::Snapshot Session::snapshot() const
         TrackInfo info;
         info.id = t->itemID.toString(); info.name = t->getName(); info.colour = t->getColour();
         if (const auto link = t->state[linkProperty].toString(); link.isNotEmpty() && linkSizes[link] > 1) info.linkId = link;
+        info.autoArmed = info.id == impl->autoArmed;
         info.mute = t->isMuted (false); info.solo = t->isSolo (false);
         info.isMidi = t->state.getProperty (midiTrackProperty, false);
         info.isReturn = isReturn (*t);
@@ -8516,6 +8535,7 @@ Result Session::setTrackInput (int index, const String& name)
     // Validate the typed name before enabling anything. Re-query instances after
     // enabling because the native device list and playback graph may rebuild.
     if (name.isNotEmpty() && !inputNames (midi).contains (name)) return Result::fail ("That input is not available for this track type.");
+    if (impl->autoArmed == t->itemID.toString()) { impl->autoArmed.clear(); impl->autoInput = false; } // Chosen by hand now.
     const auto monitored=impl->monitoredMidiTracks();
     const bool playing = impl->edit->getTransport().isPlaying();
     if (midi)
@@ -8562,6 +8582,9 @@ Result Session::setTrackArmed (int index, bool value)
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (isReturn (*t)) return Result::fail ("Return tracks cannot receive recording inputs.");
     if (! impl->input (*t)) return Result::fail ("Select an input before arming this track.");
+    // By hand, the auto-armed track keeps what it has; arming another releases it.
+    if (impl->autoArmed == t->itemID.toString()) { impl->autoArmed.clear(); impl->autoInput = false; }
+    else if (value && impl->autoArmed.isNotEmpty() && ! impl->anyRecording()) impl->releaseAutoArm();
     // Linked tracks with an input arm and disarm with this one.
     std::vector<te::AudioTrack*> tracks { t }, changing;
     for (auto* other : impl->linkedTracks (*t)) tracks.push_back (other);
@@ -8583,6 +8606,46 @@ Result Session::setTrackArmed (int index, bool value)
     for (auto* track : changing) te::getDestination (*impl->input (*track), *track, 0)->recordEnabled.setValue (value, &impl->edit->getUndoManager());
     impl->finishInputChange(monitored);impl->changed(); return Result::ok();
 }
+Result Session::autoArmTrack (const String& id)
+{
+    if (impl->exporting || impl->anyRecording() || id == impl->autoArmed) return Result::ok();
+    const auto monitored = impl->monitoredMidiTracks();
+    const auto finish = [&] { impl->finishInputChange (monitored); sendChangeMessage(); return Result::ok(); };
+    impl->releaseAutoArm();
+    auto* t = impl->track (id);
+    if (t == nullptr || isReturn (*t) || ! static_cast<bool> (t->state.getProperty (midiTrackProperty, false))
+        || t->isFrozen (te::Track::anyFreeze) || ! preferences().exclusiveArm) return finish();
+    // A track armed by hand keeps Auto-Arm off.
+    for (auto* other : te::getAudioTracks (*impl->edit))
+        if (auto* in = impl->input (*other); in != nullptr && in->isRecordingEnabled (other->itemID)) return finish();
+    auto* in = impl->input (*t);
+    bool gave = false;
+    if (in == nullptr)
+    {
+        // All MIDI Ins, enabled as choosing it would, unless another track has it. A Session whose
+        // MIDI devices have not been scanned yet scans them first.
+        auto& devices = impl->engine.getDeviceManager();
+        const auto devicesNow = devices.getMidiInDevices();
+        if (std::none_of (devicesNow.begin(), devicesNow.end(), [] (const auto& d) { auto* v = dynamic_cast<te::VirtualMidiInputDevice*> (d.get()); return v != nullptr && v->useAllInputs; }))
+            devices.rescanMidiDeviceListSynchronously();
+        for (auto device : devices.getMidiInDevices())
+            if (auto* all = dynamic_cast<te::VirtualMidiInputDevice*> (device.get()); all != nullptr && all->useAllInputs && ! all->isEnabled())
+            { all->setEnabled (true); devices.rescanMidiDeviceListSynchronously(); devices.dispatchPendingUpdates(); impl->refreshInputs(); break; }
+        for (auto* candidate : impl->edit->getAllInputDevices())
+            if (auto* all = dynamic_cast<te::VirtualMidiInputDevice*> (&candidate->getInputDevice()); all != nullptr && all->useAllInputs) in = candidate;
+        if (in == nullptr || ! in->getTargets().isEmpty()) return finish();
+        if (! in->setTarget (t->itemID, true, nullptr, 0)) return finish();
+        in->getInputDevice().setMonitorMode (te::InputDevice::MonitorMode::automatic);
+        t->state.setProperty (monitorProperty, static_cast<int> (MonitorMode::automatic), nullptr);
+        gave = true;
+    }
+    auto* destination = te::getDestination (*in, *t, 0);
+    if (destination == nullptr) { if (gave) { [[maybe_unused]] auto removed = in->removeTarget (t->itemID, nullptr); } return finish(); }
+    destination->recordEnabled.setValue (true, nullptr);
+    impl->autoArmed = id; impl->autoInput = gave;
+    return finish();
+}
+juce::String Session::autoArmedTrack() const { return impl->autoArmed; }
 Result Session::setTrackMonitor (int index, MonitorMode mode)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

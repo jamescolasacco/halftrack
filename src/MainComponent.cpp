@@ -1320,7 +1320,6 @@ private:
             link.setVisible (! columnLayout && linkId.isNotEmpty());
             input.setVisible (! returnTrack); monitor.setVisible (! returnTrack); arm.setVisible (! returnTrack);
             input.setName (midi ? "Track MIDI input" : "Track audio input");
-            arm.setTooltip (midi ? "Arm track for MIDI recording" : "Arm track for audio recording");
             sendMode.setVisible (returnTrack);
             sendMode.setSelectedId (track.sendMode == Session::SendMode::pre ? 1 : 2, juce::dontSendNotification);
             peakL = track.peakL; peakR = track.peakR;
@@ -1335,6 +1334,10 @@ private:
             mute.setButtonText (juce::String (position + 1));
             solo.setToggleState (track.solo, juce::dontSendNotification);
             arm.setToggleState (track.armed, juce::dontSendNotification);
+            // An auto-armed track shows a lighter arm, as it follows the selection.
+            arm.setColour (juce::TextButton::buttonOnColourId, track.autoArmed ? red.withAlpha (.55f) : red);
+            arm.setTooltip (track.autoArmed ? juce::String ("Armed because it is selected (Auto-Arm). Click to arm or disarm it by hand.")
+                                            : juce::String (midi ? "Arm track for MIDI recording" : "Arm track for audio recording"));
             for (auto [button, name] : { std::pair { &mute, "mute" }, std::pair { &solo, "solo" }, std::pair { &arm, "arm" } })
                 button->getProperties().set ("midiMapTarget", returnTrack ? juce::String() : "track:" + track.id + ":" + name);
             auto names = owner.session.inputNames (midi);
@@ -7196,6 +7199,8 @@ private:
     {
         if (selectedTrack != track) { selectedClip = -1; selectedLauncherClipId.clear(); }
         selectedTrack = track;
+        // Auto-Arm follows the selection to MIDI tracks.
+        session.autoArmTrack (juce::isPositiveAndBelow (track, (int) state.tracks.size()) ? state.tracks[(size_t) track].id : juce::String());
         importButton.setEnabled (currentTrack() == nullptr || ! currentTrack()->isReturn);
         newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
         canvas.repaint(); deviceChain.sync();
@@ -12376,6 +12381,20 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tracks[0].armed && state.tracks[(size_t) keys].armed, "Cmd/Ctrl-click arms an additional track");
         armFromUI (0, false, false); armFromUI (keys, false, false);
         check (session.newProject().wasOk(), "reset after solo and arm"); refresh();
+    }
+    {
+        // Auto-Arm: selecting a MIDI track arms it with All MIDI Ins and a lighter arm; selecting an
+        // audio track releases it.
+        check (session.addMidiTrack ("Auto").wasOk(), "add a MIDI track to select"); refresh();
+        const int autoTrack = (int) state.tracks.size() - 1;
+        selectTrack (autoTrack); refresh();
+        check (state.tracks[(size_t) autoTrack].armed && state.tracks[(size_t) autoTrack].autoArmed && state.tracks[(size_t) autoTrack].inputName == "All MIDI Ins",
+               "selecting a MIDI track auto-arms it with All MIDI Ins");
+        auto* arm = dynamic_cast<juce::Button*> (findNamed (*canvas.getChildComponent (autoTrack), "Record arm"));
+        check (arm != nullptr && arm->getToggleState() && arm->getTooltip().contains ("Auto-Arm"), "its arm shows that it is auto-armed");
+        selectTrack (0); refresh();
+        check (! state.tracks[(size_t) autoTrack].armed && state.tracks[(size_t) autoTrack].inputName.isEmpty() && ! state.tracks[0].armed, "selecting an audio track releases it");
+        check (session.newProject().wasOk(), "reset after Auto-Arm"); refresh();
     }
     {
         // An automated tempo: positions, snapping and the tempo field follow the map.
