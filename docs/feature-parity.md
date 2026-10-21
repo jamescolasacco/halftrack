@@ -495,8 +495,8 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | MXL-018 | MPE Control | MIDI | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-019 | Note Echo | MIDI | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-020 | Shaper MIDI | MIDI | NOT IMPLEMENTED / UNVERIFIED |
-| MXL-021 | Velocity Shaper (MIDI Tool) | TOOL | NOT IMPLEMENTED / UNVERIFIED |
-| MXL-022 | Euclidean (MIDI Tool) | TOOL | NOT IMPLEMENTED / UNVERIFIED |
+| MXL-021 | Velocity Shaper (MIDI Tool) | PARTIAL — the Velocity Shaper note tool ramps velocities from Start to End with a Curve across note starts, with hand-computed results (see MID-007 and the [note tool contract](research/midi-tools-contract.md)); the reference's drawn breakpoint envelope and exact algorithm missing | PARTIAL |
+| MXL-022 | Euclidean (MIDI Tool) | PARTIAL — the Euclidean note generator (Steps, Pulses, Rotation, Pitch, Rate, Gate, Velocity) with exact pattern tests (see MID-008 and the [note tool contract](research/midi-tools-contract.md)); the reference's multiple voices and exact algorithm missing | PARTIAL |
 
 ### Additional content/Pack capability candidates
 
