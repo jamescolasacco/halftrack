@@ -308,6 +308,10 @@ public:
     // A take lane: recorded or added takes kept below a track's main lane, as in the reference's
     // comping. Take lane clips do not play; comping copies a range of a lane into the main lane.
     struct TakeLaneInfo { juce::String id, name; std::vector<ClipInfo> clips; };
+    // A track's output ("Audio To"): Master, Sends Only, or another audio track, whose devices and
+    // mixer then play it as if it were that track's input.
+    enum class OutputKind { master, sendsOnly, track };
+    struct TrackOutput { OutputKind kind = OutputKind::master; juce::String trackId; bool operator== (const TrackOutput&) const = default; };
     struct TrackInfo
     {
         juce::String id, name;
@@ -323,6 +327,7 @@ public:
         AutomationLane volumeAutomation, panAutomation;
         std::vector<TakeLaneInfo> takeLanes; // Top to bottom.
         juce::String auditionLane; // The take lane playing in place of the main lane, if any.
+        TrackOutput output;
         MonitorMode monitor = MonitorMode::off;
         juce::String inputName;
         std::vector<ClipInfo> clips;
@@ -593,6 +598,11 @@ public:
     juce::Result setTrackPan (int trackIndex, float pan);
     // Atomic, strictly ordered beat points. Empty points restore manual control.
     juce::Result setTrackAutomation (const juce::String& trackId, AutomationTarget, const AutomationLane&);
+    // Routes a track's output. Return tracks and tracks in a group play into Master or their group;
+    // a route that would lead back into the track is refused. One undo step.
+    juce::Result setTrackOutput (const juce::String& trackId, const TrackOutput&);
+    // The audio tracks a track's output can go to, in order.
+    juce::StringArray outputDestinations (const juce::String& trackId) const;
     // Automates one native device control (by parameter index) with values in the control's own units,
     // or one of an external plug-in's parameters (by its index in pluginParameters) with values 0-1.
     juce::Result setDeviceAutomation (const juce::String& pluginId, int parameter, const AutomationLane&);

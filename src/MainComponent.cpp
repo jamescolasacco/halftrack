@@ -1095,6 +1095,17 @@ private:
                 delay.onDragEnd = [this] { owner.session.endEditGesture(); };
                 delay.onValueChange = [this] { owner.report (owner.session.setTrackDelay (trackId, delay.getValue())); };
                 delay.updateText();
+                // Audio To: Master, Sends Only (only the sends are heard) or another audio track.
+                addAndMakeVisible (output); output.setName ("Track output");
+                output.setTooltip ("Audio To: where this track plays. With Sends Only, only its sends are heard.");
+                output.onChange = [this]
+                {
+                    const int item = output.getSelectedId();
+                    Session::TrackOutput chosen;
+                    if (item == 2) chosen.kind = Session::OutputKind::sendsOnly;
+                    else if (juce::isPositiveAndBelow (item - 3, outputIds.size())) chosen = { Session::OutputKind::track, outputIds[item - 3] };
+                    owner.report (owner.session.setTrackOutput (trackId, chosen)); owner.refresh();
+                };
                 gain.setSliderStyle (juce::Slider::LinearVertical); gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 16);
                 pan.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); pan.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 42, 15);
                 pan.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
@@ -1164,7 +1175,7 @@ private:
             input.setSelectedId (inputNames.indexOf (track.inputName) + 2, juce::dontSendNotification);
             if (track.inputName.isEmpty()) input.setSelectedId (1, juce::dontSendNotification);
             monitor.setSelectedId (track.monitor == Session::MonitorMode::on ? 3 : track.monitor == Session::MonitorMode::automatic ? 2 : 1, juce::dontSendNotification);
-            if (columnLayout) syncSends (track);
+            if (columnLayout) { syncSends (track); syncOutput (track); }
             if (! columnLayout) syncAutomation (track);
             if (columnLayout)
             {
@@ -1233,6 +1244,31 @@ private:
             const auto at = std::find (controlKeys.begin(), controlKeys.end(), shownKey);
             automationControl.setSelectedId (at != controlKeys.end() ? (int) std::distance (controlKeys.begin(), at) + 1 : 0, juce::dontSendNotification);
             automationControl.setEnabled (shown != nullptr); automationLane.setEnabled (shown != nullptr);
+        }
+        // Returns play into Master and grouped tracks into their group; other tracks choose Master,
+        // Sends Only or one of the tracks they may play into.
+        void syncOutput (const Session::TrackInfo& track)
+        {
+            juce::StringArray ids, labels;
+            if (track.isReturn) labels.add ("Master");
+            else if (track.groupId.isNotEmpty()) labels.add ("Group");
+            else
+            {
+                labels.addArray ({ "Master", "Sends Only" });
+                for (const auto& id : owner.session.outputDestinations (track.id))
+                    for (const auto& other : owner.state.tracks) if (other.id == id) { ids.add (id); labels.add (other.name); }
+            }
+            if (labels != outputLabels)
+            {
+                outputLabels = labels; output.clear (juce::dontSendNotification);
+                for (int i = 0; i < labels.size(); ++i) output.addItem (labels[i], i + 1);
+            }
+            outputIds = ids;
+            int chosen = 1;
+            if (track.output.kind == Session::OutputKind::sendsOnly) chosen = 2;
+            else if (track.output.kind == Session::OutputKind::track && ids.contains (track.output.trackId)) chosen = ids.indexOf (track.output.trackId) + 3;
+            output.setSelectedId (chosen, juce::dontSendNotification);
+            output.setEnabled (labels.size() > 1 && ! owner.session.isExporting());
         }
         // Session mixer sends: one knob per return, labelled A, B, C as the returns are.
         void syncSends (const Session::TrackInfo& track)
@@ -1313,14 +1349,15 @@ private:
         {
             if (columnLayout)
             {
-                // Top to bottom: input routing, pan, volume with meter, activator / solo / arm.
+                // Top to bottom: input and output routing, pan, volume with meter, activator / solo / arm.
                 name.setBounds (6, 2, getWidth() - 12, 18);
                 input.setBounds (5, 4, getWidth() - 10, 19); monitor.setBounds (5, 25, getWidth() - 10, 19);
+                output.setBounds (5, 46, getWidth() - 10, 19);
                 sendMode.setBounds (5, 4, getWidth() - 10, 19);
                 for (size_t i = 0; i < sends.size(); ++i)
-                    sends[i]->setBounds (8 + (int) (i % 3) * 36, 48 + (int) (i / 3) * 40, 34, 28);
-                pan.setBounds ((getWidth() - 46) / 2, 50 + sendOffset(), 46, 50);
-                gain.setBounds (6, 106 + sendOffset(), 54, getHeight() - 184 - sendOffset());
+                    sends[i]->setBounds (8 + (int) (i % 3) * 36, 48 + outputRow + (int) (i / 3) * 40, 34, 28);
+                pan.setBounds ((getWidth() - 46) / 2, 50 + outputRow + sendOffset(), 46, 50);
+                gain.setBounds (6, 106 + outputRow + sendOffset(), 54, getHeight() - 184 - outputRow - sendOffset());
                 delay.setBounds (5, getHeight() - 74, getWidth() - 10, 19);
                 if (sideA != nullptr)
                 {
@@ -1362,16 +1399,19 @@ private:
         juce::Label name;
         juce::TextButton mute { "M" }, solo { "S" }, arm { "R" };
         juce::Slider gain, pan, delay;
-        juce::ComboBox input, monitor, sendMode, automationDevice, automationControl;
+        juce::ComboBox input, monitor, sendMode, automationDevice, automationControl, output;
         juce::TextButton automationLane { "+" };
         std::vector<arrangementAutomation::Target> automationTargets;
         std::vector<juce::String> controlKeys;
         juce::StringArray controlLabels;
         juce::String shownKey, deviceSignature;
-        juce::StringArray inputNames, sendReturnIds;
+        juce::StringArray inputNames, sendReturnIds, outputIds, outputLabels;
         std::vector<std::unique_ptr<juce::Slider>> sends;
         std::unique_ptr<juce::TextButton> sideA, sideB;
-        juce::Rectangle<int> meterBounds() const { return { 66, 110 + sendOffset(), 10, juce::jmax (10, getHeight() - 204 - sendOffset()) }; }
+        juce::Rectangle<int> meterBounds() const { return { 66, 110 + outputRow + sendOffset(), 10, juce::jmax (10, getHeight() - 204 - outputRow - sendOffset()) }; }
+    public:
+        // The Session mixer's Audio To row, which every strip leaves room for so their faders line up.
+        static constexpr int outputRow = 21;
     };
 
     bool syncTrackRows (juce::Component& parent, std::vector<std::unique_ptr<TrackRow>>& rows, bool vertical)
@@ -1470,8 +1510,8 @@ private:
         {
             if (columnLayout)
             {
-                pan.setBounds ((getWidth() - 46) / 2, 50, 46, 50);
-                gain.setBounds (6, 106, 54, getHeight() - 140);
+                pan.setBounds ((getWidth() - 46) / 2, 50 + TrackRow::outputRow, 46, 50);
+                gain.setBounds (6, 106 + TrackRow::outputRow, 54, getHeight() - 140 - TrackRow::outputRow);
                 const int buttons = getHeight() - 28, half = (getWidth() - 12) / 2;
                 activator.setBounds (5, buttons, half, 22); solo.setBounds (7 + half, buttons, half, 22);
                 return;
@@ -1488,7 +1528,7 @@ private:
                 g.fillAll (juce::Colour (0xff383838));
                 g.setColour (colour); g.fillRect (0, 0, 4, getHeight() - 1);
                 g.setColour (muted); g.setFont (font (9.0f, true)); g.drawText ("GROUP", 6, 8, getWidth() - 12, 16, juce::Justification::centred);
-                const juce::Rectangle<int> meter { 66, 110, 10, juce::jmax (10, getHeight() - 160) };
+                const juce::Rectangle<int> meter { 66, 110 + TrackRow::outputRow, 10, juce::jmax (10, getHeight() - 160 - TrackRow::outputRow) };
                 for (int channel = 0; channel < 2; ++channel)
                 {
                     const auto bar = meter.withWidth (4).translated (channel * 6, 0);
@@ -2858,7 +2898,7 @@ private:
         }
     public:
         static constexpr int headerHeight = 22, gridTop = headerHeight, columnWidth = 120, rowHeight = 24,
-                             sceneWidth = 132, baseMixerHeight = 252, stopHeight = 22, scrollSize = 10;
+                             sceneWidth = 132, baseMixerHeight = 252 + TrackRow::outputRow, stopHeight = 22, scrollSize = 10;
         // The mixer grows by a row of send knobs for every three returns.
         int mixerHeight() const
         {
@@ -2906,13 +2946,13 @@ private:
                 gain.getProperties().set ("midiMapTarget", "master");
                 peakL = owner.state.masterPeakL; peakR = owner.state.masterPeakR; repaint();
             }
-            void resized() override { gain.setBounds (6, 106, 54, getHeight() - 162); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22); }
+            void resized() override { gain.setBounds (6, 106 + TrackRow::outputRow, 54, getHeight() - 162 - TrackRow::outputRow); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22); }
             void paint (juce::Graphics& g) override
             {
                 g.fillAll (juce::Colour (0xff383838));
                 g.setColour (muted); g.setFont (font (9.0f, true)); g.drawText ("MASTER", 6, 8, getWidth() - 12, 16, juce::Justification::centred);
                 g.drawText ("A", 4, getHeight() - 34, 12, 22, juce::Justification::centred); g.drawText ("B", getWidth() - 16, getHeight() - 34, 12, 22, juce::Justification::centred);
-                const juce::Rectangle<int> meter { 66, 110, 10, juce::jmax (10, getHeight() - 182) };
+                const juce::Rectangle<int> meter { 66, 110 + TrackRow::outputRow, 10, juce::jmax (10, getHeight() - 182 - TrackRow::outputRow) };
                 for (int channel = 0; channel < 2; ++channel)
                 {
                     const auto bar = meter.withWidth (4).translated (channel * 6, 0);
@@ -10088,6 +10128,16 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         bool delayed = false; for (const auto& track : state.tracks) delayed = delayed || std::abs (track.delayMs + 12.5) < 1e-9;
         check (delayed, "the delay field edits the real track delay");
         session.stop(); check (session.newProject().wasOk(), "reset after the group checks"); refresh();
+        // Audio To, edited from the strip.
+        auto* output = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Track output"));
+        check (output != nullptr && output->isVisible() && output->getNumItems() == 3 && output->getText() == "Master"
+               && output->getItemText (2) == state.tracks[1].name, "a track strip's output offers Master, Sends Only and the other track");
+        output->setSelectedId (2, juce::sendNotificationSync); refresh();
+        check (state.tracks[0].output.kind == Session::OutputKind::sendsOnly && output->getText() == "Sends Only", "choosing Sends Only routes the track");
+        output->setSelectedId (3, juce::sendNotificationSync); refresh();
+        check ((state.tracks[0].output == Session::TrackOutput { Session::OutputKind::track, state.tracks[1].id }), "choosing a track routes into it");
+        session.undo(); session.undo(); refresh();
+        check (state.tracks[0].output == Session::TrackOutput {} && output->getText() == "Master", "undo returns the strip to Master");
     }
     check (session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "prepare follow-action UI clip"); refresh(); showSessionView(); selectLauncherSlot (0, 0);
     const auto followClipId = selectedSlot()->clip.id;

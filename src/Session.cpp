@@ -408,10 +408,11 @@ Result validateRouting (const juce::ValueTree& state)
             }
         if (routed && (mixers != 1 || ! canonicalID (track[te::IDs::id])))
             return Result::fail ("Routed tracks require a valid identity and exactly one track mixer.");
-        if (routed)
+        // A source track may send and play into another track; the engine drops an output that would feed back.
+        if (returned)
             for (const auto& device : track.getChildWithName (te::IDs::OUTPUTDEVICES))
                 if (device[te::IDs::name].toString().startsWithIgnoreCase ("track "))
-                    return Result::fail ("Auxiliary-routed tracks cannot route their main output to another track.");
+                    return Result::fail ("Return tracks play into Master.");
         std::set<String> targets;
         bool pastSourceEffects = false;
         for (int index = 0; index < static_cast<int> (plugins.size()); ++index)
@@ -3034,6 +3035,8 @@ Session::Snapshot Session::snapshot() const
             info.takeLanes.push_back (std::move (laneInfo));
         }
         info.launcherActive = t->playSlotClips.get() || (t->launcherOwnership.load (std::memory_order_acquire) & 1) != 0;
+        if (auto* destination = t->getOutput().getDestinationTrack()) info.output = { OutputKind::track, destination->itemID.toString() };
+        else if (t->getOutput().outputsToNone()) info.output = { OutputKind::sendsOnly, {} };
         info.frozen = t->isFrozen (te::Track::individualFreeze);
         info.crossfade = static_cast<CrossfadeAssign> (juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (crossfadeProperty, 0))));
         if (auto* delay = t->pluginList.findFirstPluginOfType<TrackDelayPlugin>()) info.delayMs = delay->milliseconds.get();
@@ -3870,6 +3873,43 @@ Result Session::exportMidiClip (const String& id, const File& destination)
      stream->flush();if(stream->getStatus().failed())return stream->getStatus();}
     if(!temporary.overwriteTargetFileWithTemporary())return Result::fail("Could not replace the MIDI destination.");
     return Result::ok();
+}
+juce::StringArray Session::outputDestinations (const String& trackId) const
+{
+    juce::StringArray result;
+    auto* source = impl->track (trackId);
+    if (source == nullptr || isReturn (*source) || source->getParentFolderTrack() != nullptr) return result;
+    for (auto* t : te::getAudioTracks (*impl->edit))
+        if (t != source && ! isReturn (*t) && ! static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) && ! t->getOutput().feedsInto (source))
+            result.add (t->itemID.toString());
+    return result;
+}
+Result Session::setTrackOutput (const String& trackId, const TrackOutput& output)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before changing a track's output.");
+    auto* t = impl->track (trackId); if (t == nullptr) return Result::fail ("Track not found.");
+    TrackOutput current;
+    if (auto* destination = t->getOutput().getDestinationTrack()) current = { OutputKind::track, destination->itemID.toString() };
+    else if (t->getOutput().outputsToNone()) current = { OutputKind::sendsOnly, {} };
+    if (output.kind != OutputKind::track ? output.kind == current.kind : output == current) return Result::ok();
+    if (output.kind != OutputKind::master && isReturn (*t)) return Result::fail ("Return tracks play into Master.");
+    if (output.kind != OutputKind::master && t->getParentFolderTrack() != nullptr) return Result::fail ("Tracks in a group play into the group.");
+    te::AudioTrack* destination = nullptr;
+    if (output.kind == OutputKind::track)
+    {
+        if (! outputDestinations (trackId).contains (output.trackId))
+            return Result::fail ("That track cannot take this track's output: choose another audio track that does not play back into this one.");
+        destination = impl->track (output.trackId);
+    }
+    impl->transaction ("Set track output");
+    switch (output.kind)
+    {
+        case OutputKind::master: t->getOutput().setOutputToDefaultDevice (false); break;
+        case OutputKind::sendsOnly: t->getOutput().setOutputToNone(); break;
+        case OutputKind::track: t->getOutput().setOutputToTrack (destination); break;
+    }
+    impl->edit->restartPlayback(); impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::auditionTakeLane (const String& laneId)
 {

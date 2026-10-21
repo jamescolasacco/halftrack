@@ -26,7 +26,8 @@ function(halftrack_patch_clip_launcher source_dir)
     set(source "${source_dir}/modules/tracktion_engine/playback/graph/tracktion_EditNodeBuilder.cpp")
     file(SHA256 "${source}" source_hash)
     if(NOT source_hash STREQUAL "31fb6f4d5b21355a67867c71461c26b17464e450c3c0e945173dd99f8550b074"
-       AND NOT source_hash STREQUAL "6bc90a7dae60e9a0ab3d01fd77b0f90377b8933a9fe11bccbb38b31f471f060d")
+       AND NOT source_hash STREQUAL "6bc90a7dae60e9a0ab3d01fd77b0f90377b8933a9fe11bccbb38b31f471f060d"
+       AND NOT source_hash STREQUAL "51ef9b7dfa77221251da5f43f77f91110f8b375de8974e6f45cac2c08c98ad48") # The later render sends-only patch.
         message(FATAL_ERROR "Halftrack launcher patch requires pinned source: ${source}; unexpected SHA256 ${source_hash}.")
     endif()
     set(source "${source_dir}/modules/tracktion_engine/model/tracks/tracktion_AudioTrack.h")
@@ -532,7 +533,8 @@ function(halftrack_patch_clip_launcher source_dir)
     endif()
     set(source "${source_dir}/modules/tracktion_engine/playback/graph/tracktion_EditNodeBuilder.cpp")
     file(SHA256 "${source}" source_hash)
-    if(NOT source_hash STREQUAL "31fb6f4d5b21355a67867c71461c26b17464e450c3c0e945173dd99f8550b074")
+    if(NOT source_hash STREQUAL "31fb6f4d5b21355a67867c71461c26b17464e450c3c0e945173dd99f8550b074"
+       AND NOT source_hash STREQUAL "51ef9b7dfa77221251da5f43f77f91110f8b375de8974e6f45cac2c08c98ad48") # Already carrying the later render sends-only patch.
         file(READ "${source}" content)
         set(before [=[    if (arrangerNodes.empty() && launcherNodes.empty())
         return {};]=])

@@ -162,8 +162,8 @@ or run model traversal in the audio callback. Engine callbacks retain the
 separately documented dependency real-time limitations.
 
 Version-1 projects persist the native route tree. Canonical nonzero route/slot identities, track identity collisions, bus, gain,
-mode, plug-in order, return clip restrictions, input aliases and unsupported
-main-output/virtual-input back-routing are checked before
+mode, plug-in order, return clip restrictions, input aliases, return main outputs routed to tracks and
+virtual-input back-routing are checked before
 constructing a candidate Edit. Invalid loads preserve the active edit and undo
 history. The standalone send/return acceptance suite uses original generated PCM
 and plug-ins to verify full-window finite output, independent mix/pan formulas,
@@ -184,6 +184,10 @@ flowchart LR
     ReturnFX --> ReturnMixer[Return volume / pan / mute]
     ReturnMixer --> Main
 ```
+
+## Track output facade
+
+`Session::TrackOutput` is `{ OutputKind kind; String trackId; }`, with `OutputKind` `master`, `sendsOnly` or `track`; `TrackInfo::output` reports it. `setTrackOutput (trackId, TrackOutput)` runs on the message thread as one undo step and is refused for returns, grouped tracks, recording and export. `outputDestinations (trackId)` lists the identities of the audio tracks it may play into, excluding returns, MIDI tracks and tracks that already feed it. The native `TrackOutput` stores the route: the default device, `(none)` for Sends Only, or `track N`, resolved by the engine to the destination's identity. Live playback processes a `(none)` track as a sink so only its sends are heard; `cmake/PatchRenderSendsOnly.cmake` gives renders the same graph. See the [routing contract](research/routing-contract.md).
 
 ## CLAP adapter decision
 

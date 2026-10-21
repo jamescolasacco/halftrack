@@ -495,3 +495,11 @@ These are simplest defaults pending a comparison with the reference:
 - **Loop recording.** It still makes the engine's single clip with takes, which is not split into lanes.
 - **Comp edges** get no automatic crossfades.
 - **Showing lanes** is a per-track view choice and is not saved.
+
+### Track output scope
+
+These are simplest defaults pending a comparison with the reference:
+
+- **Monitoring.** A track routed into another is heard through the destination whatever the destination's Monitor setting; the reference manual does not say.
+- **Destinations.** Only ordinary audio and instrument tracks are offered. Return tracks, group tracks, Ext. Out and devices' sidechain inputs are not.
+- **Fixed outputs.** Returns play into Master and grouped tracks into their group.

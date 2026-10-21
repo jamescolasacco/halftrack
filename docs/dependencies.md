@@ -208,3 +208,7 @@ Exact input/output SHA-256 values are in the module; it validates every file bef
 - **After a marker.** A ratio set now is first heard after the stretcher's output latency (90 ms), so the change came late.
 
 The reader now takes the ratio of the segment holding the read position plus the output latency, with a marker starting its own segment, when it primes, seeks and reads. Measured by the warp suite: clicks follow a 5% nudge within 0.35 ms and a 2x squeeze within 3.3 ms, before and after the marker.
+
+## Tracktion render sends-only patch
+
+`cmake/PatchRenderSendsOnly.cmake` patches the pinned `tracktion_EditNodeBuilder.cpp` after the clip-launcher patch (input SHA-256 `31fb6f4d5b21355a67867c71461c26b17464e450c3c0e945173dd99f8550b074`, patched `51ef9b7dfa77221251da5f43f77f91110f8b375de8974e6f45cac2c08c98ad48`). The clip-launcher patch accepts the new hash on reconfigure. Live playback treats a track whose output goes to no device or track as a bus that is not heard, so a Sends Only track is heard only through its sends. The render graph, `createNodeForEdit`, summed every track without a destination track into the mix, so such a track was heard in exports. It now wraps those tracks in the same `SinkNode` playback uses. `routing-acceptance` renders a Sends Only track as silent without sends and at its send level with one.

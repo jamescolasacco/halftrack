@@ -1194,3 +1194,13 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **A fix.** Comping and performance capture removed clips while iterating the track's live clip list; both now iterate a copy.
 
 See [the contract](research/take-lanes-contract.md).
+
+## Track output routing — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt`, `cmake/PatchClipLauncher.cmake`, `cmake/PatchRenderSendsOnly.cmake` (new) and `tests/RoutingTests.cpp` (new), with documentation.
+
+- **Audio To.** Tracks play into Master, Sends Only or another audio track, from the Session mixer.
+- **An engine fix.** Renders summed Sends Only tracks into the mix, although live playback silenced them; they now match.
+- **Loading.** A track that sends to a return may now also play into another track. Only returns are refused a track output.
+
+See [the contract](research/routing-contract.md).
