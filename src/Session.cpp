@@ -6,6 +6,7 @@
 #include "Racks.h"
 #include "NoteTools.h"
 #include "Grooves.h"
+#include "Tuner.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 #include <array>
@@ -3703,6 +3704,14 @@ int Session::fitToScale (const ScaleSettings& scale, int pitch) noexcept
         if (pitch + distance <= 127 && inScale (scale, pitch + distance)) return pitch + distance;
     }
     return pitch;
+}
+std::optional<Session::TunerReading> Session::tunerReading (const String& pluginId) const
+{
+    auto* device = impl->nativeDevice (pluginId);
+    if (device == nullptr || device->getKind() != EffectKind::tuner) return std::nullopt;
+    std::vector<float> frames; double rate = 0;
+    if (! device->latestInput (frames, tuner::analysisFrames, rate)) return std::nullopt;
+    return tuner::detect (frames.data(), (int) frames.size(), rate, device->readSettings().values[0]);
 }
 Result Session::addGroove (const GrooveInfo& groove, String& grooveId)
 {

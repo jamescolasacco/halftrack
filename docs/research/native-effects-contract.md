@@ -110,3 +110,27 @@ Sections at 0 dB are exact identities, so the defaults pass audio unchanged.
 
 Channel EQ also passes the shared device checks. Its spectrum display and measured comparison with the reference are missing.
 
+## Tuner (2026-10-20)
+
+The Tuner follows the manual's description in the [audio effect reference](https://www.ableton.com/en/live-manual/12/live-audio-effect-reference/), consulted 2026-10-20. It detects a monophonic pitch and its distance from the nearest semitone, shown in cents or Hz. The reference pitch runs from 410 to 480 Hz, defaulting to 440 Hz, and green means in tune.
+
+The device passes audio unchanged. Its audio callback writes the mono mix of what it processes into a preallocated ring of 16,384 atomic samples, without allocating or locking. `Session::tunerReading(pluginId)` copies the latest 4,096 frames on the message thread and runs `tuner::detect`. The detector, in `src/Tuner.*`, is YIN (de Cheveigné and Kawahara, 2002) with a 0.1 threshold:
+
+- the dip is refined with a parabola;
+- the period is then refined again at a multiple near 400 samples on the raw difference function;
+- silence (below −80 dBFS RMS), aperiodic input and pitches outside 30 Hz–4.2 kHz read nothing.
+
+The editor shows the note name, cents or Hz, and the Classic view's target mode. A circle on a ±50 cent scale is green within 3 cents and red beyond, sharp to the right.
+
+`tests/TunerTests.cpp` (`tuner-acceptance`) checks:
+
+- **Accuracy.** Sines from E1 to C8, and offsets from −49 to +49 cents, read within half a cent; measured error is under 0.03 cents.
+- **Reference.** 432 Hz references read correctly.
+- **Sample rates.** 44.1 and 96 kHz read alike.
+- **Harmonics.** A saw reads as its fundamental.
+- **Rejection.** Silence, white noise, a −100 dBFS tone, 20 Hz and 6 kHz read nothing.
+- **In a project.** The device renders bit-identically to its absence, reads A4 after a render, and follows its reference. Its inline and window editors show the reading in cents and in Hz.
+- **Live input.** The synthetic device's monitored stereo input, 440 and 660 Hz, mixes to a signal periodic at 220 Hz and reads as A3 while the transport is stopped. It reads nothing once monitoring stops.
+
+Strobe mode, the Histogram view, note-spelling choices and measured comparison with the reference are missing.
+

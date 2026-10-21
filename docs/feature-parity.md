@@ -414,7 +414,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-036 | Spectral Resonator | SPECTRAL | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-037 | Spectral Time | SPECTRAL | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-038 | Spectrum | METER | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-039 | Tuner | METER | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-039 | Tuner | PARTIAL — monophonic YIN pitch detection (30 Hz–4.2 kHz) on a lock-free tap, 410–480 Hz reference, note and cents or Hz with the target-mode meter; detection within half a cent, pass-through, offline and live readings tested ([contract](research/native-effects-contract.md#tuner-2026-10-20)). Strobe mode, Histogram view, note spellings and reference comparison missing | PARTIAL |
 | AFX-040 | Utility | Working original processor/editor, 320 matrix cases, bass/DC oracles, complete-file exports, insertion/order, undo and saved state; [contract](research/channel-utility-contract.md). Reference numerical identity unverified. | PARTIAL — automated Mac/Windows/Linux acceptance; reference numerical parity unverified |
 | AFX-041 | Vinyl Distortion | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-042 | Vocoder | VOCODER | NOT IMPLEMENTED / UNVERIFIED |

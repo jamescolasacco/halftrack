@@ -32,6 +32,8 @@ bool effectUsesTempo (Session::EffectKind) noexcept;
 bool effectIsMidi (Session::EffectKind) noexcept;
 bool effectIsInstrument (Session::EffectKind) noexcept;
 bool effectIsRack (Session::EffectKind) noexcept;
+// Analysis devices pass audio unchanged and let the message thread read their recent input.
+bool effectIsAnalysis (Session::EffectKind) noexcept;
 double effectTailSeconds (Session::EffectKind, double sampleRate) noexcept;
 double effectLatencySeconds (Session::EffectKind, double sampleRate) noexcept;
 // Index of a named control in the kind's parameter table, or -1.
@@ -166,6 +168,10 @@ public:
     // Audio thread, from an enclosing rack: an instrument fades its voices out from this sample
     // of the next block, as a Drum Rack choke group does.
     void chokeAt (int sample) noexcept;
+    // Message thread, for analysis devices: the latest `frames` input frames as mono, and the rate they
+    // were processed at. False before the device has processed audio or when the copy was overtaken.
+    bool latestInput (std::vector<float>& destination, int frames, double& rate) const;
+    static constexpr int analysisCapacity = 16384;
 private:
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
@@ -198,6 +204,11 @@ private:
     Session::EffectSettings pendingSettings;
     bool pending = false, writing = false;
     std::unique_ptr<racks::RackEngine> rack;
+    // Analysis devices: a ring the audio thread writes and the message thread copies.
+    std::unique_ptr<std::array<std::atomic<float>, analysisCapacity>> analysis;
+    std::atomic<uint64_t> analysisWritten { 0 };
+    std::atomic<double> analysisRate { 0 };
+    static_assert (std::atomic<float>::is_always_lock_free && std::atomic<uint64_t>::is_always_lock_free && std::atomic<double>::is_always_lock_free);
     const float* rackControls = nullptr; // Audio thread.
     std::array<int, 16> chokes {};       // Audio thread: pending choke samples.
     int chokeCount = 0;

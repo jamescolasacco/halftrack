@@ -987,3 +987,14 @@ The new `grooves-acceptance` suite measures rendered onsets and accents. See [th
 
 Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Session.h` and `tests/ExtendedEffectsTests.cpp`, with documentation. Channel EQ joins the native audio effects under EQ & Filters. It is the first device kind numbered after the racks; device loops now skip racks instead of assuming plain devices come first. See [the contract](research/native-effects-contract.md#channel-eq-2026-10-20).
 
+## Tuner — 2026-10-20
+
+Engine and UI change. It touches:
+
+- `src/Tuner.*` (new) and the analysis tap in `src/NativeEffects.*`;
+- `Session::tunerReading` in `src/Session.*`;
+- the Tuner display in `src/NativeEffectEditor.cpp`, and the Utilities browser group in `src/MainComponent.cpp`;
+- `tests/TunerTests.cpp`, the suite registration and documentation.
+
+The Tuner is a Utilities device that passes audio unchanged and shows the nearest note, with cents or Hz and a target meter. The new `tuner-acceptance` suite checks detection accuracy and offline and live readings. See [the contract](research/native-effects-contract.md#tuner-2026-10-20).
+

@@ -82,10 +82,10 @@ public:
         // Effect Rack is a MIDI effect; an Audio Effect Rack is an audio device.
         instrumentRack, audioEffectRack, midiEffectRack, drumRack,
         // Devices added after the racks.
-        channelEq };
+        channelEq, tuner };
     // Every persisted kind, racks included. Devices added after the racks follow them, so loop over
     // all kinds and skip racks rather than assuming plain devices come first.
-    static constexpr int deviceKindCount = 35;
+    static constexpr int deviceKindCount = 36;
     static constexpr bool isRackKind (EffectKind kind) noexcept
     { return kind == EffectKind::instrumentRack || kind == EffectKind::audioEffectRack || kind == EffectKind::midiEffectRack || kind == EffectKind::drumRack; }
     static constexpr int drumPadCount = 16; // Drum Sampler pads play notes 36 (C1) to 51.
@@ -581,6 +581,11 @@ public:
     juce::AudioPluginFormatManager& pluginFormats();
     juce::File pluginScanDeadMansFile() const;
     juce::Result addNativeEffect (int trackIndex, EffectKind);
+    // A Tuner's latest pitch: the note (MIDI numbering, 69 is A4) nearest the detected frequency at the
+    // device's reference pitch, and the distance from it in cents. Nothing for silence, aperiodic input,
+    // or an id that is not a Tuner that has processed audio.
+    struct TunerReading { double frequency = 0; int note = 69; double cents = 0; };
+    std::optional<TunerReading> tunerReading (const juce::String& pluginId) const;
     // Device presets: a native device's or Utility's settings in a .halftrackpreset file. Racks and
     // sample choices are not included. Saving refuses to replace a file unless asked to.
     static constexpr const char* presetExtension = ".halftrackpreset";

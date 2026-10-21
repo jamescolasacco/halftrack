@@ -232,7 +232,7 @@ Native effect kinds 24–27 (Poly Synth, FM Synth, Drum Kit, Wavetable) are inst
 
 ## Racks
 
-Native kinds 30–33 are racks: `instrumentRack`, `audioEffectRack`, `midiEffectRack` and `drumRack`. Devices added later follow them, starting with Channel EQ (34). `deviceKindCount` (35) bounds persisted kinds, and code that lists devices skips racks with `Session::isRackKind`. Instrument and Drum Racks take an instrument's place through `setTrackInstrument`, a MIDI Effect Rack sits with the MIDI effects and an Audio Effect Rack with the audio devices. A rack's `EffectSettings` hold its 16 macros (0–127) and, at `rackChainSelector`, its chain selector, so `setNativeEffectSettings` and `setDeviceAutomation` set and automate them like any control.
+Native kinds 30–33 are racks: `instrumentRack`, `audioEffectRack`, `midiEffectRack` and `drumRack`. Devices added later follow them: Channel EQ (34) and the Tuner (35). `deviceKindCount` (36) bounds persisted kinds, and code that lists devices skips racks with `Session::isRackKind`. Instrument and Drum Racks take an instrument's place through `setTrackInstrument`, a MIDI Effect Rack sits with the MIDI effects and an Audio Effect Rack with the audio devices. A rack's `EffectSettings` hold its 16 macros (0–127) and, at `rackChainSelector`, its chain selector, so `setNativeEffectSettings` and `setDeviceAutomation` set and automate them like any control.
 
 The model is the rack plugin's own engine tree (`src/Racks.h` names the identifiers): `RACKCHAIN` children hold `RackChainSettings` (name, volume, pan, activator, solo, key/velocity/select zones, and for Drum Rack pads the receive note, play note, choke group and sends) and, inside each chain, the chain's device `PLUGIN`s (native devices and the channel Utility); a Drum Rack's `RACKRETURN` children are return chains; `MACROMAPPING` children map a macro to a device control, a chain's volume, pan or send, or the chain selector, between a minimum and maximum. Rack, chain and device IDs are engine item IDs, remapped when a track or chain is copied. `PluginInfo` reports `isRack`, `chains`, `returns` (`RackChainInfo` with nested `PluginInfo` devices), `mappings`, `visibleMacros` and `macroNames`; `racks::locate` finds any device or chain in a snapshot.
 
@@ -669,3 +669,8 @@ The optional local REA CLI is a developer analysis tool, not an application depe
 
 
 Hosted automation tests prepare the native playback context and wait for the actual generated source file to have a mapped reader before pumping accelerated callbacks. Reopening a collected project can change the source path and leave its reader cold; native real-time playback returns silence on a cache miss instead of blocking. The test precondition has a five-second limit and fails explicitly on timeout. A cold-reload case retires its reader before that check. The measured callback count, gain oracle and tolerance are unchanged; this does not add a production load delay or certify physical device startup.
+
+## Analysis devices
+
+An analysis device (`effectIsAnalysis`, now the Tuner) passes audio unchanged. Its `NativeEffectPlugin` audio callback writes the mono mix it processed into a preallocated ring of atomic samples with a release-ordered frame count. `latestInput` copies the newest frames on the message thread and rejects a copy the writer lapped. `Session::tunerReading` runs the pure detector in `src/Tuner.*` on that copy, and the device editor polls it.
+

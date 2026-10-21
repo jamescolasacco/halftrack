@@ -6332,7 +6332,8 @@ private:
             for (int kind = 0; kind < Session::deviceKindCount; ++kind)
                 if (! Session::isRackKind ((Session::EffectKind) kind) && effectIsMidi ((Session::EffectKind) kind) == midi && ! effectIsInstrument ((Session::EffectKind) kind))
                     groups.addIfNotAlreadyThere (effectCategory ((Session::EffectKind) kind));
-            if (! midi) { groups.add ("Racks"); groups.add ("Utilities"); }
+            // Racks, then Utilities (the Tuner and the Utility), close the list.
+            if (! midi) { groups.removeString ("Utilities"); groups.addIfNotAlreadyThere ("Racks"); groups.add ("Utilities"); }
             for (const auto& group : groups)
             {
                 std::vector<DeviceRow> rows;

@@ -289,3 +289,12 @@ The reference does not document these, so they are simplest-default choices pend
 - the Mid peak's Q is 0.7;
 - Output runs from −12 to +12 dB.
 
+### Tuner defaults
+
+These are simplest-default choices pending reference measurement:
+
+- **In tune.** The Tuner counts as in tune within 3 cents.
+- **Analysis.** It analyses the mono mix of a stereo input over 4,096 frames.
+- **Range.** It detects 30 Hz–4.2 kHz with YIN's 0.1 threshold.
+- **Held reading.** It keeps showing its last reading while no audio is processed.
+

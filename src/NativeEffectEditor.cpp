@@ -1,5 +1,6 @@
 #include "NativeEffects.h"
 #include "Racks.h"
+#include "Tuner.h"
 #include <complex>
 #include <optional>
 #if HALFTRACK_TESTS_ENABLED
@@ -70,9 +71,16 @@ public:
             }
         }
         error.setColour (juce::Label::textColourId, juce::Colour (0xfff4ab84)); addAndMakeVisible (error);
+        if (kind == Session::EffectKind::tuner)
+        {
+            tunerNote.setName ("Tuner note"); tunerDetail.setName ("Tuner detail");
+            tunerNote.setFont (juce::FontOptions (compact ? 30.0f : 44.0f, juce::Font::bold)); tunerDetail.setFont (juce::FontOptions (compact ? 12.0f : 15.0f));
+            for (auto* label : { &tunerNote, &tunerDetail })
+            { label->setJustificationType (juce::Justification::centred); label->setInterceptsMouseClicks (false, false); addAndMakeVisible (*label); }
+        }
         const auto rows = static_cast<int> ((specs.size() + columns() - 1) / static_cast<size_t> (columns()));
         session.addChangeListener (this);
-        if (compact) { setSize (8 + compactColumns() * compactCellWidth, compactHeight); error.setVisible (false); }
+        if (compact) { setSize (8 + compactColumns() * compactCellWidth + (kind == Session::EffectKind::tuner ? tunerWidth : 0), compactHeight); error.setVisible (false); }
         else setSize (kind == Session::EffectKind::equalizer ? 1000 : dense() ? 48 + columns() * 120 : 660,
             kind == Session::EffectKind::equalizer ? 640 : std::max (400, 96 + rows * (dense() ? 112 : 145)));
         synchronise(); startTimerHz (15);
@@ -81,7 +89,9 @@ public:
     { stopTimer(); session.removeChangeListener (this); finishGesture(); setLookAndFeel (nullptr); }
     void paint (juce::Graphics& g) override
     {
-        if (compact) { g.fillAll (juce::Colour (0xff303030)); return; }
+        if (compact) g.fillAll (juce::Colour (0xff303030));
+        if (kind == Session::EffectKind::tuner) paintTuner (g);
+        if (compact) return;
         g.fillAll (juce::Colour (0xff2b2b2b));
         g.setColour (juce::Colour (0xffe49a58)); g.fillRect (24, 22, 5, 18);
         g.setColour (juce::Colour (0xffe9e9e9)); g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
@@ -130,6 +140,12 @@ public:
     void resized() override
     {
         const auto specs = effectParameters (kind);
+        if (kind == Session::EffectKind::tuner)
+        {
+            auto display = tunerArea();
+            tunerNote.setBounds (display.removeFromTop (display.getHeight() * 2 / 5));
+            tunerDetail.setBounds (display.removeFromBottom (display.getHeight() / 3));
+        }
         if (compact)
         {
             // Column-major grid of three rows, the density of an inline device.
@@ -206,6 +222,16 @@ public:
             const bool synced = value->values[timing] != 0;
             sliders[timing - 1].setEnabled (enabled && ! synced); choices[timing + 1].setEnabled (enabled && synced);
         }
+        if (value && kind == Session::EffectKind::tuner)
+        {
+            reading = session.tunerReading (pluginId);
+            const bool hertz = value->values[1] != 0;
+            tunerNote.setText (reading ? tuner::noteName (reading->note) : juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x94")), juce::dontSendNotification);
+            tunerDetail.setText (! reading ? juce::String ("No pitch") : hertz ? juce::String (reading->frequency, 2) + " Hz"
+                                 : (reading->cents >= 0 ? "+" : "") + juce::String (reading->cents, 1) + " ct", juce::dontSendNotification);
+            tunerNote.setColour (juce::Label::textColourId, ! reading ? juce::Colour (0xff8e8e8e) : inTune() ? juce::Colour (0xff48d17e) : juce::Colour (0xffed5249));
+            tunerDetail.setColour (juce::Label::textColourId, juce::Colour (0xffbbbbbb));
+        }
         if (value)
         {
             const auto& v = value->values;
@@ -259,6 +285,30 @@ public:
         synchronise();
     }
 private:
+    // The Tuner's Classic view in target mode: a circle on a -50 to +50 cent scale, green within
+    // 3 cents of the note and red beyond, sharp to the right.
+    static constexpr int tunerWidth = 220;
+    static constexpr double inTuneCents = 3;
+    bool inTune() const noexcept { return reading && std::abs (reading->cents) <= inTuneCents; }
+    juce::Rectangle<int> tunerArea() const
+    { return compact ? juce::Rectangle<int> (8 + compactColumns() * compactCellWidth, 4, tunerWidth - 8, compactHeight - 8) : juce::Rectangle<int> (24, 220, getWidth() - 48, getHeight() - 260); }
+    void paintTuner (juce::Graphics& g) const
+    {
+        const auto area = tunerArea().toFloat();
+        g.setColour (juce::Colour (0xff242424)); g.fillRoundedRectangle (area, 4);
+        const auto meter = area.withTrimmedTop (area.getHeight() * 2 / 5).withTrimmedBottom (area.getHeight() / 5).reduced (14, 4);
+        const auto x = [&] (double cents) { return meter.getX() + (float) ((std::clamp (cents, -50.0, 50.0) + 50) / 100) * meter.getWidth(); };
+        g.setColour (juce::Colour (0xff515151));
+        g.drawHorizontalLine ((int) meter.getCentreY(), meter.getX(), meter.getRight());
+        for (int cents : { -50, -25, 0, 25, 50 }) g.drawVerticalLine ((int) x (cents), meter.getCentreY() - (cents == 0 ? 9.0f : 5.0f), meter.getCentreY() + (cents == 0 ? 9.0f : 5.0f));
+        const auto radius = std::min (9.0f, meter.getHeight() / 2);
+        g.setColour (juce::Colour (0xff8e8e8e)); g.drawEllipse (x (0) - radius, meter.getCentreY() - radius, radius * 2, radius * 2, 1.5f);
+        if (reading)
+        {
+            g.setColour (inTune() ? juce::Colour (0xff48d17e) : juce::Colour (0xffed5249));
+            g.fillEllipse ((float) x (reading->cents) - radius + 2, meter.getCentreY() - radius + 2, radius * 2 - 4, radius * 2 - 4);
+        }
+    }
     // Instruments and other large devices use a compact eight-column grid.
     bool dense() const noexcept { return effectParameters (kind).size() > 16; }
     static constexpr int compactCellWidth = 60, compactRowHeight = 62, compactHeight = 3 * compactRowHeight + 4;
@@ -292,7 +342,8 @@ private:
     std::array<juce::Slider, maximumControls> sliders;
     std::array<juce::ComboBox, maximumControls> choices;
     std::array<juce::Label, maximumControls> labels;
-    juce::Label error;
+    juce::Label error, tunerNote, tunerDetail;
+    std::optional<Session::TunerReading> reading;
     bool dragging = false;
 };
 }
