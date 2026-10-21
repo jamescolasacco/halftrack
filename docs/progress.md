@@ -1053,3 +1053,24 @@ MIDI input (61 s, 984 checks), MIDI monitoring (14 s, 173), Session (61 s, 1190)
 ## Audio-device changes during takes — 2026-10-20
 
 Root owns the device-stop watch in `src/Session.cpp`, its scenarios in `tests/SessionTests.cpp`, the callback root in `tests/realtime_audit.py` and documentation. Measured first on the synthetic device: an input-channel change through the `AudioDeviceManager` and a same-layout driver restart each lost both Arrangement and Session slot takes. The transport stopped, Stop produced no clip, and slot takes still reported recording. Now any device stop during a take calls Stop before the engine's device rebuild. The take ends where the device stopped and is kept: 23,808 of 24,064 recorded frames in all four scenarios. A further take records on the rebuilt devices. The new test failed without the fix. Audio Settings is not disabled during recording (see [open questions](open-questions.md#audio-device-changes-during-takes)). The MIDI input (35.9 s), MIDI monitoring (25.8 s), UI (16.0 s) and Session (64.0 s) suites pass locally on the Mac, and the source guard inspects 185 bodies. Physical drivers and hot-unplug are untested.
+
+## Automation capture and override — 2026-10-21
+
+Root change. It touches:
+
+- the override and capture machinery, `setAutomationArm`, `reEnableAutomation` and automation-only recording in `src/Session.*`;
+- the control-bar buttons and live faders in `src/MainComponent.cpp`;
+- `tests/AutomationCaptureTests.cpp`, updated checks in `tests/AutomationTests.cpp` and the UI suite, the suite registration and documentation.
+
+Automated faders were locked until their points were cleared. Now moving one overrides its automation, as in Live, until Re-Enable Automation. With Automation Arm on, recording writes moves into the lanes. See [the contract](research/automation-capture-contract.md).
+
+## Punch-In and Punch-Out — 2026-10-21
+
+Root change. It touches:
+
+- the punch switches, the take trimming in `stop()` and punch-aware capture in `src/Session.*`;
+- the control-bar buttons in `src/MainComponent.cpp`;
+- `tests/PunchTests.cpp`, the UI suite, the suite registration and documentation.
+
+Arrangement recording can now be limited to the loop brace with separate Punch-In and Punch-Out switches, as in Live. See [the contract](research/punch-contract.md).
+

@@ -146,7 +146,10 @@ void historyTests (const juce::File& root)
     check (s.setTrackAutomation (id, Target::volume, excessive).failed(), "reject point count beyond supported limit");
     check (s.canRedo() && equal (lane (s, Target::volume), first) && s.snapshot().projectGeneration == before.projectGeneration, "invalid edits preserve points, project and redo");
     s.redo(); check (equal (lane (s, Target::volume), final), "redo still applies gesture after rejections");
-    check (s.setTrackGain (0, 0).failed(), "manual fader cannot overwrite one or many automation points");
+    ok (s.setTrackGain (0, 0), "moving an automated fader overrides its lane");
+    { auto overridden = final; overridden.enabled = false;
+      check (equal (lane (s, Target::volume), overridden) && s.snapshot().automationOverridden, "the override keeps every point and switches the lane off"); }
+    s.undo(); check (equal (lane (s, Target::volume), final) && ! s.snapshot().automationOverridden, "one undo restores the playing lane");
     s.setTempo (60); check (equal (lane (s, Target::volume), final), "tempo change preserves musical beat positions");
     s.undo(); check (s.snapshot().tempo == 120 && equal (lane (s, Target::volume), final), "undo tempo preserves beat envelope");
     s.redo(); check (s.snapshot().tempo == 60 && equal (lane (s, Target::volume), final), "redo tempo preserves beat envelope");
@@ -419,7 +422,8 @@ void masterWaveformTests (const juce::File& root)
     }
     auto bypass = masterCurve; bypass.enabled = false;
     ok (s.setMasterVolumeAutomation (bypass), "bypass master reading while retaining points");
-    check (s.setMasterGain (0).failed(), "master manual fader stays locked when populated lane reading is off");
+    ok (s.setMasterGain (-4), "the master fader moves freely while its lane is off");
+    check (equal (s.snapshot().masterVolumeAutomation, bypass), "moving it keeps the lane's points");
     const auto audio = render (s, root);
     for (int channel = 0; channel < 2; ++channel)
         level (audio, channel, 38400, 14400, mix * std::pow (10.0, -4.0 / 20), "master Read off restores retained manual gain on the complete mix");
