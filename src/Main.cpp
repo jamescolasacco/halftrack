@@ -94,6 +94,7 @@ int runComputerKeyboardTests (const juce::File&);
 int runKeyMapTests (const juce::File&);
 int runAutoArmTests (const juce::File&);
 int runDeviceLossTests (const juce::File&);
+int runSoakTests (const juce::File&);
 int runHardwareCheck (const juce::File&, const juce::String& deviceName, const juce::String& mode);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
@@ -325,6 +326,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-device-loss");
             setApplicationReturnValue (runDeviceLossTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-soak"))
+        {
+            const int i = args.indexOf ("--self-test-soak");
+            setApplicationReturnValue (runSoakTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-large-session"))

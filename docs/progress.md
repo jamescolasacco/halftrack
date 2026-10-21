@@ -1518,3 +1518,12 @@ Test change in `src/MainComponent.cpp`, with documentation.
 - **Audit.** The UI suite walks the main window in three views: the Arrangement View, the Session View and the MIDI clip editor. Every visible, enabled control must have a handler. One control, the note length the editor reads when drawing, is a marked exception.
 
 See [the contract](research/control-audit-contract.md).
+
+## Soak test — 2026-10-21
+
+Test change in `tests/SoakTests.cpp` (new), `src/Main.cpp` and `CMakeLists.txt`, with documentation.
+
+- **The session.** A three-minute session with an edit every five seconds and a take each minute.
+- **What it holds.** The play head keeps time, memory stays flat and open descriptors stay constant. An unlooped first version showed memory growing as playback mapped in more of the media, not from a leak.
+
+See [the robustness contract](research/robustness-contract.md#long-sessions).

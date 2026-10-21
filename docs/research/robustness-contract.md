@@ -67,7 +67,29 @@ The note keeps sounding when a seek lands inside it, inside a loop, and across a
 | Reopen (everything intact) | 0.06 s, 11 MB more memory |
 | Render 32 s of audio | 2.75 s |
 
+## Long sessions
+
+`tests/SoakTests.cpp` runs a three-minute scripted session through the synthetic device. Set `HALFTRACK_SOAK_SECONDS` for a longer one.
+
+- **The project.** Four audio tracks of a 20-second tone and two MIDI tracks of notes, looping over 16 s.
+- **The edits.** One every five seconds, in turn: a gain, a Saturator added and later removed, a MIDI track muted or unmuted, a note added, undo, redo, a pan.
+- **The takes.** Each minute, a two-second take is recorded on an armed track and undone, which restores the tone it split.
+- **What it checks.** Every sample stays finite and under 8. The play head travels exactly what the blocks played in each five-second stretch, within one block. Resident memory and open file descriptors (or Windows handles) after the first minute are compared with the end.
+
+Locally, over three minutes:
+
+| Measure | Result |
+| --- | --- |
+| Worst stretch against the blocks | 5.33 ms (one block) |
+| Takes recorded and undone | 3 of 3 |
+| Resident memory | 61.2 MB at 1 minute, 61.1 MB at 3 minutes |
+| Open descriptors | 3 throughout (the media is memory-mapped with its descriptor closed) |
+
+An earlier version played a four-minute file without looping. Its resident memory grew about 30 MB a minute while playback mapped more of four copies of the file in. The looping version shows that growth was the media, not the Session.
+
 ## Not yet covered
 
+- Dropouts on a real device over a long session.
+- Hours-long runs, plug-in instruments and Session View launching in the soak.
 - Real plug-ins and real device unplugging under edits are untested.
 - Longer fuzzing runs, other file types (grooves, collections, settings) and concurrent edits from several threads are missing.
