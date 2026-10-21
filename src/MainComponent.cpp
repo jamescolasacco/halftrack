@@ -651,6 +651,7 @@ public:
             if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && shift && ! showSession) { menuItemSelected (75, 1); return true; }
             if (code == 'G') { if (shift) ungroupSelectedTrack(); else groupSelectedTracks(); return true; }
             if (code == 'I') { importDialog(); return true; }
+            if ((code == 'E' || code == 'e') && shift && key.getModifiers().isAltDown()) { menuItemSelected (13, 1); return true; }
             if (code == 'E' && shift) { exportDialog(); return true; }
             if (code == 'C' && shift) { captureFromUI(); return true; }
             if ((code == 'U' || code == 'u') && key.getModifiers().isAltDown() && ! showSession) { toggleTakeLanes(); return true; }
@@ -6360,7 +6361,7 @@ private:
             popup.addItem (5, "Import Audio...", currentTrack() == nullptr || ! currentTrack()->isReturn); popup.addItem (6, "Export Arrangement Audio...", ! state.tracks.empty()); popup.addSeparator();
             popup.addItem (9, "Import MIDI File..."); popup.addItem (10, "Export Selected MIDI Clip...", currentMidiClip() != nullptr); popup.addSeparator();
             popup.addItem (12, "Locate Missing Media...", ! session.missingMedia().isEmpty()); popup.addSeparator();
-            popup.addItem (7, "Audio Setup..."); popup.addItem (8, "Manage Plug-ins...");
+            popup.addItem (7, "Audio Setup..."); popup.addItem (13, "Audio Engine On", true, session.isAudioEngineEnabled()); popup.addItem (8, "Manage Plug-ins...");
         }
         else if (index == 1)
         {
@@ -6428,6 +6429,12 @@ private:
             case 5: importDialog(); break;
             case 6: exportDialog(); break;
             case 7: showAudioSettings(); break;
+            case 13:
+            {
+                const bool on = ! session.isAudioEngineEnabled();
+                report (session.setAudioEngineEnabled (on), on ? "Audio engine on." : "Audio engine off.");
+                break;
+            }
             case 8: showPlugins(); break;
             case 9: importMidiDialog(); break;
             case 10: exportMidiDialog(); break;
@@ -10254,6 +10261,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (! state.scenes[1].tempo && state.scenes[1].timeSignature, "an empty field clears the tempo");
         session.undo(); session.undo(); session.undo(); refresh();
         check (! state.scenes[1].tempo && ! state.scenes[1].timeSignature, "each dialog is one undo step");
+        // Audio Engine On, from the File menu.
+        menuItemSelected (13, 1);
+        check (! session.isAudioEngineEnabled() && status.contains ("Audio engine off"), "File > Audio Engine On turns the engine off");
+        menuItemSelected (13, 1);
+        check (session.isAudioEngineEnabled() && session.audioDeviceManager().getCurrentAudioDevice() != nullptr, "and on again");
     }
     check (session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "prepare follow-action UI clip"); refresh(); showSessionView(); selectLauncherSlot (0, 0);
     const auto followClipId = selectedSlot()->clip.id;

@@ -65,6 +65,7 @@ int runTakeLanesTests (const juce::File&);
 int runRoutingTests (const juce::File&);
 int runSceneTempoTests (const juce::File&);
 int runAudioFromTests (const juce::File&);
+int runAudioEngineTests (const juce::File&);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -238,6 +239,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-routing");
             setApplicationReturnValue (runRoutingTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-audio-engine"))
+        {
+            const int i = args.indexOf ("--self-test-audio-engine");
+            setApplicationReturnValue (runAudioEngineTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-audio-from"))

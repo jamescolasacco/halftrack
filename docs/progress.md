@@ -1230,3 +1230,11 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **Loops.** Track outputs and track inputs both refuse routes that would feed back.
 
 See [the contract](research/audio-from-contract.md).
+
+## Audio engine switch — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/AudioEngineTests.cpp` (new), with documentation.
+
+- **Audio Engine On** in the File menu (Cmd+Option+Shift+E) closes and reopens the audio device. Turning it off keeps any take, and nothing plays until it is on again.
+
+See [the contract](research/audio-engine-contract.md).

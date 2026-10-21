@@ -2940,6 +2940,9 @@ struct Session::Impl
         Impl& impl;
         bool attached = false; // Message thread only.
     };
+    bool engineOff = false; // Audio Engine Off closed the device.
+    String noDeviceMessage() const
+    { return engineOff ? "Turn the audio engine on first (File > Audio Engine On)." : "Choose an audio output in Audio Settings."; }
     void endTakesForDeviceStop()
     {
         if (edit != nullptr && ! exporting && (edit->getTransport().isRecording() || ! slotRecordings.empty())) owner.stop();
@@ -4513,7 +4516,7 @@ Result Session::recordSlot (int trackIndex, int sceneIndex)
     if (slot->getClip()) return Result::fail ("Session recording needs an empty slot.");
     auto* input = impl->input (*track);
     if (input == nullptr || ! input->isRecordingEnabled (track->itemID)) return Result::fail ("Arm the track to record into a Session slot.");
-    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio device in Audio Settings.");
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
     if (auto r = impl->assets().createDirectory(); r.failed()) return r;
     auto& transport = impl->edit->getTransport();
     transport.ensureContextAllocated();
@@ -4595,7 +4598,7 @@ Result Session::launchSlot (int trackIndex, int sceneIndex)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* slot = impl->slot (trackIndex, sceneIndex);
     if (! slot) return Result::fail ("Slot not found.");
-    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio output in Audio Settings.");
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->edit->getTransport().ensureContextAllocated();
     impl->queueTrack (*impl->track (trackIndex), slot->getClip(), impl->clipBoundary (slot->getClip()));
@@ -4606,7 +4609,7 @@ Result Session::launchScene (int sceneIndex)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! juce::isPositiveAndBelow (sceneIndex, impl->edit->getSceneList().getNumScenes())) return Result::fail ("Scene not found.");
-    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio output in Audio Settings.");
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->edit->getTransport().ensureContextAllocated();
     const auto boundary = impl->launchBoundary();
@@ -4631,7 +4634,7 @@ Result Session::launchGroupSlot (const String& groupId, int sceneIndex)
     auto* folder = impl->group (groupId);
     if (! folder) return Result::fail ("Group not found.");
     if (! juce::isPositiveAndBelow (sceneIndex, impl->edit->getSceneList().getNumScenes())) return Result::fail ("Scene not found.");
-    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio output in Audio Settings.");
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->edit->getTransport().ensureContextAllocated();
     const auto boundary = impl->launchBoundary();
@@ -7006,7 +7009,7 @@ Result Session::setTrackMonitor (int index, MonitorMode mode)
 Result Session::play()
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio output in Audio Settings.");
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
     auto& transport = impl->edit->getTransport();
     if (! transport.isPlaying()) transport.setPosition (transport.startPosition);
     transport.play (false); sendChangeMessage(); return Result::ok();
@@ -7014,7 +7017,7 @@ Result Session::play()
 Result Session::continuePlayback()
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio output in Audio Settings.");
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
     impl->edit->getTransport().play (false); sendChangeMessage(); return Result::ok();
 }
 void Session::stop()
@@ -7079,7 +7082,7 @@ Result Session::record()
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     impl->endAudition();
     if (impl->edit->getTransport().isRecording()) return Result::ok();
-    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio device in Audio Settings.");
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
     bool armed = false;
     for (auto* t : te::getAudioTracks (*impl->edit)) if (auto* d = impl->input (*t)) armed |= d->isRecordingEnabled (t->itemID);
     // Recording with Session clips playing captures the performance into the Arrangement.
@@ -7511,6 +7514,29 @@ bool Session::isExporting() const { return impl->exporting; }
 void Session::cancelExport() { static_cast<UIBehaviour&> (impl->engine.getUIBehaviour()).cancelTask(); }
 
 juce::AudioDeviceManager& Session::audioDeviceManager() { return impl->engine.getDeviceManager().deviceManager; }
+Result Session::setAudioEngineEnabled (bool on)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto& devices = audioDeviceManager();
+    if (on == isAudioEngineEnabled()) return Result::ok();
+    if (! on)
+    {
+        // Takes end where the transport stops and are kept, as Stop keeps them.
+        endEditGesture(); stop();
+        devices.closeAudioDevice();
+        impl->engineOff = true;
+        sendChangeMessage(); return Result::ok();
+    }
+    devices.restartLastAudioDevice();
+    if (devices.getCurrentAudioDevice() == nullptr) return Result::fail ("The audio device could not be reopened. Choose one in Audio Settings.");
+    impl->engineOff = false;
+    sendChangeMessage(); return Result::ok();
+}
+bool Session::isAudioEngineEnabled() const
+{
+    // Choosing a device in Audio Settings turns the engine back on.
+    return ! impl->engineOff || impl->engine.getDeviceManager().deviceManager.getCurrentAudioDevice() != nullptr;
+}
 juce::KnownPluginList& Session::knownPlugins() { return impl->engine.getPluginManager().knownPluginList; }
 juce::AudioPluginFormatManager& Session::pluginFormats() { return impl->engine.getPluginManager().pluginFormatManager; }
 File Session::pluginScanDeadMansFile() const

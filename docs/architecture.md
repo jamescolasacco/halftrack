@@ -189,6 +189,10 @@ flowchart LR
 
 `Session::TrackOutput` is `{ OutputKind kind; String trackId; }`, with `OutputKind` `master`, `sendsOnly` or `track`; `TrackInfo::output` reports it. `setTrackOutput (trackId, TrackOutput)` runs on the message thread as one undo step and is refused for returns, grouped tracks, recording and export. `outputDestinations (trackId)` lists the identities of the audio tracks it may play into, excluding returns, MIDI tracks and tracks that already feed it. The native `TrackOutput` stores the route: the default device, `(none)` for Sends Only, or `track N`, resolved by the engine to the destination's identity. Live playback processes a `(none)` track as a sink so only its sends are heard; `cmake/PatchRenderSendsOnly.cmake` gives renders the same graph. See the [routing contract](research/routing-contract.md).
 
+## Audio engine switch
+
+`setAudioEngineEnabled (false)` calls `stop()`, which keeps takes and cancels launches, then `AudioDeviceManager::closeAudioDevice()`; `true` calls `restartLastAudioDevice()`. `Impl::engineOff` only selects the message the device checks give; `isAudioEngineEnabled()` is true whenever a device is open. See the [contract](research/audio-engine-contract.md).
+
 ## Track input facade
 
 `inputSources (trackId)` and `setTrackInputTrack (trackId, sourceId)` route another track's output into an audio track through the source's native track wave input device (`AudioTrack::getWaveInputDevice()`). Assigning one enables the device, creates its `INPUTDEVICE` state through `EditInputDevices` (which adds the instance to the playback context) and targets the destination as one undo step. `Impl::input` now includes track devices, so arming, monitoring and recording treat them like hardware inputs; `Impl::feeds` follows track outputs and track inputs to refuse loops for both Audio To and Audio From. The engine taps the source after its plug-ins and mute (Post Mixer). `cmake/PatchRenderTrackInputs.cmake` makes renders carry monitored track inputs from the edit's input state. See the [Audio From contract](research/audio-from-contract.md).

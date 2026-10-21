@@ -709,6 +709,10 @@ public:
     void cancelExport();
 
     juce::AudioDeviceManager& audioDeviceManager();
+    // Audio Engine Off stops the transport, keeping any takes, and closes the audio device; On
+    // reopens the last device. While it is off nothing plays, records or launches.
+    juce::Result setAudioEngineEnabled (bool);
+    bool isAudioEngineEnabled() const;
     juce::KnownPluginList& knownPlugins();
     juce::AudioPluginFormatManager& pluginFormats();
     juce::File pluginScanDeadMansFile() const;
