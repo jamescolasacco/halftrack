@@ -225,6 +225,10 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `Session::Impl` reads the preferences file when the Session starts and writes it atomically on each change. New Session clips take their launch defaults in `applyLaunchDefaults`. Imports apply the warp preferences through `setAudioClipWarp` inside one edit gesture, so each stays one undo step. The UI's arm and solo handlers read the exclusivity settings. See the [contract](research/preferences-contract.md).
 
+## Browser index
+
+`BrowserIndex` (in `src/BrowserIndex.*`, independent of the engine) indexes a folder tree on a detached worker that owns only standard-library data and a shared `Scan` record, so a blocked filesystem call can outlive the browser. A global count limits outstanding scans to four. The UI starts it with each folder listing, polls its status from the window timer, and searches it on the message thread under the scan's mutex. See the [contract](research/browser-index-contract.md).
+
 ## Linked tracks
 
 A link is a `halftrackLink` property shared by tracks, set and cleared with undo by `linkTracks` and `unlinkTracks`. A link left with one track is cleared, and the snapshot reports a link only when two or more tracks share it. `Session::Impl::linkedTracks` and `linkedClips` find the counterparts, and each edit function validates and applies them inside its own transaction, so a linked edit is one undo step. Time-selection functions widen their track list with `withLinkedTracks`. Comping goes through `Impl::compLane`. See the [contract](research/linked-tracks-contract.md).

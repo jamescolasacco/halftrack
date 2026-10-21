@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 #include "AudioClipEditor.h"
 #include "AutomationEditor.h"
+#include "BrowserIndex.h"
 #include "ArrangementAutomation.h"
 #include "Collections.h"
 #include "NativeEffects.h"
@@ -433,7 +434,7 @@ public:
         previewVolume.onValueChange = [this] { report (session.setPreviewVolume ((float) previewVolume.getValue())); };
         filesButton.setVisible (false); pluginsButton.setVisible (false); // The category list replaces these tabs.
         upButton.setTooltip ("Parent folder");
-        browserSearch.setTextToShowWhenEmpty ("Search current folder", muted);
+        browserSearch.setTextToShowWhenEmpty ("Search this folder", muted);
         browserSearch.setFont (font (12.0f));
         browserSearch.onTextChange = [this] { updateBrowser(); };
         browserList.setModel (this);
@@ -491,11 +492,19 @@ public:
         g.setColour (muted); g.setFont (font (10.0f));
         g.drawText ("CPU " + juce::String (juce::roundToInt (state.cpu * 100.0)) + "%", cpuBounds, juce::Justification::centredRight);
         g.setFont (font (10.0f, true)); g.setColour (muted);
+        const auto indexText = midiMapMode ? juce::String() : browserIndexText();
+        const int indexWidth = indexText.isEmpty() ? 0 : 118;
         if (! midiMapMode) // The mapping list replaces the browser in MIDI Map Mode.
         g.drawText (browserCategory == BrowserCategory::instruments ? "INSTRUMENTS" : browserCategory == BrowserCategory::audioEffects ? "AUDIO EFFECTS"
                         : browserCategory == BrowserCategory::midiEffects ? "MIDI EFFECTS" : pluginBrowser() ? "PLUG-INS"
                         : browserCategory == BrowserCategory::grooves ? "GROOVES" : browserFolder == juce::File() ? "SAMPLES" : browserFolder.getFileName().toUpperCase(),
-                    browserList.getX() + 4, browserList.getY() - 22, browserList.getWidth() - 8, 20, juce::Justification::centredLeft, true);
+                    browserList.getX() + 4, browserList.getY() - 22, browserList.getWidth() - 8 - indexWidth, 20, juce::Justification::centredLeft, true);
+        if (indexWidth > 0)
+        {
+            g.setFont (font (10.0f));
+            g.drawText (indexText, browserList.getRight() - 4 - indexWidth, browserList.getY() - 22, indexWidth, 20, juce::Justification::centredRight, true);
+            g.setFont (font (10.0f, true));
+        }
         if (! midiMapMode && (pluginBrowser() || sampleBrowser()) && getNumRows() == 0)
         {
             g.setFont (font (12.0f));
@@ -507,7 +516,8 @@ public:
                 message = juce::Time::getMillisecondCounterHiRes() - browserScanStarted > 5000.0
                     ? "This folder is taking longer\nto respond. You can choose\nanother folder to continue."
                     : "Loading audio folder...";
-            else message = browserSearch.getText().isEmpty() ? "No audio files here.\nChoose another folder or drag\naudio into the arrangement." : "No matching audio files.\nTry another search.";
+            else if (browserSearch.getText().isNotEmpty() && shownIndex.indexing) message = "Searching this folder and\nthe folders in it...";
+            else message = browserSearch.getText().isEmpty() ? "No audio files here.\nChoose another folder or drag\naudio into the arrangement." : "No matching audio files here\nor in the folders in it.\nTry another search.";
             g.drawFittedText (message, browserList.getBounds().reduced (14).withHeight (150), juce::Justification::centred, 7);
         }
         g.setColour (line);
@@ -1053,7 +1063,7 @@ private:
     juce::Rectangle<int> dividerBounds;
     static constexpr int categoryWidth = 98, browserWidth = 300, trackWidth = 252, trackHeight = 72, rulerHeight = 60,
                          deviceHeight = 268, statusHeight = 24;
-    struct BrowserItem { juce::File file; bool directory = false; };
+    struct BrowserItem { juce::File file; bool directory = false, found = false; }; // found: a search result from the index.
     struct FolderScan
     {
         struct Entry { std::string name; bool directory = false; };
@@ -6270,6 +6280,11 @@ private:
     juce::File scannedBrowserFolder;
     juce::String browserError;
     bool browserLoading = false;
+    // Everything under the browser folder, indexed for search; what the browser last showed of it.
+    BrowserIndex browserIndex;
+    BrowserIndex::Status shownIndex;
+    double indexShownAt = 0;
+    static constexpr std::size_t maximumSearchResults = 2000;
     double browserScanStarted = 0;
     static constexpr int pluginPresetKind = -4; // A preset row's kind under a plug-in.
     juce::File browserFolder;
@@ -7034,7 +7049,7 @@ private:
     }
     void timerCallback() override
     {
-        pollBrowserScan();
+        pollBrowserScan(); pollBrowserIndex();
         if (statusFrames > 0 && --statusFrames == 0) status.clear();
         ++ticks;
         if (ticks % insertBlinkTicks == 0) canvas.repaint(); // The insert marker flashes.
@@ -8195,7 +8210,10 @@ private:
         allBrowserItems.clear();
         browserError.clear();
         browserLoading = false;
+        browserIndex.cancel(); shownIndex = {};
         if (browserFolder == juce::File()) return;
+        if (! browserIndex.start (browserFolder.getFullPathName().toStdString()))
+            browserError = "Previous folders are still waiting on the filesystem. Try again shortly.";
         // A filesystem call may remain blocked inside the OS. Keep at most four
         // outstanding workers, including cancelled scans still waiting on I/O.
         if (activeBrowserScans->fetch_add (1) >= 4)
@@ -8282,6 +8300,24 @@ private:
         { return a.directory != b.directory ? a.directory : a.file.getFileName().compareNatural (b.file.getFileName()) < 0; });
         updateBrowser();
     }
+    // While the folder is indexed, a search's results grow and the browser shows how far it has got.
+    void pollBrowserIndex()
+    {
+        if (! sampleBrowser()) return;
+        const auto now = browserIndex.status();
+        if (now.indexing == shownIndex.indexing && now.entries == shownIndex.entries && now.unreadableFolders == shownIndex.unreadableFolders) return;
+        if (now.indexing && juce::Time::getMillisecondCounterHiRes() - indexShownAt < 400) return;
+        shownIndex = now; indexShownAt = juce::Time::getMillisecondCounterHiRes();
+        if (browserSearch.getText().trim().isNotEmpty()) updateBrowser(); else repaint();
+    }
+    juce::String browserIndexText() const
+    {
+        if (! sampleBrowser() || browserFolder == juce::File()) return {};
+        if (shownIndex.indexing) return "Indexing " + juce::String ((int) shownIndex.entries);
+        if (shownIndex.truncated) return "First " + juce::String ((int) shownIndex.entries) + " items";
+        if (shownIndex.unreadableFolders > 0) return juce::String ((int) shownIndex.unreadableFolders) + (shownIndex.unreadableFolders == 1 ? " folder unreadable" : " folders unreadable");
+        return {};
+    }
     void setBrowserCategory (BrowserCategory category)
     {
         browserCategory = category; browserList.deselectAllRows(); updateBrowser(); resized();
@@ -8319,7 +8355,11 @@ private:
         }
         else if (sampleBrowser())
         {
-            for (const auto& item : allBrowserItems) if (matches (item.file.getFileName())) browserItems.push_back (item);
+            // A search looks through everything under the folder; otherwise the folder's own items show.
+            if (query.isNotEmpty())
+                for (const auto& entry : browserIndex.search (query.toStdString(), maximumSearchResults))
+                    browserItems.push_back ({ juce::File (juce::String::fromUTF8 (entry.path.data(), (int) entry.path.size())), entry.directory, true });
+            else browserItems = allBrowserItems;
         }
         else if (browserCategory == BrowserCategory::grooves)
         {
@@ -8450,6 +8490,17 @@ private:
             for (int i = 0; i < 5; ++i) { const int h = i % 2 == 0 ? 6 : 12; g.drawVerticalLine (6 + i * 2, (float) (height - h) / 2, (float) (height + h) / 2); }
         }
         g.setColour (selected ? ink : juce::Colour (0xffc6c6c6));
+        const auto& item = browserItems[(size_t) row];
+        if (item.found)
+        {
+            // A search result also shows its folder, under the browser folder, so equal names differ.
+            const auto folder = item.file.getParentDirectory().getRelativePathFrom (browserFolder);
+            const int labelWidth = juce::jmin (width - 29, juce::roundToInt (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), label)) + 8);
+            g.drawText (label, 25, 0, labelWidth, height, juce::Justification::centredLeft, true);
+            g.setColour (muted); g.setFont (font (10.0f));
+            if (folder != ".") g.drawText (folder, 25 + labelWidth + 4, 0, width - 33 - labelWidth, height, juce::Justification::centredLeft, true);
+            return;
+        }
         g.drawText (label, 25, 0, width - 29, height, juce::Justification::centredLeft, true);
     }
     // A sample chosen for a MIDI track goes into its Drum Sampler's selected pad, or its Sampler;
@@ -8473,6 +8524,11 @@ private:
         if (sampleBrowser())
         {
             auto item = browserItems[(size_t) row];
+            if (! item.file.exists())
+            {
+                report (juce::Result::fail ("\"" + item.file.getFileName() + "\" has moved or been deleted. Searching the folder again."));
+                scannedBrowserFolder = juce::File(); updateBrowser(); return;
+            }
             if (item.directory) { browserFolder = item.file; browserSearch.clear(); updateBrowser(); }
             else useBrowserSample (item.file);
         }
@@ -8987,6 +9043,37 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         setBrowserCategory (BrowserCategory::audioEffects);
         check (! previewButton.isVisible() && ! previewVolume.isVisible(), "other categories hide them");
         setBrowserCategory (category);
+    }
+    {
+        // Search looks through the folder and the folders in it, from the index, showing where each
+        // result is; clearing it shows the folder's own items; a result that has gone is reported.
+        const auto category = browserCategory; const auto folder = browserFolder;
+        const auto library = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-browser-ui-" + juce::Uuid().toString());
+        for (const auto* name : { "Kick.wav", "Drums/Kick.wav", "Drums/Snare.wav", "Drums/Room/Kick Room.aif", "Drums/notes.txt" })
+        {
+            const auto file = library.getChildFile (name);
+            check (file.getParentDirectory().createDirectory().wasOk() && file.replaceWithText ({}), "write a browser fixture");
+        }
+        const auto settle = [&]
+        {
+            for (int i = 0; i < 1000 && (browserIndex.status().indexing || browserLoading); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
+            pollBrowserIndex();
+        };
+        setBrowserCategory (BrowserCategory::samples);
+        browserFolder = library; updateBrowser(); settle();
+        check (getNumRows() == 2 && browserIndexText().isEmpty(), "the folder shows its own items");
+        browserSearch.setText ("kick", juce::sendNotificationSync); updateBrowser(); // The editor notifies asynchronously.
+        const auto found = [&] (const juce::String& relative)
+        { return std::any_of (browserItems.begin(), browserItems.end(), [&] (const auto& item) { return item.found && item.file == library.getChildFile (relative); }); };
+        check (getNumRows() == 3 && found ("Kick.wav") && found ("Drums/Kick.wav") && found ("Drums/Room/Kick Room.aif"), "a search finds Kicks in the folders under it too");
+        browserSearch.setText ("snare", juce::sendNotificationSync); updateBrowser(); // The editor notifies asynchronously.
+        check (getNumRows() == 1 && library.getChildFile ("Drums/Snare.wav").deleteFile(), "a Snare, then it is deleted");
+        activateBrowserRow (0); settle();
+        check (status.contains ("has moved or been deleted") && getNumRows() == 0, "using a result that has gone says so and searches again");
+        browserSearch.setText ({}, juce::sendNotificationSync); updateBrowser();
+        check (getNumRows() == 2, "clearing the search shows the folder again");
+        browserFolder = folder; updateBrowser(); setBrowserCategory (category);
+        library.deleteRecursively();
     }
     {
         // MIDI Map Mode: the switch covers the work area, clicking a control learns it, and the list edits its mapping.

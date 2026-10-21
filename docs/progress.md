@@ -1446,3 +1446,13 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **Auditions.** Clip edits now end a take audition before looking clips up, so they never act on an audition's temporary copies.
 
 See [the contract](research/linked-tracks-contract.md).
+
+## Browser indexing — 2026-10-21
+
+Engine-independent change in `src/BrowserIndex.*` (new), `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/BrowserIndexTests.cpp` (new), with documentation.
+
+- **Indexing.** The Samples browser indexes its folder and every folder in it on a worker thread.
+- **Search.** Search looks through the index as it grows, and shows where each result is.
+- **Problems.** Unreadable folders, truncation and moved results are reported.
+
+See [the contract](research/browser-index-contract.md).

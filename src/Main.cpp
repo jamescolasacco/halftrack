@@ -88,6 +88,7 @@ int runStuckNoteTests (const juce::File&);
 int runLargeSessionTests (const juce::File&);
 int runPreferencesTests (const juce::File&);
 int runLinkedTrackTests (const juce::File&);
+int runBrowserIndexTests (const juce::File&);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -273,6 +274,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-linked-tracks");
             setApplicationReturnValue (runLinkedTrackTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-browser-index"))
+        {
+            const int i = args.indexOf ("--self-test-browser-index");
+            setApplicationReturnValue (runBrowserIndexTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-large-session"))
