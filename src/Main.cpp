@@ -41,7 +41,6 @@ int runFreezeTests (const juce::File&);
 int runStemExportTests (const juce::File&);
 int runCrossfadeTests (const juce::File&);
 int runTimeEditTests (const juce::File&);
-int runRackTests (const juce::File&);
 int runTrackDelayTests (const juce::File&);
 int runMidiControllerTests (const juce::File&);
 int runRangeEditTests (const juce::File&);
@@ -52,6 +51,7 @@ int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
 int runSendReturnTests (const juce::File&);
+int runRackTests (const juce::File&);
 #if JUCE_MAC
 juce::Result registerAudioUnitTestFixture();
 int runAudioUnitTests (const juce::File&);
@@ -245,12 +245,6 @@ public:
             setApplicationReturnValue (runTrackDelayTests (juce::File (args[i + 1])));
             quit(); return;
         }
-        if (args.contains ("--self-test-rack"))
-        {
-            const int i = args.indexOf ("--self-test-rack");
-            setApplicationReturnValue (runRackTests (juce::File (args[i + 1])));
-            quit(); return;
-        }
         if (args.contains ("--self-test-time-edit"))
         {
             const int i = args.indexOf ("--self-test-time-edit");
@@ -279,6 +273,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-device-automation");
             setApplicationReturnValue (runDeviceAutomationTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-racks"))
+        {
+            const int i = args.indexOf ("--self-test-racks");
+            setApplicationReturnValue (runRackTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-sampler"))

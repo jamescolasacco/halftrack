@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cerrno>
 #include <cstdlib>
+#include <functional>
 #include <optional>
 #if HALFTRACK_TESTS_ENABLED
 #include <iostream>
@@ -272,13 +273,21 @@ public:
     {
         const auto* d = device(); const auto* current = track();
         if (d == nullptr || current == nullptr) return nullptr;
-        if (current->instrument.id == d->pluginId) return &current->instrument;
-        for (const auto& plugin : current->plugins)
-        {
-            if (plugin.id == d->pluginId) return &plugin;
-            for (const auto& chain : plugin.chains) for (const auto& device : chain.devices) if (device.id == d->pluginId) return &device;
-        }
+        for (const auto* plugin : nativeDevices (*current)) if (plugin->id == d->pluginId) return plugin;
         return nullptr;
+    }
+    // The track's native devices, with the devices inside its racks after each rack.
+    static std::vector<const Session::PluginInfo*> nativeDevices (const Session::TrackInfo& current)
+    {
+        std::vector<const Session::PluginInfo*> devices;
+        const std::function<void (const Session::PluginInfo&)> add = [&] (const Session::PluginInfo& plugin)
+        {
+            devices.push_back (&plugin);
+            for (const auto* list : { &plugin.chains, &plugin.returns }) for (const auto& chain : *list) for (const auto& inner : chain.devices) add (inner);
+        };
+        if (current.instrument.isNativeEffect) add (current.instrument);
+        for (const auto& plugin : current.plugins) if (plugin.isNativeEffect) add (plugin);
+        return devices;
     }
     juce::String targetKey() const
     { if (const auto* d = device()) return d->pluginId + ":" + juce::String (d->parameter); return target() == Session::AutomationTarget::pan ? "pan" : "volume"; }
@@ -351,14 +360,7 @@ public:
             std::vector<DeviceTarget> targets; juce::String signature;
             if (const auto* current = track())
             {
-                std::vector<const Session::PluginInfo*> devices;
-                if (current->instrument.isNativeEffect) devices.push_back (&current->instrument);
-                for (const auto& plugin : current->plugins)
-                {
-                    if (plugin.isNativeEffect) devices.push_back (&plugin);
-                    for (const auto& chain : plugin.chains) for (const auto& device : chain.devices) if (device.isNativeEffect) devices.push_back (&device);
-                }
-                for (const auto* plugin : devices)
+                for (const auto* plugin : nativeDevices (*current))
                 {
                     const auto fields = effectParameters (plugin->effect.kind);
                     for (size_t i = 0; i < fields.size(); ++i)

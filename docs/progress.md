@@ -880,13 +880,6 @@ Root owns `insertTime`/`deleteTime` in `src/Session.*`, the Edit menu commands a
 
 Root owns the change in `src/Session.*`, the follow dialog, `tests/FollowActionTests.cpp`, a hash-gated engine patch and documentation. Session clips now carry action A and action B with a chance of A, matching the reference Launch box. Any and Other are added as actions. The dialog edits both actions and the percentage. Generated-signal tests check 0% and 100% chances, both outcomes at 50%, Other never replaying the same clip, No action continuing play (needing the engine patch), validation, persistence and corrupted-weight rejection.
 
-## Audio Effect Racks — 2026-10-20
-
-Root owns racks across `src/Session.*`, `tests/RackTests.cpp`, the suite registration and documentation. Audio devices can be grouped into an Audio Effect Rack whose chains run in parallel and sum. Each chain has volume, pan, mute and solo, chains hold their own devices, and eight macros drive native device controls over mapped ranges. Racks save, reopen, duplicate and undo, and invalid racks reject a load. The new `rack-acceptance` suite measures every behaviour against the generated source, and the full 39-suite run passes locally on the Mac in 110 s. See [the rack contract](research/racks-contract.md).
-
-## Rack device view — 2026-10-20
-
-UI change in `src/MainComponent.cpp`, `src/NativeEffectEditor.cpp`, `src/UtilityEditor.cpp` and `src/AutomationEditor.cpp`, with snapshot lookups added to `src/Session.*`. Devices can be selected (Shift extends, Cmd/Ctrl toggles) and grouped with Cmd/Ctrl+G. Racks show macro knobs, a chain list with activator, solo, volume and pan, and the selected chain's devices. Native controls inside a rack can be mapped to macros from their right-click menu, and the automation editor reaches chain devices. All 39 suites pass when run directly on the Mac. ctest runs hung at app launch on a macOS "reopen windows" crash prompt left by another session's crashed test, so the suites were run with `-ApplePersistenceIgnoreState YES`.
 
 ## Track Delay — 2026-10-20
 
@@ -915,6 +908,16 @@ The new test records a MIDI take and a generated audio take. During the MIDI tak
 ## Arrangement time selection — 2026-10-20
 
 Root owns the selection across `src/Session.*`, the Arrangement canvas and Edit menu in `src/MainComponent.cpp`, `tests/RangeEditTests.cpp`, the suite registration and documentation. Dragging over empty lane space selects time across tracks. Split, Duplicate (Cmd/Ctrl+D), Delete and Loop Selection act on it, and Insert Silence and Delete Time now use it in place of the loop range. MIDI clips can be split, with crossing notes divided and controller values carried. The new `range-edit-acceptance` suite compares renders sample by sample, and the UI suite covers selecting, duplicating and deleting. See [the selection contract](research/arrangement-selection-contract.md).
+
+## Racks — 2026-10-20
+
+Engine owns racks across `src/Session.*`, the new `src/Racks.*`, the rack kinds in `src/NativeEffects.*`, the choke path in `src/Instruments.*` and `tests/RackTests.cpp`. Cross-area edits: the UI's new `src/RackEditor.*` and the rack device view, device selection and grouping in `src/MainComponent.cpp`, Map to Macro in `src/NativeEffectEditor.cpp`, rack lookups in `src/AutomationEditor.cpp` and `src/UtilityEditor.cpp`, and root's `CMakeLists.txt`, `src/Main.cpp` and documentation.
+
+Instrument, Audio Effect, MIDI Effect and Drum Racks hold parallel chains of built-in devices and Utilities with volume, pan, activator, solo, key, velocity and chain select zones, sixteen macros and, in Drum Racks, 128 pad chains with choke groups and in-rack returns. Devices can be grouped into racks and one-chain racks ungrouped. They replace the earlier Audio Effect Rack from main, reverted on the merged side with its author's agreement. The engine's `RackType` was not used, because its wiring has no key, velocity or selector zones, per-pad notes or chokes. Halftrack's own `RackEngine` runs the chains inside the rack device's callback, adopting new layouts without allocating or locking.
+
+The new `racks-acceptance` suite renders generated signals against computed sums, zone and fade arithmetic, exact pad samples and choke ramps, checks undo, save/move/reopen and eight malformed files, and audits heap calls in the rack callback. The UI suite drives the rack editor, the Drum Rack pad grid and device grouping. The source guard covers the rack callback and the choke path. Racks (461 checks), UI (728), utility, freeze, instruments and sampler suites and the source guard (206 bodies) pass locally on the Mac.
+
+Freeze and Flatten could leave a stray unnamed undo step, which the engine's undo timer opened after the freeze property changed. Flatten now opens its own transaction first, and Freeze holds an undo-transaction inhibitor while the render updates. See the [rack contract](research/racks-contract.md).
 
 ## Consolidate — 2026-10-20
 

@@ -1,104 +1,65 @@
-# Audio Effect Rack contract
+# Rack contract
 
-Audio Effect Racks follow the reference rack workflow ([Instrument, Drum and Effect Racks](https://www.ableton.com/en/live-manual/12/instrument-drum-and-effect-racks/), consulted 2026-10-20). Devices are grouped into a rack. The rack runs any number of parallel chains on its input and sums them at its output. Each chain has its own volume, pan, activator (mute) and solo, and eight macro knobs can drive device controls inside the rack. This is Halftrack's own implementation on the engine's rack graph. Its sound and limits are not measured against the reference.
+Racks follow the reference's Instrument, Audio Effect, MIDI Effect and Drum Racks ([Instrument, Drum and Effect Racks](https://www.ableton.com/en/live-manual/12/instrument-drum-and-effect-racks/), consulted 2026-10-20). A rack holds parallel chains of devices and sums their outputs, with zones, a chain selector and macros. This is Halftrack's own implementation from the public description. Zone fade shapes, ramp times and other numeric choices are simplest defaults, not measurements of the reference.
 
 ## Interface
 
-- `groupDevices(trackIndex, pluginIds, rackId)` wraps audio devices of one track into a new rack. The devices keep their track order, and the rack takes the first one's position.
-  - The rack gets one chain, named after the first device, holding those devices.
-  - With an empty list it adds an empty rack, with no chains, where new audio devices go.
-  - MIDI effects, instruments, racks and unknown or repeated IDs are rejected. Grouping is one undo step.
-- `ungroupRack(rackId)` puts a one-chain rack's devices back on the track in the rack's place and removes the rack. Their macro mappings are removed with it. Racks with two or more chains are rejected.
-- `addRackChain(rackId, chainId)` appends an empty chain named "Chain N"; `removeRackChain(chainId)` deletes a chain and its devices.
-- `setRackChain(chainId, ChainSettings)` sets:
-  - the chain's name (1–128 characters);
-  - volume (silence to +6 dB, on the track fader law);
-  - pan (−1 to +1, on the track pan law);
-  - mute and solo.
-- `addNativeEffectToChain(chainId, kind)` and `addUtilityToChain(chainId)` append a device to a chain. MIDI effects and instruments are rejected. A chain holds at most 64 devices, and a rack at most 64 chains.
-- Devices are addressed by ID on tracks and in chains alike:
-  - `setDeviceEnabled`, `removeDevice` and `showDeviceEditor`.
-  - `moveDevice`, which moves a device only within its own track or chain.
-  - The existing `setNativeEffectSettings`, `setUtilitySettings` and `setDeviceAutomation` also find chain devices.
-- Macros:
-  - `setRackMacro(rackId, macro, value)` takes a value from 0 to 1.
-  - `renameRackMacro` takes a name of 1–64 characters.
-  - `mapRackMacro(rackId, macro, pluginId, parameter, minimum, maximum)` maps a native device control in the same rack over a range in the control's own units. The minimum may exceed the maximum to invert the range.
-  - `unmapRackMacro(pluginId, parameter)` removes a mapping.
-- `PluginInfo::isRack`, `chains` (ID, settings, devices) and `macros` (name, value, mappings) describe a rack in snapshots.
+- Racks are native device kinds 30–33. Instrument and Drum Racks are chosen as a MIDI track's instrument, a MIDI Effect Rack goes with the MIDI effects and an Audio Effect Rack with the audio devices. The device menu lists them under Racks.
+- A chain holds MIDI effects, then at most one instrument, then audio effects and Utilities, up to 32 devices. Audio Effect Rack chains take audio devices only, and MIDI Effect Rack chains take MIDI effects only. Racks nest up to four deep. A rack holds up to 128 chains.
+- Chain settings: name, volume (−100 dB is silence, top +6 dB), pan on the track mixer's law, activator, solo, and key, velocity and chain select zones. Each zone has a low and high limit and fade ranges inside them.
+- Solo is exclusive in the chain list; Cmd/Ctrl-click adds chains.
+- Sixteen macros, eight shown at first, with More/Fewer buttons. A macro maps to any built-in device control in the rack, a chain's volume, pan or send, or the chain selector, between a minimum and maximum. A minimum above the maximum inverts the mapping. A macro can drive many targets, and each target control takes one macro.
+- A macro's name is its custom name, else its one target's control name, else "Macro N".
+- Macros and the chain selector are the rack's own controls, so they automate and undo like any device control.
+- Drum Rack chains are pads: each receives one note (or All Notes), plays a note of its own (C3 by default) and can join one of 16 choke groups. Pads send post-fader to up to six return chains inside the rack.
+- Dropping an audio file on an empty pad makes a chain named after it with a one-shot Sampler. Dropping on a filled pad replaces its Sampler's sample. Dragging a pad onto another swaps them.
+- The pad grid shows 16 of the 128 notes and moves by bank.
+- Grouping: Cmd/Ctrl+G groups the selected devices into a rack of the right kind, and the instrument panel's Group button groups the instrument and the audio devices after it. Cmd/Ctrl+Shift+G ungroups a one-chain rack.
+- Every command in the [architecture](../architecture.md#racks) is one undo step and validates before changing the project.
 
-## Device view
+## Processing
 
-- Clicking a device's title selects it. Shift-click extends the selection within the same track or chain, and Cmd/Ctrl-click toggles a device.
-- With devices focused, Cmd/Ctrl+G groups the selection, Cmd/Ctrl+Shift+G ungroups a selected one-chain rack, and Delete removes the selected devices.
-- A device's menu offers Move left/right, Group, Ungroup and Add chain (racks), Activate/Deactivate and Delete. + Device offers an empty Audio Effect Rack.
-- A rack shows a title strip (power, Macros and Chains toggles, delete), then its sections:
-  - Eight macro knobs (0–127), showing their mappings in a tooltip. Right-clicking a knob renames it or removes a mapping.
-  - The chain list. Each row has an activator, solo, name, volume and pan; double-click renames a chain, right-click deletes it, and + adds one.
-  - The selected chain's devices, with a + menu of audio effects.
-- Right-clicking a native control inside a rack offers "Map … to" any macro, or "Remove Mapping". Mapped controls draw in the macro colour and ignore direct edits.
-- The automation editor lists chain devices' controls.
-
-## Signal flow
-
-- Each chain is a serial path from the rack input through its devices to the chain's mixer.
-- A chain with no devices passes the rack input to its mixer.
-- Audible chain mixers connect to the rack output, where the chains sum.
-- A muted chain is disconnected. When any chain is soloed, only soloed chains connect.
-- A rack without chains passes its input unchanged.
-- A deactivated chain device is bypassed, and a deactivated rack is bypassed as a whole.
-
-## Macros
-
-- A mapped control's value is `minimum + macro × (maximum − minimum)`, interpolated in the control's knob position. That is the same scale its editor and automation use.
-- The value is written into the device settings whenever the macro or a mapping changes, in the same undo step.
-- When a macro is mapped for the first time, it takes the control's current position within the range, so mapping does not move the control.
-- A control follows only one macro. While mapped, it cannot be edited directly or given automation points.
-- Controls that already have automation cannot be mapped. Only native device controls can be mapped.
+- An empty Instrument or Drum Rack is silent; an empty effect rack passes its input.
+- A note reaches every chain whose key and velocity zones hold it.
+- Inside a key or velocity fade range the note's velocity is scaled by the position in the fade. The bottom fade gains (value − low + 1) / (fade low − low + 1), and the top fade gains the mirror of that.
+- The chain selector gates notes for Instrument and MIDI Effect Racks and input for Audio Effect Racks. For Instrument and Audio Effect Racks, a selector inside a fade range scales the chain's output linearly. For MIDI Effect Racks it scales velocity.
+- Outside its select zone a chain is silent only on a side that ends in a fade, and otherwise keeps its gain, so a chain's tail survives a selector move.
+- Gains for the selector, volume, pan, activator and solo ramp linearly over 5 ms.
+- Muting or soloing changes a chain's output. A MIDI Effect Rack's deactivated or unsoloed chain starts no notes.
+- A note-off reaches the chains that received its note-on, with the note they played.
+- Instrument chains receive the other short MIDI events. A MIDI Effect Rack passes non-note events straight through.
+- Choke: striking a pad fades every other pad of its choke group linearly over 5 ms from the strike, at instrument-voice level, so effects after the instrument ring on. Pads in different groups ring together.
+- Mapped controls take the macro's value at block rate; the control's own setting stays and returns when the mapping is removed. The first mapping of a macro moves the macro to the control's current position. Removing a mapping leaves the control at the value the macro gave it.
+- Chains are delayed to the longest chain's latency, and the chain mix to the returns' latency. The rack reports the sum.
+- Structure changes build a new immutable layout on the message thread. The audio thread adopts it without allocating or locking, and keeps delay lines of chains that remain.
 
 ## Projects
 
-- A rack is stored as an engine rack type marked as Halftrack's (`halftrackRack`), referenced by exactly one rack on an audio track.
-- Each chain ends in a Halftrack mixer that carries the chain's name, mute and solo.
-- The eight macros are stored in a `HALFTRACKMACROS` child, and each device keeps its own mappings as knob positions.
-- Loading rejects the file and keeps the open project when it finds any of these:
-  - foreign or shared rack types;
-  - instruments or MIDI effects in a rack;
-  - nested racks;
-  - devices after the last chain mixer;
-  - malformed macros or mappings;
-  - mapped controls that also have automation.
-- Loading rebuilds the rack connections from the chain order, outside history.
-- Duplicating a track gives the copy its own rack, chains and mappings. Removing a rack or its track also removes its rack type.
+The rack's chains, returns, devices, mappings, visible-macro count and macro names are stored in its device state. Loading checks nesting, limits, unique canonical identities, every property's range and form, device kinds and order, and mapping targets. A malformed rack rejects the load and keeps the open project. Saving collects Sampler samples inside racks into the project's assets. Copying a track or chain gives its rack, chains and devices new identities and remaps the mappings.
 
 ## Evidence
 
-`tests/RackTests.cpp` renders a generated stereo tone through a Utility at −6 dB and checks:
+`tests/RackTests.cpp` (the `racks-acceptance` suite, 461 checks) renders generated signals and compares them sample by sample against the expected arithmetic or a reference render. It checks:
 
-- grouping keeps the sound;
-- an empty chain adds the dry input, so the chains sum;
-- chain volume, hard pan, mute, solo and two solos;
-- MIDI effects and instruments are rejected;
-- a neutral EQ in a chain keeps the sum;
-- Macro 1, mapped to the EQ output over ±24 dB, sets −12 dB at a quarter, and the render follows it;
-- mapped controls are locked against direct edits and automation;
-- reordering, bypass and removal inside a chain;
-- an identical render after reopening, with no history;
-- independent racks on duplicated tracks;
-- rack types are removed with their track or rack;
-- chain deletion and undo, and ungrouping and undo;
-- an empty rack passes its input;
-- corrupted macro values, foreign racks and bad mappings are rejected;
-- frozen-track locks.
+- the zone and pan arithmetic;
+- empty racks, parallel summing with chain gain and pan, activator, exclusive and additive solo, and undo;
+- chain-selector gates and linear fades, with input stopped past a zone;
+- device order, bypass, moves, removal, duplication, nesting, and latency alignment beside a lookahead limiter;
+- grouping, ungrouping and Utilities in chains rendering like the original serial devices;
+- key splits, overlaps, key and velocity fades, and the selector driven by a macro at two positions;
+- MIDI Effect Rack chains in parallel, filtering by key, selector fades and deactivation;
+- Drum Rack pads playing only their notes and exact samples, the play note, pad volume, pan and solo, pad swaps, All Notes, a choke fading linearly over 240 frames at 48 kHz, separate choke groups, and post-fader sends through returns and their removal;
+- save, move and reopen of a Drum Rack rendering identically, and duplication with new identities;
+- macro mapping ranges, inversion, remapping, chain-volume taper, unmapping, undo, macro automation over time, and save/reopen;
+- rejection of eight malformed project files;
+- no heap calls in 36 blocks of note floods, chokes, sends and macro-driven controls, nor in adopting a new layout.
 
-The UI suite checks Shift-click selection, Cmd/Ctrl+G grouping, the rack panel's macros and chain devices, + chain, chain volume and activator rows, the mapped-control colour, a macro knob driving the mapped EQ output, a snapshot and undo.
+The realtime source guard covers the rack callback and choke path. The UI suite drives the rack editor's chains, zone edges and fades, the macro knob and mapping list, More macros, chain-device power and removal, the Drum Rack drop, choke, returns, sends, pad drag and banks, and device selection with Cmd/Ctrl+G, Cmd/Ctrl+Shift+G and Delete.
 
 ## Not implemented
 
-- Instrument, MIDI Effect and Drum Racks with chains.
-- Key, velocity and chain-select zones.
-- Nested racks (the engine does not allow them).
-- Macro automation, MIDI mapping of macros and variations.
-- Mapping third-party plug-in or Utility parameters.
-- Rack presets.
+- Chain Selector filtering of MIDI controllers, macro variations, randomize and hot-swap.
+- Chain colors, and third-party plug-ins inside racks.
+- Drum Rack pad outputs routed to the project's returns, extracting chains to tracks, and ungrouping Drum Racks.
+- Sample-accurate macro automation; it settles at block rate.
 - Any comparison with reference output.

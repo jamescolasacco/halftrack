@@ -216,9 +216,6 @@ Insert Silence and Delete Time use the Arrangement time selection, or the loop r
 
 The follow-action time is one value shared by both actions, and a No action choice is final for that launch (it is not evaluated again on later loops). Random choice uses the engine's unseeded generator, so tests check deterministic chances exactly and an even chance statistically. These are simplest-default choices pending reference measurement.
 
-### Audio Effect Rack defaults
-
-An empty rack and an empty chain pass their input unchanged. Chain volume and pan use the track mixer's fader and pan laws. A muted chain stops processing, so its tail does not continue. A macro's first mapping takes the control's current position; later mappings follow the macro, and the macro writes each mapped control as an ordinary settings change (block rate, no extra smoothing). Ungrouping a one-chain rack drops its chain mixer settings and macro mappings. Racks cannot be nested because the engine does not allow it. These are simplest-default choices pending reference measurement.
 
 ### Track Delay defaults
 
@@ -235,6 +232,10 @@ While a Session slot take records, input assignment is refused on every track, a
 ### Arrangement selection defaults
 
 Split, Delete Selection, Duplicate Selection and Consolidate act on clips only; automation in the selection stays where it is. Consolidated audio is rendered at the audio device's rate, without the track's devices, and plays unwarped. Duplicate replaces the material in the time after the selection, and the selection moves onto the copy. Notes crossing a MIDI split become two notes. These are simplest-default choices pending reference measurement.
+
+### Rack defaults
+
+An empty effect rack passes its input and an empty Instrument or Drum Rack is silent. Zone fades are linear: key and velocity fades scale the note's velocity; selector fades scale an Instrument or Audio Effect Rack chain's output and a MIDI Effect Rack chain's velocity. The chain selector moves in whole steps from 0 to 127. Gains ramp over 5 ms. Chain mute and solo act on a chain's output, except in MIDI Effect Racks, where they stop new notes. A choke fades the choked pad's instrument voices over 5 ms, and audio effects after the instrument keep ringing. Chain pan uses the track mixer's law. Macro mappings interpolate in knob position, so a volume mapping follows the fader taper. A macro's first mapping takes the control's current position, and removing a mapping leaves the control where the macro put it. Macro automation applies at block rate. Grouping copies built-in devices into a one-chain rack; third-party plug-ins cannot go in racks yet. Only one-chain Instrument, Audio Effect and MIDI Effect Racks can be ungrouped. Chain Selector MIDI controller filtering, macro variations, randomize, hot-swap, chain colors, Drum Rack pad routing to the project's returns, and extracting chains are not implemented. These are simplest-default choices pending reference measurement.
 
 ### Time signature defaults
 

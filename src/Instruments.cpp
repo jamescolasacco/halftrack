@@ -325,7 +325,7 @@ void InstrumentDSP::start (Voice& v, int channel, int note, double velocity, boo
         v.noise = 0x9e3779b9u ^ (static_cast<uint32_t> (note) * 2654435761u) ^ (static_cast<uint32_t> (channel) << 24) ^ static_cast<uint32_t> (v.age);
         if (v.noise == 0) v.noise = 1;
     }
-    v.time = 0; v.choke = 1; v.drumState = v.drumState2 = 0;
+    v.time = 0; v.choke = 1; v.drumState = v.drumState2 = 0; v.fade = 1; v.fadeStep = 0;
     if (kind == Kind::sampler && (retrigger || ! wasActive)) v.position = sampleRegion().first;
     if (retrigger) { v.amp.start(); v.filter.start(); for (auto& op : v.operators) op.start(); }
     if (kind == Kind::drumKit)
@@ -767,12 +767,27 @@ void InstrumentDSP::renderSampler (Voice& v, double& left, double& right) noexce
     const auto level = v.amp.tick() * ((1 - p[velocityAmp]) + p[velocityAmp] * v.velocity) * gain;
     left += sumL * level * std::min (1.0, 1.0 - p[pan]); right += sumR * level * std::min (1.0, 1.0 + p[pan]);
 }
+void InstrumentDSP::chokeAll() noexcept
+{
+    const auto step = 1.0 / std::max (1.0, std::ceil (rate * .005));
+    for (auto& v : voices) if (v.active && v.fadeStep == 0) v.fadeStep = step;
+    if (monophonic()) keyCount = 0;
+}
 void InstrumentDSP::render (float* left, float* right, int samples) noexcept
 {
     for (int i = 0; i < samples; ++i)
     {
         double l = 0, r = 0;
-        for (auto& v : voices) if (v.active) renderVoice (v, l, r);
+        for (auto& v : voices)
+        {
+            if (! v.active) continue;
+            if (v.fadeStep == 0) { renderVoice (v, l, r); continue; }
+            // A choked voice keeps playing under a linear fade, then stops.
+            double vl = 0, vr = 0; renderVoice (v, vl, vr);
+            v.fade = std::max (0.0, v.fade - v.fadeStep);
+            l += vl * v.fade; r += vr * v.fade;
+            if (v.fade <= 0) v = Voice {};
+        }
         lfo.advance();
         if (left) left[i] += static_cast<float> (effects::finite (l));
         if (right) right[i] += static_cast<float> (effects::finite (r));
