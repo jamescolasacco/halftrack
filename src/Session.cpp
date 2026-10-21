@@ -1699,6 +1699,8 @@ public:
     MidiCaptureTap (te::InputDeviceInstance& in, Handler handler) : instance (&in), handle (std::move (handler)) { in.addConsumer (this); }
     ~MidiCaptureTap() override { if (instance != nullptr) instance->removeConsumer (this); cancelPendingUpdate(); }
     te::InputDeviceInstance* get() const { return instance.get(); }
+    // Hands on notes still waiting for the message thread, so a capture or a stop includes them.
+    void flush() { handleUpdateNowIfNeeded(); }
 private:
     void handleIncomingMidiMessage (const juce::MidiMessage& m, te::MPESourceID) override
     {
@@ -4312,6 +4314,7 @@ Result Session::captureMidi (CaptureDestination destination, juce::StringArray& 
     createdClipIds.clear();
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->anyRecording()) return Result::fail ("Stop recording before capturing MIDI.");
+    for (auto& tap : impl->captureTaps) tap->flush(); // Notes played just before are included.
     if (! hasCapturedMidi()) return Result::fail ("Play some notes into an armed or In-monitored MIDI track first.");
     const auto now = impl->engine.getDeviceManager().getCurrentStreamTime();
     const auto nowBeat = impl->arrivalBeat (now);
@@ -4699,6 +4702,7 @@ Result Session::sessionRecord (int sceneIndex)
         for (const auto& r : impl->slotRecordings) if (! r.stopping) recording.push_back (r.slotId);
         for (auto slotId : recording)
             for (auto& r : impl->slotRecordings) if (r.slotId == slotId) { impl->finishSlotRecording (r, true, false); break; }
+        for (auto& tap : impl->captureTaps) tap->flush(); // A note released just before is kept.
         impl->overdubs.clear();
         sendChangeMessage(); return Result::ok();
     }

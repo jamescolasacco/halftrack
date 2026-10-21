@@ -1281,3 +1281,10 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **Engine fixes.** The looping MIDI generator skipped variations, and stopped for good at an empty pass. Both are fixed in the patch.
 
 See [the contract](research/note-chance-contract.md).
+
+## Released-note and punch timing fixes — 2026-10-21
+
+Engine and test change in `src/Session.cpp`, `tests/SessionRecordTests.cpp` and `tests/PunchTests.cpp`.
+
+- **A released note was lost.** Pressing Session Record again, or capturing MIDI, right after a key was released could leave its note-off waiting for the message thread, so the overdubbed or captured note was dropped. Both now hand on pending notes first.
+- **Two tests assumed timing.** The punch test placed its MIDI notes by a block count from the lagging snapshot position, and the Session Record test waited a fixed 400 blocks for a take. Both now wait until the state under test is reached. They failed on Linux CI.

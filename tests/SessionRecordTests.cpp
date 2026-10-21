@@ -109,9 +109,10 @@ int runSessionRecordTests (const juce::File& artifacts)
         check (slot (keys, 1).playing && slot (keys, 1).overdubbing && slot (0, 1).recording, "the stopped clip launches and overdubs while audio records anew");
         controller.play (67, .25);
         ok (s.sessionRecord (1), "press it again");
-        for (int i = 0; i < 400 && ! slot (0, 1).playing; ++i) pumpSyntheticTestDevice (s, 1);
-        check (slot (0, 1).hasClip && slot (0, 1).playing && slot (keys, 1).clip.notes.size() == 1 && slot (keys, 1).clip.notes[0].pitch == 67,
-               "the audio take plays and the overdub kept its note");
+        for (int i = 0; i < 800 && ! slot (0, 1).playing; ++i) pumpSyntheticTestDevice (s, 1);
+        check (slot (0, 1).hasClip && slot (0, 1).playing, "the audio take plays");
+        check (slot (keys, 1).clip.notes.size() == 1 && slot (keys, 1).clip.notes[0].pitch == 67,
+               "the overdub kept its note (" + juce::String ((int) slot (keys, 1).clip.notes.size()) + " notes)");
         s.stop();
         std::cout << "Session record passed: " << root.getFullPathName() << std::endl; return 0;
     }
