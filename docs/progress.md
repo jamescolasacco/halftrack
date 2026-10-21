@@ -1475,3 +1475,13 @@ Engine and UI change in `src/Session.*`, `src/ComputerKeyboard.h` (new), `src/Ma
 - **The input.** Tracks choose Computer Keyboard like any MIDI input, and All MIDI Ins includes it. Turning the keyboard off ends its notes.
 
 See [the contract](research/computer-keyboard-contract.md).
+
+## Key Map Mode and mapped buttons — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/KeyMapTests.cpp` (new), with documentation.
+
+- **Buttons.** Buttons can be MIDI mapped: track activator, solo, arm and clip stop, clip slots, scenes, device switches and the transport. A controller presses one as its value rises above 63.
+- **Key Map Mode.** KEY or Cmd/Ctrl+K maps computer keys to buttons and controls. The overlay marks Session View slots and scenes too.
+- **Test fixes.** The suite found the snapshot recursing through a device button's existence check, now read from the engine. The UI suite's text-focus check waits up to a second for the app to activate.
+
+See [the contract](research/key-map-contract.md).

@@ -229,6 +229,10 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `BrowserIndex` (in `src/BrowserIndex.*`, independent of the engine) indexes a folder tree on a detached worker that owns only standard-library data and a shared `Scan` record, so a blocked filesystem call can outlive the browser. A global count limits outstanding scans to four. The UI starts it with each folder listing, polls its status from the window timer, and searches it on the message thread under the scan's mutex. See the [contract](research/browser-index-contract.md).
 
+## Key Map Mode and mapped buttons
+
+Key mappings are a `HALFTRACKKEYMAP` child of the Edit, beside the MIDI map, and are validated on load. `Session::isButtonTarget` and `Impl::buttonExists` name button targets. `Impl::pressButton` presses them through the Session's own setters, and `Impl::applyValue` sets a control from either kind of mapping. The existence checks read the engine rather than the snapshot, which asks them of every mapping. The UI's `MapOverlay` serves both modes, and `LauncherGrid::mapAreas` adds the Session View's slots, scenes and stop buttons. See the [contract](research/key-map-contract.md).
+
 ## Computer MIDI keyboard
 
 `Session::Impl::ensureComputerKeyboard` makes or finds the engine virtual MIDI input named Computer Keyboard when the Session starts, with no source devices. `playComputerKeyboard` delivers a message to it and to the All MIDI Ins aggregate, stamped with the current stream time, on the message thread. The UI owns the key layout (`ComputerKeyboard`, header-only), and finds releases from `keyStateChanged` and the window timer. See the [contract](research/computer-keyboard-contract.md).

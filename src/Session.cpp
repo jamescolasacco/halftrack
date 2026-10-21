@@ -1846,6 +1846,31 @@ juce::Result runRangeExportTaskCancellationTests (const juce::File& directory)
 
 // MIDI mappings: a Halftrack child of the Edit with one MAPPING per controller.
 const juce::Identifier midiMapType { "HALFTRACKMIDIMAP" }, midiMappingType { "MAPPING" };
+// Key Map Mode's mappings: a key (one lower-case character) and the target it drives.
+const juce::Identifier keyMapType { "HALFTRACKKEYMAP" };
+Session::KeyMapping readKeyMapping (const juce::ValueTree& v)
+{
+    const auto key = v["key"].toString();
+    return { v["target"].toString(), key.isEmpty() ? (juce::juce_wchar) 0 : key[0], static_cast<float> (v["minimum"]), static_cast<float> (v["maximum"]) };
+}
+juce::ValueTree keyMappingTree (const Session::KeyMapping& m)
+{
+    juce::ValueTree v (midiMappingType);
+    v.setProperty ("target", m.target, nullptr); v.setProperty ("key", String::charToString (m.key), nullptr);
+    v.setProperty ("minimum", m.minimum, nullptr); v.setProperty ("maximum", m.maximum, nullptr);
+    return v;
+}
+// A key Key Map Mode takes: a printable character other than a space, in lower case; 0 otherwise.
+juce::juce_wchar mappableKey (juce::juce_wchar key)
+{
+    const auto lower = juce::CharacterFunctions::toLowerCase (key);
+    return lower > 32 && lower < 127 ? lower : 0;
+}
+bool knownTargetKind (const String& target)
+{
+    const auto kind = target.upToFirstOccurrenceOf (":", false, false);
+    return target == "master" || kind == "mixer" || kind == "device" || kind == "track" || kind == "slot" || kind == "scene" || kind == "transport";
+}
 // A hosted plug-in's configured parameters, by the plug-in's own IDs, in the order shown.
 const juce::Identifier configureType { "HALFTRACKCONFIGURE" }, configuredType { "PARAMETER" };
 // A MIDI mapping of a hosted plug-in parameter keeps that parameter's own ID beside its index.
@@ -1875,11 +1900,30 @@ Result validateMidiMappings (const juce::ValueTree& state)
             const auto whole = [&] (const char* key, double low, double high) { return finiteProperty (m[key], low, high) && static_cast<double> (m[key]) == std::floor (static_cast<double> (m[key])); };
             const auto target = m["target"].toString();
             const auto kind = target.upToFirstOccurrenceOf (":", false, false);
-            if (! m.hasType (midiMappingType) || ! (kind == "mixer" || kind == "device" || target == "master") || ! whole ("channel", 1, 16) || ! whole ("controller", 0, 127)
+            if (! m.hasType (midiMappingType) || ! knownTargetKind (target) || ! whole ("channel", 1, 16) || ! whole ("controller", 0, 127)
                 || ! finiteProperty (m["minimum"], -1.0e6, 1.0e6) || ! finiteProperty (m["maximum"], -1.0e6, 1.0e6)
                 || ! targets.insert (target).second || ! controllers.insert (static_cast<int> (m["channel"]) * 128 + static_cast<int> (m["controller"])).second
                 || (m.hasProperty (parameterIdProperty) && (kind != "device" || m[parameterIdProperty].toString().isEmpty() || m[parameterIdProperty].toString().length() > 512)))
                 return Result::fail ("The project contains an invalid MIDI mapping.");
+        }
+    }
+    return Result::ok();
+}
+Result validateKeyMappings (const juce::ValueTree& state)
+{
+    int maps = 0;
+    for (const auto& map : state)
+    {
+        if (! map.hasType (keyMapType)) continue;
+        if (++maps > 1 || map.getNumChildren() > 4096) return Result::fail ("The project's key mappings are invalid.");
+        std::set<String> targets, keys;
+        for (const auto& m : map)
+        {
+            const auto key = m["key"].toString(), target = m["target"].toString();
+            if (! m.hasType (midiMappingType) || ! knownTargetKind (target) || key.length() != 1 || mappableKey (key[0]) != key[0]
+                || ! finiteProperty (m["minimum"], -1.0e6, 1.0e6) || ! finiteProperty (m["maximum"], -1.0e6, 1.0e6)
+                || ! targets.insert (target).second || ! keys.insert (key).second)
+                return Result::fail ("The project contains an invalid key mapping.");
         }
     }
     return Result::ok();
@@ -3440,7 +3484,7 @@ struct Session::Impl
         resetTapTempo();
         edit->editFileRetriever = [this] { return editLocation(); };
         grooveWatcher.watch (edit->state);
-        midiLearnTarget.clear();
+        midiLearnTarget.clear(); keyLearnTarget.clear(); buttonValues.clear();
         remote.attach (edit.get()); attachCapture();
         if (useDevices && ! remoteWatch.isTimerRunning()) { remoteWatch.tick = [this] { remote.attach (edit.get()); attachCapture(); reconcileMidiMappings(); }; remoteWatch.startTimer (1000); }
         flushStructuralUpdates();
@@ -3674,6 +3718,109 @@ struct Session::Impl
     } remoteRest;
     bool remoteGesture = false;
     bool applyingRemote = false; // While a mapped controller's value is applied.
+    // Key Map Mode's learn target, and each button-mapped controller's last value (rising past 63 presses).
+    String keyLearnTarget;
+    std::map<String, int> buttonValues;
+    int trackIndexOf (const String& id) const
+    {
+        const auto tracks = te::getAudioTracks (*edit);
+        for (int i = 0; i < tracks.size(); ++i) if (tracks[i]->itemID.toString() == id) return i;
+        return -1;
+    }
+    int sceneIndexOf (const String& id) const
+    {
+        for (auto* scene : edit->getSceneList().getScenes()) if (scene->state["halftrackSceneID"].toString() == id) return scene->getIndex();
+        return -1;
+    }
+    // Where a device is, as track and position in the snapshot's device list, or -1s. Read from the
+    // engine, as the snapshot asks this of its mappings.
+    std::pair<int, int> devicePosition (const String& pluginId) const
+    {
+        const int count = te::getAudioTracks (*edit).size();
+        for (int t = 0; t < count; ++t)
+        {
+            const auto list = plugins (t);
+            for (int p = 0; p < list.size(); ++p) if (list[p]->itemID.toString() == pluginId) return { t, p };
+        }
+        return { -1, -1 };
+    }
+    // Whether a button target names something that exists.
+    bool buttonExists (const String& target) const
+    {
+        const auto parts = juce::StringArray::fromTokens (target, ":", "");
+        if (parts[0] == "transport") return parts.size() == 2 && juce::StringArray { "play", "stop", "record", "loop", "metronome", "stopClips" }.contains (parts[1]);
+        if (parts[0] == "track") { const auto* t = track (parts[1]); return parts.size() == 3 && t != nullptr && ! isReturn (*t) && juce::StringArray { "mute", "solo", "arm", "stop" }.contains (parts[2]); }
+        if (parts[0] == "slot") { const auto* t = track (parts[1]); return parts.size() == 3 && t != nullptr && ! isReturn (*t) && sceneIndexOf (parts[2]) >= 0; }
+        if (parts[0] == "scene") return parts.size() == 2 && sceneIndexOf (parts[1]) >= 0;
+        if (parts[0] == "device") return parts.size() == 3 && parts[2] == "on" && devicePosition (parts[1]).first >= 0;
+        return false;
+    }
+    // Presses a mapped button as a click would.
+    Result pressButton (const String& target)
+    {
+        const auto parts = juce::StringArray::fromTokens (target, ":", "");
+        const auto snapshot = owner.snapshot();
+        if (parts[0] == "transport")
+        {
+            if (parts[1] == "play") return snapshot.playing ? Result::ok() : owner.play();
+            if (parts[1] == "stop") { owner.stop(); return Result::ok(); }
+            if (parts[1] == "record") { if (snapshot.recording) { owner.stop(); return Result::ok(); } return owner.record(); }
+            if (parts[1] == "loop") { owner.setLoop (! snapshot.looping, snapshot.loopStart, snapshot.loopEnd); return Result::ok(); }
+            if (parts[1] == "metronome") { auto metronome = snapshot.metronome; metronome.enabled = ! metronome.enabled; return owner.setMetronome (metronome); }
+            if (parts[1] == "stopClips") return owner.stopAllLauncherClips();
+        }
+        if (parts[0] == "track")
+        {
+            const int index = trackIndexOf (parts[1]);
+            if (index < 0) return Result::ok();
+            const auto& info = snapshot.tracks[(size_t) index];
+            if (parts[2] == "mute") return owner.setTrackMute (index, ! info.mute);
+            if (parts[2] == "solo") return owner.setTrackSolo (index, ! info.solo);
+            if (parts[2] == "arm") return owner.setTrackArmed (index, ! info.armed);
+            if (parts[2] == "stop") return owner.stopLauncherTrack (index);
+        }
+        if (parts[0] == "slot") { const int t = trackIndexOf (parts[1]), scene = sceneIndexOf (parts[2]); return t >= 0 && scene >= 0 ? owner.launchSlot (t, scene) : Result::ok(); }
+        if (parts[0] == "scene") { const int scene = sceneIndexOf (parts[1]); return scene >= 0 ? owner.launchScene (scene) : Result::ok(); }
+        if (parts[0] == "device")
+        {
+            const auto [t, p] = devicePosition (parts[1]);
+            return t >= 0 ? owner.setPluginEnabled (t, p, ! plugins (t)[p]->isEnabled()) : Result::ok();
+        }
+        return Result::ok();
+    }
+    // A mapped control's current value in its own units.
+    std::optional<float> targetValue (const String& target) const
+    {
+        const auto parts = juce::StringArray::fromTokens (target, ":", "");
+        if (target == "master") return edit->getMasterVolumePlugin()->getVolumeDb();
+        if (parts[0] == "mixer")
+            if (auto* t = track (parts[1])) if (auto* mixer = t->getVolumePlugin()) return parts[2] == "pan" ? mixer->getPan() : mixer->getVolumeDb();
+        if (parts[0] == "device")
+        {
+            if (auto* device = nativeDevice (parts[1])) return device->readSettings().values[(size_t) juce::jlimit (0, (int) device->readSettings().values.size() - 1, parts[2].getIntValue())];
+            if (auto* external = externalPlugin (parts[1]))
+                if (const auto parameters = externalParameters (*external); juce::isPositiveAndBelow (parts[2].getIntValue(), (int) parameters.size()))
+                    return parameters[(size_t) parts[2].getIntValue()]->getCurrentNormalisedValue();
+        }
+        return std::nullopt;
+    }
+    // Sets a mapped control to a value in its own units.
+    Result applyValue (const String& target, float value)
+    {
+        const auto parts = juce::StringArray::fromTokens (target, ":", "");
+        if (target == "master") return owner.setMasterGain (value);
+        if (parts[0] == "mixer")
+        {
+            const int index = trackIndexOf (parts[1]);
+            return index < 0 ? Result::ok() : parts[2] == "pan" ? owner.setTrackPan (index, value) : owner.setTrackGain (index, value);
+        }
+        if (externalPlugin (parts[1]) != nullptr) return owner.setPluginParameterValue (parts[1], parts[2].getIntValue(), value);
+        auto* device = nativeDevice (parts[1]);
+        if (device == nullptr) return Result::ok();
+        auto settings = device->readSettings();
+        settings.values[(size_t) parts[2].getIntValue()] = value;
+        return owner.setNativeEffectSettings (parts[1], settings);
+    }
     // The computer MIDI keyboard's input, made when the Session starts; whether keys play it; its held notes.
     std::shared_ptr<te::VirtualMidiInputDevice> computerKeyboard;
     bool computerKeys = false;
@@ -3792,8 +3939,11 @@ Session::Snapshot Session::snapshot() const
     s.previewing = impl->previewPlaying() ? impl->previewSource : File();
     s.previewVolumeDb = impl->previewVolumeDb;
     for (const auto& m : e.state.getChildWithName (midiMapType))
-        if (auto mapping = readMidiMapping (m); midiTargetRange (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
+        if (auto mapping = readMidiMapping (m); isMappableTarget (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
     s.midiLearnTarget = impl->midiLearnTarget;
+    for (const auto& m : e.state.getChildWithName (keyMapType))
+        if (auto mapping = readKeyMapping (m); isMappableTarget (mapping.target)) s.keyMappings.push_back (mapping);
+    s.keyLearnTarget = impl->keyLearnTarget;
     s.automationOverridden = ! impl->overriddenLanes().isEmpty();
     const auto quantisation = e.getLaunchQuantisation().type.get();
     s.launchQuantisation = quantisation == te::LaunchQType::none ? LaunchQuantisation::none
@@ -4030,6 +4180,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateGroovePool (state); result.failed()) return result;
     if (auto result = validateMidiMappings (state); result.failed()) return result;
     if (auto result = validateConfigurations (state); result.failed()) return result;
+    if (auto result = validateKeyMappings (state); result.failed()) return result;
     if (state.hasProperty (automationArmProperty) && ! (finiteProperty (state[automationArmProperty], 0, 1) && (state[automationArmProperty].toString().trim() == "0" || state[automationArmProperty].toString().trim() == "1")))
         return Result::fail ("The project's Automation Arm setting is invalid.");
     for (const auto& property : { punchInProperty, punchOutProperty })
@@ -8098,7 +8249,7 @@ std::optional<std::pair<float, float>> Session::midiTargetRange (const String& t
 }
 Result Session::setMidiLearnTarget (const String& target)
 {
-    if (target.isNotEmpty() && ! midiTargetRange (target)) return Result::fail ("That control cannot be mapped.");
+    if (target.isNotEmpty() && ! isMappableTarget (target)) return Result::fail ("That control cannot be mapped.");
     if (impl->midiLearnTarget == target) return Result::ok();
     impl->midiLearnTarget = target;
     sendChangeMessage(); return Result::ok();
@@ -8141,9 +8292,9 @@ Result Session::handleMidiControl (int channel, int controller, int value)
     auto map = impl->edit->state.getChildWithName (midiMapType);
     if (impl->midiLearnTarget.isNotEmpty())
     {
-        const auto range = midiTargetRange (impl->midiLearnTarget);
-        if (! range) { impl->midiLearnTarget.clear(); sendChangeMessage(); return Result::fail ("The control being mapped no longer exists."); }
-        const MidiMapping mapping { impl->midiLearnTarget, channel, controller, range->first, range->second };
+        if (! isMappableTarget (impl->midiLearnTarget)) { impl->midiLearnTarget.clear(); sendChangeMessage(); return Result::fail ("The control being mapped no longer exists."); }
+        const auto range = midiTargetRange (impl->midiLearnTarget).value_or (std::pair { 0.0f, 1.0f });
+        const MidiMapping mapping { impl->midiLearnTarget, channel, controller, range.first, range.second };
         for (const auto& m : map)
             if (readMidiMapping (m) == mapping) return Result::ok();
         impl->transaction ("MIDI mapping");
@@ -8163,6 +8314,14 @@ Result Session::handleMidiControl (int channel, int controller, int value)
     for (const auto& m : map)
         if (const auto candidate = readMidiMapping (m); candidate.channel == channel && candidate.controller == controller && impl->mappingCurrent (m)) mapping = candidate;
     if (! mapping) return Result::ok();
+    if (isButtonTarget (mapping->target))
+    {
+        // The button is pressed as the controller rises above 63.
+        auto& last = impl->buttonValues.try_emplace (mapping->target, -1).first->second;
+        const bool pressed = value > 63 && last <= 63;
+        last = value;
+        return pressed && impl->buttonExists (mapping->target) ? impl->pressButton (mapping->target) : Result::ok();
+    }
     const auto lane = impl->laneFor (mapping->target);
     if (! lane) return Result::ok();
     // The controller moves the fader or knob position between the mapping's ends.
@@ -8182,21 +8341,69 @@ Result Session::handleMidiControl (int channel, int controller, int value)
         impl->remoteRest.startTimer (100);
     }
     const juce::ScopedValueSetter<bool> applying (impl->applyingRemote, true);
-    const auto parts = juce::StringArray::fromTokens (mapping->target, ":", "");
-    if (mapping->target == "master") return setMasterGain (target);
-    if (parts[0] == "mixer")
+    return impl->applyValue (mapping->target, target);
+}
+bool Session::isButtonTarget (const String& target)
+{
+    const auto kind = target.upToFirstOccurrenceOf (":", false, false);
+    return kind == "track" || kind == "slot" || kind == "scene" || kind == "transport" || (kind == "device" && target.endsWith (":on"));
+}
+bool Session::isMappableTarget (const String& target) const
+{ return isButtonTarget (target) ? impl->buttonExists (target) : midiTargetRange (target).has_value(); }
+Result Session::setKeyLearnTarget (const String& target)
+{
+    if (target.isNotEmpty() && ! isMappableTarget (target)) return Result::fail ("That control cannot be mapped.");
+    if (impl->keyLearnTarget == target) return Result::ok();
+    impl->keyLearnTarget = target;
+    sendChangeMessage(); return Result::ok();
+}
+Result Session::removeKeyMapping (const String& target)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto map = impl->edit->state.getChildWithName (keyMapType);
+    for (const auto& m : map)
+        if (m["target"].toString() == target)
+        {
+            impl->transaction ("Remove key mapping");
+            map.removeChild (m, &impl->edit->getUndoManager());
+            impl->changed(); return Result::ok();
+        }
+    return Result::fail ("That control has no key mapping.");
+}
+Result Session::handleMappedKey (juce::juce_wchar typed, bool& used)
+{
+    used = false;
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    const auto key = mappableKey (typed);
+    if (key == 0) return Result::ok();
+    auto* undo = &impl->edit->getUndoManager();
+    auto map = impl->edit->state.getChildWithName (keyMapType);
+    if (impl->keyLearnTarget.isNotEmpty())
     {
-        const auto tracks = te::getAudioTracks (*impl->edit);
-        for (int i = 0; i < tracks.size(); ++i)
-            if (tracks[i]->itemID.toString() == parts[1]) return parts[2] == "pan" ? setTrackPan (i, target) : setTrackGain (i, target);
-        return Result::ok();
+        used = true;
+        if (! isMappableTarget (impl->keyLearnTarget)) { impl->keyLearnTarget.clear(); sendChangeMessage(); return Result::fail ("The control being mapped no longer exists."); }
+        const auto range = midiTargetRange (impl->keyLearnTarget).value_or (std::pair { 0.0f, 1.0f });
+        const KeyMapping mapping { impl->keyLearnTarget, key, range.first, range.second };
+        for (const auto& m : map)
+            if (readKeyMapping (m) == mapping) return Result::ok();
+        impl->transaction ("Key mapping");
+        map = impl->edit->state.getOrCreateChildWithName (keyMapType, undo);
+        // A key drives one target, and a target has one key.
+        for (int i = map.getNumChildren(); --i >= 0;)
+            if (const auto existing = readKeyMapping (map.getChild (i)); existing.target == mapping.target || existing.key == key) map.removeChild (i, undo);
+        map.appendChild (keyMappingTree (mapping), undo);
+        impl->changed(); return Result::ok();
     }
-    if (impl->externalPlugin (parts[1]) != nullptr) return setPluginParameterValue (parts[1], parts[2].getIntValue(), target);
-    auto* device = impl->nativeDevice (parts[1]);
-    if (device == nullptr) return Result::ok();
-    auto settings = device->readSettings();
-    settings.values[(size_t) parts[2].getIntValue()] = target;
-    return setNativeEffectSettings (parts[1], settings);
+    std::optional<KeyMapping> mapping;
+    for (const auto& m : map) if (const auto candidate = readKeyMapping (m); candidate.key == key) mapping = candidate;
+    if (! mapping || ! isMappableTarget (mapping->target)) return Result::ok();
+    used = true;
+    if (isButtonTarget (mapping->target)) return impl->pressButton (mapping->target);
+    // A key switches a control between its mapping's ends: to whichever it is further from.
+    const auto value = impl->targetValue (mapping->target);
+    if (! value) return Result::ok();
+    const bool nearerMaximum = std::abs (*value - mapping->maximum) < std::abs (*value - mapping->minimum);
+    return impl->applyValue (mapping->target, nearerMaximum ? mapping->minimum : mapping->maximum);
 }
 Result Session::previewFile (const File& file)
 {
