@@ -1,6 +1,8 @@
 #include "NativeEffects.h"
 #include "Racks.h"
 #include "Tuner.h"
+#include "Spectrum.h"
+#include <deque>
 #include <complex>
 #include <optional>
 #if HALFTRACK_TESTS_ENABLED
@@ -78,11 +80,18 @@ public:
             for (auto* label : { &tunerNote, &tunerDetail })
             { label->setJustificationType (juce::Justification::centred); label->setInterceptsMouseClicks (false, false); addAndMakeVisible (*label); }
         }
+        if (kind == Session::EffectKind::spectrum)
+        {
+            spectrumPeak.setName ("Spectrum peak"); spectrumPeak.setFont (juce::FontOptions (10.0f));
+            spectrumPeak.setColour (juce::Label::textColourId, juce::Colour (0xffbbbbbb));
+            spectrumPeak.setJustificationType (juce::Justification::topRight); spectrumPeak.setInterceptsMouseClicks (false, false);
+            addAndMakeVisible (spectrumPeak);
+        }
         const auto rows = static_cast<int> ((specs.size() + columns() - 1) / static_cast<size_t> (columns()));
         session.addChangeListener (this);
-        if (compact) { setSize (8 + compactColumns() * compactCellWidth + (kind == Session::EffectKind::tuner ? tunerWidth : 0), compactHeight); error.setVisible (false); }
+        if (compact) { setSize (8 + compactColumns() * compactCellWidth + displayWidth(), compactHeight); error.setVisible (false); }
         else setSize (kind == Session::EffectKind::equalizer ? 1000 : dense() ? 48 + columns() * 120 : 660,
-            kind == Session::EffectKind::equalizer ? 640 : std::max (400, 96 + rows * (dense() ? 112 : 145)));
+            kind == Session::EffectKind::equalizer ? 640 : std::max (400, 96 + rows * (dense() ? 112 : 145) + (kind == Session::EffectKind::spectrum ? 220 : 0)));
         synchronise(); startTimerHz (15);
     }
     ~NativeEffectEditor() override
@@ -91,6 +100,7 @@ public:
     {
         if (compact) g.fillAll (juce::Colour (0xff303030));
         if (kind == Session::EffectKind::tuner) paintTuner (g);
+        if (kind == Session::EffectKind::spectrum) paintSpectrum (g);
         if (compact) return;
         g.fillAll (juce::Colour (0xff2b2b2b));
         g.setColour (juce::Colour (0xffe49a58)); g.fillRect (24, 22, 5, 18);
@@ -140,9 +150,10 @@ public:
     void resized() override
     {
         const auto specs = effectParameters (kind);
+        if (kind == Session::EffectKind::spectrum) spectrumPeak.setBounds (displayArea().reduced (6, 4).removeFromTop (14));
         if (kind == Session::EffectKind::tuner)
         {
-            auto display = tunerArea();
+            auto display = displayArea();
             tunerNote.setBounds (display.removeFromTop (display.getHeight() * 2 / 5));
             tunerDetail.setBounds (display.removeFromBottom (display.getHeight() / 3));
         }
@@ -232,6 +243,7 @@ public:
             tunerNote.setColour (juce::Label::textColourId, ! reading ? juce::Colour (0xff8e8e8e) : inTune() ? juce::Colour (0xff48d17e) : juce::Colour (0xffed5249));
             tunerDetail.setColour (juce::Label::textColourId, juce::Colour (0xffbbbbbb));
         }
+        if (value && kind == Session::EffectKind::spectrum) updateSpectrum (*value);
         if (value)
         {
             const auto& v = value->values;
@@ -290,11 +302,17 @@ private:
     static constexpr int tunerWidth = 220;
     static constexpr double inTuneCents = 3;
     bool inTune() const noexcept { return reading && std::abs (reading->cents) <= inTuneCents; }
-    juce::Rectangle<int> tunerArea() const
-    { return compact ? juce::Rectangle<int> (8 + compactColumns() * compactCellWidth, 4, tunerWidth - 8, compactHeight - 8) : juce::Rectangle<int> (24, 220, getWidth() - 48, getHeight() - 260); }
+    // Analysis devices draw beside their controls inline, or below them in a window.
+    int displayWidth() const noexcept { return kind == Session::EffectKind::tuner ? tunerWidth : kind == Session::EffectKind::spectrum ? spectrumWidth : 0; }
+    juce::Rectangle<int> displayArea() const
+    {
+        if (compact) return { 8 + compactColumns() * compactCellWidth, 4, displayWidth() - 8, compactHeight - 8 };
+        if (kind == Session::EffectKind::spectrum) return { 24, getHeight() - 236, getWidth() - 48, 206 };
+        return { 24, 220, getWidth() - 48, getHeight() - 260 };
+    }
     void paintTuner (juce::Graphics& g) const
     {
-        const auto area = tunerArea().toFloat();
+        const auto area = displayArea().toFloat();
         g.setColour (juce::Colour (0xff242424)); g.fillRoundedRectangle (area, 4);
         const auto meter = area.withTrimmedTop (area.getHeight() * 2 / 5).withTrimmedBottom (area.getHeight() / 5).reduced (14, 4);
         const auto x = [&] (double cents) { return meter.getX() + (float) ((std::clamp (cents, -50.0, 50.0) + 50) / 100) * meter.getWidth(); };
@@ -308,6 +326,110 @@ private:
             g.setColour (inTune() ? juce::Colour (0xff48d17e) : juce::Colour (0xffed5249));
             g.fillEllipse ((float) x (reading->cents) - radius + 2, meter.getCentreY() - radius + 2, radius * 2 - 4, radius * 2 - 4);
         }
+    }
+    // Spectrum: the latest blocks averaged in power, the accumulated maximum, and the axis scales.
+    static constexpr int spectrumWidth = 340;
+    std::deque<std::vector<float>> spectrumHistory;
+    std::vector<float> spectrumAverage, spectrumMaximum;
+    double spectrumBinHz = 0;
+    bool wasPlaying = false;
+    int refreshMs = 0;
+    void updateSpectrum (const Session::EffectSettings& value)
+    {
+        const auto& v = value.values;
+        if (const int ms = (int) v[2]; ms != refreshMs) { refreshMs = ms; startTimer (ms); }
+        // The maximum holds until playback restarts.
+        const bool playing = session.snapshot().playing;
+        if (playing && ! wasPlaying) spectrumMaximum.clear();
+        wasPlaying = playing;
+        if (const auto reading = session.spectrum (pluginId))
+        {
+            if (reading->decibels.size() != spectrumAverage.size()) { spectrumHistory.clear(); spectrumMaximum.clear(); }
+            spectrumBinHz = reading->binHz;
+            spectrumHistory.push_back (reading->decibels);
+            while ((int) spectrumHistory.size() > (int) v[3]) spectrumHistory.pop_front();
+            spectrumAverage.assign (reading->decibels.size(), 0.0f);
+            for (size_t k = 0; k < spectrumAverage.size(); ++k)
+            {
+                double power = 0;
+                for (const auto& block : spectrumHistory) power += std::pow (10.0, block[k] / 10.0);
+                spectrumAverage[k] = (float) (10 * std::log10 (std::max (1e-20, power / (double) spectrumHistory.size())));
+            }
+            if (spectrumMaximum.size() != spectrumAverage.size()) spectrumMaximum = spectrumAverage;
+            for (size_t k = 0; k < spectrumAverage.size(); ++k) spectrumMaximum[k] = std::max (spectrumMaximum[k], spectrumAverage[k]);
+            size_t loudest = 1;
+            for (size_t k = 1; k < spectrumAverage.size(); ++k) if (spectrumAverage[k] > spectrumAverage[loudest]) loudest = k;
+            spectrumPeak.setText (juce::String (juce::roundToInt (loudest * spectrumBinHz)) + " Hz  " + juce::String (spectrumAverage[loudest], 1) + " dB", juce::dontSendNotification);
+        }
+        else spectrumPeak.setText ({}, juce::dontSendNotification);
+    }
+    void mouseUp (const juce::MouseEvent& event) override
+    {
+        // Clicking the display resets the maximum.
+        if (kind == Session::EffectKind::spectrum && displayArea().contains (event.getEventRelativeTo (this).getPosition())) { spectrumMaximum = spectrumAverage; repaint(); }
+    }
+    void paintSpectrum (juce::Graphics& g) const
+    {
+        const auto area = displayArea().toFloat();
+        g.setColour (juce::Colour (0xff242424)); g.fillRoundedRectangle (area, 4);
+        const auto value = settings(); if (! value) return;
+        const auto& v = value->values;
+        const auto plot = area.reduced (6, 18);
+        const double nyquist = spectrumBinHz * std::max<size_t> (1, spectrumAverage.size() - 1);
+        const int scale = (int) v[6];
+        const auto xOf = [&] (double hz)
+        {
+            if (nyquist <= 0) return plot.getX();
+            const double t = scale == 0 ? hz / nyquist : std::log10 (std::max (hz, 20.0) / 20) / std::log10 (std::max (nyquist, 40.0) / 20);
+            return plot.getX() + (float) std::clamp (t, 0.0, 1.0) * plot.getWidth();
+        };
+        double top = v[9], bottom = v[8];
+        if (v[7] != 0 && ! spectrumAverage.empty())
+        {
+            // Auto: the axis follows the loudest bin, 96 dB deep.
+            const auto loudest = *std::max_element (spectrumAverage.begin() + 1, spectrumAverage.end());
+            top = std::ceil (loudest / 6) * 6 + 6; bottom = top - 96;
+        }
+        if (top <= bottom) top = bottom + 1;
+        const auto yOf = [&] (double db) { return plot.getBottom() - (float) std::clamp ((db - bottom) / (top - bottom), 0.0, 1.0) * plot.getHeight(); };
+        g.setColour (juce::Colour (0xff3a3a3a)); g.setFont (juce::FontOptions (9.0f));
+        for (const double hz : { 100.0, 1000.0, 10000.0 })
+            if (hz < nyquist)
+            {
+                g.drawVerticalLine ((int) xOf (hz), plot.getY(), plot.getBottom());
+                g.setColour (juce::Colour (0xff8e8e8e));
+                g.drawText (scale == 2 ? tuner::noteName ((int) std::lround (12 * std::log2 (hz / 440) + 69)) : hz >= 1000 ? juce::String (hz / 1000, 0) + "k" : juce::String (hz, 0),
+                            (int) xOf (hz) - 20, (int) plot.getBottom() + 2, 40, 12, juce::Justification::centred);
+                g.setColour (juce::Colour (0xff3a3a3a));
+            }
+        for (double db = std::ceil (bottom / 24) * 24; db <= top; db += 24) g.drawHorizontalLine ((int) yOf (db), plot.getX(), plot.getRight());
+        if (spectrumAverage.size() < 3) return;
+        const auto curve = [&] (const std::vector<float>& bins, juce::Colour colour, bool fill)
+        {
+            g.setColour (colour);
+            if (v[4] != 0 || fill)
+            {
+                // Bins: each pixel column shows the loudest bin falling in it.
+                std::vector<float> column ((size_t) std::max (1, (int) plot.getWidth()), (float) bottom);
+                for (size_t k = 1; k < bins.size(); ++k)
+                {
+                    const auto x = (int) (xOf (k * spectrumBinHz) - plot.getX());
+                    if (x >= 0 && x < (int) column.size()) column[(size_t) x] = std::max (column[(size_t) x], bins[k]);
+                }
+                for (size_t x = 0; x < column.size(); ++x)
+                    if (column[x] > bottom) g.fillRect (plot.getX() + x, yOf (column[x]), 1.0f, plot.getBottom() - yOf (column[x]));
+                return;
+            }
+            juce::Path path;
+            for (size_t k = 1; k < bins.size(); ++k)
+            {
+                const auto point = juce::Point<float> (xOf (k * spectrumBinHz), yOf (bins[k]));
+                if (k == 1) path.startNewSubPath (point); else path.lineTo (point);
+            }
+            g.strokePath (path, juce::PathStrokeType (1.2f));
+        };
+        if (v[5] != 0 && spectrumMaximum.size() == spectrumAverage.size()) curve (spectrumMaximum, juce::Colour (0xff6b6b6b), false);
+        curve (spectrumAverage, juce::Colour (0xffe49a58), false);
     }
     // Instruments and other large devices use a compact eight-column grid.
     bool dense() const noexcept { return effectParameters (kind).size() > 16; }
@@ -342,7 +464,7 @@ private:
     std::array<juce::Slider, maximumControls> sliders;
     std::array<juce::ComboBox, maximumControls> choices;
     std::array<juce::Label, maximumControls> labels;
-    juce::Label error, tunerNote, tunerDetail;
+    juce::Label error, tunerNote, tunerDetail, spectrumPeak;
     std::optional<Session::TunerReading> reading;
     bool dragging = false;
 };

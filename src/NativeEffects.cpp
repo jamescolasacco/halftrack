@@ -140,6 +140,17 @@ constexpr EffectParameter channelEqFields[] {
 constexpr EffectParameter tunerFields[] {
     { "referenceHz", "Reference", 410, 480, 440, 0, " Hz" },
     { "showHz", "Show", 0, 1, 0, 0, "", "Cents|Hz" } };
+constexpr EffectParameter spectrumFields[] {
+    { "block", "Block", 0, 4, 2, 0, "", "1024|2048|4096|8192|16384" },
+    { "channel", "Channel", 0, 2, 2, 0, "", "L|R|L+R" },
+    { "refreshMs", "Refresh", 10, 500, 60, 0, " ms", nullptr, true },
+    { "average", "Avg", 1, 100, 1, 0, "", nullptr, true },
+    { "graph", "Graph", 0, 1, 0, 0, "", "Line|Bins" },
+    { "maximum", "Max", 0, 1, 0, 0, "", "Off|On" },
+    { "scaleX", "Scale X", 0, 2, 1, 0, "", "Lin|Log|ST" },
+    { "range", "Range", 0, 1, 1, 0, "", "Range|Auto" },
+    { "minimumDb", "Min", -120, -1, -80, 0, " dB" },
+    { "maximumDb", "Max level", -100, 12, 0, 0, " dB" } };
 constexpr EffectParameter glueFields[] {
     { "thresholdDb", "Threshold", -40, 0, -10, 0, " dB" },
     { "ratio", "Ratio", 0, 2, 0, 0, "", "2:1|4:1|10:1" },
@@ -314,7 +325,7 @@ const char* effectName (Kind kind) noexcept
         case Kind::sampler: return "Sampler"; case Kind::drumSampler: return "Drum Sampler";
         case Kind::instrumentRack: return "Instrument Rack"; case Kind::audioEffectRack: return "Audio Effect Rack";
         case Kind::midiEffectRack: return "MIDI Effect Rack"; case Kind::drumRack: return "Drum Rack";
-        case Kind::channelEq: return "Channel EQ"; case Kind::tuner: return "Tuner"; }
+        case Kind::channelEq: return "Channel EQ"; case Kind::tuner: return "Tuner"; case Kind::spectrum: return "Spectrum"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
@@ -329,7 +340,7 @@ std::span<const EffectParameter> effectParameters (Kind kind) noexcept
         case Kind::polySynth: return polySynthFields; case Kind::fmSynth: return fmSynthFields; case Kind::drumKit: return drumKitFields; case Kind::wavetableSynth: return wavetableFields;
         case Kind::sampler: return samplerFields; case Kind::drumSampler: return drumSamplerFields;
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return rackFields;
-        case Kind::channelEq: return channelEqFields; case Kind::tuner: return tunerFields; }
+        case Kind::channelEq: return channelEqFields; case Kind::tuner: return tunerFields; case Kind::spectrum: return spectrumFields; }
     return {};
 }
 const char* effectCategory (Kind kind) noexcept
@@ -344,7 +355,7 @@ const char* effectCategory (Kind kind) noexcept
         case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return "MIDI Effects";
         case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return "Instruments";
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return "Racks";
-        case Kind::tuner: return "Utilities";
+        case Kind::tuner: case Kind::spectrum: return "Utilities";
     }
     return "Effects";
 }
@@ -358,7 +369,7 @@ bool effectIsInstrument (Kind kind) noexcept
         || kind == Kind::instrumentRack || kind == Kind::drumRack;
 }
 bool effectIsRack (Kind kind) noexcept { return racks::isRack (kind); }
-bool effectIsAnalysis (Kind kind) noexcept { return kind == Kind::tuner; }
+bool effectIsAnalysis (Kind kind) noexcept { return kind == Kind::tuner || kind == Kind::spectrum; }
 double effectLatencySeconds (Kind kind, double rate) noexcept
 { return kind == Kind::limiter && rate > 0 ? std::ceil (rate * .001) / rate : 0.0; }
 double effectTailSeconds (Kind kind, double rate) noexcept
@@ -374,7 +385,7 @@ double effectTailSeconds (Kind kind, double rate) noexcept
         case Kind::chorus: case Kind::flanger: return 3.0;
         case Kind::phaser: return 1.0;
         case Kind::eqThree: case Kind::frequencyShifter: case Kind::channelEq: return .1;
-        case Kind::compressor: case Kind::gate: case Kind::autoPan: case Kind::glueCompressor: case Kind::tuner: return 0.0;
+        case Kind::compressor: case Kind::gate: case Kind::autoPan: case Kind::glueCompressor: case Kind::tuner: case Kind::spectrum: return 0.0;
         case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: return 0.0;
         case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return 0.0;
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return 0.0; // Racks report their chains.
@@ -745,7 +756,7 @@ NativeEffectPlugin::NativeEffectPlugin (tracktion::PluginCreationInfo info)
     if (kind == Kind::wavetableSynth) instruments::prepareWavetables();
     for (int slot = 0; slot < sampleSlotCount (kind); ++slot) loadSample (slot);
     for (const auto& field : effectParameters (kind)) controls.push_back (addParam (field.key, field.label, { 0.0f, 1.0f }));
-    if (effectIsAnalysis (kind)) analysis = std::make_unique<std::array<std::atomic<float>, analysisCapacity>>();
+    if (effectIsAnalysis (kind)) analysis = std::make_unique<std::array<std::array<std::atomic<float>, analysisCapacity>, 2>>();
     audioSettings = readSettings();
     if (effectIsRack (kind)) { rack = std::make_unique<racks::RackEngine> (*this); rack->structureChanged(); }
     publish(); refreshAutomation(); startTimerHz (30);
@@ -1090,18 +1101,27 @@ void NativeEffectPlugin::applyToBuffer (const tracktion::PluginRenderContext& co
     {
         const auto written = analysisWritten.load (std::memory_order_relaxed);
         for (int n = 0; n < context.bufferNumSamples; ++n)
-            (*analysis)[(size_t) ((written + (uint64_t) n) % analysisCapacity)].store (right ? .5f * (left[n] + right[n]) : left[n], std::memory_order_relaxed);
+        {
+            const auto at = (size_t) ((written + (uint64_t) n) % analysisCapacity);
+            (*analysis)[0][at].store (left[n], std::memory_order_relaxed);
+            (*analysis)[1][at].store (right ? right[n] : left[n], std::memory_order_relaxed);
+        }
         analysisWritten.store (written + (uint64_t) context.bufferNumSamples, std::memory_order_release);
     }
 }
-bool NativeEffectPlugin::latestInput (std::vector<float>& destination, int frames, double& rate) const
+bool NativeEffectPlugin::latestInput (std::vector<float>& destination, int frames, double& rate, int channel) const
 {
-    if (! analysis || frames <= 0 || frames > analysisCapacity / 2) return false;
+    if (! analysis || frames <= 0 || frames > analysisCapacity / 2 || channel < 0 || channel > 2) return false;
     const auto end = analysisWritten.load (std::memory_order_acquire);
     rate = analysisRate.load (std::memory_order_acquire);
     if (end < (uint64_t) frames || ! (rate > 0)) return false;
     destination.resize ((size_t) frames);
-    for (int n = 0; n < frames; ++n) destination[(size_t) n] = (*analysis)[(size_t) ((end - (uint64_t) frames + (uint64_t) n) % analysisCapacity)].load (std::memory_order_relaxed);
+    for (int n = 0; n < frames; ++n)
+    {
+        const auto at = (size_t) ((end - (uint64_t) frames + (uint64_t) n) % analysisCapacity);
+        const auto l = (*analysis)[0][at].load (std::memory_order_relaxed), r = (*analysis)[1][at].load (std::memory_order_relaxed);
+        destination[(size_t) n] = channel == 0 ? l : channel == 1 ? r : .5f * (l + r);
+    }
     // The writer must not have lapped the frames copied.
     return analysisWritten.load (std::memory_order_acquire) - end <= (uint64_t) (analysisCapacity - frames);
 }

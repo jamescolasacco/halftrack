@@ -323,3 +323,11 @@ These are simplest-default choices pending reference measurement:
 
 Halftrack records the whole pass and trims new takes to the brace when recording stops. Recording starts where playback starts, with no pre-roll tied to the punch point. Existing clips are never trimmed. These are simplest-default choices pending reference measurement.
 
+### Spectrum defaults
+
+The manual gives no numbers, so these are simplest-default choices pending reference measurement:
+
+- **Defaults.** Block 4,096, L+R, a 60 ms refresh, Avg 1, a line graph, Max off, a log scale and Auto range.
+- **Ranges.** Refresh runs 10–500 ms. Min runs −120 to −1 dB and Max level −100 to +12 dB.
+- **Auto range.** The axis spans 96 dB below the loudest bin rounded up to 6 dB, plus 6 dB of headroom.
+

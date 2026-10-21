@@ -7,6 +7,7 @@
 #include "NoteTools.h"
 #include "Grooves.h"
 #include "Tuner.h"
+#include "Spectrum.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 #include <array>
@@ -3956,6 +3957,16 @@ std::optional<Session::TunerReading> Session::tunerReading (const String& plugin
     std::vector<float> frames; double rate = 0;
     if (! device->latestInput (frames, tuner::analysisFrames, rate)) return std::nullopt;
     return tuner::detect (frames.data(), (int) frames.size(), rate, device->readSettings().values[0]);
+}
+std::optional<Session::SpectrumReading> Session::spectrum (const String& pluginId) const
+{
+    auto* device = impl->nativeDevice (pluginId);
+    if (device == nullptr || device->getKind() != EffectKind::spectrum) return std::nullopt;
+    const auto settings = device->readSettings();
+    const int block = spectrum::blockSizes[(size_t) settings.values[0]];
+    std::vector<float> frames; double rate = 0;
+    if (! device->latestInput (frames, block, rate, (int) settings.values[1])) return std::nullopt;
+    return SpectrumReading { rate / block, spectrum::analyse (frames.data(), block) };
 }
 Result Session::addGroove (const GrooveInfo& groove, String& grooveId)
 {

@@ -168,10 +168,11 @@ public:
     // Audio thread, from an enclosing rack: an instrument fades its voices out from this sample
     // of the next block, as a Drum Rack choke group does.
     void chokeAt (int sample) noexcept;
-    // Message thread, for analysis devices: the latest `frames` input frames as mono, and the rate they
-    // were processed at. False before the device has processed audio or when the copy was overtaken.
-    bool latestInput (std::vector<float>& destination, int frames, double& rate) const;
-    static constexpr int analysisCapacity = 16384;
+    // Message thread, for analysis devices: the latest `frames` input frames of one channel (0 left,
+    // 1 right, 2 their mean), and the rate they were processed at. False before the device has
+    // processed audio or when the copy was overtaken.
+    bool latestInput (std::vector<float>& destination, int frames, double& rate, int channel = 2) const;
+    static constexpr int analysisCapacity = 32768;
 private:
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
@@ -205,7 +206,7 @@ private:
     bool pending = false, writing = false;
     std::unique_ptr<racks::RackEngine> rack;
     // Analysis devices: a ring the audio thread writes and the message thread copies.
-    std::unique_ptr<std::array<std::atomic<float>, analysisCapacity>> analysis;
+    std::unique_ptr<std::array<std::array<std::atomic<float>, analysisCapacity>, 2>> analysis;
     std::atomic<uint64_t> analysisWritten { 0 };
     std::atomic<double> analysisRate { 0 };
     static_assert (std::atomic<float>::is_always_lock_free && std::atomic<uint64_t>::is_always_lock_free && std::atomic<double>::is_always_lock_free);

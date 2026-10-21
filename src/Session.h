@@ -82,10 +82,10 @@ public:
         // Effect Rack is a MIDI effect; an Audio Effect Rack is an audio device.
         instrumentRack, audioEffectRack, midiEffectRack, drumRack,
         // Devices added after the racks.
-        channelEq, tuner };
+        channelEq, tuner, spectrum };
     // Every persisted kind, racks included. Devices added after the racks follow them, so loop over
     // all kinds and skip racks rather than assuming plain devices come first.
-    static constexpr int deviceKindCount = 36;
+    static constexpr int deviceKindCount = 37;
     static constexpr bool isRackKind (EffectKind kind) noexcept
     { return kind == EffectKind::instrumentRack || kind == EffectKind::audioEffectRack || kind == EffectKind::midiEffectRack || kind == EffectKind::drumRack; }
     static constexpr int drumPadCount = 16; // Drum Sampler pads play notes 36 (C1) to 51.
@@ -601,6 +601,10 @@ public:
     // or an id that is not a Tuner that has processed audio.
     struct TunerReading { double frequency = 0; int note = 69; double cents = 0; };
     std::optional<TunerReading> tunerReading (const juce::String& pluginId) const;
+    // A Spectrum device's latest block, at its Block size and Channel: dBFS magnitudes of bins 0 to
+    // block/2, binHz apart. Nothing for an id that is not a Spectrum that has processed audio.
+    struct SpectrumReading { double binHz = 0; std::vector<float> decibels; };
+    std::optional<SpectrumReading> spectrum (const juce::String& pluginId) const;
     // Device presets: a native device's or Utility's settings in a .halftrackpreset file. Racks and
     // sample choices are not included. Saving refuses to replace a file unless asked to.
     static constexpr const char* presetExtension = ".halftrackpreset";

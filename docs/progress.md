@@ -1074,3 +1074,14 @@ Root change. It touches:
 
 Arrangement recording can now be limited to the loop brace with separate Punch-In and Punch-Out switches, as in Live. See [the contract](research/punch-contract.md).
 
+## Spectrum — 2026-10-21
+
+Engine and UI change. It touches:
+
+- `src/Spectrum.*` (new) and the stereo analysis tap in `src/NativeEffects.*`;
+- `Session::spectrum` in `src/Session.*`;
+- the display in `src/NativeEffectEditor.cpp`;
+- `tests/SpectrumTests.cpp`, the suite registration and documentation.
+
+The Spectrum is a Utilities analyser with Live's documented controls. See [the contract](research/native-effects-contract.md#spectrum-2026-10-21).
+

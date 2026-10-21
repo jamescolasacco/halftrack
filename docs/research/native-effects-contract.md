@@ -134,3 +134,31 @@ The editor shows the note name, cents or Hz, and the Classic view's target mode.
 
 Strobe mode, the Histogram view, note-spelling choices and measured comparison with the reference are missing.
 
+## Spectrum (2026-10-21)
+
+The Spectrum follows the manual's description in the [audio effect reference](https://www.ableton.com/en/live-manual/12/live-audio-effect-reference/), consulted 2026-10-20. It is an analyser that does not change the signal. Its controls follow the manual:
+
+- **Block:** 1,024 to 16,384 samples per analysis.
+- **Channel:** L, R or L+R.
+- **Refresh:** 10–500 ms.
+- **Avg:** 1–100 blocks averaged per display update.
+- **Graph:** a line or bins.
+- **Max:** an accumulated maximum, reset by clicking the display and when playback restarts.
+- **Scale X:** Lin, Log or ST, where ST is logarithmic with note names.
+- **Range/Auto:** Min and Max levels, or a 96 dB axis that follows the loudest bin.
+
+The manual gives no numbers for these ranges, so Halftrack's are recorded as defaults.
+
+The device shares the Tuner's analysis tap. The ring now keeps both channels and holds 32,768 frames, so a 16,384 block fits. `Session::spectrum(pluginId)` copies the newest block of the chosen channel and runs `spectrum::analyse` in `src/Spectrum.*`. The analysis is a periodic Hann window and JUCE's FFT, scaled so that a full-scale sine centred on a bin reads 0 dBFS. The editor averages the readings in power and draws the display; it also names the loudest bin, which the reference shows on hover.
+
+`tests/SpectrumTests.cpp` (`spectrum-acceptance`) checks:
+
+- **Exact levels.** Bin-centred tones read exactly: 0 dB at full scale, −20 dB at a tenth, and two resolved tones at −6.02 and −12.04 dB, at every block size.
+- **Rejection.** Other block sizes read nothing, and silence reads the floor.
+- **Pass-through.** The device renders bit-identically to its absence.
+- **Channels.** A stereo file reads per channel at 6.02 dB above the L+R mean, with the other tone over 40 dB down.
+- **Block sizes.** The tone falls on bin 30 at 1,024 and bin 480 at 16,384.
+- **Editor.** The inline editor names the 586 Hz peak.
+
+Moving the display between the device chain and the main window, the hover readout and measured comparison with the reference are missing.
+
