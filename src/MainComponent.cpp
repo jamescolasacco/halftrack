@@ -3355,25 +3355,48 @@ private:
             g.drawText (line2, details.removeFromTop (18), juce::Justification::centredLeft);
             g.drawText (clip.file.getFileName(), details.removeFromTop (18), juce::Justification::centredLeft, true);
             g.drawText ("Seg. BPM", sampleBox().getX() + 6, bpm.getY(), 52, bpm.getHeight(), juce::Justification::centredLeft);
-            // Waveform of the visible source span, with beat lines when warped.
+            // Waveform of the visible source span, with beat lines when warped. A warped clip is drawn
+            // in its beats, each warp segment over its own beats.
             const auto wave = waveBounds();
             g.setColour (juce::Colour (0xff1c1c1c)); g.fillRect (wave);
-            // A warped clip spans its beats at the source's own tempo.
-            const auto clipBeats = owner.session.beatsAt (clip.start + clip.length) - owner.session.beatsAt (clip.start);
-            const auto sourceSpan = clip.warp.mode == Session::WarpMode::off ? clip.length : clipBeats * 60.0 / clip.warp.bpm;
-            const auto offset = clip.warp.mode == Session::WarpMode::off ? clip.sourceOffset : clip.sourceOffset * owner.state.tempo / clip.warp.bpm;
-            if (thumbnail.getTotalLength() > 0 && sourceSpan > 0)
+            const auto [firstBeat, beats] = visibleBeats();
+            if (thumbnail.getTotalLength() > 0 && beats > 0)
             {
                 g.setColour (owner.selectedTrackColour().withAlpha (0.85f));
-                thumbnail.drawChannels (g, wave.reduced (0, 6), offset, offset + sourceSpan, 0.95f);
-            }
-            if (clip.warp.mode != Session::WarpMode::off && sourceSpan > 0)
-            {
-                const auto beats = sourceSpan * clip.warp.bpm / 60.0;
-                for (int beat = 0; beat <= (int) beats; ++beat)
+                if (clip.warp.mode == Session::WarpMode::off)
+                    thumbnail.drawChannels (g, wave.reduced (0, 6), clip.sourceOffset, clip.sourceOffset + clip.length, 0.95f);
+                else
                 {
-                    const auto x = wave.getX() + (float) (beat / beats) * wave.getWidth();
+                    const auto map = warpMap();
+                    for (size_t i = 1; i < map.size(); ++i)
+                    {
+                        const auto from = std::max (map[i - 1].beat, firstBeat), to = std::min (map[i].beat, firstBeat + beats);
+                        if (to <= from) continue;
+                        const auto x0 = beatX (from), x1 = beatX (to);
+                        if (x1 - x0 < .5f) continue;
+                        const auto area = juce::Rectangle<float> (x0, (float) wave.getY() + 6, x1 - x0, (float) wave.getHeight() - 12);
+                        thumbnail.drawChannels (g, area.toNearestInt(), sourceAt (from), sourceAt (to), 0.95f);
+                    }
+                }
+            }
+            if (clip.warp.mode != Session::WarpMode::off && beats > 0)
+            {
+                for (int beat = (int) std::ceil (firstBeat); beat <= (int) (firstBeat + beats); ++beat)
+                {
+                    const auto x = beatX (beat);
                     g.setColour (beat % 4 == 0 ? juce::Colour (0x66ffffff) : juce::Colour (0x22ffffff)); g.drawVerticalLine ((int) x, (float) wave.getY(), (float) wave.getBottom());
+                }
+                // Warp markers: yellow handles above lines through the waveform.
+                for (size_t i = 0; i < clip.warpMarkers.size(); ++i)
+                {
+                    const auto& m = clip.warpMarkers[i];
+                    if (i == 0 && m.beat == 0 && m.sourceSeconds == 0) continue; // The fixed start.
+                    const auto x = beatX (m.beat);
+                    if (x < wave.getX() - 4 || x > wave.getRight() + 4) continue;
+                    g.setColour (juce::Colour ((int) i == draggedMarker ? 0xffffffff : 0xffffcf4a));
+                    g.drawVerticalLine ((int) x, (float) wave.getY(), (float) wave.getBottom());
+                    juce::Path handle; handle.addTriangle (x - 5, (float) wave.getY(), x + 5, (float) wave.getY(), x, (float) wave.getY() + 8);
+                    g.fillPath (handle);
                 }
             }
             g.setColour (line); g.drawRect (wave);
@@ -3399,6 +3422,106 @@ private:
             owner.report (owner.session.setAudioClipWarp (clip.id, { warpMode, tempo })); owner.refresh(); sync();
         }
         void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
+    public:
+        // The beats of the source the waveform shows, from the clip's offset over its length.
+        std::pair<double, double> visibleBeats() const
+        {
+            if (clip.warp.mode == Session::WarpMode::off) return { 0.0, clip.length };
+            const auto clipBeats = owner.session.beatsAt (clip.start + clip.length) - owner.session.beatsAt (clip.start);
+            return { clip.sourceOffset * owner.state.tempo / 60.0, clipBeats };
+        }
+        float beatX (double beat) const
+        {
+            const auto wave = waveBounds(); const auto [first, beats] = visibleBeats();
+            return wave.getX() + (float) ((beat - first) / std::max (1e-9, beats)) * wave.getWidth();
+        }
+        double xBeat (float x) const
+        {
+            const auto wave = waveBounds(); const auto [first, beats] = visibleBeats();
+            return first + (x - wave.getX()) / std::max (1.0f, (float) wave.getWidth()) * beats;
+        }
+        // The warp map in source seconds and beats: the fixed start, the clip's markers and, after the
+        // last, the clip's tempo to the source's end.
+        std::vector<Session::WarpMarker> warpMap() const
+        {
+            auto map = clip.warpMarkers;
+            if (map.empty() || map.front().sourceSeconds > 0 || map.front().beat > 0) map.insert (map.begin(), { 0, 0 });
+            if (map.back().sourceSeconds < clip.sourceLength)
+                map.push_back ({ clip.sourceLength, map.back().beat + (clip.sourceLength - map.back().sourceSeconds) * clip.warp.bpm / 60 });
+            return map;
+        }
+        double sourceAt (double beat) const
+        {
+            const auto map = warpMap();
+            if (beat <= 0) return beat * 60 / clip.warp.bpm;
+            for (size_t i = 1; i < map.size(); ++i)
+                if (beat <= map[i].beat || i + 1 == map.size())
+                {
+                    const auto span = map[i].beat - map[i - 1].beat;
+                    return map[i - 1].sourceSeconds + (span > 0 ? (beat - map[i - 1].beat) / span : 0) * (map[i].sourceSeconds - map[i - 1].sourceSeconds);
+                }
+            return beat * 60 / clip.warp.bpm;
+        }
+        // The movable marker within a few pixels of x, or -1.
+        int markerAt (float x) const
+        {
+            for (size_t i = 0; i < clip.warpMarkers.size(); ++i)
+                if (! (i == 0 && clip.warpMarkers[i].beat == 0) && std::abs (beatX (clip.warpMarkers[i].beat) - x) <= 5) return (int) i;
+            return -1;
+        }
+        // Double-clicking the warped waveform adds a marker where it is, or removes the one there.
+        void mouseDoubleClick (const juce::MouseEvent& e) override
+        {
+            if (clip.warp.mode == Session::WarpMode::off || ! waveBounds().contains (e.getPosition())) return;
+            auto markers = clip.warpMarkers;
+            if (const auto hit = markerAt (e.position.x); hit >= 0) markers.erase (markers.begin() + hit);
+            else
+            {
+                const auto beat = xBeat (e.position.x);
+                if (beat <= 0) return;
+                Session::WarpMarker added { sourceAt (beat), beat };
+                if (added.sourceSeconds <= 0 || added.sourceSeconds >= clip.sourceLength) return;
+                markers.insert (std::lower_bound (markers.begin(), markers.end(), added, [] (const auto& a, const auto& b) { return a.beat < b.beat; }), added);
+            }
+            owner.report (owner.session.setAudioClipWarpMarkers (clip.id, markers)); owner.refresh(); sync();
+        }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            draggedMarker = clip.warp.mode != Session::WarpMode::off && waveBounds().contains (e.getPosition()) ? markerAt (e.position.x) : -1;
+            if (draggedMarker >= 0) { owner.session.beginEditGesture ("Move warp marker"); gesture = true; repaint(); }
+        }
+        // The snapping grid follows the zoom, as the reference's does: the coarsest power-of-two
+        // fraction of a beat at least 12 pixels wide.
+        double snapGrid() const
+        {
+            const auto [first, beats] = visibleBeats();
+            const double perBeat = waveBounds().getWidth() / std::max (1e-9, beats);
+            double grid = 1;
+            while (grid * perBeat < 12 && grid < 64) grid *= 2;
+            while (grid / 2 * perBeat >= 12 && grid > 1.0 / 1024) grid /= 2;
+            return grid;
+        }
+        // Dragging a marker moves its beat between its neighbours, snapped to the grid unless Alt is held.
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (draggedMarker < 0 || draggedMarker >= (int) clip.warpMarkers.size()) return;
+            auto markers = clip.warpMarkers;
+            auto beat = xBeat (e.position.x);
+            if (! e.mods.isAltDown()) { const auto grid = snapGrid(); beat = std::round (beat / grid) * grid; }
+            const auto gap = std::min (1.0 / 64, snapGrid() / 4);
+            const auto low = draggedMarker > 0 ? markers[(size_t) draggedMarker - 1].beat + gap : gap;
+            const auto high = draggedMarker + 1 < (int) markers.size() ? markers[(size_t) draggedMarker + 1].beat - gap : 1e6;
+            markers[(size_t) draggedMarker].beat = std::clamp (beat, low, std::max (low, high));
+            if (markers == clip.warpMarkers) return;
+            owner.report (owner.session.setAudioClipWarpMarkers (clip.id, markers)); owner.refresh(); sync();
+        }
+        void mouseUp (const juce::MouseEvent&) override
+        {
+            if (gesture) { owner.session.endEditGesture(); gesture = false; }
+            draggedMarker = -1; repaint();
+        }
+    private:
+        int draggedMarker = -1;
     };
 
     class PianoRoll final : public juce::Component, private juce::ScrollBar::Listener
@@ -9103,6 +9226,40 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "a slower source tempo makes the warped clip play twice as fast");
         clipGain->setValue (-6, juce::sendNotificationSync);
         check (std::abs (state.tracks[0].clips[0].audio.gainDb + 6) < 1e-4, "the clip view gain knob edits clip gain");
+        {
+            // Warp markers: double-clicking the warped waveform adds one where it is, dragging moves
+            // its beat on a sixteenth grid, and double-clicking it removes it.
+            const auto view = [&] (float x, float downX, bool dragged, int clicks, juce::ModifierKeys mods = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier))
+            {
+                const auto y = (float) audioClipView.getHeight() / 2;
+                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { x, y }, mods, 1.0f, 0, 0, 0, 0,
+                                         &audioClipView, &audioClipView, now, { downX, y }, now, clicks, dragged);
+            };
+            const auto [first, beats] = audioClipView.visibleBeats();
+            const auto bpm = state.tracks[0].clips[0].warp.bpm;
+            const auto markers = [&] { return state.tracks[0].clips[0].warpMarkers; };
+            const auto at = audioClipView.beatX (first + beats / 2);
+            audioClipView.mouseDoubleClick (view (at, at, false, 2));
+            const auto beatTolerance = beats / juce::jmax (1.0f, (float) audioClipView.getWidth()) * 2;
+            check (markers().size() == 2 && std::abs (markers()[1].beat - (first + beats / 2)) < beatTolerance
+                   && std::abs (markers()[1].sourceSeconds - markers()[1].beat * 60 / bpm) < 1e-6,
+                   "double-clicking the warped waveform adds a marker where the audio already is");
+            const auto placed = markers()[1];
+            const auto grid = audioClipView.snapGrid();
+            const auto to = audioClipView.beatX (placed.beat + beats / 5);
+            audioClipView.mouseDown (view (at, at, false, 1)); audioClipView.mouseDrag (view (to, at, true, 1)); audioClipView.mouseUp (view (to, at, true, 1));
+            check (markers().size() == 2 && markers()[1].sourceSeconds == placed.sourceSeconds && markers()[1].beat > placed.beat
+                   && std::abs (markers()[1].beat / grid - std::round (markers()[1].beat / grid)) < 1e-6 && grid * audioClipView.getWidth() / beats > 12,
+                   "dragging the marker moves its beat on the zoom-following grid");
+            session.undo(); refresh(); audioClipView.sync();
+            check (markers().size() == 2 && std::abs (markers()[1].beat - placed.beat) < 1e-9, "one undo returns the marker");
+            session.redo(); refresh(); audioClipView.sync();
+            const auto moved = audioClipView.beatX (markers()[1].beat);
+            audioClipView.mouseDoubleClick (view (moved, moved, false, 2));
+            check (markers().empty(), "double-clicking a marker removes it");
+            for (int step = 0; step < 3; ++step) session.undo();
+            refresh(); audioClipView.sync();
+        }
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
             {

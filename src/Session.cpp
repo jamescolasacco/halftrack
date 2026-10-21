@@ -5084,7 +5084,8 @@ Result Session::setAudioClipWarpMarkers (const String& id, const std::vector<War
     if (markers == warpMarkers (*clip)) return Result::ok();
     impl->transaction ("Edit warp markers");
     auto* undo = &impl->edit->getUndoManager();
-    if (markers.empty())
+    // The start alone is no markers at all.
+    if (markers.empty() || (markers.size() == 1 && markers[0].sourceSeconds == 0 && markers[0].beat == 0))
     {
         if (clip->getWarpTime()) { clip->getWarpTimeManager().removeAllMarkers(); clip->setWarpTime (false); }
         clip->state.removeProperty (warpMarkersPausedProperty, undo);

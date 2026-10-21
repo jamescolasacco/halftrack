@@ -29,4 +29,12 @@ Evidence, from the warp suite on a 120 BPM click track:
 - the markers reopen, rest while Warp is off and return;
 - removing the markers puts the clicks back on the beat grid.
 
-Missing: drawing and dragging markers in the clip view, automatic markers at transients, segment BPM display, and quantizing markers.
+The clip view draws a warped clip in its beats, each segment of the warp map over its own beats, with a yellow handle at each movable marker:
+
+- **Adding.** Double-clicking the waveform adds a marker at that beat, pinned to the source point already playing there, so nothing moves until it is dragged.
+- **Removing.** Double-clicking a marker removes it; removing the last movable marker removes the markers altogether.
+- **Dragging** a marker moves its beat between its neighbours, on a grid that follows the zoom (the coarsest power-of-two fraction of a beat at least 12 pixels wide) unless Alt is held. Each drag is one undo step.
+
+The main UI suite checks adding, a drag onto the grid, its undo, and removal.
+
+Missing: automatic markers at transients, segment BPM display, quantizing markers, and multi-marker selection.

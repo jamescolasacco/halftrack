@@ -482,3 +482,7 @@ These are simplest defaults pending a comparison with the reference:
 - **The phrase** is everything since the last pause of over ten seconds, up to 4096 notes per track.
 - **Tempo.** With the transport stopped, the current tempo is kept rather than detected from the playing.
 - **Placement.** Clips start on the bar the first note fell in and last whole bars. In Session View they go into the first empty slot.
+
+### Warp marker grid
+
+Dragging a warp marker snaps to the coarsest power-of-two fraction of a beat that is at least 12 pixels wide at the current zoom. This is the simplest default pending a comparison with the reference's adaptive grid.
