@@ -1612,6 +1612,10 @@ struct Session::Impl
     { for (const auto& r : slotRecordings) if (r.slotId == slotId) return &r; return nullptr; }
     SlotRecording* trackRecording (const String& trackId)
     { for (auto& r : slotRecordings) if (r.trackId == trackId) return &r; return nullptr; }
+    // Arrangement recording or any Session take: takes record through their inputs and leave the
+    // transport out of recording. History, rendering (which frees the playback context and with
+    // it every input recording) and flattening wait for both.
+    bool anyRecording() const { return edit->getTransport().isRecording() || ! slotRecordings.empty(); }
     // Unlooped edit time of a monotonic beat ahead of the play head, or the play head itself.
     te::TimePosition unloopedTime (std::optional<te::MonotonicBeat> beat) const
     {
@@ -2382,7 +2386,7 @@ Result Session::newProject()
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     endEditGesture();
     closePluginEditors();
-    if (impl->edit) impl->edit->getTransport().stop (false, false);
+    if (impl->edit) stop(); // Ends Session takes in the replaced project, as loading does.
     impl->meters.clear(); impl->heldSlots.clear();
     impl->projectFile = File{};
     auto state = te::createEmptyEdit (impl->engine);
@@ -3063,6 +3067,10 @@ Result Session::removeScene (int index)
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing scenes.");
     auto& list = impl->edit->getSceneList();
     if (! juce::isPositiveAndBelow (index, list.getNumScenes())) return Result::fail ("Scene not found.");
+    // Deleting the row would delete a recording slot and its take.
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        if (auto* slot = track->getClipSlotList().getClipSlots()[index]; slot && impl->slotRecording (slot->itemID))
+            return Result::fail ("End this scene's Session recording before deleting it.");
     impl->transaction ("Remove scene");
     list.deleteScene (*list.getScenes()[index]);
     impl->changed(); return Result::ok();
@@ -3165,6 +3173,8 @@ Result Session::importAudioToSlot (const File& source, int trackIndex, int scene
     auto* slot = impl->slot (trackIndex, sceneIndex);
     if (! slot) return Result::fail ("Slot not found.");
     if (slot->getClip()) return Result::fail ("Clear this slot before importing another clip.");
+    // A finished take replaces whatever clip its slot holds.
+    if (impl->slotRecording (slot->itemID)) return Result::fail ("End this slot's recording before adding a clip.");
     if (static_cast<bool> (slot->track.state.getProperty (midiTrackProperty))) return Result::fail ("Import audio onto an audio track.");
     te::AudioFile audio (impl->engine, source);
     if (! audio.isValid() || audio.getLength() <= 0) return Result::fail ("This audio file could not be read.");
@@ -3191,6 +3201,8 @@ Result Session::addMidiClipToSlot (const String& trackId, int sceneIndex, double
     auto* slot = track->getClipSlotList().getClipSlots()[sceneIndex];
     if (! slot) return Result::fail ("Slot not found.");
     if (slot->getClip()) return Result::fail ("Clear this slot before creating another clip.");
+    // A finished take replaces whatever clip its slot holds.
+    if (impl->slotRecording (slot->itemID)) return Result::fail ("End this slot's recording before adding a clip.");
     if (! std::isfinite (length) || length <= 0 || length > 1000000) return Result::fail ("Enter a positive clip length in beats.");
     impl->transaction ("Add session MIDI clip");
     const te::BeatRange beats { te::BeatPosition::fromBeats (0), te::BeatPosition::fromBeats (length) };
@@ -4149,7 +4161,7 @@ Result Session::moveTrack (const String& id, int destinationIndex)
 Result Session::setTrackFrozen (const String& trackId, bool frozen)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before freezing tracks.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before freezing tracks.");
     auto* track = impl->track (trackId);
     if (track == nullptr || isReturn (*track)) return Result::fail ("Freeze an audio or MIDI track.");
     if (track->isFrozen (te::Track::individualFreeze) == frozen) return Result::ok();
@@ -4170,7 +4182,7 @@ Result Session::setTrackFrozen (const String& trackId, bool frozen)
 Result Session::flattenTrack (const String& trackId)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before flattening tracks.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before flattening tracks.");
     auto* track = impl->track (trackId);
     if (track == nullptr || ! track->isFrozen (te::Track::individualFreeze)) return Result::fail ("Freeze the track before flattening it.");
     const bool midi = track->state.getProperty (midiTrackProperty, false);
@@ -4225,6 +4237,8 @@ Result Session::removeTrack (int index)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before removing tracks.");
+    // Other tracks can go during a Session take; this one would take the recording slot with it.
+    if (impl->trackRecording (t->itemID.toString())) return Result::fail ("End this track's Session recording before removing it.");
     closePluginEditors(); impl->meters.clear(); impl->transaction ("Remove track");
     if (isReturn (*t))
         for (auto* source : te::getAudioTracks (*impl->edit))
@@ -5394,7 +5408,7 @@ Result Session::setTrackInput (int index, const String& name)
     // Enabling a device rebuilds the device lists, which discards active takes, and a recording
     // track must keep the input its Session take stops on. Session takes do not set the transport
     // recording, so they are checked separately.
-    if (impl->edit->getTransport().isRecording() || ! impl->slotRecordings.empty()) return Result::fail ("Stop recording before changing inputs.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before changing inputs.");
     const bool midi = t->state.getProperty (midiTrackProperty, false);
     // Validate the typed name before enabling anything. Re-query instances after
     // enabling because the native device list and playback graph may rebuild.
@@ -5447,6 +5461,9 @@ Result Session::setTrackArmed (int index, bool value)
     auto* input = impl->input (*t); if (! input) return Result::fail ("Select an input before arming this track.");
     if (input->isRecordingEnabled (t->itemID) == value) return Result::ok();
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing record arms.");
+    // A take records through its slot's own destination, so disarming would leave it recording on
+    // a track that shows it is not armed.
+    if (impl->trackRecording (t->itemID.toString())) return Result::fail ("End this track's Session recording before disarming it.");
     auto* destination = te::getDestination (*input, *t, 0);
     if (!destination) return Result::fail ("Input destination is unavailable.");
     const auto monitored=impl->monitoredMidiTracks();
@@ -5550,7 +5567,8 @@ void Session::seek (double seconds)
     if (impl->exporting) return;
     if (std::isfinite (seconds))
     {
-        if (impl->edit->getTransport().isRecording()) stop();
+        // Takes are timed by the play head, so any recording ends where it is first.
+        if (impl->anyRecording()) stop();
         impl->cancelLaunches();
         impl->edit->getTransport().setPosition (te::TimePosition::fromSeconds (juce::jmax (0.0, seconds)));
     }
@@ -5736,7 +5754,7 @@ void Session::endEditGesture()
 }
 void Session::undo()
 {
-    if (impl->exporting || impl->edit->getTransport().isRecording()) return;
+    if (impl->exporting || impl->anyRecording()) return;
     const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
     impl->resetTapTempo();
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
@@ -5744,14 +5762,14 @@ void Session::undo()
 }
 void Session::redo()
 {
-    if (impl->exporting || impl->edit->getTransport().isRecording()) return;
+    if (impl->exporting || impl->anyRecording()) return;
     const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
     impl->resetTapTempo();
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
     impl->finishInputChange(monitored);sendChangeMessage();
 }
-bool Session::canUndo() const { return ! impl->exporting && ! impl->edit->getTransport().isRecording() && impl->edit->getUndoManager().canUndo(); }
-bool Session::canRedo() const { return ! impl->exporting && ! impl->edit->getTransport().isRecording() && impl->edit->getUndoManager().canRedo(); }
+bool Session::canUndo() const { return ! impl->exporting && ! impl->anyRecording() && impl->edit->getUndoManager().canUndo(); }
+bool Session::canRedo() const { return ! impl->exporting && ! impl->anyRecording() && impl->edit->getUndoManager().canRedo(); }
 
 Result Session::exportWav (const File& file, double rate, int bits, double tailSeconds)
 {
@@ -5762,7 +5780,7 @@ Result Session::exportStems (const File& folder, const AudioExportSettings& sett
 {
     written.clear();
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before exporting.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before exporting.");
     const auto snapshot = this->snapshot();
     const juce::String extension = settings.format == ExportFormat::aiff ? ".aiff" : settings.format == ExportFormat::flac ? ".flac" : ".wav";
     // Stems in display order: a group before its members, returns after the tracks, then Master.
@@ -5834,7 +5852,7 @@ Result Session::exportAudio (const File& file, const AudioExportSettings& settin
     const double rate = settings.sampleRate, tailSeconds = settings.tailSeconds;
     const int bits = settings.bitDepth;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before exporting.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before exporting.");
     if (rate < 8000 || rate > 384000 || ! std::isfinite (rate) || (bits != 16 && bits != 24 && bits != 32)) return Result::fail ("Unsupported export format.");
     auto& formats = impl->engine.getAudioFileFormatManager();
     juce::AudioFormat* audioFormat = nullptr;
