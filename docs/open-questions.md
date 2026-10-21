@@ -530,3 +530,7 @@ These are simplest defaults pending a comparison with the reference:
 ### Re-Pitch warp markers
 
 Warp markers rest while a clip is in Re-Pitch and new ones are refused, since the engine's warp reader always stretches. The reference lets Re-Pitch clips keep their markers. This is the simplest default until a resampling warp reader exists.
+
+### Playback start ramp
+
+Starting playback ramps the first few dozen samples in (39 at 48 kHz in the agreement suite), which an offline export does not. This is the engine's behaviour, kept to avoid clicks; whether the reference ramps its start is unmeasured.

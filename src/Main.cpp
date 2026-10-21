@@ -70,6 +70,9 @@ int runMultitrackRecordingTests (const juce::File&);
 int runSessionRecordTests (const juce::File&);
 int runNoteChanceTests (const juce::File&);
 int runRepitchTests (const juce::File&);
+int runSharedMediaTests (const juce::File&);
+int runWavDecoderTests (const juce::File&);
+int runRenderAgreementTests (const juce::File&);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -243,6 +246,24 @@ public:
         {
             const int i = args.indexOf ("--self-test-routing");
             setApplicationReturnValue (runRoutingTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-shared-media"))
+        {
+            const int i = args.indexOf ("--self-test-shared-media");
+            setApplicationReturnValue (runSharedMediaTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-wav-decoder"))
+        {
+            const int i = args.indexOf ("--self-test-wav-decoder");
+            setApplicationReturnValue (runWavDecoderTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-render-agreement"))
+        {
+            const int i = args.indexOf ("--self-test-render-agreement");
+            setApplicationReturnValue (runRenderAgreementTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-repitch"))

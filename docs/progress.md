@@ -1297,3 +1297,11 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **An engine fix.** The engine gave every tempo-following clip a time stretcher, so Re-Pitch clips need a property that keeps it off.
 
 See [the contract](research/repitch-contract.md).
+
+## Verification suites — 2026-10-21
+
+Test change in `tests/SharedMediaTests.cpp`, `tests/WavDecoderTests.cpp` and `tests/RenderAgreementTests.cpp` (all new), `src/Main.cpp` and `CMakeLists.txt`. No behaviour changed.
+
+- **Shared media.** Editing copies of a clip, consolidating, and editing a project saved elsewhere rewrite no existing audio file.
+- **Independent decoding.** Exports at 16, 24 and 32 bits parse correctly in a decoder written in the test, and match an analytic sine within 1.5 LSB.
+- **Realtime and offline agreement.** Playback through the synthetic device matches the offline export exactly, apart from the 39-sample ramp that starting playback applies.
