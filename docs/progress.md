@@ -1257,3 +1257,9 @@ Documentation only, in `docs/feature-parity.md` and `docs/progress-metric.md`.
 Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `cmake/PatchRenderTrackInputs.cmake` and its accepting patches, and `tests/AudioFromTests.cpp`, with documentation.
 
 - **Taps.** A track taking another track's audio chooses its Pre FX, Post FX or Post Mixer tap from the input chooser's submenu for that track. Pre FX and Post FX stay audible while the source is muted by solo, as in the reference.
+
+## Simultaneous multitrack capture — 2026-10-21
+
+Test change in `tests/MultitrackRecordingTests.cpp` (new), `src/Main.cpp` and `CMakeLists.txt`.
+
+- **Two takes in one pass.** Recording one track from another track and a second from the generated input keeps two aligned takes in separate files, each holding only its own signal. One undo removes both. No behaviour needed changing.
