@@ -2,6 +2,7 @@
 #include "Racks.h"
 #include "Tuner.h"
 #include "Spectrum.h"
+#include "MidiMonitor.h"
 #include <deque>
 #include <complex>
 #include <optional>
@@ -13,6 +14,36 @@ namespace halftrack
 {
 namespace
 {
+// MIDI Monitor's keyboard: all 128 notes, held ones lit by their velocity.
+class MonitorKeyboard final : public juce::Component
+{
+public:
+    void show (const std::array<uint8_t, 128>& next) { if (next != velocities) { velocities = next; repaint(); } }
+    void paint (juce::Graphics& g) override
+    {
+        static constexpr bool black[] { false, true, false, true, false, false, true, false, true, false, true, false };
+        const auto lit = [this] (int note, juce::Colour base)
+        { return velocities[(size_t) note] > 0 ? base.interpolatedWith (juce::Colour (0xffe49a58), .35f + .65f * velocities[(size_t) note] / 127.0f) : base; };
+        int whites = 0; for (int n = 0; n < 128; ++n) whites += black[n % 12] ? 0 : 1;
+        const auto width = getWidth() / (float) whites, height = (float) getHeight();
+        float x = 0;
+        for (int n = 0; n < 128; ++n)
+            if (! black[n % 12])
+            {
+                g.setColour (lit (n, juce::Colour (0xffd8d8d8))); g.fillRect (x, 0.0f, width - .5f, height);
+                if (n % 12 == 0 && n / 12 == 5) { g.setColour (juce::Colour (0xff8e8e8e)); g.fillRect (x + 1, height - 3, width - 2.5f, 2.0f); } // C3
+                x += width;
+            }
+        x = 0;
+        for (int n = 0; n < 128; ++n)
+        {
+            if (black[n % 12]) { g.setColour (lit (n, juce::Colour (0xff1e1e1e))); g.fillRect (x - width * .32f, 0.0f, width * .64f, height * .6f); }
+            else x += width;
+        }
+    }
+private:
+    std::array<uint8_t, 128> velocities {};
+};
 class NativeEffectEditor final : public juce::Component, private juce::ChangeListener, private juce::Timer
 {
 public:
@@ -83,6 +114,24 @@ public:
             for (auto* label : { &tunerNote, &tunerDetail })
             { label->setJustificationType (juce::Justification::centred); label->setInterceptsMouseClicks (false, false); addAndMakeVisible (*label); }
         }
+        if (kind == Session::EffectKind::midiMonitor)
+        {
+            monitorChord.setName ("MIDI Monitor chord"); monitorNotes.setName ("MIDI Monitor notes"); monitorFlow.setName ("MIDI Monitor flow");
+            monitorFreeze.setName ("MIDI Monitor freeze"); monitorClear.setName ("MIDI Monitor clear"); monitorKeys.setName ("MIDI Monitor keys");
+            monitorChord.setFont (juce::FontOptions (15.0f, juce::Font::bold)); monitorChord.setColour (juce::Label::textColourId, juce::Colour (0xffe9e9e9));
+            monitorNotes.setFont (juce::FontOptions (10.0f)); monitorNotes.setColour (juce::Label::textColourId, juce::Colour (0xffbbbbbb));
+            monitorNotes.setMinimumHorizontalScale (.7f);
+            monitorFlow.setMultiLine (true); monitorFlow.setReadOnly (true); monitorFlow.setCaretVisible (false); monitorFlow.setScrollbarsShown (true);
+            monitorFlow.setFont (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::plain));
+            monitorFlow.setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff242424)); monitorFlow.setColour (juce::TextEditor::textColourId, juce::Colour (0xffd0d0d0));
+            monitorFlow.setColour (juce::TextEditor::outlineColourId, juce::Colour (0xff3a3a3a));
+            monitorFreeze.setClickingTogglesState (true); monitorFreeze.setTooltip ("Hold the flow of messages");
+            monitorFreeze.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffe49a58)); monitorFreeze.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1e1e1e));
+            monitorFreeze.onClick = [this] { synchronise(); };
+            monitorClear.setTooltip ("Clear the flow of messages");
+            monitorClear.onClick = [this] { if (const auto reading = session.midiMonitor (pluginId)) monitorCleared = reading->total; monitorFlow.clear(); synchronise(); };
+            for (auto* c : std::initializer_list<juce::Component*> { &monitorKeys, &monitorChord, &monitorNotes, &monitorFlow, &monitorFreeze, &monitorClear }) addAndMakeVisible (*c);
+        }
         if (kind == Session::EffectKind::spectrum)
         {
             spectrumPeak.setName ("Spectrum peak"); spectrumPeak.setFont (juce::FontOptions (10.0f));
@@ -104,6 +153,7 @@ public:
         if (compact) g.fillAll (juce::Colour (0xff303030));
         if (kind == Session::EffectKind::tuner) paintTuner (g);
         if (kind == Session::EffectKind::spectrum) paintSpectrum (g);
+        if (kind == Session::EffectKind::midiMonitor && compact) paintMonitor (g);
         if (compact) return;
         g.fillAll (juce::Colour (0xff2b2b2b));
         g.setColour (juce::Colour (0xffe49a58)); g.fillRect (24, 22, 5, 18);
@@ -154,6 +204,16 @@ public:
     {
         const auto specs = effectParameters (kind);
         if (kind == Session::EffectKind::spectrum) spectrumPeak.setBounds (displayArea().reduced (6, 4).removeFromTop (14));
+        if (kind == Session::EffectKind::midiMonitor)
+        {
+            auto area = displayArea().reduced (6, 4);
+            auto top = area.removeFromTop (22);
+            monitorClear.setBounds (top.removeFromRight (46).reduced (0, 1)); top.removeFromRight (4);
+            monitorFreeze.setBounds (top.removeFromRight (54).reduced (0, 1));
+            monitorChord.setBounds (top.removeFromLeft (96)); monitorNotes.setBounds (top);
+            area.removeFromTop (3); monitorKeys.setBounds (area.removeFromTop (compact ? 30 : 44)); area.removeFromTop (4);
+            monitorFlow.setBounds (area);
+        }
         if (kind == Session::EffectKind::tuner)
         {
             auto display = displayArea();
@@ -247,6 +307,7 @@ public:
             tunerDetail.setColour (juce::Label::textColourId, juce::Colour (0xffbbbbbb));
         }
         if (value && kind == Session::EffectKind::spectrum) updateSpectrum (*value);
+        if (value && kind == Session::EffectKind::midiMonitor) updateMonitor();
         if (value)
         {
             const auto& v = value->values;
@@ -307,11 +368,13 @@ private:
     static constexpr double inTuneCents = 3;
     bool inTune() const noexcept { return reading && std::abs (reading->cents) <= inTuneCents; }
     // Analysis devices draw beside their controls inline, or below them in a window.
-    int displayWidth() const noexcept { return kind == Session::EffectKind::tuner ? tunerWidth : kind == Session::EffectKind::spectrum ? spectrumWidth : 0; }
+    int displayWidth() const noexcept
+    { return kind == Session::EffectKind::tuner ? tunerWidth : kind == Session::EffectKind::spectrum ? spectrumWidth : kind == Session::EffectKind::midiMonitor ? monitorWidth : 0; }
     juce::Rectangle<int> displayArea() const
     {
         if (compact) return { 8 + compactColumns() * compactCellWidth, 4, displayWidth() - 8, compactHeight - 8 };
         if (kind == Session::EffectKind::spectrum) return { 24, getHeight() - 236, getWidth() - 48, 206 };
+        if (kind == Session::EffectKind::midiMonitor) return { 24, 62, getWidth() - 48, getHeight() - 100 };
         return { 24, 220, getWidth() - 48, getHeight() - 260 };
     }
     void paintTuner (juce::Graphics& g) const
@@ -331,6 +394,31 @@ private:
             g.fillEllipse ((float) x (reading->cents) - radius + 2, meter.getCentreY() - radius + 2, radius * 2 - 4, radius * 2 - 4);
         }
     }
+    // MIDI Monitor: the held keys, their chord and the flow of messages since Clear, which Freeze holds.
+    static constexpr int monitorWidth = 420, monitorLines = 64;
+    void updateMonitor()
+    {
+        const auto reading = session.midiMonitor (pluginId);
+        if (! reading) return;
+        std::array<uint8_t, 128> keys {}; juce::StringArray notes;
+        for (const auto& n : reading->held)
+        {
+            keys[(size_t) n.pitch] = (uint8_t) std::max<int> (keys[(size_t) n.pitch], n.velocity);
+            notes.add (midimonitor::noteName (n.pitch) + " " + juce::String (n.velocity));
+        }
+        monitorKeys.show (keys);
+        monitorNotes.setText (notes.joinIntoString ("  "), juce::dontSendNotification);
+        monitorChord.setText (reading->chord, juce::dontSendNotification);
+        if (monitorFreeze.getToggleState()) return;
+        const auto since = (size_t) std::min<uint64_t> (reading->messages.size(), reading->total - std::min (monitorCleared, reading->total));
+        const auto shown = std::min<size_t> (since, monitorLines);
+        juce::StringArray lines;
+        for (auto i = reading->messages.size() - shown; i < reading->messages.size(); ++i)
+            lines.add (juce::String (reading->messages[i].seconds, 3).paddedLeft (' ', 9) + "  " + midimonitor::describe (reading->messages[i]));
+        if (const auto text = lines.joinIntoString ("\n"); text != monitorFlow.getText()) { monitorFlow.setText (text, false); monitorFlow.moveCaretToEnd(); }
+    }
+    void paintMonitor (juce::Graphics& g) const
+    { g.setColour (juce::Colour (0xff242424)); g.fillRoundedRectangle (displayArea().toFloat(), 4); }
     // Spectrum: the latest blocks averaged in power, the accumulated maximum, and the axis scales.
     static constexpr int spectrumWidth = 340;
     std::deque<std::vector<float>> spectrumHistory;
@@ -468,7 +556,11 @@ private:
     std::array<juce::Slider, maximumControls> sliders;
     std::array<juce::ComboBox, maximumControls> choices;
     std::array<juce::Label, maximumControls> labels;
-    juce::Label error, tunerNote, tunerDetail, spectrumPeak;
+    juce::Label error, tunerNote, tunerDetail, spectrumPeak, monitorChord, monitorNotes;
+    MonitorKeyboard monitorKeys;
+    juce::TextEditor monitorFlow;
+    juce::TextButton monitorFreeze { "Freeze" }, monitorClear { "Clear" };
+    uint64_t monitorCleared = 0;
     std::optional<Session::TunerReading> reading;
     bool dragging = false;
 };
@@ -499,25 +591,29 @@ int runNativeEffectEditorTests (const juce::File& root)
         check (requested == (int) effectParameters (kind).size() - 1, "a control's automation request reaches the host with its index");
         juce::Slider* slider = nullptr;
         const auto specs = effectParameters (kind); size_t index = 0;
-        while (index < specs.size() && specs[index].choices) ++index;
-        for (auto* child : editor->getChildren()) if (auto* c = dynamic_cast<juce::Slider*> (child); c && c->getName() == specs[index].key) slider = c;
-        check (slider != nullptr, "production control exists");
-        slider->onDragStart(); slider->setValue (specs[index].minimum, juce::sendNotificationSync); slider->setValue (specs[index].maximum, juce::sendNotificationSync); slider->onDragEnd();
-        const auto device = [&]
+        // The MIDI Monitor has no controls.
+        if (! specs.empty())
         {
-            const auto snapshot = s.snapshot(); // Keep the temporary alive across the loop.
-            if (snapshot.tracks[(size_t) track].instrument.id == info.id) return snapshot.tracks[(size_t) track].instrument;
-            for (const auto& p : snapshot.tracks[(size_t) track].plugins) if (p.id == info.id) return p;
-            return Session::PluginInfo {};
-        };
-        check (device().effect.values[index] == specs[index].maximum, "control changes actual engine value");
-        s.undo(); check (device().effect == info.effect, "one undo restores full gesture"); s.redo();
+            while (index < specs.size() && specs[index].choices) ++index;
+            for (auto* child : editor->getChildren()) if (auto* c = dynamic_cast<juce::Slider*> (child); c && c->getName() == specs[index].key) slider = c;
+            check (slider != nullptr, "production control exists");
+            slider->onDragStart(); slider->setValue (specs[index].minimum, juce::sendNotificationSync); slider->setValue (specs[index].maximum, juce::sendNotificationSync); slider->onDragEnd();
+            const auto device = [&]
+            {
+                const auto snapshot = s.snapshot(); // Keep the temporary alive across the loop.
+                if (snapshot.tracks[(size_t) track].instrument.id == info.id) return snapshot.tracks[(size_t) track].instrument;
+                for (const auto& p : snapshot.tracks[(size_t) track].plugins) if (p.id == info.id) return p;
+                return Session::PluginInfo {};
+            };
+            check (device().effect.values[index] == specs[index].maximum, "control changes actual engine value");
+            s.undo(); check (device().effect == info.effect, "one undo restores full gesture"); s.redo();
+        }
         const auto image = editor->createComponentSnapshot (editor->getLocalBounds()); const auto file = root.getChildFile ("effect-editor-"+juce::String(type)+".png");
         juce::FileOutputStream output (file); juce::PNGImageFormat png; check (png.writeImageToStream (image, output), "write original editor snapshot");
         const auto open = [&] { return instrument ? s.showInstrumentEditor (track) : s.showPluginEditor (track, position); };
         check (open().wasOk(), "native editor window opens");
         check ((instrument ? s.setTrackInstrument (s.snapshot().tracks[(size_t) track].id, std::nullopt) : s.removePlugin (track, position)).wasOk(), "remove device with open window");
-        static_cast<NativeEffectEditor*> (editor.get())->synchronise(); check (! slider->isEnabled(), "removed device disables retained editor");
+        static_cast<NativeEffectEditor*> (editor.get())->synchronise(); check (slider == nullptr || ! slider->isEnabled(), "removed device disables retained editor");
         s.undo(); check (open().wasOk(), "undo restores reopenable native editor"); s.closePluginEditors();
         if (instrument) check (s.setTrackInstrument (s.snapshot().tracks[(size_t) track].id, std::nullopt).wasOk(), "restore the built-in synth before the next instrument");
     }

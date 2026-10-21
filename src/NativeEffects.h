@@ -181,6 +181,11 @@ public:
     // processed audio or when the copy was overtaken.
     bool latestInput (std::vector<float>& destination, int frames, double& rate, int channel = 2) const;
     static constexpr int analysisCapacity = 32768;
+    // Message thread, for a MIDI Monitor: up to `monitorShown` of the latest messages, oldest first,
+    // how many it has received in all, and the velocity of each held note (16 channels of 128
+    // pitches, 0 when not held). False when the copy was overtaken.
+    bool monitorReading (std::vector<Session::MidiMonitorMessage>&, uint64_t& total, std::array<uint8_t, 16 * 128>& held) const;
+    static constexpr int monitorCapacity = 1024, monitorShown = 512, monitorPerBlock = 256;
 private:
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
@@ -191,6 +196,7 @@ private:
     void timerCallback() override;
     const Session::EffectKind kind;
     void processMidi (const tracktion::PluginRenderContext&) noexcept;
+    void monitorMidi (const tracktion::PluginRenderContext&) noexcept;
     void renderInstrument (const tracktion::PluginRenderContext&) noexcept;
     instruments::InstrumentDSP instrument;
     NativeEffectDSP processor;
@@ -217,6 +223,12 @@ private:
     std::unique_ptr<std::array<std::array<std::atomic<float>, analysisCapacity>, 2>> analysis;
     std::atomic<uint64_t> analysisWritten { 0 };
     std::atomic<double> analysisRate { 0 };
+    // A MIDI Monitor's messages, packed as status, two data bytes and the sample time, and its held notes.
+    struct MonitorState { std::array<std::atomic<uint64_t>, monitorCapacity> messages {}; std::array<std::atomic<uint8_t>, 16 * 128> held {}; };
+    std::unique_ptr<MonitorState> monitor;
+    std::atomic<uint64_t> monitorWritten { 0 };
+    std::atomic<double> monitorRate { 0 };
+    uint64_t monitorClock = 0; // Audio thread: samples processed.
     static_assert (std::atomic<float>::is_always_lock_free && std::atomic<uint64_t>::is_always_lock_free && std::atomic<double>::is_always_lock_free);
     const float* rackControls = nullptr; // Audio thread.
     std::array<int, 16> chokes {};       // Audio thread: pending choke samples.

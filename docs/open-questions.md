@@ -426,3 +426,11 @@ The reference presets give the controls, ranges and defaults; the device's patch
 - **Pitch** moves each echo one more step; the echoes end at the first one outside 0–127.
 - **Settings in flight:** each note keeps the delay, Pitch and levels it was played with; changes apply to later notes.
 - **Endless echoes:** at Feedback 100% the echoes continue until All Notes Off, a transport stop, or Pitch takes them out of range.
+
+### MIDI Monitor display
+
+The device's patch is encrypted and was not opened, and the manual describes only its displays. These are simplest-default choices pending a comparison with the reference:
+
+- **The flow** is a timed text list of the last 64 messages, not a graphical stream.
+- **Chord names** come from a table of 20 chord types. They are named from the lowest note when it can be the root, otherwise as a slash chord.
+- **Freeze and Clear** belong to the display; they are not saved or automatable.

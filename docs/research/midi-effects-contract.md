@@ -93,3 +93,38 @@ The device's patch is encrypted and was not opened, so Halftrack's rules are its
 Two engine renders through the built-in instrument equal renders of the echoes written as notes.
 
 The MPE switch, the Press, Slide and Note PB feedback controls, and measured reference timing and velocity are missing.
+
+## MIDI Monitor (2026-10-21)
+
+The MIDI Monitor follows the manual's description in [Max for Live Devices](https://www.ableton.com/en/live-manual/12/max-for-live-devices/), consulted 2026-10-21. The manual says it has no adjustable parameters, so Halftrack's MIDI Monitor has no controls. Its patch is encrypted and was not opened.
+
+What it does:
+
+- **Pass-through.** The device leaves its MIDI buffer untouched.
+- **Recording.** The audio thread records up to 256 messages per block in a 1,024-entry ring of atomics: status, data bytes and the sample time on the device's clock. It also records each held note's velocity (16 channels of 128 pitches), and clears them on All Notes Off.
+- **Reading.** `Session::midiMonitor` returns:
+  - up to the last 512 messages;
+  - how many arrived in all;
+  - the held notes;
+  - their chord.
+
+  A copy the writer overtook is retried.
+- **Display.**
+  - a 128-key keyboard with held keys lit by velocity, with C3 marked;
+  - the chord;
+  - the held notes with their velocities;
+  - a timed list of the last 64 messages since Clear. Freeze holds the list while messages keep arriving.
+- **Note names** use C3 = note 60.
+- **Messages** are described as Note On/Off, Poly Pressure, CC, Program, Pressure and Pitch Bend, signed from centre, each with its channel.
+- **Chords.** Twenty chord types, from triads to ninths, are named from the lowest note when it can be the root, otherwise as a slash chord (C/E).
+
+`tests/MidiMonitorTests.cpp` checks:
+
+- the note names, the message text for each kind, and the chord names;
+- that a monitored render equals the render without it;
+- that the render's four note messages appear in order, 0.25 s apart within a sample;
+- that a monitor reopens with its project;
+- that a generated controller's held chord shows as three notes with velocities and the name C, with its CC, bend and pressure messages;
+- the inline display's text, Freeze holding it, unfreezing catching up, Clear, and releases.
+
+The graphical flow diagram and the MPE display (slide, pressure and per-note pitch) are missing.

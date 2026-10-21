@@ -500,7 +500,7 @@ const char* effectName (Kind kind) noexcept
         case Kind::sampler: return "Sampler"; case Kind::drumSampler: return "Drum Sampler";
         case Kind::instrumentRack: return "Instrument Rack"; case Kind::audioEffectRack: return "Audio Effect Rack";
         case Kind::midiEffectRack: return "MIDI Effect Rack"; case Kind::drumRack: return "Drum Rack";
-        case Kind::channelEq: return "Channel EQ"; case Kind::tuner: return "Tuner"; case Kind::spectrum: return "Spectrum"; case Kind::pedal: return "Pedal"; case Kind::beatRepeat: return "Beat Repeat"; case Kind::filterDelay: return "Filter Delay"; case Kind::erosion: return "Erosion"; case Kind::resonators: return "Resonators"; case Kind::vinylDistortion: return "Vinyl Distortion"; case Kind::ccControl: return "CC Control"; case Kind::noteEcho: return "Note Echo"; case Kind::alignDelay: return "Align Delay"; case Kind::dynamicTube: return "Dynamic Tube"; }
+        case Kind::channelEq: return "Channel EQ"; case Kind::tuner: return "Tuner"; case Kind::spectrum: return "Spectrum"; case Kind::pedal: return "Pedal"; case Kind::beatRepeat: return "Beat Repeat"; case Kind::filterDelay: return "Filter Delay"; case Kind::erosion: return "Erosion"; case Kind::resonators: return "Resonators"; case Kind::vinylDistortion: return "Vinyl Distortion"; case Kind::ccControl: return "CC Control"; case Kind::noteEcho: return "Note Echo"; case Kind::midiMonitor: return "MIDI Monitor"; case Kind::alignDelay: return "Align Delay"; case Kind::dynamicTube: return "Dynamic Tube"; }
     return "Native effect";
 }
 std::span<const EffectParameter> effectParameters (Kind kind) noexcept
@@ -515,7 +515,7 @@ std::span<const EffectParameter> effectParameters (Kind kind) noexcept
         case Kind::polySynth: return polySynthFields; case Kind::fmSynth: return fmSynthFields; case Kind::drumKit: return drumKitFields; case Kind::wavetableSynth: return wavetableFields;
         case Kind::sampler: return samplerFields; case Kind::drumSampler: return drumSamplerFields;
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return rackFields;
-        case Kind::channelEq: return channelEqFields; case Kind::tuner: return tunerFields; case Kind::spectrum: return spectrumFields; case Kind::pedal: return pedalFields; case Kind::beatRepeat: return beatRepeatFields; case Kind::filterDelay: return filterDelayFields; case Kind::erosion: return erosionFields; case Kind::resonators: return resonatorFields; case Kind::vinylDistortion: return vinylFields; case Kind::ccControl: return ccControlFields; case Kind::noteEcho: return noteEchoFields; case Kind::alignDelay: return alignDelayFields; case Kind::dynamicTube: return dynamicTubeFields; }
+        case Kind::channelEq: return channelEqFields; case Kind::tuner: return tunerFields; case Kind::spectrum: return spectrumFields; case Kind::pedal: return pedalFields; case Kind::beatRepeat: return beatRepeatFields; case Kind::filterDelay: return filterDelayFields; case Kind::erosion: return erosionFields; case Kind::resonators: return resonatorFields; case Kind::vinylDistortion: return vinylFields; case Kind::ccControl: return ccControlFields; case Kind::noteEcho: return noteEchoFields; case Kind::midiMonitor: return {}; case Kind::alignDelay: return alignDelayFields; case Kind::dynamicTube: return dynamicTubeFields; }
     return {};
 }
 const char* effectCategory (Kind kind) noexcept
@@ -528,7 +528,7 @@ const char* effectCategory (Kind kind) noexcept
         case Kind::bitcrusher: case Kind::saturator: case Kind::overdrive: case Kind::pedal: case Kind::erosion: case Kind::vinylDistortion: case Kind::dynamicTube: return "Distortion";
         case Kind::autoPan: case Kind::chorus: case Kind::phaser: case Kind::flanger: case Kind::frequencyShifter: return "Modulation";
         case Kind::resonators: return "Resonance";
-        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: case Kind::ccControl: case Kind::noteEcho: return "MIDI Effects";
+        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: case Kind::ccControl: case Kind::noteEcho: case Kind::midiMonitor: return "MIDI Effects";
         case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return "Instruments";
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return "Racks";
         case Kind::tuner: case Kind::spectrum: case Kind::alignDelay: return "Utilities";
@@ -538,7 +538,7 @@ const char* effectCategory (Kind kind) noexcept
 bool effectUsesTempo (Kind kind) noexcept
 { return kind == Kind::delay || kind == Kind::autoFilter || kind == Kind::autoPan || kind == Kind::arpeggiator || kind == Kind::noteLength || kind == Kind::beatRepeat || kind == Kind::filterDelay || kind == Kind::noteEcho; }
 bool effectIsMidi (Kind kind) noexcept
-{ return (static_cast<int> (kind) >= static_cast<int> (Kind::arpeggiator) && static_cast<int> (kind) <= static_cast<int> (Kind::noteLength)) || kind == Kind::midiEffectRack || kind == Kind::ccControl || kind == Kind::noteEcho; }
+{ return (static_cast<int> (kind) >= static_cast<int> (Kind::arpeggiator) && static_cast<int> (kind) <= static_cast<int> (Kind::noteLength)) || kind == Kind::midiEffectRack || kind == Kind::ccControl || kind == Kind::noteEcho || kind == Kind::midiMonitor; }
 bool effectIsInstrument (Kind kind) noexcept
 {
     return (static_cast<int> (kind) >= static_cast<int> (Kind::polySynth) && static_cast<int> (kind) <= static_cast<int> (Kind::drumSampler))
@@ -566,7 +566,7 @@ double effectTailSeconds (Kind kind, double rate) noexcept
         case Kind::beatRepeat: return effects::BeatRepeat::longestSliceSeconds;
         case Kind::filterDelay: return 1800.0; // Feedback can ring for a long time, as with the Stereo Delay.
         case Kind::resonators: return 25.0; // The longest Decay, plus room for the input filter.
-        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: case Kind::ccControl: case Kind::noteEcho: return 0.0;
+        case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: case Kind::ccControl: case Kind::noteEcho: case Kind::midiMonitor: return 0.0;
         case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return 0.0;
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return 0.0; // Racks report their chains.
     }
@@ -608,7 +608,7 @@ Settings defaultEffectSettings (Kind kind) noexcept
 bool validEffectSettings (const Settings& s) noexcept
 {
     const auto fields = effectParameters (s.kind);
-    if (fields.empty() || ! std::isfinite (s.tempoBpm) || s.tempoBpm < 20 || s.tempoBpm > 999) return false;
+    if (! juce::isPositiveAndBelow (static_cast<int> (s.kind), Session::deviceKindCount) || ! std::isfinite (s.tempoBpm) || s.tempoBpm < 20 || s.tempoBpm > 999) return false;
     for (size_t i = 0; i < s.values.size(); ++i)
     {
         const auto v = s.values[i];
@@ -965,6 +965,7 @@ NativeEffectPlugin::NativeEffectPlugin (tracktion::PluginCreationInfo info)
     for (int slot = 0; slot < sampleSlotCount (kind); ++slot) loadSample (slot);
     for (const auto& field : effectParameters (kind)) controls.push_back (addParam (field.key, field.label, { 0.0f, 1.0f }));
     if (effectIsAnalysis (kind)) analysis = std::make_unique<std::array<std::array<std::atomic<float>, analysisCapacity>, 2>>();
+    if (kind == Kind::midiMonitor) monitor = std::make_unique<MonitorState>();
     audioSettings = readSettings();
     if (effectIsRack (kind)) { rack = std::make_unique<racks::RackEngine> (*this); rack->structureChanged(); }
     publish(); refreshAutomation(); startTimerHz (30);
@@ -1298,6 +1299,7 @@ void NativeEffectPlugin::applyToBuffer (const tracktion::PluginRenderContext& co
             instrument.setPadSample (static_cast<int> (pad), sample);
             acknowledgedSamples[pad].store (sample, std::memory_order_release);
         }
+    if (monitor) { monitorMidi (context); return; }
     if (effectIsMidi (kind)) { processMidi (context); return; }
     if (effectIsInstrument (kind)) { renderInstrument (context); return; }
     if (! context.destBuffer || context.bufferNumSamples <= 0 || context.destBuffer->getNumChannels() == 0) return;
@@ -1316,6 +1318,53 @@ void NativeEffectPlugin::applyToBuffer (const tracktion::PluginRenderContext& co
         }
         analysisWritten.store (written + (uint64_t) context.bufferNumSamples, std::memory_order_release);
     }
+}
+// A MIDI Monitor records each message and the held notes, and leaves the buffer as it is.
+void NativeEffectPlugin::monitorMidi (const tracktion::PluginRenderContext& context) noexcept
+{
+    const auto rate = sampleRate > 0 ? sampleRate : 48000.0;
+    monitorRate.store (rate, std::memory_order_relaxed);
+    if (context.bufferNumSamples <= 0) return;
+    if (auto* midi = context.bufferForMidiMessages)
+    {
+        auto written = monitorWritten.load (std::memory_order_relaxed);
+        if (midi->isAllNotesOff) for (auto& velocity : monitor->held) velocity.store (0, std::memory_order_relaxed);
+        int stored = 0;
+        for (const auto& m : *midi)
+        {
+            const auto size = m.getRawDataSize();
+            if (size < 1 || size > 3 || stored >= monitorPerBlock) continue;
+            const auto* raw = m.getRawData();
+            const auto sample = std::clamp (static_cast<int> (std::llround ((m.getTimeStamp() + context.midiBufferOffset) * rate)), 0, context.bufferNumSamples - 1);
+            const uint64_t first = size > 1 ? raw[1] : 0, second = size > 2 ? raw[2] : 0;
+            monitor->messages[static_cast<size_t> (written % monitorCapacity)].store (raw[0] | first << 8 | second << 16 | (monitorClock + static_cast<uint64_t> (sample)) << 24,
+                                                                                      std::memory_order_relaxed);
+            ++written; ++stored;
+            if (m.isNoteOn()) monitor->held[static_cast<size_t> ((m.getChannel() - 1) * 128 + m.getNoteNumber())].store (m.getVelocity(), std::memory_order_relaxed);
+            else if (m.isNoteOff()) monitor->held[static_cast<size_t> ((m.getChannel() - 1) * 128 + m.getNoteNumber())].store (0, std::memory_order_relaxed);
+        }
+        monitorWritten.store (written, std::memory_order_release);
+    }
+    monitorClock += static_cast<uint64_t> (context.bufferNumSamples);
+}
+bool NativeEffectPlugin::monitorReading (std::vector<Session::MidiMonitorMessage>& messages, uint64_t& total, std::array<uint8_t, 16 * 128>& held) const
+{
+    if (! monitor) return false;
+    const auto end = monitorWritten.load (std::memory_order_acquire);
+    const auto rate = monitorRate.load (std::memory_order_relaxed);
+    const auto count = std::min<uint64_t> (end, monitorShown);
+    messages.resize (static_cast<size_t> (count));
+    for (uint64_t i = 0; i < count; ++i)
+    {
+        const auto packed = monitor->messages[static_cast<size_t> ((end - count + i) % monitorCapacity)].load (std::memory_order_relaxed);
+        messages[static_cast<size_t> (i)] = { rate > 0 ? static_cast<double> (packed >> 24) / rate : 0.0,
+                                              static_cast<int> (packed & 0xff), static_cast<int> ((packed >> 8) & 0xff), static_cast<int> ((packed >> 16) & 0xff) };
+    }
+    for (size_t k = 0; k < held.size(); ++k) held[k] = monitor->held[k].load (std::memory_order_relaxed);
+    total = end;
+    // A block writes at most monitorPerBlock messages ahead of the count it publishes, so the copy
+    // is whole while fewer than that were published during it.
+    return monitorWritten.load (std::memory_order_acquire) - end <= static_cast<uint64_t> (monitorCapacity - monitorShown - monitorPerBlock);
 }
 bool NativeEffectPlugin::latestInput (std::vector<float>& destination, int frames, double& rate, int channel) const
 {

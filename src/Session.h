@@ -82,10 +82,10 @@ public:
         // Effect Rack is a MIDI effect; an Audio Effect Rack is an audio device.
         instrumentRack, audioEffectRack, midiEffectRack, drumRack,
         // Devices added after the racks.
-        channelEq, tuner, spectrum, pedal, beatRepeat, filterDelay, erosion, resonators, vinylDistortion, ccControl, alignDelay, dynamicTube, noteEcho };
+        channelEq, tuner, spectrum, pedal, beatRepeat, filterDelay, erosion, resonators, vinylDistortion, ccControl, alignDelay, dynamicTube, noteEcho, midiMonitor };
     // Every persisted kind, racks included. Devices added after the racks follow them, so loop over
     // all kinds and skip racks rather than assuming plain devices come first.
-    static constexpr int deviceKindCount = 47;
+    static constexpr int deviceKindCount = 48;
     static constexpr bool isRackKind (EffectKind kind) noexcept
     { return kind == EffectKind::instrumentRack || kind == EffectKind::audioEffectRack || kind == EffectKind::midiEffectRack || kind == EffectKind::drumRack; }
     static constexpr int drumPadCount = 16; // Drum Sampler pads play notes 36 (C1) to 51.
@@ -638,6 +638,13 @@ public:
     // block/2, binHz apart. Nothing for an id that is not a Spectrum that has processed audio.
     struct SpectrumReading { double binHz = 0; std::vector<float> decibels; };
     std::optional<SpectrumReading> spectrum (const juce::String& pluginId) const;
+    // MIDI Monitor: up to the last 512 messages the device received, oldest first, timed in seconds
+    // on its own clock; how many it has received in all; the notes held now in channel and pitch
+    // order; and the chord they spell. Nothing for an unknown id or another kind of device.
+    struct MidiMonitorMessage { double seconds = 0; int status = 0, data1 = 0, data2 = 0; };
+    struct HeldNote { int channel = 0, pitch = 0, velocity = 0; };
+    struct MidiMonitorReading { std::vector<MidiMonitorMessage> messages; uint64_t total = 0; std::vector<HeldNote> held; juce::String chord; };
+    std::optional<MidiMonitorReading> midiMonitor (const juce::String& pluginId) const;
     // Device presets: a native device's or Utility's settings in a .halftrackpreset file. Racks and
     // sample choices are not included. Saving refuses to replace a file unless asked to.
     static constexpr const char* presetExtension = ".halftrackpreset";

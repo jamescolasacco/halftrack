@@ -8,6 +8,7 @@
 #include "Grooves.h"
 #include "Tuner.h"
 #include "Spectrum.h"
+#include "MidiMonitor.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 #include <array>
@@ -4084,6 +4085,19 @@ std::optional<Session::SpectrumReading> Session::spectrum (const String& pluginI
     if (! device->latestInput (frames, block, rate, (int) settings.values[1])) return std::nullopt;
     return SpectrumReading { rate / block, spectrum::analyse (frames.data(), block) };
 }
+std::optional<Session::MidiMonitorReading> Session::midiMonitor (const String& pluginId) const
+{
+    auto* device = impl->nativeDevice (pluginId);
+    if (device == nullptr || device->getKind() != EffectKind::midiMonitor) return std::nullopt;
+    MidiMonitorReading reading; std::array<uint8_t, 16 * 128> held {};
+    for (int attempt = 0; attempt < 4 && ! device->monitorReading (reading.messages, reading.total, held); ++attempt) {}
+    std::vector<int> pitches;
+    for (int channel = 0; channel < 16; ++channel)
+        for (int pitch = 0; pitch < 128; ++pitch)
+            if (const int velocity = held[(size_t) (channel * 128 + pitch)]; velocity > 0) { reading.held.push_back ({ channel, pitch, velocity }); pitches.push_back (pitch); }
+    reading.chord = midimonitor::chordName (pitches);
+    return reading;
+}
 Result Session::addGroove (const GrooveInfo& groove, String& grooveId)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -6499,7 +6513,7 @@ Result Session::addNativeEffect (int index, EffectKind kind)
     if (auto frozen = impl->unfrozen (impl->track (index)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (index); if (! track) return Result::fail ("Track not found.");
-    if (effectParameters (kind).empty()) return Result::fail ("Unknown native effect.");
+    if (! juce::isPositiveAndBelow (static_cast<int> (kind), deviceKindCount)) return Result::fail ("Unknown native effect.");
     if (! track->pluginList.canInsertPlugin()) return Result::fail ("This track's device chain is full.");
     juce::ValueTree state (te::IDs::PLUGIN);
     state.setProperty (te::IDs::type, NativeEffectPlugin::xmlTypeName, nullptr);

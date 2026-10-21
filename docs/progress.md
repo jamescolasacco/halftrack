@@ -1147,3 +1147,7 @@ Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Sess
 ## Note Echo — 2026-10-21
 
 Engine-area change in `src/MidiEffects.*`, `src/NativeEffects.cpp`, `src/NativeEffectEditor.cpp`, `src/Session.h`, `tests/MidiEffectsTests.cpp` and `tests/RealtimeTests.cpp`, with documentation. The real-time test now covers every MIDI effect kind, not only kinds 17–23. See [the contract](research/midi-effects-contract.md#note-echo-2026-10-21).
+
+## MIDI Monitor — 2026-10-21
+
+Engine and UI change in `src/MidiMonitor.*` (new), `src/NativeEffects.*`, `src/NativeEffectEditor.cpp`, `src/Session.*`, `src/Main.cpp`, `CMakeLists.txt` and `tests/MidiMonitorTests.cpp` (new), with documentation. A device without controls is now valid. Adding a device and validating its settings check the kind's range instead of treating an empty control list as unknown. The editor suite skips the control checks for such a device. The suite's flag is `--self-test-midi-monitor-device`, because `--self-test-midi-monitor` already runs the MIDI input-monitoring suite. See [the contract](research/midi-effects-contract.md#midi-monitor-2026-10-21).

@@ -491,7 +491,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | MXL-014 | Envelope MIDI | MIDI | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-015 | Expression Control | MIDI | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-016 | Expression Control Legacy | MIDI | NOT IMPLEMENTED / UNVERIFIED |
-| MXL-017 | MIDI Monitor | MIDI | NOT IMPLEMENTED / UNVERIFIED |
+| MXL-017 | MIDI Monitor | PARTIAL — native MIDI Monitor passes MIDI through unchanged and shows held notes on a 128-key keyboard with their velocities and chord, plus a timed list of every message since Clear, which Freeze holds; render and live-controller tests ([contract](research/midi-effects-contract.md#midi-monitor-2026-10-21)). The graphical flow diagram and MPE display are missing | PARTIAL |
 | MXL-018 | MPE Control | MIDI | NOT IMPLEMENTED / UNVERIFIED |
 | MXL-019 | Note Echo | PARTIAL — native Note Echo MIDI effect with Thru/Mute, a millisecond or synced delay (1–16 sixteenths, ±33% offset), Pitch per echo, Delay (velocity into the echoes) and Feedback, using the ranges and defaults the reference presets store; exact event lists, block-size independence and engine renders against written notes tested ([contract](research/midi-effects-contract.md#note-echo-2026-10-21)). MPE echoing, Press/Slide/Note PB feedback and measured reference timing and velocity are missing | PARTIAL |
 | MXL-020 | Shaper MIDI | MIDI | NOT IMPLEMENTED / UNVERIFIED |
