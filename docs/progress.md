@@ -1433,6 +1433,6 @@ See [the contract](research/preferences-contract.md).
 UI change in `src/MainComponent.cpp`, with documentation, and a test fix in `tests/GraphEditTests.cpp`.
 
 - **Info View.** A box under the browser says what the control under the pointer is and does, and when it is unavailable. View > Info or ? toggles it.
-- **A test fix.** The graph edit suite times the play head over a longer run, since its reported position can lag on slow machines (it failed on Linux CI).
+- **A test fix.** The graph edit suite failed on Linux and Windows CI because the reported position is refreshed by a 50 Hz timer and lagged there. It now reads the position after that timer has run with no blocks pumped, which is exact, and holds it to 20 ms.
 
 See [the contract](research/info-view-contract.md).

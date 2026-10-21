@@ -57,8 +57,11 @@ int runGraphEditTests (const juce::File& artifacts)
         check (baseline > .1, "the sine plays (level " + juce::String (baseline, 4) + ")");
         ok (s.setTrackMute (keys, false), "unmute the chord");
 
+        // The reported position is refreshed from the last block by a 50 Hz timer, so it is read once
+        // that timer has run with no blocks pumped: the reading is then exact, however slow the machine.
+        const auto settledPosition = [&] { juce::MessageManager::getInstance()->runDispatchLoopUntil (150); return s.snapshot().position; };
         juce::Random random (0x47726170);
-        const auto start = s.snapshot().position;
+        const auto start = settledPosition();
         int blocks = 0, added = 0;
         bool instrument = false, sendsOnly = false;
         for (int i = 0; i < 96; ++i)
@@ -87,11 +90,9 @@ int runGraphEditTests (const juce::File& artifacts)
             if (! s.snapshot().playing) throw std::runtime_error (("edit " + juce::String (i) + " stopped playback").toStdString());
         }
         check (true, "96 edits kept playback going with finite output under four");
-        // The reported position follows the play head by a timer, which can lag on slow machines, so
-        // time is measured over a longer run: a stall or a jump would still be far outside.
-        pumpSyntheticTestDevice (s, 400); blocks += 400;
-        const auto travelled = s.snapshot().position - start, expected = blocks * 256 / 48000.0;
-        check (std::abs (travelled - expected) < std::max (.3, expected * .12),
+        pumpSyntheticTestDevice (s, 20); blocks += 20;
+        const auto travelled = settledPosition() - start, expected = blocks * 256 / 48000.0;
+        check (std::abs (travelled - expected) < .02,
                "the play head kept time (" + juce::String (travelled, 3) + " s for " + juce::String (expected, 3) + " s of blocks)");
 
         while (added-- > 0) ok (s.removePlugin (0, (int) s.snapshot().tracks[0].plugins.size() - 1), "remove the remaining EQs");
