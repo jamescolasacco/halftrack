@@ -942,3 +942,7 @@ Root owns clip scales across `src/Session.*`, the Fit to Scale tool in `src/Note
 ## Crash recovery — 2026-10-20
 
 Root owns recovery across `src/Session.*`, `src/MainComponent.*`, `src/Main.cpp`, `tests/RecoveryTests.cpp`, the UI suite, the suite registration and documentation. Unsaved work is copied every 30 seconds to the application-data folder. After a crash, Halftrack offers to recover it as an untitled project, which renders identically to the lost session, and the saved project file is never overwritten. See [the recovery contract](research/recovery-contract.md).
+
+## Device presets and default set — 2026-10-20
+
+Root owns presets across `src/Session.*`, `src/MainComponent.*`, `src/Main.cpp`, `tests/PresetTests.cpp`, the UI suite, the suite registration and documentation. Halftrack's devices can be saved as named presets in the user library. Presets appear under their device in the browser and load in one undo step. Save as Default Set makes New start from the current project. See [the preset contract](research/presets-contract.md).

@@ -297,6 +297,10 @@ A MIDI clip's scale is three properties on its state, read by `clipScale` into `
 
 `Session::writeRecovery` serialises the live edit (absolute media, `halftrackRecoveryOf` naming the saved project) without touching the project file or history, and `recoverProject` reuses `loadProject`'s validation before detaching the result from any file. `MainComponent::Impl` owns the 30-second autosave tick, the startup prompt and removing the copy once work is saved or discarded; `Main.cpp` chooses the application-data location. See the [recovery contract](research/recovery-contract.md).
 
+## Device presets and default set
+
+`saveDevicePreset`, `readDevicePreset` and `loadDevicePreset` in `src/Session.cpp` keep presets to native settings by control key (or Utility fields), validated with the same checks as live edits; loading runs inside one edit gesture. `saveDefaultSet` and `newProjectFromDefaultSet` reuse the recovery writer and `loadProject`. `MainComponent::setUserLibrary` points the browser rows, Save Preset dialog and New at the library folder chosen in `Main.cpp`. See the [preset contract](research/presets-contract.md).
+
 ## Audio warping
 
 `ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).

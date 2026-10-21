@@ -18,6 +18,8 @@ public:
     void requestClose (std::function<void()> onClose);
     // Keeps a recovery copy of unsaved work in this file and offers to recover one left by a crash.
     void enableRecovery (const juce::File&);
+    // The user library holds device presets (Presets/<device>/) and the default set for new projects.
+    void setUserLibrary (const juce::File&);
    #if HALFTRACK_TESTS_ENABLED
     static int runInteractionTests();
     static int runExportInteractionTests();

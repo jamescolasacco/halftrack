@@ -47,6 +47,7 @@ int runRangeEditTests (const juce::File&);
 int runTimeSignatureTests (const juce::File&);
 int runMidiToolTests (const juce::File&);
 int runRecoveryTests (const juce::File&);
+int runPresetTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -207,6 +208,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-groups");
             setApplicationReturnValue (runGroupTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-presets"))
+        {
+            const int i = args.indexOf ("--self-test-presets");
+            setApplicationReturnValue (runPresetTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-recovery"))
@@ -444,6 +451,7 @@ public:
                     "Could not open project", result.getErrorMessage());
         }
         window = std::make_unique<Window> (*session);
+        window->content->setUserLibrary (juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Halftrack").getChildFile ("User Library"));
         window->content->enableRecovery (juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
                                              .getChildFile ("Halftrack").getChildFile ("Recovery").getChildFile ("Recovery.halftrack"));
     }

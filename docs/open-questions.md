@@ -256,3 +256,7 @@ Scales belong to clips (there is no project-wide current scale), the piano roll 
 ### Crash recovery defaults
 
 There is one recovery copy, written every 30 seconds while there are unsaved changes. A recovered project opens untitled rather than reattaching to its saved file, so the user chooses where to save it. These are simplest-default choices pending reference measurement.
+
+### Device preset defaults
+
+The user library lives in `~/Music/Halftrack/User Library`. Presets store control values only (no samples, automation or rack contents), and loading always adds a new device rather than replacing a selected one. The default set stores media by absolute path. These are simplest-default choices pending reference measurement.

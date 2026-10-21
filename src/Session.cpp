@@ -2334,6 +2334,139 @@ Result Session::writeRecovery (const File& destination)
     if (! document.writeTo (temp.getFile()) || ! temp.overwriteTargetFileWithTemporary()) return Result::fail ("Could not write the recovery copy.");
     return Result::ok();
 }
+Result Session::saveDefaultSet (const File& destination)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before saving a default set.");
+    if (auto r = destination.getParentDirectory().createDirectory(); r.failed()) return r;
+    impl->edit->flushState();
+    juce::XmlElement document ("HALFTRACK");
+    document.setAttribute ("version", 1);
+    document.addChildElement (impl->edit->state.createCopy().createXml().release());
+    juce::TemporaryFile temp (destination);
+    if (! document.writeTo (temp.getFile()) || ! temp.overwriteTargetFileWithTemporary()) return Result::fail ("Could not write the default set.");
+    return Result::ok();
+}
+Result Session::newProjectFromDefaultSet (const File& defaultSet)
+{
+    if (auto r = loadProject (defaultSet); r.failed()) return r;
+    // A new project from the template: untitled and unchanged until edited.
+    impl->projectFile = File{};
+    impl->edit->resetChangedStatus(); impl->explicitChanges = false; impl->pristineNewDocument = true;
+    sendChangeMessage(); return Result::ok();
+}
+namespace
+{
+const juce::StringArray utilityKeys { "gainDb", "balance", "width", "midSide", "bassFrequency", "channel", "midSideMode", "invertLeft", "invertRight",
+                                      "mono", "bassMono", "bassAudition", "mute", "dcFilter" };
+bool parseNumber (const juce::String& text, double& value)
+{
+    const auto raw = text.trim().toStdString(); char* end = nullptr;
+    value = std::strtod (raw.c_str(), &end);
+    return ! raw.empty() && end == raw.c_str() + raw.size() && std::isfinite (value);
+}
+}
+Result Session::readDevicePreset (const File& file, DevicePreset& preset)
+{
+    const auto fail = [] { return Result::fail ("This is not a valid Halftrack device preset."); };
+    auto xml = juce::XmlDocument::parse (file);
+    if (xml == nullptr || ! xml->hasTagName ("HALFTRACKPRESET") || xml->getIntAttribute ("version") != 1) return fail();
+    auto* values = xml->getChildByName ("SETTINGS");
+    if (values == nullptr) return fail();
+    DevicePreset result; result.name = xml->getStringAttribute ("name").trim();
+    if (result.name.isEmpty() || result.name.length() > 128) return fail();
+    const auto device = xml->getStringAttribute ("device");
+    if (device == "utility")
+    {
+        result.utility = true;
+        std::array<double, 14> v { 0, 0, 1, 0, 120, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        for (int i = 0; i < utilityKeys.size(); ++i)
+            if (values->hasAttribute (utilityKeys[i]) && ! parseNumber (values->getStringAttribute (utilityKeys[i]), v[(size_t) i])) return fail();
+        auto& u = result.settings;
+        u.gainDb = (float) v[0]; u.balance = (float) v[1]; u.width = (float) v[2]; u.midSide = (float) v[3]; u.bassFrequency = (float) v[4];
+        if (v[5] < 0 || v[5] > 3 || v[5] != std::floor (v[5])) return fail();
+        u.channel = static_cast<UtilitySettings::Channel> ((int) v[5]);
+        for (size_t i = 6; i < 14; ++i) if (v[i] != 0 && v[i] != 1) return fail();
+        u.midSideMode = v[6] != 0; u.invertLeft = v[7] != 0; u.invertRight = v[8] != 0; u.mono = v[9] != 0;
+        u.bassMono = v[10] != 0; u.bassAudition = v[11] != 0; u.mute = v[12] != 0; u.dcFilter = v[13] != 0;
+        if (! UtilityPlugin::validSettings (u)) return fail();
+    }
+    else if (device == "native")
+    {
+        double kind = 0;
+        if (! parseNumber (xml->getStringAttribute ("kind"), kind) || kind < 0 || kind >= deviceKindCount || kind != std::floor (kind)
+            || effectIsRack (static_cast<EffectKind> ((int) kind))) return fail();
+        result.effect = defaultEffectSettings (static_cast<EffectKind> ((int) kind));
+        const auto fields = effectParameters (result.effect.kind);
+        for (size_t i = 0; i < fields.size(); ++i)
+            if (values->hasAttribute (fields[i].key))
+            {
+                double v = 0;
+                if (! parseNumber (values->getStringAttribute (fields[i].key), v)) return fail();
+                result.effect.values[i] = (float) v;
+            }
+        if (! validEffectSettings (result.effect)) return fail();
+    }
+    else return fail();
+    preset = result; return Result::ok();
+}
+Result Session::saveDevicePreset (const String& pluginId, const File& file, const String& name, bool overwrite)
+{
+    const auto label = name.trim();
+    if (label.isEmpty() || label.length() > 128) return Result::fail ("Presets need a name of up to 128 characters.");
+    if (file.exists() && ! overwrite) return Result::fail (file.getFileName() + " already exists.");
+    juce::XmlElement document ("HALFTRACKPRESET");
+    document.setAttribute ("version", 1); document.setAttribute ("name", label);
+    auto* values = document.createNewChildElement ("SETTINGS");
+    if (auto* native = impl->nativeDevice (pluginId))
+    {
+        if (effectIsRack (native->getKind())) return Result::fail ("Rack presets are not supported yet.");
+        const auto settings = native->readSettings(); const auto fields = effectParameters (settings.kind);
+        document.setAttribute ("device", "native"); document.setAttribute ("kind", static_cast<int> (settings.kind));
+        for (size_t i = 0; i < fields.size(); ++i) values->setAttribute (fields[i].key, (double) settings.values[i]);
+    }
+    else if (auto* utility = impl->utility (pluginId))
+    {
+        const auto u = utility->readSettings();
+        document.setAttribute ("device", "utility");
+        const double v[] { u.gainDb, u.balance, u.width, u.midSide, u.bassFrequency, (double) static_cast<int> (u.channel), u.midSideMode ? 1.0 : 0.0,
+                           u.invertLeft ? 1.0 : 0.0, u.invertRight ? 1.0 : 0.0, u.mono ? 1.0 : 0.0, u.bassMono ? 1.0 : 0.0, u.bassAudition ? 1.0 : 0.0,
+                           u.mute ? 1.0 : 0.0, u.dcFilter ? 1.0 : 0.0 };
+        for (int i = 0; i < utilityKeys.size(); ++i) values->setAttribute (utilityKeys[i], v[i]);
+    }
+    else return Result::fail ("Presets can be saved from Halftrack's own devices.");
+    if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
+    juce::TemporaryFile temp (file);
+    if (! document.writeTo (temp.getFile()) || ! temp.overwriteTargetFileWithTemporary()) return Result::fail ("Could not write the preset.");
+    return Result::ok();
+}
+Result Session::loadDevicePreset (int trackIndex, const File& file, String& pluginId)
+{
+    DevicePreset preset;
+    if (auto r = readDevicePreset (file, preset); r.failed()) return r;
+    auto* track = impl->track (trackIndex);
+    if (track == nullptr) return Result::fail ("Track not found.");
+    const auto before = snapshot().tracks[(size_t) trackIndex];
+    const bool instrument = ! preset.utility && effectIsInstrument (preset.effect.kind);
+    if ((instrument || (! preset.utility && effectIsMidi (preset.effect.kind))) && ! before.isMidi) return Result::fail ("This preset needs a MIDI track.");
+    beginEditGesture ("Load " + preset.name);
+    auto result = preset.utility ? addUtility (trackIndex) : instrument ? setTrackInstrument (before.id, preset.effect.kind) : addNativeEffect (trackIndex, preset.effect.kind);
+    const bool added = result.wasOk();
+    if (added)
+    {
+        const auto after = snapshot().tracks[(size_t) trackIndex];
+        pluginId.clear();
+        if (instrument) pluginId = after.instrument.id;
+        else for (const auto& p : after.plugins)
+            if (std::none_of (before.plugins.begin(), before.plugins.end(), [&] (const auto& old) { return old.id == p.id; })) pluginId = p.id;
+        if (pluginId.isEmpty()) result = Result::fail ("The preset's device could not be found.");
+        else result = preset.utility ? setUtilitySettings (pluginId, preset.settings) : setNativeEffectSettings (pluginId, preset.effect);
+    }
+    endEditGesture();
+    // A device added for a preset whose settings then failed is taken back out.
+    if (result.failed()) { if (added && canUndo()) undo(); return result; }
+    return Result::ok();
+}
 Result Session::recoverProject (const File& recovery, File& recoveredFrom)
 {
     auto xml = juce::XmlDocument::parse (recovery);

@@ -530,7 +530,7 @@ public:
         {
             if (code == 'S') { saveProject (shift); return true; }
             if (code == 'O') { openDialog(); return true; }
-            if (code == 'N') { ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) { safe->report (safe->session.newProject()); safe->resetView(); } }); return true; }
+            if (code == 'N') { ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) safe->startNewProject(); }); return true; }
             if (code == 'T') { if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
             if (code == 'Z') { if (shift) session.redo(); else session.undo(); refresh(); return true; }
             if (code == 'F' && ! shift) { setFollow (! followPlayhead); refresh(); return true; }
@@ -622,6 +622,7 @@ public:
         if (recoveryFile.existsAsFile()) offerRecovery();
     }
     void clearRecovery() { if (recoveryFile != juce::File()) recoveryFile.deleteFile(); }
+    void setUserLibrary (const juce::File& folder);
     void autosave()
     {
         if (recoveryFile == juce::File() || recoveryPending || session.isExporting() || state.recording) return;
@@ -4168,6 +4169,8 @@ private:
             menu.addItem (1, "Move left", p > 0); menu.addItem (2, "Move right", p + 1 < (int) track->plugins.size());
             menu.addSeparator(); menu.addItem (3, enabled ? "Deactivate" : "Activate");
             menu.addItem (5, "Group", native); if (rack) menu.addItem (6, "Ungroup", chains <= 1);
+            const auto& info = track->plugins[(size_t) p];
+            menu.addItem (7, "Save Preset...", owner.userLibrary != juce::File() && ((info.isNativeEffect && ! rack) || info.isUtility));
             menu.addItem (4, "Delete");
             const auto trackId = track->id, id = pluginId;
             juce::Component::SafePointer<Impl> safe (&owner);
@@ -4184,6 +4187,7 @@ private:
                                 else if (choice == 3) safe->report (safe->session.setPluginEnabled (t, p, ! snapshot.tracks[(size_t) t].plugins[(size_t) p].enabled));
                                 else if (choice == 5) safe->groupSelectedDevices();
                                 else if (choice == 6) { safe->report (safe->session.ungroupRack (id)); safe->selectedDevices.clear(); }
+                                else if (choice == 7) { const auto& d = snapshot.tracks[(size_t) t].plugins[(size_t) p]; safe->savePresetDialog (id, d.isUtility ? juce::String ("Utility") : juce::String (effectName (d.effect.kind))); return; }
                                 else safe->report (safe->session.removePlugin (t, p));
                                 safe->refresh(); return;
                             }
@@ -4409,7 +4413,49 @@ private:
     bool pluginBrowser() const noexcept { return browserCategory == BrowserCategory::plugins; }
     bool sampleBrowser() const noexcept { return browserCategory == BrowserCategory::samples; }
     // Built-in device rows: a header names a group; kind -2 is the built-in synth, -3 the Utility.
-    struct DeviceRow { juce::String label; bool header = false; int kind = -1; };
+    struct DeviceRow { juce::String label; bool header = false; int kind = -1; juce::File preset; };
+    // User library: presets per device and the default set.
+    juce::File userLibrary;
+    juce::File presetFolder (const juce::String& device) const
+    { return userLibrary == juce::File() ? juce::File() : userLibrary.getChildFile ("Presets").getChildFile (juce::File::createLegalFileName (device)); }
+    juce::File defaultSetFile() const { return userLibrary == juce::File() ? juce::File() : userLibrary.getChildFile ("Default Set.halftrack"); }
+    // Rows for a device's presets, after its own row.
+    void addPresetRows (std::vector<DeviceRow>& rows, const juce::String& device, int kind, const std::function<bool (const juce::String&)>& matches)
+    {
+        const auto folder = presetFolder (device);
+        if (! folder.isDirectory()) return;
+        auto files = folder.findChildFiles (juce::File::findFiles, false, juce::String ("*") + Session::presetExtension);
+        files.sort();
+        for (const auto& file : files)
+            if (matches (device) || matches (file.getFileNameWithoutExtension())) rows.push_back ({ file.getFileNameWithoutExtension(), false, kind, file });
+    }
+    void startNewProject()
+    {
+        // New projects start from the default set when one has been saved.
+        const auto template_ = defaultSetFile();
+        report (template_.existsAsFile() ? session.newProjectFromDefaultSet (template_) : session.newProject()); resetView();
+    }
+    void savePresetDialog (const juce::String& pluginId, const juce::String& device)
+    {
+        if (userLibrary == juce::File()) return;
+        auto* dialog = new juce::AlertWindow ("Save preset", "Name this " + device + " preset.", juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor ("name", device, "Name");
+        dialog->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey)); dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
+        auto safe = juce::Component::SafePointer<Impl> (this); auto safeDialog = juce::Component::SafePointer<juce::AlertWindow> (dialog);
+        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog, pluginId, device] (int result)
+        {
+            if (! safe || ! safeDialog || result != 1) return;
+            const auto name = safeDialog->getTextEditorContents ("name").trim();
+            const auto file = safe->presetFolder (device).getChildFile (juce::File::createLegalFileName (name) + Session::presetExtension);
+            if (! file.exists()) { safe->report (safe->session.saveDevicePreset (pluginId, file, name), "Saved preset " + name + "."); safe->updateBrowser(); return; }
+            // Replacing an existing preset is the user's choice.
+            juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::QuestionIcon).withTitle ("Replace preset?")
+                .withMessage (name + " already exists. Replace it?").withButton ("Replace").withButton ("Cancel"),
+                [safe, pluginId, file, name] (int choice)
+                { if (safe && choice == 1) { safe->report (safe->session.saveDevicePreset (pluginId, file, name, true), "Replaced preset " + name + "."); safe->updateBrowser(); } });
+        }), true);
+    }
     std::vector<DeviceRow> deviceItems;
     bool showPiano = false, showSession = false;
     juce::String selectedSceneId, selectedLauncherClipId;
@@ -5016,7 +5062,7 @@ private:
         if (index == 0)
         {
             popup.addItem (1, "New Project"); popup.addItem (2, "Open Project..."); popup.addSeparator();
-            popup.addItem (3, "Save Project"); popup.addItem (4, "Save Project As..."); popup.addSeparator();
+            popup.addItem (3, "Save Project"); popup.addItem (4, "Save Project As..."); popup.addItem (11, "Save as Default Set", userLibrary != juce::File()); popup.addSeparator();
             popup.addItem (5, "Import Audio...", currentTrack() == nullptr || ! currentTrack()->isReturn); popup.addItem (6, "Export Arrangement Audio...", ! state.tracks.empty()); popup.addSeparator();
             popup.addItem (9, "Import MIDI File..."); popup.addItem (10, "Export Selected MIDI Clip...", currentMidiClip() != nullptr); popup.addSeparator();
             popup.addItem (7, "Audio Setup..."); popup.addItem (8, "Manage Plug-ins...");
@@ -5076,7 +5122,8 @@ private:
         if(id>=60 && id<=66) { report(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>(id-60)));refresh();return; }
         switch (id)
         {
-            case 1: ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) { safe->report (safe->session.newProject()); safe->resetView(); } }); break;
+            case 1: ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) safe->startNewProject(); }); break;
+            case 11: report (session.saveDefaultSet (defaultSetFile()), "Saved as the default set for new projects."); break;
             case 2: openDialog(); break;
             case 3: saveProject (false); break;
             case 4: saveProject (true); break;
@@ -5922,7 +5969,12 @@ private:
         {
             if (matches ("Halftrack Synth")) deviceItems.push_back ({ "Halftrack Synth", false, -2 });
             for (int kind = (int) Session::EffectKind::polySynth; kind < Session::effectKindCount; ++kind)
-                if (matches (effectName ((Session::EffectKind) kind))) deviceItems.push_back ({ effectName ((Session::EffectKind) kind), false, kind });
+            {
+                const juce::String device = effectName ((Session::EffectKind) kind);
+                std::vector<DeviceRow> presets; addPresetRows (presets, device, kind, matches);
+                if (matches (device) || ! presets.empty()) deviceItems.push_back ({ device, false, kind });
+                deviceItems.insert (deviceItems.end(), presets.begin(), presets.end());
+            }
             for (const auto kind : { Session::EffectKind::instrumentRack, Session::EffectKind::drumRack })
                 if (matches (effectName (kind))) deviceItems.push_back ({ effectName (kind), false, (int) kind });
         }
@@ -5937,8 +5989,19 @@ private:
             {
                 std::vector<DeviceRow> rows;
                 for (int kind = 0; kind < Session::effectKindCount; ++kind)
-                    if (group == effectCategory ((Session::EffectKind) kind) && matches (effectName ((Session::EffectKind) kind))) rows.push_back ({ effectName ((Session::EffectKind) kind), false, kind });
-                if (group == "Utilities" && matches ("Utility")) rows.push_back ({ "Utility", false, -3 });
+                    if (group == effectCategory ((Session::EffectKind) kind))
+                    {
+                        const juce::String device = effectName ((Session::EffectKind) kind);
+                        std::vector<DeviceRow> presets; addPresetRows (presets, device, kind, matches);
+                        if (matches (device) || ! presets.empty()) rows.push_back ({ device, false, kind });
+                        rows.insert (rows.end(), presets.begin(), presets.end());
+                    }
+                if (group == "Utilities")
+                {
+                    std::vector<DeviceRow> presets; addPresetRows (presets, "Utility", -3, matches);
+                    if (matches ("Utility") || ! presets.empty()) rows.push_back ({ "Utility", false, -3 });
+                    rows.insert (rows.end(), presets.begin(), presets.end());
+                }
                 if (group == "MIDI Effects" && matches (effectName (Session::EffectKind::midiEffectRack))) rows.push_back ({ effectName (Session::EffectKind::midiEffectRack), false, (int) Session::EffectKind::midiEffectRack });
                 if (group == "Racks" && matches (effectName (Session::EffectKind::audioEffectRack))) rows.push_back ({ effectName (Session::EffectKind::audioEffectRack), false, (int) Session::EffectKind::audioEffectRack });
                 if (rows.empty()) continue;
@@ -5964,6 +6027,15 @@ private:
                 return;
             }
             if (selected) { g.setColour (raised); g.fillRect (0, 0, width, height); }
+            if (item.preset != juce::File())
+            {
+                // Presets sit under their device, marked with a small dot.
+                const int indent = (browserCategory == BrowserCategory::audioEffects ? 14 : 4) + 16;
+                g.setColour (selected ? orange : muted); g.fillEllipse ((float) indent + 5, (float) height / 2 - 2, 4, 4);
+                g.setColour (selected ? ink : juce::Colour (0xffa8a8a8)); g.setFont (font (11.0f));
+                g.drawText (item.label, indent + 15, 0, width - indent - 18, height, juce::Justification::centredLeft, true);
+                return;
+            }
             const int indent = browserCategory == BrowserCategory::audioEffects ? 14 : 4;
             g.setColour (selected ? orange : muted); g.drawRect (indent + 3, height / 2 - 5, 10, 10); g.fillRect (indent + 5, height / 2 - 3, 6, 2);
             g.setColour (selected ? ink : juce::Colour (0xffc6c6c6)); g.setFont (font (11.5f));
@@ -6025,7 +6097,8 @@ private:
                 track = currentTrack(); if (track == nullptr || ! track->isMidi) return;
             }
             if (track == nullptr) { addTrack(); refresh(); track = currentTrack(); if (track == nullptr) return; }
-            if (item.kind == -2) report (session.setTrackInstrument (track->id, std::nullopt));
+            if (item.preset != juce::File()) { juce::String added; report (session.loadDevicePreset (selectedTrack, item.preset, added), "Loaded preset " + item.label + "."); }
+            else if (item.kind == -2) report (session.setTrackInstrument (track->id, std::nullopt));
             else if (item.kind == -3) report (session.addUtility (selectedTrack));
             else if (effectIsInstrument ((Session::EffectKind) item.kind)) report (session.setTrackInstrument (track->id, (Session::EffectKind) item.kind));
             else report (session.addNativeEffect (selectedTrack, (Session::EffectKind) item.kind));
@@ -8676,6 +8749,37 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         recoveryFile = juce::File();
         folder.deleteRecursively();
     }
+    {
+        // Presets: a device saves into the user library, shows under its device in the browser and loads
+        // from there; Save as Default Set makes New start from this project.
+        const auto library = audioFixture.getParentDirectory().getChildFile ("library-ui-" + juce::Uuid().toString());
+        setUserLibrary (library);
+        check (session.newProject().wasOk(), "start a project for presets"); refresh(); selectTrack (0); refresh();
+        check (session.addNativeEffect (0, Session::EffectKind::saturator).wasOk(), "add a Saturator"); refresh();
+        const auto device = state.tracks[0].plugins.back();
+        auto drive = device.effect; drive.values[(size_t) effectParameterIndex (Session::EffectKind::saturator, "driveDb")] = 9;
+        check (session.setNativeEffectSettings (device.id, drive).wasOk(), "drive it 9 dB"); refresh();
+        const auto alertsBefore = alerts.size();
+        savePresetDialog (device.id, "Saturator");
+        check (alerts.size() == alertsBefore + 1, "Save Preset asks for a name");
+        alerts.back()->getTextEditor ("name")->setText ("Crunch"); alerts.back()->exitModalState (1);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+        const auto preset = library.getChildFile ("Presets").getChildFile ("Saturator").getChildFile (juce::String ("Crunch") + Session::presetExtension);
+        check (preset.existsAsFile(), "the preset is saved in the user library under its device");
+        setBrowserCategory (BrowserCategory::audioEffects);
+        int row = -1; for (int i = 0; i < (int) deviceItems.size(); ++i) if (deviceItems[(size_t) i].preset == preset) row = i;
+        check (row > 0 && deviceItems[(size_t) row - 1].label == "Saturator" && deviceItems[(size_t) row].label == "Crunch", "the browser lists Crunch under the Saturator");
+        check (session.addAudioTrack ("Presets").wasOk(), "add a track for the preset"); refresh(); selectTrack ((int) state.tracks.size() - 1); refresh();
+        activateBrowserRow (row); refresh();
+        check (! currentTrack()->plugins.empty() && currentTrack()->plugins.back().effect.values == drive.values, "choosing the preset loads a Saturator with its settings");
+        session.setTempo (97); refresh();
+        menuItemSelected (11, 0);
+        check (library.getChildFile ("Default Set.halftrack").existsAsFile(), "Save as Default Set writes the template");
+        startNewProject(); refresh();
+        check (state.tempo == 97 && state.projectFile == juce::File() && ! state.dirty && state.tracks.size() == 3, "New starts from the default set, untitled and unchanged");
+        setUserLibrary ({}); check (session.newProject().wasOk(), "leave the template behind"); refresh();
+        library.deleteRecursively();
+    }
 }
 
 int MainComponent::runExportInteractionTests()
@@ -8741,4 +8845,6 @@ void MainComponent::requestClose (std::function<void()> onClose)
     impl->ensureSaved ([this, onClose = std::move (onClose)] { impl->clearRecovery(); onClose(); });
 }
 void MainComponent::enableRecovery (const juce::File& file) { impl->enableRecovery (file); }
+void MainComponent::Impl::setUserLibrary (const juce::File& folder) { userLibrary = folder; updateBrowser(); }
+void MainComponent::setUserLibrary (const juce::File& folder) { impl->setUserLibrary (folder); }
 }

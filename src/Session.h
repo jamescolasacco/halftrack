@@ -338,6 +338,10 @@ public:
     // collecting media or changing the project's file, history or unsaved state. recoverProject opens one
     // as an untitled project with unsaved changes and reports the project it was recovered from.
     juce::Result writeRecovery (const juce::File&);
+    // A default set is a project template: saveDefaultSet writes the open project like a recovery copy,
+    // and newProjectFromDefaultSet opens one as a new, untitled, unchanged project.
+    juce::Result saveDefaultSet (const juce::File&);
+    juce::Result newProjectFromDefaultSet (const juce::File&);
     juce::Result recoverProject (const juce::File& recovery, juce::File& recoveredFrom);
     juce::Result addAudioTrack (juce::String name = {});
     juce::Result addMidiTrack (juce::String name = {});
@@ -517,6 +521,20 @@ public:
     juce::AudioPluginFormatManager& pluginFormats();
     juce::File pluginScanDeadMansFile() const;
     juce::Result addNativeEffect (int trackIndex, EffectKind);
+    // Device presets: a native device's or Utility's settings in a .halftrackpreset file. Racks and
+    // sample choices are not included. Saving refuses to replace a file unless asked to.
+    static constexpr const char* presetExtension = ".halftrackpreset";
+    struct DevicePreset
+    {
+        juce::String name;
+        bool utility = false;
+        EffectSettings effect;     // For native devices.
+        UtilitySettings settings;  // For the Utility.
+    };
+    static juce::Result readDevicePreset (const juce::File&, DevicePreset&);
+    juce::Result saveDevicePreset (const juce::String& pluginId, const juce::File&, const juce::String& name, bool overwrite = false);
+    // Adds the preset's device to a track (an instrument preset replaces the instrument) in one undo step.
+    juce::Result loadDevicePreset (int trackIndex, const juce::File&, juce::String& pluginId);
     // Devices inside racks share these commands and setDeviceAutomation with track devices.
     juce::Result setNativeEffectSettings (const juce::String& pluginId, const EffectSettings&);
     // Racks: each command is one undo step and validates everything before changing the project.
