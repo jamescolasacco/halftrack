@@ -59,19 +59,19 @@ void Processor::sendControls (double timelineSeconds) noexcept
     if (! controlsKnown) { std::copy (v.begin(), v.begin() + sentControls.size(), sentControls.begin()); controlsKnown = true; if (! started) return; }
     const bool all = started || v[29] != sentControls[29];
     const auto channel = std::clamp (static_cast<int> (v[29]) - 1, 0, 15);
-    const auto changed = [&] (size_t i) { return all || v[i] != sentControls[i]; };
+    const auto differs = [&] (size_t i) { return all || v[i] != sentControls[i]; };
     const auto cc = [&] (int number, int value)
     { emit ({ 0, static_cast<uint8_t> (0xb0 | channel), static_cast<uint8_t> (std::clamp (number, 0, 127)), static_cast<uint8_t> (std::clamp (value, 0, 127)), 0 }); };
-    if (changed (0)) cc (1, static_cast<int> (v[0]));
-    if (changed (1))
+    if (differs (0)) cc (1, static_cast<int> (v[0]));
+    if (differs (1))
     {
         const auto bend = std::clamp (static_cast<int> (v[1]) + 8192, 0, 16383);
         emit ({ 0, static_cast<uint8_t> (0xe0 | channel), static_cast<uint8_t> (bend & 0x7f), static_cast<uint8_t> (bend >> 7), 0 });
     }
-    if (changed (2)) emit ({ 0, static_cast<uint8_t> (0xd0 | channel), static_cast<uint8_t> (std::clamp (static_cast<int> (v[2]), 0, 127)), 0, 0 });
-    if (changed (3) || changed (4)) cc (static_cast<int> (v[4]), v[3] != 0 ? 127 : 0);
+    if (differs (2)) emit ({ 0, static_cast<uint8_t> (0xd0 | channel), static_cast<uint8_t> (std::clamp (static_cast<int> (v[2]), 0, 127)), 0, 0 });
+    if (differs (3) || differs (4)) cc (static_cast<int> (v[4]), v[3] != 0 ? 127 : 0);
     for (size_t k = 0; k < 12; ++k)
-        if (changed (5 + 2 * k) || changed (6 + 2 * k)) cc (static_cast<int> (v[6 + 2 * k]), static_cast<int> (v[5 + 2 * k]));
+        if (differs (5 + 2 * k) || differs (6 + 2 * k)) cc (static_cast<int> (v[6 + 2 * k]), static_cast<int> (v[5 + 2 * k]));
     std::copy (v.begin(), v.begin() + sentControls.size(), sentControls.begin());
 }
 uint32_t Processor::random() noexcept
