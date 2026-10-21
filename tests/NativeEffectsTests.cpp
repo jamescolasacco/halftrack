@@ -339,7 +339,11 @@ void projectTests(const juce::File& root)
         ok(s.setNativeEffectSettings(id,settings),"unchanged packet accepted");check(!s.canUndo()&&!s.snapshot().dirty,"unchanged packet does not dirty or invent history");
         auto invalid=settings;invalid.values[0]=std::numeric_limits<float>::quiet_NaN();check(s.setNativeEffectSettings(id,invalid).failed()&&!s.canUndo(),"invalid command preserves history");
         const auto fields=effectParameters(kind);
-        for(size_t i=0;i<fields.size();++i)settings.values[i]=fields[i].choices?fields[i].maximum:fields[i].minimum+(fields[i].maximum-fields[i].minimum)*.37f;
+        for(size_t i=0;i<fields.size();++i)
+        {
+            const auto value=fields[i].minimum+(fields[i].maximum-fields[i].minimum)*.37f;
+            settings.values[i]=fields[i].choices?fields[i].maximum:fields[i].integer?std::round(value):value; // Integer controls hold whole values.
+        }
         ok(s.setNativeEffectSettings(id,settings),"edit every device property");s.undo();check(s.snapshot().tracks[0].plugins[0].effect==defaultEffectSettings(kind),"one undo restores all properties");s.redo();
         ok(s.saveProject(project),"save all properties");ok(s.loadProject(project),"reopen all properties");check(s.snapshot().tracks[0].plugins[0].effect==settings,"every property round trips exactly");
         auto xml=juce::XmlDocument::parse(project);check(xml!=nullptr,"read disposable project XML");auto tree=juce::ValueTree::fromXml(*xml);effectState(tree).setProperty(fields[0].key,"nan",nullptr);const auto bad=root.getChildFile("bad.halftrack");check(tree.createXml()->writeTo(bad),"write malformed effect fixture");

@@ -54,6 +54,7 @@ int runGrooveTests (const juce::File&);
 int runTunerTests (const juce::File&);
 int runAutomationCaptureTests (const juce::File&);
 int runPunchTests (const juce::File&);
+int runSpectrumTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -214,6 +215,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-groups");
             setApplicationReturnValue (runGroupTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-spectrum"))
+        {
+            const int i = args.indexOf ("--self-test-spectrum");
+            setApplicationReturnValue (runSpectrumTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-punch"))
