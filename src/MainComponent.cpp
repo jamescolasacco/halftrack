@@ -2387,6 +2387,14 @@ private:
                 popup.addItem (5, "Copy audio clip", clip->canEditAudioRange);
                 popup.addItem (6, "Cut audio clip", clip->canEditAudioRange);
                 popup.addItem (7, "Paste audio at playhead", owner.session.hasAudioClipClipboard());
+                popup.addSeparator();
+                // Slice to New MIDI Track, by transients, warp markers or a division of the clip's beats.
+                juce::PopupMenu slices;
+                const bool warped = clip->warp.mode != Session::WarpMode::off, markers = warped && clip->warpMarkers.size() >= 2;
+                slices.addItem (20, "Transients", ! markers); slices.addItem (21, "Warp Markers", markers);
+                slices.addItem (22, "1/16", ! markers); slices.addItem (23, "1/8", ! markers); slices.addItem (24, "1/4", ! markers);
+                slices.addItem (25, "1/2", ! markers); slices.addItem (26, "1 Bar", ! markers);
+                popup.addSubMenu ("Slice to New MIDI Track", slices, clip->canEditAudioRange || warped);
             }
             if(clip&&clip->isMidi)
             {
@@ -2406,6 +2414,7 @@ private:
                 else if (choice == 8) safe->setClipActiveFromUI(id,activate);
                 else if (choice == 9) safe->renameClipDialog(id);
                 else if (choice == 7) {if(midi)safe->pasteMidi(trackId,position);else safe->pasteAudio(trackId,position);}
+                else if (choice >= 20 && choice <= 26) safe->sliceClip (id, static_cast<Session::SliceBy> (choice - 20));
                 else if (choice > 1) {if(midi)safe->midiClipCommand(choice,id);else safe->audioClipCommand(choice,id);}
             });
         }
@@ -6533,6 +6542,13 @@ private:
         return result;
     }
     // Makes another shown clip the one the editor edits, keeping the one it edited in view.
+    // Slice to New MIDI Track, selecting the new track.
+    void sliceClip (const juce::String& id, Session::SliceBy by)
+    {
+        juce::String trackId;
+        report (session.sliceToNewMidiTrack (id, by, trackId)); refresh();
+        for (int t = 0; t < (int) state.tracks.size(); ++t) if (state.tracks[(size_t) t].id == trackId) { selectTrack (t); selectedClip = 0; refresh(); }
+    }
     void focusMidiClip (const juce::String& id)
     {
         const auto [t, c] = locateClip (id);
@@ -10308,6 +10324,16 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         "one production undo restores quantized group");
 
     check (session.newProject().wasOk() && session.importAudio(audioFixture,0).wasOk(), "prepare arrangement audio command fixture"); refresh();
+    {
+        // Slice to New MIDI Track from the clip menu selects the new Drum Rack track.
+        const auto before = state.tracks.size();
+        sliceClip (state.tracks[0].clips[0].id, Session::SliceBy::quarter);
+        check (state.tracks.size() == before + 1 && selectedTrack == 1 && state.tracks[1].isMidi && state.tracks[1].instrument.isRack
+                   && state.tracks[1].clips.size() == 1 && ! state.tracks[1].clips[0].notes.empty(),
+               "slicing makes and selects a Drum Rack track playing the slices");
+        session.undo(); refresh(); selectTrack (0); refresh();
+        check (state.tracks.size() == before, "one undo removes it");
+    }
     const auto originalAudio = state.tracks[0].clips[0].id;
     session.seek(.05); audioClipCommand(3,originalAudio);
     check(state.tracks[0].clips.size()==2 && selectedClip>=0 && state.tracks[0].clips[(size_t)selectedClip].id!=originalAudio,

@@ -79,6 +79,7 @@ int runCollectionsTests (const juce::File&);
 int runPluginPresetTests (const juce::File&);
 int runClipEnvelopeTests (const juce::File&);
 int runWarpModeTests (const juce::File&);
+int runSliceTests (const juce::File&);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -252,6 +253,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-routing");
             setApplicationReturnValue (runRoutingTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-slicing"))
+        {
+            const int i = args.indexOf ("--self-test-slicing");
+            setApplicationReturnValue (runSliceTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-warp-modes"))

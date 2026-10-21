@@ -1368,3 +1368,11 @@ Engine and UI change in `src/WarpStretchers.*` (new), `src/Session.*`, `src/Main
 - **Transpose and Detune.** A warped clip transposes by semitones and cents at its speed.
 
 See [the contract](research/warp-modes-contract.md).
+
+## Slice to New MIDI Track — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/WarpStretchers.*` (the transient detector shared with Beats warping), `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/SliceTests.cpp` (new), with documentation.
+
+- **Slicing.** An audio clip's menu slices it to a new MIDI track at its transients, warp markers or a beat division. The new track's Drum Rack has a pad per slice, played back from a MIDI clip in the clip's place.
+
+See [the contract](research/slicing-contract.md).

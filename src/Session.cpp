@@ -3916,6 +3916,118 @@ Result Session::loadDevicePreset (int trackIndex, const File& file, String& plug
     if (result.failed()) { if (added && canUndo()) undo(); return result; }
     return Result::ok();
 }
+Result Session::sliceToNewMidiTrack (const String& clipId, SliceBy by, String& trackId)
+{
+    if (impl->exporting || impl->anyRecording()) return Result::fail ("Stop recording or finish exporting before slicing.");
+    auto* clip = impl->audioClip (clipId);
+    if (clip == nullptr || clip->getClipSlot() != nullptr) return Result::fail ("Choose an Arrangement audio clip to slice.");
+    if (clip->isLooping()) return Result::fail ("Turn off the clip's loop before slicing it.");
+    if (auto frozen = impl->unfrozen (clip->getTrack()); frozen.failed()) return frozen;
+    const auto info = describeClip (*clip);
+    const auto file = clip->getOriginalFile();
+    if (info.mediaMissing || info.reversed || ! file.existsAsFile()) return Result::fail ("Slicing needs the clip's audio file, unreversed.");
+    const bool warped = info.warp.mode != WarpMode::off;
+    if (by == SliceBy::warpMarkers ? ! warped || info.warpMarkers.size() < 2 : warped && ! info.warpMarkers.empty())
+        return Result::fail (by == SliceBy::warpMarkers ? "The clip has no warp markers to slice at." : "Slice a clip with warp markers at its markers.");
+    // Clip beats from the clip's start, and the source seconds they play.
+    const auto startBeat = beatsAt (info.start), lengthBeats = beatsAt (info.start + info.length) - startBeat;
+    const auto offsetBeats = startBeat - beatsAt (std::max (0.0, info.start - info.sourceOffset));
+    const auto sourceAt = [&] (double beat)
+    {
+        if (! warped) return info.sourceOffset + (secondsAt (startBeat + beat) - info.start);
+        const auto sourceBeat = offsetBeats + beat;
+        if (info.warpMarkers.size() < 2) return sourceBeat * 60 / info.warp.bpm;
+        const auto& m = info.warpMarkers;
+        size_t i = 1;
+        while (i + 1 < m.size() && m[i].beat < sourceBeat) ++i;
+        const auto t = (sourceBeat - m[i - 1].beat) / std::max (1e-9, m[i].beat - m[i - 1].beat);
+        return m[i - 1].sourceSeconds + t * (m[i].sourceSeconds - m[i - 1].sourceSeconds);
+    };
+    std::vector<double> beats { 0.0 };
+    const auto add = [&] (double beat) { if (beat > beats.back() + 1e-6 && beat < lengthBeats - 1e-6) beats.push_back (beat); };
+    juce::AudioFormatManager formats; formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    if (reader == nullptr || reader->lengthInSamples <= 0) return Result::fail ("The clip's audio could not be read.");
+    if (by == SliceBy::transients)
+    {
+        const auto from = (juce::int64) std::floor (std::max (0.0, sourceAt (0)) * reader->sampleRate);
+        const auto to = std::min (reader->lengthInSamples, (juce::int64) std::ceil (sourceAt (lengthBeats) * reader->sampleRate));
+        if (to - from > (juce::int64) (reader->sampleRate * 600)) return Result::fail ("Slice clips of up to ten minutes at their transients.");
+        juce::AudioBuffer<float> audio ((int) reader->numChannels, (int) std::max<juce::int64> (1, to - from));
+        reader->read (&audio, 0, audio.getNumSamples(), from, true, true);
+        const auto beatOfSource = [&] (double seconds)
+        {
+            if (! warped) return beatsAt (info.start + seconds - info.sourceOffset) - startBeat;
+            return seconds * info.warp.bpm / 60 - offsetBeats;
+        };
+        for (const auto frame : warp::findTransients (audio, reader->sampleRate)) add (beatOfSource ((double) (from + frame) / reader->sampleRate));
+    }
+    else if (by == SliceBy::warpMarkers)
+    {
+        for (const auto& marker : info.warpMarkers) add (marker.beat - offsetBeats);
+    }
+    else
+    {
+        const auto division = by == SliceBy::sixteenth ? .25 : by == SliceBy::eighth ? .5 : by == SliceBy::quarter ? 1.0 : by == SliceBy::half ? 2.0
+                            : snapshot().timeSignature.beatsPerBar();
+        for (double beat = division; beat < lengthBeats - 1e-6 && beats.size() <= 128; beat += division) add (beat);
+    }
+    if (beats.size() > 128) return Result::fail ("That makes more than 128 slices; slice at a coarser division.");
+    beats.push_back (lengthBeats);
+    // The Sampler starts at the frame below Start and ends at the frame nearest End, so Start sits
+    // half a frame into its slice's first frame.
+    const auto frames = (double) reader->lengthInSamples;
+    const auto frameAt = [&] (double beat) { return juce::jlimit (0.0, frames, (double) std::llround (sourceAt (beat) * reader->sampleRate)); };
+    const auto fields = effectParameters (EffectKind::sampler);
+    const auto field = [&] (const char* key) { for (size_t i = 0; i < fields.size(); ++i) if (juce::String (fields[i].key) == key) return (int) i; return -1; };
+    const int startField = field ("start"), endField = field ("end");
+    const auto sourceIndex = te::getAudioTracks (*impl->edit).indexOf (dynamic_cast<te::AudioTrack*> (clip->getTrack()));
+
+    beginEditGesture ("Slice to New MIDI Track");
+    auto result = addMidiTrack (clip->getName() + " Slices");
+    const auto created = result.wasOk();
+    if (created)
+    {
+        trackId = snapshot().tracks.back().id;
+        const auto destination = sourceIndex + 1;
+        if (destination < (int) snapshot().tracks.size() - 1) result = moveTrack (trackId, destination);
+    }
+    if (result.wasOk()) result = setTrackInstrument (trackId, EffectKind::drumRack);
+    const auto rackId = [&] { for (const auto& t : snapshot().tracks) if (t.id == trackId) return t.instrument.id; return String(); }();
+    for (size_t i = 0; result.wasOk() && i + 1 < beats.size(); ++i)
+    {
+        String chainId;
+        result = setDrumRackPadSample (rackId, 36 + (int) i, file, chainId);
+        if (result.failed()) break;
+        String samplerId;
+        for (const auto& t : snapshot().tracks)
+            if (t.id == trackId) for (const auto& chain : t.instrument.chains) if (chain.id == chainId && ! chain.devices.empty()) samplerId = chain.devices.front().id;
+        auto* sampler = impl->nativeDevice (samplerId);
+        if (sampler == nullptr || startField < 0 || endField < 0) { result = Result::fail ("A slice's Sampler could not be found."); break; }
+        auto settings = sampler->readSettings();
+        settings.values[(size_t) startField] = (float) juce::jlimit (0.0, 1.0, (frameAt (beats[i]) + 0.5) / frames);
+        settings.values[(size_t) endField] = (float) juce::jlimit (0.0, 1.0, frameAt (beats[i + 1]) / frames);
+        result = setNativeEffectSettings (samplerId, settings);
+    }
+    if (result.wasOk()) result = addMidiClip (trackId, startBeat, lengthBeats);
+    if (result.wasOk())
+    {
+        String midiId;
+        for (const auto& t : snapshot().tracks) if (t.id == trackId && ! t.clips.empty()) midiId = t.clips.front().id;
+        std::vector<MidiNoteInfo> notes;
+        for (size_t i = 0; i + 1 < beats.size(); ++i)
+        {
+            MidiNoteInfo note; note.pitch = 36 + (int) i; note.startBeat = beats[i];
+            note.lengthBeats = std::max (1.0 / 64, beats[i + 1] - beats[i]); note.velocity = 1.0f;
+            notes.push_back (note);
+        }
+        juce::StringArray inserted;
+        result = addMidiNotes (midiId, notes, inserted);
+    }
+    endEditGesture();
+    if (result.failed()) { if (created && canUndo()) undo(); trackId.clear(); return result; }
+    return Result::ok();
+}
 Result Session::recoverProject (const File& recovery, File& recoveredFrom)
 {
     auto xml = juce::XmlDocument::parse (recovery);

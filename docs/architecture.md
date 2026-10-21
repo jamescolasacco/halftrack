@@ -189,6 +189,10 @@ flowchart LR
 
 `Session::TrackOutput` is `{ OutputKind kind; String trackId; }`, with `OutputKind` `master`, `sendsOnly` or `track`; `TrackInfo::output` reports it. `setTrackOutput (trackId, TrackOutput)` runs on the message thread as one undo step and is refused for returns, grouped tracks, recording and export. `outputDestinations (trackId)` lists the identities of the audio tracks it may play into, excluding returns, MIDI tracks and tracks that already feed it. The native `TrackOutput` stores the route: the default device, `(none)` for Sends Only, or `track N`, resolved by the engine to the destination's identity. Live playback processes a `(none)` track as a sink so only its sends are heard; `cmake/PatchRenderSendsOnly.cmake` gives renders the same graph. See the [routing contract](research/routing-contract.md).
 
+## Slicing
+
+`sliceToNewMidiTrack` builds the new track from existing commands inside one edit gesture: a MIDI track, a Drum Rack, a pad per slice whose Sampler Start and End frame the slice, and a MIDI clip of the slices' notes. A failed step undoes the gesture. Transients come from `warp::findTransients`, the detector Beats warping uses. See the [contract](research/slicing-contract.md).
+
 ## Warp modes
 
 `WarpSettings` carries the mode and each mode's settings; `setAudioClipWarp` maps Beats, Tones, Texture and Complex Pro to the engine stretcher modes that `cmake/PatchWarpModes.cmake` adds, and their settings to the stretch options' four Halftrack values. `src/WarpStretchers.*` holds the stretchers, registered with the engine when a Session starts. They allocate when created and not while processing. Transposition is part of `AudioClipSettings`, kept in clip properties and applied as the clip's pitch change. See the [contract](research/warp-modes-contract.md).

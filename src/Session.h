@@ -633,6 +633,14 @@ public:
     // Delete Time: removes [start, start + length) everywhere and moves later material earlier.
     juce::Result deleteTime (double startSeconds, double lengthSeconds);
     juce::Result duplicateAudioClip (const juce::String& clipId, juce::String& duplicateId);
+    // Slice to New MIDI Track, after the reference's: a new MIDI track after the clip's plays the
+    // clip's audio through a Drum Rack with one pad per slice from C1 (note 36) up, from a MIDI clip
+    // in the clip's place with a note per slice. Slices begin at the clip's transients, at its warp
+    // markers, or at every division of its beats, and play at the source's own speed. At most 128
+    // slices; the clip must be an unwarped or marker-free warped Arrangement clip, unless slicing
+    // by markers. One undo step.
+    enum class SliceBy { transients, warpMarkers, sixteenth, eighth, quarter, half, bar };
+    juce::Result sliceToNewMidiTrack (const juce::String& clipId, SliceBy, juce::String& trackId);
     // Typed application clipboard. Copy retains independent media before Cut removes anything.
     juce::Result copyMidiClip (const juce::String& clipId, bool cut = false);
     bool hasMidiClipClipboard() const;
