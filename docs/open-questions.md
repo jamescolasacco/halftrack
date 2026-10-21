@@ -388,3 +388,12 @@ These are simplest-default choices pending reference measurement:
 
 The Live 12.4 redesign ("Erosion Legacy" for older Sets) is not distinguished.
 
+### Resonators defaults
+
+These are simplest-default choices pending reference measurement:
+
+- **Mode B:** a half-period negative comb.
+- **Decay:** 0.05–20 s; without Const it scales by C3 / pitch.
+- **Color:** a low-pass from 500 Hz to 20 kHz.
+- **Defaults:** a 50 Hz high-pass input filter, a C3 root, and II–V at +12, +7, +19 and +4 semitones.
+

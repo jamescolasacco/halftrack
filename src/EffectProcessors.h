@@ -367,5 +367,40 @@ private:
     std::array<std::array<float, 64>, 2> history {};
     size_t write = 0;
 };
+
+// Resonators after the reference's: an input filter, then five tuned feedback combs. Resonator I
+// takes both channels and sets the root Note (C-1 to C5); II and IV take the left input and III and
+// V the right, each a Pitch (+/-24 semitones) from I. Mode A rings a full period with positive
+// feedback; Mode B a half period with negative feedback, odd harmonics only. Decay is the time to
+// fall 60 dB, the same at every pitch with Const and shorter for higher notes without it. Color
+// sets a low-pass inside each loop, whose phase delay the loop subtracts so the pitch stays true.
+// Controls: filter type, frequency, mode, decay, const, color; per resonator on, note or pitch,
+// fine, gain; then width, gain, dry/wet.
+class Resonators
+{
+public:
+    static constexpr int count = 5, controlsPerResonator = 4, first = 6;
+    static constexpr double lowestHz = 2.0, constReferenceHz = 130.8127826502993; // C3.
+    // Resonator k's pitch in Hz (k = 0 is Resonator I).
+    static double frequencyOf (const float* values, int k) noexcept;
+    void prepare (double rate) noexcept;
+    void configure (const float* values) noexcept;
+    void reset() noexcept;
+    void tick (double& left, double& right) noexcept;
+private:
+    struct Comb
+    {
+        std::array<std::vector<float>, 2> buffer;
+        size_t write = 0;
+        double delay = 100, feedback = 0, colour = 0, gain = 1;
+        std::array<double, 2> state {};
+        bool on = false;
+    };
+    double rate = 48000, width = 1, output = 1;
+    int filterType = 0;
+    std::array<Biquad, 2> input;
+    std::array<Comb, count> combs;
+    bool halfPeriod = false;
+};
 }
 

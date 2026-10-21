@@ -105,6 +105,7 @@ private:
     effects::BeatRepeat beatRepeat;
     effects::FilterDelay filterDelay;
     effects::Erosion erosion;
+    effects::Resonators resonators;
     effects::GlueCompressor glue;
     effects::FrequencyShifter shifter;
     int ramp = 0;

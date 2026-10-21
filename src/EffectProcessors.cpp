@@ -755,5 +755,93 @@ void Erosion::tick (double& left, double& right) noexcept
     ++sample;
     write = (write + 1) % history[0].size();
 }
+
+double Resonators::frequencyOf (const float* v, int k) noexcept
+{
+    const auto* r1 = v + first;
+    double note = (double) r1[1] + (double) r1[2] / 100;
+    if (k > 0) { const auto* r = v + first + k * controlsPerResonator; note += (double) r[1] + (double) r[2] / 100; }
+    return std::max (lowestHz, 440 * std::pow (2.0, (note - 69) / 12));
+}
+void Resonators::prepare (double sampleRate) noexcept
+{
+    rate = sampleRate;
+    for (auto& comb : combs) for (auto& channel : comb.buffer) channel.assign ((size_t) std::ceil (rate / lowestHz) + 4, 0.0f);
+    reset();
+}
+void Resonators::configure (const float* v) noexcept
+{
+    filterType = (int) v[0];
+    const auto hz = (double) v[1];
+    const auto section = filterType == 0 ? lowPassSection (hz, .70710678118654752, rate) : filterType == 1 ? bandPassOctaves (hz, 1, rate)
+                       : filterType == 2 ? highPassSection (hz, .70710678118654752, rate) : std::array<double, 5> {};
+    for (auto& s : input)
+    {
+        if (filterType == 3)
+        {
+            // A notch: the band-pass subtracted from the input, formed as one section.
+            const auto b = bandPassOctaves (hz, 1, rate);
+            s.c = { 1 - b[0], b[3] - b[1], b[4] - b[2], b[3], b[4] };
+        }
+        else s.c = section;
+    }
+    halfPeriod = v[2] != 0;
+    const auto decaySeconds = std::max (.01, (double) v[3]);
+    const bool constant = v[4] != 0;
+    const auto cutoff = 500 * std::pow (40.0, std::clamp ((double) v[5], 0.0, 1.0));
+    const auto pole = std::exp (-2 * pi * std::min (cutoff, rate * .45) / rate);
+    for (int k = 0; k < count; ++k)
+    {
+        const auto* r = v + first + k * controlsPerResonator;
+        auto& comb = combs[(size_t) k];
+        const auto f = frequencyOf (v, k);
+        comb.on = r[0] != 0; comb.gain = r[3]; comb.colour = pole;
+        // The loop is one period (Mode A) or half a period with negative feedback (Mode B), less the
+        // colour filter's phase delay at the pitch.
+        // Both modes resonate at the note itself.
+        const auto omega = 2 * pi * f / rate;
+        const auto lag = std::atan2 (pole * std::sin (omega), 1 - pole * std::cos (omega)) / omega;
+        comb.delay = std::clamp (rate / f / (halfPeriod ? 2 : 1) - lag, 1.0, (double) comb.buffer[0].size() - 3);
+        const auto ringSeconds = constant ? decaySeconds : decaySeconds * constReferenceHz / f;
+        const auto loopSeconds = comb.delay / rate;
+        comb.feedback = (halfPeriod ? -1 : 1) * std::pow (10.0, -3 * loopSeconds / ringSeconds);
+    }
+    width = std::clamp ((double) v[first + count * controlsPerResonator], 0.0, 1.0);
+    output = std::pow (10.0, (double) v[first + count * controlsPerResonator + 1] / 20);
+}
+void Resonators::reset() noexcept
+{
+    for (auto& comb : combs) { for (auto& channel : comb.buffer) std::fill (channel.begin(), channel.end(), 0.0f); comb.write = 0; comb.state = {}; }
+    for (auto& s : input) s.clear();
+}
+void Resonators::tick (double& left, double& right) noexcept
+{
+    const double in[] { input[0].tick (left), input[1].tick (right) };
+    double out[] { 0, 0 };
+    for (int k = 0; k < count; ++k)
+    {
+        auto& comb = combs[(size_t) k];
+        if (! comb.on || comb.buffer[0].empty()) continue;
+        // I takes both channels, II and IV the left, III and V the right.
+        const bool takesLeft = k == 0 || k % 2 == 1, takesRight = k == 0 || (k > 0 && k % 2 == 0);
+        const auto size = comb.buffer[0].size();
+        for (size_t c = 0; c < 2; ++c)
+        {
+            if ((c == 0 && ! takesLeft) || (c == 1 && ! takesRight)) continue;
+            auto& line = comb.buffer[c];
+            const auto whole = (size_t) comb.delay; const auto fraction = comb.delay - (double) whole;
+            const auto a = line[(comb.write + size - whole) % size], b = line[(comb.write + size - whole - 1) % size];
+            const auto delayed = a + (b - a) * fraction;
+            comb.state[c] = (1 - comb.colour) * delayed + comb.colour * comb.state[c];
+            const auto y = in[c] + comb.feedback * comb.state[c];
+            line[comb.write] = (float) finite (y);
+            out[c] += y * comb.gain;
+        }
+        comb.write = (comb.write + 1) % size;
+    }
+    // Width 0 sums the resonances to mono.
+    const auto mid = .5 * (out[0] + out[1]);
+    left = (mid + width * (out[0] - mid)) * output; right = (mid + width * (out[1] - mid)) * output;
+}
 }
 

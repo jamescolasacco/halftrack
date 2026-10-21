@@ -1,4 +1,5 @@
 #include "NativeEffects.h"
+#include "Tuner.h"
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -533,6 +534,67 @@ void erosionTests()
         check (sameMono == 0 && sameWide > .05, "Stereo Width 0% modulates both channels alike, 100% independently");
     }
 }
+// Resonators: impulses ring at each resonator's pitch, measured with the Tuner's detector.
+void resonatorTests()
+{
+    const auto only = [] (int resonator, std::initializer_list<std::pair<const char*, float>> more)
+    {
+        auto s = with (Kind::resonators, { { "filterType", 2 }, { "filterHz", 30 }, { "color", 1 }, { "mix", 1 }, { "gainDb", 0 }, { "r1Note", 57 } });
+        for (int k = 1; k <= 5; ++k) s.values[(size_t) effectParameterIndex (Kind::resonators, ("r" + std::to_string (k) + "On").c_str())] = k == resonator ? 1.0f : 0.0f;
+        for (const auto& [key, value] : more) s.values[(size_t) effectParameterIndex (Kind::resonators, key)] = value;
+        return s;
+    };
+    const auto impulse = [] (float left, float right, int frames = 48000) { juce::AudioBuffer<float> x (2, frames); x.clear(); x.setSample (0, 0, left); x.setSample (1, 0, right); return x; };
+    const auto pitch = [] (const juce::AudioBuffer<float>& x, int channel = 0) -> double
+    {
+        std::vector<float> frames ((size_t) tuner::analysisFrames);
+        for (int n = 0; n < tuner::analysisFrames; ++n) frames[(size_t) n] = x.getSample (channel, 4800 + n);
+        const auto r = tuner::detect (frames.data(), (int) frames.size(), 48000, 440);
+        return r ? r->frequency : 0;
+    };
+    const auto cents = [] (double hz, double target) { return hz > 0 ? 1200 * std::log2 (hz / target) : 1e9; };
+    check (std::abs (cents (pitch (process (impulse (1, 1), only (1, {}))), 220)) < 3, "Resonator I rings at its Note, A3");
+    check (std::abs (cents (pitch (process (impulse (1, 1), only (1, { { "color", 0 } }))), 220)) < 5, "a dark Color keeps the pitch true");
+    check (std::abs (cents (pitch (process (impulse (1, 1), only (1, { { "r1Fine", 50 } }))), 220 * std::pow (2.0, 50 / 1200.0))) < 3, "Fine detunes by cents");
+    check (std::abs (cents (pitch (process (impulse (1, 0), only (2, { { "r2Pitch", 12 } }))), 440)) < 3, "Resonator II rings its Pitch above I, an octave");
+    {
+        // Mode B: half-period negative feedback, odd harmonics only.
+        const auto harmonic = [&] (bool modeB, double multiple)
+        {
+            const auto x = process (impulse (1, 1, 96000), only (1, { { "mode", modeB ? 1.0f : 0.0f }, { "decaySeconds", 10 } }));
+            return amplitudeAt (x, 0, 220 * multiple, 24000, 72000);
+        };
+        check (std::abs (cents (pitch (process (impulse (1, 1), only (1, { { "mode", 1 } }))), 220)) < 3, "Mode B rings at the same pitch");
+        check (harmonic (true, 2) < .05 * harmonic (true, 3) && harmonic (false, 2) > .3 * harmonic (false, 3), "Mode B has odd harmonics only, Mode A all of them");
+    }
+    {
+        // Decay: the fundamental falls 60 dB over the Decay time with Const, faster for higher notes without it.
+        const auto drop = [&] (std::initializer_list<std::pair<const char*, float>> more, double seconds)
+        {
+            auto settings = only (1, more);
+            const auto hz = effects::Resonators::frequencyOf (settings.values.data(), 0);
+            const auto x = process (impulse (1, 1, 96000), settings);
+            return db (amplitudeAt (x, 0, hz, (int) ((.05 + seconds) * 48000), (int) ((.15 + seconds) * 48000)) / amplitudeAt (x, 0, hz, 2400, 7200));
+        };
+        check (std::abs (drop ({ { "constant", 1 }, { "decaySeconds", .5f } }, .5) + 60) < 3, "with Const, a 0.5 s Decay falls 60 dB in 0.5 s");
+        check (std::abs (drop ({ { "constant", 1 }, { "decaySeconds", .5f }, { "r1Note", 69 } }, .5) + 60) < 3, "at any note");
+        check (drop ({ { "constant", 0 }, { "decaySeconds", .5f }, { "r1Note", 69 } }, .5) < -100, "without Const, a higher note dies sooner");
+    }
+    {
+        const auto fromLeft = process (impulse (1, 0), only (3, {})), fromRight = process (impulse (0, 1), only (3, {}));
+        check (fromLeft.getMagnitude (0, 48000) == 0 && fromLeft.getMagnitude (1, 0, 48000) == 0 && fromRight.getMagnitude (1, 0, 48000) > .1 && fromRight.getMagnitude (0, 0, 48000) == 0,
+               "Resonator III takes and plays only the right channel");
+        const auto mono = process (impulse (1, 0), only (2, { { "width", 0 } }));
+        double worst = 0; for (int n = 0; n < 48000; ++n) worst = std::max (worst, (double) std::abs (mono.getSample (0, n) - mono.getSample (1, n)));
+        check (worst == 0 && mono.getMagnitude (1, 0, 48000) > 0, "Width 0 sums the resonances to mono");
+    }
+    {
+        const auto in = sine (440, .5, 4800, 48000, .3);
+        const auto dry = process (in, with (Kind::resonators, { { "mix", 0 } }));
+        bool same = true; for (int c = 0; c < 2; ++c) for (int n = 0; n < in.getNumSamples(); ++n) same = same && dry.getSample (c, n) == in.getSample (c, n);
+        check (same, "fully dry passes audio unchanged");
+    }
+}
 void eqThreeTests()
 {
     for (int steep = 0; steep < 2; ++steep)
@@ -607,6 +669,6 @@ void shifterTests()
 void runExtendedEffectsTests()
 {
     saturatorTests(); overdriveTests(); autoFilterTests(); autoPanTests(); modulatedDelayTests();
-    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); beatRepeatTests(); filterDelayTests(); erosionTests(); glueTests(); shifterTests();
+    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); beatRepeatTests(); filterDelayTests(); erosionTests(); resonatorTests(); glueTests(); shifterTests();
 }
 }

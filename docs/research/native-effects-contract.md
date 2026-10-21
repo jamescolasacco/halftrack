@@ -291,3 +291,34 @@ Halftrack's model:
 
 The shared device checks include engine-render equality. The X-Y display and measured comparison with the reference are missing.
 
+## Resonators (2026-10-21)
+
+Resonators follows the manual's description in the [audio effect reference](https://www.ableton.com/en/live-manual/12/live-audio-effect-reference/), consulted 2026-10-21. The manual gives:
+
+- an input filter (low-pass, band-pass, high-pass or notch) feeding five parallel resonators;
+- Modes A and B;
+- Decay, with Const making it independent of pitch;
+- Color for brightness;
+- channel routing: I takes both channels, II and IV the left, III and V the right;
+- Resonator I's Note (C-1 to C5) with Fine in cents, and II–V tuned by Pitch (±24 semitones) and Fine relative to I;
+- On and Gain for each resonator;
+- Width (0% is mono), Gain and Dry/Wet.
+
+Halftrack's model:
+
+- **Combs.** Each resonator is a feedback comb with linear-interpolated delay. Mode A loops a full period with positive feedback. Mode B loops half a period with negative feedback, so only odd harmonics ring.
+- **Decay.** Decay (0.05–20 s) is the time to fall 60 dB. Without Const it is scaled by C3 / pitch.
+- **Color.** Color sets a one-pole low-pass in each loop, at 500 Hz × 40^Color. The loop subtracts the low-pass's phase delay at the pitch, so tuning stays true.
+- **Input filter.** The band-pass is one octave wide and the notch is its complement.
+- **Defaults.** II–V default to +12, +7, +19 and +4 semitones at 70% gain. The output Gain is −6 dB and Dry/Wet 50%.
+
+`tests/ExtendedEffectsTests.cpp` measures impulse responses with the Tuner's detector:
+
+- **Pitch.** Resonator I rings at A3 within 3 cents, and within 5 cents at the darkest Color. Fine detunes by cents, and Resonator II rings an octave above.
+- **Mode B.** It rings at the same pitch with no even harmonics, while Mode A has them.
+- **Decay.** With Const the fundamental falls 60 dB in a 0.5 s Decay at A3 and at A4. Without Const a higher note dies sooner.
+- **Routing.** Resonator III takes and plays only the right channel.
+- **Output.** Width 0 is mono, and fully dry is bit-exact.
+
+Scale-aware and tuning-system notes, and measured comparison with the reference, are missing.
+
