@@ -1104,3 +1104,7 @@ Root change. It touches:
 
 MIDI controllers can be learned onto mixer and device controls and then drive them. The Map Mode user interface follows. See [the contract](research/midi-mapping-contract.md).
 
+## MIDI Map Mode — 2026-10-21
+
+UI change in `src/MainComponent.cpp` and `src/NativeEffectEditor.cpp`, with the UI suite and documentation. The MIDI switch (Cmd/Ctrl+M) highlights mappable controls in blue. Clicking one learns it, and the browser area lists the mappings with Min, Max and remove. See [the contract](research/midi-mapping-contract.md#map-mode).
+

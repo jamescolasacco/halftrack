@@ -352,6 +352,12 @@ public:
         recordButton.onClick = [this] { if (state.recording) session.stop(); else report (session.record()); refresh(); };
         automationArmButton.setTooltip ("Automation Arm: while recording, moving a fader or device control records its automation");
         automationArmButton.onClick = [this] { report (session.setAutomationArm (! state.automationArm)); refresh(); };
+        addAndMakeVisible (midiMapButton); addChildComponent (mapOverlay); addChildComponent (mappingList);
+        midiMapButton.setName ("MIDI Map Mode"); midiMapButton.setClickingTogglesState (true);
+        midiMapButton.setTooltip ("MIDI Map Mode: click a blue control, then move a controller to map it  |  Cmd/Ctrl+M");
+        midiMapButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d8bff)); midiMapButton.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+        midiMapButton.setWantsKeyboardFocus (false); midiMapButton.setMouseClickGrabsKeyboardFocus (false);
+        midiMapButton.onClick = [this] { setMidiMapMode (midiMapButton.getToggleState()); };
         reEnableButton.setTooltip ("Re-Enable Automation: overridden controls follow their automation again");
         reEnableButton.onClick = [this] { report (session.reEnableAutomation()); refresh(); };
         followButton.setName ("Follow"); followButton.setClickingTogglesState (true); followButton.setToggleState (true, juce::dontSendNotification);
@@ -467,11 +473,12 @@ public:
         g.setColour (muted); g.setFont (font (10.0f));
         g.drawText ("CPU " + juce::String (juce::roundToInt (state.cpu * 100.0)) + "%", cpuBounds, juce::Justification::centredRight);
         g.setFont (font (10.0f, true)); g.setColour (muted);
+        if (! midiMapMode) // The mapping list replaces the browser in MIDI Map Mode.
         g.drawText (browserCategory == BrowserCategory::instruments ? "INSTRUMENTS" : browserCategory == BrowserCategory::audioEffects ? "AUDIO EFFECTS"
                         : browserCategory == BrowserCategory::midiEffects ? "MIDI EFFECTS" : pluginBrowser() ? "PLUG-INS"
                         : browserCategory == BrowserCategory::grooves ? "GROOVES" : browserFolder == juce::File() ? "SAMPLES" : browserFolder.getFileName().toUpperCase(),
                     browserList.getX() + 4, browserList.getY() - 22, browserList.getWidth() - 8, 20, juce::Justification::centredLeft, true);
-        if ((pluginBrowser() || sampleBrowser()) && getNumRows() == 0)
+        if (! midiMapMode && (pluginBrowser() || sampleBrowser()) && getNumRows() == 0)
         {
             g.setFont (font (12.0f));
             juce::String message;
@@ -514,6 +521,7 @@ public:
         clickButton.setBounds (bar.removeFromLeft (46)); clickSettingsButton.setBounds (bar.removeFromLeft (20));
         bar.removeFromLeft (8); quantisation.setBounds (bar.removeFromLeft (64));
         audioButton.setBounds (bar.removeFromRight (52)); bar.removeFromRight (8);
+        midiMapButton.setBounds (bar.removeFromRight (46)); bar.removeFromRight (8);
         arrangementTab.setBounds (bar.removeFromRight (62)); sessionTab.setBounds (bar.removeFromRight (62));
         pianoTab.setBounds (bar.removeFromRight (40)); bar.removeFromRight (10);
         cpuBounds = bar.removeFromRight (56); bar.removeFromRight (8);
@@ -539,6 +547,9 @@ public:
             hidden->setVisible (false);
         area.removeFromBottom (statusHeight);
         browserBounds = area.removeFromLeft (browserWidth);
+        // MIDI Map Mode covers the working area and shows the mappings in place of the browser.
+        mapOverlay.setVisible (midiMapMode); mappingList.setVisible (midiMapMode);
+        if (midiMapMode) { mapOverlay.setBounds (area); mappingList.setBounds (browserBounds.reduced (6)); mapOverlay.toFront (false); }
         // The detail view shows either the device chain or, for an open clip, its editor.
         const int detailHeight = showPiano ? juce::jlimit (minimumClipViewHeight, juce::jmax (minimumClipViewHeight, area.getHeight() - 140),
                                                            juce::roundToInt (area.getHeight() * clipViewFraction))
@@ -563,6 +574,9 @@ public:
         folderButton.setBounds (actions);
         browser.removeFromBottom (4); browser.removeFromTop (22);
         browserList.setBounds (browser);
+        for (auto* part : std::initializer_list<juce::Component*> { &browserSearch, &browserCategories, &browserList })
+            part->setVisible (! midiMapMode);
+        if (midiMapMode) for (auto* part : std::initializer_list<juce::Component*> { &folderButton, &upButton, &previewButton, &previewVolume }) part->setVisible (false);
         launcher.setBounds (area);
         launcher.setVisible (showSession);
         const bool audioClip = showPiano && selectedAudioClip() != nullptr;
@@ -615,6 +629,7 @@ public:
         if (cmd)
         {
             if (code == 'S') { saveProject (shift); return true; }
+            if (code == 'M' && ! shift) { setMidiMapMode (! midiMapMode); return true; }
             if (code == 'O') { openDialog(); return true; }
             if (code == 'N') { ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) safe->startNewProject(); }); return true; }
             if (code == 'T') { if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
@@ -1031,6 +1046,7 @@ private:
             if (! pan.isMouseButtonDown()) pan.setValue (track.pan, juce::dontSendNotification);
             gain.setEnabled (! owner.session.isExporting()); pan.setEnabled (! owner.session.isExporting());
             showAutomationState (gain, track.volumeAutomation, "Track volume. Double-click to reset to 0 dB.", "Volume");
+            gain.getProperties().set ("midiMapTarget", "mixer:" + track.id + ":volume"); pan.getProperties().set ("midiMapTarget", "mixer:" + track.id + ":pan");
             showAutomationState (pan, track.panAutomation, "Track pan. Double-click to center.", "Pan");
             mute.setToggleState (! track.mute, juce::dontSendNotification);
             mute.setButtonText (juce::String (position + 1));
@@ -2480,6 +2496,7 @@ private:
                 if (! gain.isMouseButtonDown()) gain.setValue (owner.state.masterGainDb, juce::dontSendNotification);
                 gain.setEnabled (! owner.session.isExporting());
                 showAutomationState (gain, owner.state.masterVolumeAutomation, "Master output level. Double-click for 0 dB.", "Master volume");
+                gain.getProperties().set ("midiMapTarget", "master");
                 peakL = owner.state.masterPeakL; peakR = owner.state.masterPeakR; repaint();
             }
             void resized() override { gain.setBounds (6, 106, 54, getHeight() - 162); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22); }
@@ -2833,6 +2850,168 @@ private:
         juce::Slider amount;
         juce::TextButton add { "Add Groove..." };
         juce::Label empty;
+    };
+
+    // MIDI Map Mode, after the reference: mappable controls show in blue with their controller, the
+    // control being learned is outlined, and clicking a control learns it. Controls take part by
+    // carrying a "midiMapTarget" property with their mapping target.
+    class MapOverlay final : public juce::Component
+    {
+    public:
+        explicit MapOverlay (Impl& o) : owner (o) { setName ("MIDI map overlay"); setAlwaysOnTop (true); }
+        struct Target { juce::Component* component; juce::String key; };
+        std::vector<Target> targets() const
+        {
+            std::vector<Target> found;
+            const std::function<void (juce::Component&)> visit = [&] (juce::Component& c)
+            {
+                // Visibility down from the main component, so hidden panels and their controls are skipped.
+                if (&c == this || ! c.isVisible()) return;
+                if (const auto key = c.getProperties()["midiMapTarget"].toString(); key.isNotEmpty()) found.push_back ({ &c, key });
+                for (auto* child : c.getChildren()) visit (*child);
+            };
+            visit (owner);
+            return found;
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (juce::Colours::black.withAlpha (0.12f));
+            for (const auto& t : targets())
+            {
+                const auto r = getLocalArea (t.component, t.component->getLocalBounds()).toFloat();
+                if (! getLocalBounds().toFloat().intersects (r)) continue;
+                g.setColour (juce::Colour (0xff3d8bff).withAlpha (0.42f)); g.fillRect (r);
+                for (const auto& m : owner.state.midiMappings)
+                    if (m.target == t.key)
+                    {
+                        g.setColour (juce::Colours::white); g.setFont (font (9.0f, true));
+                        g.drawFittedText (juce::String (m.channel) + "/" + juce::String (m.controller), r.toNearestInt(), juce::Justification::centred, 1);
+                    }
+                if (owner.state.midiLearnTarget == t.key) { g.setColour (orange); g.drawRect (r.expanded (1), 2.0f); }
+            }
+        }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            juce::String key;
+            for (const auto& t : targets())
+                if (getLocalArea (t.component, t.component->getLocalBounds()).contains (e.getPosition())) key = t.key;
+            owner.report (owner.session.setMidiLearnTarget (key)); owner.refresh(); repaint();
+        }
+    private:
+        Impl& owner;
+    };
+
+    // The Mapping Browser: every MIDI mapping with its control, controller, Min and Max.
+    class MappingList final : public juce::Component
+    {
+    public:
+        explicit MappingList (Impl& o) : owner (o) { setName ("MIDI mappings"); }
+        void sync()
+        {
+            const auto& mappings = owner.state.midiMappings;
+            juce::StringArray keys; for (const auto& m : mappings) keys.add (m.target);
+            if (keys != shown)
+            {
+                shown = keys; rows.clear();
+                for (const auto& m : mappings) { auto* row = rows.add (new Row (*this, m.target)); addAndMakeVisible (row); }
+                resized();
+            }
+            for (int i = 0; i < rows.size(); ++i) rows[i]->show (mappings[(size_t) i]);
+            repaint();
+        }
+        void resized() override
+        {
+            for (int i = 0; i < rows.size(); ++i) rows[i]->setBounds (0, 22 + i * 46, getWidth(), 44);
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (muted); g.setFont (font (10.0f, true));
+            g.drawText ("MIDI MAPPINGS", 4, 0, getWidth() - 8, 20, juce::Justification::centredLeft);
+            if (rows.isEmpty())
+            {
+                g.setFont (font (11.0f));
+                g.drawFittedText ("Click a blue control, then move a knob or fader on your MIDI controller.", getLocalBounds().withTrimmedTop (24).reduced (8), juce::Justification::centredTop, 4);
+            }
+        }
+        // The control a target names, for the list.
+        juce::String describe (const juce::String& target) const
+        {
+            const auto parts = juce::StringArray::fromTokens (target, ":", "");
+            if (target == "master") return "Master / Volume";
+            for (const auto& t : owner.state.tracks)
+            {
+                if (parts[0] == "mixer" && t.id == parts[1]) return t.name + " / " + (parts[2] == "pan" ? "Pan" : "Volume");
+                if (parts[0] == "device")
+                    for (const auto* list : { &t.plugins })
+                        for (const auto& p : *list)
+                            if (p.id == parts[1] && p.isNativeEffect)
+                            {
+                                const auto fields = effectParameters (p.effect.kind);
+                                const int index = parts[2].getIntValue();
+                                return t.name + " / " + p.name + " / " + (juce::isPositiveAndBelow (index, (int) fields.size()) ? juce::String (fields[(size_t) index].label) : juce::String());
+                            }
+                if (parts[0] == "device" && t.instrument.isNativeEffect && t.instrument.id == parts[1])
+                {
+                    const auto fields = effectParameters (t.instrument.effect.kind);
+                    const int index = parts[2].getIntValue();
+                    return t.name + " / " + t.instrument.name + " / " + (juce::isPositiveAndBelow (index, (int) fields.size()) ? juce::String (fields[(size_t) index].label) : juce::String());
+                }
+            }
+            return target;
+        }
+    private:
+        class Row final : public juce::Component
+        {
+        public:
+            Row (MappingList& l, const juce::String& t) : list (l), target (t)
+            {
+                for (auto* c : std::initializer_list<juce::Component*> { &minimum, &maximum, &remove }) addAndMakeVisible (c);
+                for (auto* s : { &minimum, &maximum })
+                {
+                    s->setSliderStyle (juce::Slider::LinearBar); s->setWantsKeyboardFocus (false);
+                    s->setColour (juce::Slider::trackColourId, juce::Colour (0xff3d8bff).withAlpha (0.5f)); s->setColour (juce::Slider::textBoxTextColourId, ink);
+                    s->setNumDecimalPlacesToDisplay (2);
+                    s->onValueChange = [this] { list.owner.report (list.owner.session.setMidiMappingRange (target, (float) minimum.getValue(), (float) maximum.getValue())); list.owner.refresh(); };
+                }
+                minimum.setName ("Mapping minimum"); maximum.setName ("Mapping maximum");
+                minimum.setTooltip ("Min: the control's value at the controller's lowest position");
+                maximum.setTooltip ("Max: the control's value at the controller's highest position. Set it below Min to invert.");
+                remove.setName ("Remove mapping"); remove.setTooltip ("Remove this mapping");
+                remove.onClick = [this] { list.owner.report (list.owner.session.removeMidiMapping (target)); list.owner.refresh(); };
+            }
+            void show (const Session::MidiMapping& m)
+            {
+                mapping = m;
+                if (const auto range = list.owner.session.midiTargetRange (target))
+                    for (auto* s : { &minimum, &maximum }) s->setRange (range->first, range->second, 0);
+                if (! minimum.isMouseButtonDown()) minimum.setValue (m.minimum, juce::dontSendNotification);
+                if (! maximum.isMouseButtonDown()) maximum.setValue (m.maximum, juce::dontSendNotification);
+                repaint();
+            }
+            void resized() override
+            {
+                auto area = getLocalBounds().reduced (4, 2); area.removeFromTop (18);
+                remove.setBounds (area.removeFromRight (22));
+                minimum.setBounds (area.removeFromLeft (area.getWidth() / 2).reduced (1, 0)); maximum.setBounds (area.reduced (1, 0));
+            }
+            void paint (juce::Graphics& g) override
+            {
+                g.setColour (ink); g.setFont (font (10.5f));
+                g.drawText (list.describe (target), 4, 0, getWidth() - 70, 18, juce::Justification::centredLeft, true);
+                g.setColour (muted); g.setFont (font (10.0f));
+                g.drawText ("Ch " + juce::String (mapping.channel) + "  CC " + juce::String (mapping.controller), getWidth() - 70, 0, 66, 18, juce::Justification::centredRight);
+                g.setColour (line); g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
+            }
+        private:
+            MappingList& list;
+            const juce::String target;
+            Session::MidiMapping mapping;
+            juce::Slider minimum, maximum;
+            juce::TextButton remove { "X" };
+        };
+        Impl& owner;
+        juce::OwnedArray<Row> rows;
+        juce::StringArray shown;
     };
 
     class AudioClipView final : public juce::Component, private juce::ChangeListener
@@ -4610,6 +4789,7 @@ private:
             if (projectChanged || ! masterGain.isMouseButtonDown()) masterGain.setValue (owner.state.masterGainDb, juce::dontSendNotification);
             masterGain.setEnabled (! owner.session.isExporting());
             showAutomationState (masterGain, owner.state.masterVolumeAutomation, "Master output level. Double-click for 0 dB. The bottom of the fader is silence.", "Master volume");
+            masterGain.getProperties().set ("midiMapTarget", "master");
             automationButton.setEnabled (! owner.session.isExporting());
             addButton.setEnabled (track != nullptr);
             // Rebuild panels only when the device list itself changes.
@@ -4726,6 +4906,17 @@ private:
     PianoRoll pianoRoll;
     AudioClipView audioClipView { *this };
     LaunchBox midiLaunch { *this };
+    bool midiMapMode = false;
+    MapOverlay mapOverlay { *this };
+    MappingList mappingList { *this };
+    juce::TextButton midiMapButton { "MIDI" };
+    void setMidiMapMode (bool on)
+    {
+        midiMapMode = on;
+        if (! on) session.setMidiLearnTarget ({});
+        midiMapButton.setToggleState (on, juce::dontSendNotification);
+        resized(); refresh();
+    }
     GrooveBox clipGroove { *this };
     juce::Component::SafePointer<GroovePoolPanel> groovePool;
     int selectedDrumPad = 0; // The Drum Sampler pad that browser samples load into.
@@ -5358,6 +5549,7 @@ private:
         }
         followButton.setToggleState (followPlayhead, juce::dontSendNotification);
         ruler.sync(); deviceChain.sync(); repaint();
+        if (midiMapMode) { mappingList.sync(); mapOverlay.repaint(); }
         updateScroll();
         followView();
     }
@@ -7000,6 +7192,46 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         setBrowserCategory (BrowserCategory::audioEffects);
         check (! previewButton.isVisible() && ! previewVolume.isVisible(), "other categories hide them");
         setBrowserCategory (category);
+    }
+    {
+        // MIDI Map Mode: the switch covers the work area, clicking a control learns it, and the list edits its mapping.
+        check (! midiMapMode && ! mapOverlay.isVisible(), "MIDI Map Mode starts off");
+        midiMapButton.setToggleState (true, juce::dontSendNotification); midiMapButton.onClick();
+        check (midiMapMode && mapOverlay.isVisible() && mappingList.isVisible() && ! browserList.isVisible(),
+               "the MIDI switch shows the overlay and the mappings in place of the browser");
+        const int previousTrack = selectedTrack;
+        selectTrack (0); refresh();
+        auto* gain = findNamed (*canvas.getChildComponent (0), "Track volume");
+        const auto key = gain->getProperties()["midiMapTarget"].toString();
+        const auto targets = mapOverlay.targets();
+        check (key == "mixer:" + state.tracks[0].id + ":volume" && std::any_of (targets.begin(), targets.end(), [&] (const auto& t) { return t.key == key; })
+               && findNamed (deviceChain, "Master volume") != nullptr && findNamed (deviceChain, "Master volume")->getProperties()["midiMapTarget"].toString() == "master",
+               "the track's fader is a target in the overlay, and the master fader carries its target");
+        const auto centre = mapOverlay.getLocalArea (gain, gain->getLocalBounds()).getCentre().toFloat();
+        const auto now = juce::Time::getCurrentTime();
+        mapOverlay.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), centre, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f,
+                                                0, 0, 0, 0, &mapOverlay, &mapOverlay, now, centre, now, 1, false));
+        check (state.midiLearnTarget == key && std::abs (state.tracks[0].gainDb) < 50, "clicking the fader in the overlay learns it without moving it");
+        check (session.handleMidiControl (1, 7, 64).wasOk(), "a controller arrives"); refresh();
+        auto* minimum = dynamic_cast<juce::Slider*> (findNamed (mappingList, "Mapping minimum"));
+        check (state.midiMappings.size() == 1 && state.midiMappings[0].controller == 7 && minimum != nullptr && minimum->isVisible() && mappingList.isVisible(), "it maps the fader and the list shows the mapping");
+        minimum->setValue (-30, juce::sendNotificationSync);
+        check (std::abs (state.midiMappings[0].minimum + 30) < 1e-3, "the list's Min edits the mapping");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("midi-map-mode.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (createComponentSnapshot (getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        dynamic_cast<juce::Button*> (findNamed (mappingList, "Remove mapping"))->onClick(); refresh();
+        check (state.midiMappings.empty(), "its remove button removes it");
+        midiMapButton.setToggleState (false, juce::dontSendNotification); midiMapButton.onClick();
+        check (! midiMapMode && ! mapOverlay.isVisible() && browserList.isVisible() && state.midiLearnTarget.isEmpty(), "leaving Map Mode ends learning and restores the browser");
+        handleKey (juce::KeyPress ('M', juce::ModifierKeys::commandModifier, 0)); check (midiMapMode && midiMapButton.getToggleState(), "Cmd/Ctrl+M enters Map Mode");
+        handleKey (juce::KeyPress ('M', juce::ModifierKeys::commandModifier, 0)); check (! midiMapMode, "and leaves it");
+        selectTrack (previousTrack); refresh();
     }
     withGeneratedMidiController(session,[&](const juce::String& controller)
     {

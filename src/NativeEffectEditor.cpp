@@ -31,6 +31,9 @@ public:
         const auto specs = effectParameters (kind);
         for (size_t i = 0; i < specs.size(); ++i)
         {
+            // MIDI Map Mode finds the control by its mapping target.
+            sliders[i].getProperties().set ("midiMapTarget", "device:" + pluginId + ":" + juce::String ((int) i));
+            choices[i].getProperties().set ("midiMapTarget", "device:" + pluginId + ":" + juce::String ((int) i));
             const auto& spec = specs[i]; labels[i].setText (spec.label, juce::dontSendNotification);
             labels[i].setColour (juce::Label::textColourId, juce::Colour (0xffbbbbbb)); addAndMakeVisible (labels[i]);
             if (compact) { labels[i].setFont (juce::FontOptions (9.5f)); labels[i].setJustificationType (juce::Justification::centred); labels[i].setMinimumHorizontalScale (.75f); }

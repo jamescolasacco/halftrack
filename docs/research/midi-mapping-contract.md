@@ -33,7 +33,19 @@ A deleted device's mappings drop out of `Snapshot::midiMappings` and do nothing.
 - **Ranges by target.** `midiTargetRange(target)` reports a target's range.
 - **MIDI inputs.** A `MidiRemote` consumer is attached to every MIDI input instance of the current Edit, and reattached every second as devices come and go. It copies controller changes into a fixed ring under a spin lock on the MIDI thread and applies them on the message thread.
 
+## Map Mode
+
+The MIDI switch in the control bar (Cmd/Ctrl+M) enters Map Mode, which:
+
+- dims the working area and highlights every visible mappable control in blue with its channel/controller: track volume and pan, the master faders, and inline device knobs and menus;
+- outlines the control being learned in orange; clicking a control learns it, and clicking elsewhere stops learning;
+- replaces the browser with the mapping list, where each mapping shows its control path, channel and CC, with Min and Max sliders and a remove button.
+
+Leaving Map Mode ends learning. Controls take part by carrying a `midiMapTarget` property with their target key.
+
 ## Evidence
+
+The UI suite checks the switch and Cmd/Ctrl+M, the overlay's targets, learning a fader by clicking it in the overlay, the list's Min and remove button, and that leaving the mode ends learning and restores the browser.
 
 `tests/MidiMappingTests.cpp` (`midi-mapping-acceptance`) checks:
 
@@ -48,7 +60,6 @@ A deleted device's mappings drop out of `Snapshot::midiMappings` and do nothing.
 
 ## Not implemented
 
-- The Map Mode user interface (next commit).
 - Note and key mappings: buttons, clip launch, transport.
 - Per-input Remote switches (every input acts as a remote).
 - Takeover modes (Pick-Up, Value Scaling) and relative encoders.
