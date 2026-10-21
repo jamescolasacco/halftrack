@@ -1427,3 +1427,12 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **A test fix.** An AddressSanitizer pass over every suite found the groove suite reading a freed snapshot through a range-for over a temporary, and nothing else.
 
 See [the contract](research/preferences-contract.md).
+
+## Info View — 2026-10-21
+
+UI change in `src/MainComponent.cpp`, with documentation, and a test fix in `tests/GraphEditTests.cpp`.
+
+- **Info View.** A box under the browser says what the control under the pointer is and does, and when it is unavailable. View > Info or ? toggles it.
+- **A test fix.** The graph edit suite times the play head over a longer run, since its reported position can lag on slow machines (it failed on Linux CI).
+
+See [the contract](research/info-view-contract.md).

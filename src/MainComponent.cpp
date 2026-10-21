@@ -272,7 +272,7 @@ public:
         for (auto* child : std::initializer_list<juce::Component*> {
                  &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
-                 &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &ruler, &viewport,
+                 &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &info, &ruler, &viewport,
                  &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipGroove, &deviceChain })
             addAndMakeVisible (child);
 
@@ -580,6 +580,9 @@ public:
             hidden->setVisible (false);
         area.removeFromBottom (statusHeight);
         browserBounds = area.removeFromLeft (browserWidth);
+        // The Info View sits under the browser, as in the reference.
+        info.setVisible (showInfo);
+        if (showInfo) info.setBounds (browserBounds.removeFromBottom (infoHeight).reduced (6, 4));
         // MIDI Map Mode covers the working area and shows the mappings in place of the browser.
         mapOverlay.setVisible (midiMapMode); mappingList.setVisible (midiMapMode);
         if (midiMapMode) { mapOverlay.setBounds (area); mappingList.setBounds (browserBounds.reduced (6)); mapOverlay.toFront (false); }
@@ -712,6 +715,10 @@ public:
                 }
             }
             if (code == ',') { showAudioSettings(); return true; }
+        }
+        if (key.getTextCharacter() == '?' && ! cmd)
+        {
+            showInfo = ! showInfo; resized(); return true;
         }
         if((code=='R'||code=='r')&&cmd&&!shift&&!showPiano)
         {
@@ -7123,7 +7130,7 @@ private:
         {
             popup.addItem (45, "Session"); popup.addItem (43, "Arrangement"); popup.addItem (44, "Piano Roll"); popup.addItem (46, "Automation..."); popup.addItem (47, "Master Volume Automation..."); popup.addSeparator();
             popup.addItem (48, "Show Take Lanes", currentTrack() != nullptr && ! currentTrack()->isReturn && ! showSession, currentTrack() != nullptr && takeLanesShown.count (currentTrack()->id) > 0);
-            popup.addItem (49, "Automation Mode", ! showSession, automationMode); popup.addSeparator();
+            popup.addItem (49, "Automation Mode", ! showSession, automationMode); popup.addItem (90, "Info", true, showInfo); popup.addSeparator();
             const bool canZoom = ! showSession || showPiano;
             popup.addItem (40, showPiano ? "Fit Piano Roll" : "Fit Arrangement", canZoom); popup.addItem (41, "Zoom In", canZoom); popup.addItem (42, "Zoom Out", canZoom);
         }
@@ -7167,6 +7174,7 @@ private:
             case 39: insertTakeLaneFromUI(); break;
             case 48: toggleTakeLanes(); break;
             case 49: setAutomationMode (! automationMode); break;
+            case 90: showInfo = ! showInfo; resized(); break;
             case 20: session.undo(); break;
             case 21: session.redo(); break;
             case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); break;
@@ -7860,6 +7868,54 @@ private:
         juce::ComboBox type, depth;
         juce::TextButton mpe { "MPE Inputs..." }, inputConfig { "Input Config..." };
     };
+    // The Info View, after the reference's: what the control under the pointer is and does, from its
+    // name and tooltip, and when it cannot be used now.
+    class InfoView final : public juce::Component, private juce::Timer
+    {
+    public:
+        InfoView() { setName ("Info View"); setInterceptsMouseClicks (false, false); startTimerHz (10); }
+        juce::String title, body { "Point at a control to see what it does." };
+        // Describes a component, or the nearest of its parents that says what it is.
+        void describe (juce::Component* component)
+        {
+            juce::String nextTitle, nextBody;
+            bool unavailable = false;
+            for (auto* c = component; c != nullptr && c != this; c = c->getParentComponent())
+            {
+                auto tip = dynamic_cast<juce::TooltipClient*> (c) != nullptr ? dynamic_cast<juce::TooltipClient*> (c)->getTooltip() : juce::String();
+                auto name = c->getName();
+                if (auto* button = dynamic_cast<juce::Button*> (c); button != nullptr && button->getButtonText().isNotEmpty()) name = button->getButtonText();
+                if (tip.isEmpty() && name.isEmpty()) continue;
+                unavailable = ! c->isEnabled();
+                nextTitle = name.isNotEmpty() ? name : tip.upToFirstOccurrenceOf (":", false, false);
+                nextBody = tip;
+                break;
+            }
+            if (nextTitle.isEmpty()) nextBody = "Point at a control to see what it does.";
+            if (unavailable) nextBody << (nextBody.isEmpty() ? "" : " ") << "Not available here now.";
+            if (nextTitle == title && nextBody == body) return;
+            title = nextTitle; body = nextBody; repaint();
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (juce::Colour (0xff1e1e1e)); g.fillRect (getLocalBounds());
+            g.setColour (line); g.drawRect (getLocalBounds());
+            auto area = getLocalBounds().reduced (8, 6);
+            g.setColour (ink); g.setFont (font (11.0f, true));
+            g.drawText (title, area.removeFromTop (16), juce::Justification::centredLeft, true);
+            g.setColour (muted); g.setFont (font (10.5f));
+            g.drawFittedText (body, area, juce::Justification::topLeft, 6, 1.0f);
+        }
+    private:
+        void timerCallback() override
+        {
+            if (! isShowing()) return;
+            describe (juce::Desktop::getInstance().getMainMouseSource().getComponentUnderMouse());
+        }
+    };
+    InfoView info;
+    bool showInfo = true;
+    static constexpr int infoHeight = 110;
     void showAudioSettings() { showDialog ("Halftrack - Audio & MIDI Setup", std::make_unique<AudioSetupPanel> (*this), 660, 680); }
     // Preferences, after the reference's Record, Warp & Launch settings.
     class PreferencesPanel final : public juce::Component
@@ -10538,6 +10594,20 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         && std::abs (currentMidiClip()->notes.front().startBeat-unquantized.front().startBeat) < 1e-8,
         "one production undo restores quantized group");
 
+    {
+        // The Info View describes the control under the pointer, and says when it is unavailable.
+        check (info.isVisible() && info.getHeight() > 60, "the Info View shows under the browser");
+        info.describe (&playButton);
+        check (info.title.isNotEmpty() && info.body == playButton.getTooltip() && info.body.isNotEmpty(), "it names the Play button and shows what it does (" + info.title + ": " + info.body + ")");
+        playButton.setEnabled (false); info.describe (&playButton); playButton.setEnabled (true);
+        check (info.body.endsWith ("Not available here now."), "and says when a control is unavailable");
+        info.describe (nullptr);
+        check (info.title.isEmpty() && info.body.isNotEmpty(), "with nothing under the pointer it invites pointing at a control");
+        handleKey (juce::KeyPress ('/', juce::ModifierKeys::shiftModifier, '?'));
+        check (! info.isVisible(), "? hides it");
+        handleKey (juce::KeyPress ('/', juce::ModifierKeys::shiftModifier, '?'));
+        check (info.isVisible(), "and shows it again");
+    }
     {
         // Preferences: the panel's switches edit them, and solo clicks follow Exclusive Solo.
         PreferencesPanel panel (*this); panel.setSize (440, 300);
