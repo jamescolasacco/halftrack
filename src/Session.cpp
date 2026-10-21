@@ -3650,6 +3650,15 @@ Result Session::readDevicePreset (const File& file, DevicePreset& preset)
             }
         if (! validEffectSettings (result.effect)) return fail();
     }
+    else if (device == "plugin")
+    {
+        auto* description = xml->getChildByName ("PLUGIN");
+        auto* state = xml->getChildByName ("STATE");
+        if (description == nullptr || description->getFirstChildElement() == nullptr || state == nullptr
+            || ! result.description.loadFromXml (*description->getFirstChildElement()) || result.description.fileOrIdentifier.isEmpty()
+            || ! result.state.fromBase64Encoding (state->getAllSubText().trim())) return fail();
+        result.plugin = true;
+    }
     else return fail();
     preset = result; return Result::ok();
 }
@@ -3677,7 +3686,17 @@ Result Session::saveDevicePreset (const String& pluginId, const File& file, cons
                            u.mute ? 1.0 : 0.0, u.dcFilter ? 1.0 : 0.0 };
         for (int i = 0; i < utilityKeys.size(); ++i) values->setAttribute (utilityKeys[i], v[i]);
     }
-    else return Result::fail ("Presets can be saved from Halftrack's own devices.");
+    else if (auto* external = impl->externalPlugin (pluginId))
+    {
+        // A plug-in's preset is its identity and the state it saves, restored when it is loaded.
+        auto* instance = external->getAudioPluginInstance();
+        if (instance == nullptr || external->isMissing()) return Result::fail ("The plug-in is not loaded, so its state cannot be saved.");
+        juce::MemoryBlock state; instance->getStateInformation (state);
+        document.setAttribute ("device", "plugin");
+        document.createNewChildElement ("PLUGIN")->addChildElement (external->desc.createXml().release());
+        document.createNewChildElement ("STATE")->addTextElement (state.toBase64Encoding());
+    }
+    else return Result::fail ("Presets can be saved from devices and plug-ins.");
     if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
     juce::TemporaryFile temp (file);
     if (! document.writeTo (temp.getFile()) || ! temp.overwriteTargetFileWithTemporary()) return Result::fail ("Could not write the preset.");
@@ -3690,6 +3709,27 @@ Result Session::loadDevicePreset (int trackIndex, const File& file, String& plug
     auto* track = impl->track (trackIndex);
     if (track == nullptr) return Result::fail ("Track not found.");
     const auto before = snapshot().tracks[(size_t) trackIndex];
+    if (preset.plugin)
+    {
+        // The plug-in, then its saved state, in one undo step.
+        beginEditGesture ("Load " + preset.name);
+        auto result = addPlugin (trackIndex, preset.description);
+        const bool added = result.wasOk();
+        if (added)
+        {
+            const auto after = snapshot().tracks[(size_t) trackIndex];
+            pluginId.clear();
+            for (const auto& p : after.plugins)
+                if (std::none_of (before.plugins.begin(), before.plugins.end(), [&] (const auto& old) { return old.id == p.id; })) pluginId = p.id;
+            auto* external = impl->externalPlugin (pluginId);
+            auto* instance = external != nullptr ? external->getAudioPluginInstance() : nullptr;
+            if (instance == nullptr) result = Result::fail ("The preset's plug-in could not be found.");
+            else { instance->setStateInformation (preset.state.getData(), (int) preset.state.getSize()); external->flushPluginStateToValueTree(); }
+        }
+        endEditGesture();
+        if (result.failed()) { if (added && canUndo()) undo(); return result; }
+        return Result::ok();
+    }
     const bool instrument = ! preset.utility && effectIsInstrument (preset.effect.kind);
     if ((instrument || (! preset.utility && effectIsMidi (preset.effect.kind))) && ! before.isMidi) return Result::fail ("This preset needs a MIDI track.");
     beginEditGesture ("Load " + preset.name);

@@ -1331,3 +1331,11 @@ UI change in `src/Collections.*` (new), `src/MainComponent.cpp`, `src/Main.cpp`,
 - **A narrow control bar.** In a narrow window the transport ran into the view buttons. The punch switches, loop fields, Follow, capture and automation buttons now give way in turn.
 
 See [the contract](research/collections-contract.md).
+
+## Plug-in presets — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/PluginPresetTests.cpp` (new), with documentation.
+
+- **Presets for plug-ins.** Save Preset now works for plug-ins too. The preset keeps the plug-in and its state, is listed under the plug-in in the browser, and loads in one undo step.
+
+See [the presets contract](research/presets-contract.md#plug-in-presets).

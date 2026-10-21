@@ -761,15 +761,18 @@ public:
     struct HeldNote { int channel = 0, pitch = 0, velocity = 0; };
     struct MidiMonitorReading { std::vector<MidiMonitorMessage> messages; uint64_t total = 0; std::vector<HeldNote> held; juce::String chord; };
     std::optional<MidiMonitorReading> midiMonitor (const juce::String& pluginId) const;
-    // Device presets: a native device's or Utility's settings in a .halftrackpreset file. Racks and
-    // sample choices are not included. Saving refuses to replace a file unless asked to.
+    // Device presets: a native device's or Utility's settings, or a plug-in's identity and state, in
+    // a .halftrackpreset file. Racks and sample choices are not included. Saving refuses to replace
+    // a file unless asked to.
     static constexpr const char* presetExtension = ".halftrackpreset";
     struct DevicePreset
     {
         juce::String name;
-        bool utility = false;
+        bool utility = false, plugin = false;
         EffectSettings effect;     // For native devices.
         UtilitySettings settings;  // For the Utility.
+        juce::PluginDescription description; // For plug-ins, with the state they save.
+        juce::MemoryBlock state;
     };
     static juce::Result readDevicePreset (const juce::File&, DevicePreset&);
     juce::Result saveDevicePreset (const juce::String& pluginId, const juce::File&, const juce::String& name, bool overwrite = false);

@@ -5389,7 +5389,7 @@ private:
             menu.addSeparator(); menu.addItem (3, enabled ? "Deactivate" : "Activate");
             menu.addItem (5, "Group", native); if (rack) menu.addItem (6, "Ungroup", chains <= 1);
             const auto& info = track->plugins[(size_t) p];
-            menu.addItem (7, "Save Preset...", owner.userLibrary != juce::File() && ((info.isNativeEffect && ! rack) || info.isUtility));
+            menu.addItem (7, "Save Preset...", owner.userLibrary != juce::File() && ((info.isNativeEffect && ! rack) || info.isUtility || (! info.isNativeEffect && ! info.missing)));
             menu.addItem (4, "Delete");
             const auto trackId = track->id, id = pluginId;
             juce::Component::SafePointer<Impl> safe (&owner);
@@ -5406,7 +5406,12 @@ private:
                                 else if (choice == 3) safe->report (safe->session.setPluginEnabled (t, p, ! snapshot.tracks[(size_t) t].plugins[(size_t) p].enabled));
                                 else if (choice == 5) safe->groupSelectedDevices();
                                 else if (choice == 6) { safe->report (safe->session.ungroupRack (id)); safe->selectedDevices.clear(); }
-                                else if (choice == 7) { const auto& d = snapshot.tracks[(size_t) t].plugins[(size_t) p]; safe->savePresetDialog (id, d.isUtility ? juce::String ("Utility") : juce::String (effectName (d.effect.kind))); return; }
+                                else if (choice == 7)
+                                {
+                                    const auto& d = snapshot.tracks[(size_t) t].plugins[(size_t) p];
+                                    safe->savePresetDialog (id, d.isUtility ? juce::String ("Utility") : d.isNativeEffect ? juce::String (effectName (d.effect.kind)) : d.name);
+                                    return;
+                                }
                                 else safe->report (safe->session.removePlugin (t, p));
                                 safe->refresh(); return;
                             }
@@ -5641,7 +5646,7 @@ private:
     juce::String browserError;
     bool browserLoading = false;
     double browserScanStarted = 0;
-    std::vector<juce::PluginDescription> pluginItems;
+    static constexpr int pluginPresetKind = -4; // A preset row's kind under a plug-in.
     juce::File browserFolder;
     juce::String status;
     int selectedTrack = -1, selectedClip = -1, statusFrames = 0, ticks = 0;
@@ -5661,15 +5666,14 @@ private:
     juce::String browserKey (int row) const
     {
         if (row < 0 || row >= const_cast<Impl*> (this)->getNumRows()) return {};
-        if (pluginBrowser()) return "plugin:" + pluginItems[(size_t) row].createIdentifierString();
         if (sampleBrowser()) return browserItems[(size_t) row].directory ? juce::String() : "sample:" + browserItems[(size_t) row].file.getFullPathName();
         const auto& item = deviceItems[(size_t) row];
         if (item.header) return {};
         if (item.sample != juce::File()) return "sample:" + item.sample.getFullPathName();
+        if (item.preset != juce::File()) return "preset:" + juce::String (item.kind) + ":" + item.preset.getFullPathName();
         if (item.pluginId.isNotEmpty()) return "plugin:" + item.pluginId;
         if (item.groove >= 0) return "groove:" + Session::grooveLibrary()[(size_t) item.groove].name;
         if (item.grooveFile != juce::File()) return "groovefile:" + item.grooveFile.getFullPathName();
-        if (item.preset != juce::File()) return "preset:" + juce::String (item.kind) + ":" + item.preset.getFullPathName();
         return "device:" + juce::String (item.kind);
     }
     // A collection's item as a row, or nothing once it no longer exists.
@@ -7455,7 +7459,7 @@ private:
     }
     void updateBrowser()
     {
-        browserItems.clear(); pluginItems.clear(); deviceItems.clear();
+        browserItems.clear(); deviceItems.clear();
         const auto query = browserSearch.getText().trim();
         folderButton.setButtonText (pluginBrowser() ? "Manage / Scan..." : "Choose Folder...");
         upButton.setEnabled (browserFolder != juce::File() && browserFolder.getParentDirectory() != browserFolder);
@@ -7472,8 +7476,17 @@ private:
         }
         else if (pluginBrowser())
         {
-            for (const auto& type : session.knownPlugins().getTypes()) if (matches (type.name)) pluginItems.push_back (type);
-            std::sort (pluginItems.begin(), pluginItems.end(), [] (const auto& a, const auto& b) { return a.name.compareIgnoreCase (b.name) < 0; });
+            // Each plug-in, with its presets from the user library under it.
+            auto types = session.knownPlugins().getTypes();
+            std::sort (types.begin(), types.end(), [] (const auto& a, const auto& b) { return a.name.compareIgnoreCase (b.name) < 0; });
+            for (const auto& type : types)
+            {
+                std::vector<DeviceRow> presets; addPresetRows (presets, type.name, pluginPresetKind, matches);
+                for (auto& preset : presets) preset.pluginId = type.createIdentifierString();
+                if (! matches (type.name) && presets.empty()) continue;
+                DeviceRow row { type.name }; row.pluginId = type.createIdentifierString();
+                deviceItems.push_back (row); deviceItems.insert (deviceItems.end(), presets.begin(), presets.end());
+            }
         }
         else if (sampleBrowser())
         {
@@ -7543,7 +7556,7 @@ private:
         browserList.updateContent(); browserList.repaint(); browserCategories.repaint(); repaint();
     }
     int getNumRows() override
-    { return pluginBrowser() ? (int) pluginItems.size() : sampleBrowser() ? (int) browserItems.size() : (int) deviceItems.size(); }
+    { return sampleBrowser() ? (int) browserItems.size() : (int) deviceItems.size(); }
     void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override
     {
         if (row < 0 || row >= getNumRows()) return;
@@ -7555,7 +7568,7 @@ private:
     }
     void paintBrowserRow (int row, juce::Graphics& g, int width, int height, bool selected)
     {
-        if (! pluginBrowser() && ! sampleBrowser())
+        if (! sampleBrowser())
         {
             const auto& item = deviceItems[(size_t) row];
             if (item.header)
@@ -7598,15 +7611,10 @@ private:
         if (selected) { g.setColour (raised); g.fillRect (0, 0, width, height); }
         g.setColour (selected ? orange : muted);
         g.setFont (font (11.5f));
-        auto label = pluginBrowser() ? pluginItems[(size_t) row].name : browserItems[(size_t) row].file.getFileName();
-        const bool folder = ! pluginBrowser() && browserItems[(size_t) row].directory;
-        if (folder)
+        auto label = browserItems[(size_t) row].file.getFileName();
+        if (browserItems[(size_t) row].directory)
         {
             g.drawRect (6, height / 2 - 4, 11, 9); g.fillRect (6, height / 2 - 6, 5, 2);
-        }
-        else if (pluginBrowser())
-        {
-            g.drawRect (7, height / 2 - 5, 9, 11); g.drawHorizontalLine (height / 2 - 2, 5.0f, 18.0f); g.drawHorizontalLine (height / 2 + 3, 5.0f, 18.0f);
         }
         else
         {
@@ -7633,12 +7641,7 @@ private:
     void activateBrowserRow (int row)
     {
         if (row < 0 || row >= getNumRows()) return;
-        if (pluginBrowser())
-        {
-            if (selectedTrack < 0) addTrack();
-            report (session.addPlugin (selectedTrack, pluginItems[(size_t) row])); refresh();
-        }
-        else if (sampleBrowser())
+        if (sampleBrowser())
         {
             auto item = browserItems[(size_t) row];
             if (item.directory) { browserFolder = item.file; browserSearch.clear(); updateBrowser(); }
@@ -7648,7 +7651,7 @@ private:
         {
             const auto item = deviceItems[(size_t) row]; if (item.header) return;
             if (item.sample != juce::File()) { useBrowserSample (item.sample); return; }
-            if (item.pluginId.isNotEmpty())
+            if (item.pluginId.isNotEmpty() && item.preset == juce::File())
             {
                 for (const auto& type : session.knownPlugins().getTypes())
                     if (type.createIdentifierString() == item.pluginId) { if (selectedTrack < 0) addTrack(); report (session.addPlugin (selectedTrack, type)); refresh(); }
@@ -10814,6 +10817,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                    "the collections are saved in the user library");
             showBrowserCollection (0); toggleBrowserCollection (0, 0);
             check (deviceItems.empty() && ! collections.contains (saturatorKey, 0), "toggling it again takes it out");
+            setBrowserCategory (BrowserCategory::audioEffects);
+        }
+        {
+            // Plug-in presets in the user library are listed under their plug-in.
+            juce::PluginDescription stand;
+            stand.name = "Halftrack Stand-in"; stand.pluginFormatName = "VST3"; stand.fileOrIdentifier = "/nonexistent/Halftrack Stand-in.vst3"; stand.uniqueId = 0x48616c66;
+            session.knownPlugins().addType (stand);
+            const auto standPreset = presetFolder (stand.name).getChildFile (juce::String ("Soft") + Session::presetExtension);
+            check (standPreset.getParentDirectory().createDirectory().wasOk() && standPreset.replaceWithText ("<HALFTRACKPRESET version=\"1\" name=\"Soft\" device=\"plugin\"/>"),
+                   "put a preset in the stand-in plug-in's folder");
+            setBrowserCategory (BrowserCategory::plugins);
+            int standRow = -1; for (int i = 0; i < (int) deviceItems.size(); ++i) if (deviceItems[(size_t) i].label == stand.name) standRow = i;
+            check (standRow >= 0 && standRow + 1 < (int) deviceItems.size() && deviceItems[(size_t) standRow + 1].preset == standPreset
+                   && browserKey (standRow).startsWith ("plugin:") && browserKey (standRow + 1).startsWith ("preset:"),
+                   "the Plug-ins list shows the preset under its plug-in");
+            session.knownPlugins().removeType (stand);
             setBrowserCategory (BrowserCategory::audioEffects);
         }
         session.setTempo (97); refresh();

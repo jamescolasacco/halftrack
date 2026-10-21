@@ -40,3 +40,14 @@ The UI suite saves a preset through its dialog, finds it under its device in the
 - Hot-swapping presets.
 - Preset previews.
 - Track and clip templates.
+
+## Plug-in presets
+
+A plug-in's preset keeps its identity (its `PluginDescription`) and the state it saves (`getStateInformation`, as base64) in the same `.halftrackpreset` format, with `device="plugin"`.
+
+- **Saving.** The device menu's Save Preset works for any loaded plug-in, into `Presets/<plug-in name>` in the user library. It refuses to replace a file unless asked, as for native presets.
+- **Loading.** The preset adds the plug-in and restores its state as one undo step; a plug-in that cannot be found takes the addition back.
+- **Refusals.** A preset missing its plug-in or state is refused without changing the project.
+- **The browser.** The Plug-ins list shows each plug-in's presets under it, and they can be put in collections.
+
+`tests/PluginPresetTests.cpp` saves the controlled VST3 gain plug-in at a quarter gain as a preset. It then checks that loading the preset onto a track playing 0.5 renders 0.125, that one undo renders dry again, and that overwriting without asking and a preset without its plug-in are refused. The UI suite lists a preset under a stand-in plug-in. Plug-ins' own preset formats (`.vstpreset`, `.aupreset`) and program lists are not read.
