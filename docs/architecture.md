@@ -193,6 +193,10 @@ flowchart LR
 
 `WarpMode::repitch` keeps a warped clip's auto tempo with its time stretcher disabled and sets the `halftrackRepitch` property, which `cmake/PatchRepitch.cmake` reads so the engine resamples the clip rather than stretching it. Warp markers are paused as with Warp off. See the [contract](research/repitch-contract.md).
 
+## Clip envelopes
+
+`setClipEnvelope` writes one envelope of a clip to the engine's clip curve modifiers (one per control, with absolute, relative and scaling curves). Automation uses the absolute curve, volume modulation the scaling curve and other modulation the relative curve, so a control's modes keep separate timing. `ClipInfo::envelopes` reads them back in Session units. Mixer targets keep the manual-level baseline used by track automation, because the engine writes modulated levels into the fader's stored value during playback. Native devices mark controls with modifiers as modulated and read them every block. See the [contract](research/clip-envelopes-contract.md).
+
 ## Note chance
 
 `MidiNoteInfo::chance` and `velocityRange` are `halftrackChance` and `halftrackVelocityRange` note properties. Halftrack's `Behaviour` reports 64 playback variations for a clip whose notes use either, and builds each from a copy of the notes: a note is kept when `noteRoll (identity, pass)` is below its chance, and its velocity moves by the pass's share of its range. `cmake/PatchMidiVariations.cmake` lets the engine build and cycle those sequences per loop pass. See the [contract](research/note-chance-contract.md).

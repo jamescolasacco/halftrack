@@ -1161,6 +1161,7 @@ void NativeEffectPlugin::refreshAutomation()
         if (reads) controls[i]->updateToFollowCurve (edit.getTransport().getPosition());
         else controls[i]->setParameter (effectValueToProportion (kind, (int) i, settings.values[i]), juce::dontSendNotification);
         readsCurve[i].store (reads, std::memory_order_release);
+        modulated[i].store (! controls[i]->getModifiers().isEmpty(), std::memory_order_release);
     }
     if (rack) rack->refreshAutomation();
 }
@@ -1275,12 +1276,13 @@ void NativeEffectPlugin::applyToBuffer (const tracktion::PluginRenderContext& co
     // Controls whose automation reads this block override their manual settings, and an enclosing
     // rack's macros override both.
     bool automatedNow = rackControls != nullptr;
-    for (size_t i = 0; i < controls.size(); ++i) automatedNow = automatedNow || readsCurve[i].load (std::memory_order_acquire);
+    const auto reads = [this] (size_t i) { return readsCurve[i].load (std::memory_order_acquire) || modulated[i].load (std::memory_order_acquire); };
+    for (size_t i = 0; i < controls.size(); ++i) automatedNow = automatedNow || reads (i);
     if (automatedNow)
     {
         next = audioSettings;
         for (size_t i = 0; i < controls.size(); ++i)
-            if (readsCurve[i].load (std::memory_order_acquire)) next.values[i] = effectProportionToValue (kind, (int) i, controls[i]->getCurrentValue());
+            if (reads (i)) next.values[i] = effectProportionToValue (kind, (int) i, controls[i]->getCurrentValue());
         if (rackControls != nullptr)
             for (size_t i = 0; i < controls.size(); ++i) if (! std::isnan (rackControls[i])) next.values[i] = rackControls[i];
     }

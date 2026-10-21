@@ -57,6 +57,8 @@ int runPluginPresetTests (const juce::File& artifacts)
         ok (Session::readDevicePreset (file, preset), "read the preset");
         check (preset.plugin && preset.name == "Quarter" && preset.description.name == descriptions[0]->name && preset.state.getSize() > 0,
                "the preset names the plug-in and keeps its state");
+        std::cout << "The preset's plug-in: " << preset.description.pluginFormatName << " " << preset.description.fileOrIdentifier
+                  << " (scanned " << descriptions[0]->fileOrIdentifier << ")" << std::endl;
         check (s.saveDevicePreset (pluginId, file, "Quarter").failed(), "saving over it needs the overwrite choice");
 
         ok (s.removePlugin (0, 0), "remove the plug-in");

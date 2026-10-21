@@ -534,3 +534,11 @@ Warp markers rest while a clip is in Re-Pitch and new ones are refused, since th
 ### Playback start ramp
 
 Starting playback ramps the first few dozen samples in (39 at 48 kHz in the agreement suite), which an offline export does not. This is the engine's behaviour, kept to avoid clicks; whether the reference ramps its start is unmeasured.
+
+### Clip envelope scaling
+
+These are simplest defaults pending a comparison with the reference:
+
+- **Volume modulation** scales the fader position, as the engine's scaling curve does. Whether the reference scales the position, the gain or decibels is unmeasured.
+- **Device modulation** adds up to half a control's range each way. The reference's modulation range per control is unmeasured.
+- **Session clip automation** applies only while the clip plays; the control then returns to its own value. Whether the reference keeps the last automated value is unmeasured.

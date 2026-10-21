@@ -208,6 +208,8 @@ private:
     // Sampler: decoded samples stay alive until the audio thread acknowledges a newer one.
     std::vector<tracktion::AutomatableParameter*> controls;
     std::array<std::atomic<bool>, std::tuple_size_v<decltype (Session::EffectSettings::values)>> readsCurve {};
+    // Controls a clip envelope may modulate, which read their value whether or not a curve sets it.
+    std::array<std::atomic<bool>, std::tuple_size_v<decltype (Session::EffectSettings::values)>> modulated {};
     Session::EffectSettings audioSettings; // Audio thread: the last manual settings received.
     bool automated = false;
     void loadSample (int slot);

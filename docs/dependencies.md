@@ -235,3 +235,12 @@ The reader now takes the ratio of the segment holding the read position plus the
 ## Tracktion Re-Pitch patch
 
 `cmake/PatchRepitch.cmake` patches the pinned `tracktion_AudioClipBase.cpp` after the reverse-channels patch (input SHA-256 `1902c1ad6fd72e5a62c9f83778bf190d239e7e8ae8f77229d66ff8ba6de2df57`, patched `63336ba34baf1de28fce2e8bc0aff7b06d015ba45f9776cc62b0e7716449c455`). The reverse-channels patch accepts the new hash on reconfigure. `getActualTimeStretchMode` gave any clip that follows the tempo the default time stretcher when its own mode was disabled. That kept its pitch, so no clip could follow the tempo by resampling. A clip with the `halftrackRepitch` property now keeps the stretcher disabled, and the wave node's resampler then plays it at the tempo ratio. `repitch-acceptance` measures the rendered pitch.
+
+## Tracktion clip envelope patch
+
+`cmake/PatchClipEnvelopes.cmake` patches the pinned `tracktion_AutomatableParameter.cpp` (input SHA-256 `bd3609d9b42fa1312e775c48488307639894a79528c1d84b1909c050d1ae9aad`, patched `0f92ff4402fcbe24dae9477ce7910c7bcc8f2b6cb5229b47a2eab92226dbe2a7`). It makes two changes:
+
+- **Held values.** A curve of one point produced no automation stream. Halftrack holds such a curve's value on the message thread, but once a clip curve modulated the parameter, the audio thread computed the base from the manual value. The track curve source now stores a one-point curve's value in atomics for the audio thread.
+- **Deleted curves.** A clip curve's source on a parameter held a plain reference to the clip's curve modifier. A plug-in kept by the plug-in cache for undo could outlive the deleted modifier and read it from a timer, which crashed after undoing a track duplication. The source now detaches on the modifier's deletion notice: it stops its timer, drops its streams and ignores later calls.
+
+The engine's clip curve sources take a critical section around their streams on the audio thread. That is unchanged upstream behaviour and is not claimed lock-free. `clip-envelopes-acceptance` covers both changes.

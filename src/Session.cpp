@@ -857,6 +857,21 @@ Result validateAudioClips (const juce::ValueTree& state)
                 && (! finiteProperty (state[noteVelocityRangeProperty], -127, 127)
                     || std::floor ((double) state[noteVelocityRangeProperty]) != (double) state[noteVelocityRangeProperty]))))
         return Result::fail ("The project contains an invalid MIDI note chance or velocity range.");
+    // Clip envelope curves: values inside their curve's range and finite timing.
+    if (state.hasType (te::IDs::AUTOMATIONCURVE) && state.getParent().hasType (te::IDs::AUTOMATIONCURVEMODIFIER))
+    {
+        const auto type = te::curveModifierTypeFromString (state[te::IDs::type].toString());
+        const auto limits = state.getParent()[te::IDs::absoluteLimits].toString();
+        const double low = type == te::CurveModifierType::relative ? -0.5 : type == te::CurveModifierType::scale ? 0 : limits.upToFirstOccurrenceOf (" ", false, false).getDoubleValue();
+        const double high = type == te::CurveModifierType::relative ? 0.5 : type == te::CurveModifierType::scale ? 1 : limits.fromFirstOccurrenceOf (" ", false, false).getDoubleValue();
+        bool valid = type.has_value() && low <= high;
+        for (const auto& key : { te::IDs::start, te::IDs::length, te::IDs::loopStart, te::IDs::loopLength })
+            valid = valid && (! state.hasProperty (key) || finiteProperty (state[key], 0, 1000000));
+        for (const auto& point : state)
+            valid = valid && (! point.hasType (te::IDs::POINT) || (finiteProperty (point[te::IDs::t], 0, 1000000) && finiteProperty (point[te::IDs::v], low, high)
+                                                                   && (! point.hasProperty (te::IDs::c) || finiteProperty (point[te::IDs::c], -1, 1))));
+        if (! valid) return Result::fail ("The project contains an invalid clip envelope.");
+    }
     if (state.hasType (te::IDs::AUDIOCLIP))
     {
         const auto parse = [&state] (const juce::Identifier& key, double fallback, double& result)
@@ -1104,6 +1119,114 @@ int controllerLane (int type)
 }
 int laneValue (int lane, int stored) { return lane == Session::pitchBendLane ? stored - 8192 : stored >> 7; }
 int storedValue (int lane, int value) { return lane == Session::pitchBendLane ? value + 8192 : value << 7; }
+// Clip envelopes sit on the engine's clip curve modifiers, one per control. Each holds an absolute,
+// a relative and a scaling curve: automation uses the first, volume modulation scales and other
+// modulation offsets, so a control's automation and modulation keep separate curves and timing.
+te::CurveModifierType envelopeCurveType (const Session::EnvelopeTarget& target, Session::EnvelopeMode mode)
+{
+    if (mode == Session::EnvelopeMode::automation) return te::CurveModifierType::absolute;
+    return target.pluginId.isEmpty() && target.parameter == 0 ? te::CurveModifierType::scale : te::CurveModifierType::relative;
+}
+// The control an envelope target names on a track, and the device holding it (none for the mixer).
+te::AutomatableParameter* envelopeParameter (te::AudioTrack& track, const Session::EnvelopeTarget& target, te::Plugin** device = nullptr)
+{
+    if (target.pluginId.isEmpty())
+    {
+        auto* mixer = track.getVolumePlugin();
+        if (mixer == nullptr || (target.parameter != 0 && target.parameter != 1)) return nullptr;
+        return &automationParameter (*mixer, target.parameter == 0 ? Session::AutomationTarget::volume : Session::AutomationTarget::pan);
+    }
+    for (auto* p : track.pluginList.getPlugins())
+        if (p->itemID.toString() == target.pluginId)
+        {
+            if (device != nullptr) *device = p;
+            if (auto* native = dynamic_cast<NativeEffectPlugin*> (p)) return native->control (target.parameter);
+            if (dynamic_cast<te::ExternalPlugin*> (p) == nullptr) return nullptr;
+            const auto parameters = externalParameters (*p);
+            return juce::isPositiveAndBelow (target.parameter, (int) parameters.size()) ? parameters[(size_t) target.parameter] : nullptr;
+        }
+    return nullptr;
+}
+// The values an envelope takes, in Session's units; both ends are allowed.
+std::pair<float, float> envelopeRange (const Session::EnvelopeTarget& target, Session::EnvelopeMode mode, te::Plugin* device)
+{
+    const bool volume = target.pluginId.isEmpty() && target.parameter == 0;
+    if (mode == Session::EnvelopeMode::modulation) return volume ? std::pair { 0.0f, 1.0f } : std::pair { -1.0f, 1.0f };
+    if (target.pluginId.isEmpty()) return volume ? std::pair { -100.0f, 6.0f } : std::pair { -1.0f, 1.0f };
+    if (auto* native = dynamic_cast<NativeEffectPlugin*> (device))
+    { const auto& field = effectParameters (native->getKind())[(size_t) target.parameter]; return { field.minimum, field.maximum }; }
+    return { 0.0f, 1.0f };
+}
+float envelopeToCurve (const Session::EnvelopeTarget& target, Session::EnvelopeMode mode, te::Plugin* device, float value)
+{
+    const bool volume = target.pluginId.isEmpty() && target.parameter == 0;
+    if (mode == Session::EnvelopeMode::modulation) return volume ? value : value * 0.5f;
+    if (target.pluginId.isEmpty()) return volume ? te::decibelsToVolumeFaderPosition (value) : value;
+    if (auto* native = dynamic_cast<NativeEffectPlugin*> (device)) return effectValueToProportion (native->getKind(), target.parameter, value);
+    return value;
+}
+float curveToEnvelope (const Session::EnvelopeTarget& target, Session::EnvelopeMode mode, te::Plugin* device, float value)
+{
+    const bool volume = target.pluginId.isEmpty() && target.parameter == 0;
+    if (mode == Session::EnvelopeMode::modulation) return volume ? value : value * 2.0f;
+    if (target.pluginId.isEmpty()) return volume ? te::volumeFaderPositionToDB (value) : value;
+    if (auto* native = dynamic_cast<NativeEffectPlugin*> (device)) return effectProportionToValue (native->getKind(), target.parameter, value);
+    return value;
+}
+// The target a clip curve modifier controls on the clip's track, if it is one Session names.
+std::optional<Session::EnvelopeTarget> envelopeTargetOf (te::AudioTrack& track, const te::AutomatableParameterID& id, te::Plugin** device)
+{
+    if (auto* mixer = track.getVolumePlugin(); mixer != nullptr && mixer->itemID == id.automatableEditItemID)
+    {
+        if (id.paramID == mixer->volParam->paramID) return Session::EnvelopeTarget { {}, 0 };
+        if (id.paramID == mixer->panParam->paramID) return Session::EnvelopeTarget { {}, 1 };
+        return std::nullopt;
+    }
+    for (auto* p : track.pluginList.getPlugins())
+        if (p->itemID == id.automatableEditItemID)
+        {
+            *device = p;
+            if (auto* native = dynamic_cast<NativeEffectPlugin*> (p))
+            {
+                for (int i = 0; i < native->numControls(); ++i) if (native->control (i)->paramID == id.paramID) return Session::EnvelopeTarget { p->itemID.toString(), i };
+            }
+            else if (dynamic_cast<te::ExternalPlugin*> (p) != nullptr)
+            {
+                const auto parameters = externalParameters (*p);
+                for (size_t i = 0; i < parameters.size(); ++i) if (parameters[i]->paramID == id.paramID) return Session::EnvelopeTarget { p->itemID.toString(), (int) i };
+            }
+            return std::nullopt;
+        }
+    return std::nullopt;
+}
+std::vector<Session::ClipEnvelope> clipEnvelopes (te::Clip& clip)
+{
+    std::vector<Session::ClipEnvelope> result;
+    auto* track = dynamic_cast<te::AudioTrack*> (clip.getTrack());
+    auto* list = track != nullptr && clip.state.getChildWithName (te::IDs::AUTOMATIONCURVES).getNumChildren() > 0 ? clip.getAutomationCurveList (false) : nullptr;
+    if (list == nullptr) return result;
+    for (auto modifier : list->getItems())
+    {
+        te::Plugin* device = nullptr;
+        const auto target = envelopeTargetOf (*track, modifier->getDestID(), &device);
+        if (! target) continue;
+        for (const auto mode : { Session::EnvelopeMode::modulation, Session::EnvelopeMode::automation })
+        {
+            const auto type = envelopeCurveType (*target, mode);
+            auto& curve = modifier->getCurve (type).curve;
+            if (curve.getNumPoints() == 0) continue;
+            Session::ClipEnvelope envelope { *target, mode, {} };
+            for (int i = 0; i < curve.getNumPoints(); ++i)
+                envelope.points.push_back ({ te::toBeats (curve.getPointPosition (i), clip.edit.tempoSequence).inBeats(),
+                                             curveToEnvelope (*target, mode, device, curve.getPointValue (i)) });
+            auto& timing = modifier->getCurveTiming (type);
+            envelope.unlinked = timing.unlinked.get();
+            envelope.loopBeats = te::BeatDuration (timing.loopLength.get()).inBeats();
+            result.push_back (std::move (envelope));
+        }
+    }
+    return result;
+}
 Session::ClipInfo describeClip (te::Clip& clip)
 {
     Session::ClipInfo result;
@@ -1115,6 +1238,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
     result.launch = clipLaunchSettings (clip.state);
     result.scale = clipScale (clip.state);
     result.grooveId = clip.state[clipGrooveProperty].toString();
+    result.envelopes = clipEnvelopes (clip);
     if (clip.usesSourceFile()) result.file = clip.getSourceFileReference().getFile();
     if (auto* audio = dynamic_cast<te::WaveAudioClip*> (&clip))
     {
@@ -3711,9 +3835,15 @@ Result Session::loadDevicePreset (int trackIndex, const File& file, String& plug
     const auto before = snapshot().tracks[(size_t) trackIndex];
     if (preset.plugin)
     {
+        // A scanned plug-in of the same identity is used where it is now, since a plug-in can
+        // report a location inside its bundle that its format then does not recognise.
+        auto description = preset.description;
+        for (const auto& known : knownPlugins().getTypes())
+            if (known.pluginFormatName == description.pluginFormatName && known.uniqueId == description.uniqueId && known.name == description.name)
+            { description = known; break; }
         // The plug-in, then its saved state, in one undo step.
         beginEditGesture ("Load " + preset.name);
-        auto result = addPlugin (trackIndex, preset.description);
+        auto result = addPlugin (trackIndex, description);
         const bool added = result.wasOk();
         if (added)
         {
@@ -6969,6 +7099,61 @@ Result Session::setTrackAutomation (const String& trackId, AutomationTarget targ
 }
 float Session::deviceAutomationValueToProportion (EffectKind kind, int parameter, float value) { return effectValueToProportion (kind, parameter, value); }
 float Session::deviceAutomationProportionToValue (EffectKind kind, int parameter, float proportion) { return effectProportionToValue (kind, parameter, proportion); }
+Result Session::setClipEnvelope (const String& clipId, const ClipEnvelope& envelope)
+{
+    if (impl->exporting || impl->anyRecording()) return Result::fail ("Stop recording or finish exporting before editing clip envelopes.");
+    te::Clip* clip = nullptr;
+    for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* c : allTrackClips (*t)) if (c->itemID.toString() == clipId) clip = c;
+    auto* track = clip != nullptr ? dynamic_cast<te::AudioTrack*> (clip->getTrack()) : nullptr;
+    if (track == nullptr || (dynamic_cast<te::WaveAudioClip*> (clip) == nullptr && dynamic_cast<te::MidiClip*> (clip) == nullptr)) return Result::fail ("Clip not found.");
+    if (auto frozen = impl->unfrozen (track); frozen.failed()) return frozen;
+    if (envelope.mode == EnvelopeMode::automation && clip->getClipSlot() == nullptr)
+        return Result::fail ("Arrangement clips modulate controls; automation envelopes belong to Session clips.");
+    te::Plugin* device = nullptr;
+    auto* parameter = envelopeParameter (*track, envelope.target, &device);
+    if (parameter == nullptr) return Result::fail ("That control is not on the clip's track.");
+    const auto [low, high] = envelopeRange (envelope.target, envelope.mode, device);
+    if (envelope.points.size() > 4096) return Result::fail ("An envelope can contain at most 4096 points.");
+    double previous = -1;
+    for (const auto& point : envelope.points)
+    {
+        if (! std::isfinite (point.beat) || point.beat < 0 || point.beat > 1000000 || point.beat <= previous || (previous >= 0 && point.beat - previous < 0.999e-6)
+            || ! std::isfinite (point.value) || point.value < low || point.value > high)
+            return Result::fail ("An envelope needs ordered beat points from " + String (low) + " to " + String (high) + ".");
+        previous = point.beat;
+    }
+    if (! std::isfinite (envelope.loopBeats) || envelope.loopBeats < 1 || envelope.loopBeats > 1024) return Result::fail ("An envelope loop is 1 to 1024 beats.");
+    const te::AutomatableParameterID id { parameter->automatableEditElement.itemID, parameter->paramID };
+    const auto existing = [&] { for (const auto& e : clipEnvelopes (*clip)) if (e.target == envelope.target && e.mode == envelope.mode) return std::optional (e); return std::optional<ClipEnvelope>(); }();
+    if (existing ? *existing == envelope : envelope.points.empty()) return Result::ok();
+    impl->transaction ("Edit clip envelope");
+    auto* undo = &impl->edit->getUndoManager();
+    auto* list = clip->getAutomationCurveList (true);
+    te::AutomationCurveModifier::Ptr modifier;
+    for (auto item : list->getItems()) if (item->getDestID() == id) modifier = item;
+    if (modifier == nullptr) modifier = list->addCurve (*parameter);
+    const auto type = envelopeCurveType (envelope.target, envelope.mode);
+    auto& curve = modifier->getCurve (type).curve;
+    curve.clear (undo);
+    for (const auto& point : envelope.points)
+        curve.addPoint (te::BeatPosition::fromBeats (point.beat), envelopeToCurve (envelope.target, envelope.mode, device, point.value), 0, undo);
+    auto& timing = modifier->getCurveTiming (type);
+    timing.unlinked = envelope.unlinked;
+    timing.start = te::BeatPosition(); timing.loopStart = te::BeatPosition();
+    timing.looping = true; timing.loopLength = te::BeatDuration::fromBeats (envelope.loopBeats);
+    if (! te::hasAnyPoints (*modifier)) modifier->remove();
+    // The mixer keeps its manual level as with track automation, since the engine writes the
+    // modulated level into the fader's stored value while the clip plays.
+    if (auto* mixer = dynamic_cast<te::VolumeAndPanPlugin*> (&parameter->automatableEditElement))
+    {
+        const auto& property = manualAutomationProperty (envelope.target.parameter == 0 ? AutomationTarget::volume : AutomationTarget::pan);
+        if (! mixer->state.hasProperty (property)) mixer->state.setProperty (property, parameter->getCurrentExplicitValue(), nullptr);
+    }
+    parameter->updateStream();
+    if (auto* native = dynamic_cast<NativeEffectPlugin*> (device)) native->refreshAutomation();
+    impl->edit->dispatchPendingUpdatesSynchronously();
+    impl->changed(); return Result::ok();
+}
 Result Session::setDeviceAutomation (const String& pluginId, int parameter, const AutomationLane& lane)
 {
     te::AudioTrack* owner = nullptr;

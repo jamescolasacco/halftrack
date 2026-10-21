@@ -145,6 +145,29 @@ public:
         std::vector<AutomationPoint> points;
         bool operator== (const AutomationLane&) const = default;
     };
+    // Clip envelopes, after the reference's: while a clip plays it changes a control of its track's
+    // mixer or of a device on that track. Modulation moves the control from its value: volume as a
+    // fraction (0-1) of the fader position, pan by -1 to +1, a device control by -1 to +1 halves of
+    // its range. Automation, for Session clips only, sets the control in its own units (decibels,
+    // pan, a native control's units or a plug-in's 0-1). Points are beats from the clip's content
+    // start. A linked envelope follows the clip and its loop; an unlinked one loops on its own
+    // length from the clip's start.
+    enum class EnvelopeMode { modulation, automation };
+    struct EnvelopeTarget
+    {
+        juce::String pluginId; // Empty for the track's mixer.
+        int parameter = 0;     // The mixer's 0 volume or 1 pan, a native control or a plug-in parameter index.
+        bool operator== (const EnvelopeTarget&) const = default;
+    };
+    struct ClipEnvelope
+    {
+        EnvelopeTarget target;
+        EnvelopeMode mode = EnvelopeMode::modulation;
+        std::vector<AutomationPoint> points;
+        bool unlinked = false;
+        double loopBeats = 4; // An unlinked envelope's loop, 1 to 1024 beats.
+        bool operator== (const ClipEnvelope&) const = default;
+    };
     // Coordinate mapping matches native interpolation, including the volume fader taper.
     static float automationValueToProportion (AutomationTarget, float value);
     static float automationProportionToValue (AutomationTarget, float proportion);
@@ -267,6 +290,7 @@ public:
         ScaleSettings scale;
         juce::String grooveId; // The pool groove a MIDI clip plays with; empty for None.
         std::vector<WarpMarker> warpMarkers; // A warped audio clip's markers, in order.
+        std::vector<ClipEnvelope> envelopes; // Envelopes with points, in the order they were added.
         bool mediaMissing = false; // An audio clip whose file is not on disk plays silence.
     };
     struct LocatorInfo { juce::String id, name; double position = 0; };
@@ -642,6 +666,8 @@ public:
     // plug-in's own text. Empty for an unknown id, a native device or a missing plug-in.
     struct PluginParameterInfo { juce::String name, text; float value = 0; };
     std::vector<PluginParameterInfo> pluginParameters (const juce::String& pluginId) const;
+    // Sets a clip's envelope for its target and mode as one undo step; no points removes it.
+    juce::Result setClipEnvelope (const juce::String& clipId, const ClipEnvelope&);
     // Automation Arm, after the reference. While it is on and the transport records, moving a track's
     // volume or pan, the master volume or a native device control writes that lane at the playhead:
     // while an edit gesture holds the control (then the earlier automation resumes), or until recording

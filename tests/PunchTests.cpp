@@ -132,10 +132,12 @@ int runPunchTests (const juce::File& artifacts)
                 pumpSyntheticTestDevice (s, 1);
             }
             juce::String sentAt;
+            std::vector<double> sent;
             for (const double at : { .5, 1.5, 2.5 })
             {
                 // Until the play head reaches the note's time, however late playback started.
                 for (int i = 0; i < 400 && s.snapshot().position < at; ++i) pumpSyntheticTestDevice (s, 1);
+                sent.push_back (s.snapshot().position);
                 sentAt << juce::String (s.snapshot().position, 3) << (s.snapshot().recording ? "r " : " ");
                 controller.now (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100));
                 pumpSyntheticTestDevice (s, blocksPerSecond / 10);
@@ -147,7 +149,12 @@ int runPunchTests (const juce::File& artifacts)
             check (midiClips.size() == 1 && std::abs (midiClips[0].start - 1) < 1e-3 && std::abs (midiClips[0].length - 1) < 1e-3,
                    "the MIDI take is trimmed to the brace (" + juce::String ((int) midiClips.size()) + " clips, started " + started.trim() + ", notes sent at " + sentAt.trim()
                        + (midiClips.empty() ? juce::String() : ", from " + juce::String (midiClips[0].start, 3) + " for " + juce::String (midiClips[0].length, 3)) + ")");
-            check (midiClips[0].notes.size() == 1 && std::abs (midiClips[0].notes[0].startBeat - 1) < .1, "only the note played inside the brace remains, at its place");
+            // The note lands where the play head was when it was sent, which slow machines reach late;
+            // the reported position trails the play head by a little.
+            const double sentBeat = (sent[1] - 1) * 2;
+            check (midiClips[0].notes.size() == 1 && midiClips[0].notes[0].startBeat > sentBeat - .05 && midiClips[0].notes[0].startBeat < sentBeat + .15,
+                   "only the note played inside the brace remains, at its place (" + juce::String ((int) midiClips[0].notes.size()) + " notes"
+                       + (midiClips[0].notes.empty() ? juce::String() : ", at beat " + juce::String (midiClips[0].notes[0].startBeat, 3)) + ", sent at beat " + juce::String (sentBeat, 3) + ")");
             ok (s.setTrackArmed (keys, false), "disarm the MIDI track");
         }
 
