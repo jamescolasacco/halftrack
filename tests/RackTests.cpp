@@ -645,7 +645,16 @@ void allocationTests (const juce::File& root)
         bool addSystemAudioIODeviceTypes() override { return false; }
         bool canScanPluginsOutOfProcess() override { return false; }
     };
-    te::Engine engine ("Halftrack Rack Audit", nullptr, std::make_unique<Quiet>());
+    // Settings and temporary files stay in this run's folder, apart from other checkouts' runs.
+    struct Storage final : te::PropertyStorage
+    {
+        explicit Storage (juce::File directory) : PropertyStorage ("Halftrack Rack Audit"), folder (std::move (directory)) {}
+        juce::File getAppPrefsFolder() override { return folder; }
+        juce::File folder;
+    };
+    const auto engineFolder = root.getChildFile ("Audit engine");
+    ok (engineFolder.createDirectory(), "create the audit engine's folder");
+    te::Engine engine (std::make_unique<Storage> (engineFolder), nullptr, std::make_unique<Quiet>());
     engine.getPluginManager().createBuiltInType<NativeEffectPlugin>();
     auto edit = te::Edit::createSingleTrackEdit (engine);
     const auto sample = root.getChildFile ("audit.wav");
