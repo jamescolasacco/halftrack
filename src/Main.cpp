@@ -82,6 +82,8 @@ int runWarpModeTests (const juce::File&);
 int runSliceTests (const juce::File&);
 int runMpeTests (const juce::File&);
 int runInputConfigTests (const juce::File&);
+int runFuzzTests (const juce::File&);
+int runGraphEditTests (const juce::File&);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -255,6 +257,18 @@ public:
         {
             const int i = args.indexOf ("--self-test-routing");
             setApplicationReturnValue (runRoutingTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-graph-edits"))
+        {
+            const int i = args.indexOf ("--self-test-graph-edits");
+            setApplicationReturnValue (runGraphEditTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-fuzz"))
+        {
+            const int i = args.indexOf ("--self-test-fuzz");
+            setApplicationReturnValue (runFuzzTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-input-config"))

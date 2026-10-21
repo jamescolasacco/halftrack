@@ -1,0 +1,49 @@
+# Robustness suites contract
+
+Two verification suites test existing behaviour under stress rather than adding features. Both are generated, deterministic and bounded.
+
+## Graph edits during playback
+
+`tests/GraphEditTests.cpp` plays a 1 kHz sine clip and a held MIDI chord through the synthetic device while making 96 edits from a fixed seed:
+
+- adding and removing EQ Three devices;
+- moving the audio track's output to Sends Only and back;
+- changing its send to a return;
+- swapping the MIDI track's instrument between the Poly Synth and the built-in synth;
+- adding and removing audio tracks;
+- changing the MIDI track's gain.
+
+After every edit it plays three blocks and checks:
+- the output stays finite and below 4;
+- playback keeps going.
+
+Afterwards:
+- the play head has kept time within 0.2 s;
+- once the edits are put back, the sine plays at its level within 1% (measured 1.0005).
+
+## Malformed input
+
+`tests/FuzzTests.cpp` saves a project using most of the model:
+- audio clips, one warped in Texture with settings;
+- a clip envelope, a device, volume automation, a return and a send;
+- a MIDI clip whose notes have chance, velocity range and MPE pitch bend.
+
+It then loads 300 mutants of it from a fixed seed. Each mutant either:
+- replaces an attribute value with empty, non-finite, huge, negative or junk text, or a 4000-digit number;
+- removes or duplicates an element;
+- cuts the file short;
+- or flips bytes.
+
+Each load either succeeds, and the project then saves and reopens, or is refused leaving the open project unchanged. Junk audio, a WAV cut inside its header, a broken MIDI file and a preset with a non-finite setting are each refused without changing the project.
+
+## What the fuzzing found
+
+- **A crash.** A mutant naming a missing device as a clip envelope's target crashed the engine while connecting the curve. Projects with such a target are now refused on load, and the engine skips such a curve rather than dereferencing it (the clip envelope patch in [dependencies](../dependencies.md#tracktion-clip-envelope-patch)).
+- **A save that would not reopen.** A mixer level outside the fader's 0–1 range loaded, and saving then wrote a stored level that the loader refuses. Mixer levels and pans out of range are now refused on load.
+
+A local run of 1500 more mutants with another seed (`HALFTRACK_FUZZ_SEED`, `HALFTRACK_FUZZ_COUNT`) found nothing further.
+
+## Not yet covered
+
+- Real plug-ins and real device unplugging under edits are untested.
+- Longer fuzzing runs, other file types (grooves, collections, settings) and concurrent edits from several threads are missing.

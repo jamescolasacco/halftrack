@@ -1,16 +1,17 @@
-# Halftrack clip envelopes for pinned Tracktion Engine, two fixes to automatable parameters.
+# Halftrack clip envelopes for pinned Tracktion Engine, fixes to automatable parameters.
 # A curve of one point holds its value, but the engine streams only curves of two or more
 # points, so once a clip envelope modulated the parameter the audio thread took the base from
 # the manual value instead; the curve source now keeps a one-point curve's value for it.
 # A clip curve's source on a parameter held a plain reference to the curve, so a plug-in kept
 # for undo outlived a deleted clip's curve and read it later; the source now detaches when
-# the curve is deleted.
+# the curve is deleted, and a curve whose destination is missing (as a malformed project can
+# name) is skipped rather than dereferenced.
 # Retains all upstream source notices. Validates every file before writing any.
 function(halftrack_patch_clip_envelopes source_dir)
     set(source0 "${source_dir}/modules/tracktion_engine/model/automation/tracktion_AutomatableParameter.cpp")
     set(original0 "bd3609d9b42fa1312e775c48488307639894a79528c1d84b1909c050d1ae9aad")
-    set(patched0 "0f92ff4402fcbe24dae9477ce7910c7bcc8f2b6cb5229b47a2eab92226dbe2a7")
-    set(count0 11)
+    set(patched0 "fd6b4d431d6d47a1478b972e419d8a0f10c06be9ca4e7695385dde9420767de1")
+    set(count0 12)
     set(before0_0 [=[    AutomatableParameter& parameter;
     AutomationCurve curve;
 ]=])
@@ -136,6 +137,17 @@ function(halftrack_patch_clip_envelopes source_dir)
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AutomationCurveModifierSource)]=])
+    set(before0_11 [=[            auto assignedParam = getParameter (*curveModifier);
+            assert (assignedParam);
+            assert (&parameter == assignedParam);
+            as = new AutomationCurveModifierSource (*assignedParam,]=])
+    set(after0_11 [=[            auto assignedParam = getParameter (*curveModifier);
+
+            // Halftrack: a curve whose destination is missing, or another parameter, has no source here.
+            if (assignedParam == nullptr || assignedParam.get() != &parameter)
+                return nullptr;
+
+            as = new AutomationCurveModifierSource (*assignedParam,]=])
     foreach(index RANGE 0 0)
         file(SHA256 "${source${index}}" hash)
         if(hash STREQUAL "${patched${index}}")

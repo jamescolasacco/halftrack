@@ -243,6 +243,10 @@ Result validateMixerAutomation (const juce::ValueTree& state)
 {
     if (isMixerState (state))
     {
+        // The fader's own level and pan, which the engine would otherwise load out of range and save back.
+        if ((state.hasProperty (te::IDs::volume) && ! finiteProperty (state[te::IDs::volume], 0, 1))
+            || (state.hasProperty (te::IDs::pan) && ! finiteProperty (state[te::IDs::pan], -1, 1)))
+            return Result::fail ("Invalid mixer level or pan.");
         std::map<String, float> explicitValues;
         if (auto result = readStoredManualParameters (state, explicitValues); result.failed()) return result;
         for (const auto& key : { manualVolumeProperty, manualPanProperty })
@@ -843,6 +847,26 @@ Result validateFollowActions (const juce::ValueTree& state)
     return Result::ok();
 }
 
+// Clip envelope curves name the device they control by its ID and a parameter; the engine
+// dereferences that device when connecting the curve, so one naming nothing is refused.
+Result validateCurveModifiers (const juce::ValueTree& state)
+{
+    std::set<String> ids;
+    std::function<void (const juce::ValueTree&)> gather = [&] (const juce::ValueTree& v)
+    { if (v.hasType (te::IDs::PLUGIN) && v.hasProperty (te::IDs::id)) ids.insert (v[te::IDs::id].toString()); for (const auto& child : v) gather (child); };
+    gather (state);
+    std::function<bool (const juce::ValueTree&)> valid = [&] (const juce::ValueTree& v)
+    {
+        if (v.hasType (te::IDs::AUTOMATIONCURVEMODIFIER))
+        {
+            const auto source = v[te::IDs::source].toString();
+            if (! source.containsOnly ("0123456789") || source.isEmpty() || ! ids.contains (source) || v[te::IDs::paramID].toString().isEmpty()) return false;
+        }
+        for (const auto& child : v) if (! valid (child)) return false;
+        return true;
+    };
+    return valid (state) ? Result::ok() : Result::fail ("The project contains a clip envelope for a device it does not have.");
+}
 Result validateAudioClips (const juce::ValueTree& state)
 {
     if ((state.hasType(te::IDs::AUDIOCLIP) || state.hasType(te::IDs::MIDICLIP)) && state.hasProperty(te::IDs::mute))
@@ -3729,6 +3753,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateRackIdentities (state); result.failed()) return result;
     if (auto result = NativeEffectPlugin::resolveSamples (state, file.getParentDirectory()); result.failed()) return result;
     if (auto result = validateAudioClips (state); result.failed()) return result;
+    if (auto result = validateCurveModifiers (state); result.failed()) return result;
     if (auto result = validateFollowActions (state); result.failed()) return result;
     if (auto result = validateLocators (state); result.failed()) return result;
     if (auto result = validateTrackDelays (state); result.failed()) return result;

@@ -238,10 +238,11 @@ The reader now takes the ratio of the segment holding the read position plus the
 
 ## Tracktion clip envelope patch
 
-`cmake/PatchClipEnvelopes.cmake` patches the pinned `tracktion_AutomatableParameter.cpp` (input SHA-256 `bd3609d9b42fa1312e775c48488307639894a79528c1d84b1909c050d1ae9aad`, patched `0f92ff4402fcbe24dae9477ce7910c7bcc8f2b6cb5229b47a2eab92226dbe2a7`). It makes two changes:
+`cmake/PatchClipEnvelopes.cmake` patches the pinned `tracktion_AutomatableParameter.cpp` (input SHA-256 `bd3609d9b42fa1312e775c48488307639894a79528c1d84b1909c050d1ae9aad`, patched `fd6b4d431d6d47a1478b972e419d8a0f10c06be9ca4e7695385dde9420767de1`). It makes three changes:
 
 - **Held values.** A curve of one point produced no automation stream. Halftrack holds such a curve's value on the message thread, but once a clip curve modulated the parameter, the audio thread computed the base from the manual value. The track curve source now stores a one-point curve's value in atomics for the audio thread.
 - **Deleted curves.** A clip curve's source on a parameter held a plain reference to the clip's curve modifier. A plug-in kept by the plug-in cache for undo could outlive the deleted modifier and read it from a timer, which crashed after undoing a track duplication. The source now detaches on the modifier's deletion notice: it stops its timer, drops its streams and ignores later calls.
+- **Missing destinations.** A curve whose destination parameter is missing, as a malformed project can name, was dereferenced when its source was made. Such a curve now gets no source. Fuzzing found this (see the [robustness contract](research/robustness-contract.md)).
 
 The engine's clip curve sources take a critical section around their streams on the audio thread. That is unchanged upstream behaviour and is not claimed lock-free. `clip-envelopes-acceptance` covers both changes.
 

@@ -567,3 +567,7 @@ These are simplest defaults pending a comparison with the reference:
 ### Input configuration
 
 A pair of input channels is a stereo input or two mono inputs, not both at once as the reference allows. This is the engine's device model; offering both would need a second device over the same channels.
+
+### Linux CI recording stop
+
+On Linux CI, a MIDI recording through a just-created virtual controller has occasionally stopped within its first two blocks, so the punch test's take went missing. It has not happened on macOS or Windows, or locally. The punch test now lets the routing settle and retries such a recording once, saying so in its log; the cause is not yet found.

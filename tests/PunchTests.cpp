@@ -120,16 +120,26 @@ int runPunchTests (const juce::File& artifacts)
         {
             Controller controller (s);
             ok (s.setTrackInput (keys, controller.name), "route the controller"); ok (s.setTrackArmed (keys, true), "arm the MIDI track");
-            pumpSyntheticTestDevice (s, 8);
+            // Let the device and graph changes from routing the new controller settle first.
+            pumpSyntheticTestDevice (s, 100);
             std::set<juce::String> midiKnown; fresh (s, keys, midiKnown);
-            s.seek (0); ok (s.record(), "record MIDI");
-            // The transport's first blocks, reported if the take goes missing.
+            // The transport's first blocks, reported if the take goes missing. Linux CI has
+            // occasionally stopped a recording within its first blocks here (see open questions),
+            // so a recording that stops before any note is sent is started once more, and said so.
             juce::String started;
-            for (int i = 0; i < 6; ++i)
+            for (int attempt = 0; attempt < 2; ++attempt)
             {
-                const auto now = s.snapshot();
-                started << juce::String (now.position, 3) << (now.playing ? "p" : "") << (now.recording ? "r" : "") << " ";
-                pumpSyntheticTestDevice (s, 1);
+                s.seek (0); ok (s.record(), "record MIDI");
+                started.clear();
+                for (int i = 0; i < 6; ++i)
+                {
+                    const auto now = s.snapshot();
+                    started << juce::String (now.position, 3) << (now.playing ? "p" : "") << (now.recording ? "r" : "") << " ";
+                    pumpSyntheticTestDevice (s, 1);
+                }
+                if (s.snapshot().recording || attempt == 1) break;
+                std::cout << "The MIDI recording stopped in its first blocks (" << started.trim() << "); recording again" << std::endl;
+                s.stop(); pumpSyntheticTestDevice (s, 20);
             }
             juce::String sentAt;
             std::vector<double> sent;

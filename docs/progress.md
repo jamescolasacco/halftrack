@@ -1394,3 +1394,18 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **Input Config.** Audio & MIDI Setup sets each pair of input channels as one stereo input or two mono inputs, and switches inputs on and off.
 
 See [the contract](research/input-config-contract.md).
+
+## Robustness suites — 2026-10-21
+
+Test and engine change in `tests/GraphEditTests.cpp` and `tests/FuzzTests.cpp` (new), `src/Session.cpp` (load validation), `cmake/PatchClipEnvelopes.cmake`, `tests/PunchTests.cpp`, `src/Main.cpp` and `CMakeLists.txt`, with documentation.
+
+- **Graph edits during playback.** 96 edits while clips play keep playback going and the output sound.
+- **Malformed input.** 300 mutants of a saved project load and round-trip or are refused without changing the open project.
+- **Two faults the fuzzing found:**
+  - a clip envelope naming a missing device crashed the engine on load;
+  - a mixer level outside the fader's range loaded, then saved a project that would not reopen.
+
+  Both are refused on load now, and the engine skips such a curve.
+- **The Linux punch test** lets new MIDI routing settle and retries a recording that stops in its first blocks, recorded as an open question.
+
+See [the contract](research/robustness-contract.md).
