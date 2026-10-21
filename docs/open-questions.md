@@ -268,3 +268,15 @@ Tempo segments ramp linearly (applied by the engine in quarter-beat steps) and t
 ### Exclusive solo and arm defaults
 
 Solo and arm are always exclusive, with Cmd/Ctrl-click adding, matching the reference's default preferences; there is no preference to change it yet.
+
+### Groove defaults
+
+These are simplest-default choices pending reference measurement:
+
+- **Placement.** A note is moved by the offset of the groove event on its nearest Base line (a step per line, not a continuous warp). Lines without an event leave the note's timing and velocity alone.
+- **Velocity.** Accents are relative to the groove's loudest event.
+- **Random.** Random reaches half a Base step at 100%. It is fixed per note (clip, pitch and beat) rather than drawn again on each pass.
+- **Alignment.** Grooves align to the clip's own beats, not the song position.
+- **Frozen tracks.** Pool edits are allowed while frozen tracks use the groove, and are heard once the track is unfrozen.
+- **MIDI export.** MIDI export writes the clip's own, ungrooved notes.
+

@@ -5,6 +5,7 @@
 #include "NativeEffects.h"
 #include "Racks.h"
 #include "NoteTools.h"
+#include "Grooves.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 #include <array>
@@ -898,6 +899,114 @@ Result validateClipScales (const juce::ValueTree& state)
     for (const auto& child : state) if (auto result = validateClipScales (child); result.failed()) return result;
     return Result::ok();
 }
+// The groove pool: a Halftrack child of the Edit holding the Global Amount and the grooves, and
+// each MIDI clip's groove id.
+const juce::Identifier groovePoolType { "HALFTRACKGROOVEPOOL" }, grooveType { "HALFTRACKGROOVE" }, grooveEventType { "HALFTRACKGROOVEEVENT" };
+const juce::Identifier clipGrooveProperty { "halftrackGroove" };
+float grooveAmount (const juce::ValueTree& editState)
+{
+    const auto pool = editState.getChildWithName (groovePoolType);
+    return juce::jlimit (0.0f, Session::maximumGrooveAmount, static_cast<float> (pool.getProperty ("amount", 100.0f)));
+}
+Session::GrooveInfo readGroove (const juce::ValueTree& v)
+{
+    Session::GrooveInfo g;
+    g.id = v["id"].toString(); g.name = v["name"].toString();
+    g.base = static_cast<Session::GrooveBase> (juce::jlimit (0, Session::grooveBaseCount - 1, static_cast<int> (v.getProperty ("base", 3))));
+    g.lengthBeats = v.getProperty ("length", 4.0);
+    g.quantize = v.getProperty ("quantize", 0.0f); g.timing = v.getProperty ("timing", 100.0f);
+    g.random = v.getProperty ("random", 0.0f); g.velocity = v.getProperty ("velocity", 0.0f);
+    for (const auto& e : v)
+        if (e.hasType (grooveEventType)) g.events.push_back ({ static_cast<double> (e["beat"]), static_cast<float> (e.getProperty ("velocity", 127.0f)) });
+    return g;
+}
+juce::ValueTree grooveTree (const Session::GrooveInfo& g)
+{
+    juce::ValueTree v (grooveType);
+    v.setProperty ("id", g.id, nullptr); v.setProperty ("name", g.name, nullptr); v.setProperty ("base", static_cast<int> (g.base), nullptr);
+    v.setProperty ("length", g.lengthBeats, nullptr);
+    v.setProperty ("quantize", g.quantize, nullptr); v.setProperty ("timing", g.timing, nullptr);
+    v.setProperty ("random", g.random, nullptr); v.setProperty ("velocity", g.velocity, nullptr);
+    for (const auto& e : g.events)
+    {
+        juce::ValueTree event (grooveEventType);
+        event.setProperty ("beat", e.beat, nullptr); event.setProperty ("velocity", e.velocity, nullptr);
+        v.appendChild (event, nullptr);
+    }
+    return v;
+}
+juce::ValueTree grooveState (const juce::ValueTree& editState, const String& id)
+{
+    if (id.isEmpty()) return {};
+    for (const auto& g : editState.getChildWithName (groovePoolType))
+        if (g.hasType (grooveType) && g["id"].toString() == id) return g;
+    return {};
+}
+std::optional<grooves::Pattern> clipGroovePattern (const te::MidiClip& clip)
+{
+    const auto state = grooveState (clip.edit.state, clip.state[clipGrooveProperty].toString());
+    if (! state.isValid()) return std::nullopt;
+    grooves::Pattern pattern (readGroove (state), grooveAmount (clip.edit.state));
+    if (pattern.neutral()) return std::nullopt;
+    return pattern;
+}
+// A note's placement under its clip's groove, from its beat in the clip's own sequence.
+grooves::Pattern::Placement placeNote (const grooves::Pattern& pattern, const te::MidiClip& clip, double beat, int pitch, int velocity)
+{
+    return pattern.place (beat, velocity, grooves::noteSeed (clip.itemID.getRawID(), pitch, beat));
+}
+// Grooved playback: the clip's notes are moved and accented in a copy of the list being played.
+// A looped list repeats the clip's loop from beat 0, so each note is placed by its beat in the clip.
+juce::ValueTree groovedSequence (const grooves::Pattern& pattern, const te::MidiClip& clip, const te::MidiList& list, bool looped)
+{
+    auto copy = list.state.createCopy();
+    const auto loopStart = clip.getLoopStartBeats().inBeats(), loopLength = clip.getLoopLengthBeats().inBeats();
+    for (auto note : copy)
+        if (note.hasType (te::IDs::NOTE))
+        {
+            const double beat = note[te::IDs::b];
+            const auto inClip = looped && loopLength > 0 ? loopStart + beat - std::floor (beat / loopLength) * loopLength : beat;
+            const auto placed = placeNote (pattern, clip, inClip, static_cast<int> (note[te::IDs::p]), static_cast<int> (note[te::IDs::v]));
+            note.setProperty (te::IDs::b, beat + (placed.beat - inClip), nullptr);
+            note.setProperty (te::IDs::v, placed.velocity, nullptr);
+        }
+    return copy;
+}
+Result validateGroovePool (const juce::ValueTree& state)
+{
+    std::set<String> ids;
+    int pools = 0;
+    for (const auto& pool : state)
+    {
+        if (! pool.hasType (groovePoolType)) continue;
+        if (++pools > 1 || (pool.hasProperty ("amount") && ! finiteProperty (pool["amount"], 0, Session::maximumGrooveAmount)) || pool.getNumChildren() > Session::maximumGrooves)
+            return Result::fail ("The project's groove pool is invalid.");
+        for (const auto& g : pool)
+        {
+            if (! g.hasType (grooveType)) return Result::fail ("The project's groove pool is invalid.");
+            const auto id = g["id"].toString();
+            bool numbers = finiteProperty (g["base"], 0, Session::grooveBaseCount - 1) && static_cast<double> (g["base"]) == std::floor (static_cast<double> (g["base"]))
+                && finiteProperty (g["length"], 0, 1024) && finiteProperty (g["quantize"], 0, 100) && finiteProperty (g["timing"], 0, 100)
+                && finiteProperty (g["random"], 0, 100) && finiteProperty (g["velocity"], -100, 100);
+            for (const auto& e : g)
+                numbers = numbers && e.hasType (grooveEventType) && finiteProperty (e["beat"], 0, 1024) && finiteProperty (e["velocity"], 1, 127);
+            if (id.isEmpty() || ! ids.insert (id).second || ! numbers || ! grooves::valid (readGroove (g)))
+                return Result::fail ("The project contains an invalid groove.");
+        }
+    }
+    const auto clips = [&] (auto&& self, const juce::ValueTree& node) -> Result
+    {
+        if (node.hasProperty (clipGrooveProperty))
+        {
+            const auto id = node[clipGrooveProperty].toString();
+            if (! node.hasType (te::IDs::MIDICLIP) || (id.isNotEmpty() && ! ids.contains (id)))
+                return Result::fail ("A clip uses a groove that is not in the groove pool.");
+        }
+        for (const auto& child : node) if (auto result = self (self, child); result.failed()) return result;
+        return Result::ok();
+    };
+    return clips (clips, state);
+}
 // Engine controller types for Halftrack lanes, and the lane value of a stored event.
 int engineControllerType (int lane)
 { return lane == Session::pitchBendLane ? te::MidiControllerEvent::pitchWheelType : lane == Session::channelPressureLane ? te::MidiControllerEvent::channelPressureType : lane; }
@@ -920,6 +1029,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
     result.follow = clipFollowSettings (clip.state);
     result.launch = clipLaunchSettings (clip.state);
     result.scale = clipScale (clip.state);
+    result.grooveId = clip.state[clipGrooveProperty].toString();
     if (clip.usesSourceFile()) result.file = clip.getSourceFileReference().getFile();
     if (auto* audio = dynamic_cast<te::WaveAudioClip*> (&clip))
     {
@@ -969,6 +1079,17 @@ public:
     bool lengthOfOneBeatDependsOnTimeSignature() override { return false; }
     // Device chains are open-ended; the engine's 16-plugin default includes the mixer and meter.
     te::EditLimits getEditLimits() override { te::EditLimits limits; limits.maxPluginsOnTrack = 64; return limits; }
+    // A clip with a pool groove plays a grooved copy of its notes; the clip's own notes are unchanged.
+    // Graph building runs on the message thread, never in the audio callback.
+    juce::MidiMessageSequence createPlaybackMidiSequence (const te::MidiList& list, te::MidiClip& clip, te::MidiList::TimeBase base, bool mpe) override
+    {
+        if (const auto pattern = clipGroovePattern (clip))
+        {
+            const te::MidiList grooved (groovedSequence (*pattern, clip, list, &list != &clip.getSequence()), nullptr);
+            return te::MidiList::createDefaultPlaybackMidiSequence (grooved, clip, base, mpe);
+        }
+        return te::MidiList::createDefaultPlaybackMidiSequence (list, clip, base, mpe);
+    }
     File getFileForNewAudioRecording (te::Track& track, const String& extension) override
     {
         auto base = te::EditFileOperations (track.edit).getEditFile();
@@ -1304,6 +1425,34 @@ juce::Result runRangeExportTaskCancellationTests (const juce::File& directory)
 }
 #endif
 
+// The engine does not watch Halftrack's groove state, so playback is rebuilt when it changes,
+// undo and redo included. Only the Session's current Edit is restarted: a replaced Edit being
+// destroyed is never touched.
+class GrooveWatcher final : private juce::ValueTree::Listener
+{
+public:
+    explicit GrooveWatcher (const std::unique_ptr<te::Edit>& e) : edit (e) {}
+    ~GrooveWatcher() override { watch ({}); }
+    void watch (const juce::ValueTree& editState)
+    {
+        if (state.isValid()) state.removeListener (this);
+        state = editState;
+        if (state.isValid()) state.addListener (this);
+    }
+private:
+    const std::unique_ptr<te::Edit>& edit;
+    juce::ValueTree state;
+    static bool inPool (juce::ValueTree v)
+    {
+        for (; v.isValid(); v = v.getParent()) if (v.hasType (groovePoolType)) return true;
+        return false;
+    }
+    void restart() { if (edit != nullptr && edit->state == state) edit->restartPlayback(); }
+    void valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& id) override { if (id == clipGrooveProperty || inPool (v)) restart(); }
+    void valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child) override { if (inPool (parent) || child.hasType (groovePoolType)) restart(); }
+    void valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int) override { if (inPool (parent) || child.hasType (groovePoolType)) restart(); }
+};
+
 struct Session::Impl
 {
     explicit Impl (Session& s, bool devices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType)
@@ -1333,6 +1482,7 @@ struct Session::Impl
     {
         gesture.reset();
         meters.clear();
+        grooveWatcher.watch ({});
         edit.reset();
         // Unsaved sessions are deliberately retained in the temp directory for recovery.
     }
@@ -1990,6 +2140,7 @@ struct Session::Impl
         refreshCrossfade(); // Loaded and new projects apply their saved crossfade gains.
         resetTapTempo();
         edit->editFileRetriever = [this] { return editLocation(); };
+        grooveWatcher.watch (edit->state);
         flushStructuralUpdates();
         edit->playInStopEnabled = true;
         edit->getAutomationRecordManager().setReadingAutomation (true);
@@ -2076,6 +2227,7 @@ struct Session::Impl
     double midiClipboardBeats = 0;
     std::unique_ptr<juce::TemporaryFile> audioClipboardMedia;
     std::unique_ptr<te::Edit> edit;
+    GrooveWatcher grooveWatcher { edit };
     std::unique_ptr<te::Edit::UndoTransactionInhibitor> gesture;
     mutable std::map<String, std::unique_ptr<Meter>> meters;
 };
@@ -2119,6 +2271,8 @@ Session::Snapshot Session::snapshot() const
         s.locators.push_back ({ marker->itemID.toString(), marker->getName(), marker->getPosition().getStart().inSeconds() });
     for (auto* scene : e.getSceneList().getScenes())
         s.scenes.push_back ({ scene->state.getProperty ("halftrackSceneID").toString(), scene->name.get() });
+    for (const auto& groove : e.state.getChildWithName (groovePoolType)) s.grooves.push_back (readGroove (groove));
+    s.grooveAmount = grooveAmount (e.state);
     const auto quantisation = e.getLaunchQuantisation().type.get();
     s.launchQuantisation = quantisation == te::LaunchQType::none ? LaunchQuantisation::none
         : quantisation == te::LaunchQType::quarter ? LaunchQuantisation::beat : LaunchQuantisation::bar;
@@ -2308,6 +2462,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateLocators (state); result.failed()) return result;
     if (auto result = validateTrackDelays (state); result.failed()) return result;
     if (auto result = validateClipScales (state); result.failed()) return result;
+    if (auto result = validateGroovePool (state); result.failed()) return result;
     restoreManualMixerState (state);
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
@@ -3548,6 +3703,115 @@ int Session::fitToScale (const ScaleSettings& scale, int pitch) noexcept
         if (pitch + distance <= 127 && inScale (scale, pitch + distance)) return pitch + distance;
     }
     return pitch;
+}
+Result Session::addGroove (const GrooveInfo& groove, String& grooveId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto copy = groove; copy.name = copy.name.trim();
+    if (! grooves::valid (copy)) return Result::fail ("The groove's settings are out of range.");
+    auto pool = impl->edit->state.getChildWithName (groovePoolType);
+    if (pool.getNumChildren() >= maximumGrooves) return Result::fail ("The groove pool is full.");
+    // Names stay distinguishable in the clip chooser.
+    const auto taken = [&] (const String& name) { for (const auto& g : pool) if (g["name"].toString() == name) return true; return false; };
+    for (int n = 2; taken (copy.name); ++n) copy.name = groove.name.trim() + " " + String (n);
+    copy.id = juce::Uuid().toString();
+    impl->transaction ("Add groove");
+    auto* undo = &impl->edit->getUndoManager();
+    impl->edit->state.getOrCreateChildWithName (groovePoolType, undo).appendChild (grooveTree (copy), undo);
+    grooveId = copy.id;
+    impl->changed(); return Result::ok();
+}
+Result Session::extractGroove (const String& clipId, String& grooveId)
+{
+    auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("Grooves are extracted from MIDI clips.");
+    // A looping clip's groove is its loop, measured from the loop start.
+    auto notes = describeClip (*clip).notes;
+    const bool looping = clip->isLooping();
+    if (looping) for (auto& n : notes) n.startBeat -= clip->getLoopStartBeats().inBeats();
+    const auto length = looping ? clip->getLoopLengthBeats().inBeats() : clip->getLengthInBeats().inBeats();
+    const auto groove = grooves::extract (clip->getName(), notes, length);
+    if (groove.events.empty()) return Result::fail ("The clip has no notes to extract a groove from.");
+    return addGroove (groove, grooveId);
+}
+Result Session::setGroove (const String& grooveId, const GrooveInfo& groove)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto state = grooveState (impl->edit->state, grooveId); if (! state.isValid()) return Result::fail ("Groove not found.");
+    auto copy = groove; copy.id = grooveId; copy.name = copy.name.trim();
+    if (! grooves::valid (copy)) return Result::fail ("The groove's settings are out of range.");
+    if (readGroove (state) == copy) return Result::ok();
+    impl->transaction ("Groove");
+    auto* undo = &impl->edit->getUndoManager();
+    auto pool = state.getParent(); const auto index = pool.indexOf (state);
+    pool.removeChild (index, undo); pool.addChild (grooveTree (copy), index, undo);
+    impl->changed(); return Result::ok();
+}
+Result Session::removeGroove (const String& grooveId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto state = grooveState (impl->edit->state, grooveId); if (! state.isValid()) return Result::fail ("Groove not found.");
+    impl->transaction ("Remove groove");
+    auto* undo = &impl->edit->getUndoManager();
+    for (auto* t : te::getAudioTracks (*impl->edit))
+        for (auto* c : allTrackClips (*t))
+            if (c->state[clipGrooveProperty].toString() == grooveId) c->state.removeProperty (clipGrooveProperty, undo);
+    state.getParent().removeChild (state, undo);
+    impl->changed(); return Result::ok();
+}
+Result Session::setGrooveAmount (float percent)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! std::isfinite (percent) || percent < 0 || percent > maximumGrooveAmount) return Result::fail ("Choose a global groove amount from 0 to 130%.");
+    if (grooveAmount (impl->edit->state) == percent) return Result::ok();
+    impl->transaction ("Groove amount");
+    auto* undo = &impl->edit->getUndoManager();
+    impl->edit->state.getOrCreateChildWithName (groovePoolType, undo).setProperty ("amount", percent, undo);
+    impl->changed(); return Result::ok();
+}
+Result Session::setClipGroove (const String& clipId, const String& grooveId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* clip = impl->midiClip (clipId);
+    if (! clip) return Result::fail (impl->audioClip (clipId) != nullptr ? "Grooves apply to MIDI clips." : "MIDI clip not found.");
+    if (auto frozen = impl->unfrozen (clip->getClipTrack()); frozen.failed()) return frozen;
+    if (grooveId.isNotEmpty() && ! grooveState (impl->edit->state, grooveId).isValid()) return Result::fail ("Groove not found.");
+    if (clip->state[clipGrooveProperty].toString() == grooveId) return Result::ok();
+    impl->transaction ("Clip groove");
+    auto* undo = &impl->edit->getUndoManager();
+    if (grooveId.isEmpty()) clip->state.removeProperty (clipGrooveProperty, undo);
+    else clip->state.setProperty (clipGrooveProperty, grooveId, undo);
+    impl->changed(); return Result::ok();
+}
+Result Session::commitClipGroove (const String& clipId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before committing a groove.");
+    auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    if (auto frozen = impl->unfrozen (clip->getClipTrack()); frozen.failed()) return frozen;
+    if (clip->state[clipGrooveProperty].toString().isEmpty()) return Result::fail ("The clip has no groove to commit.");
+    impl->transaction ("Commit groove");
+    auto* undo = &impl->edit->getUndoManager();
+    if (const auto pattern = clipGroovePattern (*clip))
+    {
+        // Each note lands where grooved playback put it; one moved before the clip start starts
+        // at the clip start and keeps its end, as playback does.
+        struct Moved { te::MidiNote* note; double start, length; int velocity; };
+        std::vector<Moved> moved;
+        for (auto* note : clip->getSequence().getNotes())
+        {
+            const auto placed = placeNote (*pattern, *clip, note->getStartBeat().inBeats(), note->getNoteNumber(), note->getVelocity());
+            auto length = note->getLengthBeats().inBeats(), start = placed.beat;
+            if (start < 0) { length = std::max (1.0 / 960, length + start); start = 0; }
+            moved.push_back ({ note, start, length, placed.velocity });
+        }
+        for (const auto& m : moved)
+        {
+            m.note->setStartAndLength (te::BeatPosition::fromBeats (m.start), te::BeatDuration::fromBeats (m.length), undo);
+            m.note->setVelocity (m.velocity, undo);
+        }
+    }
+    clip->state.removeProperty (clipGrooveProperty, undo);
+    impl->changed(); return Result::ok();
 }
 Result Session::setClipScale (const String& clipId, const ScaleSettings& scale)
 {

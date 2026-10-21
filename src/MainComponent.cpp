@@ -214,7 +214,7 @@ public:
                  &playButton, &stopButton, &recordButton, &followButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &ruler, &viewport,
-                 &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &deviceChain })
+                 &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipGroove, &deviceChain })
             addAndMakeVisible (child);
 
         for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &followButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
@@ -396,7 +396,7 @@ public:
         g.setFont (font (10.0f, true)); g.setColour (muted);
         g.drawText (browserCategory == BrowserCategory::instruments ? "INSTRUMENTS" : browserCategory == BrowserCategory::audioEffects ? "AUDIO EFFECTS"
                         : browserCategory == BrowserCategory::midiEffects ? "MIDI EFFECTS" : pluginBrowser() ? "PLUG-INS"
-                        : browserFolder == juce::File() ? "SAMPLES" : browserFolder.getFileName().toUpperCase(),
+                        : browserCategory == BrowserCategory::grooves ? "GROOVES" : browserFolder == juce::File() ? "SAMPLES" : browserFolder.getFileName().toUpperCase(),
                     browserList.getX() + 4, browserList.getY() - 22, browserList.getWidth() - 8, 20, juce::Justification::centredLeft, true);
         if ((pluginBrowser() || sampleBrowser()) && getNumRows() == 0)
         {
@@ -489,6 +489,10 @@ public:
         auto editor = deviceChain.getBounds();
         midiLaunch.setVisible (launchClip != nullptr);
         if (launchClip != nullptr) { midiLaunch.setBounds (editor.removeFromLeft (LaunchBox::width).reduced (0, 6).withTrimmedLeft (6)); midiLaunch.setClip (*launchClip); }
+        // Every MIDI clip shows its Groove section beside the note editor.
+        const auto* grooveClip = showPiano && ! audioClip ? currentMidiClip() : nullptr;
+        clipGroove.setVisible (grooveClip != nullptr);
+        if (grooveClip != nullptr) { clipGroove.setBounds (editor.removeFromLeft (GrooveBox::width).reduced (0, 6).withTrimmedLeft (6)); clipGroove.setClip (*grooveClip); }
         pianoRoll.setBounds (editor);
         pianoRoll.setVisible (showPiano && ! audioClip);
         audioClipView.setBounds (deviceChain.getBounds());
@@ -795,7 +799,7 @@ private:
         std::string error;
     };
 
-    enum class BrowserCategory { instruments, audioEffects, midiEffects, plugins, samples };
+    enum class BrowserCategory { instruments, audioEffects, midiEffects, plugins, samples, grooves };
     // Left column of the browser: one row per category, as in the reference browser sidebar.
     class BrowserCategories final : public juce::Component
     {
@@ -827,9 +831,9 @@ private:
         static constexpr int headerHeight = 20, rowHeight = 22;
         juce::Rectangle<int> rowBounds (int i) const { return { 0, headerHeight + i * rowHeight, getWidth() - 1, rowHeight }; }
         Impl& owner;
-        const std::array<std::pair<BrowserCategory, const char*>, 5> entries {{ { BrowserCategory::instruments, "Instruments" },
+        const std::array<std::pair<BrowserCategory, const char*>, 6> entries {{ { BrowserCategory::instruments, "Instruments" },
             { BrowserCategory::audioEffects, "Audio Effects" }, { BrowserCategory::midiEffects, "MIDI Effects" },
-            { BrowserCategory::plugins, "Plug-ins" }, { BrowserCategory::samples, "Samples" } }};
+            { BrowserCategory::plugins, "Plug-ins" }, { BrowserCategory::samples, "Samples" }, { BrowserCategory::grooves, "Grooves" } }};
     };
 
     class TrackRow final : public juce::Component
@@ -1773,6 +1777,7 @@ private:
                 popup.addItem(4,"Duplicate MIDI after clip",clip->canEditMidiClip);
                 popup.addItem(5,"Copy MIDI clip",clip->canEditMidiClip);popup.addItem(6,"Cut MIDI clip",clip->canEditMidiClip);
                 popup.addItem(7,"Paste MIDI at playhead",owner.session.hasMidiClipClipboard());
+                popup.addSeparator();popup.addItem(10,"Extract Groove");
             }
             const bool midi=clip&&clip->isMidi;
             auto safe = juce::Component::SafePointer<Impl> (&owner);
@@ -2449,7 +2454,7 @@ private:
             else menu.addItem (owner.state.tracks[(size_t) track].isMidi ? 4 : 5, owner.state.tracks[(size_t) track].isMidi ? "Create MIDI Clip" : "Import Audio Here...");
             menu.addSeparator(); menu.addItem (6, "Stop Track Clips");
             const auto clipId=slot->hasClip?slot->clip.id:juce::String();const bool activate=slot->hasClip && !slot->clip.active;
-            if(slot->hasClip){menu.addItem(8,activate?"Activate clip":"Deactivate clip");menu.addItem(9,"Rename clip...");menu.addItem(10,"Follow action...",!owner.state.recording);}
+            if(slot->hasClip){menu.addItem(8,activate?"Activate clip":"Deactivate clip");menu.addItem(9,"Rename clip...");menu.addItem(10,"Follow action...",!owner.state.recording);if(slot->clip.isMidi)menu.addItem(11,"Extract Groove");}
             const auto trackId = owner.state.tracks[(size_t) track].id, sceneId = owner.state.scenes[(size_t) scene].id;
             auto safe = juce::Component::SafePointer<Impl> (&owner);
             menu.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId, sceneId, clipId, activate] (int choice)
@@ -2458,6 +2463,7 @@ private:
                 if(choice==8){safe->setClipActiveFromUI(clipId,activate);return;}
                 if(choice==9){safe->renameClipDialog(clipId);return;}
                 if(choice==10){safe->clipFollowDialog(clipId);return;}
+                if(choice==11){safe->extractGrooveFromUI(clipId);return;}
                 const auto indices = safe->launcherIndices (trackId, sceneId); if (indices.first < 0 || indices.second < 0) return;
                 safe->selectLauncherSlot (indices.first, indices.second);
                 if (choice == 1) safe->report (safe->session.launchSlot (indices.first, indices.second));
@@ -2543,6 +2549,210 @@ private:
             if (settings == clip.launch) return;
             owner.report (owner.session.setClipLaunchSettings (clip.id, settings)); owner.refresh();
         }
+    };
+
+    // A MIDI clip's Groove section, after the reference's clip view: the pool groove the clip
+    // plays with, Commit, and the Groove Pool window.
+    class GrooveBox final : public juce::Component
+    {
+    public:
+        static constexpr int width = 150;
+        explicit GrooveBox (Impl& o) : owner (o)
+        {
+            setName ("Groove box");
+            for (auto* c : std::initializer_list<juce::Component*> { &groove, &commit, &pool }) addAndMakeVisible (c);
+            groove.setName ("Clip groove"); groove.addItem ("None", 1);
+            groove.setTooltip ("The groove this clip plays with. It moves and accents the notes on playback without changing them.");
+            commit.setName ("Commit groove"); commit.setTooltip ("Commit: write the groove into the clip's notes and set its groove to None");
+            pool.setName ("Open Groove Pool"); pool.setTooltip ("Groove Pool: the project's grooves and their Base, Quantize, Timing, Random and Velocity");
+            for (auto* b : { &commit, &pool }) { b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); }
+            groove.onChange = [this]
+            {
+                const auto index = groove.getSelectedId() - 2;
+                owner.report (owner.session.setClipGroove (clip.id, juce::isPositiveAndBelow (index, ids.size()) ? ids[index] : juce::String())); owner.refresh();
+            };
+            commit.onClick = [this] { owner.report (owner.session.commitClipGroove (clip.id), "Committed the groove into the clip's notes."); owner.refresh(); };
+            pool.onClick = [this] { owner.openGroovePool(); };
+        }
+        void setClip (const Session::ClipInfo& shown)
+        {
+            clip = shown;
+            juce::StringArray grooveIds, names;
+            for (const auto& g : owner.state.grooves) { grooveIds.add (g.id); names.add (g.name); }
+            if (grooveIds != ids || names != shownNames)
+            {
+                ids = grooveIds; shownNames = names;
+                groove.clear (juce::dontSendNotification); groove.addItem ("None", 1);
+                for (int i = 0; i < names.size(); ++i) groove.addItem (names[i], i + 2);
+            }
+            groove.setSelectedId (clip.grooveId.isEmpty() ? 1 : ids.indexOf (clip.grooveId) + 2, juce::dontSendNotification);
+            const bool editable = ! owner.session.isExporting();
+            groove.setEnabled (editable); commit.setEnabled (editable && clip.grooveId.isNotEmpty());
+        }
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced (6, 0).withTrimmedTop (28);
+            area.removeFromTop (14); groove.setBounds (area.removeFromTop (22));
+            area.removeFromTop (8); commit.setBounds (area.removeFromTop (22));
+            area.removeFromTop (8); pool.setBounds (area.removeFromTop (22));
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (juce::Colour (0xff303030)); g.fillRect (getLocalBounds());
+            g.setColour (juce::Colour (0xff4a4a4a)); g.fillRect (getLocalBounds().withHeight (22));
+            g.setColour (line); g.drawRect (getLocalBounds());
+            g.setColour (ink); g.setFont (font (11.0f, true));
+            g.drawText ("Groove", getLocalBounds().withHeight (22).reduced (6, 0), juce::Justification::centredLeft);
+            g.setColour (muted); g.setFont (font (10.0f));
+            g.drawText ("Groove", 6, groove.getY() - 14, getWidth() - 12, 13, juce::Justification::bottomLeft);
+        }
+    private:
+        Impl& owner;
+        Session::ClipInfo clip;
+        juce::StringArray ids, shownNames;
+        juce::ComboBox groove;
+        juce::TextButton commit { "Commit" }, pool { "Groove Pool" };
+    };
+
+    // The Groove Pool: every groove in the project with its Base, Quantize, Timing, Random and
+    // Velocity, and the Global Amount that scales Timing, Random and Velocity for all of them.
+    class GroovePoolPanel final : public juce::Component
+    {
+    public:
+        explicit GroovePoolPanel (Impl& o) : owner (o)
+        {
+            setName ("Groove Pool");
+            for (auto* c : std::initializer_list<juce::Component*> { &viewport, &amount, &add, &empty }) addAndMakeVisible (c);
+            viewport.setViewedComponent (&list, false); viewport.setScrollBarsShown (true, false);
+            amount.setName ("Global groove amount"); amount.setSliderStyle (juce::Slider::LinearBar);
+            amount.setRange (0, Session::maximumGrooveAmount, 1); amount.setDoubleClickReturnValue (true, 100);
+            styleBar (amount);
+            amount.textFromValueFunction = [] (double v) { return "Global Amount " + juce::String (juce::roundToInt (v)) + "%"; };
+            amount.setTooltip ("Global Amount: scales the Timing, Random and Velocity of every groove (0-130%). Double-click for 100%.");
+            amount.valueFromTextFunction = [] (const juce::String& text) { return text.retainCharacters (".0123456789").getDoubleValue(); };
+            amount.updateText();
+            amount.onDragStart = [this] { owner.session.beginEditGesture ("Groove amount"); };
+            amount.onDragEnd = [this] { owner.session.endEditGesture(); };
+            amount.onValueChange = [this] { owner.report (owner.session.setGrooveAmount ((float) amount.getValue())); owner.refresh(); };
+            add.setName ("Add groove"); add.setTooltip ("Add a groove from Halftrack's library, a groove file or the selected MIDI clip");
+            add.onClick = [this] { owner.showAddGrooveMenu (add); };
+            empty.setText ("No grooves yet. Add one from the library or a groove file, or extract one from a MIDI clip.", juce::dontSendNotification);
+            empty.setColour (juce::Label::textColourId, muted); empty.setJustificationType (juce::Justification::centred);
+            sync();
+        }
+        ~GroovePoolPanel() override { owner.session.endEditGesture(); }
+        void sync()
+        {
+            const auto& pool = owner.state.grooves;
+            juce::StringArray ids; for (const auto& g : pool) ids.add (g.id);
+            if (ids != rowIds)
+            {
+                rowIds = ids; rows.clear();
+                for (const auto& g : pool) { auto* row = rows.add (new Row (*this, g.id)); list.addAndMakeVisible (row); }
+                layoutRows();
+            }
+            for (int i = 0; i < rows.size(); ++i) rows[i]->show (pool[(size_t) i]);
+            if (! amount.isMouseButtonDown()) amount.setValue (owner.state.grooveAmount, juce::dontSendNotification);
+            empty.setVisible (pool.empty());
+        }
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced (10);
+            auto footer = area.removeFromBottom (26); area.removeFromBottom (8);
+            add.setBounds (footer.removeFromLeft (110)); footer.removeFromLeft (10); amount.setBounds (footer.removeFromLeft (220));
+            header = area.removeFromTop (18);
+            viewport.setBounds (area); empty.setBounds (area);
+            layoutRows();
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (panel);
+            g.setColour (muted); g.setFont (font (10.0f, true));
+            int x = header.getX();
+            for (const auto& [label, w] : columns()) { g.drawText (label, x + 2, header.getY(), w - 4, header.getHeight(), juce::Justification::centredLeft); x += w; }
+        }
+    private:
+        static std::vector<std::pair<const char*, int>> columns()
+        { return { { "GROOVE", 190 }, { "BASE", 70 }, { "QUANTIZE", 90 }, { "TIMING", 90 }, { "RANDOM", 90 }, { "VELOCITY", 90 }, { "", 30 } }; }
+        static void styleBar (juce::Slider& s)
+        {
+            s.setWantsKeyboardFocus (false); s.setColour (juce::Slider::trackColourId, juce::Colour (0xff4a4a4a));
+            s.setColour (juce::Slider::textBoxTextColourId, ink);
+        }
+        class Row final : public juce::Component
+        {
+        public:
+            Row (GroovePoolPanel& p, const juce::String& grooveId) : pool (p), id (grooveId)
+            {
+                for (auto* c : std::initializer_list<juce::Component*> { &name, &base, &quantize, &timing, &random, &velocity, &remove }) addAndMakeVisible (c);
+                name.setEditable (false, true, false); name.setColour (juce::Label::textColourId, ink);
+                name.setTooltip ("Double-click to rename");
+                name.onTextChange = [this] { auto g = groove; g.name = name.getText(); apply (g); };
+                for (int b = 0; b < Session::grooveBaseCount; ++b) base.addItem (Session::grooveBaseName ((Session::GrooveBase) b), b + 1);
+                base.setName ("Base"); base.setTooltip ("Base: the grid the groove's timing is measured against");
+                base.onChange = [this] { auto g = groove; g.base = (Session::GrooveBase) (base.getSelectedId() - 1); apply (g); };
+                const auto bar = [this] (juce::Slider& s, const char* label, double low, double initial, float Session::GrooveInfo::* field, const char* tip)
+                {
+                    s.setName (juce::String (label)); s.setSliderStyle (juce::Slider::LinearBar); s.setRange (low, 100, 1);
+                    s.setDoubleClickReturnValue (true, initial); styleBar (s); s.setTooltip (tip);
+                    s.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v)) + "%"; };
+                    s.valueFromTextFunction = [] (const juce::String& text) { return text.retainCharacters ("-.0123456789").getDoubleValue(); };
+                    s.updateText();
+                    s.onDragStart = [this] { pool.owner.session.beginEditGesture ("Groove"); };
+                    s.onDragEnd = [this] { pool.owner.session.endEditGesture(); };
+                    s.onValueChange = [this, &s, field] { auto g = groove; g.*field = (float) s.getValue(); apply (g); };
+                };
+                bar (quantize, "Quantize", 0, 0, &Session::GrooveInfo::quantize, "Quantize: how far notes move onto the Base grid before the groove applies");
+                bar (timing, "Timing", 0, 100, &Session::GrooveInfo::timing, "Timing: how much the groove's timing moves the notes");
+                bar (random, "Random", 0, 0, &Session::GrooveInfo::random, "Random: random timing of up to half a Base step, different for every note");
+                bar (velocity, "Velocity", -100, 0, &Session::GrooveInfo::velocity, "Velocity: how much the groove's accents change note velocities; negative values invert them");
+                remove.setName ("Remove groove"); remove.setTooltip ("Remove this groove; clips that use it play without a groove");
+                remove.onClick = [this] { pool.owner.report (pool.owner.session.removeGroove (id)); pool.owner.refresh(); };
+            }
+            void show (const Session::GrooveInfo& g)
+            {
+                groove = g;
+                if (! name.isBeingEdited()) name.setText (g.name, juce::dontSendNotification);
+                name.setName ("Groove name " + g.name);
+                base.setSelectedId ((int) g.base + 1, juce::dontSendNotification);
+                const std::array<std::pair<juce::Slider*, float>, 4> values {{ { &quantize, g.quantize }, { &timing, g.timing }, { &random, g.random }, { &velocity, g.velocity } }};
+                for (const auto& [slider, value] : values)
+                    if (! slider->isMouseButtonDown()) slider->setValue (value, juce::dontSendNotification);
+            }
+            void resized() override
+            {
+                int x = 0;
+                std::array<juce::Component*, 7> cells { &name, &base, &quantize, &timing, &random, &velocity, &remove };
+                const auto widths = columns();
+                for (size_t i = 0; i < cells.size(); ++i) { cells[i]->setBounds (x + 2, 3, widths[i].second - 4, getHeight() - 6); x += widths[i].second; }
+            }
+            void paint (juce::Graphics& g) override { g.setColour (line); g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth()); }
+            GroovePoolPanel& pool;
+            const juce::String id;
+        private:
+            Session::GrooveInfo groove;
+            juce::Label name;
+            juce::ComboBox base;
+            juce::Slider quantize, timing, random, velocity;
+            juce::TextButton remove { "X" };
+            void apply (const Session::GrooveInfo& g) { pool.owner.report (pool.owner.session.setGroove (id, g)); pool.owner.refresh(); }
+        };
+        void layoutRows()
+        {
+            int total = 0; for (const auto& [label, w] : columns()) total += w;
+            list.setSize (std::max (total, viewport.getMaximumVisibleWidth()), rows.size() * rowHeight);
+            for (int i = 0; i < rows.size(); ++i) rows[i]->setBounds (0, i * rowHeight, list.getWidth(), rowHeight);
+        }
+        static constexpr int rowHeight = 30;
+        Impl& owner;
+        juce::Viewport viewport;
+        juce::Component list;
+        juce::OwnedArray<Row> rows;
+        juce::StringArray rowIds;
+        juce::Rectangle<int> header;
+        juce::Slider amount;
+        juce::TextButton add { "Add Groove..." };
+        juce::Label empty;
     };
 
     class AudioClipView final : public juce::Component, private juce::ChangeListener
@@ -2807,10 +3017,23 @@ private:
         }
         void resized() override
         {
-            noteTools.setBounds (698, 7, 100, 23); laneChoice.setBounds (842, 7, 116, 23);
-            scaleButton.setBounds (968, 7, 48, 23); scaleRoot.setBounds (1018, 7, 52, 23); scaleMode.setBounds (1072, 7, 132, 23);
+            // The header flows left to right. A narrower editor (beside the Groove and Launch boxes)
+            // shortens the clip name, then the widest controls.
+            const int tier = getWidth() >= 1216 ? 0 : getWidth() >= 940 ? 1 : 2;
+            const int velocityWidth = std::array { 142, 104, 80 }[(size_t) tier], laneWidth = std::array { 116, 100, 90 }[(size_t) tier];
+            const int modeWidth = std::array { 132, 108, 96 }[(size_t) tier], toolsWidth = std::array { 100, 88, 76 }[(size_t) tier];
+            const int fixed = 7 + 34 + 66 + 8 + 48 + 76 + 12 + 56 + velocityWidth + 12 + toolsWidth + 12 + 32 + laneWidth + 10 + 50 + 54 + modeWidth;
+            nameWidth = juce::jlimit (0, 225, getWidth() - 24 - fixed);
+            if (nameWidth < 40) nameWidth = 0;
+            int x = nameWidth > 0 ? 12 + nameWidth + 7 : 8;
+            labelX[0] = x; x += 34; snap.setBounds (x, 7, 66, 23); x += 66 + 8;
+            labelX[1] = x; x += 48; noteLength.setBounds (x, 7, 76, 23); x += 76 + 12;
+            labelX[2] = x; x += 56; velocity.setBounds (x, 5, velocityWidth, 27); x += velocityWidth + 12;
+            noteTools.setBounds (x, 7, toolsWidth, 23); x += toolsWidth + 12;
+            labelX[3] = x; x += 32; laneChoice.setBounds (x, 7, laneWidth, 23); x += laneWidth + 10;
+            scaleButton.setBounds (x, 7, 48, 23); x += 50; scaleRoot.setBounds (x, 7, 52, 23); x += 54; scaleMode.setBounds (x, 7, modeWidth, 23);
+            infoX = x + modeWidth + 6;
             if (laneView.isVisible()) laneView.setBounds (0, getHeight() - scrollSize - laneHeight, getWidth() - scrollSize, laneHeight);
-            snap.setBounds (278, 7, 66, 23); noteLength.setBounds (400, 7, 76, 23); velocity.setBounds (544, 5, 142, 27);
             horizontal.setBounds (keysWidth, getHeight() - scrollSize, getWidth() - keysWidth - scrollSize, scrollSize);
             vertical.setBounds (getWidth() - scrollSize, gridTop, scrollSize, gridBounds().getHeight());
             updateScroll();
@@ -2821,14 +3044,14 @@ private:
             g.setColour (panel); g.fillRect (0, 0, getWidth(), headerHeight);
             g.setColour (ink); g.setFont (font (11.5f, true));
             const auto* clip = owner.currentMidiClip();
-            g.drawText (clip == nullptr ? "SELECT A MIDI CLIP" : clip->name, 12, 0, 225, headerHeight, juce::Justification::centredLeft, true);
+            if (nameWidth > 0) g.drawText (clip == nullptr ? "SELECT A MIDI CLIP" : clip->name, 12, 0, nameWidth, headerHeight, juce::Justification::centredLeft, true);
             g.setColour (muted); g.setFont (font (10.0f));
-            g.drawText ("Snap", 244, 0, 32, headerHeight, juce::Justification::centredLeft);
-            g.drawText ("Length", 352, 0, 45, headerHeight, juce::Justification::centredLeft);
-            g.drawText ("Velocity", 488, 0, 52, headerHeight, juce::Justification::centredLeft);
-            g.drawText ("Lane", 810, 0, 30, headerHeight, juce::Justification::centredLeft);
+            g.drawText ("Snap", labelX[0], 0, 32, headerHeight, juce::Justification::centredLeft);
+            g.drawText ("Length", labelX[1], 0, 45, headerHeight, juce::Justification::centredLeft);
+            g.drawText ("Velocity", labelX[2], 0, 52, headerHeight, juce::Justification::centredLeft);
+            g.drawText ("Lane", labelX[3], 0, 30, headerHeight, juce::Justification::centredLeft);
             g.drawText ((selectedNoteIds.empty() ? juce::String() : juce::String ((int) selectedNoteIds.size()) + " selected  |  ")
-                        + "Insert " + juce::String (insertionBeat + 1, 2), 1210, 0, juce::jmax (0, getWidth() - 1224), headerHeight, juce::Justification::centredRight);
+                        + "Insert " + juce::String (insertionBeat + 1, 2), infoX, 0, juce::jmax (0, getWidth() - infoX - 14), headerHeight, juce::Justification::centredRight);
             if (clip == nullptr)
             {
                 g.setColour (muted); g.setFont (font (14.0f));
@@ -3303,6 +3526,8 @@ private:
     };
         LaneView laneView { *this };
         juce::ComboBox snap, noteLength, laneChoice, scaleRoot, scaleMode;
+        int nameWidth = 225, infoX = 1210;
+        std::array<int, 4> labelX { 244, 352, 488, 810 };
         juce::TextButton noteTools { "Note tools" }, scaleButton { "Scale" };
         void editScale()
         {
@@ -4419,6 +4644,8 @@ private:
     PianoRoll pianoRoll;
     AudioClipView audioClipView { *this };
     LaunchBox midiLaunch { *this };
+    GrooveBox clipGroove { *this };
+    juce::Component::SafePointer<GroovePoolPanel> groovePool;
     int selectedDrumPad = 0; // The Drum Sampler pad that browser samples load into.
     DeviceChain deviceChain;
     juce::Viewport viewport;
@@ -4443,7 +4670,8 @@ private:
     bool pluginBrowser() const noexcept { return browserCategory == BrowserCategory::plugins; }
     bool sampleBrowser() const noexcept { return browserCategory == BrowserCategory::samples; }
     // Built-in device rows: a header names a group; kind -2 is the built-in synth, -3 the Utility.
-    struct DeviceRow { juce::String label; bool header = false; int kind = -1; juce::File preset; };
+    // Grooves list Halftrack's library (by index) and groove files in the User Library.
+    struct DeviceRow { juce::String label; bool header = false; int kind = -1; juce::File preset; int groove = -1; juce::File grooveFile; };
     // User library: presets per device and the default set.
     juce::File userLibrary;
     juce::File presetFolder (const juce::String& device) const
@@ -4797,6 +5025,63 @@ private:
         const auto& clip = track->clips[(size_t) selectedClip];
         return clip.isMidi ? &clip : nullptr;
     }
+    // Grooves: the Groove Pool window, adding library or file grooves, and extraction from clips.
+    juce::File grooveFolder() const { return userLibrary == juce::File() ? juce::File() : userLibrary.getChildFile ("Grooves"); }
+    void openGroovePool()
+    {
+        if (groovePool != nullptr) { if (auto* window = groovePool->getTopLevelComponent()) window->toFront (true); return; }
+        auto panel = std::make_unique<GroovePoolPanel> (*this);
+        groovePool = panel.get();
+        showDialog ("Halftrack - Groove Pool", std::move (panel), 700, 320);
+    }
+    // Adds a groove to the pool; from the browser it also becomes the selected MIDI clip's groove.
+    void useGrooveFromUI (const Session::GrooveInfo& groove, bool applyToClip)
+    {
+        juce::String id;
+        const auto result = session.addGroove (groove, id);
+        report (result, "Added " + groove.name + " to the Groove Pool.");
+        if (result.wasOk() && applyToClip) if (const auto* clip = currentMidiClip()) report (session.setClipGroove (clip->id, id));
+        refresh();
+    }
+    void useGrooveFileFromUI (const juce::File& file, bool applyToClip)
+    {
+        Session::GrooveInfo groove;
+        if (const auto result = Session::readGrooveFile (file, groove); result.failed()) { report (result); return; }
+        useGrooveFromUI (groove, applyToClip);
+    }
+    void extractGrooveFromUI (const juce::String& clipId)
+    {
+        juce::String id;
+        const auto result = session.extractGroove (clipId, id);
+        report (result, "Extracted the clip's groove into the Groove Pool."); refresh();
+        if (result.wasOk()) openGroovePool();
+    }
+    void showAddGrooveMenu (juce::Component& target)
+    {
+        juce::PopupMenu menu, library;
+        const auto grooves = Session::grooveLibrary();
+        for (int i = 0; i < (int) grooves.size(); ++i) library.addItem (i + 1, grooves[(size_t) i].name);
+        menu.addSubMenu ("Halftrack Grooves", library);
+        menu.addItem (1000, "Groove File...");
+        const auto* clip = currentMidiClip();
+        menu.addItem (1001, "Extract from Selected Clip", clip != nullptr);
+        const auto clipId = clip != nullptr ? clip->id : juce::String();
+        auto safe = juce::Component::SafePointer<Impl> (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&target), [safe, grooves, clipId] (int choice)
+        {
+            if (safe == nullptr || choice == 0) return;
+            if (choice == 1001) { safe->extractGrooveFromUI (clipId); return; }
+            if (choice == 1000) { safe->chooseGrooveFile(); return; }
+            if (juce::isPositiveAndBelow (choice - 1, (int) grooves.size())) safe->useGrooveFromUI (grooves[(size_t) choice - 1], false);
+        });
+    }
+    void chooseGrooveFile()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Add a Groove File", grooveFolder().isDirectory() ? grooveFolder() : juce::File(), "*.agr");
+        auto safe = juce::Component::SafePointer<Impl> (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+            [safe] (const juce::FileChooser& fc) { if (safe != nullptr && fc.getResult() != juce::File()) safe->useGrooveFileFromUI (fc.getResult(), false); });
+    }
     void openPianoRoll()
     {
         const auto* track = currentTrack();
@@ -4973,9 +5258,12 @@ private:
         if (selectedSceneIndex() < 0) selectedSceneId = state.scenes.empty() ? juce::String() : state.scenes.front().id;
         launcher.sync();
         pianoRoll.sync();
-        if (showPiano && (audioClipView.isVisible() != (selectedAudioClip() != nullptr) || midiLaunch.isVisible() != (selectedAudioClip() == nullptr && sessionMidiClip() != nullptr))) resized();
+        if (showPiano && (audioClipView.isVisible() != (selectedAudioClip() != nullptr) || midiLaunch.isVisible() != (selectedAudioClip() == nullptr && sessionMidiClip() != nullptr)
+                          || clipGroove.isVisible() != (selectedAudioClip() == nullptr && currentMidiClip() != nullptr))) resized();
         if (audioClipView.isVisible()) audioClipView.sync();
         if (midiLaunch.isVisible()) if (const auto* clip = sessionMidiClip()) midiLaunch.setClip (*clip);
+        if (clipGroove.isVisible()) if (const auto* clip = currentMidiClip()) clipGroove.setClip (*clip);
+        if (groovePool != nullptr) groovePool->sync();
         newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
         importButton.setEnabled (currentTrack() == nullptr || ! currentTrack()->isReturn);
         {
@@ -5681,6 +5969,7 @@ private:
     }
     void midiClipCommand (int choice,const juce::String& id)
     {
+        if(choice==10){extractGrooveFromUI(id);return;}
         if(choice==7){if(const auto* track=currentTrack())pasteMidi(track->id,session.snapshot().position);return;}
         if(choice==5||choice==6)
         {
@@ -5993,7 +6282,7 @@ private:
         upButton.setEnabled (browserFolder != juce::File() && browserFolder.getParentDirectory() != browserFolder);
         browserSearch.setTextToShowWhenEmpty ("Search (" + juce::String (browserCategory == BrowserCategory::instruments ? "Instruments"
             : browserCategory == BrowserCategory::audioEffects ? "Audio Effects" : browserCategory == BrowserCategory::midiEffects ? "MIDI Effects"
-            : pluginBrowser() ? "Plug-ins" : "Samples") + ")", muted);
+            : pluginBrowser() ? "Plug-ins" : browserCategory == BrowserCategory::grooves ? "Grooves" : "Samples") + ")", muted);
         if (browserFolder != scannedBrowserFolder) startBrowserScan();
         const auto matches = [&query] (const juce::String& label) { return query.isEmpty() || label.containsIgnoreCase (query); };
         if (pluginBrowser())
@@ -6004,6 +6293,20 @@ private:
         else if (sampleBrowser())
         {
             for (const auto& item : allBrowserItems) if (matches (item.file.getFileName())) browserItems.push_back (item);
+        }
+        else if (browserCategory == BrowserCategory::grooves)
+        {
+            const auto library = Session::grooveLibrary();
+            for (int i = 0; i < (int) library.size(); ++i)
+                if (matches (library[(size_t) i].name)) { DeviceRow row { library[(size_t) i].name }; row.groove = i; deviceItems.push_back (row); }
+            if (grooveFolder().isDirectory())
+            {
+                auto files = grooveFolder().findChildFiles (juce::File::findFiles, true, "*.agr");
+                files.sort();
+                std::vector<DeviceRow> rows;
+                for (const auto& f : files) if (matches (f.getFileNameWithoutExtension())) { DeviceRow row { f.getFileNameWithoutExtension() }; row.grooveFile = f; rows.push_back (row); }
+                if (! rows.empty()) { deviceItems.push_back ({ "User Library", true, -1 }); deviceItems.insert (deviceItems.end(), rows.begin(), rows.end()); }
+            }
         }
         else if (browserCategory == BrowserCategory::instruments)
         {
@@ -6077,7 +6380,13 @@ private:
                 return;
             }
             const int indent = browserCategory == BrowserCategory::audioEffects ? 14 : 4;
-            g.setColour (selected ? orange : muted); g.drawRect (indent + 3, height / 2 - 5, 10, 10); g.fillRect (indent + 5, height / 2 - 3, 6, 2);
+            g.setColour (selected ? orange : muted);
+            if (item.groove >= 0 || item.grooveFile != juce::File())
+            {
+                // A groove: a short swung pulse train.
+                for (int i = 0; i < 4; ++i) g.fillRect (indent + 3 + i * 3 + (i % 2) * 1, height / 2 - (i % 2 == 0 ? 5 : 3), 1, i % 2 == 0 ? 10 : 6);
+            }
+            else { g.drawRect (indent + 3, height / 2 - 5, 10, 10); g.fillRect (indent + 5, height / 2 - 3, 6, 2); }
             g.setColour (selected ? ink : juce::Colour (0xffc6c6c6)); g.setFont (font (11.5f));
             g.drawText (item.label, indent + 19, 0, width - indent - 22, height, juce::Justification::centredLeft, true);
             return;
@@ -6129,6 +6438,8 @@ private:
         else
         {
             const auto item = deviceItems[(size_t) row]; if (item.header) return;
+            if (item.groove >= 0) { useGrooveFromUI (Session::grooveLibrary()[(size_t) item.groove], true); return; }
+            if (item.grooveFile != juce::File()) { useGrooveFileFromUI (item.grooveFile, true); return; }
             const bool needsMidi = item.kind == -2 || (item.kind >= 0 && (effectIsInstrument ((Session::EffectKind) item.kind) || effectIsMidi ((Session::EffectKind) item.kind)));
             const auto* track = currentTrack();
             if (needsMidi && (track == nullptr || ! track->isMidi))
@@ -6521,6 +6832,58 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         if (auto* window = fit->findParentComponentOfClass<juce::DialogWindow>()) delete window;
         for (int step = 0; step < 3; ++step) pianoRoll.keyPressed (undo);
         check (! currentMidiClip()->scale.enabled, "undo removes the scale");
+    }
+    {
+        // The Groove section and the Groove Pool: a library groove from the browser becomes the clip's
+        // groove, the pool edits it, Commit writes it into the notes and Extract Groove makes one.
+        auto* chooser = dynamic_cast<juce::ComboBox*> (findNamed (clipGroove, "Clip groove"));
+        auto* commit = dynamic_cast<juce::Button*> (findNamed (clipGroove, "Commit groove"));
+        check (clipGroove.isVisible() && pianoRoll.getX() >= clipGroove.getRight() && chooser != nullptr && commit != nullptr
+               && chooser->getSelectedId() == 1 && ! commit->isEnabled(), "a MIDI clip shows its Groove section, set to None");
+        const auto clipId = currentMidiClip()->id;
+        const auto category = browserCategory;
+        setBrowserCategory (BrowserCategory::grooves);
+        int swingRow = -1;
+        for (int r = 0; r < (int) deviceItems.size(); ++r) if (deviceItems[(size_t) r].label == "16th Swing 62") swingRow = r;
+        check (swingRow >= 0 && getNumRows() == (int) Session::grooveLibrary().size(), "the Grooves browser lists Halftrack's grooves");
+        activateBrowserRow (swingRow); refresh();
+        check (state.grooves.size() == 1 && currentMidiClip()->grooveId == state.grooves[0].id && chooser->getSelectedId() == 2 && commit->isEnabled(),
+               "Return on a groove adds it to the pool and gives it to the selected clip");
+        chooser->setSelectedId (1, juce::sendNotificationSync);
+        check (currentMidiClip()->grooveId.isEmpty() && ! commit->isEnabled(), "None takes the groove off the clip");
+        chooser->setSelectedId (2, juce::sendNotificationSync);
+        openGroovePool();
+        check (groovePool != nullptr && groovePool->isShowing(), "Groove Pool opens its window");
+        auto* timing = dynamic_cast<juce::Slider*> (findNamed (*groovePool, "Timing"));
+        auto* base = dynamic_cast<juce::ComboBox*> (findNamed (*groovePool, "Base"));
+        auto* amount = dynamic_cast<juce::Slider*> (findNamed (*groovePool, "Global groove amount"));
+        check (timing != nullptr && base != nullptr && amount != nullptr && timing->getValue() == 100 && base->getSelectedId() == 4 && amount->getValue() == 100,
+               "the pool shows the groove's Timing, Base and the Global Amount");
+        timing->setValue (40, juce::sendNotificationSync); base->setSelectedId (2, juce::sendNotificationSync); amount->setValue (50, juce::sendNotificationSync);
+        check (state.grooves[0].timing == 40 && state.grooves[0].base == Session::GrooveBase::eighth && state.grooveAmount == 50, "the pool's controls edit the groove and the amount");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+                for (auto [component, name] : { std::pair<juce::Component*, const char*> { groovePool->getTopLevelComponent(), "groove-pool.png" }, { this, "groove-clip.png" } })
+                {
+                    juce::PNGImageFormat png; const auto output = directory.getChildFile (name);
+                    if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                        && png.writeImageToStream (component->createComponentSnapshot (component->getLocalBounds(), true, 1.0f), *stream))
+                        std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                }
+        commit->onClick(); refresh();
+        check (currentMidiClip()->grooveId.isEmpty() && chooser->getSelectedId() == 1, "Commit writes the groove and sets the clip to None");
+        pianoRoll.keyPressed (undo);
+        check (currentMidiClip()->grooveId == state.grooves[0].id, "one undo restores the groove");
+        midiClipCommand (10, clipId); refresh();
+        const bool extracted = state.grooves.size() == 2 && state.grooves[1].name == currentMidiClip()->name;
+        check (extracted || currentMidiClip()->notes.empty(), "Extract Groove adds the clip's groove to the pool");
+        dynamic_cast<juce::Button*> (findNamed (*groovePool, "Remove groove"))->onClick(); refresh();
+        check (state.grooves.size() == (extracted ? 1u : 0u) && currentMidiClip()->grooveId.isEmpty(), "removing a groove takes it off its clips");
+        for (int step = 0; step < (extracted ? 9 : 8); ++step) pianoRoll.keyPressed (undo);
+        refresh();
+        check (state.grooves.empty() && state.grooveAmount == 100 && currentMidiClip()->grooveId.isEmpty(), "undo returns the pool to empty");
+        if (auto* window = groovePool->findParentComponentOfClass<juce::DialogWindow>()) delete window;
+        setBrowserCategory (category);
     }
     withGeneratedMidiController(session,[&](const juce::String& controller)
     {

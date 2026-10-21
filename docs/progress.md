@@ -968,3 +968,18 @@ Root owns the tempo map across `src/Session.*`, the UI's time conversions in `sr
 ## Exclusive solo and arm — 2026-10-20
 
 UI change in `src/MainComponent.cpp`. Solo and Arm are now exclusive: a click releases the other tracks (and groups, for solo), and Cmd/Ctrl-click adds. Each click is one undo step. The UI suite covers both. See [the solo and arm contract](research/solo-arm-contract.md).
+
+## Groove pool — 2026-10-20
+
+Root owns grooves across:
+
+- `src/Grooves.*` and `src/Session.*`, including the engine behaviour's playback hook and the groove watcher;
+- the Groove section, Groove Pool window, Grooves browser and Extract Groove menu items in `src/MainComponent.cpp`;
+- `tests/GrooveTests.cpp`, the UI suite, the suite registration and documentation.
+
+MIDI clips can play with a groove from the project's pool, with Base, Quantize, Timing, Random, Velocity and Global Amount. The clip's notes are unchanged until Commit. Grooves come from Halftrack's generated swing and quantize library, from `.agr` files or from a clip's notes. Live playback follows groove edits and undo without stopping.
+
+The piano-roll header now lays itself out to the editor's width, so the Scale controls stay visible beside the Groove section.
+
+The new `grooves-acceptance` suite measures rendered onsets and accents. See [the groove contract](research/grooves-contract.md).
+

@@ -50,6 +50,7 @@ int runMidiToolTests (const juce::File&);
 int runRecoveryTests (const juce::File&);
 int runPresetTests (const juce::File&);
 int runTempoMapTests (const juce::File&);
+int runGrooveTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -210,6 +211,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-groups");
             setApplicationReturnValue (runGroupTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-grooves"))
+        {
+            const int i = args.indexOf ("--self-test-grooves");
+            setApplicationReturnValue (runGrooveTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-tempo-map"))

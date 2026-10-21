@@ -299,6 +299,23 @@ The meter is the engine tempo sequence's first `TimeSigSetting`; `setTimeSignatu
 
 A MIDI clip's scale is three properties on its state, read by `clipScale` into `ClipInfo::scale` and written by `setClipScale`. `Session::scaleIntervals`, `inScale` and `fitToScale` are pure helpers shared by the piano roll's row highlighting and the Fit to Scale note tool. See the [scale contract](research/scales-contract.md).
 
+## Groove pool
+
+The pool is a Halftrack child of the Edit (`HALFTRACKGROOVEPOOL`), and a MIDI clip names its groove in `halftrackGroove`. `src/Grooves.*` holds the pure model:
+
+- `grooves::Pattern` places a note's start and velocity;
+- `extract` builds a groove from notes;
+- `library` generates Halftrack's grooves;
+- `Session::readGrooveFile` reads `.agr` files.
+
+Playback never changes a clip's notes. The engine behaviour's `createPlaybackMidiSequence` override places a copy of the clip's MIDI list while the graph is built on the message thread. A `GrooveWatcher` on the current Edit restarts playback when groove state changes, since the engine does not watch it. `commitClipGroove` writes the same placement into the notes. In the UI:
+
+- `GrooveBox` sits beside the note editor;
+- the Groove Pool window is `GroovePoolPanel`;
+- the browser has a Grooves category.
+
+See the [groove contract](research/grooves-contract.md).
+
 ## Crash recovery
 
 `Session::writeRecovery` serialises the live edit (absolute media, `halftrackRecoveryOf` naming the saved project) without touching the project file or history, and `recoverProject` reuses `loadProject`'s validation before detaching the result from any file. `MainComponent::Impl` owns the 30-second autosave tick, the startup prompt and removing the copy once work is saved or discarded; `Main.cpp` chooses the application-data location. See the [recovery contract](research/recovery-contract.md).

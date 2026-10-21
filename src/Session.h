@@ -191,6 +191,33 @@ public:
     static uint16_t scaleIntervals (int mode) noexcept; // Bit n set when the scale holds n semitones above its root.
     static bool inScale (const ScaleSettings&, int pitch) noexcept; // Every pitch is in a disabled scale.
     static int fitToScale (const ScaleSettings&, int pitch) noexcept; // The nearest scale pitch; ties go down.
+    // The groove pool. A groove is a pattern of note timings and velocities measured against its Base
+    // grid; MIDI clips that use one play their notes moved and accented by it without being changed,
+    // until the groove is committed. Bases are appended only; never reorder.
+    enum class GrooveBase { quarter, eighth, eighthTriplet, sixteenth, sixteenthTriplet, thirtySecond };
+    static constexpr int grooveBaseCount = 6, maximumGrooveEvents = 4096, maximumGrooves = 256;
+    static constexpr float maximumGrooveAmount = 130;
+    struct GrooveEvent
+    {
+        double beat = 0;      // From the groove's start.
+        float velocity = 127; // 1-127.
+        bool operator== (const GrooveEvent&) const = default;
+    };
+    struct GrooveInfo
+    {
+        juce::String id, name;
+        GrooveBase base = GrooveBase::sixteenth;
+        double lengthBeats = 4; // The pattern repeats every lengthBeats (1/960 to 1024 beats).
+        // Percentages: Quantize, Timing and Random 0-100, Velocity -100 to 100.
+        float quantize = 0, timing = 100, random = 0, velocity = 0;
+        std::vector<GrooveEvent> events; // Ordered by beat, inside [0, lengthBeats).
+        bool operator== (const GrooveInfo&) const = default;
+    };
+    // Halftrack's own generated grooves (swing at several amounts); their ids are empty.
+    static std::vector<GrooveInfo> grooveLibrary();
+    // Reads a groove file in the reference's .agr format (plain or gzip XML) for addGroove; its id is empty.
+    static juce::Result readGrooveFile (const juce::File&, GrooveInfo&);
+    static const char* grooveBaseName (GrooveBase) noexcept;
     enum class FadeCurve { linear = 1, convex, concave, sCurve };
     // Warped audio follows the project tempo; its length is fixed in beats.
     enum class WarpMode { off, stretch, efficient };
@@ -226,6 +253,7 @@ public:
         std::vector<MidiNoteInfo> notes;
         std::vector<ControllerLane> controllers; // Lanes with points, by controller number.
         ScaleSettings scale;
+        juce::String grooveId; // The pool groove a MIDI clip plays with; empty for None.
     };
     struct LocatorInfo { juce::String id, name; double position = 0; };
     struct SceneInfo { juce::String id, name; };
@@ -330,6 +358,8 @@ public:
         std::vector<GroupInfo> groups;
         std::vector<SceneInfo> scenes;
         std::vector<LocatorInfo> locators;
+        std::vector<GrooveInfo> grooves; // The groove pool, in pool order.
+        float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
         MetronomeSettings metronome;
         RecordQuantisation recordQuantisation = RecordQuantisation::none;
@@ -396,6 +426,17 @@ public:
     // Replaces one controller lane of a MIDI clip in one undo step; no points removes the lane.
     juce::Result setMidiControllerLane (const juce::String& clipId, int controller, const std::vector<ControllerPoint>& points);
     juce::Result setClipScale (const juce::String& clipId, const ScaleSettings&);
+    // Groove pool edits, one undo step each. addGroove copies a groove (from grooveLibrary or a file) into
+    // the pool; extractGroove makes one from a MIDI clip's notes; setGroove replaces a pool groove's name,
+    // Base, amounts and pattern; removeGroove sets the clips that used it to None.
+    juce::Result addGroove (const GrooveInfo&, juce::String& grooveId);
+    juce::Result extractGroove (const juce::String& clipId, juce::String& grooveId);
+    juce::Result setGroove (const juce::String& grooveId, const GrooveInfo&);
+    juce::Result removeGroove (const juce::String& grooveId);
+    juce::Result setGrooveAmount (float percent);
+    // A MIDI clip's groove; an empty id is None. Commit writes the groove into the clip's notes and sets it to None.
+    juce::Result setClipGroove (const juce::String& clipId, const juce::String& grooveId);
+    juce::Result commitClipGroove (const juce::String& clipId);
     juce::Result removeMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds);
     juce::Result setSynthSettings (const juce::String& trackId, const SynthSettings&);
     // Replaces a MIDI track's instrument in one undo step; nullopt restores the built-in synth.

@@ -152,7 +152,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | WRP-006 | Repitch behavior | Verify coupled pitch/speed changes and tempo automation using known-frequency fixtures. | NOT IMPLEMENTED / UNVERIFIED |
 | WRP-007 | Complex stretching | Assess polyphonic and formant-aware processing on permitted material; record subjective and numeric tolerances. | NOT IMPLEMENTED / UNVERIFIED |
 | WRP-008 | Leader/follower tempo | PARTIAL — warped clips follow the project tempo with clip BPM and length in beats; clips cannot lead the tempo | PARTIAL |
-| WRP-009 | Groove pool | Extract, apply, edit, commit, and remove timing/velocity grooves without losing original note/marker data. | NOT IMPLEMENTED / UNVERIFIED |
+| WRP-009 | Groove pool | Extract, apply, edit, commit, and remove timing/velocity grooves without losing original note/marker data. | PARTIAL: project groove pool with Base, Quantize, Timing, Random, Velocity and Global Amount; non-destructive MIDI clip playback, Commit, extraction, `.agr` reading and a generated library, checked by rendered onsets and accents ([contract](research/grooves-contract.md)). Audio-clip grooves, hot-swap and measured reference arithmetic are missing. |
 | WRP-010 | Slicing and conversion | Test transient slicing and separate melody, harmony, and drum transcription fixtures; report errors rather than imply perfect inference. | NOT IMPLEMENTED / UNVERIFIED |
 | WRP-011 | Shared media edits | Verify that duplicate clips and alternate sessions do not unexpectedly mutate each other's source files. | NOT IMPLEMENTED / UNVERIFIED |
 
