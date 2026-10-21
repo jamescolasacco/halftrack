@@ -1272,3 +1272,12 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **Overdub.** Armed MIDI tracks whose slot already holds a clip play it and add the notes played where they fall in its loop. Pressing the button again plays the takes and ends overdubbing.
 
 See [the contract](research/session-recording-contract.md#session-record-and-overdub).
+
+## Note chance and velocity range — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt`, `cmake/PatchMidiVariations.cmake` (new) and the patches it chains after, and `tests/NoteChanceTests.cpp` (new), with documentation.
+
+- **Chance and range.** Notes can have a chance to play and a velocity range, set in the piano roll's Chance lane and by Cmd-dragging velocities. They vary over 64 repeating passes of the clip's loop.
+- **Engine fixes.** The looping MIDI generator skipped variations, and stopped for good at an empty pass. Both are fixed in the patch.
+
+See [the contract](research/note-chance-contract.md).

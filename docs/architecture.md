@@ -189,6 +189,10 @@ flowchart LR
 
 `Session::TrackOutput` is `{ OutputKind kind; String trackId; }`, with `OutputKind` `master`, `sendsOnly` or `track`; `TrackInfo::output` reports it. `setTrackOutput (trackId, TrackOutput)` runs on the message thread as one undo step and is refused for returns, grouped tracks, recording and export. `outputDestinations (trackId)` lists the identities of the audio tracks it may play into, excluding returns, MIDI tracks and tracks that already feed it. The native `TrackOutput` stores the route: the default device, `(none)` for Sends Only, or `track N`, resolved by the engine to the destination's identity. Live playback processes a `(none)` track as a sink so only its sends are heard; `cmake/PatchRenderSendsOnly.cmake` gives renders the same graph. See the [routing contract](research/routing-contract.md).
 
+## Note chance
+
+`MidiNoteInfo::chance` and `velocityRange` are `halftrackChance` and `halftrackVelocityRange` note properties. Halftrack's `Behaviour` reports 64 playback variations for a clip whose notes use either, and builds each from a copy of the notes: a note is kept when `noteRoll (identity, pass)` is below its chance, and its velocity moves by the pass's share of its range. `cmake/PatchMidiVariations.cmake` lets the engine build and cycle those sequences per loop pass. See the [contract](research/note-chance-contract.md).
+
 ## Session Record
 
 `sessionRecord (sceneIndex)` records empty slots through `recordSlot` and adds `Impl::Overdub` entries for armed MIDI tracks whose slot holds a MIDI clip, launching it if it is not playing. The Capture MIDI tap's `captureNote` hands each note on an armed track to `overdubNote`, which places it from the launch handle's played range and the sync point and adds it at its note-off. `cancelLaunches` clears the overdubs. See the [Session recording contract](research/session-recording-contract.md#session-record-and-overdub).

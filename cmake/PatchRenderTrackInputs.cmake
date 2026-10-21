@@ -11,6 +11,7 @@ function(halftrack_patch_render_track_inputs source_dir)
     set(original0 "51ef9b7dfa77221251da5f43f77f91110f8b375de8974e6f45cac2c08c98ad48")
     set(patched0 "06c1d2be2f00c494f5db33c2b5ced64f9395e9fb7e16e4e8002ef7beacfa9ee8")
     set(count0 5)
+    set(downstream0 "bfc26bb83dcc389b9b3cd64db016f5e493e7f1f982b7c8910be6524c30703766") # The later MIDI variations patch.
     set(before0_0 [=[    int getMidiInputDeviceBusID (EditItemID trackItemID)
     {
         constexpr size_t midiMagicNum = 0x9a2762;

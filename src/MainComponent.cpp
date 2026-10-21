@@ -4230,8 +4230,10 @@ private:
     {
     public:
         explicit LaneView (PianoRoll& r) : roll (r) { setName ("Controller lane"); }
-        // -1 shows velocities; otherwise a controller number or Session::pitchBendLane / channelPressureLane.
+        // -1 shows velocities and chanceLane note chances; otherwise a controller number or
+        // Session::pitchBendLane / channelPressureLane.
         int lane = -1;
+        static constexpr int chanceLane = -2;
         void paint (juce::Graphics& g) override
         {
             g.fillAll (juce::Colour (0xff262626));
@@ -4254,8 +4256,15 @@ private:
                 for (const auto& note : notes())
                 {
                     const bool selected = roll.selectedNoteIds.contains (note.id);
-                    const auto top = y (juce::roundToInt (note.velocity * 127)), at = x (note.startBeat);
-                    g.setColour ((selected ? orange : juce::Colour (0xff8cc4b5)).withAlpha (note.active ? 1.0f : .35f));
+                    const auto top = y (noteValue (note)), at = x (note.startBeat);
+                    const auto colour = (selected ? orange : juce::Colour (0xff8cc4b5)).withAlpha (note.active ? 1.0f : .35f);
+                    // A velocity range shows as a lighter bar beside the velocity, reaching the range's end.
+                    if (lane == -1 && note.velocityRange != 0)
+                    {
+                        const auto reach = y (juce::jlimit (1, 127, noteValue (note) + note.velocityRange));
+                        g.setColour (colour.withMultipliedAlpha (.45f)); g.fillRect (at + 2.0f, juce::jmin (top, reach), 3.0f, std::abs (reach - top));
+                    }
+                    g.setColour (colour);
                     g.fillRect (at, top, 2.0f, (float) area.getBottom() - top);
                     g.fillEllipse (at - 2.5f, top - 2.5f, 6, 6);
                 }
@@ -4296,6 +4305,8 @@ private:
                 for (const auto& note : clip->notes)
                     if (const auto distance = std::abs (x (note.startBeat) - e.position.x); distance < best) { best = distance; velocityNote = note.id; }
                 if (velocityNote.isEmpty()) return;
+                // Cmd-dragging a velocity sets the note's velocity range instead, as in the reference.
+                rangeDrag = lane == -1 && e.mods.isCommandDown();
                 previewNotes = clip->notes; dragVelocity (e); return;
             }
             auto points = this->points();
@@ -4330,9 +4341,15 @@ private:
                 if (velocityNote.isNotEmpty() && ! previewNotes.empty())
                 {
                     std::vector<Session::MidiNoteInfo> changed;
+                    juce::StringArray ids;
                     const bool group = roll.selectedNoteIds.contains (velocityNote);
-                    for (const auto& note : previewNotes) if (note.id == velocityNote || (group && roll.selectedNoteIds.contains (note.id))) changed.push_back (note);
-                    roll.updateNotes (clipId, changed, "Note velocity");
+                    for (const auto& note : previewNotes)
+                        if (note.id == velocityNote || (group && roll.selectedNoteIds.contains (note.id))) { changed.push_back (note); ids.add (note.id); }
+                    const auto dragged = std::find_if (previewNotes.begin(), previewNotes.end(), [this] (const auto& n) { return n.id == velocityNote; });
+                    if (lane == chanceLane) roll.owner.report (roll.owner.session.setMidiNotesChance (clipId, ids, dragged->chance));
+                    else if (rangeDrag) roll.owner.report (roll.owner.session.setMidiNotesVelocityRange (clipId, ids, dragged->velocityRange));
+                    else roll.updateNotes (clipId, changed, "Note velocity");
+                    roll.owner.refresh();
                 }
                 velocityNote.clear(); previewNotes.clear(); return;
             }
@@ -4340,6 +4357,7 @@ private:
         }
         static juce::String laneName (int lane)
         {
+            if (lane == chanceLane) return "Chance";
             if (lane < 0) return "Velocity";
             if (lane == Session::pitchBendLane) return "Pitch Bend";
             if (lane == Session::channelPressureLane) return "Pressure";
@@ -4353,13 +4371,17 @@ private:
     private:
         PianoRoll& roll;
         juce::String clipId, velocityNote;
+        bool rangeDrag = false;
         std::optional<std::vector<Session::ControllerPoint>> preview;
         std::vector<Session::MidiNoteInfo> previewNotes;
         int dragged = -1;
         bool drawing = false;
         juce::Rectangle<int> plot() const { return { keysWidth, 6, juce::jmax (1, getWidth() - keysWidth), juce::jmax (1, getHeight() - 10) }; }
-        int low() const { return lane == Session::pitchBendLane ? -8192 : lane < 0 ? 1 : 0; }
-        int high() const { return lane == Session::pitchBendLane ? 8191 : 127; }
+        int low() const { return lane == Session::pitchBendLane ? -8192 : lane == chanceLane ? 0 : lane < 0 ? 1 : 0; }
+        int high() const { return lane == Session::pitchBendLane ? 8191 : lane == chanceLane ? 100 : 127; }
+        // A note's bar in a note lane: its velocity, or its chance in percent.
+        int noteValue (const Session::MidiNoteInfo& note) const
+        { return lane == chanceLane ? juce::roundToInt (note.chance * 100) : juce::roundToInt (note.velocity * 127); }
         float x (double beat) const { return (float) (keysWidth + (beat - roll.viewBeat) * roll.pixelsPerBeat); }
         float y (int value) const { const auto a = plot(); return (float) a.getBottom() - (float) (value - low()) / (float) (high() - low()) * (float) a.getHeight(); }
         double beatAt (float px) const { return roll.viewBeat + (px - keysWidth) / roll.pixelsPerBeat; }
@@ -4400,9 +4422,15 @@ private:
         }
         void dragVelocity (const juce::MouseEvent& e)
         {
-            const auto value = juce::jlimit (0.01f, 1.0f, (float) valueAt (e.position.y) / 127.0f);
+            const int value = valueAt (e.position.y);
             const bool group = roll.selectedNoteIds.contains (velocityNote);
-            for (auto& note : previewNotes) if (note.id == velocityNote || (group && roll.selectedNoteIds.contains (note.id))) note.velocity = value;
+            for (auto& note : previewNotes)
+                if (note.id == velocityNote || (group && roll.selectedNoteIds.contains (note.id)))
+                {
+                    if (lane == chanceLane) note.chance = (float) value / 100.0f;
+                    else if (rangeDrag) note.velocityRange = juce::jlimit (-127, 127, value - juce::roundToInt (note.velocity * 127));
+                    else note.velocity = juce::jlimit (0.01f, 1.0f, (float) value / 127.0f);
+                }
             repaint();
         }
         void commit (const std::vector<Session::ControllerPoint>& points)
@@ -4442,7 +4470,9 @@ private:
         static constexpr int laneHeight = 92, hiddenLane = 99;
         // Lane menu: velocity, common controllers, then any other controller the clip uses.
         static constexpr int commonLanes[] { Session::pitchBendLane, 1, 7, 10, 11, 64, Session::channelPressureLane };
-        int laneForChoice (int id) const { return id == 1 ? -1 : id >= 2 && id < 2 + (int) std::size (commonLanes) ? commonLanes[id - 2] : id - 100; }
+        static constexpr int chanceChoice = 97;
+        int laneForChoice (int id) const
+        { return id == 1 ? -1 : id == chanceChoice ? LaneView::chanceLane : id >= 2 && id < 2 + (int) std::size (commonLanes) ? commonLanes[id - 2] : id - 100; }
         void refreshLaneChoices (const Session::ClipInfo* clip)
         {
             const auto common = [] (int lane) { return std::find (std::begin (commonLanes), std::end (commonLanes), lane) != std::end (commonLanes); };
@@ -4452,7 +4482,7 @@ private:
             laneOthers = others;
             const auto keep = laneChoice.getSelectedId();
             laneChoice.clear (juce::dontSendNotification);
-            laneChoice.addItem ("Velocity", 1);
+            laneChoice.addItem ("Velocity", 1); laneChoice.addItem ("Chance", chanceChoice);
             for (int i = 0; i < (int) std::size (commonLanes); ++i) laneChoice.addItem (LaneView::laneName (commonLanes[i]), 2 + i);
             for (const auto lane : others) laneChoice.addItem (LaneView::laneName (lane), 100 + lane);
             juce::PopupMenu more;
@@ -7816,6 +7846,25 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (currentMidiClip()->notes.front().velocity == 1.0f, "dragging a velocity bar to the top sets full velocity");
         pianoRoll.keyPressed (undo);
         check (currentMidiClip()->notes.front().velocity == before, "one undo restores the velocity");
+        // The Chance lane sets a note's chance; Cmd-dragging a velocity sets its velocity range.
+        laneMenu->setSelectedId (97, juce::sendNotificationSync);
+        check (laneMenu->getText() == "Chance", "the lane chooser offers Chance");
+        laneView->mouseDown (laneEvent ({ noteX, 50 }, { noteX, 50 })); laneView->mouseDrag (laneEvent ({ noteX, 47 }, { noteX, 50 }, true)); laneView->mouseUp (laneEvent ({ noteX, 47 }, { noteX, 50 }, true));
+        check (std::abs (currentMidiClip()->notes.front().chance - .5f) < .02f, "dragging a chance bar to the middle sets a 50% chance");
+        pianoRoll.keyPressed (undo);
+        check (currentMidiClip()->notes.front().chance == 1, "one undo restores the certain note");
+        laneMenu->setSelectedId (1, juce::sendNotificationSync);
+        {
+            const auto now = juce::Time::getCurrentTime();
+            const auto command = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::commandModifier);
+            const auto at = [&] (float y, bool dragged)
+            { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { noteX, y }, command, 1.0f, 0, 0, 0, 0, laneView, laneView, now, { noteX, 50 }, now, 1, dragged); };
+            laneView->mouseDown (at (50, false)); laneView->mouseDrag (at (6, true)); laneView->mouseUp (at (6, true));
+        }
+        check (currentMidiClip()->notes.front().velocityRange == 127 - juce::roundToInt (before * 127) && currentMidiClip()->notes.front().velocity == before,
+               "Cmd-dragging a velocity bar to the top gives the note a range up to full velocity, keeping its velocity");
+        pianoRoll.keyPressed (undo);
+        check (currentMidiClip()->notes.front().velocityRange == 0, "one undo removes the range");
         laneMenu->setSelectedId (2, juce::sendNotificationSync);
         const auto beat2 = juce::Point<float> ((float) (55 + 2 * beatWidth), 6);
         laneView->mouseDown (laneEvent (beat2, beat2)); laneView->mouseUp (laneEvent (beat2, beat2));

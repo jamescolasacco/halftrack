@@ -55,6 +55,7 @@ Session::LaunchSettings clipLaunchSettings (const juce::ValueTree& state)
     return settings;
 }
 const juce::Identifier midiNoteIDProperty { "halftrackNoteId" };
+const juce::Identifier noteChanceProperty { "halftrackChance" }, noteVelocityRangeProperty { "halftrackVelocityRange" };
 const juce::Identifier returnProperty { "halftrackReturn" };
 const juce::Identifier returnBusProperty { "halftrackReturnBus" };
 const juce::Identifier returnModeProperty { "halftrackReturnSendMode" };
@@ -849,6 +850,12 @@ Result validateAudioClips (const juce::ValueTree& state)
         const auto value = state[te::IDs::m].toString().trim();
         if (value != "0" && value != "1") return Result::fail ("The project contains invalid MIDI note activation.");
     }
+    if (state.hasType (te::IDs::NOTE)
+        && ((state.hasProperty (noteChanceProperty) && ! finiteProperty (state[noteChanceProperty], 0, 1))
+            || (state.hasProperty (noteVelocityRangeProperty)
+                && (! finiteProperty (state[noteVelocityRangeProperty], -127, 127)
+                    || std::floor ((double) state[noteVelocityRangeProperty]) != (double) state[noteVelocityRangeProperty]))))
+        return Result::fail ("The project contains an invalid MIDI note chance or velocity range.");
     if (state.hasType (te::IDs::AUDIOCLIP))
     {
         const auto parse = [&state] (const juce::Identifier& key, double fallback, double& result)
@@ -1124,7 +1131,9 @@ Session::ClipInfo describeClip (te::Clip& clip)
         result.startBeat = beats.getStart().inBeats(); result.lengthBeats = beats.getLength().inBeats();
         for (auto* note : midi->getSequence().getNotes())
             result.notes.push_back ({ note->state.getProperty (midiNoteIDProperty).toString(), note->getNoteNumber(),
-                                     note->getStartBeat().inBeats(), note->getLengthBeats().inBeats(), note->getVelocity() / 127.0f, !note->isMute() });
+                                     note->getStartBeat().inBeats(), note->getLengthBeats().inBeats(), note->getVelocity() / 127.0f, !note->isMute(),
+                                     static_cast<float> (static_cast<double> (note->state.getProperty (noteChanceProperty, 1.0))),
+                                     static_cast<int> (note->state.getProperty (noteVelocityRangeProperty, 0)) });
         std::map<int, Session::ControllerLane> lanes;
         for (auto* event : midi->getSequence().getControllerEvents())
             if (const int lane = controllerLane (event->getType()); lane >= 0)
@@ -1182,13 +1191,48 @@ public:
     bool lengthOfOneBeatDependsOnTimeSignature() override { return false; }
     // Device chains are open-ended; the engine's 16-plugin default includes the mixer and meter.
     te::EditLimits getEditLimits() override { te::EditLimits limits; limits.maxPluginsOnTrack = 64; return limits; }
-    // A clip with a pool groove plays a grooved copy of its notes; the clip's own notes are unchanged.
     // Graph building runs on the message thread, never in the audio callback.
     juce::MidiMessageSequence createPlaybackMidiSequence (const te::MidiList& list, te::MidiClip& clip, te::MidiList::TimeBase base, bool mpe) override
     {
+        return playbackSequence (list, clip, base, mpe, &list != &clip.getSequence());
+    }
+    // Notes with a chance or a velocity range vary between passes of their clip. Each of 64 passes
+    // decides from the note's identity and the pass, so the outcome repeats exactly.
+    int getNumPlaybackMidiSequenceVariations (te::MidiClip& clip) override
+    {
+        for (auto note : clip.getSequence().state)
+            if (note.hasType (te::IDs::NOTE) && (note.hasProperty (noteChanceProperty) || note.hasProperty (noteVelocityRangeProperty))) return 64;
+        return 1;
+    }
+    juce::MidiMessageSequence createPlaybackMidiSequenceVariation (const te::MidiList& list, te::MidiClip& clip, te::MidiList::TimeBase base,
+                                                                   bool mpe, int variation) override
+    {
+        auto state = list.state.createCopy();
+        for (int i = state.getNumChildren(); --i >= 0;)
+        {
+            auto note = state.getChild (i);
+            if (! note.hasType (te::IDs::NOTE)) continue;
+            const auto id = note[midiNoteIDProperty].toString() + "@" + note[te::IDs::b].toString() + "/" + note[te::IDs::p].toString();
+            if (noteRoll (id, variation, 0) >= static_cast<double> (note.getProperty (noteChanceProperty, 1.0))) { state.removeChild (i, nullptr); continue; }
+            if (const int range = note.getProperty (noteVelocityRangeProperty, 0); range != 0)
+                note.setProperty (te::IDs::v, juce::jlimit (1, 127, static_cast<int> (note[te::IDs::v]) + juce::roundToInt (noteRoll (id, variation, 1) * range)), nullptr);
+        }
+        const te::MidiList varied (state, nullptr);
+        return playbackSequence (varied, clip, base, mpe, &list != &clip.getSequence());
+    }
+    // A number in [0, 1) from a note's identity, a pass and a purpose, the same on every platform.
+    static double noteRoll (const String& id, int variation, int purpose)
+    {
+        auto x = static_cast<uint64_t> (id.hashCode64()) ^ (0x9e3779b97f4a7c15ull * static_cast<uint64_t> (variation + 1)) ^ (0xbf58476d1ce4e5b9ull * static_cast<uint64_t> (purpose + 1));
+        x ^= x >> 30; x *= 0xbf58476d1ce4e5b9ull; x ^= x >> 27; x *= 0x94d049bb133111ebull; x ^= x >> 31;
+        return static_cast<double> (x >> 11) * (1.0 / 9007199254740992.0);
+    }
+    // A clip with a pool groove plays a grooved copy of its notes; the clip's own notes are unchanged.
+    static juce::MidiMessageSequence playbackSequence (const te::MidiList& list, te::MidiClip& clip, te::MidiList::TimeBase base, bool mpe, bool looped)
+    {
         if (const auto pattern = clipGroovePattern (clip))
         {
-            const te::MidiList grooved (groovedSequence (*pattern, clip, list, &list != &clip.getSequence()), nullptr);
+            const te::MidiList grooved (groovedSequence (*pattern, clip, list, looped), nullptr);
             return te::MidiList::createDefaultPlaybackMidiSequence (grooved, clip, base, mpe);
         }
         return te::MidiList::createDefaultPlaybackMidiSequence (list, clip, base, mpe);
@@ -1773,6 +1817,38 @@ struct Session::Impl
         heldSlots.clear();
         pendingSceneChange.reset(); sceneWatch.stopTimer();
         overdubs.clear();
+    }
+    // Sets one property on the given notes as one undo step, removing it where it takes its default.
+    Result setNotesProperty (const String& clipId, const juce::StringArray& ids, const juce::Identifier& property,
+                             const juce::var& value, const juce::var& fallback, const String& action)
+    {
+        if (exporting) return Result::fail ("Finish or cancel the current export first.");
+        auto* clip = midiClip (clipId);
+        if (clip == nullptr) return Result::fail ("MIDI clip not found.");
+        if (clip->getClipTrack()->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze the track before editing notes.");
+        std::map<String, te::MidiNote*> existing;
+        for (auto* note : clip->getSequence().getNotes())
+        {
+            auto [entry, inserted] = existing.emplace (note->state.getProperty (midiNoteIDProperty).toString(), note);
+            if (! inserted) entry->second = nullptr;
+        }
+        std::set<String> requested;
+        std::vector<te::MidiNote*> changes;
+        for (const auto& id : ids)
+        {
+            if (id.isEmpty() || ! requested.insert (id).second) return Result::fail ("Each selected note needs a unique identifier.");
+            const auto found = existing.find (id);
+            if (found == existing.end() || found->second == nullptr) return Result::fail ("MIDI note not found or its identifier is ambiguous.");
+            if (found->second->state.getProperty (property, fallback) != value) changes.push_back (found->second);
+        }
+        if (changes.empty()) return Result::ok();
+        transaction (action);
+        auto* undo = &edit->getUndoManager();
+        for (auto* note : changes)
+            if (value == fallback) note->state.removeProperty (property, undo); else note->state.setProperty (property, value, undo);
+        // The engine does not watch Halftrack's note properties, so the clip's sequences are rebuilt here.
+        edit->restartPlayback();
+        changed(); return Result::ok();
     }
     // Session Record overdubs: the MIDI clips taking the notes played into their armed tracks.
     struct Overdub
@@ -4828,6 +4904,8 @@ Result Session::addMidiNotes (const String& clipId, const std::vector<MidiNoteIn
         jassert (note != nullptr);
         note->state.setProperty (midiNoteIDProperty, value.id, undo);
         note->setMute (!value.active, undo);
+        if (value.chance < 1) note->state.setProperty (noteChanceProperty, juce::jlimit (0.0f, 1.0f, value.chance), undo);
+        if (value.velocityRange != 0) note->state.setProperty (noteVelocityRangeProperty, juce::jlimit (-127, 127, value.velocityRange), undo);
     }
     insertedIds = std::move (newIds);
     impl->changed(); return Result::ok();
@@ -4907,6 +4985,16 @@ Result Session::setMidiNotesActive (const String& clipId, const juce::StringArra
     for (auto* note : changes) note->setMute (!active, &impl->edit->getUndoManager());
     impl->changed();
     return Result::ok();
+}
+Result Session::setMidiNotesChance (const String& clipId, const juce::StringArray& ids, float chance)
+{
+    if (! std::isfinite (chance) || chance < 0 || chance > 1) return Result::fail ("Choose a chance from 0% to 100%.");
+    return impl->setNotesProperty (clipId, ids, noteChanceProperty, static_cast<double> (chance), 1.0, "Note chance");
+}
+Result Session::setMidiNotesVelocityRange (const String& clipId, const juce::StringArray& ids, int range)
+{
+    if (range < -127 || range > 127) return Result::fail ("Choose a velocity range from -127 to 127.");
+    return impl->setNotesProperty (clipId, ids, noteVelocityRangeProperty, range, 0, "Velocity range");
 }
 Result Session::splitMidiNotes(const String& clipId,const juce::StringArray& ids,double beat,juce::StringArray& insertedIds)
 {

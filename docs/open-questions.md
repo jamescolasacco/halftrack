@@ -519,3 +519,10 @@ These are simplest defaults pending a comparison with the reference:
 - **Pre FX on an instrument track** is taken after the instrument, so it carries audio; the reference manual does not say where its audio Pre FX tap sits.
 - **One destination.** As with hardware inputs, a source feeds one track at a time; choosing it for another track moves it.
 - **Exports** include a routed input while it is monitored In, or Auto and armed, as playback hears it.
+
+### Note chance scope
+
+These are simplest defaults pending a comparison with the reference:
+
+- **Passes.** Chance and velocity range vary over 64 deterministic passes that repeat, decided from each note's identity, so a project plays the same way each time it is opened.
+- **Unlooped clips** play their first pass every time until their graph is rebuilt.

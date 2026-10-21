@@ -54,6 +54,7 @@ void DeviceManager::timerCallback()
     set(replacements3 0)
     # The later input take rescan patch builds on this DeviceManager.cpp result.
     set(downstream2 "896d6fc2b35ecaaffb1a8bca4b453880e01328a29eae4ee5e222c02da570ed36")
+    set(downstream0 "5721d06c407ce781dee9c3e804981f3a283fc98d26d412f2ce27246381ba9eaa") # The later MIDI variations patch.
     foreach(index RANGE 0 3)
         file(SHA256 "${source${index}}" hash)
         if(hash STREQUAL "${patched${index}}" OR (DEFINED downstream${index} AND hash STREQUAL "${downstream${index}}"))

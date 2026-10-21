@@ -200,6 +200,7 @@ void MidiNode::processSection (Node::ProcessContext& pc,
         shouldCreateMessagesForTime = true;]=])
     # The later stretch-alignment and warp-timing patches build on this WaveNode result.
     set(downstream0 "2f2a0038be5991510a1d0222f166d831fa9865dfe6f9d42e4dbbe4e20c6b2cd0" "04ccc34aa76ca5f81534007a7d68da4e595b6680b323879d7ffe6b69d947b269")
+    set(downstream1 "012a4ac8ea6c65ffb647e8d0244ecf5c0ce62d6f1841e72009c14309cb3307e1") # The later MIDI variations patch.
     foreach(index RANGE 0 3)
         file(SHA256 "${source${index}}" hash)
         if(hash STREQUAL "${patched${index}}" OR (DEFINED downstream${index} AND hash IN_LIST downstream${index}))

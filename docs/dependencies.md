@@ -221,3 +221,13 @@ The reader now takes the ratio of the segment holding the read position plus the
 - **Renders.** Playback carries routed audio through a send on the source and a track input node on the destination. Renders built neither, and a render frees the playback context holding the input instances, so exports lost the routed audio. Renders now send every enabled track device's buses. Each track then reads the routes targeting it from the edit's `INPUTDEVICES` state, and returns the tapped bus while the source device monitors In, or Auto with the destination armed. Hardware inputs are still not rendered.
 
 `audio-from-acceptance` checks each tap's level in playback, the Post FX tap in an export, and the solo behaviour.
+
+## Tracktion MIDI variations patch
+
+`cmake/PatchMidiVariations.cmake` patches three pinned files, after the plug-in-scanner and MIDI-device patches (`tracktion_EngineBehaviour.h`, input `fe49e3934dc91d709c99293a2a8c5dbc7f582c10bcd389a2d9aeb15fec8305cf`), the track-inputs patch (`tracktion_EditNodeBuilder.cpp`, input `06c1d2be2f00c494f5db33c2b5ced64f9395e9fb7e16e4e8002ef7beacfa9ee8`) and the clip-activation patch (`tracktion_LoopingMidiNode.cpp`, input `e7ceddf6d9d00adf8035070f911d0e4c69f5b8f9daf62ee70e125d4825ad8820`). The earlier patches accept its outputs on reconfigure. It makes three changes:
+
+- **Hooks.** `EngineBehaviour` gains `getNumPlaybackMidiSequenceVariations` and `createPlaybackMidiSequenceVariation`. The node builder makes a MIDI clip's sequences from them when there is more than one, as step clips make probability sequences.
+- **One sequence per pass.** `CachingMidiEventGenerator::cacheSequence` moved to the next sequence on every call, but the looping generator calls it twice a block once a pass's events are done. It now takes the loop index and plays sequence `loopIndex mod n`.
+- **Empty passes.** An empty sequence is exhausted at once, and only `advance()`, which an exhausted generator never reaches, moved on to the next loop, so playback stopped for good. The looping generator now skips up to 64 empty loops when it seeks and advances.
+
+`note-chance-acceptance` renders the per-pass outcomes.
