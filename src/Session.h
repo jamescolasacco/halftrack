@@ -286,6 +286,7 @@ public:
         juce::String id;
         bool hasClip = false, playing = false, queued = false, stopQueued = false;
         bool recording = false; // A Session recording is capturing into this empty slot.
+        bool overdubbing = false; // Session Record is adding the notes played to this MIDI clip.
         ClipInfo clip;
         double playPositionBeats = -1;
     };
@@ -390,6 +391,7 @@ public:
         juce::File projectFile;
         uint64_t projectGeneration = 0; // Transient identity; changes only on successful New/Load.
         bool dirty = false, playing = false, recording = false, looping = false;
+        bool sessionRecording = false; // Session takes are recording or a clip is overdubbing.
         double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
         double insertMarker = 0; // Seconds: where Play starts.
         TimeSignature timeSignature;
@@ -489,6 +491,11 @@ public:
     // Records the armed track's input into an empty slot from the next launch boundary. Pressing the
     // recording slot again ends the take on the grid and plays it in loop; stopping the track keeps it silent.
     juce::Result recordSlot (int trackIndex, int sceneIndex);
+    // Session Record: armed tracks record new clips into the scene's empty slots, and an armed MIDI
+    // track whose slot holds a MIDI clip launches it and overdubs, adding the notes played at their
+    // looped positions as one undo step. Pressed again, new takes end on the launch grid and loop,
+    // and overdubbing stops.
+    juce::Result sessionRecord (int sceneIndex);
     juce::Result setClipLaunchSettings (const juce::String& clipId, const LaunchSettings&);
     juce::Result launchScene (int sceneIndex);
     juce::Result stopLauncherTrack (int trackIndex);

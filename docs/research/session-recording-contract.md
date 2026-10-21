@@ -73,15 +73,32 @@ With the fixes, the seek ends the take with both keys played before it, and the 
 
 The same file runs four device-change scenarios: an Arrangement or slot take, then an input-channel change through the `AudioDeviceManager` or a same-layout driver restart. Each records 94 generated blocks before the change. Before the fix, all four lost the take: no clip after Stop, and slot takes still reported `recording`. Now each keeps a 23,808-frame take containing the signal (every block but the first), stops the transport, and records a further take on the rebuilt devices. The channel change is applied without storing it as the chosen setup, because the engine saves that to the shared test settings that later sessions load.
 
+## Session Record and overdub
+
+The control bar's Session Record button (`Session::sessionRecord (sceneIndex)`, on the selected scene) follows the reference's [recording chapter](https://www.ableton.com/en/live-manual/12/recording-new-clips/), consulted 2026-10-21:
+
+- **First press.** Every armed track records a new clip into its empty slot in the scene, as a slot button does. An armed MIDI track whose slot holds a MIDI clip launches it (with the new takes from a stopped transport, otherwise on its launch grid) and overdubs.
+- **Overdub.** Notes played into the armed track are added to the clip at its note-off. Each is placed where it was played in the clip's loop: the beats the clip has played less those from the note's stream time to the play head. Its length is the time it was held, at most the loop. A pass is one undo step, begun again if another edit came between its notes.
+- **Second press.** New takes end on the launch grid and loop, and overdubbing stops while the clips play on. Stop, locating and replacing the project also end overdubbing.
+- **Status.** `Snapshot::sessionRecording` lights the button, and `SlotInfo::overdubbing` marks an overdubbing clip, whose launch button shows a red record dot.
+- **Skipped slots.** Audio tracks whose slot holds a clip, and unarmed tracks, are left alone.
+
+`tests/SessionRecordTests.cpp` drives a generated controller and the generated audio input. It checks the following:
+
+- a first press records MIDI and audio into the scene while an unarmed track's slot stays empty;
+- a second press ends both takes on the bar, where they loop, with the played note in the MIDI take;
+- overdubbing adds a note at the loop position where it was played (1.984 beats, at 1.984), undone in one step;
+- a stopped clip launches to overdub while audio records anew.
+
+The UI suite records and ends a take with the button.
+
 ## Not implemented
 
-- MIDI overdub into an existing clip.
-- The global Session Record button and scene recording.
+- Audio overdub, and recording into the next empty slot when the scene's slot is full.
 - Fixed-length recording.
 - Count-in for slot recording.
 - Recording while the transport loops.
 - Recording quantization of slot takes.
-- Capture MIDI.
 - Any comparison with reference recording timing.
 
 Assigning an input, arming a track or changing monitoring keeps the transport and launched clips playing (see [immediate MIDI input activation](../architecture.md#immediate-midi-input-activation)). That section also explains why input changes are refused while a take records. Audio-device changes during a take and physical MIDI hot-plug are not covered (see [open questions](../open-questions.md#input-changes-during-session-takes)). Loop and tempo changes during a take have not been audited (see [open questions](../open-questions.md#edits-during-session-takes)).

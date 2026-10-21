@@ -1772,6 +1772,51 @@ struct Session::Impl
         }
         heldSlots.clear();
         pendingSceneChange.reset(); sceneWatch.stopTimer();
+        overdubs.clear();
+    }
+    // Session Record overdubs: the MIDI clips taking the notes played into their armed tracks.
+    struct Overdub
+    {
+        te::EditItemID trackId, clipId;
+        struct Held { double position, launched; float velocity; };
+        std::map<std::pair<int, int>, Held> held; // By channel and pitch.
+    };
+    std::vector<Overdub> overdubs;
+    // Adds a note to an overdubbing clip where it was played in the clip's loop, at its note-off.
+    void overdubNote (Overdub& overdub, const juce::MidiMessage& m)
+    {
+        auto* clip = dynamic_cast<te::MidiClip*> (te::findClipForID (*edit, overdub.clipId));
+        auto handle = clip != nullptr ? clip->getLaunchHandle() : nullptr;
+        auto* context = edit->getTransport().getCurrentPlaybackContext();
+        if (handle == nullptr || context == nullptr || handle->getPlayingStatus() != te::LaunchHandle::PlayState::playing) return;
+        const auto played = handle->getPlayedRange();
+        const auto sync = context->getSyncPoint();
+        if (! played || ! sync) return;
+        // Beats since the clip launched when the note arrived: the beats it has played less the
+        // beats from the note's stream time to the play head.
+        const auto noteBeat = edit->tempoSequence.toBeats (context->globalStreamTimeToEditTime (m.getTimeStamp())).inBeats();
+        const auto launched = played->getLength().inBeats() - (sync->beat.inBeats() - noteBeat);
+        const auto loop = clip->getLoopRangeBeats();
+        const auto length = loop.getLength().inBeats() > 0 ? loop.getLength().inBeats() : clip->getLengthInBeats().inBeats();
+        const auto start = loop.getLength().inBeats() > 0 ? loop.getStart().inBeats() : 0.0;
+        if (length <= 0) return;
+        const auto key = std::make_pair (m.getChannel(), m.getNoteNumber());
+        if (m.isNoteOn())
+        {
+            overdub.held[key] = { start + std::fmod (std::max (0.0, launched), length), launched, m.getFloatVelocity() };
+            return;
+        }
+        const auto on = overdub.held.find (key);
+        if (on == overdub.held.end()) return;
+        const auto note = on->second; overdub.held.erase (on);
+        const auto duration = juce::jlimit (1.0 / 960, length, launched - note.launched);
+        // A pass is one undo step, begun again if another edit came between its notes.
+        auto& undo = edit->getUndoManager();
+        if (undo.getCurrentTransactionName() != "Overdub") transaction ("Overdub");
+        auto* added = clip->getSequence().addNote (m.getNoteNumber(), te::BeatPosition::fromBeats (note.position), te::BeatDuration::fromBeats (duration),
+                                                  juce::jlimit (1, 127, juce::roundToInt (note.velocity * 127)), 0, &undo);
+        if (added != nullptr) added->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), &undo);
+        changed();
     }
     te::Scene* scene (const String& id) const
     {
@@ -2986,6 +3031,8 @@ struct Session::Impl
             if (t == nullptr || ! static_cast<bool> (t->state.getProperty (midiTrackProperty))) continue;
             const bool monitored = static_cast<int> (t->state.getProperty (monitorProperty, 0)) == static_cast<int> (MonitorMode::on);
             if (! in.isRecordingEnabled (target) && ! monitored) continue;
+            if (in.isRecordingEnabled (target))
+                for (auto& overdub : overdubs) if (overdub.trackId == target) overdubNote (overdub, m);
             auto& notes = captured[target];
             if (m.isNoteOn())
             {
@@ -3049,6 +3096,7 @@ Session::Snapshot Session::snapshot() const
     s.dirty = impl->explicitChanges || (! impl->pristineNewDocument && e.hasChangedSinceSaved());
     s.crossfader = static_cast<float> (e.state.getProperty (crossfaderProperty, 0.0f));
     s.playing = transport.isPlaying(); s.recording = transport.isRecording();
+    s.sessionRecording = ! impl->slotRecordings.empty() || ! impl->overdubs.empty();
     s.looping = transport.looping;
     s.position = transport.getPosition().inSeconds();
     s.insertMarker = transport.startPosition.get().inSeconds();
@@ -3162,6 +3210,7 @@ Session::Snapshot Session::snapshot() const
             if (auto* c = slot->getClip())
             {
                 slotInfo.hasClip = true; slotInfo.clip = describeClip (*c);
+                slotInfo.overdubbing = std::any_of (impl->overdubs.begin(), impl->overdubs.end(), [c] (const auto& o) { return o.clipId == c->itemID; });
                 if (auto h = c->getLaunchHandle())
                 {
                     slotInfo.playing = s.playing && h->getPlayingStatus() == te::LaunchHandle::PlayState::playing;
@@ -4560,6 +4609,54 @@ Result Session::recordSlot (int trackIndex, int sceneIndex)
     input->startRecording (std::move (contexts));
     if (! transport.isPlaying()) transport.play (false);
     impl->slotRecordings.push_back ({ trackId, slot->itemID, start });
+    sendChangeMessage(); return Result::ok();
+}
+Result Session::sessionRecord (int sceneIndex)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop Arrangement recording before recording into Session slots.");
+    if (! juce::isPositiveAndBelow (sceneIndex, impl->edit->getSceneList().getNumScenes())) return Result::fail ("Scene not found.");
+    // Pressed again: new takes end on the launch grid and loop, and overdubbing stops.
+    if (! impl->slotRecordings.empty() || ! impl->overdubs.empty())
+    {
+        std::vector<te::EditItemID> recording;
+        for (const auto& r : impl->slotRecordings) if (! r.stopping) recording.push_back (r.slotId);
+        for (auto slotId : recording)
+            for (auto& r : impl->slotRecordings) if (r.slotId == slotId) { impl->finishSlotRecording (r, true, false); break; }
+        impl->overdubs.clear();
+        sendChangeMessage(); return Result::ok();
+    }
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
+    auto& transport = impl->edit->getTransport();
+    const bool wasPlaying = transport.isPlaying();
+    std::vector<std::pair<te::AudioTrack*, te::MidiClip*>> overdubbed;
+    bool recorded = false;
+    for (int i = 0; i < (int) te::getAudioTracks (*impl->edit).size(); ++i)
+    {
+        auto* t = impl->track (i);
+        if (t == nullptr || isReturn (*t)) continue;
+        auto* input = impl->input (*t);
+        if (input == nullptr || ! input->isRecordingEnabled (t->itemID)) continue;
+        auto* slot = impl->slot (i, sceneIndex);
+        if (slot == nullptr) continue;
+        if (slot->getClip() == nullptr)
+        {
+            if (auto r = recordSlot (i, sceneIndex); r.failed()) return r;
+            recorded = true;
+        }
+        else if (auto* midi = dynamic_cast<te::MidiClip*> (slot->getClip()); midi != nullptr && static_cast<bool> (t->state.getProperty (midiTrackProperty, false)))
+            overdubbed.push_back ({ t, midi });
+    }
+    if (! recorded && overdubbed.empty()) return Result::fail ("Arm a track to record into this scene.");
+    for (auto [t, midi] : overdubbed)
+    {
+        impl->overdubs.push_back ({ t->itemID, midi->itemID, {} });
+        // A clip already playing keeps playing; otherwise it launches with the new takes.
+        auto handle = midi->getLaunchHandle();
+        if (handle == nullptr || handle->getPlayingStatus() != te::LaunchHandle::PlayState::playing)
+            impl->queueTrack (*t, midi, wasPlaying ? impl->clipBoundary (midi) : std::nullopt);
+    }
+    if (! transport.isPlaying()) { transport.ensureContextAllocated(); transport.play (false); }
     sendChangeMessage(); return Result::ok();
 }
 Result Session::pressSlot (int trackIndex, int sceneIndex)

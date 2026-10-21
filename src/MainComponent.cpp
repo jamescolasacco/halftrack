@@ -160,8 +160,8 @@ public:
 class TransportButton final : public juce::Button
 {
 public:
-    enum Kind { play, stop, record };
-    explicit TransportButton (Kind k) : juce::Button (k == play ? "Play" : k == stop ? "Stop" : "Record"), kind (k) {}
+    enum Kind { play, stop, record, sessionRecord };
+    explicit TransportButton (Kind k) : juce::Button (k == play ? "Play" : k == stop ? "Stop" : k == record ? "Record" : "Session Record"), kind (k) {}
     void paintButton (juce::Graphics& g, bool over, bool down) override
     {
         g.setColour ((over || down) ? raised.brighter (0.08f) : raised);
@@ -170,9 +170,17 @@ public:
         g.drawRect (getLocalBounds().reduced (1));
         const auto side = juce::jmin (getWidth(), getHeight()) * .42f;
         auto r = getLocalBounds().toFloat().withSizeKeepingCentre (side, side);
-        auto c = kind == record ? red : ink;
-        if (getToggleState()) c = kind == record ? red.brighter (0.3f) : green;
+        const bool recordKind = kind == record || kind == sessionRecord;
+        auto c = recordKind ? red : ink;
+        if (getToggleState()) c = recordKind ? red.brighter (0.3f) : green;
         g.setColour (c);
+        if (kind == sessionRecord)
+        {
+            // The Session's record button: the record circle inside a square.
+            g.drawRect (r.expanded (2.0f), 1.0f);
+            g.fillEllipse (r.reduced (2.0f));
+            return;
+        }
         if (kind == play)
         {
             juce::Path p;
@@ -261,13 +269,13 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
+                 &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &ruler, &viewport,
                  &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipGroove, &deviceChain })
             addAndMakeVisible (child);
 
-        for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &automationArmButton, &reEnableButton, &punchInButton, &punchOutButton, &followButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
+        for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &punchInButton, &punchOutButton, &followButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
                  &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton, &folderButton,
                  &upButton, &zoomIn, &zoomOut, &fitButton })
         {
@@ -356,6 +364,8 @@ public:
         recordButton.onClick = [this] { if (state.recording) session.stop(); else report (session.record()); refresh(); };
         automationArmButton.setTooltip ("Automation Arm: while recording, moving a fader or device control records its automation");
         automationArmButton.onClick = [this] { report (session.setAutomationArm (! state.automationArm)); refresh(); };
+        sessionRecordButton.setTooltip ("Session Record: record new clips into the selected scene on armed tracks, and overdub their MIDI clips; press again to play them");
+        sessionRecordButton.onClick = [this] { report (session.sessionRecord (juce::jmax (0, selectedSceneIndex()))); refresh(); };
         captureButton.setName ("Capture MIDI"); captureButton.setWantsKeyboardFocus (false);
         captureButton.setTooltip ("Capture MIDI: turn the notes just played into armed or monitored MIDI tracks into clips  |  Shift+Cmd+C");
         captureButton.onClick = [this] { captureFromUI(); };
@@ -533,14 +543,15 @@ public:
         pianoTab.setBounds (bar.removeFromRight (40)); bar.removeFromRight (10);
         cpuBounds = bar.removeFromRight (56); bar.removeFromRight (8);
         // Transport is centred on the window, independent of the side groups.
-        constexpr int transportWidth = 92 + 6 + 3 * 28 + 2 + 2 * 28 + 4 + 54 + 4 + 50 + 10 + 30 + 2 + 78 + 3 + 48 + 3 + 78 + 2 + 30;
+        constexpr int transportWidth = 92 + 6 + 3 * 28 + 2 + 2 * 28 + 4 + 54 + 2 + 28 + 4 + 50 + 10 + 30 + 2 + 78 + 3 + 48 + 3 + 78 + 2 + 30;
         auto centre = juce::Rectangle<int> (juce::jmax (bar.getX(), getWidth() / 2 - transportWidth / 2), bar.getY(), transportWidth, bar.getHeight());
         positionLabel.setBounds (centre.removeFromLeft (92)); centre.removeFromLeft (6);
         playButton.setBounds (centre.removeFromLeft (28));
         stopButton.setBounds (centre.removeFromLeft (28));
         recordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (2);
         automationArmButton.setBounds (centre.removeFromLeft (28)); reEnableButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4);
-        captureButton.setBounds (centre.removeFromLeft (54)); centre.removeFromLeft (4);
+        captureButton.setBounds (centre.removeFromLeft (54)); centre.removeFromLeft (2);
+        sessionRecordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4);
         followButton.setBounds (centre.removeFromLeft (50)); centre.removeFromLeft (10);
         punchInButton.setBounds (centre.removeFromLeft (30)); centre.removeFromLeft (2);
         loopStartLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (3);
@@ -2681,6 +2692,7 @@ private:
                         g.setColour (queued && blink ? clipColour.brighter (0.35f) : clipColour); g.fillRect (cell);
                         g.setColour (slot->playing ? green.brighter (0.2f) : queued ? juce::Colours::white : dark);
                         if (slot->stopQueued) g.fillRect (cell.getX() + 6, cell.getCentreY() - 4, 8, 8);
+                        else if (slot->overdubbing) { g.setColour (red); g.fillEllipse ((float) cell.getX() + 6, (float) cell.getCentreY() - 4, 8, 8); }
                         else drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
                         if (slot->playing) { g.setColour (dark.withAlpha (0.35f)); g.fillRect (cell.withTrimmedLeft (cell.getWidth() - 3)); }
                         const bool follows = slot->clip.follow.action != Session::FollowAction::off;
@@ -5511,7 +5523,8 @@ private:
     juce::MenuBarComponent menu;
     juce::AudioFormatManager formats;
     juce::AudioThumbnailCache thumbnailCache { 128 };
-    TransportButton playButton { TransportButton::play }, stopButton { TransportButton::stop }, recordButton { TransportButton::record };
+    TransportButton playButton { TransportButton::play }, stopButton { TransportButton::stop }, recordButton { TransportButton::record },
+                    sessionRecordButton { TransportButton::sessionRecord };
     AutomationButton automationArmButton { AutomationButton::arm }, reEnableButton { AutomationButton::reEnable };
     juce::TextButton captureButton { "Capture" };
     juce::TextButton punchInButton { "In" }, punchOutButton { "Out" };
@@ -6169,6 +6182,7 @@ private:
         if (const auto* track = currentTrack(); track == nullptr || selectedClip >= (int) track->clips.size()) selectedClip = -1;
         playButton.setToggleState (state.playing, juce::dontSendNotification);
         recordButton.setToggleState (state.recording, juce::dontSendNotification);
+        sessionRecordButton.setToggleState (state.sessionRecording, juce::dontSendNotification); sessionRecordButton.setEnabled (! state.recording);
         automationArmButton.setToggleState (state.automationArm, juce::dontSendNotification);
         reEnableButton.setToggleState (state.automationOverridden, juce::dontSendNotification); reEnableButton.setEnabled (state.automationOverridden);
         loopButton.setToggleState (state.looping, juce::dontSendNotification);
@@ -8768,6 +8782,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "clicking the recording slot ends the take and plays it");
         session.undo(); refresh();
         check (! state.tracks[(size_t) midiTrack].slots[1].hasClip, "undo removes the recorded take");
+        // The control bar's Session Record button records into the selected scene.
+        selectLauncherSlot (midiTrack, 1); refresh();
+        sessionRecordButton.onClick();
+        check (state.sessionRecording && sessionRecordButton.getToggleState() && state.tracks[(size_t) midiTrack].slots[1].recording,
+               "Session Record records into the selected scene's slot");
+        pumpSyntheticTestDevice (session, 40);
+        sessionRecordButton.onClick();
+        for (int i = 0; i < 800 && state.tracks[(size_t) midiTrack].slots[1].recording; ++i) { pumpSyntheticTestDevice (session, 1); refresh(); }
+        check (! state.sessionRecording && ! sessionRecordButton.getToggleState() && state.tracks[(size_t) midiTrack].slots[1].hasClip,
+               "pressed again, the take ends and plays");
+        session.undo(); refresh();
         check (session.setTrackArmed (midiTrack, false).wasOk() && session.setTrackInput (midiTrack, {}).wasOk(), "disarm and disconnect the controller");
     });
     // The generated controller stops the transport when it is removed; relaunch the first clip.

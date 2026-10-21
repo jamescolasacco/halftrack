@@ -1263,3 +1263,12 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `cmake/PatchRe
 Test change in `tests/MultitrackRecordingTests.cpp` (new), `src/Main.cpp` and `CMakeLists.txt`.
 
 - **Two takes in one pass.** Recording one track from another track and a second from the generated input keeps two aligned takes in separate files, each holding only its own signal. One undo removes both. No behaviour needed changing.
+
+## Session Record and overdub — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/SessionRecordTests.cpp` (new), with documentation.
+
+- **Session Record** in the control bar records new clips into the selected scene on armed tracks.
+- **Overdub.** Armed MIDI tracks whose slot already holds a clip play it and add the notes played where they fall in its loop. Pressing the button again plays the takes and ends overdubbing.
+
+See [the contract](research/session-recording-contract.md#session-record-and-overdub).
