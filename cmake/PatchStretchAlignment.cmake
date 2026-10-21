@@ -6,6 +6,8 @@ function(halftrack_patch_stretch_alignment source_dir)
     set(source0 "${source_dir}/modules/tracktion_engine/timestretch/tracktion_TimeStretch.h")
     set(original0 "8714b1c76395b671f77cf8d91e3f8686bdc8ed3d1b1f38faf20e9f7c992328ee")
     set(patched0 "823e52adaf06223d36c886c754c0b464f9d0f93ba28d9bbb9d379ac67b345a30")
+    # The warp modes patch edits this file afterwards.
+    set(downstream0 "27e50e271e9b07c9f30c50951d387b462dbdb0684bfb50c46d81e454ff4dc3f2")
     set(count0 1)
     set(before0_0 [=[        This can be used to report latency to the audio graph for compensation.
     */
@@ -22,6 +24,7 @@ function(halftrack_patch_stretch_alignment source_dir)
     set(source1 "${source_dir}/modules/tracktion_engine/timestretch/tracktion_TimeStretch.cpp")
     set(original1 "b2a3ca555d7817dc6e3faf0c5e4daf28adf472288e22010ebf2ecace01e06aa9")
     set(patched1 "51775bb94b0c46021476489a9d4bbbe4a004c029f1652dec53407d09e0f1c530")
+    set(downstream1 "9058c56542eacba92ee5890eb63ffdb059faac60baf7e6b7998101ff30e8b9f4")
     set(count1 7)
     set(before1_0 [=[    virtual int getLatencySamples() const { return 0; }
 };]=])

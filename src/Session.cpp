@@ -9,6 +9,7 @@
 #include "Tuner.h"
 #include "Spectrum.h"
 #include "MidiMonitor.h"
+#include "WarpStretchers.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 #include <array>
@@ -31,6 +32,7 @@ const juce::Identifier monitorProperty { "halftrackMonitor" };
 // comped main-lane clip was copied from.
 const juce::Identifier takeLanesType { "HALFTRACKTAKELANES" }, takeLaneType { "TAKELANE" }, compSourceProperty { "halftrackCompSource" };
 const juce::Identifier repitchProperty { "halftrackRepitch" }; // Read by the Re-Pitch engine patch.
+const juce::Identifier transposeProperty { "halftrackTranspose" }, detuneProperty { "halftrackDetune" };
 const juce::Identifier implicitWarpEndProperty { "halftrackWarpEnd" }, warpMarkersPausedProperty { "halftrackWarpMarkersPaused" };
 const juce::Identifier recordQuantisationProperty { "halftrackRecordQuantisation" };
 const juce::Identifier countInProperty { "halftrackCountInBars" };
@@ -593,7 +595,8 @@ juce::Array<te::Clip*> allTrackClips (te::AudioTrack& track)
 Session::AudioClipSettings audioSettings (const te::WaveAudioClip& clip)
 {
     return { clip.getGainDB(), clip.getFadeIn().inSeconds(), clip.getFadeOut().inSeconds(),
-        static_cast<Session::FadeCurve> (clip.getFadeInType()), static_cast<Session::FadeCurve> (clip.getFadeOutType()) };
+        static_cast<Session::FadeCurve> (clip.getFadeInType()), static_cast<Session::FadeCurve> (clip.getFadeOutType()),
+        static_cast<int> (clip.state.getProperty (transposeProperty, 0)), static_cast<float> (static_cast<double> (clip.state.getProperty (detuneProperty, 0.0))) };
 }
 bool validAudioSettings (const Session::AudioClipSettings& s, double length)
 {
@@ -602,7 +605,8 @@ bool validAudioSettings (const Session::AudioClipSettings& s, double length)
         && std::isfinite (s.fadeInSeconds) && std::isfinite (s.fadeOutSeconds)
         && s.fadeInSeconds >= 0 && s.fadeOutSeconds >= 0
         && s.fadeInSeconds + s.fadeOutSeconds <= length + 1e-10
-        && curve (s.fadeInCurve) && curve (s.fadeOutCurve);
+        && curve (s.fadeInCurve) && curve (s.fadeOutCurve)
+        && s.transposeSemitones >= -48 && s.transposeSemitones <= 48 && std::isfinite (s.detuneCents) && s.detuneCents >= -50 && s.detuneCents <= 50;
 }
 bool canEditAudioRange (const te::WaveAudioClip& clip)
 {
@@ -874,6 +878,17 @@ Result validateAudioClips (const juce::ValueTree& state)
     }
     if (state.hasType (te::IDs::AUDIOCLIP))
     {
+        // Transposition and the warp modes' settings.
+        bool pitch = (! state.hasProperty (transposeProperty) || (finiteProperty (state[transposeProperty], -48, 48)
+                                                                  && std::floor ((double) state[transposeProperty]) == (double) state[transposeProperty]))
+                  && (! state.hasProperty (detuneProperty) || finiteProperty (state[detuneProperty], -50, 50));
+        if (const auto options = state[te::IDs::elastiqueOptions].toString(); options.startsWith ("2/"))
+        {
+            const auto tokens = juce::StringArray::fromTokens (options, "/", {});
+            pitch = pitch && tokens.size() == 9;
+            for (int i = 5; pitch && i < 9; ++i) pitch = finiteProperty (tokens[i], 0, 100);
+        }
+        if (! pitch) return Result::fail ("The project contains an invalid clip transposition or warp setting.");
         const auto parse = [&state] (const juce::Identifier& key, double fallback, double& result)
         {
             if (! state.hasProperty (key)) { result = fallback; return true; }
@@ -970,8 +985,23 @@ Session::WarpSettings warpSettings (te::WaveAudioClip& clip)
     const auto source = clip.getSourceLength().inSeconds();
     result.bpm = Session::estimateClipTempo (source);
     if (! clip.getAutoTempo()) return result;
-    result.mode = static_cast<bool> (clip.state.getProperty (repitchProperty, false)) ? Session::WarpMode::repitch
-                : clip.getTimeStretchMode() == te::TimeStretcher::signalsmithCheaper ? Session::WarpMode::efficient : Session::WarpMode::stretch;
+    using Mode = Session::WarpMode;
+    const auto stretcher = clip.getTimeStretchMode();
+    const auto values = clip.elastiqueProOptions.get().halftrack;
+    result.mode = static_cast<bool> (clip.state.getProperty (repitchProperty, false)) ? Mode::repitch
+                : stretcher == te::TimeStretcher::signalsmithCheaper ? Mode::efficient
+                : stretcher == te::TimeStretcher::halftrackBeats ? Mode::beats
+                : stretcher == te::TimeStretcher::halftrackTones ? Mode::tones
+                : stretcher == te::TimeStretcher::halftrackTexture ? Mode::texture
+                : stretcher == te::TimeStretcher::halftrackComplexPro ? Mode::complexPro : Mode::stretch;
+    if (result.mode == Mode::beats)
+    {
+        result.transientLoop = static_cast<Session::TransientLoop> (juce::jlimit (0, 2, (int) values[warp::beats::loopMode]));
+        result.transientEnvelope = 100 - values[warp::beats::fade];
+    }
+    if (result.mode == Mode::tones || result.mode == Mode::texture) result.grainSize = values[warp::grains::size];
+    if (result.mode == Mode::texture) result.flux = values[warp::grains::flux];
+    if (result.mode == Mode::complexPro) result.formants = 100 - values[warp::complexPro::formantShift];
     if (const auto bpm = clip.getLoopInfo().getBpm (clip.getWaveInfo()); std::isfinite (bpm) && bpm > 0) result.bpm = bpm;
     return result;
 }
@@ -2589,6 +2619,12 @@ struct Session::Impl
                 entry.curve->setPointPosition (point, edit->tempoSequence.toTime (entry.beats[(size_t) point]), &edit->getUndoManager());
         if (! curves.empty()) visitDevices ([] (te::AudioTrack&, NativeEffectPlugin& d) { d.refreshAutomation(); });
     }
+    void clearTransposition (te::WaveAudioClip& clip)
+    {
+        auto* undo = &edit->getUndoManager();
+        clip.state.removeProperty (transposeProperty, undo); clip.state.removeProperty (detuneProperty, undo);
+        if (clip.getPitchChange() != 0) clip.setPitchChange (0);
+    }
     te::Track* trackOfClip (const String& clipId) const
     {
         for (auto* t : te::getAudioTracks (*edit)) for (auto* c : t->getClips()) if (c->itemID.toString() == clipId) return t;
@@ -3343,7 +3379,7 @@ struct Session::Impl
 };
 
 Session::Session (bool enableAudioDevices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType)
-    : impl (std::make_unique<Impl> (*this, enableAudioDevices, std::move (customDeviceType))) { newProject(); }
+    : impl (std::make_unique<Impl> (*this, enableAudioDevices, std::move (customDeviceType))) { warp::registerStretchers(); newProject(); }
 Session::~Session() { closePluginEditors(); }
 
 Session::Snapshot Session::snapshot() const
@@ -6032,8 +6068,24 @@ Result Session::setAudioClipWarpMarkers (const String& id, const std::vector<War
     impl->edit->restartPlayback();
     impl->changed(); return Result::ok();
 }
-Result Session::setAudioClipWarp (const String& id, const WarpSettings& settings)
+// A mode's settings, with those of other modes at their defaults, as warpSettings reads them back.
+Session::WarpSettings normalisedWarp (Session::WarpSettings s)
 {
+    using Mode = Session::WarpMode;
+    const Session::WarpSettings defaults;
+    if (s.mode != Mode::beats) { s.transientLoop = defaults.transientLoop; s.transientEnvelope = defaults.transientEnvelope; }
+    if (s.mode != Mode::tones && s.mode != Mode::texture) s.grainSize = defaults.grainSize;
+    if (s.mode != Mode::texture) s.flux = defaults.flux;
+    if (s.mode != Mode::complexPro) s.formants = defaults.formants;
+    return s;
+}
+Result Session::setAudioClipWarp (const String& id, const WarpSettings& requested)
+{
+    const auto settings = normalisedWarp (requested);
+    const auto within = [] (float v, float low, float high) { return std::isfinite (v) && v >= low && v <= high; };
+    if (! within (settings.transientEnvelope, 0, 100) || ! within (settings.grainSize, 0, 100) || ! within (settings.flux, 0, 100) || ! within (settings.formants, 0, 100)
+        || ! juce::isPositiveAndBelow ((int) settings.transientLoop, 3) || ! juce::isPositiveAndBelow ((int) settings.mode, 8) || (settings.grainSize > 0 && settings.grainSize < 1))
+        return Result::fail ("Warp settings are out of range: envelope, grain size, flux and formants run 0-100, grain size from 1.");
     if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
@@ -6057,6 +6109,7 @@ Result Session::setAudioClipWarp (const String& id, const WarpSettings& settings
         offset = juce::jlimit (0.0, source, offset); length = juce::jlimit (0.001, source - offset, length);
         clip->setAutoTempo (false); clip->setTimeStretchMode (te::TimeStretcher::disabled);
         clip->state.removeProperty (repitchProperty, &impl->edit->getUndoManager());
+        impl->clearTransposition (*clip);
         // Markers rest while warp is off.
         if (clip->getWarpTime()) { clip->state.setProperty (warpMarkersPausedProperty, true, &impl->edit->getUndoManager()); clip->setWarpTime (false); }
         clip->setPosition ({ { start, start + te::TimeDuration::fromSeconds (length) }, te::TimeDuration::fromSeconds (offset) });
@@ -6068,8 +6121,26 @@ Result Session::setAudioClipWarp (const String& id, const WarpSettings& settings
     // Set first: the stretch mode's change rebuilds the graph, which reads it.
     if (repitch) clip->state.setProperty (repitchProperty, true, &impl->edit->getUndoManager());
     else clip->state.removeProperty (repitchProperty, &impl->edit->getUndoManager());
+    // Transposing keeps the speed, which only the stretching modes can.
+    if (repitch) impl->clearTransposition (*clip);
+    // The mode's settings first, read when the graph rebuilds for the mode.
+    auto options = clip->elastiqueProOptions.get();
+    options.halftrack = {};
+    if (settings.mode == WarpMode::beats)
+    {
+        options.halftrack[warp::beats::loopMode] = (float) settings.transientLoop;
+        options.halftrack[warp::beats::fade] = 100 - settings.transientEnvelope;
+    }
+    if (settings.mode == WarpMode::tones || settings.mode == WarpMode::texture) options.halftrack[warp::grains::size] = settings.grainSize;
+    if (settings.mode == WarpMode::texture) options.halftrack[warp::grains::flux] = settings.flux;
+    if (settings.mode == WarpMode::complexPro) options.halftrack[warp::complexPro::formantShift] = 100 - settings.formants;
+    if (options != clip->elastiqueProOptions.get()) clip->elastiqueProOptions = options;
     clip->setTimeStretchMode (repitch ? te::TimeStretcher::disabled
-                              : settings.mode == WarpMode::efficient ? te::TimeStretcher::signalsmithCheaper : te::TimeStretcher::signalsmithDefault);
+                              : settings.mode == WarpMode::efficient ? te::TimeStretcher::signalsmithCheaper
+                              : settings.mode == WarpMode::beats ? te::TimeStretcher::halftrackBeats
+                              : settings.mode == WarpMode::tones ? te::TimeStretcher::halftrackTones
+                              : settings.mode == WarpMode::texture ? te::TimeStretcher::halftrackTexture
+                              : settings.mode == WarpMode::complexPro ? te::TimeStretcher::halftrackComplexPro : te::TimeStretcher::signalsmithDefault);
     clip->setUsesProxy (false);
     if (repitch && clip->getWarpTime()) { clip->state.setProperty (warpMarkersPausedProperty, true, &impl->edit->getUndoManager()); clip->setWarpTime (false); }
     if (! repitch && static_cast<bool> (clip->state.getProperty (warpMarkersPausedProperty, false)))
@@ -6098,8 +6169,12 @@ Result Session::setAudioClipSettings (const String& id, const AudioClipSettings&
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
     if (! validAudioSettings (settings, clip->getPosition().getLength().inSeconds()))
-        return Result::fail ("Clip gain or fades are outside their supported range. Fades must fit inside the clip.");
+        return Result::fail ("Clip gain, fades or transposition are outside their supported range. Fades must fit inside the clip.");
     const auto previous = audioSettings (*clip);
+    const auto pitched = settings.transposeSemitones != 0 || settings.detuneCents != 0;
+    if (pitched && (previous.transposeSemitones != settings.transposeSemitones || previous.detuneCents != settings.detuneCents))
+        if (const auto mode = warpSettings (*clip).mode; mode == WarpMode::off || mode == WarpMode::repitch)
+            return Result::fail ("Warp the clip in a stretching mode to transpose it.");
     if (clip->getClipSlot() && (previous.fadeInSeconds != settings.fadeInSeconds || previous.fadeOutSeconds != settings.fadeOutSeconds
         || previous.fadeInCurve != settings.fadeInCurve || previous.fadeOutCurve != settings.fadeOutCurve))
         return Result::fail ("Manual fade editing is available for Arrangement clips.");
@@ -6111,6 +6186,13 @@ Result Session::setAudioClipSettings (const String& id, const AudioClipSettings&
     clip->setFadeIn (te::TimeDuration::fromSeconds (settings.fadeInSeconds));
     clip->setFadeInType (static_cast<te::AudioFadeCurve::Type> (settings.fadeInCurve));
     clip->setFadeOutType (static_cast<te::AudioFadeCurve::Type> (settings.fadeOutCurve));
+    if (previous.transposeSemitones != settings.transposeSemitones || previous.detuneCents != settings.detuneCents)
+    {
+        auto* undo = &impl->edit->getUndoManager();
+        if (settings.transposeSemitones != 0) clip->state.setProperty (transposeProperty, settings.transposeSemitones, undo); else clip->state.removeProperty (transposeProperty, undo);
+        if (settings.detuneCents != 0) clip->state.setProperty (detuneProperty, settings.detuneCents, undo); else clip->state.removeProperty (detuneProperty, undo);
+        clip->setPitchChange ((float) settings.transposeSemitones + settings.detuneCents / 100.0f);
+    }
     impl->changed(); return Result::ok();
 }
 Result Session::setAudioClipReversed (const String& id, bool reversed)

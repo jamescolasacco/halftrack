@@ -250,12 +250,23 @@ public:
     static const char* grooveBaseName (GrooveBase) noexcept;
     enum class FadeCurve { linear = 1, convex, concave, sCurve };
     // Warped audio follows the project tempo; its length is fixed in beats. The stretching modes keep
-    // its pitch; Re-Pitch plays it faster or slower, so its pitch follows the tempo.
-    enum class WarpMode { off, stretch, efficient, repitch };
+    // its pitch; Re-Pitch plays it faster or slower, so its pitch follows the tempo. Stretch is the
+    // reference's Complex and Efficient a cheaper Complex; Beats, Tones, Texture and Complex Pro
+    // follow its other modes. Beats plays the segments between transients each at its own speed,
+    // Tones and Texture stretch in grains, and Complex Pro keeps formants when transposed.
+    enum class WarpMode { off, stretch, efficient, repitch, beats, tones, texture, complexPro };
+    // What a Beats segment plays once its audio runs out before the next transient.
+    enum class TransientLoop { off, forward, backAndForth };
     struct WarpSettings
     {
         WarpMode mode = WarpMode::off;
         double bpm = 120; // The source's own tempo.
+        // Each mode's own settings; the others keep their defaults.
+        TransientLoop transientLoop = TransientLoop::off; // Beats.
+        float transientEnvelope = 100;                    // Beats, 0-100: below 100 each segment fades out.
+        float grainSize = 0;                              // Tones and Texture, 1-100, or 0 for the mode's default (30, 65).
+        float flux = 0;                                   // Texture, 0-100: how far grains wander.
+        float formants = 100;                             // Complex Pro, 0-100%: how much of the formants stay when transposed.
         bool operator== (const WarpSettings&) const = default;
     };
     // A warp marker pins a point of a warped clip's source to a beat, counted from the source's start
@@ -269,6 +280,10 @@ public:
         float gainDb = 0;
         double fadeInSeconds = 0, fadeOutSeconds = 0;
         FadeCurve fadeInCurve = FadeCurve::linear, fadeOutCurve = FadeCurve::linear;
+        // Transposition of a clip warped in a stretching mode, keeping its speed: -48 to 48
+        // semitones and -50 to 50 cents.
+        int transposeSemitones = 0;
+        float detuneCents = 0;
         bool operator== (const AudioClipSettings&) const = default;
     };
     struct ClipInfo

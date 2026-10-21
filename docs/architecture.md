@@ -189,6 +189,10 @@ flowchart LR
 
 `Session::TrackOutput` is `{ OutputKind kind; String trackId; }`, with `OutputKind` `master`, `sendsOnly` or `track`; `TrackInfo::output` reports it. `setTrackOutput (trackId, TrackOutput)` runs on the message thread as one undo step and is refused for returns, grouped tracks, recording and export. `outputDestinations (trackId)` lists the identities of the audio tracks it may play into, excluding returns, MIDI tracks and tracks that already feed it. The native `TrackOutput` stores the route: the default device, `(none)` for Sends Only, or `track N`, resolved by the engine to the destination's identity. Live playback processes a `(none)` track as a sink so only its sends are heard; `cmake/PatchRenderSendsOnly.cmake` gives renders the same graph. See the [routing contract](research/routing-contract.md).
 
+## Warp modes
+
+`WarpSettings` carries the mode and each mode's settings; `setAudioClipWarp` maps Beats, Tones, Texture and Complex Pro to the engine stretcher modes that `cmake/PatchWarpModes.cmake` adds, and their settings to the stretch options' four Halftrack values. `src/WarpStretchers.*` holds the stretchers, registered with the engine when a Session starts. They allocate when created and not while processing. Transposition is part of `AudioClipSettings`, kept in clip properties and applied as the clip's pitch change. See the [contract](research/warp-modes-contract.md).
+
 ## Re-Pitch
 
 `WarpMode::repitch` keeps a warped clip's auto tempo with its time stretcher disabled and sets the `halftrackRepitch` property, which `cmake/PatchRepitch.cmake` reads so the engine resamples the clip rather than stretching it. Warp markers are paused as with Warp off. See the [contract](research/repitch-contract.md).

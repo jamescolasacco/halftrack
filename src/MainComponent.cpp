@@ -3723,27 +3723,73 @@ private:
         explicit AudioClipView (Impl& o) : owner (o), thumbnail (512, o.formats, o.thumbnailCache)
         {
             setName ("Audio clip view");
-            for (auto* c : std::initializer_list<juce::Component*> { &warp, &mode, &bpm, &halve, &twice, &gain, &reverse }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &warp, &mode, &bpm, &halve, &twice, &gain, &reverse, &transpose, &detune }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &transientLoop, &transientEnvelope, &grainSize, &flux, &formants }) addChildComponent (c);
             addChildComponent (launch);
             for (auto* b : { &warp, &halve, &twice, &reverse }) { b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); }
             warp.setName ("Clip warp"); warp.setClickingTogglesState (true); warp.setTooltip ("Warp: follow the project tempo (length fixed in beats)");
             warp.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); warp.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
-            warp.onClick = [this] { apply (warp.getToggleState() ? selectedMode() : Session::WarpMode::off, clip.warp.bpm); };
-            mode.setName ("Warp mode"); mode.addItem ("Stretch", 1); mode.addItem ("Efficient", 2); mode.addItem ("Re-Pitch", 3);
-            mode.setTooltip ("Stretch quality: Stretch (default) or Efficient (lower CPU)");
-            mode.onChange = [this] { if (clip.warp.mode != Session::WarpMode::off) apply (selectedMode(), clip.warp.bpm); };
+            warp.onClick = [this] { auto next = clip.warp; next.mode = warp.getToggleState() ? selectedMode() : Session::WarpMode::off; apply (next); };
+            mode.setName ("Warp mode");
+            mode.addItem ("Beats", 1); mode.addItem ("Tones", 2); mode.addItem ("Texture", 3); mode.addItem ("Re-Pitch", 4);
+            mode.addItem ("Complex", 5); mode.addItem ("Complex Pro", 6); mode.addSeparator(); mode.addItem ("Complex (Efficient)", 7);
+            mode.setTooltip ("Warp mode: Beats keeps transients, Tones and Texture stretch in grains, Re-Pitch changes the pitch with the tempo, Complex and Complex Pro suit full mixes");
+            mode.onChange = [this] { if (clip.warp.mode != Session::WarpMode::off) { auto next = clip.warp; next.mode = selectedMode(); apply (next); } };
+            // The chosen mode's own settings.
+            transientLoop.setName ("Transient loop");
+            transientLoop.addItem ("Loop Off", 1); transientLoop.addItem ("Loop Forward", 2); transientLoop.addItem ("Loop Back-and-Forth", 3);
+            transientLoop.setTooltip ("What a segment plays once its audio runs out before the next transient");
+            transientLoop.onChange = [this] { auto next = clip.warp; next.transientLoop = (Session::TransientLoop) (transientLoop.getSelectedId() - 1); apply (next); };
+            const auto setting = [this] (juce::Slider& slider, const juce::String& name, double low, double high, const juce::String& tip, std::function<void (Session::WarpSettings&, float)> set)
+            {
+                slider.setName (name); slider.setSliderStyle (juce::Slider::LinearBar); slider.setRange (low, high, 1);
+                slider.setTextValueSuffix (""); slider.setTooltip (tip);
+                slider.textFromValueFunction = [name] (double v) { return name + " " + juce::String ((int) v); };
+                slider.onDragStart = [this, name] { owner.session.beginEditGesture (name); gesture = true; };
+                slider.onDragEnd = [this] { if (gesture) owner.session.endEditGesture(); gesture = false; };
+                slider.onValueChange = [this, &slider, set]
+                {
+                    auto next = clip.warp; set (next, (float) slider.getValue());
+                    if (next == clip.warp) return;
+                    owner.report (owner.session.setAudioClipWarp (clip.id, next)); owner.refresh();
+                };
+            };
+            setting (transientEnvelope, "Envelope", 0, 100, "Transient Envelope: below 100 each segment fades out", [] (auto& w, float v) { w.transientEnvelope = v; });
+            setting (grainSize, "Grain", 1, 100, "Grain Size", [] (auto& w, float v) { w.grainSize = v; });
+            setting (flux, "Flux", 0, 100, "Flux: how far the grains wander", [] (auto& w, float v) { w.flux = v; });
+            setting (formants, "Formants", 0, 100, "Formants: how much of the formants stay when the clip is transposed", [] (auto& w, float v) { w.formants = v; });
+            const auto knob = [this] (juce::Slider& slider, const juce::String& name, double low, double high, std::function<void (Session::AudioClipSettings&, double)> set)
+            {
+                slider.setName (name); slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); slider.setRange (low, high, 1);
+                slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 56, 14); slider.setDoubleClickReturnValue (true, 0);
+                slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+                slider.onDragStart = [this, name] { owner.session.beginEditGesture (name); gesture = true; };
+                slider.onDragEnd = [this] { if (gesture) owner.session.endEditGesture(); gesture = false; };
+                slider.onValueChange = [this, &slider, set]
+                {
+                    auto next = clip.audio; set (next, slider.getValue());
+                    if (next == clip.audio) return;
+                    owner.report (owner.session.setAudioClipSettings (clip.id, next)); owner.refresh();
+                };
+            };
+            knob (transpose, "Clip transpose", -48, 48, [] (auto& a, double v) { a.transposeSemitones = (int) v; });
+            transpose.textFromValueFunction = [] (double v) { return (v > 0 ? "+" : "") + juce::String ((int) v) + " st"; };
+            transpose.setTooltip ("Transpose: semitones, keeping the clip's speed (warped clips in a stretching mode)");
+            knob (detune, "Clip detune", -50, 50, [] (auto& a, double v) { a.detuneCents = (float) v; });
+            detune.textFromValueFunction = [] (double v) { return juce::String ((int) v) + " ct"; };
+            detune.setTooltip ("Detune: cents, keeping the clip's speed (warped clips in a stretching mode)");
             bpm.setName ("Clip tempo"); bpm.setEditable (false, true, false); bpm.setJustificationType (juce::Justification::centred);
             bpm.setColour (juce::Label::backgroundColourId, background); bpm.setColour (juce::Label::outlineColourId, line);
             bpm.setTooltip ("The source's own tempo (Seg. BPM). Double-click to type it.");
             bpm.onTextChange = [this]
             {
                 const auto text = bpm.getText().trim().toStdString(); char* end = nullptr; const auto value = std::strtod (text.c_str(), &end);
-                if (! text.empty() && end == text.c_str() + text.size() && std::isfinite (value)) apply (clip.warp.mode, value);
+                if (! text.empty() && end == text.c_str() + text.size() && std::isfinite (value)) { auto next = clip.warp; next.bpm = value; apply (next); }
                 else sync();
             };
             halve.setTooltip ("Halve the clip tempo (plays twice as long)"); twice.setTooltip ("Double the clip tempo (plays twice as fast)");
-            halve.onClick = [this] { apply (clip.warp.mode, clip.warp.bpm / 2); };
-            twice.onClick = [this] { apply (clip.warp.mode, clip.warp.bpm * 2); };
+            halve.onClick = [this] { auto next = clip.warp; next.bpm /= 2; apply (next); };
+            twice.onClick = [this] { auto next = clip.warp; next.bpm *= 2; apply (next); };
             gain.setName ("Clip gain"); gain.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); gain.setRange (-100, 24, .1);
             gain.setSkewFactorFromMidPoint (-12); gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 56, 14);
             gain.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack); gain.setDoubleClickReturnValue (true, 0);
@@ -3782,7 +3828,21 @@ private:
             if (clip.file != shownFile) { shownFile = clip.file; thumbnail.setSource (clip.file.existsAsFile() ? new juce::FileInputSource (clip.file) : nullptr); }
             const bool warped = clip.warp.mode != Session::WarpMode::off;
             warp.setToggleState (warped, juce::dontSendNotification); warp.setEnabled (clip.canWarp && ! owner.session.isExporting());
-            mode.setSelectedId (clip.warp.mode == Session::WarpMode::efficient ? 2 : clip.warp.mode == Session::WarpMode::repitch ? 3 : 1, juce::dontSendNotification); mode.setEnabled (warped);
+            mode.setSelectedId (modeId (clip.warp.mode), juce::dontSendNotification); mode.setEnabled (warped);
+            using Mode = Session::WarpMode;
+            const auto shown = clip.warp.mode;
+            transientLoop.setVisible (shown == Mode::beats); transientEnvelope.setVisible (shown == Mode::beats);
+            grainSize.setVisible (shown == Mode::tones || shown == Mode::texture); flux.setVisible (shown == Mode::texture);
+            formants.setVisible (shown == Mode::complexPro);
+            transientLoop.setSelectedId ((int) clip.warp.transientLoop + 1, juce::dontSendNotification);
+            const auto show = [] (juce::Slider& slider, double value) { if (! slider.isMouseButtonDown()) slider.setValue (value, juce::dontSendNotification); slider.updateText(); };
+            show (transientEnvelope, clip.warp.transientEnvelope);
+            show (grainSize, clip.warp.grainSize > 0 ? clip.warp.grainSize : (shown == Mode::texture ? 65.0 : 30.0));
+            show (flux, clip.warp.flux); show (formants, clip.warp.formants);
+            const bool pitchable = shown != Mode::off && shown != Mode::repitch;
+            transpose.setEnabled (pitchable); detune.setEnabled (pitchable);
+            show (transpose, clip.audio.transposeSemitones); show (detune, clip.audio.detuneCents);
+            if (shown != laidOutMode) { laidOutMode = shown; resized(); }
             if (! bpm.isBeingEdited()) bpm.setText (juce::String (clip.warp.bpm, 2), juce::dontSendNotification);
             for (auto* c : std::initializer_list<juce::Component*> { &bpm, &halve, &twice }) c->setEnabled (clip.canWarp);
             if (! gain.isMouseButtonDown()) gain.setValue (clip.audio.gainDb, juce::dontSendNotification);
@@ -3837,9 +3897,19 @@ private:
             twice.setBounds (row.removeFromRight (26)); halve.setBounds (row.removeFromRight (26)); row.removeFromRight (4);
             bpm.setBounds (row.withTrimmedLeft (54));
             sample.removeFromTop (6);
-            row = sample.removeFromTop (70).reduced (6, 0);
-            gain.setBounds (row.removeFromLeft (64)); row.removeFromLeft (6);
-            reverse.setBounds (row.withSizeKeepingCentre (row.getWidth(), 22));
+            // The mode's settings, then Transpose, Detune and Gain.
+            row = sample.removeFromTop (22).reduced (6, 0);
+            using Mode = Session::WarpMode;
+            if (laidOutMode == Mode::beats) { transientLoop.setBounds (row.removeFromLeft (row.getWidth() * 3 / 5)); row.removeFromLeft (4); transientEnvelope.setBounds (row); }
+            if (laidOutMode == Mode::tones) grainSize.setBounds (row);
+            if (laidOutMode == Mode::texture) { grainSize.setBounds (row.removeFromLeft (row.getWidth() / 2 - 2)); row.removeFromLeft (4); flux.setBounds (row); }
+            if (laidOutMode == Mode::complexPro) formants.setBounds (row);
+            sample.removeFromTop (6);
+            row = sample.removeFromTop (84).reduced (6, 0).withTrimmedTop (14);
+            const auto third = row.getWidth() / 3;
+            transpose.setBounds (row.removeFromLeft (third)); detune.setBounds (row.removeFromLeft (third)); gain.setBounds (row);
+            sample.removeFromTop (6);
+            reverse.setBounds (sample.removeFromTop (22).reduced (6, 0));
             envelopeChoice.setBounds (clipBox().reduced (8, 0).removeFromBottom (32).withTrimmedBottom (8));
         }
         void paint (juce::Graphics& g) override
@@ -3864,6 +3934,8 @@ private:
             g.drawText (line2, details.removeFromTop (18), juce::Justification::centredLeft);
             g.drawText (clip.file.getFileName(), details.removeFromTop (18), juce::Justification::centredLeft, true);
             g.drawText ("Seg. BPM", sampleBox().getX() + 6, bpm.getY(), 52, bpm.getHeight(), juce::Justification::centredLeft);
+            for (auto [knob, name] : { std::pair<juce::Component*, const char*> { &transpose, "Transpose" }, { &detune, "Detune" }, { &gain, "Gain" } })
+                g.drawText (name, knob->getBounds().withY (knob->getY() - 14).withHeight (14), juce::Justification::centred);
             // Waveform of the visible source span, with beat lines when warped. A warped clip is drawn
             // in its beats, each warp segment over its own beats.
             const auto wave = waveBounds();
@@ -3921,7 +3993,9 @@ private:
         juce::File shownFile;
         Session::ClipInfo clip;
         juce::TextButton warp { "WARP" }, halve { ":2" }, twice { "*2" }, reverse { "Reverse" };
-        juce::ComboBox mode;
+        juce::ComboBox mode, transientLoop;
+        juce::Slider transientEnvelope, grainSize, flux, formants, transpose, detune;
+        Session::WarpMode laidOutMode = Session::WarpMode::off;
         juce::Label bpm;
         juce::Slider gain;
         LaunchBox launch { owner };
@@ -3930,13 +4004,21 @@ private:
         juce::Rectangle<int> clipBox() const { return { 6, 6, 170, getHeight() - 12 }; }
         juce::Rectangle<int> sampleBox() const { return { 182 + launchSpace(), 6, 200, getHeight() - 12 }; }
         juce::Rectangle<int> waveBounds() const { return { 390 + launchSpace(), 6, juce::jmax (40, getWidth() - 396 - launchSpace()), getHeight() - 12 }; }
+        // Chooser items in the reference's order, with Halftrack's cheaper Complex last.
+        static constexpr Session::WarpMode chooserModes[] { Session::WarpMode::beats, Session::WarpMode::tones, Session::WarpMode::texture, Session::WarpMode::repitch,
+                                                            Session::WarpMode::stretch, Session::WarpMode::complexPro, Session::WarpMode::efficient };
+        static int modeId (Session::WarpMode m)
+        {
+            for (int i = 0; i < (int) std::size (chooserModes); ++i) if (chooserModes[i] == m) return i + 1;
+            return 5; // An unwarped clip shows Complex, which the Warp switch chooses.
+        }
         Session::WarpMode selectedMode() const
-        { return mode.getSelectedId() == 2 ? Session::WarpMode::efficient : mode.getSelectedId() == 3 ? Session::WarpMode::repitch : Session::WarpMode::stretch; }
+        { return juce::isPositiveAndBelow (mode.getSelectedId() - 1, (int) std::size (chooserModes)) ? chooserModes[mode.getSelectedId() - 1] : Session::WarpMode::stretch; }
         // Warp markers are edited in the stretching modes.
         bool markersEditable() const { return clip.warp.mode != Session::WarpMode::off && clip.warp.mode != Session::WarpMode::repitch; }
-        void apply (Session::WarpMode warpMode, double tempo)
+        void apply (const Session::WarpSettings& settings)
         {
-            owner.report (owner.session.setAudioClipWarp (clip.id, { warpMode, tempo })); owner.refresh(); sync();
+            owner.report (owner.session.setAudioClipWarp (clip.id, settings)); owner.refresh(); sync();
         }
         void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
     public:
@@ -10348,11 +10430,39 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (std::abs (state.tracks[0].clips[0].audio.gainDb + 6) < 1e-4, "the clip view gain knob edits clip gain");
         {
             auto* warpMode = dynamic_cast<juce::ComboBox*> (findNamed (audioClipView, "Warp mode"));
-            check (warpMode != nullptr && warpMode->getItemText (2) == "Re-Pitch", "the warp mode chooser offers Re-Pitch");
-            warpMode->setSelectedId (3, juce::sendNotificationSync); refresh();
+            check (warpMode != nullptr && warpMode->getItemText (3) == "Re-Pitch", "the warp mode chooser offers Re-Pitch");
+            warpMode->setSelectedId (4, juce::sendNotificationSync); refresh();
             check (state.tracks[0].clips[0].warp.mode == Session::WarpMode::repitch, "choosing it warps the clip Re-Pitch");
             session.undo(); refresh();
-            check (state.tracks[0].clips[0].warp.mode == Session::WarpMode::stretch && warpMode->getSelectedId() == 1, "undo returns the clip and chooser to Stretch");
+            check (state.tracks[0].clips[0].warp.mode == Session::WarpMode::stretch && warpMode->getSelectedId() == 5, "undo returns the clip and chooser to Complex");
+            // Each mode shows its own settings, which edit the clip.
+            auto* loopChoice = dynamic_cast<juce::ComboBox*> (findNamed (audioClipView, "Transient loop"));
+            auto* fluxSlider = dynamic_cast<juce::Slider*> (findNamed (audioClipView, "Flux"));
+            auto* grainSlider = dynamic_cast<juce::Slider*> (findNamed (audioClipView, "Grain"));
+            auto* formantSlider = dynamic_cast<juce::Slider*> (findNamed (audioClipView, "Formants"));
+            auto* transposeKnob = dynamic_cast<juce::Slider*> (findNamed (audioClipView, "Clip transpose"));
+            check (loopChoice && fluxSlider && grainSlider && formantSlider && transposeKnob && ! loopChoice->isVisible() && ! fluxSlider->isVisible(),
+                   "Complex shows no mode settings");
+            warpMode->setSelectedId (1, juce::sendNotificationSync); refresh();
+            check (state.tracks[0].clips[0].warp.mode == Session::WarpMode::beats && loopChoice->isVisible() && ! grainSlider->isVisible(), "Beats shows its transient settings");
+            loopChoice->setSelectedId (2, juce::sendNotificationSync); refresh();
+            check (state.tracks[0].clips[0].warp.transientLoop == Session::TransientLoop::forward, "choosing Loop Forward sets it");
+            warpMode->setSelectedId (3, juce::sendNotificationSync); refresh();
+            check (state.tracks[0].clips[0].warp.mode == Session::WarpMode::texture && grainSlider->isVisible() && fluxSlider->isVisible()
+                       && grainSlider->getValue() == 65 && ! loopChoice->isVisible(), "Texture shows Grain Size at its default 65 and Flux");
+            fluxSlider->setValue (40, juce::sendNotificationSync); refresh();
+            check (state.tracks[0].clips[0].warp.flux == 40, "dragging Flux sets it");
+            warpMode->setSelectedId (6, juce::sendNotificationSync); refresh();
+            check (state.tracks[0].clips[0].warp.mode == Session::WarpMode::complexPro && formantSlider->isVisible() && formantSlider->getValue() == 100,
+                   "Complex Pro shows Formants at 100");
+            transposeKnob->setValue (7, juce::sendNotificationSync); refresh();
+            check (state.tracks[0].clips[0].audio.transposeSemitones == 7 && transposeKnob->isEnabled(), "the Transpose knob transposes the warped clip");
+            warpMode->setSelectedId (4, juce::sendNotificationSync); refresh();
+            check (state.tracks[0].clips[0].audio.transposeSemitones == 0 && ! transposeKnob->isEnabled(), "Re-Pitch clears and disables it");
+            for (int step = 0; step < 7; ++step) session.undo();
+            refresh(); audioClipView.sync();
+            check (state.tracks[0].clips[0].warp.mode == Session::WarpMode::stretch && state.tracks[0].clips[0].warp.flux == 0 && warpMode->getSelectedId() == 5,
+                   "seven undo steps return to Complex");
         }
         {
             // Warp markers: double-clicking the warped waveform adds one where it is, dragging moves

@@ -1359,3 +1359,12 @@ Engine change in `src/Session.*`, `src/NativeEffects.*` (cross-area: native devi
 - **Test fixes.** On slow machines, the punch test now checks the MIDI note against where it was sent. Plug-in presets now load the scanned plug-in of the same identity, since Linux CI could not instantiate the stored location.
 
 See [the contract](research/clip-envelopes-contract.md).
+
+## Warp modes and transposition — 2026-10-21
+
+Engine and UI change in `src/WarpStretchers.*` (new), `src/Session.*`, `src/MainComponent.cpp`, `cmake/PatchWarpModes.cmake` (new), `cmake/PatchStretchAlignment.cmake` (accepts the new hashes), `CMakeLists.txt`, `src/Main.cpp` and `tests/WarpModeTests.cpp` (new), with documentation.
+
+- **Warp modes.** Audio clips warp in Beats, Tones, Texture and Complex Pro besides Re-Pitch and Complex, each with its own settings in the clip view.
+- **Transpose and Detune.** A warped clip transposes by semitones and cents at its speed.
+
+See [the contract](research/warp-modes-contract.md).

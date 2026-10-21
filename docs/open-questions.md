@@ -542,3 +542,16 @@ These are simplest defaults pending a comparison with the reference:
 - **Volume modulation** scales the fader position, as the engine's scaling curve does. Whether the reference scales the position, the gain or decibels is unmeasured.
 - **Device modulation** adds up to half a control's range each way. The reference's modulation range per control is unmeasured.
 - **Session clip automation** applies only while the clip plays; the control then returns to its own value. Whether the reference keeps the last automated value is unmeasured.
+
+### Warp mode defaults and scaling
+
+These are simplest defaults pending a comparison with the reference:
+
+- **Default warp mode.** Warping a clip chooses Complex. The reference's default (a preference) is Beats.
+- **Beats.**
+  - Transient Loop defaults to Loop Off.
+  - Transients are found as the audio plays, half a second ahead, rather than from the whole file.
+  - Preserve's grid divisions are not offered.
+- **Grain Size** is 4 ms a step for both Tones and Texture (defaults 30 and 65); the reference's scale is unmeasured.
+- **Complex Pro** offers Formants only; the reference's Envelope setting is missing.
+- **Transposition** is refused for unwarped and Re-Pitch clips; how the reference transposes unwarped clips is unmeasured.

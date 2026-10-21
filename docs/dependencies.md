@@ -244,3 +244,21 @@ The reader now takes the ratio of the segment holding the read position plus the
 - **Deleted curves.** A clip curve's source on a parameter held a plain reference to the clip's curve modifier. A plug-in kept by the plug-in cache for undo could outlive the deleted modifier and read it from a timer, which crashed after undoing a track duplication. The source now detaches on the modifier's deletion notice: it stops its timer, drops its streams and ignores later calls.
 
 The engine's clip curve sources take a critical section around their streams on the audio thread. That is unchanged upstream behaviour and is not claimed lock-free. `clip-envelopes-acceptance` covers both changes.
+
+## Tracktion warp modes patch
+
+`cmake/PatchWarpModes.cmake` patches the pinned time stretcher after the stretch alignment patch. The alignment patch accepts the new hashes on reconfigure.
+
+| File | Input SHA-256 | Patched SHA-256 |
+| --- | --- | --- |
+| `tracktion_TimeStretch.h` | `823e52adaf06223d36c886c754c0b464f9d0f93ba28d9bbb9d379ac67b345a30` | `27e50e271e9b07c9f30c50951d387b462dbdb0684bfb50c46d81e454ff4dc3f2` |
+| `tracktion_TimeStretch.cpp` | `51775bb94b0c46021476489a9d4bbbe4a004c029f1652dec53407d09e0f1c530` | `9058c56542eacba92ee5890eb63ffdb059faac60baf7e6b7998101ff30e8b9f4` |
+
+The patch makes these changes:
+
+- **New modes.** It adds four modes for Halftrack's Beats, Tones, Texture and Complex Pro.
+- **A public interface.** It makes the stretcher interface public, so Halftrack's stretchers can implement it.
+- **Stretcher creation.** `initialise` creates those modes' stretchers through a factory Halftrack registers.
+- **Mode settings.** The stretch options carry four Halftrack values. They are saved as a version 2 string only when set, so other clips' options strings are unchanged.
+
+`warp-modes-acceptance` renders each mode.
