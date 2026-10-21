@@ -2,6 +2,7 @@
 #include "AudioClipEditor.h"
 #include "AutomationEditor.h"
 #include "ArrangementAutomation.h"
+#include "Collections.h"
 #include "NativeEffects.h"
 #include "RackEditor.h"
 #include "NoteTools.h"
@@ -542,22 +543,35 @@ public:
         arrangementTab.setBounds (bar.removeFromRight (62)); sessionTab.setBounds (bar.removeFromRight (62));
         pianoTab.setBounds (bar.removeFromRight (40)); bar.removeFromRight (10);
         cpuBounds = bar.removeFromRight (56); bar.removeFromRight (8);
-        // Transport is centred on the window, independent of the side groups.
-        constexpr int transportWidth = 92 + 6 + 3 * 28 + 2 + 2 * 28 + 4 + 54 + 2 + 28 + 4 + 50 + 10 + 30 + 2 + 78 + 3 + 48 + 3 + 78 + 2 + 30;
-        auto centre = juce::Rectangle<int> (juce::jmax (bar.getX(), getWidth() / 2 - transportWidth / 2), bar.getY(), transportWidth, bar.getHeight());
+        // Transport is centred on the window, independent of the side groups, and kept clear of them.
+        // In a narrow window the less essential sections give way first, as the reference's do.
+        struct Section { std::vector<juce::Component*> parts; int width; };
+        const Section punch { { &punchInButton, &punchOutButton }, 30 + 2 + 30 }, loop { { &loopStartLabel, &loopButton, &loopLengthLabel }, 78 + 3 + 48 + 3 + 78 + 2 },
+                      follow { { &followButton }, 50 + 10 }, capture { { &captureButton, &sessionRecordButton }, 54 + 2 + 28 + 4 },
+                      automation { { &automationArmButton, &reEnableButton }, 2 * 28 + 4 };
+        int transportWidth = 92 + 6 + 3 * 28 + 2 + automation.width + capture.width + follow.width + punch.width + loop.width;
+        std::set<const Section*> dropped;
+        for (const auto* section : { &punch, &loop, &follow, &capture, &automation })
+            if (transportWidth > bar.getWidth()) { dropped.insert (section); transportWidth -= section->width; }
+        for (const auto* section : { &punch, &loop, &follow, &capture, &automation })
+            for (auto* part : section->parts) part->setVisible (! dropped.count (section));
+        const auto x = juce::jlimit (bar.getX(), juce::jmax (bar.getX(), bar.getRight() - transportWidth), getWidth() / 2 - transportWidth / 2);
+        auto centre = juce::Rectangle<int> (x, bar.getY(), transportWidth, bar.getHeight());
         positionLabel.setBounds (centre.removeFromLeft (92)); centre.removeFromLeft (6);
         playButton.setBounds (centre.removeFromLeft (28));
         stopButton.setBounds (centre.removeFromLeft (28));
         recordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (2);
-        automationArmButton.setBounds (centre.removeFromLeft (28)); reEnableButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4);
-        captureButton.setBounds (centre.removeFromLeft (54)); centre.removeFromLeft (2);
-        sessionRecordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4);
-        followButton.setBounds (centre.removeFromLeft (50)); centre.removeFromLeft (10);
-        punchInButton.setBounds (centre.removeFromLeft (30)); centre.removeFromLeft (2);
-        loopStartLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (3);
-        loopButton.setBounds (centre.removeFromLeft (48)); centre.removeFromLeft (3);
-        loopLengthLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (2);
-        punchOutButton.setBounds (centre.removeFromLeft (30));
+        if (! dropped.count (&automation)) { automationArmButton.setBounds (centre.removeFromLeft (28)); reEnableButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4); }
+        if (! dropped.count (&capture)) { captureButton.setBounds (centre.removeFromLeft (54)); centre.removeFromLeft (2); sessionRecordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4); }
+        if (! dropped.count (&follow)) { followButton.setBounds (centre.removeFromLeft (50)); centre.removeFromLeft (10); }
+        if (! dropped.count (&punch)) { punchInButton.setBounds (centre.removeFromLeft (30)); centre.removeFromLeft (2); }
+        if (! dropped.count (&loop))
+        {
+            loopStartLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (3);
+            loopButton.setBounds (centre.removeFromLeft (48)); centre.removeFromLeft (3);
+            loopLengthLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (2);
+        }
+        if (! dropped.count (&punch)) punchOutButton.setBounds (centre.removeFromLeft (30));
         auto status = bar.withLeft (centre.getRight() + 12);
         backToArrangement.setBounds (status.removeFromLeft (124)); status.removeFromLeft (8);
         projectLabel.setBounds (status);
@@ -645,6 +659,9 @@ public:
         const auto code = key.getKeyCode();
         const auto cmd = key.getModifiers().isCommandDown();
         const auto shift = key.getModifiers().isShiftDown();
+        // In the browser, 1 to 7 put the selected item in a collection or take it out.
+        if (! cmd && ! shift && code >= '1' && code <= '7' && browserList.hasKeyboardFocus (true) && browserList.getSelectedRow() >= 0)
+        { toggleBrowserCollection (browserList.getSelectedRow(), code - '1'); return true; }
         if (cmd)
         {
             if (code == 'S') { saveProject (shift); return true; }
@@ -992,8 +1009,9 @@ private:
         std::string error;
     };
 
-    enum class BrowserCategory { instruments, audioEffects, midiEffects, plugins, samples, grooves };
-    // Left column of the browser: one row per category, as in the reference browser sidebar.
+    enum class BrowserCategory { instruments, audioEffects, midiEffects, plugins, samples, grooves, collection };
+    // Left column of the browser, as in the reference browser sidebar: the collections, then one row
+    // per category.
     class BrowserCategories final : public juce::Component
     {
     public:
@@ -1001,7 +1019,18 @@ private:
         void paint (juce::Graphics& g) override
         {
             g.fillAll (juce::Colour (0xff272727));
-            g.setColour (muted); g.setFont (font (9.5f, true)); g.drawText ("CATEGORIES", 6, 0, getWidth() - 8, headerHeight, juce::Justification::centredLeft);
+            g.setColour (muted); g.setFont (font (9.5f, true));
+            g.drawText ("COLLECTIONS", 6, 0, getWidth() - 8, headerHeight, juce::Justification::centredLeft);
+            g.drawText ("CATEGORIES", 6, categoriesTop() - headerHeight, getWidth() - 8, headerHeight, juce::Justification::centredLeft);
+            for (int i = 0; i < Collections::count; ++i)
+            {
+                const auto row = collectionBounds (i);
+                const bool selected = owner.browserCategory == BrowserCategory::collection && owner.browserCollection == i;
+                if (selected) { g.setColour (raised); g.fillRect (row); }
+                g.setColour (Collections::colour (i)); g.fillEllipse ((float) row.getX() + 8, (float) row.getCentreY() - 3, 6, 6);
+                g.setColour (selected ? orange : ink.withAlpha (0.85f)); g.setFont (font (11.0f, selected));
+                g.drawText (Collections::name (i), row.withTrimmedLeft (20), juce::Justification::centredLeft, true);
+            }
             for (int i = 0; i < (int) entries.size(); ++i)
             {
                 const auto row = rowBounds (i); const bool selected = owner.browserCategory == entries[(size_t) i].first;
@@ -1013,8 +1042,10 @@ private:
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
+            for (int i = 0; i < Collections::count; ++i) if (collectionBounds (i).contains (e.getPosition())) { owner.showBrowserCollection (i); return; }
             for (int i = 0; i < (int) entries.size(); ++i) if (rowBounds (i).contains (e.getPosition())) { owner.setBrowserCategory (entries[(size_t) i].first); return; }
         }
+        juce::Point<int> collectionPoint (int collection) const { return collectionBounds (collection).getCentre(); }
         juce::Point<int> categoryPoint (BrowserCategory category) const
         {
             for (int i = 0; i < (int) entries.size(); ++i) if (entries[(size_t) i].first == category) return rowBounds (i).getCentre();
@@ -1022,7 +1053,9 @@ private:
         }
     private:
         static constexpr int headerHeight = 20, rowHeight = 22;
-        juce::Rectangle<int> rowBounds (int i) const { return { 0, headerHeight + i * rowHeight, getWidth() - 1, rowHeight }; }
+        int categoriesTop() const { return headerHeight + Collections::count * rowHeight + 6 + headerHeight; }
+        juce::Rectangle<int> collectionBounds (int i) const { return { 0, headerHeight + i * rowHeight, getWidth() - 1, rowHeight }; }
+        juce::Rectangle<int> rowBounds (int i) const { return { 0, categoriesTop() + i * rowHeight, getWidth() - 1, rowHeight }; }
         Impl& owner;
         const std::array<std::pair<BrowserCategory, const char*>, 6> entries {{ { BrowserCategory::instruments, "Instruments" },
             { BrowserCategory::audioEffects, "Audio Effects" }, { BrowserCategory::midiEffects, "MIDI Effects" },
@@ -5619,7 +5652,62 @@ private:
     bool sampleBrowser() const noexcept { return browserCategory == BrowserCategory::samples; }
     // Built-in device rows: a header names a group; kind -2 is the built-in synth, -3 the Utility.
     // Grooves list Halftrack's library (by index) and groove files in the User Library.
-    struct DeviceRow { juce::String label; bool header = false; int kind = -1; juce::File preset; int groove = -1; juce::File grooveFile; };
+    // A row of the device lists. In a collection, samples and plug-ins are rows too.
+    struct DeviceRow { juce::String label; bool header = false; int kind = -1; juce::File preset; int groove = -1; juce::File grooveFile; juce::File sample; juce::String pluginId; };
+    Collections collections;
+    int browserCollection = 0;
+    void showBrowserCollection (int collection) { browserCollection = collection; setBrowserCategory (BrowserCategory::collection); }
+    // The collection key of a browser row, or empty for headers and folders.
+    juce::String browserKey (int row) const
+    {
+        if (row < 0 || row >= const_cast<Impl*> (this)->getNumRows()) return {};
+        if (pluginBrowser()) return "plugin:" + pluginItems[(size_t) row].createIdentifierString();
+        if (sampleBrowser()) return browserItems[(size_t) row].directory ? juce::String() : "sample:" + browserItems[(size_t) row].file.getFullPathName();
+        const auto& item = deviceItems[(size_t) row];
+        if (item.header) return {};
+        if (item.sample != juce::File()) return "sample:" + item.sample.getFullPathName();
+        if (item.pluginId.isNotEmpty()) return "plugin:" + item.pluginId;
+        if (item.groove >= 0) return "groove:" + Session::grooveLibrary()[(size_t) item.groove].name;
+        if (item.grooveFile != juce::File()) return "groovefile:" + item.grooveFile.getFullPathName();
+        if (item.preset != juce::File()) return "preset:" + juce::String (item.kind) + ":" + item.preset.getFullPathName();
+        return "device:" + juce::String (item.kind);
+    }
+    // A collection's item as a row, or nothing once it no longer exists.
+    std::optional<DeviceRow> collectionRow (const juce::String& key)
+    {
+        const auto value = key.fromFirstOccurrenceOf (":", false, false);
+        if (key.startsWith ("device:"))
+        {
+            const int kind = value.getIntValue();
+            if (kind == -2) return DeviceRow { "Halftrack Synth", false, -2 };
+            if (kind == -3) return DeviceRow { "Utility", false, -3 };
+            if (juce::isPositiveAndBelow (kind, Session::deviceKindCount)) return DeviceRow { effectName ((Session::EffectKind) kind), false, kind };
+        }
+        if (key.startsWith ("preset:"))
+        {
+            const juce::File file (value.fromFirstOccurrenceOf (":", false, false));
+            if (file.existsAsFile()) { DeviceRow row { file.getFileNameWithoutExtension(), false, value.getIntValue() }; row.preset = file; return row; }
+        }
+        if (key.startsWith ("groove:"))
+        {
+            const auto library = Session::grooveLibrary();
+            for (int i = 0; i < (int) library.size(); ++i) if (library[(size_t) i].name == value) { DeviceRow row { value }; row.groove = i; return row; }
+        }
+        if (key.startsWith ("groovefile:")) { const juce::File file (value); if (file.existsAsFile()) { DeviceRow row { file.getFileNameWithoutExtension() }; row.grooveFile = file; return row; } }
+        if (key.startsWith ("sample:")) { const juce::File file (value); if (file.existsAsFile()) { DeviceRow row { file.getFileName() }; row.sample = file; return row; } }
+        if (key.startsWith ("plugin:"))
+            for (const auto& type : session.knownPlugins().getTypes())
+                if (type.createIdentifierString() == value) { DeviceRow row { type.name }; row.pluginId = value; return row; }
+        return std::nullopt;
+    }
+    void toggleBrowserCollection (int row, int collection)
+    {
+        const auto key = browserKey (row);
+        if (key.isEmpty()) return;
+        const bool adding = ! collections.contains (key, collection);
+        report (collections.toggle (key, collection), (adding ? "Added to " : "Removed from ") + Collections::name (collection) + ".");
+        updateBrowser(); browserList.repaint();
+    }
     // User library: presets per device and the default set.
     juce::File userLibrary;
     juce::File presetFolder (const juce::String& device) const
@@ -7371,12 +7459,18 @@ private:
         const auto query = browserSearch.getText().trim();
         folderButton.setButtonText (pluginBrowser() ? "Manage / Scan..." : "Choose Folder...");
         upButton.setEnabled (browserFolder != juce::File() && browserFolder.getParentDirectory() != browserFolder);
-        browserSearch.setTextToShowWhenEmpty ("Search (" + juce::String (browserCategory == BrowserCategory::instruments ? "Instruments"
+        browserSearch.setTextToShowWhenEmpty ("Search (" + juce::String (browserCategory == BrowserCategory::collection ? Collections::name (browserCollection)
+            : browserCategory == BrowserCategory::instruments ? "Instruments"
             : browserCategory == BrowserCategory::audioEffects ? "Audio Effects" : browserCategory == BrowserCategory::midiEffects ? "MIDI Effects"
             : pluginBrowser() ? "Plug-ins" : browserCategory == BrowserCategory::grooves ? "Grooves" : "Samples") + ")", muted);
         if (browserFolder != scannedBrowserFolder) startBrowserScan();
         const auto matches = [&query] (const juce::String& label) { return query.isEmpty() || label.containsIgnoreCase (query); };
-        if (pluginBrowser())
+        if (browserCategory == BrowserCategory::collection)
+        {
+            for (const auto& key : collections.keys (browserCollection))
+                if (auto row = collectionRow (key); row && matches (row->label)) deviceItems.push_back (*row);
+        }
+        else if (pluginBrowser())
         {
             for (const auto& type : session.knownPlugins().getTypes()) if (matches (type.name)) pluginItems.push_back (type);
             std::sort (pluginItems.begin(), pluginItems.end(), [] (const auto& a, const auto& b) { return a.name.compareIgnoreCase (b.name) < 0; });
@@ -7453,6 +7547,14 @@ private:
     void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override
     {
         if (row < 0 || row >= getNumRows()) return;
+        paintBrowserRow (row, g, width, height, selected);
+        // A tagged item shows its collections' colours at the right.
+        const auto tags = collections.collectionsOf (browserKey (row));
+        for (size_t i = 0; i < tags.size(); ++i)
+        { g.setColour (Collections::colour (tags[i])); g.fillEllipse ((float) width - 10 - 8 * (float) i, (float) height / 2 - 3, 6, 6); }
+    }
+    void paintBrowserRow (int row, juce::Graphics& g, int width, int height, bool selected)
+    {
         if (! pluginBrowser() && ! sampleBrowser())
         {
             const auto& item = deviceItems[(size_t) row];
@@ -7475,7 +7577,15 @@ private:
             }
             const int indent = browserCategory == BrowserCategory::audioEffects ? 14 : 4;
             g.setColour (selected ? orange : muted);
-            if (item.groove >= 0 || item.grooveFile != juce::File())
+            if (item.sample != juce::File())
+            {
+                for (int i = 0; i < 5; ++i) { const int h = i % 2 == 0 ? 6 : 12; g.drawVerticalLine (indent + 2 + i * 2, (float) (height - h) / 2, (float) (height + h) / 2); }
+            }
+            else if (item.pluginId.isNotEmpty())
+            {
+                g.drawRect (indent + 3, height / 2 - 5, 9, 11); g.drawHorizontalLine (height / 2 - 2, (float) indent + 1, (float) indent + 14); g.drawHorizontalLine (height / 2 + 3, (float) indent + 1, (float) indent + 14);
+            }
+            else if (item.groove >= 0 || item.grooveFile != juce::File())
             {
                 // A groove: a short swung pulse train.
                 for (int i = 0; i < 4; ++i) g.fillRect (indent + 3 + i * 3 + (i % 2) * 1, height / 2 - (i % 2 == 0 ? 5 : 3), 1, i % 2 == 0 ? 10 : 6);
@@ -7505,6 +7615,20 @@ private:
         g.setColour (selected ? ink : juce::Colour (0xffc6c6c6));
         g.drawText (label, 25, 0, width - 29, height, juce::Justification::centredLeft, true);
     }
+    // A sample chosen for a MIDI track goes into its Drum Sampler's selected pad, or its Sampler;
+    // otherwise it imports at the insert marker, or into the selected Session slot.
+    void useBrowserSample (const juce::File& file)
+    {
+        if (const auto* track = currentTrack(); track != nullptr && track->isMidi)
+        {
+            if (track->instrument.isNativeEffect && track->instrument.effect.kind == Session::EffectKind::drumSampler)
+                report (session.setDrumPadSample (track->id, selectedDrumPad, file));
+            else report (session.setInstrumentSample (track->id, file));
+            refresh();
+        }
+        else if (showSession) importLauncherFiles ({ file.getFullPathName() }, selectedTrack, selectedSceneIndex());
+        else importFiles ({ file.getFullPathName() }, selectedTrack, state.insertMarker);
+    }
     // Double-click or Return inserts the item, creating a MIDI track when one is required.
     void activateBrowserRow (int row)
     {
@@ -7518,20 +7642,18 @@ private:
         {
             auto item = browserItems[(size_t) row];
             if (item.directory) { browserFolder = item.file; browserSearch.clear(); updateBrowser(); }
-            // A sample chosen for a MIDI track goes into its Drum Sampler's selected pad, or its Sampler.
-            else if (const auto* track = currentTrack(); track != nullptr && track->isMidi)
-            {
-                if (track->instrument.isNativeEffect && track->instrument.effect.kind == Session::EffectKind::drumSampler)
-                    report (session.setDrumPadSample (track->id, selectedDrumPad, item.file));
-                else report (session.setInstrumentSample (track->id, item.file));
-                refresh();
-            }
-            else if (showSession) importLauncherFiles ({ item.file.getFullPathName() }, selectedTrack, selectedSceneIndex());
-            else importFiles ({ item.file.getFullPathName() }, selectedTrack, state.insertMarker);
+            else useBrowserSample (item.file);
         }
         else
         {
             const auto item = deviceItems[(size_t) row]; if (item.header) return;
+            if (item.sample != juce::File()) { useBrowserSample (item.sample); return; }
+            if (item.pluginId.isNotEmpty())
+            {
+                for (const auto& type : session.knownPlugins().getTypes())
+                    if (type.createIdentifierString() == item.pluginId) { if (selectedTrack < 0) addTrack(); report (session.addPlugin (selectedTrack, type)); refresh(); }
+                return;
+            }
             if (item.groove >= 0) { useGrooveFromUI (Session::grooveLibrary()[(size_t) item.groove], true); return; }
             if (item.grooveFile != juce::File()) { useGrooveFileFromUI (item.grooveFile, true); return; }
             const bool needsMidi = item.kind == -2 || (item.kind >= 0 && (effectIsInstrument ((Session::EffectKind) item.kind) || effectIsMidi ((Session::EffectKind) item.kind)));
@@ -7551,6 +7673,16 @@ private:
         }
     }
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { activateBrowserRow (row); }
+    // Right-click: the collections the item belongs to, ticked, each toggled by its choice (or keys 1 to 7).
+    void listBoxItemClicked (int row, const juce::MouseEvent& e) override
+    {
+        if (! e.mods.isPopupMenu() || browserKey (row).isEmpty()) return;
+        juce::PopupMenu menu;
+        for (int i = 0; i < Collections::count; ++i)
+            menu.addItem (i + 1, Collections::name (i) + "  (" + juce::String (i + 1) + ")", true, collections.contains (browserKey (row), i));
+        auto safe = juce::Component::SafePointer<Impl> (this);
+        menu.showMenuAsync (juce::PopupMenu::Options(), [safe, row] (int choice) { if (safe != nullptr && choice > 0) safe->toggleBrowserCollection (row, choice - 1); });
+    }
     void selectedRowsChanged (int) override { if (previewButton.getToggleState()) previewSelectedSample(); }
     // With Preview on, the selected sample plays; a folder or no selection stops the preview.
     void previewSelectedSample()
@@ -10663,6 +10795,27 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (session.addAudioTrack ("Presets").wasOk(), "add a track for the preset"); refresh(); selectTrack ((int) state.tracks.size() - 1); refresh();
         activateBrowserRow (row); refresh();
         check (! currentTrack()->plugins.empty() && currentTrack()->plugins.back().effect.values == drive.values, "choosing the preset loads a Saturator with its settings");
+        {
+            // Collections: the keys 1 to 7 toggle the selected item in one; a collection lists and loads its items.
+            toggleBrowserCollection (row - 1, 0);
+            const auto saturatorKey = browserKey (row - 1);
+            check (saturatorKey.startsWith ("device:") && collections.contains (saturatorKey, 0), "1 puts the selected device in Favorites");
+            toggleBrowserCollection (row, 3);
+            showBrowserCollection (0);
+            check (deviceItems.size() == 1 && deviceItems[0].label == "Saturator", "Favorites lists it");
+            const auto devicesBefore = currentTrack()->plugins.size();
+            activateBrowserRow (0); refresh();
+            check (currentTrack()->plugins.size() == devicesBefore + 1 && currentTrack()->plugins.back().effect.kind == Session::EffectKind::saturator,
+                   "choosing it from Favorites adds a Saturator");
+            showBrowserCollection (3);
+            check (deviceItems.size() == 1 && deviceItems[0].preset == preset, "Green lists the preset");
+            Collections reopened;
+            check (reopened.load (library.getChildFile ("Collections.xml")).wasOk() && reopened.contains (saturatorKey, 0) && reopened.keys (3).size() == 1,
+                   "the collections are saved in the user library");
+            showBrowserCollection (0); toggleBrowserCollection (0, 0);
+            check (deviceItems.empty() && ! collections.contains (saturatorKey, 0), "toggling it again takes it out");
+            setBrowserCategory (BrowserCategory::audioEffects);
+        }
         session.setTempo (97); refresh();
         menuItemSelected (11, 0);
         check (library.getChildFile ("Default Set.halftrack").existsAsFile(), "Save as Default Set writes the template");
@@ -10772,6 +10925,11 @@ void MainComponent::requestClose (std::function<void()> onClose)
     impl->ensureSaved ([this, onClose = std::move (onClose)] { impl->clearRecovery(); onClose(); });
 }
 void MainComponent::enableRecovery (const juce::File& file) { impl->enableRecovery (file); }
-void MainComponent::Impl::setUserLibrary (const juce::File& folder) { userLibrary = folder; updateBrowser(); }
+void MainComponent::Impl::setUserLibrary (const juce::File& folder)
+{
+    userLibrary = folder;
+    if (auto loaded = collections.load (folder == juce::File() ? juce::File() : folder.getChildFile ("Collections.xml")); loaded.failed()) report (loaded);
+    updateBrowser();
+}
 void MainComponent::setUserLibrary (const juce::File& folder) { impl->setUserLibrary (folder); }
 }

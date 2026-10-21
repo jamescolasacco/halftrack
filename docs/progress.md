@@ -1322,3 +1322,12 @@ Engine and test change in `src/Session.cpp`, `tests/SessionTests.cpp` (the synth
 
 - **Playback carries on.** Changing the audio device's sample rate or block size while playing used to stop playback. The engine restarts the device, rebuilds its playback context, and its transport timer stopped the transport. Halftrack now resumes playback from where it stopped, within a second of the restart, unless the user stops it or a take was recording.
 - **The synthetic device** now offers 44.1, 48 and 96 kHz with 128, 256 or 512-sample blocks; it still opens at 48 kHz with 256-sample blocks.
+
+## Browser collections — 2026-10-21
+
+UI change in `src/Collections.*` (new), `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/CollectionsTests.cpp` (new), with documentation.
+
+- **Collections.** The browser sidebar lists Favorites and six coloured collections above the categories. Keys 1 to 7 or a right-click tag the selected item, and a collection lists and loads its items. They are saved in the user library.
+- **A narrow control bar.** In a narrow window the transport ran into the view buttons. The punch switches, loop fields, Follow, capture and automation buttons now give way in turn.
+
+See [the contract](research/collections-contract.md).
