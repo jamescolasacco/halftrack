@@ -571,3 +571,16 @@ A pair of input channels is a stereo input or two mono inputs, not both at once 
 ### Linux CI recording stop
 
 On Linux CI, a MIDI recording through a just-created virtual controller has occasionally stopped within its first two blocks, so the punch test's take went missing. It has not happened on macOS or Windows, or locally. The punch test now lets the routing settle and retries such a recording once, saying so in its log; the cause is not yet found.
+
+### Preference defaults
+
+Auto-Warp Long Samples is off by default and treats samples over 30 seconds as long. The reference's default is on, and its threshold is unmeasured. Turning it on by default would warp every long test fixture.
+
+### A rare heap corruption
+
+One run of the audio clip suite in a full local gate aborted on heap corruption that malloc detected in the engine's audio-file cache thread (creating a LoopInfo). That suite then passed:
+- 35 ordinary runs, 32 of them under load;
+- one AddressSanitizer pass over every suite;
+- 16 more AddressSanitizer runs of the suite.
+
+The AddressSanitizer pass found only a test's use-after-free read, now fixed. A data race, which AddressSanitizer does not detect, is the likeliest remaining cause. A ThreadSanitizer run is the next step.

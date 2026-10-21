@@ -780,6 +780,8 @@ public:
     void enableRecovery (const juce::File& file)
     {
         recoveryFile = file; recoveryTicks = 0;
+        // Started with the app's own settings: say if its preferences could not be read.
+        if (const auto problem = session.preferencesProblem(); problem.isNotEmpty()) report (juce::Result::fail (problem));
         if (recoveryFile.existsAsFile()) offerRecovery();
     }
     void clearRecovery() { if (recoveryFile != juce::File()) recoveryFile.deleteFile(); }
@@ -893,13 +895,14 @@ private:
         report (session.compTake (takeSelection.laneId, takeSelection.start, takeSelection.end)); refresh();
     }
     std::set<juce::String> multiSelectedTracks;
-    // Solo and arm are exclusive, as in the reference's defaults: a plain click releases every other
-    // track (and, for solo, group); Cmd/Ctrl-click adds to them. Each click is one undo step.
+    // Solo and arm are exclusive by default, as in the reference: a plain click releases every other
+    // track (and, for solo, group); Cmd/Ctrl-click adds to them. With exclusivity off in the
+    // preferences, the two swap. Each click is one undo step.
     void soloFromUI (int trackIndex, const juce::String& groupId, bool on, bool additive)
     {
         const auto current = session.snapshot();
         session.beginEditGesture ("Solo");
-        if (on && ! additive)
+        if (on && additive != session.preferences().exclusiveSolo)
         {
             for (int t = 0; t < (int) current.tracks.size(); ++t) if (t != trackIndex && current.tracks[(size_t) t].solo) session.setTrackSolo (t, false);
             for (const auto& g : current.groups) if (g.id != groupId && g.solo) session.setGroupSolo (g.id, false);
@@ -912,7 +915,7 @@ private:
         const auto current = session.snapshot();
         session.beginEditGesture ("Arm");
         juce::Result result = juce::Result::ok();
-        if (on && ! additive)
+        if (on && additive != session.preferences().exclusiveArm)
             for (int t = 0; t < (int) current.tracks.size() && result.wasOk(); ++t)
                 if (t != trackIndex && current.tracks[(size_t) t].armed) result = session.setTrackArmed (t, false);
         if (result.wasOk()) result = session.setTrackArmed (trackIndex, on);
@@ -7082,7 +7085,7 @@ private:
             popup.addItem (5, "Import Audio...", currentTrack() == nullptr || ! currentTrack()->isReturn); popup.addItem (6, "Export Arrangement Audio...", ! state.tracks.empty()); popup.addSeparator();
             popup.addItem (9, "Import MIDI File..."); popup.addItem (10, "Export Selected MIDI Clip...", currentMidiClip() != nullptr); popup.addSeparator();
             popup.addItem (12, "Locate Missing Media...", ! session.missingMedia().isEmpty()); popup.addSeparator();
-            popup.addItem (7, "Audio Setup..."); popup.addItem (13, "Audio Engine On", true, session.isAudioEngineEnabled()); popup.addItem (8, "Manage Plug-ins...");
+            popup.addItem (14, "Preferences..."); popup.addItem (7, "Audio Setup..."); popup.addItem (13, "Audio Engine On", true, session.isAudioEngineEnabled()); popup.addItem (8, "Manage Plug-ins...");
         }
         else if (index == 1)
         {
@@ -7150,6 +7153,7 @@ private:
             case 5: importDialog(); break;
             case 6: exportDialog(); break;
             case 7: showAudioSettings(); break;
+            case 14: showPreferences(); break;
             case 13:
             {
                 const bool on = ! session.isAudioEngineEnabled();
@@ -7857,6 +7861,64 @@ private:
         juce::TextButton mpe { "MPE Inputs..." }, inputConfig { "Input Config..." };
     };
     void showAudioSettings() { showDialog ("Halftrack - Audio & MIDI Setup", std::make_unique<AudioSetupPanel> (*this), 660, 680); }
+    // Preferences, after the reference's Record, Warp & Launch settings.
+    class PreferencesPanel final : public juce::Component
+    {
+    public:
+        explicit PreferencesPanel (Impl& o) : owner (o)
+        {
+            for (auto* c : std::initializer_list<juce::Component*> { &exclusiveArm, &exclusiveSolo, &autoWarp, &warpLabel, &warp, &modeLabel, &mode, &gridLabel, &grid, &reset })
+                addAndMakeVisible (c);
+            exclusiveArm.setName ("Exclusive arm"); exclusiveSolo.setName ("Exclusive solo"); autoWarp.setName ("Auto-warp long samples");
+            warp.setName ("Default warp mode"); mode.setName ("Default launch mode"); grid.setName ("Default launch quantization"); reset.setName ("Reset preferences");
+            warpLabel.setText ("Default Warp Mode", juce::dontSendNotification); modeLabel.setText ("Default Launch Mode", juce::dontSendNotification);
+            gridLabel.setText ("Default Launch Quantization", juce::dontSendNotification);
+            int id = 1;
+            for (const auto* name : { "Beats", "Tones", "Texture", "Re-Pitch", "Complex", "Complex Pro", "Complex (Efficient)" }) warp.addItem (name, id++);
+            id = 1;
+            for (const auto* name : { "Trigger", "Gate", "Toggle", "Repeat" }) mode.addItem (name, id++);
+            id = 1;
+            for (const auto* name : { "Global", "None", "8 Bars", "4 Bars", "2 Bars", "1 Bar", "1/2", "1/4", "1/8", "1/16", "1/32" }) grid.addItem (name, id++);
+            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp }) b->onClick = [this] { apply(); };
+            warp.onChange = mode.onChange = grid.onChange = [this] { apply(); };
+            reset.onClick = [this] { owner.report (owner.session.resetPreferences(), "Preferences reset to their defaults."); sync(); };
+            sync();
+        }
+        void sync()
+        {
+            const auto p = owner.session.preferences();
+            exclusiveArm.setToggleState (p.exclusiveArm, juce::dontSendNotification); exclusiveSolo.setToggleState (p.exclusiveSolo, juce::dontSendNotification);
+            autoWarp.setToggleState (p.autoWarpLongSamples, juce::dontSendNotification);
+            for (int i = 0; i < (int) std::size (warpModes); ++i) if (warpModes[i] == p.defaultWarpMode) warp.setSelectedId (i + 1, juce::dontSendNotification);
+            mode.setSelectedId ((int) p.defaultLaunchMode + 1, juce::dontSendNotification); grid.setSelectedId ((int) p.defaultLaunchQuantisation + 1, juce::dontSendNotification);
+        }
+        void apply()
+        {
+            Session::Preferences p;
+            p.exclusiveArm = exclusiveArm.getToggleState(); p.exclusiveSolo = exclusiveSolo.getToggleState(); p.autoWarpLongSamples = autoWarp.getToggleState();
+            p.defaultWarpMode = warpModes[(size_t) juce::jlimit (0, (int) std::size (warpModes) - 1, warp.getSelectedId() - 1)];
+            p.defaultLaunchMode = (Session::LaunchMode) juce::jlimit (0, 3, mode.getSelectedId() - 1);
+            p.defaultLaunchQuantisation = (Session::ClipQuantisation) juce::jlimit (0, 10, grid.getSelectedId() - 1);
+            owner.report (owner.session.setPreferences (p)); sync();
+        }
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced (16);
+            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp }) { b->setBounds (area.removeFromTop (26)); area.removeFromTop (4); }
+            for (auto [label, box] : { std::pair<juce::Label*, juce::ComboBox*> { &warpLabel, &warp }, { &modeLabel, &mode }, { &gridLabel, &grid } })
+            { auto row = area.removeFromTop (26); label->setBounds (row.removeFromLeft (190)); box->setBounds (row.removeFromLeft (180)); area.removeFromTop (6); }
+            area.removeFromTop (10); reset.setBounds (area.removeFromTop (26).removeFromLeft (160));
+        }
+    private:
+        Impl& owner;
+        static constexpr Session::WarpMode warpModes[] { Session::WarpMode::beats, Session::WarpMode::tones, Session::WarpMode::texture, Session::WarpMode::repitch,
+                                                         Session::WarpMode::stretch, Session::WarpMode::complexPro, Session::WarpMode::efficient };
+        juce::ToggleButton exclusiveArm { "Exclusive Arm" }, exclusiveSolo { "Exclusive Solo" }, autoWarp { "Auto-Warp Long Samples" };
+        juce::Label warpLabel, modeLabel, gridLabel;
+        juce::ComboBox warp, mode, grid;
+        juce::TextButton reset { "Reset to Defaults" };
+    };
+    void showPreferences() { showDialog ("Halftrack - Preferences", std::make_unique<PreferencesPanel> (*this), 440, 300); }
     void showPlugins()
     {
         auto list = std::make_unique<juce::PluginListComponent> (session.pluginFormats(), session.knownPlugins(), session.pluginScanDeadMansFile(), nullptr, false);
@@ -10476,6 +10538,21 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         && std::abs (currentMidiClip()->notes.front().startBeat-unquantized.front().startBeat) < 1e-8,
         "one production undo restores quantized group");
 
+    {
+        // Preferences: the panel's switches edit them, and solo clicks follow Exclusive Solo.
+        PreferencesPanel panel (*this); panel.setSize (440, 300);
+        auto* exclusive = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Exclusive solo"));
+        check (exclusive != nullptr && exclusive->getToggleState() == session.preferences().exclusiveSolo, "the Preferences panel shows Exclusive Solo");
+        exclusive->setToggleState (false, juce::dontSendNotification); exclusive->onClick();
+        check (! session.preferences().exclusiveSolo, "switching it off saves the preference");
+        check (state.tracks.size() >= 2, "two tracks to solo");
+        soloFromUI (0, {}, true, false); soloFromUI (1, {}, true, false); refresh();
+        check (state.tracks[0].solo && state.tracks[1].solo, "with Exclusive Solo off, a plain click adds a soloed track");
+        session.undo(); session.undo(); refresh();
+        auto* reset = dynamic_cast<juce::Button*> (findNamed (panel, "Reset preferences"));
+        check (reset != nullptr, "the panel offers a reset"); reset->onClick();
+        check (session.preferences() == Session::Preferences {} && exclusive->getToggleState(), "reset restores the defaults");
+    }
     {
         // Audio & MIDI Setup lays out its recording and input settings inside the dialog.
         AudioSetupPanel panel (*this); panel.setSize (660, 680);

@@ -86,6 +86,7 @@ int runFuzzTests (const juce::File&);
 int runGraphEditTests (const juce::File&);
 int runStuckNoteTests (const juce::File&);
 int runLargeSessionTests (const juce::File&);
+int runPreferencesTests (const juce::File&);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -259,6 +260,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-routing");
             setApplicationReturnValue (runRoutingTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-preferences"))
+        {
+            const int i = args.indexOf ("--self-test-preferences");
+            setApplicationReturnValue (runPreferencesTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-large-session"))

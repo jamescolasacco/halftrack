@@ -218,7 +218,8 @@ int runGrooveTests (const juce::File& artifacts)
         const auto swung = render (s, file);
         check (follows (hits (swung), 1.0 / 6), "offbeats play a sixth of a beat late");
         bool unchanged = true;
-        for (const auto& n : s.snapshot().tracks.back().clips[0].notes) unchanged = unchanged && near (std::fmod (n.startBeat, .5), 0) && n.velocity == 1.0f;
+        const auto own = s.snapshot(); // Held, since the loop reads into it.
+        for (const auto& n : own.tracks.back().clips[0].notes) unchanged = unchanged && near (std::fmod (n.startBeat, .5), 0) && n.velocity == 1.0f;
         check (unchanged, "the clip's own notes are unchanged");
         auto halfTiming = swing; halfTiming.timing = 50; halfTiming.name = "Half";
         ok (s.setGroove (swingId, halfTiming), "Timing 50%");

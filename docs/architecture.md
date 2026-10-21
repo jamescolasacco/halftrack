@@ -221,6 +221,10 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `setAudioEngineEnabled (false)` calls `stop()`, which keeps takes and cancels launches, then `AudioDeviceManager::closeAudioDevice()`; `true` calls `restartLastAudioDevice()`. `Impl::engineOff` only selects the message the device checks give; `isAudioEngineEnabled()` is true whenever a device is open. See the [contract](research/audio-engine-contract.md).
 
+## Preferences
+
+`Session::Impl` reads the preferences file when the Session starts and writes it atomically on each change. New Session clips take their launch defaults in `applyLaunchDefaults`. Imports apply the warp preferences through `setAudioClipWarp` inside one edit gesture, so each stays one undo step. The UI's arm and solo handlers read the exclusivity settings. See the [contract](research/preferences-contract.md).
+
 ## Input configuration
 
 `audioInputGroups`, `setAudioInputPairStereo` and `setAudioInputEnabled` change the engine's wave input device descriptions (channel counts and enablement), flush the device manager's pending updates and refresh the Session's inputs. The engine keeps the layout with its device settings. See the [contract](research/input-config-contract.md).

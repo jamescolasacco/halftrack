@@ -1418,3 +1418,12 @@ Test change in `tests/StuckNoteTests.cpp` and `tests/LargeSessionTests.cpp` (new
 - **Large sessions.** A 50-track session with 768 clips and 12,288 notes saves, reopens and renders well inside the limits set.
 
 See [the robustness contract](research/robustness-contract.md).
+
+## Preferences — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt`, `tests/PreferencesTests.cpp` (new) and `tests/GrooveTests.cpp`, with documentation.
+
+- **Preferences.** A Preferences dialog sets exclusive arm and solo, the default warp mode, Auto-Warp Long Samples, and new Session clips' launch mode and grid. They are kept in a versioned file that survives older and damaged versions.
+- **A test fix.** An AddressSanitizer pass over every suite found the groove suite reading a freed snapshot through a range-for over a temporary, and nothing else.
+
+See [the contract](research/preferences-contract.md).

@@ -642,6 +642,28 @@ public:
     // Delete Time: removes [start, start + length) everywhere and moves later material earlier.
     juce::Result deleteTime (double startSeconds, double lengthSeconds);
     juce::Result duplicateAudioClip (const juce::String& clipId, juce::String& duplicateId);
+    // Preferences, after the reference's Record, Warp & Launch settings: whether arm and solo clicks
+    // are exclusive (Cmd/Ctrl-click then adds), the warp mode clips get (Session clips always, and
+    // Arrangement samples over 30 seconds when Auto-Warp Long Samples is on), and new Session
+    // clips' launch mode and grid. Kept in a versioned file beside the engine's settings, saved
+    // atomically; a missing file gives the defaults, an older version gains them for new settings,
+    // and an unreadable one is set aside, keeping the defaults, with the reason reported.
+    struct Preferences
+    {
+        bool exclusiveArm = true, exclusiveSolo = true;
+        WarpMode defaultWarpMode = WarpMode::stretch;
+        bool autoWarpLongSamples = false;
+        LaunchMode defaultLaunchMode = LaunchMode::trigger;
+        ClipQuantisation defaultLaunchQuantisation = ClipQuantisation::global;
+        bool operator== (const Preferences&) const = default;
+    };
+    static constexpr int preferencesVersion = 1;
+    Preferences preferences() const;
+    juce::Result setPreferences (const Preferences&);
+    juce::Result resetPreferences();
+    juce::File preferencesFile() const;
+    // Why the preferences file could not be read when the Session started, or empty.
+    juce::String preferencesProblem() const;
     // Slice to New MIDI Track, after the reference's: a new MIDI track after the clip's plays the
     // clip's audio through a Drum Rack with one pad per slice from C1 (note 36) up, from a MIDI clip
     // in the clip's place with a note per slice. Slices begin at the clip's transients, at its warp

@@ -2409,7 +2409,7 @@ struct Session::Impl
         const te::BeatRange beats { te::BeatPosition(), te::BeatPosition::fromBeats (length) };
         auto* clip = slot->getClip();
         if (clip == nullptr && static_cast<bool> (t->state.getProperty (midiTrackProperty, false)))
-            clip = te::insertMIDIClip (*slot, "MIDI clip", edit->tempoSequence.toTime (beats)).get();
+            if ((clip = te::insertMIDIClip (*slot, "MIDI clip", edit->tempoSequence.toTime (beats)).get()) != nullptr) applyLaunchDefaults (*clip);
         if (clip == nullptr) { changed(); return; }
         auto* undo = &edit->getUndoManager();
         clip->setPosition ({ { te::TimePosition(), edit->tempoSequence.toTime (beats.getEnd()) }, te::TimeDuration() });
@@ -2720,6 +2720,66 @@ struct Session::Impl
             for (int point = (int) entry.beats.size(); --point >= 0;)
                 entry.curve->setPointPosition (point, edit->tempoSequence.toTime (entry.beats[(size_t) point]), &edit->getUndoManager());
         if (! curves.empty()) visitDevices ([] (te::AudioTrack&, NativeEffectPlugin& d) { d.refreshAutomation(); });
+    }
+    // Preferences, read when the Session starts.
+    Preferences prefs;
+    String prefsProblem;
+    File prefsFile() const { return engine.getPropertyStorage().getAppPrefsFolder().getChildFile ("Halftrack Preferences.xml"); }
+    static bool validPreferences (const Preferences& p)
+    {
+        return juce::isPositiveAndBelow ((int) p.defaultWarpMode, 8) && p.defaultWarpMode != WarpMode::off
+            && juce::isPositiveAndBelow ((int) p.defaultLaunchMode, 4) && juce::isPositiveAndBelow ((int) p.defaultLaunchQuantisation, 11);
+    }
+    void loadPreferences()
+    {
+        prefs = {}; prefsProblem.clear();
+        const auto file = prefsFile();
+        if (! file.existsAsFile()) return;
+        auto xml = juce::XmlDocument::parse (file);
+        Preferences read;
+        const auto number = [&] (const char* key, int fallback, int count)
+        {
+            const auto text = xml->getStringAttribute (key, juce::String (fallback)).trim();
+            return text.containsOnly ("0123456789") && text.isNotEmpty() && text.getIntValue() < count ? text.getIntValue() : -1;
+        };
+        bool valid = xml != nullptr && xml->hasTagName ("HALFTRACKPREFERENCES") && xml->getIntAttribute ("version", 0) >= 0;
+        if (valid)
+        {
+            // Settings an older file lacks keep their defaults; a newer file's unknown ones are ignored.
+            const int arm = number ("exclusiveArm", 1, 2), solo = number ("exclusiveSolo", 1, 2), warp = number ("defaultWarpMode", (int) read.defaultWarpMode, 8);
+            const int autoWarp = number ("autoWarpLongSamples", 0, 2), mode = number ("defaultLaunchMode", 0, 4), grid = number ("defaultLaunchQuantisation", 0, 11);
+            valid = arm >= 0 && solo >= 0 && warp >= 0 && autoWarp >= 0 && mode >= 0 && grid >= 0;
+            read = { arm == 1, solo == 1, (WarpMode) warp, autoWarp == 1, (LaunchMode) mode, (ClipQuantisation) grid };
+            valid = valid && validPreferences (read);
+        }
+        if (valid) { prefs = read; return; }
+        // Set an unreadable file aside rather than lose it, and keep the defaults.
+        const auto aside = file.getSiblingFile ("Halftrack Preferences (unreadable).xml");
+        aside.deleteFile();
+        file.moveFileTo (aside);
+        prefsProblem = "The preferences file could not be read, so the defaults are in use. It was kept as " + aside.getFullPathName() + ".";
+    }
+    Result savePreferences (const Preferences& next)
+    {
+        juce::XmlElement xml ("HALFTRACKPREFERENCES");
+        xml.setAttribute ("version", preferencesVersion);
+        xml.setAttribute ("exclusiveArm", next.exclusiveArm ? 1 : 0); xml.setAttribute ("exclusiveSolo", next.exclusiveSolo ? 1 : 0);
+        xml.setAttribute ("defaultWarpMode", (int) next.defaultWarpMode); xml.setAttribute ("autoWarpLongSamples", next.autoWarpLongSamples ? 1 : 0);
+        xml.setAttribute ("defaultLaunchMode", (int) next.defaultLaunchMode); xml.setAttribute ("defaultLaunchQuantisation", (int) next.defaultLaunchQuantisation);
+        const auto file = prefsFile();
+        if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
+        juce::TemporaryFile temporary (file);
+        if (! xml.writeTo (temporary.getFile()) || ! temporary.overwriteTargetFileWithTemporary())
+            return Result::fail ("The preferences could not be saved to " + file.getFullPathName() + ".");
+        prefs = next;
+        return Result::ok();
+    }
+    // New Session clips launch as the preferences say.
+    void applyLaunchDefaults (te::Clip& clip)
+    {
+        auto* undo = &edit->getUndoManager();
+        if (prefs.defaultLaunchMode != LaunchMode::trigger) clip.state.setProperty (launchModeProperty, (int) prefs.defaultLaunchMode, undo);
+        if (prefs.defaultLaunchQuantisation != ClipQuantisation::global) clip.state.setProperty (launchQuantisationProperty, (int) prefs.defaultLaunchQuantisation, undo);
     }
     void clearTransposition (te::WaveAudioClip& clip)
     {
@@ -3481,7 +3541,7 @@ struct Session::Impl
 };
 
 Session::Session (bool enableAudioDevices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType)
-    : impl (std::make_unique<Impl> (*this, enableAudioDevices, std::move (customDeviceType))) { warp::registerStretchers(); newProject(); }
+    : impl (std::make_unique<Impl> (*this, enableAudioDevices, std::move (customDeviceType))) { warp::registerStretchers(); impl->loadPreferences(); newProject(); }
 Session::~Session() { closePluginEditors(); }
 
 Session::Snapshot Session::snapshot() const
@@ -4172,6 +4232,17 @@ Result Session::setAudioInputEnabled (const String& inputName, bool enabled)
         }
     return Result::fail ("That input is not available.");
 }
+Session::Preferences Session::preferences() const { return impl->prefs; }
+juce::File Session::preferencesFile() const { return impl->prefsFile(); }
+String Session::preferencesProblem() const { return impl->prefsProblem; }
+Result Session::setPreferences (const Preferences& next)
+{
+    if (! Impl::validPreferences (next)) return Result::fail ("Those preferences are out of range.");
+    if (next == impl->prefs && impl->prefsFile().existsAsFile()) return Result::ok();
+    if (auto r = impl->savePreferences (next); r.failed()) return r;
+    impl->changed(); return Result::ok();
+}
+Result Session::resetPreferences() { return setPreferences ({}); }
 Result Session::setMidiInputMpe (const String& inputName, bool on)
 {
     for (auto device : impl->engine.getDeviceManager().getMidiInDevices())
@@ -5094,6 +5165,14 @@ Result Session::setSceneTimeSignature (const String& sceneId, std::optional<Time
     else { scene->state.removeProperty (sceneNumeratorProperty, undo); scene->state.removeProperty (sceneDenominatorProperty, undo); }
     impl->changed(); return Result::ok();
 }
+// One command's edits as one undo step, unless an edit gesture already groups them.
+struct OneUndoStep
+{
+    OneUndoStep (Session& s, bool needed, bool inGesture, const String& name) : session (s), own (needed && ! inGesture) { if (own) session.beginEditGesture (name); }
+    ~OneUndoStep() { if (own) session.endEditGesture(); }
+    Session& session;
+    const bool own;
+};
 Result Session::importAudioToSlot (const File& source, int trackIndex, int sceneIndex)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -5109,6 +5188,7 @@ Result Session::importAudioToSlot (const File& source, int trackIndex, int scene
     auto assets = impl->assets(); auto result = assets.createDirectory(); if (result.failed()) return result;
     auto file = source.isAChildOf (assets) ? source : assets.getNonexistentChildFile (source.getFileNameWithoutExtension(), source.getFileExtension(), true);
     if (file != source && ! source.copyFileTo (file)) return Result::fail ("Could not copy the imported audio.");
+    const OneUndoStep step (*this, impl->prefs.defaultWarpMode != WarpMode::stretch, impl->gesture != nullptr, "Import session clip");
     impl->transaction ("Import session clip");
     const te::TimeRange range { te::TimePosition::fromSeconds (0), te::TimePosition::fromSeconds (audio.getLength()) };
     auto clip = te::insertWaveClip (*slot, source.getFileNameWithoutExtension(), file, { range, {} }, te::DeleteExistingClips::no);
@@ -5117,6 +5197,13 @@ Result Session::importAudioToSlot (const File& source, int trackIndex, int scene
     clip->setAutoTempo (true); clip->setAutoPitch (false); clip->setUsesProxy (false);
     clip->setLoopRange (range);
     clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
+    impl->applyLaunchDefaults (*clip);
+    // Session clips always follow the tempo, in the preferred warp mode.
+    if (impl->prefs.defaultWarpMode != WarpMode::stretch)
+    {
+        const auto id = clip->itemID.toString();
+        if (auto warped = setAudioClipWarp (id, { impl->prefs.defaultWarpMode, warpSettings (*clip).bpm }); warped.failed()) return warped;
+    }
     impl->changed(); return Result::ok();
 }
 Result Session::addMidiClipToSlot (const String& trackId, int sceneIndex, double length)
@@ -5137,6 +5224,7 @@ Result Session::addMidiClipToSlot (const String& trackId, int sceneIndex, double
     auto clip = te::insertMIDIClip (*slot, "MIDI clip", impl->edit->tempoSequence.toTime (beats));
     if (! clip) return Result::fail ("Could not create the MIDI clip.");
     clip->setSyncType (te::Clip::syncBarsBeats); clip->setLoopRangeBeats (beats);
+    impl->applyLaunchDefaults (*clip);
     impl->changed(); return Result::ok();
 }
 Result Session::clearSlot (int trackIndex, int sceneIndex)
@@ -6294,6 +6382,7 @@ Result Session::importAudio (const File& source, int index, double start)
     auto assets = impl->assets(); auto r = assets.createDirectory(); if (r.failed()) return r;
     auto file = source.isAChildOf (assets) ? source : assets.getNonexistentChildFile (source.getFileNameWithoutExtension(), source.getFileExtension(), true);
     if (file != source && ! source.copyFileTo (file)) return Result::fail ("Could not copy the imported audio.");
+    const OneUndoStep step (*this, impl->prefs.autoWarpLongSamples && audio.getLength() > 30, impl->gesture != nullptr, "Import audio");
     impl->transaction ("Import audio");
     auto clip = t->insertWaveClip (source.getFileNameWithoutExtension(), file,
         { { te::TimePosition::fromSeconds (start), te::TimePosition::fromSeconds (start + audio.getLength()) }, {} }, false);
@@ -6301,6 +6390,9 @@ Result Session::importAudio (const File& source, int index, double start)
     clip->getSourceFileReference().setToFile (file, te::SourceFileReference::PathStyle::alwaysAbsolute, false);
     clip->setAutoTempo (false); clip->setAutoPitch (false);
     clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
+    // Auto-Warp Long Samples: a long sample is taken for a song at its estimated tempo.
+    if (impl->prefs.autoWarpLongSamples && audio.getLength() > 30)
+        if (auto warped = setAudioClipWarp (clip->itemID.toString(), { impl->prefs.defaultWarpMode, estimateClipTempo (audio.getLength()) }); warped.failed()) return warped;
     impl->changed(); return Result::ok();
 }
 double Session::estimateClipTempo (double seconds)
