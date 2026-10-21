@@ -1,0 +1,63 @@
+#pragma once
+
+#include "Session.h"
+#include <functional>
+
+// The Arrangement's automation envelopes. A track offers its mixer's Volume and Pan, every control
+// of its native devices (racks' inner devices included) and its plug-ins' parameters. Envelope
+// draws one of them across a lane and edits its breakpoints as the reference does: clicking a
+// segment adds a breakpoint, double-clicking empty space adds one there, clicking a breakpoint
+// deletes it and dragging moves it.
+namespace halftrack::arrangementAutomation
+{
+struct Target
+{
+    enum class Kind { volume, pan, native, external };
+    Kind kind = Kind::volume;
+    juce::String key;           // The Session lane key: "mixer:<track>:volume|pan" or "device:<plugin>:<parameter>".
+    juce::String device, control; // Chooser labels, such as "Mixer" and "Volume".
+    juce::String trackId, pluginId;
+    int parameter = 0;
+    Session::EffectKind effect {};
+    Session::AutomationLane lane;
+    float manual = 0;           // The destination's value without automation, in its own units.
+};
+
+std::vector<Target> targets (Session&, const Session::TrackInfo&);
+std::optional<Target> find (Session&, const Session::TrackInfo&, const juce::String& key);
+juce::String volumeKey (const Session::TrackInfo&);
+float toProportion (const Target&, float value);
+float fromProportion (const Target&, float proportion);
+juce::String format (const Target&, float value);
+juce::Result write (Session&, const Target&, const Session::AutomationLane&);
+
+class Envelope
+{
+public:
+    // The arrangement's mapping between beats and lane x, and its grid.
+    std::function<float (double)> xOfBeat;
+    std::function<double (float)> beatOfX;
+    std::function<double (double)> snapBeat;
+
+    void paint (juce::Graphics&, juce::Rectangle<float> area, const Target&) const;
+    // Each returns true when it handled the event.
+    bool mouseDown (Session&, const Target&, juce::Rectangle<float> area, const juce::MouseEvent&);
+    bool mouseDrag (Session&, const Target&, juce::Rectangle<float> area, const juce::MouseEvent&);
+    bool mouseUp (Session&, const Target&);
+    bool doubleClick (Session&, const Target&, juce::Rectangle<float> area, const juce::MouseEvent&);
+    bool active() const noexcept { return gesture; }
+    static constexpr float hitRadius = 5;
+
+private:
+    int hitPoint (const Target&, juce::Rectangle<float> area, juce::Point<float>) const;
+    // The segment under the point, as the index of its right-hand breakpoint (points.size() after the last).
+    std::optional<size_t> hitSegment (const Target&, juce::Rectangle<float> area, juce::Point<float>) const;
+    juce::Point<float> position (const Target&, juce::Rectangle<float> area, const Session::AutomationPoint&) const;
+    Session::AutomationPoint pointAt (const Target&, juce::Rectangle<float> area, juce::Point<float>, bool snap) const;
+    void begin (Session&, const Target&);
+    int dragged = -1;           // The breakpoint being dragged.
+    bool moved = false, gesture = false, pressedPoint = false;
+    juce::String gestureKey;
+    juce::Point<float> downAt;
+};
+}

@@ -1169,3 +1169,7 @@ Engine and UI change in `src/Session.*`, `src/NativeEffects.cpp`, `src/MainCompo
 ## Plug-in automation — 2026-10-21
 
 Engine and UI change in `src/Session.*`, `src/AutomationEditor.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/PluginAutomationTests.cpp` (new), with documentation. See [the contract](research/plugin-automation-contract.md).
+
+## Arrangement Automation Mode — 2026-10-21
+
+UI change in `src/ArrangementAutomation.*` (new), `src/MainComponent.cpp` and `CMakeLists.txt`, with documentation. See [the contract](research/arrangement-automation-contract.md).

@@ -454,3 +454,13 @@ These are simplest defaults pending a comparison with the reference:
 - **Bypass.** The parameter list includes any Bypass parameter a plug-in wrapper exposes; the reference ties that to the device's on switch.
 - **Switching a lane off** leaves the plug-in where its last value put it; nothing restores an earlier manual value.
 - **Moves in a plug-in's own editor** neither override its lanes nor record with Automation Arm yet.
+
+### Automation Mode lanes
+
+These are simplest defaults pending a comparison with the reference:
+
+- **Saving.** The envelope a track shows, and its extra lanes, belong to the window and are not saved with the project.
+- **Lanes** appear only in Automation Mode.
+- **The main lane** shows None after the lane button moves its envelope into a lane.
+- **Clips** stay movable outside the envelope line.
+- **A double-click on the line** adds, deletes and re-adds a breakpoint, leaving one, in three undo steps.

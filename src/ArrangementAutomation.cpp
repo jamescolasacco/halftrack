@@ -1,0 +1,273 @@
+#include "ArrangementAutomation.h"
+#include "NativeEffects.h"
+#include <algorithm>
+
+namespace halftrack::arrangementAutomation
+{
+namespace
+{
+constexpr double maximumBeat = 1000000;
+const juce::Colour envelopeColour { 0xffff6a6a }, inactiveColour { 0xff8e8e8e }, pointFill { 0xff1d1d1d };
+
+void addNative (std::vector<Target>& result, const Session::PluginInfo& plugin)
+{
+    if (plugin.isNativeEffect && ! plugin.isRack)
+    {
+        const auto fields = effectParameters (plugin.effect.kind);
+        for (size_t i = 0; i < fields.size(); ++i)
+        {
+            Target t; t.kind = Target::Kind::native; t.pluginId = plugin.id; t.parameter = (int) i; t.effect = plugin.effect.kind;
+            t.key = "device:" + plugin.id + ":" + juce::String ((int) i); t.device = plugin.name; t.control = fields[i].label;
+            t.manual = plugin.effect.values[i];
+            for (const auto& a : plugin.automation) if (a.parameter == (int) i) t.lane = a.lane;
+            result.push_back (std::move (t));
+        }
+    }
+    if (plugin.isRack)
+    {
+        // A rack's macros are its controls; its chains' devices follow.
+        for (int m = 0; m < Session::rackMacroCount; ++m)
+        {
+            Target t; t.kind = Target::Kind::native; t.pluginId = plugin.id; t.parameter = m; t.effect = plugin.effect.kind;
+            t.key = "device:" + plugin.id + ":" + juce::String (m); t.device = plugin.name;
+            t.control = plugin.macroNames[(size_t) m].isNotEmpty() ? plugin.macroNames[(size_t) m] : "Macro " + juce::String (m + 1);
+            t.manual = plugin.effect.values[(size_t) m];
+            for (const auto& a : plugin.automation) if (a.parameter == m) t.lane = a.lane;
+            result.push_back (std::move (t));
+        }
+        for (const auto* list : { &plugin.chains, &plugin.returns })
+            for (const auto& chain : *list) for (const auto& inner : chain.devices) addNative (result, inner);
+    }
+}
+}
+
+juce::String volumeKey (const Session::TrackInfo& track) { return "mixer:" + track.id + ":volume"; }
+
+std::vector<Target> targets (Session& session, const Session::TrackInfo& track)
+{
+    std::vector<Target> result;
+    Target volume; volume.kind = Target::Kind::volume; volume.trackId = track.id; volume.key = volumeKey (track);
+    volume.device = "Mixer"; volume.control = "Track Volume"; volume.lane = track.volumeAutomation; volume.manual = track.gainDb;
+    Target pan = volume; pan.kind = Target::Kind::pan; pan.key = "mixer:" + track.id + ":pan"; pan.control = "Track Panning";
+    pan.lane = track.panAutomation; pan.manual = track.pan;
+    result.push_back (volume); result.push_back (pan);
+    if (track.instrument.isNativeEffect) addNative (result, track.instrument);
+    for (const auto& plugin : track.plugins)
+    {
+        if (plugin.isNativeEffect) { addNative (result, plugin); continue; }
+        if (plugin.isUtility || plugin.missing) continue;
+        const auto parameters = session.pluginParameters (plugin.id);
+        for (size_t i = 0; i < parameters.size(); ++i)
+        {
+            Target t; t.kind = Target::Kind::external; t.pluginId = plugin.id; t.parameter = (int) i;
+            t.key = "device:" + plugin.id + ":" + juce::String ((int) i); t.device = plugin.name; t.control = parameters[i].name;
+            t.manual = parameters[i].value;
+            for (const auto& a : plugin.automation) if (a.parameter == (int) i) t.lane = a.lane;
+            result.push_back (std::move (t));
+        }
+    }
+    for (auto& t : result) t.trackId = track.id;
+    return result;
+}
+
+std::optional<Target> find (Session& session, const Session::TrackInfo& track, const juce::String& key)
+{
+    for (auto& t : targets (session, track)) if (t.key == key) return t;
+    return std::nullopt;
+}
+
+float toProportion (const Target& t, float value)
+{
+    switch (t.kind)
+    {
+        case Target::Kind::volume: return Session::automationValueToProportion (Session::AutomationTarget::volume, value);
+        case Target::Kind::pan: return Session::automationValueToProportion (Session::AutomationTarget::pan, value);
+        case Target::Kind::native: return Session::deviceAutomationValueToProportion (t.effect, t.parameter, value);
+        case Target::Kind::external: return value;
+    }
+    return value;
+}
+float fromProportion (const Target& t, float proportion)
+{
+    proportion = std::clamp (proportion, 0.0f, 1.0f);
+    switch (t.kind)
+    {
+        case Target::Kind::volume: return Session::automationProportionToValue (Session::AutomationTarget::volume, proportion);
+        case Target::Kind::pan: return Session::automationProportionToValue (Session::AutomationTarget::pan, proportion);
+        case Target::Kind::native: return Session::deviceAutomationProportionToValue (t.effect, t.parameter, proportion);
+        case Target::Kind::external: return proportion;
+    }
+    return proportion;
+}
+juce::String format (const Target& t, float value)
+{
+    switch (t.kind)
+    {
+        case Target::Kind::volume: return value <= -99.99f ? juce::String ("-inf dB") : juce::String (value, 1) + " dB";
+        case Target::Kind::pan: return std::abs (value) < .005f ? juce::String ("C") : juce::String (juce::roundToInt (std::abs (value) * 100)) + (value < 0 ? "L" : "R");
+        case Target::Kind::external: return juce::String (value * 100, 1) + "%";
+        case Target::Kind::native:
+        {
+            const auto fields = effectParameters (t.effect);
+            if (! juce::isPositiveAndBelow (t.parameter, (int) fields.size())) return juce::String (value, 2);
+            const auto& f = fields[(size_t) t.parameter];
+            if (f.choices != nullptr)
+            {
+                const auto options = juce::StringArray::fromTokens (f.choices, "|", {});
+                return options[juce::jlimit (0, options.size() - 1, juce::roundToInt (value))];
+            }
+            if (effectShowsPercent (f)) return juce::String (value * 100, 1) + "%";
+            return juce::String (value, std::abs (value) >= 100 || f.integer ? 0 : 2) + juce::String (f.unit);
+        }
+    }
+    return {};
+}
+juce::Result write (Session& session, const Target& t, const Session::AutomationLane& lane)
+{
+    switch (t.kind)
+    {
+        case Target::Kind::volume: return session.setTrackAutomation (t.trackId, Session::AutomationTarget::volume, lane);
+        case Target::Kind::pan: return session.setTrackAutomation (t.trackId, Session::AutomationTarget::pan, lane);
+        case Target::Kind::native: case Target::Kind::external: return session.setDeviceAutomation (t.pluginId, t.parameter, lane);
+    }
+    return juce::Result::fail ("Unknown automation destination.");
+}
+
+juce::Point<float> Envelope::position (const Target& t, juce::Rectangle<float> area, const Session::AutomationPoint& p) const
+{ return { xOfBeat (p.beat), area.getBottom() - toProportion (t, p.value) * area.getHeight() }; }
+Session::AutomationPoint Envelope::pointAt (const Target& t, juce::Rectangle<float> area, juce::Point<float> at, bool snap) const
+{
+    auto beat = std::clamp (beatOfX (at.x), 0.0, maximumBeat);
+    if (snap && snapBeat) beat = snapBeat (beat);
+    return { beat, fromProportion (t, (area.getBottom() - at.y) / std::max (1.0f, area.getHeight())) };
+}
+int Envelope::hitPoint (const Target& t, juce::Rectangle<float> area, juce::Point<float> at) const
+{
+    for (size_t i = 0; i < t.lane.points.size(); ++i)
+        if (position (t, area, t.lane.points[i]).getDistanceFrom (at) <= hitRadius) return (int) i;
+    return -1;
+}
+std::optional<size_t> Envelope::hitSegment (const Target& t, juce::Rectangle<float> area, juce::Point<float> at) const
+{
+    const auto& points = t.lane.points;
+    if (points.empty())
+    {
+        const auto y = area.getBottom() - toProportion (t, t.manual) * area.getHeight();
+        return std::abs (at.y - y) <= hitRadius ? std::optional<size_t> (0) : std::nullopt;
+    }
+    // The line runs flat before the first breakpoint and after the last.
+    size_t right = 0;
+    while (right < points.size() && xOfBeat (points[right].beat) < at.x) ++right;
+    float y;
+    if (right == 0) y = position (t, area, points.front()).y;
+    else if (right == points.size()) y = position (t, area, points.back()).y;
+    else
+    {
+        const auto a = position (t, area, points[right - 1]), b = position (t, area, points[right]);
+        y = b.x > a.x ? a.y + (b.y - a.y) * (at.x - a.x) / (b.x - a.x) : a.y;
+    }
+    return std::abs (at.y - y) <= hitRadius ? std::optional<size_t> (right) : std::nullopt;
+}
+void Envelope::paint (juce::Graphics& g, juce::Rectangle<float> area, const Target& t) const
+{
+    juce::Graphics::ScopedSaveState save (g);
+    g.reduceClipRegion (area.toNearestInt());
+    const auto colour = t.lane.enabled || t.lane.points.empty() ? envelopeColour : inactiveColour;
+    juce::Path path;
+    if (t.lane.points.empty())
+    {
+        const auto y = area.getBottom() - toProportion (t, t.manual) * area.getHeight();
+        path.startNewSubPath (area.getX(), y); path.lineTo (area.getRight(), y);
+    }
+    else
+    {
+        path.startNewSubPath (area.getX(), position (t, area, t.lane.points.front()).y);
+        for (const auto& p : t.lane.points) path.lineTo (position (t, area, p));
+        path.lineTo (area.getRight(), position (t, area, t.lane.points.back()).y);
+    }
+    g.setColour (colour.withAlpha (t.lane.points.empty() ? .55f : 1.0f));
+    g.strokePath (path, juce::PathStrokeType (1.5f));
+    for (size_t i = 0; i < t.lane.points.size(); ++i)
+    {
+        const auto p = position (t, area, t.lane.points[i]);
+        if (p.x < area.getX() - hitRadius || p.x > area.getRight() + hitRadius) continue;
+        g.setColour (pointFill); g.fillEllipse (p.x - 3.5f, p.y - 3.5f, 7, 7);
+        g.setColour ((int) i == dragged ? juce::Colours::white : colour); g.drawEllipse (p.x - 3.5f, p.y - 3.5f, 7, 7, 1.5f);
+    }
+}
+void Envelope::begin (Session& session, const Target& t)
+{
+    if (gesture) return;
+    session.beginEditGesture ("Edit " + t.control + " automation");
+    gesture = true; gestureKey = t.key;
+}
+bool Envelope::mouseDown (Session& session, const Target& t, juce::Rectangle<float> area, const juce::MouseEvent& e)
+{
+    if (! area.expanded (0, hitRadius).contains (e.position) || ! e.mods.isLeftButtonDown()) return false;
+    moved = false; downAt = e.position; dragged = hitPoint (t, area, e.position); pressedPoint = dragged >= 0;
+    if (pressedPoint) return true; // A click releases it; a drag moves it.
+    if (const auto segment = hitSegment (t, area, e.position))
+    {
+        // Clicking a segment adds a breakpoint on it, under the pointer.
+        auto lane = t.lane;
+        auto point = pointAt (t, area, e.position, ! (e.mods.isAltDown() || e.mods.isCommandDown()));
+        if (lane.points.size() >= 4096) return true;
+        const auto at = std::lower_bound (lane.points.begin(), lane.points.end(), point.beat, [] (const auto& p, double beat) { return p.beat < beat; });
+        if (at != lane.points.end() && std::abs (at->beat - point.beat) < 1e-6) { dragged = (int) std::distance (lane.points.begin(), at); return true; }
+        dragged = (int) std::distance (lane.points.begin(), at);
+        lane.points.insert (at, point);
+        begin (session, t);
+        if (write (session, t, lane).failed()) dragged = -1;
+        return true;
+    }
+    return false;
+}
+bool Envelope::mouseDrag (Session& session, const Target& t, juce::Rectangle<float> area, const juce::MouseEvent& e)
+{
+    if (dragged < 0 || (size_t) dragged >= t.lane.points.size()) return dragged >= 0;
+    if (! moved && e.position.getDistanceFrom (downAt) < 3) return true;
+    moved = true;
+    auto lane = t.lane;
+    const auto index = (size_t) dragged;
+    auto point = pointAt (t, area, e.position, ! (e.mods.isAltDown() || e.mods.isCommandDown()));
+    // Shift gives a finer vertical step from where the drag began.
+    if (e.mods.isShiftDown())
+    {
+        const auto start = toProportion (t, lane.points[index].value);
+        const auto delta = (downAt.y - e.position.y) / std::max (1.0f, area.getHeight()) * .1f;
+        point.value = fromProportion (t, start + delta); point.beat = lane.points[index].beat;
+    }
+    const auto lowest = index == 0 ? 0.0 : lane.points[index - 1].beat + 1e-6;
+    const auto highest = index + 1 == lane.points.size() ? maximumBeat : lane.points[index + 1].beat - 1e-6;
+    point.beat = std::clamp (point.beat, lowest, std::max (lowest, highest));
+    lane.points[index] = point;
+    begin (session, t);
+    write (session, t, lane);
+    return true;
+}
+bool Envelope::mouseUp (Session& session, const Target& t)
+{
+    const bool handled = dragged >= 0 || gesture;
+    // Clicking a breakpoint without dragging it deletes it.
+    if (pressedPoint && ! moved && dragged >= 0 && (size_t) dragged < t.lane.points.size())
+    {
+        auto lane = t.lane; lane.points.erase (lane.points.begin() + dragged);
+        begin (session, t); write (session, t, lane);
+    }
+    dragged = -1; pressedPoint = false;
+    if (gesture) { session.endEditGesture(); gesture = false; }
+    return handled;
+}
+bool Envelope::doubleClick (Session& session, const Target& t, juce::Rectangle<float> area, const juce::MouseEvent& e)
+{
+    if (! area.contains (e.position) || hitPoint (t, area, e.position) >= 0) return false;
+    auto lane = t.lane;
+    const auto point = pointAt (t, area, e.position, ! (e.mods.isAltDown() || e.mods.isCommandDown()));
+    if (lane.points.size() >= 4096) return true;
+    const auto at = std::lower_bound (lane.points.begin(), lane.points.end(), point.beat, [] (const auto& p, double beat) { return p.beat < beat; });
+    if (at != lane.points.end() && std::abs (at->beat - point.beat) < 1e-6) return true;
+    lane.points.insert (at, point);
+    session.beginEditGesture ("Add " + t.control + " breakpoint"); write (session, t, lane); session.endEditGesture();
+    return true;
+}
+}
