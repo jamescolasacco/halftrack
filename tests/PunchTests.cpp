@@ -123,6 +123,14 @@ int runPunchTests (const juce::File& artifacts)
             pumpSyntheticTestDevice (s, 8);
             std::set<juce::String> midiKnown; fresh (s, keys, midiKnown);
             s.seek (0); ok (s.record(), "record MIDI");
+            // The transport's first blocks, reported if the take goes missing.
+            juce::String started;
+            for (int i = 0; i < 6; ++i)
+            {
+                const auto now = s.snapshot();
+                started << juce::String (now.position, 3) << (now.playing ? "p" : "") << (now.recording ? "r" : "") << " ";
+                pumpSyntheticTestDevice (s, 1);
+            }
             juce::String sentAt;
             for (const double at : { .5, 1.5, 2.5 })
             {
@@ -137,7 +145,7 @@ int runPunchTests (const juce::File& artifacts)
             s.stop();
             const auto midiClips = fresh (s, keys, midiKnown);
             check (midiClips.size() == 1 && std::abs (midiClips[0].start - 1) < 1e-3 && std::abs (midiClips[0].length - 1) < 1e-3,
-                   "the MIDI take is trimmed to the brace (" + juce::String ((int) midiClips.size()) + " clips, notes sent at " + sentAt.trim()
+                   "the MIDI take is trimmed to the brace (" + juce::String ((int) midiClips.size()) + " clips, started " + started.trim() + ", notes sent at " + sentAt.trim()
                        + (midiClips.empty() ? juce::String() : ", from " + juce::String (midiClips[0].start, 3) + " for " + juce::String (midiClips[0].length, 3)) + ")");
             check (midiClips[0].notes.size() == 1 && std::abs (midiClips[0].notes[0].startBeat - 1) < .1, "only the note played inside the brace remains, at its place");
             ok (s.setTrackArmed (keys, false), "disarm the MIDI track");
