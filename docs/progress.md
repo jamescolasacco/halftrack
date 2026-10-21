@@ -1173,3 +1173,7 @@ Engine and UI change in `src/Session.*`, `src/AutomationEditor.cpp`, `src/Main.c
 ## Arrangement Automation Mode — 2026-10-21
 
 UI change in `src/ArrangementAutomation.*` (new), `src/MainComponent.cpp` and `CMakeLists.txt`, with documentation. See [the contract](research/arrangement-automation-contract.md).
+
+## Session performance capture — 2026-10-21
+
+Engine change in `src/Session.cpp` and `tests/LauncherTests.cpp`, with documentation. See [the contract](research/performance-capture-contract.md).

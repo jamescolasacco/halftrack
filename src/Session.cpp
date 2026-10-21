@@ -1496,6 +1496,8 @@ namespace
 {
 bool canSplitMidiAt (const te::MidiClip&, te::TimePosition);
 te::MidiClip* splitMidiClipAt (te::MidiClip&, te::TimePosition, juce::UndoManager*);
+Result splittableAt (te::AudioTrack&, te::TimePosition);
+void splitTrackAt (te::AudioTrack&, te::TimePosition, juce::UndoManager*);
 }
 // The engine does not watch Halftrack's groove state, so playback is rebuilt when it changes,
 // undo and redo included. Only the Session's current Edit is restarted: a replaced Edit being
@@ -1725,6 +1727,78 @@ struct Session::Impl
                     if (c == selected) { if (playing != nullptr) h->playSynced (*playing, boundary); else h->play (boundary); }
                     else h->stop (boundary);
                 }
+        if (performanceStart) performance[track.itemID].push_back ({ unloopedTime (boundary), selected != nullptr ? selected->itemID : te::EditItemID(), {} });
+    }
+    // Arrangement recording of the Session: each track's clip changes between Record and Stop, as
+    // the unlooped times they happen at. An invalid clip id is a stop.
+    struct PerformanceChange { te::TimePosition at; te::EditItemID clip; te::TimeDuration offset; };
+    std::map<te::EditItemID, std::vector<PerformanceChange>> performance;
+    std::optional<te::TimePosition> performanceStart;
+    // The unlooped time the engine has played up to: the same point clips' played ranges reach.
+    te::TimePosition playedTime() const
+    {
+        if (auto* context = edit->getTransport().getCurrentPlaybackContext()) if (auto sync = context->getSyncPoint()) return sync->unloopedTime;
+        return unloopedTime (std::nullopt);
+    }
+    // A Session clip playing or about to.
+    bool launcherActive() const
+    {
+        for (auto* t : te::getAudioTracks (*edit))
+            for (auto* slot : t->getClipSlotList().getClipSlots())
+                if (auto* c = slot->getClip()) if (auto h = c->getLaunchHandle())
+                    if (h->getPlayingStatus() == te::LaunchHandle::PlayState::playing || h->getQueuedStatus() == te::LaunchHandle::QueueState::playQueued) return true;
+        return false;
+    }
+    // Starts capturing at `start` with the clips already playing, each from the point it has reached.
+    void startPerformance (te::TimePosition start)
+    {
+        performance.clear(); performanceStart = start;
+        for (auto* t : te::getAudioTracks (*edit))
+            for (auto* slot : t->getClipSlotList().getClipSlots())
+                if (auto* c = slot->getClip()) if (auto h = c->getLaunchHandle(); h && h->getPlayingStatus() == te::LaunchHandle::PlayState::playing)
+                {
+                    double beats = 0;
+                    if (auto played = h->getPlayedRange()) beats = played->getLength().inBeats();
+                    const auto loop = c->getLoopRangeBeats();
+                    if (loop.getLength().inBeats() > 0) beats = loop.getStart().inBeats() + std::fmod (beats, loop.getLength().inBeats());
+                    const auto startBeat = edit->tempoSequence.toBeats (start);
+                    const auto offset = edit->tempoSequence.toTime (startBeat + te::BeatDuration::fromBeats (beats)) - start;
+                    performance[t->itemID].push_back ({ start, c->itemID, offset });
+                }
+    }
+    // Writes what each track played into the Arrangement, replacing what was there.
+    void finishPerformance (te::TimePosition end)
+    {
+        if (! performanceStart) return;
+        const auto start = *performanceStart; performanceStart.reset();
+        auto* undo = &edit->getUndoManager();
+        for (auto& [trackId, changes] : performance)
+        {
+            auto* track = dynamic_cast<te::AudioTrack*> (te::findTrackForID (*edit, trackId));
+            if (track == nullptr) continue;
+            std::stable_sort (changes.begin(), changes.end(), [] (const auto& x, const auto& y) { return x.at < y.at; });
+            for (size_t i = 0; i < changes.size(); ++i)
+            {
+                const auto& change = changes[i];
+                const auto from = std::max (change.at, start), to = std::min (i + 1 < changes.size() ? changes[i + 1].at : end, end);
+                auto* source = change.clip.isValid() ? te::findClipForID (*edit, change.clip) : nullptr;
+                if (source == nullptr || to <= from + te::TimeDuration::fromSeconds (1e-4)) continue;
+                if (splittableAt (*track, from).wasOk() && splittableAt (*track, to).wasOk())
+                {
+                    splitTrackAt (*track, from, undo); splitTrackAt (*track, to, undo);
+                    for (auto* c : track->getClips())
+                        if (c->getPosition().getStart() >= from - te::TimeDuration::fromSeconds (1e-6) && c->getPosition().getEnd() <= to + te::TimeDuration::fromSeconds (1e-6)) c->removeFromParent();
+                }
+                auto state = source->state.createCopy();
+                te::EditItemID::remapIDs (state, nullptr, *edit);
+                renewMidiNoteIDs (state);
+                state.setProperty (te::IDs::start, from.inSeconds(), nullptr);
+                state.setProperty (te::IDs::length, (to - from).inSeconds(), nullptr);
+                state.setProperty (te::IDs::offset, (change.offset + (from - change.at)).inSeconds(), nullptr);
+                track->insertClipWithState (state);
+            }
+        }
+        performance.clear();
     }
     // Launch buttons held in Gate or Repeat mode.
     struct HeldSlot { String trackId, clipId; };
@@ -6237,7 +6311,11 @@ void Session::stop()
         endEditGesture();
         impl->finishSlotRecording (impl->slotRecordings.front(), false, true);
     }
+    const auto performanceEnd = impl->playedTime();
     if (recording) { impl->finishCaptures (false); endEditGesture(); impl->transaction ("Record take"); }
+    // The performance joins the take's undo step.
+    if (recording) impl->finishPerformance (performanceEnd);
+    else impl->performanceStart.reset();
     te::Edit::UndoTransactionInhibitor stopping (*impl->edit);
     impl->cancelLaunches();
     impl->edit->getTransport().stop (false, false);
@@ -6276,7 +6354,10 @@ Result Session::record()
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio device in Audio Settings.");
     bool armed = false;
     for (auto* t : te::getAudioTracks (*impl->edit)) if (auto* d = impl->input (*t)) armed |= d->isRecordingEnabled (t->itemID);
-    if (! armed && ! impl->automationArmed()) return Result::fail ("Assign an input and arm at least one track, or turn on Automation Arm, before recording.");
+    // Recording with Session clips playing captures the performance into the Arrangement.
+    const bool performing = impl->launcherActive();
+    if (! armed && ! impl->automationArmed() && ! performing)
+        return Result::fail ("Assign an input and arm at least one track, turn on Automation Arm, or launch Session clips before recording.");
     impl->captures.clear(); impl->captureTransaction = false;
     impl->clipsBeforeRecording.clear();
     for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* c : t->getClips()) impl->clipsBeforeRecording.insert (c->itemID.toString());
@@ -6299,10 +6380,12 @@ Result Session::record()
         if(auto* midi=dynamic_cast<te::MidiInputDevice*>(&input->getInputDevice())) midi->quantisation.setType("(none)");
     impl->edit->setClickTrackRange ({});
     // Recording starts from the insert marker unless the transport is already playing.
-    if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().setPosition (impl->edit->getTransport().startPosition);
-    // With Automation Arm on, recording runs for automation alone when no track is armed.
+    const bool alreadyPlaying = impl->edit->getTransport().isPlaying();
+    if (! alreadyPlaying) impl->edit->getTransport().setPosition (impl->edit->getTransport().startPosition);
+    // With Automation Arm on, or Session clips playing, recording runs with no track armed.
     impl->edit->getTransport().record (false, ! armed);
     if (! impl->edit->getTransport().isRecording()) return Result::fail ("Recording could not start. Check the selected input and device settings.");
+    impl->startPerformance (alreadyPlaying ? impl->playedTime() : impl->edit->getTransport().startPosition.get());
     impl->changed(); return Result::ok();
 }
 void Session::seek (double seconds)

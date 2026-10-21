@@ -464,3 +464,13 @@ These are simplest defaults pending a comparison with the reference:
 - **The main lane** shows None after the lane button moves its envelope into a lane.
 - **Clips** stay movable outside the envelope line.
 - **A double-click on the line** adds, deletes and re-adds a breakpoint, leaving one, in three undo steps.
+
+### Performance capture scope
+
+Only launches and stops made through Halftrack's launch commands are captured. These are not:
+
+- **Engine-driven changes:** follow-action transitions, Gate and Repeat retriggers, and legato phase.
+- **Loop wrapping.** With the loop brace on, the clips land at unlooped times.
+- **Mixer moves.** They record only through Automation Arm.
+
+Replaced Arrangement material is split at the recorded range when it can be. A clip that cannot be split stays underneath.

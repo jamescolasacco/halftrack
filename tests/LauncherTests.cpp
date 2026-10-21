@@ -614,6 +614,54 @@ void midiTests()
     check (magnitude (stopped, 3000, 21000) < 0.00001f, "MIDI stop has no stuck voice");
     session.stop();
 }
+// Arrangement recording of the Session, as in the reference: Record while Session clips play writes
+// what each track played into the Arrangement at the times it played, replacing what was there,
+// in the take's single undo step. 120 BPM: a beat is half a second, 24000 samples.
+void performanceTests()
+{
+    Session session (false);
+    auto& engine = engineFor (session);
+    te::test_utilities::EnginePlayer player (engine, parameters());
+    ok (session.addMidiTrack ("A"), "first performance track"); const int ai = (int) session.snapshot().tracks.size() - 1;
+    ok (session.addMidiTrack ("B"), "second performance track"); const int bi = ai + 1;
+    const auto a = session.snapshot().tracks[(size_t) ai].id, b = session.snapshot().tracks[(size_t) bi].id;
+    const auto slotNote = [&] (const juce::String& track, int scene, double beats, int pitch)
+    {
+        ok (session.addMidiClipToSlot (track, scene, beats), "a Session clip");
+        const auto snapshot = session.snapshot();
+        for (const auto& t : snapshot.tracks) if (t.id == track) ok (session.addMidiNote (t.slots[(size_t) scene].clip.id, pitch, 0, .25, 1), "a note in it");
+    };
+    slotNote (a, 0, 1, 60); slotNote (a, 1, 2, 64); slotNote (b, 0, 1, 67);
+    ok (session.addMidiClip (a, 0, 8), "an Arrangement clip under the performance");
+    ok (session.addMidiNote (session.snapshot().tracks[(size_t) ai].clips[0].id, 50, 0, 8, 1), "with its own note");
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::beat), "a beat launch grid");
+    check (session.record().failed(), "with nothing armed and no Session clip playing, recording is refused");
+    ok (session.launchScene (0), "launch the first scene"); player.process (12000);
+    ok (session.record(), "Record while Session clips play");
+    player.process (24000);
+    ok (session.launchSlot (ai, 1), "launch A's second clip on the next beat");
+    player.process (48000);
+    ok (session.stopLauncherTrack (bi), "stop B on the next beat");
+    player.process (24000);
+    session.stop();
+    const auto clipsOf = [&] (int track) { auto clips = session.snapshot().tracks[(size_t) track].clips; std::sort (clips.begin(), clips.end(), [] (const auto& x, const auto& y) { return x.start < y.start; }); return clips; };
+    const auto near = [] (double x, double y) { return std::abs (x - y) < 2e-3; };
+    const auto pitch = [] (const Session::ClipInfo& c) { return c.notes.empty() ? -1 : c.notes[0].pitch; };
+    auto clips = clipsOf (ai);
+    // A: the old clip before the take, scene 1 from 0.25 s (half way through its first beat) to 1 s,
+    // scene 2 from 1 s to the stop at 2.25 s, then the rest of the old clip.
+    check (clips.size() == 4 && pitch (clips[0]) == 50 && near (clips[0].start, 0) && near (clips[0].length, .25)
+           && pitch (clips[1]) == 60 && near (clips[1].start, .25) && near (clips[1].length, .75) && near (clips[1].sourceOffset, .25)
+           && pitch (clips[2]) == 64 && near (clips[2].start, 1) && near (clips[2].length, 1.25) && near (clips[2].sourceOffset, 0)
+           && pitch (clips[3]) == 50 && near (clips[3].start, 2.25) && near (clips[3].start + clips[3].length, 4),
+           "A's Arrangement holds each Session clip where it played, replacing the old clip there");
+    clips = clipsOf (bi);
+    check (clips.size() == 1 && pitch (clips[0]) == 67 && near (clips[0].start, .25) && near (clips[0].length, 1.75), "B holds its clip until it stopped");
+    session.undo();
+    check (clipsOf (ai).size() == 1 && pitch (clipsOf (ai)[0]) == 50 && clipsOf (bi).empty(), "one undo removes the recorded performance");
+    session.redo();
+    check (clipsOf (ai).size() == 4 && clipsOf (bi).size() == 1, "and redo restores it");
+}
 void sceneOrderTests (const juce::File& root, const juce::File& first, const juce::File& second)
 {
     MemoryBuffers memory;
@@ -749,6 +797,7 @@ int runLauncherTests (const juce::File& requestedDirectory)
         midiOwnershipTests (76);
         midiOwnershipTests (60);
         midiTests();
+        performanceTests();
         std::cout << "Launcher acceptance tests passed. Artifacts: " << root.getFullPathName() << std::endl;
         return 0;
     }
