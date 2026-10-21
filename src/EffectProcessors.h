@@ -448,5 +448,28 @@ private:
     std::array<std::vector<float>, 2> buffer;
     size_t write = 0;
 };
+
+// Dynamic Tube after the reference's. Drive sets the level into the tube; Bias sets how much it
+// distorts, through an offset tanh curve that adds even harmonics. Model A stays clean until Bias
+// passes a threshold, Model C distorts at any Bias, Model B sits between. Envelope (-100% to
+// +100%) moves the Bias with an Attack/Release follower of the input, so loud passages distort
+// more (positive) or less (negative). Tone tilts a 1 kHz shelf before the tube and the inverse
+// after it, moving the distortion toward the highs or the lows without changing the clean level.
+class DynamicTube
+{
+public:
+    static constexpr std::array<double, 3> thresholds { .35, .15, 0 }; // Bias where A, B and C begin to distort.
+    // The tube for a model and an effective bias (0-1).
+    static double tube (int model, double bias, double x) noexcept;
+    void prepare (double rate) noexcept;
+    void configure (const float* values) noexcept; // model, drive dB, bias, envelope, attack ms, release ms, tone, output dB.
+    void reset() noexcept;
+    void tick (double& left, double& right) noexcept;
+private:
+    double rate = 48000, drive = 1, bias = 0, envelopeAmount = 0, attack = 0, release = 0, follower = 0, dcPole = 0;
+    int model = 0;
+    std::array<Biquad, 2> emphasis, deemphasis;
+    std::array<double, 2> dcInput {}, dcOutput {};
+};
 }
 

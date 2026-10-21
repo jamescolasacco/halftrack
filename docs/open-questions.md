@@ -409,3 +409,11 @@ These are simplest-default choices pending reference measurement:
 
 Controls are sent on change and again at transport start or a jump back. Custom B–M default to CCs 20–31. These are simplest-default choices pending reference measurement.
 
+### Dynamic Tube defaults
+
+These are simplest-default choices pending reference measurement:
+
+- **Curve:** the model thresholds and the tanh tube curve.
+- **Tone:** a ±12 dB, 1 kHz tilt.
+- **Ranges:** Drive from −12 to +36 dB and Output from −36 to +12 dB.
+

@@ -388,7 +388,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-010 | Corpus | RESONANCE | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-011 | Delay (12.2.1 behavior) | Stereo and ping-pong delay, feedback damping, link, freeze and complete export tails; eleven project-tempo divisions are tested; sample-accurate tempo automation and reference parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated three-platform acceptance |
 | AFX-012 | Drum Buss | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-013 | Dynamic Tube | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-013 | Dynamic Tube | PARTIAL — three tube models with thresholds, Drive, Bias, envelope-follower Bias modulation (Attack/Release), Tone pre/de-emphasis, Output and Dry/Wet; model thresholds and ordering, envelope direction, tone tilt and scaling tested ([contract](research/native-effects-contract.md#dynamic-tube-2026-10-21)). Hi-Quality mode and reference comparison missing | PARTIAL |
 | AFX-014 | Echo | TIME | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-015 | EQ Eight | Eight serial bands, seven filter modes plus off, output/mix and actual response plot; independent response and project tests. Advanced modes and numerical parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated three-platform acceptance |
 | AFX-016 | EQ Three | PARTIAL — Linkwitz–Riley 24/48 dB three-band isolator with all-pass-aligned recombination, kill switches; parity unmeasured | PARTIAL |

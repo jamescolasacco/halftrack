@@ -372,3 +372,30 @@ Halftrack's choices:
 - **Time.** 10 ms is 480 samples at 48 kHz.
 - **Distance.** 34.3 m at 20 °C lands at the computed travel time, and the same distance in feet at 68 °F matches. A colder room delays more.
 
+## Dynamic Tube (2026-10-21)
+
+Dynamic Tube follows the manual's description in the [audio effect reference](https://www.ableton.com/en/live-manual/12/live-audio-effect-reference/), consulted 2026-10-21. The manual gives no numbers. It describes:
+
+- **Models:** A, clean at low Bias and distorting above a threshold; C, always distorting; B, between them.
+- **Tone:** distortion toward the highs or the mids and lows.
+- **Drive and Bias.**
+- **Envelope:** an envelope follower that modulates Bias, positive for dirtier loud sounds and negative for cleaner ones, with Attack and Release.
+- **Output.**
+
+Halftrack's model:
+
+- **Curve.** The tube is `tanh(x + offset) − tanh(offset)`. The offset is 1.5 × the Bias beyond the model's threshold: 0.35 for A, 0.15 for B and 0 for C. A and B blend from the clean signal into the curve as the Bias passes the threshold, and C is always curved.
+- **Envelope.** Envelope adds `Envelope × follower` to the Bias. The follower tracks the driven input level with Attack and Release.
+- **Tone.** Tone is a ±12 dB, 1 kHz high shelf before the tube, undone after it.
+- **Output stage.** A 10 Hz DC blocker follows the tube.
+- **Ranges.** Drive runs from −12 to +36 dB and Output from −36 to +12 dB, with Dry/Wet.
+
+`tests/ExtendedEffectsTests.cpp` checks:
+
+- **Models.** Model A has no second harmonic below its threshold and a strong one above it, Model C distorts at low Bias, and Model B's distortion lies between A's and C's.
+- **Envelope.** It widens or narrows the gap between loud and quiet inputs.
+- **Tone.** It raises a 3 kHz tone's distortion by over 6 dB from −100% to +100%.
+- **Output and mix.** Output scales exactly, and fully dry is bit-exact.
+
+The Hi-Quality mode and measured comparison with the reference are missing.
+

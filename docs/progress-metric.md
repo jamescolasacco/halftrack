@@ -1,6 +1,6 @@
 # Recorded implementation coverage
 
-Current implementation checkpoint: Align Delay, 2026-10-21. **107 of 246 tracked active feature areas have partial implementation evidence: 43.5%.** None of these broad rows establishes complete measured reference parity.
+Current implementation checkpoint: Dynamic Tube, 2026-10-21. **108 of 246 tracked active feature areas have partial implementation evidence: 43.9%.** None of these broad rows establishes complete measured reference parity.
 
 This is recorded partial coverage, not percentage finished, remaining engineering time, or a weighted feature score. The initial inventory is not exhaustive, some existing behavior is recorded only in preview rows, and items vary greatly in size. Static decompiler coverage uses a different denominator and must never be reported as application completion.
 
@@ -8,7 +8,7 @@ This is recorded partial coverage, not percentage finished, remaining engineerin
 
 The [capability ledger](feature-parity.md) has 275 identified rows. Excluding PRE preview-check rows, OUT scope/watchlist rows, EXT programmable-environment rows and rows explicitly OUT OF SCOPE leaves 246 active rows. Count each active row whose status contains PARTIAL once. No fractional credit or estimated effort weighting is assigned.
 
-The partial rows are REC-003/004/005/008, ARR-001/002/003/004/005/006/007/008/009/010/011/012, SES-001/002/003/004/006/008, WRP-001/002/004/008/009, MID-001/002/005/006/007/008/011/012/013, MIX-001/002/003/005/007/008/009/010/011/012/013/014/016, PRJ-002/004/005/006/009/011/012/013, UX-001/002, QA-003, AFX-002/003/005/007/008/009/011/015/016/017/019/020/021/024/027/028/029/030/031/032/034/035/038/039/040/041, MFX-001/002/003/004/005/006/007/008, INS-001/003/009/011/013, RCK-001/002/003/004 and MXL-006/010/021/022. The [progress log](progress.md), ledger and per-feature contracts record what each actually does and what remains missing.
+The partial rows are REC-003/004/005/008, ARR-001/002/003/004/005/006/007/008/009/010/011/012, SES-001/002/003/004/006/008, WRP-001/002/004/008/009, MID-001/002/005/006/007/008/011/012/013, MIX-001/002/003/005/007/008/009/010/011/012/013/014/016, PRJ-002/004/005/006/009/011/012/013, UX-001/002, QA-003, AFX-002/003/005/007/008/009/011/013/015/016/017/019/020/021/024/027/028/029/030/031/032/034/035/038/039/040/041, MFX-001/002/003/004/005/006/007/008, INS-001/003/009/011/013, RCK-001/002/003/004 and MXL-006/010/021/022. The [progress log](progress.md), ledger and per-feature contracts record what each actually does and what remains missing.
 
 Before audio editing, source `b342496` had 19 partial rows with the same denominator: 7.7%. The six added rows are ARR-003/005/006/008/012 and WRP-001. Their evidence and boundaries are in the [audio-editing contract](research/audio-clip-editing-contract.md). Timeline gestures improve those existing rows without increasing their count.
 
@@ -105,3 +105,5 @@ Vinyl Distortion adds bounded partial coverage for AFX-041: 105/246 (42.7%).
 CC Control adds bounded partial coverage for MFX-002: 106/246 (43.1%).
 
 Align Delay adds bounded partial coverage for MXL-010: 107/246 (43.5%).
+
+Dynamic Tube adds bounded partial coverage for AFX-013: 108/246 (43.9%).

@@ -673,6 +673,33 @@ void alignDelayTests()
     const auto cold = process (impulse(), with (Kind::alignDelay, { { "delayMode", 2 }, { "leftDistance", 34.3f }, { "temperature", -10 } }));
     check (centroid (cold, 0) > expected, "sound travels slower in a colder room");
 }
+// Dynamic Tube: the models' harmonic content at the same settings, the envelope's effect on
+// loud and quiet passages, and Tone's tilt of where the distortion happens.
+void dynamicTubeTests()
+{
+    const auto second = [] (std::initializer_list<std::pair<const char*, float>> values, double amplitude = .5, double hz = 1000)
+    {
+        const auto out = process (sine (hz, amplitude, 48000), with (Kind::dynamicTube, values));
+        return db (amplitudeAt (out, 0, 2 * hz, 24000, 48000) / amplitudeAt (out, 0, hz, 24000, 48000));
+    };
+    check (second ({ { "tubeModel", 0 }, { "bias", .2f } }) < -100 && second ({ { "tubeModel", 0 }, { "bias", .9f } }) > -40, "Model A stays clean at low Bias and distorts above its threshold");
+    check (second ({ { "tubeModel", 2 }, { "bias", .2f } }) > -60, "Model C distorts even at low Bias");
+    const auto a = second ({ { "tubeModel", 0 }, { "bias", .5f } }), b = second ({ { "tubeModel", 1 }, { "bias", .5f } }), c = second ({ { "tubeModel", 2 }, { "bias", .5f } });
+    check (a < b && b < c, "Model B lies between A and C");
+    // The envelope: with positive Envelope a louder input distorts more, with negative less.
+    const auto loudness = [&] (float envelope) { return second ({ { "tubeModel", 2 }, { "bias", .3f }, { "envelope", envelope } }, .9) - second ({ { "tubeModel", 2 }, { "bias", .3f }, { "envelope", envelope } }, .05); };
+    check (loudness (1) > loudness (0) && loudness (-1) < loudness (0), "Envelope makes loud passages dirtier or cleaner");
+    check (second ({ { "tubeModel", 2 }, { "tone", 1 } }, .5, 3000) > second ({ { "tubeModel", 2 }, { "tone", -1 } }, .5, 3000) + 6, "Tone moves the distortion toward the highs");
+    {
+        const auto in = sine (440, .5, 4800, 48000, .3);
+        const auto loud = process (in, with (Kind::dynamicTube, { { "outputDb", 0 } })), quiet = process (in, with (Kind::dynamicTube, { { "outputDb", -6 } }));
+        const auto dry = process (in, with (Kind::dynamicTube, { { "mix", 0 } }));
+        double worst = 0; bool same = true;
+        for (int ch = 0; ch < 2; ++ch) for (int n = 0; n < in.getNumSamples(); ++n)
+        { worst = std::max (worst, std::abs (quiet.getSample (ch, n) - std::pow (10.0, -6 / 20.0) * loud.getSample (ch, n))); same = same && dry.getSample (ch, n) == in.getSample (ch, n); }
+        check (worst < 1e-6 && same, "Output scales exactly and fully dry passes audio unchanged");
+    }
+}
 void eqThreeTests()
 {
     for (int steep = 0; steep < 2; ++steep)
@@ -747,6 +774,6 @@ void shifterTests()
 void runExtendedEffectsTests()
 {
     saturatorTests(); overdriveTests(); autoFilterTests(); autoPanTests(); modulatedDelayTests();
-    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); beatRepeatTests(); filterDelayTests(); erosionTests(); resonatorTests(); vinylTests(); alignDelayTests(); glueTests(); shifterTests();
+    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); beatRepeatTests(); filterDelayTests(); erosionTests(); resonatorTests(); vinylTests(); alignDelayTests(); dynamicTubeTests(); glueTests(); shifterTests();
 }
 }

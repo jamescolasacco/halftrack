@@ -931,5 +931,47 @@ void AlignDelay::tick (double& left, double& right) noexcept
     }
     write = (write + 1) % size;
 }
+
+double DynamicTube::tube (int model, double bias, double x) noexcept
+{
+    const auto m = (size_t) std::clamp (model, 0, 2);
+    // Below the model's threshold the tube is clean; above it the offset grows with Bias. Model C
+    // also always rounds the waveform.
+    const auto engaged = std::max (0.0, bias - thresholds[m]) / (1 - thresholds[m]);
+    const auto offset = 1.5 * engaged;
+    if (m == 2) return std::tanh (x + offset) - std::tanh (offset);
+    if (engaged <= 0) return x;
+    const auto curved = std::tanh (x + offset) - std::tanh (offset);
+    const auto blend = std::min (1.0, engaged * (m == 1 ? 2.0 : 1.5));
+    return x + blend * (curved - x);
+}
+void DynamicTube::prepare (double sampleRate) noexcept { rate = sampleRate; dcPole = std::exp (-2 * pi * 10 / rate); reset(); }
+void DynamicTube::configure (const float* v) noexcept
+{
+    model = (int) v[0]; drive = std::pow (10.0, (double) v[1] / 20); bias = v[2]; envelopeAmount = v[3];
+    attack = std::exp (-1 / (std::max (.1, (double) v[4]) * .001 * rate)); release = std::exp (-1 / (std::max (1.0, (double) v[5]) * .001 * rate));
+    const auto tilt = 12 * (double) v[6];
+    for (auto& s : emphasis) s.c = highShelfSection (1000, tilt, .70710678118654752, rate);
+    for (auto& s : deemphasis) s.c = highShelfSection (1000, -tilt, .70710678118654752, rate);
+}
+void DynamicTube::reset() noexcept
+{
+    follower = 0; dcInput = {}; dcOutput = {};
+    for (auto* set : { &emphasis, &deemphasis }) for (auto& s : *set) s.clear();
+}
+void DynamicTube::tick (double& left, double& right) noexcept
+{
+    const auto level = std::max (std::abs (left), std::abs (right)) * drive;
+    follower = level > follower ? attack * follower + (1 - attack) * level : release * follower + (1 - release) * level;
+    const auto effective = std::clamp (bias + envelopeAmount * std::min (1.0, follower), 0.0, 1.0);
+    double* channels[] { &left, &right };
+    for (size_t c = 0; c < 2; ++c)
+    {
+        const auto shaped = tube (model, effective, emphasis[c].tick (*channels[c] * drive));
+        const auto blocked = shaped - dcInput[c] + dcPole * dcOutput[c];
+        dcInput[c] = shaped; dcOutput[c] = finite (blocked);
+        *channels[c] = deemphasis[c].tick (dcOutput[c]);
+    }
+}
 }
 

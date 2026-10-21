@@ -1140,3 +1140,7 @@ Engine-area change in `src/MidiEffects.*`, `src/NativeEffects.cpp`, `src/Session
 
 Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Session.h` and `tests/ExtendedEffectsTests.cpp`, with documentation. See [the contract](research/native-effects-contract.md#align-delay-2026-10-21).
 
+## Dynamic Tube — 2026-10-21
+
+Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Session.h` and `tests/ExtendedEffectsTests.cpp`, with documentation. See [the contract](research/native-effects-contract.md#dynamic-tube-2026-10-21).
+
