@@ -1409,3 +1409,12 @@ Test and engine change in `tests/GraphEditTests.cpp` and `tests/FuzzTests.cpp` (
 - **The Linux punch test** lets new MIDI routing settle and retries a recording that stops in its first blocks, recorded as an open question.
 
 See [the contract](research/robustness-contract.md).
+
+## Stuck notes and large sessions — 2026-10-21
+
+Test change in `tests/StuckNoteTests.cpp` and `tests/LargeSessionTests.cpp` (new), `src/Main.cpp` and `CMakeLists.txt`, with documentation.
+
+- **Stuck notes.** A held note ends within its release whenever playback, its clip, its track or its instrument goes away. No stuck notes were found.
+- **Large sessions.** A 50-track session with 768 clips and 12,288 notes saves, reopens and renders well inside the limits set.
+
+See [the robustness contract](research/robustness-contract.md).

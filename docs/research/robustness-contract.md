@@ -1,6 +1,6 @@
 # Robustness suites contract
 
-Two verification suites test existing behaviour under stress rather than adding features. Both are generated, deterministic and bounded.
+Four verification suites test existing behaviour under stress rather than adding features. Both are generated, deterministic and bounded.
 
 ## Graph edits during playback
 
@@ -42,6 +42,30 @@ Each load either succeeds, and the project then saves and reopens, or is refused
 - **A save that would not reopen.** A mixer level outside the fader's 0–1 range loaded, and saving then wrote a stored level that the loader refuses. Mixer levels and pans out of range are now refused on load.
 
 A local run of 1500 more mutants with another seed (`HALFTRACK_FUZZ_SEED`, `HALFTRACK_FUZZ_COUNT`) found nothing further.
+
+## Stuck notes
+
+`tests/StuckNoteTests.cpp` holds a long note on a sine voice at full sustain through the synthetic device. A held note ends within its release, leaving silence within half a second, when:
+- the transport stops;
+- it seeks past the clip;
+- a loop inside the note stops;
+- the tempo changes and the transport then stops;
+- the sounding clip is deleted;
+- the instrument is swapped;
+- its Session clip is stopped;
+- its track is deleted.
+
+The note keeps sounding when a seek lands inside it, inside a loop, and across a tempo change.
+
+## Large sessions
+
+`tests/LargeSessionTests.cpp` builds 24 audio tracks of 16 clips each with an EQ Three, and 24 MIDI tracks of 16 clips of 32 notes, with a 64-point volume envelope on every track. It saves, reopens and renders the session, reporting each step's time and the memory the reopened project takes. Each is held under a generous limit: save 20 s, load 30 s, 2 GB, render 120 s. Locally it measured:
+
+| Step | Measured |
+| --- | --- |
+| Save | 1832 KB in 0.66 s |
+| Reopen (everything intact) | 0.06 s, 11 MB more memory |
+| Render 32 s of audio | 2.75 s |
 
 ## Not yet covered
 

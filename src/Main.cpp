@@ -84,6 +84,8 @@ int runMpeTests (const juce::File&);
 int runInputConfigTests (const juce::File&);
 int runFuzzTests (const juce::File&);
 int runGraphEditTests (const juce::File&);
+int runStuckNoteTests (const juce::File&);
+int runLargeSessionTests (const juce::File&);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -257,6 +259,18 @@ public:
         {
             const int i = args.indexOf ("--self-test-routing");
             setApplicationReturnValue (runRoutingTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-large-session"))
+        {
+            const int i = args.indexOf ("--self-test-large-session");
+            setApplicationReturnValue (runLargeSessionTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-stuck-notes"))
+        {
+            const int i = args.indexOf ("--self-test-stuck-notes");
+            setApplicationReturnValue (runStuckNoteTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-graph-edits"))
