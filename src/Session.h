@@ -365,6 +365,8 @@ public:
         std::vector<LocatorInfo> locators;
         std::vector<GrooveInfo> grooves; // The groove pool, in pool order.
         bool automationArm = false, punchIn = false, punchOut = false;
+        juce::File previewing; // The file the browser preview is playing, if any.
+        float previewVolumeDb = 0;
         bool automationOverridden = false; // Some lane with points is switched off.
         float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
@@ -395,6 +397,11 @@ public:
     juce::Result setReturnSendMode (const juce::String& returnTrackId, SendMode);
     juce::Result importMidiFile (const juce::File&, double startBeat, std::vector<juce::String>& clipIds);
     juce::Result exportMidiClip (const juce::String& clipId, const juce::File&);
+    // Browser preview: a separate preview Edit plays an audio file on the audio device, beside the
+    // project and outside it, at the preview volume. Another file replaces it; it stops at its end.
+    juce::Result previewFile (const juce::File&);
+    void stopPreview();
+    juce::Result setPreviewVolume (float decibels); // -70 to +6 dB.
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
     juce::Result addScene (juce::String name = {});
     juce::Result removeScene (int sceneIndex);

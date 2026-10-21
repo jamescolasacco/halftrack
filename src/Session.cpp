@@ -1497,6 +1497,7 @@ struct Session::Impl
         gesture.reset();
         meters.clear();
         grooveWatcher.watch ({});
+        preview.reset();
         edit.reset();
         // Unsaved sessions are deliberately retained in the temp directory for recovery.
     }
@@ -2445,6 +2446,16 @@ struct Session::Impl
     }
     Session& owner;
     te::Engine engine;
+    // Browser preview: its own Edit, playing beside the project's.
+    std::unique_ptr<te::Edit> preview;
+    File previewSource;
+    float previewVolumeDb = 0;
+    bool previewPlaying() const
+    {
+        if (! preview) return false;
+        auto& transport = preview->getTransport();
+        return transport.isPlaying() && transport.getPosition() < transport.getLoopRange().getEnd();
+    }
     bool useDevices;
     uint64_t projectGeneration = 0;
     bool explicitChanges = false, pristineNewDocument = false, exporting = false;
@@ -2505,6 +2516,8 @@ Session::Snapshot Session::snapshot() const
     s.grooveAmount = grooveAmount (e.state);
     s.automationArm = impl->automationArmed();
     s.punchIn = impl->punchIn(); s.punchOut = impl->punchOut();
+    s.previewing = impl->previewPlaying() ? impl->previewSource : File();
+    s.previewVolumeDb = impl->previewVolumeDb;
     s.automationOverridden = ! impl->overriddenLanes().isEmpty();
     const auto quantisation = e.getLaunchQuantisation().type.get();
     s.launchQuantisation = quantisation == te::LaunchQType::none ? LaunchQuantisation::none
@@ -5613,6 +5626,36 @@ Result Session::setDeviceAutomation (const String& pluginId, int parameter, cons
     device->refreshAutomation();
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->changed(); return Result::ok();
+}
+Result Session::previewFile (const File& file)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! impl->useDevices || audioDeviceManager().getCurrentAudioDevice() == nullptr) return Result::fail ("Choose an audio device in Audio Settings to preview files.");
+    if (! te::AudioFile (impl->engine, file).isValid()) return Result::fail ("This file cannot be previewed: " + file.getFileName());
+    stopPreview();
+    impl->preview = te::Edit::createEditForPreviewingFile (impl->engine, file, nullptr, false, false, nullptr, {});
+    if (! impl->preview) return Result::fail ("This file cannot be previewed: " + file.getFileName());
+    impl->preview->getMasterVolumePlugin()->setVolumeDb (impl->previewVolumeDb);
+    auto& transport = impl->preview->getTransport();
+    transport.ensureContextAllocated();
+    transport.setPosition (te::TimePosition());
+    transport.play (false);
+    impl->previewSource = file;
+    sendChangeMessage(); return Result::ok();
+}
+void Session::stopPreview()
+{
+    if (! impl->preview) return;
+    impl->preview->getTransport().stop (false, true);
+    impl->preview.reset(); impl->previewSource = File();
+    sendChangeMessage();
+}
+Result Session::setPreviewVolume (float decibels)
+{
+    if (! std::isfinite (decibels) || decibels < -70 || decibels > 6) return Result::fail ("Choose a preview volume from -70 to +6 dB.");
+    impl->previewVolumeDb = decibels;
+    if (impl->preview) impl->preview->getMasterVolumePlugin()->setVolumeDb (decibels);
+    sendChangeMessage(); return Result::ok();
 }
 Result Session::setPunchIn (bool on)
 {

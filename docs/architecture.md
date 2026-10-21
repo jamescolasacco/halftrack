@@ -692,3 +692,7 @@ Lanes are named by key and resolved again at each use, so a pass never holds a d
 
 A pass keeps the lane's original points and its recorded points, and rewrites the whole lane through the ordinary lane writers with `internalAutomationWrite` set. Touch passes end in `endEditGesture`, and every pass ends in `stop()`. `overriddenLanes()` feeds `Snapshot::automationOverridden` and `reEnableAutomation`.
 
+## Browser preview
+
+`Session::Impl` owns a second `te::Edit` for preview, made by `createEditForPreviewingFile`. It plays on the same `DeviceManager`, which mixes every allocated playback context. It is created per previewed file, destroyed by `stopPreview` and before the project Edit at shutdown, and never enters the project's state or undo history.
+
