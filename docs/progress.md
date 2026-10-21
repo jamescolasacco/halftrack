@@ -1436,3 +1436,13 @@ UI change in `src/MainComponent.cpp`, with documentation, and a test fix in `tes
 - **A test fix.** The graph edit suite failed on Linux and Windows CI because the reported position is refreshed by a 50 Hz timer and lagged there. It now reads the position after that timer has run with no blocks pumped, which is exact, and holds it to 20 ms.
 
 See [the contract](research/info-view-contract.md).
+
+## Linked-track editing — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/LinkedTrackTests.cpp` (new), with documentation.
+
+- **Linking.** Link Tracks and Unlink Track(s) in a track header's menu link audio and MIDI tracks, and a header indicator shows and selects a link.
+- **Linked edits.** Clip moves, trims, splits, deletions, activation, fades, time-selection edits, arming, take lanes and comping on a linked track apply to its linked tracks as one undo step. They are refused whole when a linked part cannot be done.
+- **Auditions.** Clip edits now end a take audition before looking clips up, so they never act on an audition's temporary copies.
+
+See [the contract](research/linked-tracks-contract.md).

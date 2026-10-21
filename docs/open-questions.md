@@ -584,3 +584,12 @@ One run of the audio clip suite in a full local gate aborted on heap corruption 
 - 16 more AddressSanitizer runs of the suite.
 
 The AddressSanitizer pass found only a test's use-after-free read, now fixed. A data race, which AddressSanitizer does not detect, is the likeliest remaining cause. A ThreadSanitizer run is the next step.
+
+### Linked-track matching
+
+The reference's manual lists the edits that apply across linked tracks but not how it finds the corresponding clips. Halftrack's defaults:
+- moves, trims, deletion and activation follow clips that start and end within 1 ms of the edited one;
+- splits cut whatever crosses the split time on each linked track;
+- take lanes and comps follow lane position, and comping skips a linked lane with no material in the range.
+
+A move to another track, a duplicated track and a MIDI clip beside a trimmed audio clip are left out of the link. Auditioning stays on one track. All of these are unmeasured against the reference.

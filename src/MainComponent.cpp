@@ -688,7 +688,13 @@ public:
             if ((code == 'U' || code == 'u') && key.getModifiers().isAltDown() && ! showSession) { toggleTakeLanes(); return true; }
             if ((code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) && ! showSession && ! showPiano && timeSelection.active())
             {
-                for (const auto& id : timeSelection.trackIds) report (session.cycleTake (id, timeSelection.start, timeSelection.end, code == juce::KeyPress::downKey));
+                juce::StringArray cycled; // A cycle on a linked track comps its linked tracks too.
+                for (const auto& id : timeSelection.trackIds)
+                    if (const auto t = trackIndex (id); ! cycled.contains (id) && t >= 0)
+                    {
+                        report (session.cycleTake (id, timeSelection.start, timeSelection.end, code == juce::KeyPress::downKey));
+                        cycled.add (id); addLinkedTracks (cycled);
+                    }
                 refresh(); return true;
             }
             if (! shift && ! showSession && ! showPiano && (code == 'E' || code == 'D' || code == 'C' || code == 'X' || code == 'V'))
@@ -999,6 +1005,44 @@ private:
         for (const auto& track : state.tracks) if (multiSelectedTracks.contains (track.id) || (currentTrack() != nullptr && track.id == currentTrack()->id)) ids.add (track.id);
         juce::String group; report (session.groupTracks (ids, group)); multiSelectedTracks.clear(); refresh();
     }
+    // Linked-track editing. The selected tracks, then Link Tracks: with Cmd/Ctrl held, the selection
+    // joins the clicked track's link. Selecting time or a clip on a linked track selects the same on
+    // the tracks linked to it.
+    juce::StringArray selectedTrackIds() const
+    {
+        juce::StringArray ids;
+        for (const auto& track : state.tracks) if (multiSelectedTracks.contains (track.id) || (currentTrack() != nullptr && track.id == currentTrack()->id)) ids.add (track.id);
+        return ids;
+    }
+    void linkSelectedTracks (bool joinClickedLink)
+    {
+        auto ids = selectedTrackIds();
+        if (joinClickedLink && currentTrack() != nullptr && currentTrack()->linkId.isNotEmpty())
+            for (const auto& track : state.tracks) if (track.linkId == currentTrack()->linkId) ids.addIfNotAlreadyThere (track.id);
+        juce::String link; report (session.linkTracks (ids, link)); multiSelectedTracks.clear(); refresh();
+    }
+    void unlinkSelectedTracks() { report (session.unlinkTracks (selectedTrackIds())); multiSelectedTracks.clear(); refresh(); }
+    void addLinkedTracks (juce::StringArray& ids) const
+    {
+        for (int i = 0; i < ids.size(); ++i)
+            if (const auto t = trackIndex (ids[i]); t >= 0 && state.tracks[(size_t) t].linkId.isNotEmpty())
+                for (const auto& other : state.tracks) if (other.linkId == state.tracks[(size_t) t].linkId) ids.addIfNotAlreadyThere (other.id);
+    }
+    void selectLinkedTracks (const juce::String& link)
+    {
+        multiSelectedTracks.clear();
+        for (const auto& track : state.tracks) if (track.linkId == link) multiSelectedTracks.insert (track.id);
+        canvas.repaint(); for (int i = 0; i < canvas.getNumChildComponents(); ++i) canvas.getChildComponent (i)->repaint();
+    }
+    bool linkedToSelectedClip (int t, const Session::ClipInfo& clip) const
+    {
+        const auto* selected = currentTrack();
+        if (selected == nullptr || selected->linkId.isEmpty() || t == selectedTrack || ! juce::isPositiveAndBelow (selectedClip, (int) selected->clips.size())
+            || state.tracks[(size_t) t].linkId != selected->linkId) return false;
+        const auto& chosen = selected->clips[(size_t) selectedClip];
+        return std::abs (clip.start - chosen.start) < .001 && std::abs (clip.start + clip.length - chosen.start - chosen.length) < .001;
+    }
+    juce::String hoveredLink; // The link whose indicator is under the pointer; its tracks are outlined.
     void ungroupSelectedTrack()
     {
         if (const auto* track = currentTrack(); track != nullptr && track->groupId.isNotEmpty()) report (session.ungroupTracks (track->groupId));
@@ -1072,6 +1116,25 @@ private:
             { BrowserCategory::plugins, "Plug-ins" }, { BrowserCategory::samples, "Samples" }, { BrowserCategory::grooves, "Grooves" } }};
     };
 
+    // A linked track's header indicator: hovering outlines the tracks in its link; clicking selects them.
+    class LinkIndicator final : public juce::Component, public juce::SettableTooltipClient
+    {
+    public:
+        std::function<void()> onClick;
+        std::function<void (bool)> onHover;
+        void paint (juce::Graphics& g) override
+        {
+            // Two chain links side by side.
+            const auto r = getLocalBounds().toFloat().reduced (2.0f, 5.0f);
+            const auto w = r.getWidth() * .62f, h = r.getHeight();
+            g.setColour (isMouseOver() ? juce::Colours::white : juce::Colour (0xff141414));
+            g.drawRoundedRectangle ({ r.getX(), r.getY(), w, h }, h / 2, 1.6f);
+            g.drawRoundedRectangle ({ r.getRight() - w, r.getY(), w, h }, h / 2, 1.6f);
+        }
+        void mouseEnter (const juce::MouseEvent&) override { if (onHover) onHover (true); repaint(); }
+        void mouseExit (const juce::MouseEvent&) override { if (onHover) onHover (false); repaint(); }
+        void mouseUp (const juce::MouseEvent& e) override { if (onClick != nullptr && getLocalBounds().contains (e.getPosition())) onClick(); }
+    };
     class TrackRow final : public juce::Component
     {
     public:
@@ -1084,6 +1147,14 @@ private:
             name.setEditable (false, true, false);
             name.onTextChange = [this] { owner.report (owner.session.renameTrack (index, name.getText())); };
             name.setTooltip ("Double-click to rename this track");
+            addChildComponent (link); link.setName ("Linked track");
+            link.setTooltip ("Linked track: edits apply to the tracks linked to it. Point at it to see them; click to select them.");
+            link.onClick = [this] { owner.selectLinkedTracks (linkId); };
+            link.onHover = [this] (bool over)
+            {
+                owner.hoveredLink = over ? linkId : juce::String();
+                if (auto* parent = getParentComponent()) parent->repaint();
+            };
             for (auto* button : { &mute, &solo, &arm })
             {
                 button->setClickingTogglesState (true);
@@ -1209,6 +1280,8 @@ private:
             index = position;
             colour = track.colour;
             midi = track.isMidi; returnTrack = track.isReturn;
+            if (linkId != track.linkId) { linkId = track.linkId; resized(); }
+            link.setVisible (! columnLayout && linkId.isNotEmpty());
             input.setVisible (! returnTrack); monitor.setVisible (! returnTrack); arm.setVisible (! returnTrack);
             input.setName (midi ? "Track MIDI input" : "Track audio input");
             arm.setTooltip (midi ? "Arm track for MIDI recording" : "Arm track for audio recording");
@@ -1410,6 +1483,7 @@ private:
             const bool selected = owner.selectedTrack == index || owner.multiSelectedTracks.contains (trackId);
             g.setColour (selected ? colour.brighter (0.2f) : colour); g.fillRect (0, 0, getWidth() - 8, 24);
             if (owner.multiSelectedTracks.contains (trackId)) { g.setColour (orange); g.drawRect (0, 0, getWidth() - 8, getHeight(), 2); }
+            else if (linkId.isNotEmpty() && linkId == owner.hoveredLink) { g.setColour (ink); g.drawRect (0, 0, getWidth() - 8, getHeight(), 1); }
             g.setColour (muted); g.setFont (font (9.0f, true));
             if (owner.automationMode) { g.drawText ("DEVICE", 10, 26, 44, 19, juce::Justification::centredLeft); g.drawText ("CONTROL", 10, 49, 44, 20, juce::Justification::centredLeft); }
             else if (returnTrack) g.drawText ("SEND INPUT", 10, 26, 64, 19, juce::Justification::centredLeft);
@@ -1448,7 +1522,8 @@ private:
                 return;
             }
             const int w = getWidth() - 8, half = (w - 40) / 2;
-            name.setBounds (6, 2, w - 92, 20);
+            name.setBounds (6, 2, w - (linkId.isNotEmpty() ? 112 : 92), 20);
+            link.setBounds (w - 106, 3, 20, 18);
             mute.setBounds (w - 84, 3, 26, 18); solo.setBounds (w - 56, 3, 26, 18); arm.setBounds (w - 28, 3, 26, 18);
             input.setBounds (36, 27, half, 18); monitor.setBounds (40 + half, 27, w - 44 - half, 18);
             sendMode.setBounds (76, 27, w - 80, 18);
@@ -1475,7 +1550,9 @@ private:
         juce::Colour colour;
         float peakL = 0, peakR = 0;
         bool midi = false, columnLayout = false, returnTrack = false;
+        juce::String linkId;
         juce::Label name;
+        LinkIndicator link;
         juce::TextButton mute { "M" }, solo { "S" }, arm { "R" };
         juce::Slider gain, pan, delay;
         juce::ComboBox input, monitor, sendMode, automationDevice, automationControl, output;
@@ -1905,7 +1982,7 @@ private:
                     const auto& clip = track.clips[(size_t) c];
                     auto bounds = clipBounds (clip, t);
                     if (bounds.getRight() < 0 || bounds.getX() > tw) continue;
-                    const bool selected = (t == owner.selectedTrack && c == owner.selectedClip) || owner.isExtraMidiClip (clip.id);
+                    const bool selected = (t == owner.selectedTrack && c == owner.selectedClip) || owner.isExtraMidiClip (clip.id) || owner.linkedToSelectedClip (t, clip);
                     auto colour = track.colour;
                     if (colour.isTransparent()) colour = juce::Colour (0xff76b5bf);
                     if (!clip.active) colour=muted;
@@ -2325,6 +2402,7 @@ private:
             const int last = juce::jlimit (0, count - 1, juce::jmax (selectionAnchorTrack, track < 0 ? count - 1 : track));
             Impl::TimeSelection next { juce::jmin (selectionAnchorTime, at), juce::jmax (selectionAnchorTime, at), {} };
             for (int t = first; t <= last; ++t) next.trackIds.add (owner.state.tracks[(size_t) t].id);
+            owner.addLinkedTracks (next.trackIds);
             owner.timeSelection = next; owner.session.setInsertMarker (next.start); repaint(); owner.ruler.repaint();
         }
         void mouseMove (const juce::MouseEvent& e) override
@@ -6833,12 +6911,21 @@ private:
         menu.addSeparator();
         menu.addItem (4, info != nullptr && info->frozen ? "Unfreeze Track" : "Freeze Track", info != nullptr && ! info->isReturn && (info->frozen || ! info->clips.empty()));
         menu.addItem (5, "Flatten", info != nullptr && info->frozen);
-        menu.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), id] (int result)
+        // Link Tracks links the selected tracks; with Cmd/Ctrl held, they join this track's link.
+        const auto selection = selectedTrackIds();
+        const bool join = juce::ModifierKeys::getCurrentModifiers().isCommandDown() && info != nullptr && info->linkId.isNotEmpty();
+        const bool anyLinked = std::any_of (state.tracks.begin(), state.tracks.end(), [&] (const auto& t) { return selection.contains (t.id) && t.linkId.isNotEmpty(); });
+        menu.addSeparator();
+        menu.addItem (6, "Link Tracks", info != nullptr && ! info->isReturn && (selection.size() >= 2 || (join && ! selection.isEmpty())));
+        menu.addItem (7, selection.size() > 1 ? "Unlink Tracks" : "Unlink Track", anyLinked);
+        menu.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), id, join] (int result)
         {
             if (safe == nullptr) return;
             if (result == 1 || result == 2) safe->reorderTrack (id, result == 1 ? -1 : 1);
             else if (result == 3) safe->duplicateTrackFromUI (id);
             else if (result == 4 || result == 5) safe->freezeTrackFromUI (id, result == 5);
+            else if (result == 6) safe->linkSelectedTracks (join);
+            else if (result == 7) safe->unlinkSelectedTracks();
         });
     }
     void selectTrack (int track)
@@ -9631,6 +9718,36 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         session.undo(); session.undo(); session.undo(); refresh();
         check (state.tracks[0].plugins.empty(), "undo removes the inline test device");
         selectTrack (instrumentTrack); refresh();
+    }
+    {
+        // Linked tracks: Link Tracks links the selected headers, which show the indicator; clicking it
+        // selects the link, time selected on one track covers the other, and Unlink Tracks ends it.
+        showArrangementView(); refresh();
+        const auto firstId = state.tracks[0].id, secondId = state.tracks[1].id;
+        const auto now = juce::Time::getCurrentTime();
+        auto headerClick = [&] (int index, juce::ModifierKeys mods)
+        {
+            auto* row = canvas.getChildComponent (index);
+            row->mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { 20.0f, 30.0f }, mods, 1.0f, 0, 0, 0, 0, row, row, now, { 20.0f, 30.0f }, now, 1, false));
+        };
+        check (findNamed (canvas, "Linked track") == nullptr || ! findNamed (canvas, "Linked track")->isVisible(), "unlinked headers show no link indicator");
+        headerClick (0, {}); headerClick (1, juce::ModifierKeys (juce::ModifierKeys::shiftModifier));
+        linkSelectedTracks (false);
+        check (state.tracks[0].linkId.isNotEmpty() && state.tracks[0].linkId == state.tracks[1].linkId && multiSelectedTracks.empty(), "Link Tracks links the selected tracks");
+        auto* indicator = dynamic_cast<LinkIndicator*> (findNamed (canvas, "Linked track"));
+        check (indicator != nullptr && indicator->isVisible() && indicator->getWidth() > 0, "a linked header shows the link indicator");
+        indicator->onHover (true);
+        check (hoveredLink == state.tracks[0].linkId, "pointing at it marks the link's tracks");
+        indicator->onHover (false);
+        indicator->onClick();
+        check (multiSelectedTracks.contains (firstId) && multiSelectedTracks.contains (secondId), "clicking it selects the linked tracks");
+        juce::StringArray time { firstId }; addLinkedTracks (time);
+        check (time.contains (secondId), "time selected on one linked track covers the other");
+        selectTrack (0); multiSelectedTracks.clear(); multiSelectedTracks.insert (secondId);
+        unlinkSelectedTracks();
+        indicator = dynamic_cast<LinkIndicator*> (findNamed (canvas, "Linked track"));
+        check (state.tracks[0].linkId.isEmpty() && state.tracks[1].linkId.isEmpty() && (indicator == nullptr || ! indicator->isVisible()), "Unlink Tracks ends the link");
+        selectTrack (0);
     }
     {
         // Groups: Shift-click extends the track selection, Cmd/Ctrl+G groups it, the header folds it.

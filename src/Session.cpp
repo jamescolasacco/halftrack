@@ -60,6 +60,7 @@ Session::LaunchSettings clipLaunchSettings (const juce::ValueTree& state)
 const juce::Identifier midiNoteIDProperty { "halftrackNoteId" };
 const juce::Identifier noteChanceProperty { "halftrackChance" }, noteVelocityRangeProperty { "halftrackVelocityRange" };
 const juce::Identifier returnProperty { "halftrackReturn" };
+const juce::Identifier linkProperty { "halftrackLink" }; // Linked-track editing: tracks with the same value edit together.
 const juce::Identifier returnBusProperty { "halftrackReturnBus" };
 const juce::Identifier returnModeProperty { "halftrackReturnSendMode" };
 const juce::Identifier sendReturnProperty { "halftrackSendReturnID" };
@@ -961,6 +962,18 @@ Result validateTrackDelays (const juce::ValueTree& state)
             return Result::fail ("The project contains an invalid track delay.");
     }
     for (const auto& child : state) if (auto result = validateTrackDelays (child); result.failed()) return result;
+    return Result::ok();
+}
+// A link is a short identifier without spaces, on an audio or MIDI track.
+Result validateTrackLinks (const juce::ValueTree& state)
+{
+    if (state.hasProperty (linkProperty))
+    {
+        const auto link = state[linkProperty].toString();
+        if (! state.hasType (te::IDs::TRACK) || static_cast<bool> (state.getProperty (returnProperty, false)) || link.isEmpty() || link.length() > 64 || link.containsAnyOf (" \t\r\n"))
+            return Result::fail ("The project contains an invalid track link.");
+    }
+    for (const auto& child : state) if (auto result = validateTrackLinks (child); result.failed()) return result;
     return Result::ok();
 }
 Result validateLocators (const juce::ValueTree& state)
@@ -3006,6 +3019,94 @@ struct Session::Impl
                 if (lane[te::IDs::id].toString() == id) return { t, lane };
         return { nullptr, {} };
     }
+    // Linked-track editing: the other tracks in a track's link; the clips on them that start and
+    // end within 1 ms of an Arrangement clip; track ids with their linked tracks added; and the
+    // lane at a position on a track.
+    std::vector<te::AudioTrack*> linkedTracks (const te::AudioTrack& t) const
+    {
+        std::vector<te::AudioTrack*> result;
+        const auto link = t.state[linkProperty].toString();
+        if (link.isNotEmpty())
+            for (auto* other : te::getAudioTracks (*edit))
+                if (other != &t && other->state[linkProperty].toString() == link) result.push_back (other);
+        return result;
+    }
+    std::vector<te::Clip*> linkedClips (te::Clip& clip) const
+    {
+        std::vector<te::Clip*> result;
+        auto* t = dynamic_cast<te::AudioTrack*> (clip.getClipTrack());
+        if (t == nullptr || clip.getClipSlot() != nullptr) return result;
+        const auto p = clip.getPosition();
+        const auto near = [] (te::TimePosition a, te::TimePosition b) { return std::abs ((a - b).inSeconds()) < .001; };
+        for (auto* other : linkedTracks (*t))
+            for (auto* c : other->getClips())
+                if (near (c->getPosition().getStart(), p.getStart()) && near (c->getPosition().getEnd(), p.getEnd())) result.push_back (c);
+        return result;
+    }
+    juce::StringArray withLinkedTracks (const juce::StringArray& ids) const
+    {
+        auto result = ids;
+        for (const auto& id : ids)
+            if (auto* t = track (id)) for (auto* other : linkedTracks (*t)) result.addIfNotAlreadyThere (other->itemID.toString());
+        return result;
+    }
+    juce::ValueTree laneAt (te::AudioTrack& t, int position) { return takeLanes (t, false).getChild (position); }
+    // The clips linked to one moving in time by an offset, or why one of them cannot move.
+    Result linkedMoves (te::Clip& clip, double offset, std::vector<te::Clip*>& linked) const
+    {
+        linked = linkedClips (clip);
+        for (auto* other : linked)
+        {
+            if (auto frozen = unfrozen (other->getClipTrack()); frozen.failed()) return frozen;
+            const auto p = other->getPosition();
+            if (p.getStart().inSeconds() + offset < 0 || p.getEnd().inSeconds() + offset > te::Edit::maximumLength)
+                return Result::fail ("\"" + other->getName() + "\" on a linked track would leave the timeline.");
+        }
+        return Result::ok();
+    }
+    static void moveLinked (const std::vector<te::Clip*>& linked, double offset)
+    {
+        for (auto* other : linked) other->setStart (other->getPosition().getStart() + te::TimeDuration::fromSeconds (offset), false, true);
+    }
+    // Links the given ones left that now have one track end.
+    void endSingleLinks (const juce::StringArray& links)
+    {
+        for (const auto& link : links)
+        {
+            if (link.isEmpty()) continue;
+            std::vector<te::AudioTrack*> members;
+            for (auto* t : te::getAudioTracks (*edit)) if (t->state[linkProperty].toString() == link) members.push_back (t);
+            if (members.size() == 1) members.front()->state.removeProperty (linkProperty, &edit->getUndoManager());
+        }
+    }
+    // Comping: a lane's material in a range replaces the main lane's there.
+    void compLane (te::AudioTrack& t, const juce::ValueTree& lane, double startSeconds, double endSeconds)
+    {
+        auto* undo = &edit->getUndoManager();
+        const auto from = te::TimePosition::fromSeconds (startSeconds), to = te::TimePosition::fromSeconds (endSeconds);
+        for (const auto at : { from, to }) splitTrackAt (t, at, undo);
+        const auto existing = t.getClips(); // Removing clips changes the track's list.
+        for (auto* c : existing)
+            if (c->getPosition().getStart() >= from - te::TimeDuration::fromSeconds (1e-6) && c->getPosition().getEnd() <= to + te::TimeDuration::fromSeconds (1e-6)) c->removeFromParent();
+        for (auto clip : lane)
+        {
+            const double start = clip[te::IDs::start], end = start + static_cast<double> (clip[te::IDs::length]);
+            const auto a = std::max (start, startSeconds), b = std::min (end, endSeconds);
+            if (b <= a + 1e-6) continue;
+            auto copy = freshClipCopy (clip);
+            copy.setProperty (te::IDs::start, a, nullptr);
+            copy.setProperty (te::IDs::length, b - a, nullptr);
+            copy.setProperty (te::IDs::offset, static_cast<double> (clip[te::IDs::offset]) + (a - start), nullptr);
+            copy.setProperty (compSourceProperty, lane[te::IDs::id].toString(), nullptr);
+            t.insertClipWithState (copy);
+        }
+    }
+    static bool laneHasMaterial (const juce::ValueTree& lane, double startSeconds, double endSeconds)
+    {
+        for (auto clip : lane)
+            if (static_cast<double> (clip[te::IDs::start]) < endSeconds && static_cast<double> (clip[te::IDs::start]) + static_cast<double> (clip[te::IDs::length]) > startSeconds) return true;
+        return false;
+    }
     juce::ValueTree newTakeLane (te::AudioTrack& t)
     {
         auto lanes = takeLanes (t, true);
@@ -3601,10 +3702,13 @@ Session::Snapshot Session::snapshot() const
     s.launchQuantisation = quantisation == te::LaunchQType::none ? LaunchQuantisation::none
         : quantisation == te::LaunchQType::quarter ? LaunchQuantisation::beat : LaunchQuantisation::bar;
     int index = 0;
+    std::map<String, int> linkSizes;
+    for (auto* t : te::getAudioTracks (e)) if (const auto link = t->state[linkProperty].toString(); link.isNotEmpty()) ++linkSizes[link];
     for (auto* t : te::getAudioTracks (e))
     {
         TrackInfo info;
         info.id = t->itemID.toString(); info.name = t->getName(); info.colour = t->getColour();
+        if (const auto link = t->state[linkProperty].toString(); link.isNotEmpty() && linkSizes[link] > 1) info.linkId = link;
         info.mute = t->isMuted (false); info.solo = t->isSolo (false);
         info.isMidi = t->state.getProperty (midiTrackProperty, false);
         info.isReturn = isReturn (*t);
@@ -3817,6 +3921,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateFollowActions (state); result.failed()) return result;
     if (auto result = validateLocators (state); result.failed()) return result;
     if (auto result = validateTrackDelays (state); result.failed()) return result;
+    if (auto result = validateTrackLinks (state); result.failed()) return result;
     if (auto result = validateClipScales (state); result.failed()) return result;
     if (auto result = validateGroovePool (state); result.failed()) return result;
     if (auto result = validateMidiMappings (state); result.failed()) return result;
@@ -4839,6 +4944,7 @@ Result Session::insertTakeLane (const String& trackId, String& laneId)
     if (track == nullptr || isReturn (*track)) return Result::fail ("Choose an audio or MIDI track for the take lane.");
     impl->transaction ("Insert take lane");
     laneId = impl->newTakeLane (*track)[te::IDs::id].toString();
+    for (auto* other : impl->linkedTracks (*track)) impl->newTakeLane (*other);
     impl->changed(); return Result::ok();
 }
 Result Session::removeTakeLane (const String& laneId)
@@ -4846,8 +4952,11 @@ Result Session::removeTakeLane (const String& laneId)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto [track, lane] = impl->takeLane (laneId);
     if (track == nullptr) return Result::fail ("Take lane not found.");
+    const int position = lane.getParent().indexOf (lane);
+    std::vector<juce::ValueTree> lanes { lane };
+    for (auto* other : impl->linkedTracks (*track)) if (auto linked = impl->laneAt (*other, position); linked.isValid()) lanes.push_back (linked);
     impl->transaction ("Delete take lane");
-    lane.getParent().removeChild (lane, &impl->edit->getUndoManager());
+    for (auto& l : lanes) l.getParent().removeChild (l, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
 Result Session::renameTakeLane (const String& laneId, const String& name)
@@ -4855,9 +4964,14 @@ Result Session::renameTakeLane (const String& laneId, const String& name)
     auto [track, lane] = impl->takeLane (laneId);
     if (track == nullptr) return Result::fail ("Take lane not found.");
     if (name.trim().isEmpty()) return Result::fail ("Enter a name for the take lane.");
-    if (lane[te::IDs::name].toString() == name.trim()) return Result::ok();
+    std::vector<juce::ValueTree> lanes;
+    if (lane[te::IDs::name].toString() != name.trim()) lanes.push_back (lane);
+    const int position = lane.getParent().indexOf (lane);
+    for (auto* other : impl->linkedTracks (*track))
+        if (auto linked = impl->laneAt (*other, position); linked.isValid() && linked[te::IDs::name].toString() != name.trim()) lanes.push_back (linked);
+    if (lanes.empty()) return Result::ok();
     impl->transaction ("Rename take lane");
-    lane.setProperty (te::IDs::name, name.trim(), &impl->edit->getUndoManager());
+    for (auto& l : lanes) l.setProperty (te::IDs::name, name.trim(), &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
 Result Session::compTake (const String& laneId, double startSeconds, double endSeconds)
@@ -4869,27 +4983,19 @@ Result Session::compTake (const String& laneId, double startSeconds, double endS
     if (auto frozen = impl->unfrozen (track); frozen.failed()) return frozen;
     if (! std::isfinite (startSeconds) || ! std::isfinite (endSeconds) || endSeconds <= startSeconds || startSeconds < 0)
         return Result::fail ("Select a time range in the take lane.");
-    const auto from = te::TimePosition::fromSeconds (startSeconds), to = te::TimePosition::fromSeconds (endSeconds);
-    for (const auto at : { from, to }) if (auto r = splittableAt (*track, at); r.failed()) return r;
+    // Linked tracks comp the lane at the same position, where it holds material in the range.
+    std::vector<std::pair<te::AudioTrack*, juce::ValueTree>> comps { { track, lane } };
+    const int position = lane.getParent().indexOf (lane);
+    for (auto* other : impl->linkedTracks (*track))
+        if (auto linked = impl->laneAt (*other, position); linked.isValid() && Impl::laneHasMaterial (linked, startSeconds, endSeconds))
+        {
+            if (auto frozen = impl->unfrozen (other); frozen.failed()) return frozen;
+            comps.push_back ({ other, linked });
+        }
+    for (auto& [t, l] : comps)
+        for (const auto seconds : { startSeconds, endSeconds }) if (auto r = splittableAt (*t, te::TimePosition::fromSeconds (seconds)); r.failed()) return r;
     impl->transaction ("Comp take");
-    auto* undo = &impl->edit->getUndoManager();
-    // The main lane's material in the range gives way to the take's.
-    for (const auto at : { from, to }) splitTrackAt (*track, at, undo);
-    const auto existing = track->getClips(); // Removing clips changes the track's list.
-    for (auto* c : existing)
-        if (c->getPosition().getStart() >= from - te::TimeDuration::fromSeconds (1e-6) && c->getPosition().getEnd() <= to + te::TimeDuration::fromSeconds (1e-6)) c->removeFromParent();
-    for (auto clip : lane)
-    {
-        const double start = clip[te::IDs::start], end = start + static_cast<double> (clip[te::IDs::length]);
-        const auto a = std::max (start, startSeconds), b = std::min (end, endSeconds);
-        if (b <= a + 1e-6) continue;
-        auto copy = impl->freshClipCopy (clip);
-        copy.setProperty (te::IDs::start, a, nullptr);
-        copy.setProperty (te::IDs::length, b - a, nullptr);
-        copy.setProperty (te::IDs::offset, static_cast<double> (clip[te::IDs::offset]) + (a - start), nullptr);
-        copy.setProperty (compSourceProperty, laneId, nullptr);
-        track->insertClipWithState (copy);
-    }
+    for (auto& [t, l] : comps) impl->compLane (*t, l, startSeconds, endSeconds);
     impl->changed(); return Result::ok();
 }
 Result Session::cycleTake (const String& trackId, double startSeconds, double endSeconds, bool next)
@@ -6126,6 +6232,47 @@ Result Session::showInstrumentEditor (int trackIndex)
     if (window == nullptr || ! window->isVisible() || window->getContentComponent() == nullptr) return Result::fail ("This instrument has no available editor.");
     return Result::ok();
 }
+Result Session::linkTracks (const juce::StringArray& ids, String& linkId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    std::vector<te::AudioTrack*> tracks;
+    for (const auto& id : ids)
+    {
+        auto* t = impl->track (id);
+        if (t == nullptr) return Result::fail ("A selected track no longer exists.");
+        if (isReturn (*t)) return Result::fail ("Return tracks cannot be linked.");
+        if (std::find (tracks.begin(), tracks.end(), t) == tracks.end()) tracks.push_back (t);
+    }
+    if (tracks.size() < 2) return Result::fail ("Select two or more audio or MIDI tracks to link.");
+    // Already exactly these tracks' link: nothing changes.
+    const auto current = tracks.front()->state[linkProperty].toString();
+    if (current.isNotEmpty() && std::all_of (tracks.begin(), tracks.end(), [&] (auto* t) { return t->state[linkProperty].toString() == current; })
+        && impl->linkedTracks (*tracks.front()).size() + 1 == tracks.size())
+    { linkId = current; return Result::ok(); }
+    impl->transaction ("Link tracks");
+    linkId = juce::Uuid().toString();
+    juce::StringArray left;
+    for (auto* t : tracks) { left.addIfNotAlreadyThere (t->state[linkProperty].toString()); t->state.setProperty (linkProperty, linkId, &impl->edit->getUndoManager()); }
+    impl->endSingleLinks (left);
+    impl->changed(); return Result::ok();
+}
+Result Session::unlinkTracks (const juce::StringArray& ids)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    std::vector<te::AudioTrack*> tracks;
+    for (const auto& id : ids)
+    {
+        auto* t = impl->track (id);
+        if (t == nullptr) return Result::fail ("A selected track no longer exists.");
+        if (t->state.hasProperty (linkProperty)) tracks.push_back (t);
+    }
+    if (tracks.empty()) return Result::ok();
+    impl->transaction ("Unlink tracks");
+    juce::StringArray left;
+    for (auto* t : tracks) { left.addIfNotAlreadyThere (t->state[linkProperty].toString()); t->state.removeProperty (linkProperty, &impl->edit->getUndoManager()); }
+    impl->endSingleLinks (left);
+    impl->changed(); return Result::ok();
+}
 Result Session::groupTracks (const juce::StringArray& ids, String& groupId)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -6257,6 +6404,7 @@ Result Session::duplicateTrack (const String& id, String& duplicateId)
                 parameter.updateFromAutomationSources (impl->edit->getTransport().getPosition());
             }
     renewMidiNoteIDs (track->state, undo);
+    track->state.removeProperty (linkProperty, undo); // A duplicate starts unlinked.
     track->setName (source->getName() + " copy");
     // Input target assignments live outside this copied track, so the new ID has
     // no input/arm state. Runtime Session ownership must not silence its Arrangement.
@@ -6553,6 +6701,7 @@ Result Session::setAudioClipSettings (const String& id, const AudioClipSettings&
 {
     if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    impl->endAudition(); // No pointer may refer to an audition's copies.
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
     if (! validAudioSettings (settings, clip->getPosition().getLength().inSeconds()))
         return Result::fail ("Clip gain, fades or transposition are outside their supported range. Fades must fit inside the clip.");
@@ -6564,21 +6713,45 @@ Result Session::setAudioClipSettings (const String& id, const AudioClipSettings&
     if (clip->getClipSlot() && (previous.fadeInSeconds != settings.fadeInSeconds || previous.fadeOutSeconds != settings.fadeOutSeconds
         || previous.fadeInCurve != settings.fadeInCurve || previous.fadeOutCurve != settings.fadeOutCurve))
         return Result::fail ("Manual fade editing is available for Arrangement clips.");
-    if (previous == settings && ! clip->getAutoCrossfade()) return Result::ok();
+    // Linked audio clips take the fade changes: a fade-in on those starting with this clip, a
+    // fade-out on those whose fade-out starts where this one's did. Their gain and pitch stay.
+    const bool fadeIn = previous.fadeInSeconds != settings.fadeInSeconds || previous.fadeInCurve != settings.fadeInCurve;
+    const bool fadeOut = previous.fadeOutSeconds != settings.fadeOutSeconds || previous.fadeOutCurve != settings.fadeOutCurve;
+    std::vector<std::pair<te::WaveAudioClip*, AudioClipSettings>> linked;
+    if (fadeIn || fadeOut)
+        for (auto* other : impl->linkedClips (*clip))
+            if (auto* wave = dynamic_cast<te::WaveAudioClip*> (other))
+            {
+                const auto own = audioSettings (*wave);
+                auto next = own;
+                if (fadeIn) { next.fadeInSeconds = settings.fadeInSeconds; next.fadeInCurve = settings.fadeInCurve; }
+                if (fadeOut && std::abs (own.fadeOutSeconds - previous.fadeOutSeconds) < .001) { next.fadeOutSeconds = settings.fadeOutSeconds; next.fadeOutCurve = settings.fadeOutCurve; }
+                if (next == own) continue;
+                if (auto frozen = impl->unfrozen (wave->getClipTrack()); frozen.failed()) return frozen;
+                if (! validAudioSettings (next, wave->getPosition().getLength().inSeconds()))
+                    return Result::fail ("The fades do not fit \"" + wave->getName() + "\" on a linked track.");
+                linked.push_back ({ wave, next });
+            }
+    if (previous == settings && ! clip->getAutoCrossfade() && linked.empty()) return Result::ok();
     impl->transaction ("Audio clip gain and fades");
-    clip->setAutoCrossfade (false); clip->setGainDB (settings.gainDb);
-    // Clear first so the engine's one-edge setters cannot rescale the other edge.
-    clip->setFadeIn ({}); clip->setFadeOut (te::TimeDuration::fromSeconds (settings.fadeOutSeconds));
-    clip->setFadeIn (te::TimeDuration::fromSeconds (settings.fadeInSeconds));
-    clip->setFadeInType (static_cast<te::AudioFadeCurve::Type> (settings.fadeInCurve));
-    clip->setFadeOutType (static_cast<te::AudioFadeCurve::Type> (settings.fadeOutCurve));
-    if (previous.transposeSemitones != settings.transposeSemitones || previous.detuneCents != settings.detuneCents)
+    const auto apply = [this] (te::WaveAudioClip& target, const AudioClipSettings& before, const AudioClipSettings& after)
     {
-        auto* undo = &impl->edit->getUndoManager();
-        if (settings.transposeSemitones != 0) clip->state.setProperty (transposeProperty, settings.transposeSemitones, undo); else clip->state.removeProperty (transposeProperty, undo);
-        if (settings.detuneCents != 0) clip->state.setProperty (detuneProperty, settings.detuneCents, undo); else clip->state.removeProperty (detuneProperty, undo);
-        clip->setPitchChange ((float) settings.transposeSemitones + settings.detuneCents / 100.0f);
-    }
+        target.setAutoCrossfade (false); target.setGainDB (after.gainDb);
+        // Clear first so the engine's one-edge setters cannot rescale the other edge.
+        target.setFadeIn ({}); target.setFadeOut (te::TimeDuration::fromSeconds (after.fadeOutSeconds));
+        target.setFadeIn (te::TimeDuration::fromSeconds (after.fadeInSeconds));
+        target.setFadeInType (static_cast<te::AudioFadeCurve::Type> (after.fadeInCurve));
+        target.setFadeOutType (static_cast<te::AudioFadeCurve::Type> (after.fadeOutCurve));
+        if (before.transposeSemitones != after.transposeSemitones || before.detuneCents != after.detuneCents)
+        {
+            auto* undo = &impl->edit->getUndoManager();
+            if (after.transposeSemitones != 0) target.state.setProperty (transposeProperty, after.transposeSemitones, undo); else target.state.removeProperty (transposeProperty, undo);
+            if (after.detuneCents != 0) target.state.setProperty (detuneProperty, after.detuneCents, undo); else target.state.removeProperty (detuneProperty, undo);
+            target.setPitchChange ((float) after.transposeSemitones + after.detuneCents / 100.0f);
+        }
+    };
+    apply (*clip, previous, settings);
+    for (auto& [wave, next] : linked) apply (*wave, audioSettings (*wave), next);
     impl->changed(); return Result::ok();
 }
 Result Session::setAudioClipReversed (const String& id, bool reversed)
@@ -6604,6 +6777,7 @@ Result Session::setAudioClipRange (const String& id, double start, double length
     if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before trimming clips.");
+    impl->endAudition();
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
     if (! canEditAudioRange (*clip)) return Result::fail ("Range editing requires an unwarped, unlooped arrangement audio clip.");
     const auto sourceLength = clip->getSourceLength().inSeconds();
@@ -6613,23 +6787,43 @@ Result Session::setAudioClipRange (const String& id, double start, double length
         return Result::fail ("The range must fit the source and existing fades, with at least 1 ms of audio.");
     const auto p = clip->getPosition();
     if (p.getStart().inSeconds() == start && p.getLength().inSeconds() == length && p.offset.inSeconds() == offset) return Result::ok();
+    // Linked audio clips move each edge and their source offset by the same amounts.
+    const auto startShift = start - p.getStart().inSeconds(), endShift = start + length - p.getEnd().inSeconds(), offsetShift = offset - p.offset.inSeconds();
+    std::vector<std::pair<te::WaveAudioClip*, te::ClipPosition>> linked;
+    for (auto* other : impl->linkedClips (*clip))
+        if (auto* wave = dynamic_cast<te::WaveAudioClip*> (other))
+        {
+            const auto q = wave->getPosition();
+            const auto from = q.getStart().inSeconds() + startShift, span = q.getLength().inSeconds() + endShift - startShift, skip = q.offset.inSeconds() + offsetShift;
+            if (auto frozen = impl->unfrozen (wave->getClipTrack()); frozen.failed()) return frozen;
+            if (! canEditAudioRange (*wave) || from < 0 || span < .001 || from + span > te::Edit::maximumLength || skip < 0
+                || skip + span > wave->getSourceLength().inSeconds() + 1e-9 || ! validAudioSettings (audioSettings (*wave), span))
+                return Result::fail ("\"" + wave->getName() + "\" on a linked track cannot be trimmed there.");
+            linked.push_back ({ wave, { { te::TimePosition::fromSeconds (from), te::TimePosition::fromSeconds (from + span) }, te::TimeDuration::fromSeconds (skip) } });
+        }
     impl->transaction ("Trim audio clip");
     clip->setPosition ({ { te::TimePosition::fromSeconds (start), te::TimePosition::fromSeconds (start+length) }, te::TimeDuration::fromSeconds (offset) });
+    for (auto& [wave, position] : linked) wave->setPosition (position);
     impl->changed(); return Result::ok();
 }
 Result Session::splitAudioClip (const String& id, double at, String& rightId)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before splitting clips.");
+    impl->endAudition();
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
     const auto p = clip->getPosition(); const auto s = audioSettings (*clip);
     const auto left = at-p.getStart().inSeconds(), right = p.getEnd().inSeconds()-at;
     if (! canEditAudioRange (*clip) || ! std::isfinite (at) || left < .002 || right < .002
         || left < s.fadeInSeconds || right < s.fadeOutSeconds)
         return Result::fail ("Split inside an unwarped arrangement clip, outside its fades, leaving at least 2 ms on each side.");
+    const auto when = te::TimePosition::fromSeconds (at);
+    const auto linked = impl->linkedTracks (*dynamic_cast<te::AudioTrack*> (clip->getClipTrack()));
+    for (auto* other : linked) if (auto r = splittableAt (*other, when); r.failed()) return r;
     impl->transaction ("Split audio clip");
-    auto* second = clip->getClipTrack()->splitClip (*clip, te::TimePosition::fromSeconds (at));
+    auto* second = clip->getClipTrack()->splitClip (*clip, when);
     if (! second) return Result::fail ("The audio clip could not be split.");
+    for (auto* other : linked) splitTrackAt (*other, when, &impl->edit->getUndoManager());
     rightId = second->itemID.toString(); impl->changed(); return Result::ok();
 }
 // Time edits across the whole arrangement. Every automation curve moves with the material.
@@ -6810,13 +7004,18 @@ Result Session::splitMidiClip (const String& id, double at, String& rightId)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before splitting clips.");
+    impl->endAudition();
     auto* clip = impl->midiClip (id); if (! clip) return Result::fail ("MIDI clip not found.");
     if (auto frozen = impl->unfrozen (clip->getClipTrack()); frozen.failed()) return frozen;
     if (! std::isfinite (at) || ! canSplitMidiAt (*clip, te::TimePosition::fromSeconds (at)))
         return Result::fail ("Split inside an unlooped Arrangement MIDI clip, away from its ends.");
+    const auto when = te::TimePosition::fromSeconds (at);
+    const auto linked = impl->linkedTracks (*dynamic_cast<te::AudioTrack*> (clip->getClipTrack()));
+    for (auto* other : linked) if (auto r = splittableAt (*other, when); r.failed()) return r;
     impl->transaction ("Split MIDI clip");
-    auto* right = splitMidiClipAt (*clip, te::TimePosition::fromSeconds (at), &impl->edit->getUndoManager());
+    auto* right = splitMidiClipAt (*clip, when, &impl->edit->getUndoManager());
     if (! right) return Result::fail ("The MIDI clip could not be split.");
+    for (auto* other : linked) splitTrackAt (*other, when, &impl->edit->getUndoManager());
     rightId = right->itemID.toString(); impl->changed(); return Result::ok();
 }
 namespace
@@ -6842,7 +7041,7 @@ Result Session::splitRange (const juce::StringArray& trackIds, double start, dou
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before splitting clips.");
     juce::Array<te::AudioTrack*> tracks;
-    if (auto r = rangeTracks (*impl->edit, trackIds, start, end, tracks); r.failed()) return r;
+    if (auto r = rangeTracks (*impl->edit, impl->withLinkedTracks (trackIds), start, end, tracks); r.failed()) return r;
     const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (end);
     for (auto* t : tracks) for (const auto at : { from, to }) if (auto r = splittableAt (*t, at); r.failed()) return r;
     impl->transaction ("Split");
@@ -6854,7 +7053,7 @@ Result Session::deleteRange (const juce::StringArray& trackIds, double start, do
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before deleting clips.");
     juce::Array<te::AudioTrack*> tracks;
-    if (auto r = rangeTracks (*impl->edit, trackIds, start, end, tracks); r.failed()) return r;
+    if (auto r = rangeTracks (*impl->edit, impl->withLinkedTracks (trackIds), start, end, tracks); r.failed()) return r;
     const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (end);
     for (auto* t : tracks)
     {
@@ -6881,7 +7080,7 @@ Result Session::duplicateRange (const juce::StringArray& trackIds, double start,
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before duplicating clips.");
     juce::Array<te::AudioTrack*> tracks;
-    if (auto r = rangeTracks (*impl->edit, trackIds, start, end, tracks); r.failed()) return r;
+    if (auto r = rangeTracks (*impl->edit, impl->withLinkedTracks (trackIds), start, end, tracks); r.failed()) return r;
     const auto length = end - start;
     if (end + length > te::Edit::maximumLength) return Result::fail ("The copy must fit inside the 48-hour timeline.");
     const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (end), after = te::TimePosition::fromSeconds (end + length);
@@ -6927,7 +7126,7 @@ Result Session::consolidateRange (const juce::StringArray& trackIds, double star
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before consolidating clips.");
     juce::Array<te::AudioTrack*> tracks;
-    if (auto r = rangeTracks (*impl->edit, trackIds, start, end, tracks); r.failed()) return r;
+    if (auto r = rangeTracks (*impl->edit, impl->withLinkedTracks (trackIds), start, end, tracks); r.failed()) return r;
     const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (end);
     const te::TimeRange range (from, to);
     juce::Array<te::AudioTrack*> work;
@@ -7312,6 +7511,7 @@ Result Session::moveMidiClip (const String& id, const String& destinationId, dou
     if (auto frozen = impl->unfrozen (impl->trackOfClip (id), impl->track (destinationId)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before moving MIDI clips.");
+    impl->endAudition();
     auto* clip = impl->midiClip (id); auto* destination = impl->track (destinationId);
     if (! clip || clip->getClipSlot() || clip->isGrouped()) return Result::fail ("Move an ungrouped Arrangement MIDI clip.");
     if (! destination || isReturn (*destination) || ! static_cast<bool> (destination->state.getProperty (midiTrackProperty)))
@@ -7321,10 +7521,15 @@ Result Session::moveMidiClip (const String& id, const String& destinationId, dou
     if (! std::isfinite (start) || start < 0 || start + clip->getPosition().getLength().inSeconds() > te::Edit::maximumLength)
         return Result::fail ("The complete clip must fit inside the 48-hour timeline.");
     if (clip->getClipTrack() == destination && clip->getPosition().getStart().inSeconds() == start) return Result::ok();
+    // Moving in time on a linked track moves the linked clips too.
+    const auto offset = start - clip->getPosition().getStart().inSeconds();
+    std::vector<te::Clip*> linked;
+    if (clip->getClipTrack() == destination) if (auto r = impl->linkedMoves (*clip, offset, linked); r.failed()) return r;
     const te::Clip::Ptr retained (clip);
     impl->transaction ("Move MIDI clip");
     if (clip->getClipTrack() != destination && ! clip->moveTo (*destination)) return Result::fail ("Could not move the MIDI clip to that track.");
     clip->setStart (te::TimePosition::fromSeconds (start), false, true);
+    Impl::moveLinked (linked, offset);
     impl->changed(); return Result::ok();
 }
 Result Session::moveAudioClip (const String& id, const String& destinationId, double start)
@@ -7332,6 +7537,7 @@ Result Session::moveAudioClip (const String& id, const String& destinationId, do
     if (auto frozen = impl->unfrozen (impl->trackOfClip (id), impl->track (destinationId)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before moving audio clips.");
+    impl->endAudition();
     auto* clip = impl->audioClip (id); auto* destination = impl->track (destinationId);
     if (! clip || clip->getClipSlot() || clip->isGrouped()) return Result::fail ("Move an ungrouped Arrangement audio clip.");
     if (! destination || isReturn (*destination) || static_cast<bool> (destination->state.getProperty (midiTrackProperty)))
@@ -7341,27 +7547,42 @@ Result Session::moveAudioClip (const String& id, const String& destinationId, do
     if (! std::isfinite (start) || start < 0 || start + clip->getPosition().getLength().inSeconds() > te::Edit::maximumLength)
         return Result::fail ("The complete clip must fit inside the 48-hour timeline.");
     if (clip->getClipTrack() == destination && clip->getPosition().getStart().inSeconds() == start) return Result::ok();
+    // Moving in time on a linked track moves the linked clips too.
+    const auto offset = start - clip->getPosition().getStart().inSeconds();
+    std::vector<te::Clip*> linked;
+    if (clip->getClipTrack() == destination) if (auto r = impl->linkedMoves (*clip, offset, linked); r.failed()) return r;
     const te::Clip::Ptr retained (clip);
     impl->transaction ("Move audio clip");
     if (clip->getClipTrack() != destination && ! clip->moveTo (*destination)) return Result::fail ("Could not move the audio clip to that track.");
     clip->setStart (te::TimePosition::fromSeconds (start), false, true);
+    Impl::moveLinked (linked, offset);
     impl->changed(); return Result::ok();
 }
 Result Session::moveClip (int t, int c, double start)
 {
     if (auto frozen = impl->unfrozen (impl->track (t)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    impl->endAudition();
     auto* clip = impl->clip (t, c); if (! clip) return Result::fail ("Clip not found.");
     if (! std::isfinite (start) || start < 0 || start + clip->getPosition().getLength().inSeconds() > te::Edit::maximumLength)
         return Result::fail ("The complete clip must fit inside the 48-hour timeline.");
-    impl->transaction ("Move clip"); clip->setStart (te::TimePosition::fromSeconds (start), false, true); impl->changed(); return Result::ok();
+    const auto offset = start - clip->getPosition().getStart().inSeconds();
+    std::vector<te::Clip*> linked;
+    if (auto r = impl->linkedMoves (*clip, offset, linked); r.failed()) return r;
+    impl->transaction ("Move clip"); clip->setStart (te::TimePosition::fromSeconds (start), false, true); Impl::moveLinked (linked, offset);
+    impl->changed(); return Result::ok();
 }
 Result Session::removeClip (int t, int c)
 {
     if (auto frozen = impl->unfrozen (impl->track (t)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    impl->endAudition();
     auto* clip = impl->clip (t, c); if (! clip) return Result::fail ("Clip not found.");
-    impl->transaction ("Remove clip"); clip->removeFromParent(); impl->changed(); return Result::ok();
+    const auto linked = impl->linkedClips (*clip);
+    for (auto* other : linked) if (auto frozen = impl->unfrozen (other->getClipTrack()); frozen.failed()) return frozen;
+    impl->transaction ("Remove clip"); clip->removeFromParent();
+    for (auto* other : linked) other->removeFromParent();
+    impl->changed(); return Result::ok();
 }
 Result Session::setClipFollowAction (const String& id, const FollowSettings& settings)
 {
@@ -7406,6 +7627,7 @@ Result Session::setClipFollowAction (const String& id, const FollowSettings& set
 Result Session::setClipActive(const String& id,bool active)
 {
     if (impl->exporting) return Result::fail("Finish or cancel the current export first.");
+    impl->endAudition();
     te::Clip* found=nullptr;
     for (auto* track:te::getAudioTracks(*impl->edit)) for (auto* clip:allTrackClips(*track))
         if (clip->itemID.toString()==id && (dynamic_cast<te::WaveAudioClip*>(clip) || dynamic_cast<te::MidiClip*>(clip)))
@@ -7414,9 +7636,12 @@ Result Session::setClipActive(const String& id,bool active)
             found=clip;
         }
     if (!found) return Result::fail("Clip not found.");
-    if (found->isMuted()==!active) return Result::ok();
-    if(found->getClipTrack()->isFrozen(te::Track::anyFreeze)) return Result::fail("Unfreeze the track before changing clip activation.");
-    impl->transaction(active?"Activate clip":"Deactivate clip");found->setMuted(!active);
+    std::vector<te::Clip*> changing;
+    if (found->isMuted()!=!active) changing.push_back(found);
+    for (auto* other:impl->linkedClips(*found)) if (other->isMuted()!=!active) changing.push_back(other);
+    if (changing.empty()) return Result::ok();
+    for (auto* clip:changing) if(clip->getClipTrack()->isFrozen(te::Track::anyFreeze)) return Result::fail("Unfreeze the track before changing clip activation.");
+    impl->transaction(active?"Activate clip":"Deactivate clip");for (auto* clip:changing) clip->setMuted(!active);
     // Prepared stretch buffers can retain the previous gain. Rebuild through
     // the native message-thread graph path before the next playback block.
     impl->edit->restartPlayback();impl->edit->dispatchPendingUpdatesSynchronously();
@@ -7949,17 +8174,26 @@ Result Session::setTrackArmed (int index, bool value)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (isReturn (*t)) return Result::fail ("Return tracks cannot receive recording inputs.");
-    auto* input = impl->input (*t); if (! input) return Result::fail ("Select an input before arming this track.");
-    if (input->isRecordingEnabled (t->itemID) == value) return Result::ok();
-    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing record arms.");
-    // A take records through its slot's own destination, so disarming would leave it recording on
-    // a track that shows it is not armed.
-    if (impl->trackRecording (t->itemID.toString())) return Result::fail ("End this track's Session recording before disarming it.");
-    auto* destination = te::getDestination (*input, *t, 0);
-    if (!destination) return Result::fail ("Input destination is unavailable.");
+    if (! impl->input (*t)) return Result::fail ("Select an input before arming this track.");
+    // Linked tracks with an input arm and disarm with this one.
+    std::vector<te::AudioTrack*> tracks { t }, changing;
+    for (auto* other : impl->linkedTracks (*t)) tracks.push_back (other);
+    for (auto* track : tracks)
+    {
+        auto* input = impl->input (*track);
+        if (input == nullptr || input->isRecordingEnabled (track->itemID) == value) continue;
+        if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing record arms.");
+        // A take records through its slot's own destination, so disarming would leave it recording on
+        // a track that shows it is not armed.
+        if (impl->trackRecording (track->itemID.toString()))
+        { if (track == t) return Result::fail ("End this track's Session recording before disarming it."); continue; }
+        if (! te::getDestination (*input, *track, 0)) { if (track == t) return Result::fail ("Input destination is unavailable."); continue; }
+        changing.push_back (track);
+    }
+    if (changing.empty()) return Result::ok();
     const auto monitored=impl->monitoredMidiTracks();
     impl->transaction ("Record arm");
-    destination->recordEnabled.setValue (value, &impl->edit->getUndoManager());
+    for (auto* track : changing) te::getDestination (*impl->input (*track), *track, 0)->recordEnabled.setValue (value, &impl->edit->getUndoManager());
     impl->finishInputChange(monitored);impl->changed(); return Result::ok();
 }
 Result Session::setTrackMonitor (int index, MonitorMode mode)

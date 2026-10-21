@@ -402,6 +402,7 @@ public:
         std::vector<SlotInfo> slots;
         bool launcherActive = false;
         juce::String groupId; // Empty for ungrouped tracks.
+        juce::String linkId;  // The tracks sharing it are linked for editing; empty when unlinked.
     };
     // A group sums its member tracks through its own mixer, like a bus.
     struct GroupInfo
@@ -612,6 +613,18 @@ public:
     juce::Result stopGroup (const juce::String& groupId);
     juce::Result moveTrack (const juce::String& trackId, int destinationIndex);
     juce::Result removeTrack (int trackIndex);
+    // Linked-track editing, after the reference's: Arrangement edits on a linked track apply to the
+    // other tracks in its link. Moving a clip in time, trimming, deleting or (de)activating it does
+    // the same to the clips on the linked tracks that start and end with it (within 1 ms); a split
+    // cuts each linked track's clip at that time; fades change on linked audio clips whose fades
+    // start where the edited one's did, which keep their own gain; time-selection edits include the
+    // linked tracks; arming or disarming covers the linked tracks that have an input; and take lanes
+    // are inserted, deleted, renamed and comped by their position on every linked track. Each edit
+    // and its linked edits are one undo step, refused whole when a linked part cannot be done.
+    // Linking the given audio and MIDI tracks makes them one link of their own, taking them out of
+    // any they were in; unlinking takes tracks out. A link left with one track ends.
+    juce::Result linkTracks (const juce::StringArray& trackIds, juce::String& linkId);
+    juce::Result unlinkTracks (const juce::StringArray& trackIds);
     juce::Result importAudio (const juce::File&, int trackIndex = -1, double startSeconds = 0);
     juce::Result setAudioClipSettings (const juce::String& clipId, const AudioClipSettings&);
     juce::Result setAudioClipReversed (const juce::String& clipId, bool reversed);
