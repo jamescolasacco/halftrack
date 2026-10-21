@@ -368,3 +368,12 @@ These are simplest-default choices pending reference measurement:
 - **Randomness.** Random choices are seeded at reset.
 - **Defaults.** 1 Bar, Gate 8/16, Grid 1/16, Mix, filter off.
 
+### Filter Delay defaults
+
+These are simplest-default choices pending reference measurement:
+
+- **Pan:** a linear pan law.
+- **Filters:** 12 dB/oct sections.
+- **Ranges:** 1–2,000 ms, ±33% swing, −36 to +6 dB line volume, and Dry down to −70 dB, which is off.
+- **Defaults:** lines 1 and 3 on at 1/8 and 1/4 with 50% feedback.
+

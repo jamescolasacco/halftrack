@@ -308,5 +308,40 @@ private:
     std::array<std::vector<float>, 2> capture;
     std::array<std::array<Biquad, 2>, 2> filter; // High-pass and low-pass per channel.
 };
+
+// Filter Delay after the reference's: three delay lines fed by the left input, the mean of both
+// channels and the right input. Each line's linked high-pass and low-pass filters sit in front
+// of the line inside its feedback loop, so every echo passes them again. A line is synced to
+// sixteenths (with a swing percentage) or set in milliseconds, and pans to its source channel
+// unless panned elsewhere. Controls per line, in order: on, filter on, frequency, bandwidth,
+// sync, time ms, division, swing, feedback, pan, volume; then Dry.
+class FilterDelay
+{
+public:
+    static constexpr int controlsPerLine = 11;
+    static constexpr std::array<int, 8> divisions { 1, 2, 3, 4, 5, 6, 8, 16 }; // Sixteenths.
+    static constexpr double longestSeconds = 16; // 16 sixteenths at 20 BPM with +33% swing.
+    // A line's delay in seconds.
+    static double delaySeconds (const float* line, double bpm) noexcept
+    {
+        if (line[4] == 0) return line[5] * .001;
+        return divisions[(size_t) std::clamp ((int) line[6], 0, 7)] * .25 * 60 / std::clamp (bpm, 20.0, 999.0) * (1 + line[7]);
+    }
+    void prepare (double rate) noexcept; // Allocates the delay lines.
+    void configure (const float* values, double bpm) noexcept;
+    void reset() noexcept;
+    void tick (double& left, double& right) noexcept;
+private:
+    struct Line
+    {
+        std::vector<float> buffer;
+        size_t write = 0;
+        double delay = 1, feedback = 0, left = 0, right = 0, last = 0;
+        bool on = false, filtered = false;
+        Biquad highPass, lowPass;
+    };
+    double rate = 48000, dry = 1;
+    std::array<Line, 3> lines;
+};
 }
 

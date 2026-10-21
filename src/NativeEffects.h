@@ -103,6 +103,7 @@ private:
     effects::ChannelEq channelEq;
     effects::Pedal pedal;
     effects::BeatRepeat beatRepeat;
+    effects::FilterDelay filterDelay;
     effects::GlueCompressor glue;
     effects::FrequencyShifter shifter;
     int ramp = 0;

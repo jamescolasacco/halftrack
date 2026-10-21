@@ -52,6 +52,7 @@ double amplitudeAt (const juce::AudioBuffer<float>& a, int channel, double frequ
     return 2 * std::abs (sum) / (end - start);
 }
 double db (double v) { return 20 * std::log10 (std::max (v, 1e-20)); }
+bool near (double a, double b, double tolerance) { return std::abs (a - b) <= tolerance; }
 
 double curve (int type, double x)
 {
@@ -439,6 +440,57 @@ void beatRepeatTests()
         check (worst < 1e-7 && gated.getMagnitude (0, frames) == 0, "stopped, it passes the input in Mix and nothing in Gate");
     }
 }
+// Filter Delay: impulses show each line's routing, timing, feedback, pan and level exactly; tones
+// show the filters, which sit inside the feedback loop.
+void filterDelayTests()
+{
+    // Plain lines: filters, sync and feedback off, Dry off; times of 12000, 18000 and 24000 samples.
+    const auto plain = [] (std::initializer_list<std::pair<const char*, float>> more)
+    {
+        auto s = with (Kind::filterDelay, { { "line1Filter", 0 }, { "line2Filter", 0 }, { "line3Filter", 0 }, { "line1Sync", 0 }, { "line2Sync", 0 }, { "line3Sync", 0 },
+                                            { "line1Feedback", 0 }, { "line2Feedback", 0 }, { "line3Feedback", 0 }, { "line1On", 0 }, { "line3On", 0 }, { "dryDb", -70 } });
+        for (const auto& [key, value] : more) s.values[(size_t) effectParameterIndex (Kind::filterDelay, key)] = value;
+        return s;
+    };
+    const auto impulse = [] (float left, float right) { juce::AudioBuffer<float> x (2, 48000); x.clear(); x.setSample (0, 0, left); x.setSample (1, 0, right); return x; };
+    const auto at = [] (const juce::AudioBuffer<float>& x, int channel, int n) { return (double) x.getSample (channel, n); };
+    {
+        const auto left = process (impulse (1, 0), plain ({ { "line1On", 1 }, { "line2On", 1 }, { "line3On", 1 } }));
+        check (near (at (left, 0, 12000), 1, 1e-6) && near (at (left, 1, 12000), 0, 1e-9) && near (at (left, 0, 18000), .5, 1e-6) && near (at (left, 1, 18000), .5, 1e-6)
+               && near (at (left, 1, 24000), 0, 1e-9) && left.getMagnitude (0, 1, 11998) == 0, "line 1 delays the left input to the left, line 2 their mean to both sides");
+        const auto right = process (impulse (0, 1), plain ({ { "line3On", 1 } }));
+        check (near (at (right, 1, 24000), 1, 1e-6) && near (at (right, 0, 24000), 0, 1e-9), "line 3 delays the right input to the right");
+    }
+    {
+        const auto echoes = process (impulse (1, 0), plain ({ { "line1On", 1 }, { "line1Feedback", .5f } }));
+        check (near (at (echoes, 0, 12000), 1, 1e-6) && near (at (echoes, 0, 24000), .5, 1e-6) && near (at (echoes, 0, 36000), .25, 1e-6), "feedback 50% halves each echo");
+        const auto panned = process (impulse (1, 0), plain ({ { "line1On", 1 }, { "line1Pan", 1 } })), centred = process (impulse (1, 0), plain ({ { "line1On", 1 }, { "line1Pan", 0 } }));
+        check (near (at (panned, 1, 12000), 1, 1e-6) && near (at (panned, 0, 12000), 0, 1e-9) && near (at (centred, 0, 12000), 1, 1e-6) && near (at (centred, 1, 12000), 1, 1e-6),
+               "Pan sends line 1 to the right, or the centre to both");
+        const auto louder = process (impulse (1, 0), plain ({ { "line1On", 1 }, { "line1Db", 6 } }));
+        check (near (at (louder, 0, 12000), std::pow (10.0, 6 / 20.0), 1e-5), "Volume raises a line by up to 6 dB");
+        const auto synced = process (impulse (1, 0), plain ({ { "line1On", 1 }, { "line1Sync", 1 }, { "line1Division", 3 } }));
+        auto swung = plain ({ { "line1On", 1 }, { "line1Sync", 1 }, { "line1Division", 3 }, { "line1Swing", .25f } });
+        const auto late = process (impulse (1, 0), swung);
+        check (near (at (synced, 0, 24000), 1, 1e-6) && near (at (late, 0, 30000), 1, 1e-6), "a synced line waits 4/16 at 120 BPM, a quarter longer with +25% swing");
+        const auto wet = process (impulse (1, .5f), plain ({ { "dryDb", 0 } })), half = process (impulse (1, .5f), plain ({ { "dryDb", -6 } }));
+        check (near (at (wet, 0, 0), 1, 1e-6) && near (at (wet, 1, 0), .5, 1e-6) && near (at (half, 0, 0), std::pow (10.0, -6 / 20.0), 1e-6), "Dry sets the direct signal's level");
+    }
+    {
+        // The filters: a 1 kHz band four octaves wide passes its centre and rejects tones far outside it.
+        const auto echoLevel = [&] (double hz)
+        {
+            const auto out = process (sine (hz, .2, 48000), plain ({ { "line1On", 1 }, { "line1Filter", 1 }, { "line1Hz", 1000 }, { "line1Width", 4 } }));
+            return db (amplitudeAt (out, 0, hz, 24000, 48000) / .2);
+        };
+        check (echoLevel (1000) > -1 && echoLevel (8000) < -10 && echoLevel (100) < -10, "the filters pass the band's centre and reject tones three octaves away");
+        // Inside the feedback loop, each echo is filtered again: with full feedback an echo outside the band shrinks.
+        const auto loop = process (impulse (1, 0), plain ({ { "line1On", 1 }, { "line1Filter", 1 }, { "line1Hz", 2000 }, { "line1Width", 1 }, { "line1Feedback", 1 } }));
+        const auto first = loop.getMagnitude (0, 12000, 12000), second = loop.getMagnitude (0, 24000, 12000);
+        check (first > 0 && second < first * .9, "every echo passes the filters again");
+    }
+    check (process (sine (440, .3, 48000), defaultEffectSettings (Kind::filterDelay)).getMagnitude (0, 24000, 24000) > .3, "the default lines echo the input");
+}
 void eqThreeTests()
 {
     for (int steep = 0; steep < 2; ++steep)
@@ -513,6 +565,6 @@ void shifterTests()
 void runExtendedEffectsTests()
 {
     saturatorTests(); overdriveTests(); autoFilterTests(); autoPanTests(); modulatedDelayTests();
-    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); beatRepeatTests(); glueTests(); shifterTests();
+    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); beatRepeatTests(); filterDelayTests(); glueTests(); shifterTests();
 }
 }

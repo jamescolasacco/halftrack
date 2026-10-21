@@ -235,3 +235,32 @@ Halftrack's behaviour, where the manual gives no detail:
 
 The shared device checks compare an engine render with the processor run from position 0, sample for sample. Tempo maps, time signatures other than 4/4 and measured comparison with the reference are missing.
 
+## Filter Delay (2026-10-21)
+
+Filter Delay follows the manual's description in the [audio effect reference](https://www.ableton.com/en/live-manual/12/live-audio-effect-reference/), consulted 2026-10-21:
+
+- three delay lines, fed by the left input, both channels and the right input;
+- each line preceded by linked low-pass and high-pass filters, which also act on the feedback;
+- a frequency and bandwidth for each filter;
+- sync to sixteenths with a swing percentage, or milliseconds;
+- Feedback, a Pan that overrides each line's own channel, Volume up to +6 dB, and Dry.
+
+Halftrack's choices:
+
+- **Inputs and filters.** Line 2 takes the mean of both channels. The filters are 12 dB/oct high- and low-pass sections, Width octaves apart around the frequency, inside the feedback loop.
+- **Timing.** Synced lines use 1, 2, 3, 4, 5, 6, 8 or 16 sixteenths with swing from −33% to +33%. Unsynced lines run from 1 to 2,000 ms, read with linear interpolation.
+- **Pan.** Pan is linear: hard left keeps only the left output, the centre keeps both at full level.
+- **Ranges.** Volume runs from −36 to +6 dB. Dry runs down to −70 dB, which is off.
+- **Defaults.** Lines 1 and 3 are on at 1/8 and 1/4, line 2 is off, filters are on, feedback is 50% and Dry is 0 dB.
+
+`tests/ExtendedEffectsTests.cpp` checks with impulses and tones:
+
+- **Routing.** Each line takes its input and outputs to its channel; line 2 sends the mean to both sides.
+- **Feedback.** At 50% it halves each echo.
+- **Pan and Volume.** Pan overrides the output side, and Volume raises a line by 6 dB.
+- **Timing.** A synced line waits 4/16 at 120 BPM, and +25% swing makes it a quarter longer.
+- **Dry.** It sets the direct level.
+- **Filters.** A four-octave band passes its centre within 1 dB and rejects tones three octaves out by over 10 dB. With full feedback, each echo is filtered again.
+
+The X-Y filter display and measured comparison with the reference are missing.
+

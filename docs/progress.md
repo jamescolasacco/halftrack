@@ -1116,3 +1116,7 @@ Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Sess
 
 Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Session.h`, `tests/ExtendedEffectsTests.cpp` and the shared device test's render reference, with documentation. Beat Repeat joins the Delay & Reverb devices. See [the contract](research/native-effects-contract.md#beat-repeat-2026-10-21).
 
+## Filter Delay — 2026-10-21
+
+Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Session.h` and `tests/ExtendedEffectsTests.cpp`, with documentation. See [the contract](research/native-effects-contract.md#filter-delay-2026-10-21).
+

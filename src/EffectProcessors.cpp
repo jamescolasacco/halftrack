@@ -643,5 +643,56 @@ void BeatRepeat::tick (double& left, double& right) noexcept
     else { left = out[0]; right = out[1]; }
     ++frame; beat += beatStep;
 }
+
+void FilterDelay::prepare (double sampleRate) noexcept
+{
+    rate = sampleRate;
+    for (auto& line : lines) line.buffer.assign ((size_t) std::ceil (rate * longestSeconds) + 4, 0.0f);
+    reset();
+}
+void FilterDelay::configure (const float* v, double bpm) noexcept
+{
+    for (size_t k = 0; k < lines.size(); ++k)
+    {
+        const auto* p = v + k * controlsPerLine;
+        auto& line = lines[k];
+        line.on = p[0] != 0; line.filtered = p[1] != 0;
+        const auto half = std::pow (2.0, (double) p[3] / 2);
+        line.highPass.c = highPassSection (std::max (20.0, p[2] / half), .70710678118654752, rate);
+        line.lowPass.c = lowPassSection (std::min (rate * .45, p[2] * half), .70710678118654752, rate);
+        line.delay = std::clamp (delaySeconds (p, bpm) * rate, 1.0, (double) line.buffer.size() - 3);
+        line.feedback = p[8];
+        // Linear pan: hard left keeps only the left output, the centre keeps both at full level.
+        const auto pan = (double) p[9], level = std::pow (10.0, (double) p[10] / 20);
+        line.left = (pan <= 0 ? 1 : 1 - pan) * level; line.right = (pan >= 0 ? 1 : 1 + pan) * level;
+    }
+    const auto d = (double) v[3 * controlsPerLine];
+    dry = d <= -70 ? 0 : std::pow (10.0, d / 20);
+}
+void FilterDelay::reset() noexcept
+{
+    for (auto& line : lines) { std::fill (line.buffer.begin(), line.buffer.end(), 0.0f); line.write = 0; line.last = 0; line.highPass.clear(); line.lowPass.clear(); }
+}
+void FilterDelay::tick (double& left, double& right) noexcept
+{
+    const double inputs[] { left, .5 * (left + right), right };
+    double outL = dry * left, outR = dry * right;
+    for (size_t k = 0; k < lines.size(); ++k)
+    {
+        auto& line = lines[k];
+        if (line.buffer.empty()) continue;
+        const auto size = line.buffer.size();
+        // The echo leaving the line, read with linear interpolation.
+        const auto whole = (size_t) line.delay; const auto fraction = line.delay - (double) whole;
+        const auto a = line.buffer[(line.write + size - whole) % size], b = line.buffer[(line.write + size - whole - 1) % size];
+        const double echo = line.on ? a + (b - a) * fraction : 0.0;
+        auto into = (line.on ? inputs[k] : 0.0) + line.feedback * echo;
+        if (line.filtered) into = line.lowPass.tick (line.highPass.tick (into));
+        line.buffer[line.write] = (float) finite (into);
+        line.write = (line.write + 1) % size;
+        outL += echo * line.left; outR += echo * line.right;
+    }
+    left = outL; right = outR;
+}
 }
 

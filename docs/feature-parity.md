@@ -394,7 +394,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-016 | EQ Three | PARTIAL — Linkwitz–Riley 24/48 dB three-band isolator with all-pass-aligned recombination, kill switches; parity unmeasured | PARTIAL |
 | AFX-017 | Erosion (12.2.1 behavior) | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-018 | External Audio Effect | EXTERNAL | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-019 | Filter Delay | TIME | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-019 | Filter Delay | PARTIAL — three lines (L, L+R, R) with linked filters inside their feedback loops, synced sixteenths with swing or milliseconds, feedback, pan override, volume to +6 dB and dry; routing, echo timing and levels, swing, filtering and feedback filtering tested ([contract](research/native-effects-contract.md#filter-delay-2026-10-21)). X-Y display and reference comparison missing | PARTIAL |
 | AFX-020 | Gate | Original Noise Gate: linked peak detection, hysteresis, attack/hold/release, floor, duck and mix; independent envelopes, export, state/history/editor and callback tests pass locally. Sidechains, lookahead, metering and numerical reference parity remain missing or unverified. | PARTIAL — original native dynamics device |
 | AFX-021 | Glue Compressor | PARTIAL — original Bus Compressor with discrete ratio/attack/release, auto release, range, soft clip and mix; sidechain and parity missing | PARTIAL |
 | AFX-022 | Grain Delay | TIME | NOT IMPLEMENTED / UNVERIFIED |
