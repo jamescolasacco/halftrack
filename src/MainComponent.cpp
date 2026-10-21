@@ -2633,7 +2633,16 @@ private:
         {
             setName ("Piano roll editor");
             setWantsKeyboardFocus (true);
-            for (auto* c : std::initializer_list<juce::Component*> { &snap, &noteLength, &velocity, &noteTools, &laneChoice, &laneView, &horizontal, &vertical }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &snap, &noteLength, &velocity, &noteTools, &laneChoice, &laneView, &scaleButton, &scaleRoot, &scaleMode, &horizontal, &vertical }) addAndMakeVisible (c);
+            scaleButton.setName ("Scale"); scaleButton.setClickingTogglesState (true); scaleButton.setTooltip ("Scale: highlight this clip's scale in the note editor");
+            scaleButton.setColour (juce::TextButton::buttonOnColourId, orange); scaleButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            scaleButton.setWantsKeyboardFocus (false); scaleButton.setMouseClickGrabsKeyboardFocus (false);
+            scaleRoot.setName ("Scale root"); scaleMode.setName ("Scale mode");
+            for (int r = 0; r < 12; ++r) scaleRoot.addItem (pitchName (r).dropLastCharacters (2), r + 1);
+            for (int m = 0; m < Session::scaleModeCount; ++m) scaleMode.addItem (Session::scaleModeName (m), m + 1);
+            scaleButton.onClick = [this] { editScale(); };
+            scaleRoot.onChange = [this] { editScale(); };
+            scaleMode.onChange = [this] { editScale(); };
             laneChoice.setName ("Lane"); laneChoice.setTooltip ("The lane under the notes: velocities or a MIDI controller. Draw points with the mouse; double-click or right-click a point to delete it.");
             laneChoice.onChange = [this]
             {
@@ -2712,6 +2721,10 @@ private:
             const bool active = clip != nullptr;
             snap.setEnabled (active); noteLength.setEnabled (active); velocity.setEnabled (active); noteTools.setEnabled (active); laneChoice.setEnabled (active);
             refreshLaneChoices (clip);
+            const auto scale = clip != nullptr ? clip->scale : Session::ScaleSettings {};
+            scaleButton.setToggleState (scale.enabled, juce::dontSendNotification);
+            scaleRoot.setSelectedId (scale.root + 1, juce::dontSendNotification); scaleMode.setSelectedId (scale.mode + 1, juce::dontSendNotification);
+            for (auto* c : std::initializer_list<juce::Component*> { &scaleButton, &scaleRoot, &scaleMode }) c->setEnabled (active);
             updateScroll(); repaint(); laneView.repaint();
         }
         void zoom (double factor)
@@ -2729,6 +2742,7 @@ private:
         void resized() override
         {
             noteTools.setBounds (698, 7, 100, 23); laneChoice.setBounds (842, 7, 116, 23);
+            scaleButton.setBounds (968, 7, 48, 23); scaleRoot.setBounds (1018, 7, 52, 23); scaleMode.setBounds (1072, 7, 132, 23);
             if (laneView.isVisible()) laneView.setBounds (0, getHeight() - scrollSize - laneHeight, getWidth() - scrollSize, laneHeight);
             snap.setBounds (278, 7, 66, 23); noteLength.setBounds (400, 7, 76, 23); velocity.setBounds (544, 5, 142, 27);
             horizontal.setBounds (keysWidth, getHeight() - scrollSize, getWidth() - keysWidth - scrollSize, scrollSize);
@@ -2748,7 +2762,7 @@ private:
             g.drawText ("Velocity", 488, 0, 52, headerHeight, juce::Justification::centredLeft);
             g.drawText ("Lane", 810, 0, 30, headerHeight, juce::Justification::centredLeft);
             g.drawText ((selectedNoteIds.empty() ? juce::String() : juce::String ((int) selectedNoteIds.size()) + " selected  |  ")
-                        + "Insert " + juce::String (insertionBeat + 1, 2), 966, 0, juce::jmax (0, getWidth() - 980), headerHeight, juce::Justification::centredRight);
+                        + "Insert " + juce::String (insertionBeat + 1, 2), 1210, 0, juce::jmax (0, getWidth() - 1224), headerHeight, juce::Justification::centredRight);
             if (clip == nullptr)
             {
                 g.setColour (muted); g.setFont (font (14.0f));
@@ -2767,7 +2781,11 @@ private:
                 const int semitone = pitch % 12;
                 const bool black = semitone == 1 || semitone == 3 || semitone == 6 || semitone == 8 || semitone == 10;
                 const int y = gridTop + row * rowHeight;
-                g.setColour (black ? juce::Colour (0xff2a2a2a) : juce::Colour (0xff353535));
+                // A clip scale lights its rows (the root most) and dims the rest.
+                const bool scaled = clip->scale.enabled;
+                const bool member = Session::inScale (clip->scale, pitch);
+                g.setColour (scaled ? (member ? (semitone == clip->scale.root ? juce::Colour (0xff474038) : juce::Colour (0xff3c3c3c)) : juce::Colour (0xff272727))
+                                    : black ? juce::Colour (0xff2a2a2a) : juce::Colour (0xff353535));
                 g.fillRect (keysWidth, y, grid.getWidth(), rowHeight);
                 g.setColour (black ? juce::Colour (0xff232323) : juce::Colour (0xffc6c6c6));
                 g.fillRect (0, y, black ? keysWidth - 14 : keysWidth, rowHeight);
@@ -3218,8 +3236,14 @@ private:
         }
     };
         LaneView laneView { *this };
-        juce::ComboBox snap, noteLength, laneChoice;
-        juce::TextButton noteTools { "Note tools" };
+        juce::ComboBox snap, noteLength, laneChoice, scaleRoot, scaleMode;
+        juce::TextButton noteTools { "Note tools" }, scaleButton { "Scale" };
+        void editScale()
+        {
+            const auto* clip = owner.currentMidiClip(); if (! clip) return;
+            owner.report (owner.session.setClipScale (clip->id, { scaleButton.getToggleState(), scaleRoot.getSelectedId() - 1, scaleMode.getSelectedId() - 1 }));
+            owner.refresh();
+        }
         juce::Slider velocity;
         juce::ScrollBar horizontal { false }, vertical { true };
         juce::String loadedClip, selectedNoteId, dragClipId;
@@ -3415,8 +3439,9 @@ private:
         class NoteToolPanel final : public juce::Component
         {
         public:
-            NoteToolPanel (PianoRoll& r, Session::NoteTool tool) : roll (&r), settings (notetools::defaults (tool))
+            NoteToolPanel (PianoRoll& r, Session::NoteToolSettings initial) : roll (&r), settings (initial)
             {
+                const auto tool = settings.tool;
                 setName ("Note tool " + juce::String (notetools::name (tool)));
                 const auto fields = notetools::fields (tool);
                 for (size_t i = 0; i < fields.size(); ++i)
@@ -3426,14 +3451,14 @@ private:
                     if (f.choices)
                     {
                         auto& box = choices[i]; box.setName (f.label); box.addItemList (juce::StringArray::fromTokens (f.choices, "|", ""), 1);
-                        box.setSelectedId ((int) f.initial + 1, juce::dontSendNotification);
+                        box.setSelectedId ((int) settings.values[i] + 1, juce::dontSendNotification);
                         box.onChange = [this, i] { settings.values[i] = choices[i].getSelectedId() - 1; };
                         addAndMakeVisible (box);
                     }
                     else
                     {
                         auto& slider = sliders[i]; slider.setName (f.label); slider.setSliderStyle (juce::Slider::LinearBar);
-                        slider.setRange (f.minimum, f.maximum, f.integer ? 1.0 : 0.0); slider.setValue (f.initial, juce::dontSendNotification);
+                        slider.setRange (f.minimum, f.maximum, f.integer ? 1.0 : 0.0); slider.setValue (settings.values[i], juce::dontSendNotification);
                         slider.setTextValueSuffix (f.unit); slider.setNumDecimalPlacesToDisplay (f.integer ? 0 : 3); slider.updateText();
                         slider.setColour (juce::Slider::trackColourId, juce::Colour (0xff59606a)); slider.setColour (juce::Slider::textBoxTextColourId, ink);
                         slider.onValueChange = [this, i] { settings.values[i] = sliders[i].getValue(); };
@@ -3475,7 +3500,13 @@ private:
             int rows = 0;
         };
         void openNoteTool (Session::NoteTool tool)
-        { owner.showDialog (juce::String (notetools::name (tool)), std::make_unique<NoteToolPanel> (*this, tool), 340, NoteToolPanel::heightFor (tool)); }
+        {
+            auto initial = notetools::defaults (tool);
+            // Fit to Scale starts from the clip's own scale.
+            if (const auto* clip = owner.currentMidiClip(); clip && tool == Session::NoteTool::fitToScale && clip->scale.enabled)
+            { initial.values[0] = clip->scale.root; initial.values[1] = clip->scale.mode; }
+            owner.showDialog (juce::String (notetools::name (tool)), std::make_unique<NoteToolPanel> (*this, initial), 340, NoteToolPanel::heightFor (tool));
+        }
         void applyNoteTool (const Session::NoteToolSettings& settings)
         {
             const auto* clip = owner.currentMidiClip(); if (! clip) return;
@@ -6672,6 +6703,33 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         pianoRoll.keyPressed (undo);
         check (currentMidiClip()->notes.size() == before.size(), "one undo restores the note");
         if (auto* window = panel->findParentComponentOfClass<juce::DialogWindow>()) delete window;
+    }
+    {
+        // The Scale switch and menus set the clip's scale; Fit to Scale opens with it.
+        auto* scale = dynamic_cast<juce::Button*> (findNamed (pianoRoll, "Scale"));
+        auto* root = dynamic_cast<juce::ComboBox*> (findNamed (pianoRoll, "Scale root"));
+        auto* mode = dynamic_cast<juce::ComboBox*> (findNamed (pianoRoll, "Scale mode"));
+        check (scale != nullptr && root != nullptr && mode != nullptr && ! currentMidiClip()->scale.enabled, "the piano roll has scale controls, off for a new clip");
+        root->setSelectedId (3, juce::sendNotificationSync); mode->setSelectedId (2, juce::sendNotificationSync);
+        scale->setToggleState (true, juce::dontSendNotification); scale->onClick(); refresh();
+        check (currentMidiClip()->scale == Session::ScaleSettings { true, 2, 1 }, "the controls give the clip D minor");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("piano-scale.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (pianoRoll.createComponentSnapshot (pianoRoll.getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        pianoRoll.openNoteTool (Session::NoteTool::fitToScale);
+        juce::Component* fit = nullptr;
+        for (int w = 0; w < juce::TopLevelWindow::getNumTopLevelWindows() && fit == nullptr; ++w)
+            if (auto* window = juce::TopLevelWindow::getTopLevelWindow (w)) fit = findNamed (*window, "Note tool Fit to Scale");
+        check (fit != nullptr && dynamic_cast<juce::ComboBox*> (findNamed (*fit, "Root"))->getSelectedId() == 3
+               && dynamic_cast<juce::ComboBox*> (findNamed (*fit, "Scale"))->getSelectedId() == 2, "Fit to Scale opens with the clip's scale");
+        if (auto* window = fit->findParentComponentOfClass<juce::DialogWindow>()) delete window;
+        for (int step = 0; step < 3; ++step) pianoRoll.keyPressed (undo);
+        check (! currentMidiClip()->scale.enabled, "undo removes the scale");
     }
     withGeneratedMidiController(session,[&](const juce::String& controller)
     {

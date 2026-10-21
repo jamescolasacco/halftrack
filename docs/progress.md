@@ -931,3 +931,7 @@ Root owns the note tools across `src/NoteTools.*` (new), `applyNoteTool` in `src
 ## Timeline navigation — 2026-10-20
 
 UI change in `src/MainComponent.cpp`. A Follow switch (Cmd/Ctrl+F) keeps the playhead in view by paging the Arrangement and the piano roll, and turns off when you scroll by hand during playback. Z zooms the Arrangement to the time selection or selected clip, and X zooms back. The UI suite covers both. See [the navigation contract](research/timeline-navigation-contract.md).
+
+## Clip scales — 2026-10-20
+
+Root owns clip scales across `src/Session.*`, the Fit to Scale tool in `src/NoteTools.cpp`, the piano roll's scale controls and highlighting in `src/MainComponent.cpp`, tests in `tests/MidiToolTests.cpp` and the UI suite, and documentation. A MIDI clip can carry a root and one of sixteen scales. The piano roll lights its rows, and Fit to Scale moves notes to the nearest scale tone. See [the scale contract](research/scales-contract.md).

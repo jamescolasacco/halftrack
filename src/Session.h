@@ -106,8 +106,8 @@ public:
     enum class NoteTransform { quantizeStarts, quantizeEnds, reverse, invertPitch, legato, halfTime, doubleTime, fixedLength };
     // Note tools after the reference's transformation and generative tools; settings follow each
     // tool's field table in NoteTools.h. Appended tools keep their value; never reorder.
-    enum class NoteTool { strum, chop, span, recombine, velocityShaper, arpeggiate, ornament, connect, euclidean, seed };
-    static constexpr int noteToolCount = 10;
+    enum class NoteTool { strum, chop, span, recombine, velocityShaper, arpeggiate, ornament, connect, euclidean, seed, fitToScale };
+    static constexpr int noteToolCount = 11;
     struct NoteToolSettings
     {
         NoteTool tool = NoteTool::strum;
@@ -137,6 +137,20 @@ public:
         std::vector<ControllerPoint> points;
         bool operator== (const ControllerLane&) const = default;
     };
+    // A clip's scale: the piano roll highlights its notes and Fit to Scale moves notes into it.
+    // Scale modes are appended only; never reorder.
+    static constexpr int scaleModeCount = 16;
+    struct ScaleSettings
+    {
+        bool enabled = false;
+        int root = 0; // Pitch class, 0 = C.
+        int mode = 0; // Index into scaleModeName / scaleIntervals.
+        bool operator== (const ScaleSettings&) const = default;
+    };
+    static const char* scaleModeName (int mode) noexcept;
+    static uint16_t scaleIntervals (int mode) noexcept; // Bit n set when the scale holds n semitones above its root.
+    static bool inScale (const ScaleSettings&, int pitch) noexcept; // Every pitch is in a disabled scale.
+    static int fitToScale (const ScaleSettings&, int pitch) noexcept; // The nearest scale pitch; ties go down.
     enum class FadeCurve { linear = 1, convex, concave, sCurve };
     // Warped audio follows the project tempo; its length is fixed in beats.
     enum class WarpMode { off, stretch, efficient };
@@ -171,6 +185,7 @@ public:
         double startBeat = 0, lengthBeats = 0;
         std::vector<MidiNoteInfo> notes;
         std::vector<ControllerLane> controllers; // Lanes with points, by controller number.
+        ScaleSettings scale;
     };
     struct LocatorInfo { juce::String id, name; double position = 0; };
     struct SceneInfo { juce::String id, name; };
@@ -337,6 +352,7 @@ public:
     juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);
     // Replaces one controller lane of a MIDI clip in one undo step; no points removes the lane.
     juce::Result setMidiControllerLane (const juce::String& clipId, int controller, const std::vector<ControllerPoint>& points);
+    juce::Result setClipScale (const juce::String& clipId, const ScaleSettings&);
     juce::Result removeMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds);
     juce::Result setSynthSettings (const juce::String& trackId, const SynthSettings&);
     // Replaces a MIDI track's instrument in one undo step; nullopt restores the built-in synth.

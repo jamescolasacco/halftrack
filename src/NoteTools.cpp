@@ -27,6 +27,9 @@ constexpr Field connectFields[] { { "Rate", 0, 4, 1, true, "", grids }, { "Veloc
 constexpr Field euclideanFields[] {
     { "Steps", 2, 32, 16, true, "" }, { "Pulses", 1, 32, 5, true, "" }, { "Rotation", 0, 31, 0, true, "" }, { "Pitch", 0, 127, 36, true, "" },
     { "Rate", 0, 4, 1, true, "", grids }, { "Gate", .1, 1, .5, false, "" }, { "Velocity", .01, 1, .8, false, "" } };
+constexpr Field fitFields[] {
+    { "Root", 0, 11, 0, true, "", "C|C#|D|D#|E|F|F#|G|G#|A|A#|B" },
+    { "Scale", 0, Session::scaleModeCount - 1, 0, true, "", "Major|Minor|Dorian|Phrygian|Lydian|Mixolydian|Locrian|Harmonic Minor|Melodic Minor|Major Pentatonic|Minor Pentatonic|Minor Blues|Whole Tone|Half-whole Diminished|Whole-half Diminished|Phrygian Dominant" } };
 constexpr Field seedFields[] {
     { "Notes", 1, 256, 16, true, "" }, { "Low pitch", 0, 127, 48, true, "" }, { "High pitch", 0, 127, 72, true, "" },
     { "Shortest", 1.0 / 16, 4, .25, false, " beats" }, { "Longest", 1.0 / 16, 4, 1, false, " beats" }, { "Grid", 0, 4, 1, true, "", grids },
@@ -260,12 +263,13 @@ std::span<const Field> fields (Tool tool) noexcept
         case Tool::connect: return connectFields;
         case Tool::euclidean: return euclideanFields;
         case Tool::seed: return seedFields;
+        case Tool::fitToScale: return fitFields;
     }
     return {};
 }
 const char* name (Tool tool) noexcept
 {
-    constexpr const char* names[] { "Strum", "Chop", "Span", "Recombine", "Velocity Shaper", "Arpeggiate", "Ornament", "Connect", "Euclidean", "Seed" };
+    constexpr const char* names[] { "Strum", "Chop", "Span", "Recombine", "Velocity Shaper", "Arpeggiate", "Ornament", "Connect", "Euclidean", "Seed", "Fit to Scale" };
     const auto index = (int) tool;
     return index >= 0 && index < Session::noteToolCount ? names[index] : "";
 }
@@ -307,6 +311,10 @@ std::vector<Note> run (const Session::NoteToolSettings& s, const std::vector<Not
         case Tool::connect: result = connect (v, notes, clip); break;
         case Tool::euclidean: result = euclidean (v, clip); break;
         case Tool::seed: result = seed (v, clip); break;
+        case Tool::fitToScale:
+            // Out-of-scale notes move to the nearest scale tone; ties move down.
+            for (auto n : notes) { n.pitch = Session::fitToScale ({ true, (int) v[0], (int) v[1] }, n.pitch); result.push_back (make (n.pitch, n.startBeat, n.lengthBeats, n.velocity, clip)); }
+            break;
     }
     return ordered (result);
 }

@@ -903,6 +903,30 @@ Session::WarpSettings warpSettings (te::WaveAudioClip& clip)
     if (const auto bpm = clip.getLoopInfo().getBpm (clip.getWaveInfo()); std::isfinite (bpm) && bpm > 0) result.bpm = bpm;
     return result;
 }
+// Clip scales.
+const juce::Identifier scaleEnabledProperty { "halftrackScale" };
+const juce::Identifier scaleRootProperty { "halftrackScaleRoot" };
+const juce::Identifier scaleModeProperty { "halftrackScaleMode" };
+Session::ScaleSettings clipScale (const juce::ValueTree& state)
+{
+    Session::ScaleSettings scale;
+    scale.enabled = state.getProperty (scaleEnabledProperty, false);
+    scale.root = juce::jlimit (0, 11, static_cast<int> (state.getProperty (scaleRootProperty, 0)));
+    scale.mode = juce::jlimit (0, Session::scaleModeCount - 1, static_cast<int> (state.getProperty (scaleModeProperty, 0)));
+    return scale;
+}
+Result validateClipScales (const juce::ValueTree& state)
+{
+    if (state.hasProperty (scaleEnabledProperty) || state.hasProperty (scaleRootProperty) || state.hasProperty (scaleModeProperty))
+    {
+        const auto whole = [] (const juce::var& v, double low, double high) { return finiteProperty (v, low, high) && static_cast<double> (v) == std::floor (static_cast<double> (v)); };
+        if (! state.hasType (te::IDs::MIDICLIP) || ! whole (state.getProperty (scaleEnabledProperty, 0), 0, 1)
+            || ! whole (state.getProperty (scaleRootProperty, 0), 0, 11) || ! whole (state.getProperty (scaleModeProperty, 0), 0, Session::scaleModeCount - 1))
+            return Result::fail ("The project contains an invalid clip scale.");
+    }
+    for (const auto& child : state) if (auto result = validateClipScales (child); result.failed()) return result;
+    return Result::ok();
+}
 // Engine controller types for Halftrack lanes, and the lane value of a stored event.
 int engineControllerType (int lane)
 { return lane == Session::pitchBendLane ? te::MidiControllerEvent::pitchWheelType : lane == Session::channelPressureLane ? te::MidiControllerEvent::channelPressureType : lane; }
@@ -924,6 +948,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
     result.sourceOffset = position.offset.inSeconds();
     result.follow = clipFollowSettings (clip.state);
     result.launch = clipLaunchSettings (clip.state);
+    result.scale = clipScale (clip.state);
     if (clip.usesSourceFile()) result.file = clip.getSourceFileReference().getFile();
     if (auto* audio = dynamic_cast<te::WaveAudioClip*> (&clip))
     {
@@ -2323,6 +2348,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateLocators (state); result.failed()) return result;
     if (auto result = validateRacks (state); result.failed()) return result;
     if (auto result = validateTrackDelays (state); result.failed()) return result;
+    if (auto result = validateClipScales (state); result.failed()) return result;
     restoreManualMixerState (state);
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
@@ -3371,6 +3397,45 @@ Result Session::applyNoteTool (const String& clipId, const juce::StringArray& id
         note->state.setProperty (midiNoteIDProperty, id, undo);
         resultIds.add (id);
     }
+    impl->changed(); return Result::ok();
+}
+const char* Session::scaleModeName (int mode) noexcept
+{
+    constexpr const char* names[] { "Major", "Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian", "Locrian", "Harmonic Minor", "Melodic Minor",
+        "Major Pentatonic", "Minor Pentatonic", "Minor Blues", "Whole Tone", "Half-whole Diminished", "Whole-half Diminished", "Phrygian Dominant" };
+    return mode >= 0 && mode < scaleModeCount ? names[mode] : "";
+}
+uint16_t Session::scaleIntervals (int mode) noexcept
+{
+    // Bit n is set when the scale holds n semitones above its root, in scaleModeName order.
+    constexpr std::array<uint16_t, scaleModeCount> masks { 0xab5, 0x5ad, 0x6ad, 0x5ab, 0xad5, 0x6b5, 0x56b, 0x9ad, 0xaad, 0x295, 0x4a9, 0x4e9, 0x555, 0x6db, 0xb6d, 0x5b3 };
+    return mode >= 0 && mode < scaleModeCount ? masks[(size_t) mode] : 0;
+}
+bool Session::inScale (const ScaleSettings& scale, int pitch) noexcept
+{
+    if (! scale.enabled) return true;
+    return (scaleIntervals (scale.mode) >> (((pitch - scale.root) % 12 + 12) % 12)) & 1u;
+}
+int Session::fitToScale (const ScaleSettings& scale, int pitch) noexcept
+{
+    for (int distance = 0; distance < 12; ++distance)
+    {
+        if (pitch - distance >= 0 && inScale (scale, pitch - distance)) return pitch - distance;
+        if (pitch + distance <= 127 && inScale (scale, pitch + distance)) return pitch + distance;
+    }
+    return pitch;
+}
+Result Session::setClipScale (const String& clipId, const ScaleSettings& scale)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    if (scale.root < 0 || scale.root > 11 || scale.mode < 0 || scale.mode >= scaleModeCount) return Result::fail ("Choose a root from C to B and a listed scale.");
+    if (clipScale (clip->state) == scale) return Result::ok();
+    impl->transaction ("Clip scale");
+    auto* undo = &impl->edit->getUndoManager();
+    clip->state.setProperty (scaleEnabledProperty, scale.enabled ? 1 : 0, undo);
+    clip->state.setProperty (scaleRootProperty, scale.root, undo);
+    clip->state.setProperty (scaleModeProperty, scale.mode, undo);
     impl->changed(); return Result::ok();
 }
 Result Session::setMidiControllerLane (const String& clipId, int controller, const std::vector<ControllerPoint>& points)

@@ -24,6 +24,7 @@ The piano roll's Note tools menu has Transform and Generate submenus modelled on
 | Ornament | Offset, Pitch, Velocity | Adds a grace note Offset beats before each note, transposed and scaled in velocity. A note too close to the clip start gets none. |
 | Connect | Rate, Velocity, Gate | Fills gaps between consecutive notes with passing notes on the Rate grid. Their pitches interpolate between the two neighbours, and their velocity is the neighbours' average scaled by Velocity. |
 | Euclidean | Steps, Pulses, Rotation, Pitch, Rate, Gate, Velocity | Spreads Pulses evenly over Steps (step *i* sounds when (*i* × pulses) mod steps < pulses). Rotation shifts the pattern earlier, and it repeats across the clip. |
+| Fit to Scale | Root, Scale | Each note moves to the nearest tone of the scale, ties going down. The window starts from the clip's scale (see the [scale contract](scales-contract.md)). |
 | Seed | Notes, pitch range, Shortest, Longest, Grid, Seed, Velocity | Places that many notes at random grid starts with random pitches and lengths, reproducibly for a seed. |
 
 ## Evidence

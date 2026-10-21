@@ -282,6 +282,10 @@ The meter is the engine tempo sequence's first `TimeSigSetting`; `setTimeSignatu
 
 `src/NoteTools.*` holds each tool's field table and a pure `notetools::run` from notes to notes. `Session::applyNoteTool` validates the settings and every resulting note, then removes the chosen notes and adds the result in one transaction. The piano roll's `NoteToolPanel` edits a tool's settings and applies it to the selection. See the [note tool contract](research/midi-tools-contract.md).
 
+## Clip scales
+
+A MIDI clip's scale is three properties on its state, read by `clipScale` into `ClipInfo::scale` and written by `setClipScale`. `Session::scaleIntervals`, `inScale` and `fitToScale` are pure helpers shared by the piano roll's row highlighting and the Fit to Scale note tool. See the [scale contract](research/scales-contract.md).
+
 ## Audio warping
 
 `ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).

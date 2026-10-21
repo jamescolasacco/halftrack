@@ -36,7 +36,7 @@ void expect (const std::vector<Note>& actual, const std::vector<Note>& expected,
 { check (same (actual, expected), text + " (" + describe (actual) + ")"); }
 }
 
-int runMidiToolTests (const juce::File&)
+int runMidiToolTests (const juce::File& artifacts)
 {
     try
     {
@@ -117,6 +117,37 @@ int runMidiToolTests (const juce::File&)
         s.undo();
         ok (s.applyNoteTool (clip, ids, settings (Tool::euclidean, { { 0, 8 }, { 1, 3 }, { 3, 36 } }), result), "generate over the chosen chord");
         check (notesNow().size() == 6, "a generator replaces the chosen notes");
+        // Scales.
+        const Session::ScaleSettings cMajor { true, 0, 0 }, aMinor { true, 9, 1 }, cPentatonic { true, 0, 9 };
+        check (Session::inScale (cMajor, 60) && ! Session::inScale (cMajor, 61) && Session::inScale (cMajor, 71) && Session::inScale (aMinor, 69)
+               && ! Session::inScale (aMinor, 70) && Session::inScale (aMinor, 72) && Session::inScale ({ false, 0, 0 }, 61), "scale membership follows root and mode; a disabled scale holds every pitch");
+        check (Session::fitToScale (cMajor, 61) == 60 && Session::fitToScale (cMajor, 66) == 65 && Session::fitToScale (cMajor, 64) == 64
+               && Session::fitToScale (cPentatonic, 65) == 64 && Session::fitToScale (cPentatonic, 66) == 67, "Fit to Scale takes the nearest scale tone, ties going down");
+        check (Session::scaleIntervals (0) == 0xab5 && std::string (Session::scaleModeName (11)) == "Minor Blues" && Session::scaleIntervals (16) == 0, "the scale table is exact");
+        expect (run (Tool::fitToScale, { { 0, 0 }, { 1, 0 } }, { note (61, 0, 1), note (66, 1, 1), note (70, 2, 1) }), { note (60, 0, 1), note (65, 1, 1), note (69, 2, 1) },
+                "the Fit to Scale tool moves notes into C major");
+        check (s.setClipScale (clip, { true, 12, 0 }).failed() && s.setClipScale (clip, { true, 0, Session::scaleModeCount }).failed()
+               && s.setClipScale ("missing", {}).failed(), "roots past B, unknown modes and unknown clips are rejected");
+        const auto scaleNow = [&] { const auto snapshot = s.snapshot(); return snapshot.tracks.back().clips[0].scale; };
+        check (scaleNow() == Session::ScaleSettings {}, "clips start without a scale");
+        ok (s.setClipScale (clip, aMinor), "give the clip A minor");
+        check (scaleNow() == aMinor, "the clip reports its scale");
+        s.undo(); check (scaleNow() == Session::ScaleSettings {}, "undo removes it"); s.redo();
+        juce::String copy;
+        ok (s.duplicateMidiClip (clip, copy), "duplicate the clip");
+        bool kept = false; { const auto snapshot = s.snapshot(); for (const auto& c : snapshot.tracks.back().clips) if (c.id == copy) kept = c.scale == aMinor; }
+        check (kept, "a duplicate keeps the scale");
+        const auto root = artifacts.getChildFile ("note-tools-" + juce::Uuid().toString());
+        ok (root.createDirectory(), "create a project folder");
+        const auto project = root.getChildFile ("Scale.halftrack");
+        ok (s.saveProject (project), "save"); ok (s.loadProject (project), "reopen");
+        check (scaleNow() == aMinor, "the scale reopens");
+        auto xml = juce::XmlDocument::parse (project); check (xml != nullptr, "parse the project");
+        std::function<void (juce::XmlElement&)> corrupt = [&] (juce::XmlElement& e) { if (e.hasAttribute ("halftrackScaleMode")) e.setAttribute ("halftrackScaleMode", 99); for (auto* c : e.getChildIterator()) corrupt (*c); };
+        corrupt (*xml);
+        const auto broken = root.getChildFile ("Broken.halftrack"); check (xml->writeTo (broken), "write an unknown scale mode");
+        const auto loaded = s.loadProject (broken);
+        check (loaded.failed() && loaded.getErrorMessage().contains ("clip scale") && scaleNow() == aMinor, "an unknown scale rejects the load and keeps the open project");
         std::cout << "Note tools passed." << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL note tools: " << e.what() << std::endl; return 1; }
