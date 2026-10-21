@@ -861,6 +861,13 @@ Result validateAudioClips (const juce::ValueTree& state)
                 && (! finiteProperty (state[noteVelocityRangeProperty], -127, 127)
                     || std::floor ((double) state[noteVelocityRangeProperty]) != (double) state[noteVelocityRangeProperty]))))
         return Result::fail ("The project contains an invalid MIDI note chance or velocity range.");
+    // MPE note expression: points at finite beats inside their ranges.
+    if (state.getParent().hasType (te::IDs::NOTE) && te::MidiExpression::isExpression (state.getType()))
+    {
+        const bool bend = state.hasType (te::IDs::PITCHBEND);
+        if (! finiteProperty (state[te::IDs::b], 0, 1000000) || ! finiteProperty (state[te::IDs::v], bend ? -48 : 0, bend ? 48 : 1))
+            return Result::fail ("The project contains an invalid MIDI note expression.");
+    }
     // Clip envelope curves: values inside their curve's range and finite timing.
     if (state.hasType (te::IDs::AUTOMATIONCURVE) && state.getParent().hasType (te::IDs::AUTOMATIONCURVEMODIFIER))
     {
@@ -1149,6 +1156,44 @@ int controllerLane (int type)
 }
 int laneValue (int lane, int stored) { return lane == Session::pitchBendLane ? stored - 8192 : stored >> 7; }
 int storedValue (int lane, int value) { return lane == Session::pitchBendLane ? value + 8192 : value << 7; }
+// MPE note expression, kept as the engine's PITCHBEND, TIMBRE (slide) and PRESSURE children of a
+// note, each point at beats from the note's start.
+const juce::Identifier& expressionType (Session::NoteExpression kind)
+{ return kind == Session::NoteExpression::pitchBend ? te::IDs::PITCHBEND : kind == Session::NoteExpression::slide ? te::IDs::TIMBRE : te::IDs::PRESSURE; }
+std::pair<float, float> expressionRange (Session::NoteExpression kind)
+{ return kind == Session::NoteExpression::pitchBend ? std::pair { -48.0f, 48.0f } : std::pair { 0.0f, 1.0f }; }
+std::vector<Session::ExpressionPoint> noteExpression (const juce::ValueTree& note, Session::NoteExpression kind)
+{
+    std::vector<Session::ExpressionPoint> result;
+    for (const auto& child : note)
+        if (child.hasType (expressionType (kind))) result.push_back ({ static_cast<double> (child[te::IDs::b]), static_cast<float> (static_cast<double> (child[te::IDs::v])) });
+    std::stable_sort (result.begin(), result.end(), [] (const auto& a, const auto& b) { return a.beat < b.beat; });
+    return result;
+}
+void writeNoteExpression (juce::ValueTree note, Session::NoteExpression kind, const std::vector<Session::ExpressionPoint>& points, juce::UndoManager* undo)
+{
+    for (int i = note.getNumChildren(); --i >= 0;) if (note.getChild (i).hasType (expressionType (kind))) note.removeChild (i, undo);
+    for (const auto& point : points)
+        note.appendChild (juce::ValueTree (expressionType (kind), { { te::IDs::b, point.beat }, { te::IDs::v, point.value } }), undo);
+}
+bool validExpression (const std::vector<Session::ExpressionPoint>& points, Session::NoteExpression kind, double length)
+{
+    const auto [low, high] = expressionRange (kind);
+    double previous = -1;
+    for (const auto& p : points)
+    {
+        if (! std::isfinite (p.beat) || p.beat < 0 || p.beat > length + 1e-9 || p.beat <= previous || ! std::isfinite (p.value) || p.value < low || p.value > high) return false;
+        previous = p.beat;
+    }
+    return points.size() <= 4096;
+}
+// A clip plays as MPE while any of its notes has expression.
+void updateMpeMode (te::MidiClip& clip)
+{
+    bool any = false;
+    for (auto* note : clip.getSequence().getNotes()) any = any || te::MidiExpression::noteHasExpression (note->state);
+    if (clip.getMPEMode() != any) clip.setMPEMode (any);
+}
 // Clip envelopes sit on the engine's clip curve modifiers, one per control. Each holds an absolute,
 // a relative and a scaling curve: automation uses the first, volume modulation scales and other
 // modulation offsets, so a control's automation and modulation keep separate curves and timing.
@@ -1289,7 +1334,9 @@ Session::ClipInfo describeClip (te::Clip& clip)
             result.notes.push_back ({ note->state.getProperty (midiNoteIDProperty).toString(), note->getNoteNumber(),
                                      note->getStartBeat().inBeats(), note->getLengthBeats().inBeats(), note->getVelocity() / 127.0f, !note->isMute(),
                                      static_cast<float> (static_cast<double> (note->state.getProperty (noteChanceProperty, 1.0))),
-                                     static_cast<int> (note->state.getProperty (noteVelocityRangeProperty, 0)) });
+                                     static_cast<int> (note->state.getProperty (noteVelocityRangeProperty, 0)),
+                                     noteExpression (note->state, Session::NoteExpression::pitchBend), noteExpression (note->state, Session::NoteExpression::slide),
+                                     noteExpression (note->state, Session::NoteExpression::pressure) });
         std::map<int, Session::ControllerLane> lanes;
         for (auto* event : midi->getSequence().getControllerEvents())
             if (const int lane = controllerLane (event->getType()); lane >= 0)
@@ -1389,9 +1436,40 @@ public:
         if (const auto pattern = clipGroovePattern (clip))
         {
             const te::MidiList grooved (groovedSequence (*pattern, clip, list, looped), nullptr);
-            return te::MidiList::createDefaultPlaybackMidiSequence (grooved, clip, base, mpe);
+            return mpe ? mpeSequence (grooved, clip, base) : te::MidiList::createDefaultPlaybackMidiSequence (grooved, clip, base, mpe);
         }
-        return te::MidiList::createDefaultPlaybackMidiSequence (list, clip, base, mpe);
+        return mpe ? mpeSequence (list, clip, base) : te::MidiList::createDefaultPlaybackMidiSequence (list, clip, base, mpe);
+    }
+    // MPE playback: the engine steps between expression points, so ramps get a point every 1/64
+    // beat; and each note's channel gets a 48-semitone pitch bend range (RPN 0) as the note starts.
+    static juce::MidiMessageSequence mpeSequence (const te::MidiList& list, te::MidiClip& clip, te::MidiList::TimeBase base)
+    {
+        auto state = list.state.createCopy();
+        for (auto note : state)
+        {
+            if (! note.hasType (te::IDs::NOTE)) continue;
+            for (const auto kind : { Session::NoteExpression::pitchBend, Session::NoteExpression::slide, Session::NoteExpression::pressure })
+            {
+                const auto points = noteExpression (note, kind);
+                if (points.size() < 2) continue;
+                std::vector<Session::ExpressionPoint> ramped;
+                for (size_t i = 0; i + 1 < points.size(); ++i)
+                    for (double beat = points[i].beat; beat < points[i + 1].beat - 1e-9; beat += 1.0 / 64)
+                        ramped.push_back ({ beat, (float) (points[i].value + (points[i + 1].value - points[i].value) * (beat - points[i].beat) / (points[i + 1].beat - points[i].beat)) });
+                ramped.push_back (points.back());
+                writeNoteExpression (note, kind, ramped, nullptr);
+            }
+        }
+        const te::MidiList ramped (state, nullptr);
+        auto sequence = te::MidiList::createDefaultPlaybackMidiSequence (ramped, clip, base, true);
+        juce::MidiMessageSequence ranges;
+        for (const auto* event : sequence)
+            if (event->message.isNoteOn())
+                for (const auto [controller, value] : { std::pair { 101, 0 }, { 100, 0 }, { 6, 48 }, { 38, 0 } })
+                    ranges.addEvent (juce::MidiMessage::controllerEvent (event->message.getChannel(), controller, value), event->message.getTimeStamp());
+        sequence.addSequence (ranges, 0);
+        sequence.updateMatchedPairs();
+        return sequence;
     }
     File getFileForNewAudioRecording (te::Track& track, const String& extension) override
     {
@@ -4028,6 +4106,22 @@ Result Session::sliceToNewMidiTrack (const String& clipId, SliceBy by, String& t
     if (result.failed()) { if (created && canUndo()) undo(); trackId.clear(); return result; }
     return Result::ok();
 }
+Result Session::setMidiInputMpe (const String& inputName, bool on)
+{
+    for (auto device : impl->engine.getDeviceManager().getMidiInDevices())
+        if (! device->isTrackDevice() && device->getName() == inputName)
+        {
+            if (device->recordToNoteAutomation != on) { device->recordToNoteAutomation = on; device->saveProps(); }
+            impl->changed(); return Result::ok();
+        }
+    return Result::fail ("That MIDI input is not available.");
+}
+bool Session::isMidiInputMpe (const String& inputName) const
+{
+    for (auto device : impl->engine.getDeviceManager().getMidiInDevices())
+        if (! device->isTrackDevice() && device->getName() == inputName) return device->recordToNoteAutomation;
+    return false;
+}
 Result Session::recoverProject (const File& recovery, File& recoveredFrom)
 {
     auto xml = juce::XmlDocument::parse (recovery);
@@ -5288,7 +5382,12 @@ Result Session::addMidiNotes (const String& clipId, const std::vector<MidiNoteIn
         note->setMute (!value.active, undo);
         if (value.chance < 1) note->state.setProperty (noteChanceProperty, juce::jlimit (0.0f, 1.0f, value.chance), undo);
         if (value.velocityRange != 0) note->state.setProperty (noteVelocityRangeProperty, juce::jlimit (-127, 127, value.velocityRange), undo);
+        for (const auto kind : { NoteExpression::pitchBend, NoteExpression::slide, NoteExpression::pressure })
+            if (const auto& points = kind == NoteExpression::pitchBend ? value.pitchBend : kind == NoteExpression::slide ? value.slide : value.pressure;
+                ! points.empty() && validExpression (points, kind, value.lengthBeats))
+                writeNoteExpression (note->state, kind, points, undo);
     }
+    updateMpeMode (*clip);
     insertedIds = std::move (newIds);
     impl->changed(); return Result::ok();
 }
@@ -5372,6 +5471,23 @@ Result Session::setMidiNotesChance (const String& clipId, const juce::StringArra
 {
     if (! std::isfinite (chance) || chance < 0 || chance > 1) return Result::fail ("Choose a chance from 0% to 100%.");
     return impl->setNotesProperty (clipId, ids, noteChanceProperty, static_cast<double> (chance), 1.0, "Note chance");
+}
+Result Session::setMidiNoteExpression (const String& clipId, const String& noteId, NoteExpression kind, const std::vector<ExpressionPoint>& points)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    if (auto frozen = impl->unfrozen (clip->getClipTrack()); frozen.failed()) return frozen;
+    te::MidiNote* note = nullptr;
+    for (auto* n : clip->getSequence().getNotes()) if (n->state[midiNoteIDProperty].toString() == noteId) note = n;
+    if (note == nullptr) return Result::fail ("MIDI note not found.");
+    if (! validExpression (points, kind, note->getLengthBeats().inBeats()))
+        return Result::fail (kind == NoteExpression::pitchBend ? "Pitch bend needs ordered points inside the note, from -48 to 48 semitones."
+                                                               : "Slide and pressure need ordered points inside the note, from 0 to 1.");
+    if (noteExpression (note->state, kind) == points) return Result::ok();
+    impl->transaction (kind == NoteExpression::pitchBend ? "Edit note pitch bend" : kind == NoteExpression::slide ? "Edit note slide" : "Edit note pressure");
+    writeNoteExpression (note->state, kind, points, &impl->edit->getUndoManager());
+    updateMpeMode (*clip);
+    impl->changed(); return Result::ok();
 }
 Result Session::setMidiNotesVelocityRange (const String& clipId, const juce::StringArray& ids, int range)
 {

@@ -17,6 +17,7 @@ void SubtractiveSynthDSP::reset() noexcept
     voices = {};
     sustainPedal = {};
     pitchRatios.fill (1.0);
+    wheels = {}; bendSensitivity.fill (2.0); rpnMsb.fill (127); rpnLsb.fill (127);
     nextAge = 0;
 }
 void SubtractiveSynthDSP::setSettings (const Session::SynthSettings& next) noexcept
@@ -86,10 +87,15 @@ void SubtractiveSynthDSP::noteOff (int channel, int pitch) noexcept
 void SubtractiveSynthDSP::pitchWheel (int channel, int value) noexcept
 {
     if (channel < 1 || channel > 16 || value < 0 || value > 16383) return;
-    // Fixed +/- two-semitone range, with each endpoint represented exactly.
-    const double semitones = 2.0 * (value - 8192) / (value < 8192 ? 8192.0 : 8191.0);
-    const double ratio = std::exp2 (semitones / 12.0);
-    pitchRatios[static_cast<size_t> (channel - 1)] = ratio;
+    // Each endpoint represented exactly.
+    wheels[static_cast<size_t> (channel - 1)] = (value - 8192) / (value < 8192 ? 8192.0 : 8191.0);
+    applyBend (channel);
+}
+void SubtractiveSynthDSP::applyBend (int channel) noexcept
+{
+    const auto c = static_cast<size_t> (channel - 1);
+    const double ratio = std::exp2 (wheels[c] * bendSensitivity[c] / 12.0);
+    pitchRatios[c] = ratio;
     for (auto& voice : voices)
         if (voice.stage != 0 && voice.channel == channel)
             voice.increment = std::min (0.45, frequencies[static_cast<size_t> (voice.pitch)] * ratio / sampleRate);
@@ -107,6 +113,16 @@ void SubtractiveSynthDSP::controlChange (int channel, int controller, int value)
                     release (voice);
         pedal = down;
         if (controller == 121) pitchWheel (channel, 8192);
+    }
+    // RPN 0, pitch bend sensitivity: CC 101 and 100 choose it, CC 6 and 38 give semitones and cents.
+    else if (controller == 101) rpnMsb[static_cast<size_t> (channel - 1)] = value;
+    else if (controller == 100) rpnLsb[static_cast<size_t> (channel - 1)] = value;
+    else if ((controller == 6 || controller == 38) && rpnMsb[static_cast<size_t> (channel - 1)] == 0 && rpnLsb[static_cast<size_t> (channel - 1)] == 0)
+    {
+        auto& range = bendSensitivity[static_cast<size_t> (channel - 1)];
+        const auto whole = std::floor (range);
+        range = controller == 6 ? value + (range - whole) : whole + value / 100.0;
+        applyBend (channel);
     }
     else if (controller == 120)
     {

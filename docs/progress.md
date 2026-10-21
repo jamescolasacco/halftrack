@@ -1376,3 +1376,13 @@ Engine and UI change in `src/Session.*`, `src/WarpStretchers.*` (the transient d
 - **Slicing.** An audio clip's menu slices it to a new MIDI track at its transients, warp markers or a beat division. The new track's Drum Rack has a pad per slice, played back from a MIDI clip in the clip's place.
 
 See [the contract](research/slicing-contract.md).
+
+## MPE — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/Instruments.*` and `src/SubtractiveSynth.*` (RPN 0 bend sensitivity per channel), `src/MainComponent.cpp`, `cmake/PatchMpeTiming.cmake` (new), `cmake/PatchMidiReleaseVelocity.cmake` (accepts the new hash), `CMakeLists.txt`, `src/Main.cpp` and `tests/MpeTests.cpp` (new), with documentation.
+
+- **Note expression.** Notes carry their own pitch bend, slide and pressure, drawn in the piano roll's Note Expression lanes or recorded from inputs switched to MPE.
+- **MPE playback.** Clips with expression play each note on its own channel with a 48-semitone bend range, which the instruments now honour.
+- **An engine fix.** Expressive notes in MIDI clips played at half their time at 120 BPM; they are now placed in beats.
+
+See [the contract](research/mpe-contract.md).

@@ -145,6 +145,10 @@ private:
     std::array<Voice, maximumVoices> voices;
     std::array<bool, 16> sustainPedal {};
     std::array<double, 16> wheel {};
+    // Pitch bend sensitivity a channel's RPN 0 set, in semitones; negative where none did, which
+    // keeps the device's Bend range. MPE playback sets 48 on each note's channel.
+    std::array<double, 16> bendSensitivity {};
+    std::array<int, 16> rpnMsb {}, rpnLsb {};
     // Monophonic key stack: last-note priority with return to earlier held keys.
     std::array<int, 16> keyStack {};
     std::array<int, 16> keyChannels {};

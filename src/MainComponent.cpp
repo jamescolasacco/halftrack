@@ -4192,8 +4192,9 @@ private:
             {
                 const auto id = laneChoice.getSelectedId();
                 laneView.setVisible (id != hiddenLane);
-                laneView.envelope.choice.reset();
+                laneView.envelope.choice.reset(); laneView.expression.reset();
                 if (juce::isPositiveAndBelow (id - envelopeChoiceBase, (int) envelopeChoices.size())) laneView.envelope.choice = envelopeChoices[(size_t) (id - envelopeChoiceBase)];
+                else if (id >= expressionChoice && id < expressionChoice + 3) laneView.expression = static_cast<Session::NoteExpression> (id - expressionChoice);
                 else if (id != hiddenLane) laneView.lane = laneForChoice (id);
                 resized(); repaint();
             };
@@ -4395,6 +4396,17 @@ private:
                     g.drawText ((note.active ? juce::String() : juce::String("OFF / ")) + pitchName (note.pitch), r.reduced (4, 0), juce::Justification::centredLeft, true);
                 }
                 if (selected) { g.setColour (ink); g.fillRect (r.getRight() - 4, r.getY() + 3, 2.0f, r.getHeight() - 6); }
+                // An MPE note's pitch bend, in semitone rows from its centre.
+                if (! note.pitchBend.empty())
+                {
+                    juce::Path bend;
+                    const auto centre = r.getCentreY();
+                    const auto at = [&] (double beat) { return (float) (keysWidth + (note.startBeat + beat - viewBeat) * pixelsPerBeat); };
+                    bend.startNewSubPath (at (0), centre - note.pitchBend.front().value * rowHeight);
+                    for (const auto& point : note.pitchBend) bend.lineTo (at (point.beat), centre - point.value * rowHeight);
+                    bend.lineTo (at (note.lengthBeats), centre - note.pitchBend.back().value * rowHeight);
+                    g.setColour (juce::Colours::white.withAlpha (0.8f)); g.strokePath (bend, juce::PathStrokeType (1.5f));
+                }
             }
             if (marquee)
             {
@@ -4644,6 +4656,8 @@ private:
         explicit LaneView (PianoRoll& r) : envelope (r.owner), roll (r) { setName ("Controller lane"); }
         // A clip envelope when one is chosen; otherwise the lane below.
         EnvelopeEditor envelope;
+        // MPE: the selected note's own pitch bend, slide or pressure when one is chosen.
+        std::optional<Session::NoteExpression> expression;
         // -1 shows velocities and chanceLane note chances; otherwise a controller number or
         // Session::pitchBendLane / channelPressureLane.
         int lane = -1;
@@ -4654,7 +4668,8 @@ private:
             g.setColour (line); g.drawHorizontalLine (0, 0.0f, (float) getWidth());
             g.setColour (raised); g.fillRect (0, 1, keysWidth, getHeight() - 1);
             g.setColour (muted); g.setFont (font (9.5f, true));
-            g.drawFittedText ((envelope.active() ? envelope.label() : laneName (lane)).toUpperCase(), juce::Rectangle<int> (4, 4, keysWidth - 6, getHeight() - 8), juce::Justification::topLeft, 3);
+            g.drawFittedText ((envelope.active() ? envelope.label() : expression ? expressionName (*expression) : laneName (lane)).toUpperCase(),
+                              juce::Rectangle<int> (4, 4, keysWidth - 6, getHeight() - 8), juce::Justification::topLeft, 3);
             const auto* clip = roll.owner.currentMidiClip();
             if (clip == nullptr) return;
             const auto area = plot();
@@ -4664,9 +4679,10 @@ private:
                 g.setColour (std::fmod (beat, 4.0) == 0 ? juce::Colour (0xff4e4e4e) : juce::Colour (0xff353535));
                 g.drawVerticalLine ((int) x (beat), (float) area.getY(), (float) area.getBottom());
             }
-            if (envelope.active()) envelope.paint (g, area.toFloat(), *clip, [this] (double b) { return x (b); }, clip->lengthBeats);
+            if (expression) paintExpression (g, area.toFloat());
+            else if (envelope.active()) envelope.paint (g, area.toFloat(), *clip, [this] (double b) { return x (b); }, clip->lengthBeats);
             else if (lane == Session::pitchBendLane) { g.setColour (juce::Colour (0xff3d3d3d)); g.drawHorizontalLine ((int) y (0), (float) area.getX(), (float) area.getRight()); }
-            if (envelope.active()) {}
+            if (envelope.active() || expression) {}
             else if (lane < 0)
             {
                 for (const auto& note : notes())
@@ -4714,6 +4730,7 @@ private:
             dragged = -1; velocityNote.clear(); preview.reset(); previewNotes.clear(); drawing = false;
             if (clip == nullptr || e.x < keysWidth) return;
             clipId = clip->id;
+            if (expression) { expressionDown (e); repaint(); return; }
             if (envelope.active())
             {
                 envelope.mouseDown (e, plot().toFloat(), *clip, [this] (double b) { return x (b); }, [this] (float px) { return beatAt (px); }, clip->lengthBeats);
@@ -4744,6 +4761,7 @@ private:
         }
         void mouseDrag (const juce::MouseEvent& e) override
         {
+            if (expression) { expressionDrag (e); repaint(); return; }
             if (envelope.active())
             {
                 if (const auto* clip = roll.owner.currentMidiClip()) envelope.mouseDrag (e, plot().toFloat(), [this] (float px) { return beatAt (px); }, clip->lengthBeats);
@@ -4762,6 +4780,7 @@ private:
         }
         void mouseUp (const juce::MouseEvent&) override
         {
+            if (expression) { expressionUp(); repaint(); return; }
             if (envelope.active())
             {
                 if (const auto* clip = roll.owner.currentMidiClip()) envelope.mouseUp (*clip);
@@ -4799,10 +4818,92 @@ private:
             if (lane == 64) return "Sustain";
             return "CC " + juce::String (lane);
         }
+        static juce::String expressionName (Session::NoteExpression kind)
+        { return kind == Session::NoteExpression::pitchBend ? "Note Pitch Bend" : kind == Session::NoteExpression::slide ? "Note Slide" : "Note Pressure"; }
     private:
         PianoRoll& roll;
         juce::String clipId, velocityNote;
         bool rangeDrag = false;
+        // Note expression editing: points at beats from the note's start, bend -48 to 48 semitones,
+        // slide and pressure 0-1, ramping between points.
+        std::optional<std::vector<Session::ExpressionPoint>> expressionPreview;
+        juce::String expressionNote;
+        int expressionDragged = -1;
+        float expressionPosition (float value) const { return *expression == Session::NoteExpression::pitchBend ? (value + 48) / 96 : value; }
+        float expressionAt (float py) const
+        {
+            const auto a = plot().toFloat();
+            const auto p = juce::jlimit (0.0f, 1.0f, (a.getBottom() - py) / a.getHeight());
+            return *expression == Session::NoteExpression::pitchBend ? std::round ((p * 96 - 48) * 100) / 100 : p;
+        }
+        float expressionY (float value) const { const auto a = plot().toFloat(); return a.getBottom() - expressionPosition (value) * a.getHeight(); }
+        std::vector<Session::ExpressionPoint> expressionPoints (const Session::MidiNoteInfo& note) const
+        {
+            if (expressionPreview && expressionNote == note.id) return *expressionPreview;
+            return *expression == Session::NoteExpression::pitchBend ? note.pitchBend : *expression == Session::NoteExpression::slide ? note.slide : note.pressure;
+        }
+        void paintExpression (juce::Graphics& g, juce::Rectangle<float> area) const
+        {
+            const auto* note = roll.selectedNote();
+            g.setColour (muted); g.setFont (font (10.0f));
+            if (note == nullptr) { g.drawText ("Select a note to edit its expression", area, juce::Justification::centred); return; }
+            const auto from = x (note->startBeat), to = x (note->startBeat + note->lengthBeats);
+            g.setColour (juce::Colours::white.withAlpha (0.05f)); g.fillRect (juce::Rectangle<float> (from, area.getY(), to - from, area.getHeight()));
+            const auto neutral = *expression == Session::NoteExpression::slide ? .5f : 0.0f;
+            g.setColour (juce::Colour (0x40ffffff)); g.drawHorizontalLine ((int) expressionY (neutral), from, to);
+            const auto points = expressionPoints (*note);
+            if (points.empty()) return;
+            juce::Path curve;
+            curve.startNewSubPath (from, expressionY (points.front().value));
+            for (const auto& point : points) curve.lineTo (x (note->startBeat + point.beat), expressionY (point.value));
+            curve.lineTo (to, expressionY (points.back().value));
+            g.setColour (orange); g.strokePath (curve, juce::PathStrokeType (1.5f));
+            for (size_t i = 0; i < points.size(); ++i)
+            {
+                g.setColour ((int) i == expressionDragged ? ink : orange);
+                g.fillEllipse (x (note->startBeat + points[i].beat) - 3.5f, expressionY (points[i].value) - 3.5f, 7, 7);
+            }
+        }
+        void expressionDown (const juce::MouseEvent& e)
+        {
+            expressionDragged = -1; expressionPreview.reset();
+            const auto* note = roll.selectedNote();
+            if (note == nullptr) return;
+            expressionNote = note->id;
+            auto points = expressionPoints (*note);
+            int hit = -1;
+            for (int i = (int) points.size(); --i >= 0;)
+                if (std::abs (x (note->startBeat + points[(size_t) i].beat) - e.position.x) <= 5 && std::abs (expressionY (points[(size_t) i].value) - e.position.y) <= 6) { hit = i; break; }
+            if (hit >= 0 && (e.mods.isPopupMenu() || e.getNumberOfClicks() > 1)) { points.erase (points.begin() + hit); commitExpression (points); return; }
+            if (e.mods.isPopupMenu()) return;
+            if (hit < 0)
+            {
+                const Session::ExpressionPoint point { juce::jlimit (0.0, note->lengthBeats, beatAt (e.position.x) - note->startBeat), expressionAt (e.position.y) };
+                const auto at = std::lower_bound (points.begin(), points.end(), point.beat, [] (const auto& p, double b) { return p.beat < b; });
+                if (at != points.end() && std::abs (at->beat - point.beat) < 1e-6) return;
+                hit = (int) (at - points.begin()); points.insert (at, point);
+            }
+            expressionPreview = points; expressionDragged = hit;
+        }
+        void expressionDrag (const juce::MouseEvent& e)
+        {
+            const auto* note = roll.selectedNote();
+            if (! expressionPreview || expressionDragged < 0 || note == nullptr || note->id != expressionNote) return;
+            auto& points = *expressionPreview;
+            const double low = expressionDragged > 0 ? points[(size_t) expressionDragged - 1].beat + 1.0 / 960 : 0;
+            const double high = (size_t) expressionDragged + 1 < points.size() ? points[(size_t) expressionDragged + 1].beat - 1.0 / 960 : note->lengthBeats;
+            points[(size_t) expressionDragged] = { juce::jlimit (low, juce::jmax (low, high), beatAt (e.position.x) - note->startBeat), expressionAt (e.position.y) };
+        }
+        void expressionUp()
+        {
+            if (expressionPreview) { auto points = *expressionPreview; expressionPreview.reset(); expressionDragged = -1; commitExpression (points); }
+        }
+        void commitExpression (const std::vector<Session::ExpressionPoint>& points)
+        {
+            if (const auto* clip = roll.owner.currentMidiClip())
+                roll.owner.report (roll.owner.session.setMidiNoteExpression (clip->id, expressionNote, *expression, points));
+            roll.owner.refresh(); roll.repaint();
+        }
         std::optional<std::vector<Session::ControllerPoint>> preview;
         std::vector<Session::MidiNoteInfo> previewNotes;
         int dragged = -1;
@@ -4901,7 +5002,7 @@ private:
         static constexpr int laneHeight = 92, hiddenLane = 99;
         // Lane menu: velocity, common controllers, then any other controller the clip uses.
         static constexpr int commonLanes[] { Session::pitchBendLane, 1, 7, 10, 11, 64, Session::channelPressureLane };
-        static constexpr int chanceChoice = 97;
+        static constexpr int chanceChoice = 97, expressionChoice = 90;
         int laneForChoice (int id) const
         { return id == 1 ? -1 : id == chanceChoice ? LaneView::chanceLane : id >= 2 && id < 2 + (int) std::size (commonLanes) ? commonLanes[id - 2] : id - 100; }
         void refreshLaneChoices (const Session::ClipInfo* clip)
@@ -4931,6 +5032,9 @@ private:
             juce::PopupMenu more;
             for (int cc = 0; cc < 120; ++cc) if (! common (cc) && ! others.contains (cc)) more.addItem (100 + cc, "CC " + juce::String (cc));
             laneChoice.getRootMenu()->addSubMenu ("Other controller", more);
+            juce::PopupMenu expressions;
+            for (int i = 0; i < 3; ++i) expressions.addItem (expressionChoice + i, LaneView::expressionName (static_cast<Session::NoteExpression> (i)));
+            laneChoice.getRootMenu()->addSubMenu ("Note Expression (MPE)", expressions);
             // Clip envelopes, by device, for modulation and, on Session clips, automation.
             for (const auto mode : { Session::EnvelopeMode::modulation, Session::EnvelopeMode::automation })
             {
@@ -5103,6 +5207,7 @@ private:
             if (next != viewBeat) { viewBeat = next; updateScroll(); repaint(); }
         }
         double visibleStartBeat() const noexcept { return viewBeat; }
+        juce::Rectangle<float> shownNoteBounds (const Session::MidiNoteInfo& note) const { return noteBounds (note); }
         // A note of another shown clip, placed against the edited clip's start.
         juce::Rectangle<float> ghostBounds (const Session::ClipInfo& other, const Session::MidiNoteInfo& note) const
         {
@@ -7670,7 +7775,23 @@ private:
         explicit AudioSetupPanel (Impl& o) : owner (o), devices (o.session.audioDeviceManager(), 0, 128, 0, 128, true, true, true, false)
         {
             addAndMakeVisible (devices);
-            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth, &mpe }) addAndMakeVisible (c);
+            // MPE controllers record their notes' own pitch bend, slide and pressure.
+            mpe.setName ("MPE inputs"); mpe.setTooltip ("MPE: choose the MIDI inputs that are MPE controllers");
+            mpe.onClick = [this]
+            {
+                juce::PopupMenu menu;
+                const auto names = owner.session.inputNames (true);
+                for (int i = 0; i < names.size(); ++i) menu.addItem (i + 1, names[i], true, owner.session.isMidiInputMpe (names[i]));
+                if (names.isEmpty()) menu.addItem (-1, "No MIDI inputs", false);
+                auto safe = juce::Component::SafePointer<AudioSetupPanel> (this);
+                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&mpe), [safe, names] (int chosen)
+                {
+                    if (safe == nullptr || ! juce::isPositiveAndBelow (chosen - 1, names.size())) return;
+                    const auto& name = names[chosen - 1];
+                    safe->owner.report (safe->owner.session.setMidiInputMpe (name, ! safe->owner.session.isMidiInputMpe (name)));
+                });
+            };
             typeLabel.setText ("Record File Type", juce::dontSendNotification); depthLabel.setText ("Bit Depth", juce::dontSendNotification);
             type.setName ("Record file type"); depth.setName ("Record bit depth");
             type.addItem ("WAV", 1); type.addItem ("AIFF", 2); type.addItem ("FLAC", 3);
@@ -7694,7 +7815,8 @@ private:
             auto area = getLocalBounds();
             auto row = area.removeFromBottom (40).reduced (16, 8);
             typeLabel.setBounds (row.removeFromLeft (120)); type.setBounds (row.removeFromLeft (90)); row.removeFromLeft (24);
-            depthLabel.setBounds (row.removeFromLeft (80)); depth.setBounds (row.removeFromLeft (70));
+            depthLabel.setBounds (row.removeFromLeft (80)); depth.setBounds (row.removeFromLeft (70)); row.removeFromLeft (24);
+            mpe.setBounds (row.removeFromLeft (130));
             devices.setBounds (area);
         }
     private:
@@ -7702,6 +7824,7 @@ private:
         juce::AudioDeviceSelectorComponent devices;
         juce::Label typeLabel, depthLabel;
         juce::ComboBox type, depth;
+        juce::TextButton mpe { "MPE Inputs..." };
     };
     void showAudioSettings() { showDialog ("Halftrack - Audio & MIDI Setup", std::make_unique<AudioSetupPanel> (*this), 660, 640); }
     void showPlugins()
@@ -10421,6 +10544,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "clicking the lane adds a pan modulation point to the MIDI clip");
         session.undo(); refresh();
         check (currentMidiClip()->envelopes.empty(), "undo removes it");
+        // MPE: the lane edits the selected note's pitch bend, drawn on the note too.
+        check (session.addMidiNote (currentMidiClip()->id, 60, 0, 4, .8f).wasOk(), "a note to bend"); refresh();
+        const auto noteCentre = pianoRoll.shownNoteBounds (currentMidiClip()->notes[0]).getCentre();
+        pianoRoll.mouseDown (press (pianoRoll, noteCentre, noteCentre, false, 1)); pianoRoll.mouseUp (press (pianoRoll, noteCentre, noteCentre, false, 1)); refresh();
+        const int bendItem = findItem (*laneBox, "Note Expression (MPE)", "Note Pitch Bend");
+        check (bendItem > 0, "the lane chooser offers note expression");
+        laneBox->setSelectedId (bendItem, juce::sendNotificationSync);
+        // The lane shares the grid's beat positions.
+        const juce::Point<float> bendPoint { pianoRoll.shownNoteBounds (currentMidiClip()->notes[0]).getCentreX(), plotBottom - (plotBottom - plotTop) * .75f };
+        laneComponent->mouseDown (press (*laneComponent, bendPoint, bendPoint, false, 1)); laneComponent->mouseUp (press (*laneComponent, bendPoint, bendPoint, false, 1)); refresh();
+        const auto bendNote = currentMidiClip()->notes[0];
+        check (bendNote.pitchBend.size() == 1 && std::abs (bendNote.pitchBend[0].value - 24) < 1 && bendNote.pitchBend[0].beat > 1 && bendNote.pitchBend[0].beat < 3,
+               "clicking the lane over the note bends it about two octaves at its middle (" + juce::String (bendNote.pitchBend.empty() ? 0.0f : bendNote.pitchBend[0].value, 1) + " st)");
+        session.undo(); refresh();
+        check (currentMidiClip()->notes[0].pitchBend.empty(), "undo removes the bend");
+        session.undo(); refresh();
         laneBox->setSelectedId (1, juce::sendNotificationSync); closeClipView();
         check (session.addMidiClipToSlot (currentTrack()->id, 0, 4).wasOk(), "a Session MIDI clip"); refresh();
         showSessionView(); selectLauncherSlot (lane, 0); openPianoRoll(); refresh();

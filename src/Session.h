@@ -182,6 +182,12 @@ public:
         std::array<double, 8> values {};
         bool operator== (const NoteToolSettings&) const = default;
     };
+    // MPE, after the reference's: a note's own pitch bend in semitones (-48 to 48), slide (CC 74)
+    // and pressure (both 0-1), each a curve of points at beats from the note's start, ramping
+    // between them and holding the last. A clip with any plays as MPE: each note on its own
+    // channel, with a pitch bend range of 48 semitones there.
+    enum class NoteExpression { pitchBend, slide, pressure };
+    struct ExpressionPoint { double beat = 0; float value = 0; bool operator== (const ExpressionPoint&) const = default; };
     struct MidiNoteInfo
     {
         juce::String id;
@@ -191,6 +197,7 @@ public:
         bool active = true;
         float chance = 1;      // The probability the note plays on each pass of its clip, 0 to 1.
         int velocityRange = 0; // Each pass adds a random velocity between 0 and this, -127 to 127.
+        std::vector<ExpressionPoint> pitchBend, slide, pressure;
     };
     // MIDI controller lanes in a clip: CC numbers 0-119, plus pitch bend and channel pressure.
     // Each point's value holds until the next point (step playback).
@@ -554,6 +561,8 @@ public:
     // Each is one undo step for the notes given. A clip with notes that vary plays them differently
     // on each pass of its loop, through 64 passes that repeat.
     juce::Result setMidiNotesChance (const juce::String& clipId, const juce::StringArray& noteIds, float chance);
+    // Sets one of a note's expression curves as one undo step; no points removes it.
+    juce::Result setMidiNoteExpression (const juce::String& clipId, const juce::String& noteId, NoteExpression, const std::vector<ExpressionPoint>&);
     juce::Result setMidiNotesVelocityRange (const juce::String& clipId, const juce::StringArray& noteIds, int range);
     juce::Result splitMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, double splitBeat, juce::StringArray& insertedIds);
     juce::Result transformMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, NoteTransform, double gridBeats);
@@ -725,6 +734,11 @@ public:
     juce::Result setTrackMute (int trackIndex, bool);
     juce::Result setTrackSolo (int trackIndex, bool);
     juce::StringArray inputNames (bool midi = false) const;
+    // An MPE controller's input, after the reference's per-input MPE switch: its notes record with
+    // their own pitch bend, slide and pressure, a lower zone of 15 member channels. Kept with the
+    // device settings.
+    juce::Result setMidiInputMpe (const juce::String& inputName, bool);
+    bool isMidiInputMpe (const juce::String& inputName) const;
     juce::Result setTrackInput (int trackIndex, const juce::String& inputName);
     juce::Result setTrackArmed (int trackIndex, bool);
     juce::Result setTrackMonitor (int trackIndex, MonitorMode);

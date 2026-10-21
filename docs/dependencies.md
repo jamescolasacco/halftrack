@@ -262,3 +262,9 @@ The patch makes these changes:
 - **Mode settings.** The stretch options carry four Halftrack values. They are saved as a version 2 string only when set, so other clips' options strings are unchanged.
 
 `warp-modes-acceptance` renders each mode.
+
+## Tracktion MPE timing patch
+
+`cmake/PatchMpeTiming.cmake` patches the pinned `tracktion_MidiList.cpp` after the MIDI release velocity patch (input SHA-256 `93b05169b4008e66831d4ee3a9d42d065b32b011cd5f27c1dd04fd0a0854dcbd`, patched `ed53b9158c0162bef0c3c041c473bd4e6e740bad5eee65c61e4f3e5775436949`). The release velocity patch accepts the new hash on reconfigure.
+
+MIDI clips build their playback sequences in raw beats. Expressive notes and their expression events were placed in seconds there, which the sequence then played as beats. Raw-beat sequences now place them in beats, as other notes are. `mpe-acceptance` measures the bends' timing.

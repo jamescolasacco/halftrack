@@ -37,6 +37,10 @@ private:
     std::array<double, 128> frequencies {};
     std::array<bool, 16> sustainPedal {};
     std::array<double, 16> pitchRatios {}; // prepare/reset centers every channel.
+    // The wheel's last position (-1 to 1) and the bend sensitivity RPN 0 set, two semitones until then.
+    std::array<double, 16> wheels {}, bendSensitivity {};
+    std::array<int, 16> rpnMsb {}, rpnLsb {};
+    void applyBend (int channel) noexcept;
     Session::SynthSettings settings;
     double sampleRate = 48000, a1 = 0, a2 = 0, a3 = 0;
     float attackStep = 1, decayStep = 1;

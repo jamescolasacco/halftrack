@@ -289,6 +289,7 @@ void InstrumentDSP::reset() noexcept
     for (auto& v : voices) { v = Voice {}; }
     configure (settings);
     sustainPedal = {}; wheel = {}; keyCount = 0; clock = 0; lfo.reset(); lfoSeed = 0x6d2b79f5u;
+    bendSensitivity.fill (-1); rpnMsb.fill (127); rpnLsb.fill (127);
 }
 int InstrumentDSP::activeVoices() const noexcept
 { int count = 0; for (const auto& v : voices) count += v.active; return count; }
@@ -296,7 +297,8 @@ double InstrumentDSP::bend (int channel) const noexcept
 {
     const auto range = kind == Kind::polySynth ? settings.values[poly::bendRange] : kind == Kind::fmSynth ? settings.values[fm::bendRange]
         : kind == Kind::wavetableSynth ? settings.values[wavetable::bendRange] : kind == Kind::sampler ? settings.values[sampler::bendRange] : 0.0f;
-    return wheel[static_cast<size_t> (std::clamp (channel, 1, 16) - 1)] * range;
+    const auto c = static_cast<size_t> (std::clamp (channel, 1, 16) - 1);
+    return wheel[c] * (bendSensitivity[c] >= 0 ? bendSensitivity[c] : range);
 }
 InstrumentDSP::Voice* InstrumentDSP::allocate() noexcept
 {
@@ -445,6 +447,14 @@ void InstrumentDSP::controlChange (int channel, int controller, int value) noexc
         if (controller == 121) wheel[c] = 0;
     }
     else if (controller == 120) { for (auto& v : voices) if (v.channel == channel) v = Voice {}; configure (settings); if (monophonic()) keyCount = 0; }
+    // RPN 0, pitch bend sensitivity: CC 101 and 100 choose it, CC 6 and 38 give semitones and cents.
+    else if (controller == 101) rpnMsb[c] = value;
+    else if (controller == 100) rpnLsb[c] = value;
+    else if ((controller == 6 || controller == 38) && rpnMsb[c] == 0 && rpnLsb[c] == 0)
+    {
+        const auto whole = bendSensitivity[c] >= 0 ? std::floor (bendSensitivity[c]) : 0.0;
+        bendSensitivity[c] = controller == 6 ? value + (bendSensitivity[c] >= 0 ? bendSensitivity[c] - whole : 0.0) : whole + value / 100.0;
+    }
     else if (controller == 123)
     {
         if (monophonic()) keyCount = 0;

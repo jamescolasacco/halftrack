@@ -555,3 +555,11 @@ These are simplest defaults pending a comparison with the reference:
 - **Grain Size** is 4 ms a step for both Tones and Texture (defaults 30 and 65); the reference's scale is unmeasured.
 - **Complex Pro** offers Formants only; the reference's Envelope setting is missing.
 - **Transposition** is refused for unwarped and Re-Pitch clips; how the reference transposes unwarped clips is unmeasured.
+
+### MPE scope
+
+These are simplest defaults pending a comparison with the reference:
+
+- **Zones.** MPE plays and records in a fixed lower zone of 15 member channels with a 48-semitone bend range.
+- **Instruments.** The native instruments respond to MPE pitch bend but not yet to slide or pressure.
+- **Ramps.** Expression ramps between drawn points in 1/64-beat steps.
