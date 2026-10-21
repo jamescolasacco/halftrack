@@ -474,3 +474,11 @@ Only launches and stops made through Halftrack's launch commands are captured. T
 - **Mixer moves.** They record only through Automation Arm.
 
 Replaced Arrangement material is split at the recorded range when it can be. A clip that cannot be split stays underneath.
+
+### Capture MIDI boundaries
+
+These are simplest defaults pending a comparison with the reference:
+
+- **The phrase** is everything since the last pause of over ten seconds, up to 4096 notes per track.
+- **Tempo.** With the transport stopped, the current tempo is kept rather than detected from the playing.
+- **Placement.** Clips start on the bar the first note fell in and last whole bars. In Session View they go into the first empty slot.

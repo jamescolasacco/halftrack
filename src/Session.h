@@ -426,6 +426,13 @@ public:
     void stopPreview();
     juce::Result setPreviewVolume (float decibels); // -70 to +6 dB.
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
+    // Capture MIDI: the notes played into armed or In-monitored MIDI tracks are kept. Capturing turns
+    // each track's latest phrase (since its last pause of over ten seconds) into a clip, bar-aligned:
+    // in the Arrangement at the beats it was played while the transport ran, otherwise from the
+    // insert marker at the current tempo; or into the track's first empty Session slot. One undo step.
+    enum class CaptureDestination { arrangement, session };
+    juce::Result captureMidi (CaptureDestination, juce::StringArray& createdClipIds);
+    bool hasCapturedMidi() const;
     juce::Result addScene (juce::String name = {});
     juce::Result removeScene (int sceneIndex);
     juce::Result duplicateScene (const juce::String& sceneId, juce::String& duplicatedSceneId);

@@ -261,7 +261,7 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &automationArmButton, &reEnableButton, &punchInButton, &punchOutButton, &followButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
+                 &playButton, &stopButton, &recordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &ruler, &viewport,
                  &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipGroove, &deviceChain })
@@ -356,6 +356,9 @@ public:
         recordButton.onClick = [this] { if (state.recording) session.stop(); else report (session.record()); refresh(); };
         automationArmButton.setTooltip ("Automation Arm: while recording, moving a fader or device control records its automation");
         automationArmButton.onClick = [this] { report (session.setAutomationArm (! state.automationArm)); refresh(); };
+        captureButton.setName ("Capture MIDI"); captureButton.setWantsKeyboardFocus (false);
+        captureButton.setTooltip ("Capture MIDI: turn the notes just played into armed or monitored MIDI tracks into clips  |  Shift+Cmd+C");
+        captureButton.onClick = [this] { captureFromUI(); };
         addAndMakeVisible (midiMapButton); addChildComponent (mapOverlay); addChildComponent (mappingList);
         midiMapButton.setName ("MIDI Map Mode"); midiMapButton.setClickingTogglesState (true);
         midiMapButton.setTooltip ("MIDI Map Mode: click a blue control, then move a controller to map it  |  Cmd/Ctrl+M");
@@ -530,13 +533,14 @@ public:
         pianoTab.setBounds (bar.removeFromRight (40)); bar.removeFromRight (10);
         cpuBounds = bar.removeFromRight (56); bar.removeFromRight (8);
         // Transport is centred on the window, independent of the side groups.
-        constexpr int transportWidth = 92 + 6 + 3 * 28 + 2 + 2 * 28 + 4 + 50 + 10 + 30 + 2 + 78 + 3 + 48 + 3 + 78 + 2 + 30;
+        constexpr int transportWidth = 92 + 6 + 3 * 28 + 2 + 2 * 28 + 4 + 54 + 4 + 50 + 10 + 30 + 2 + 78 + 3 + 48 + 3 + 78 + 2 + 30;
         auto centre = juce::Rectangle<int> (juce::jmax (bar.getX(), getWidth() / 2 - transportWidth / 2), bar.getY(), transportWidth, bar.getHeight());
         positionLabel.setBounds (centre.removeFromLeft (92)); centre.removeFromLeft (6);
         playButton.setBounds (centre.removeFromLeft (28));
         stopButton.setBounds (centre.removeFromLeft (28));
         recordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (2);
         automationArmButton.setBounds (centre.removeFromLeft (28)); reEnableButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4);
+        captureButton.setBounds (centre.removeFromLeft (54)); centre.removeFromLeft (4);
         followButton.setBounds (centre.removeFromLeft (50)); centre.removeFromLeft (10);
         punchInButton.setBounds (centre.removeFromLeft (30)); centre.removeFromLeft (2);
         loopStartLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (3);
@@ -648,6 +652,7 @@ public:
             if (code == 'G') { if (shift) ungroupSelectedTrack(); else groupSelectedTracks(); return true; }
             if (code == 'I') { importDialog(); return true; }
             if (code == 'E' && shift) { exportDialog(); return true; }
+            if (code == 'C' && shift) { captureFromUI(); return true; }
             if (! shift && ! showSession && ! showPiano && (code == 'E' || code == 'D' || code == 'C' || code == 'X' || code == 'V'))
             {
                 for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused != nullptr; focused = focused->getParentComponent())
@@ -5132,6 +5137,7 @@ private:
     juce::AudioThumbnailCache thumbnailCache { 128 };
     TransportButton playButton { TransportButton::play }, stopButton { TransportButton::stop }, recordButton { TransportButton::record };
     AutomationButton automationArmButton { AutomationButton::arm }, reEnableButton { AutomationButton::reEnable };
+    juce::TextButton captureButton { "Capture" };
     juce::TextButton punchInButton { "In" }, punchOutButton { "Out" };
     juce::TextButton followButton { "Follow" }, tapButton { "TAP" }, loopButton { "Loop" }, clickButton { "Metro" }, clickSettingsButton { "..." }, audioButton { "Audio" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
                      sessionTab { "Session" }, arrangementTab { "Arrange" }, pianoTab { "Clip" }, importButton { "Import Audio" },
@@ -5755,6 +5761,7 @@ private:
         loopButton.setToggleState (state.looping, juce::dontSendNotification);
         punchInButton.setToggleState (state.punchIn, juce::dontSendNotification); punchOutButton.setToggleState (state.punchOut, juce::dontSendNotification);
         punchInButton.setEnabled (! state.recording); punchOutButton.setEnabled (! state.recording);
+        captureButton.setEnabled (! state.recording && session.hasCapturedMidi());
         clickButton.setToggleState(state.metronome.enabled,juce::dontSendNotification);
         quantisation.setSelectedId (state.launchQuantisation == Session::LaunchQuantisation::none ? 1 : state.launchQuantisation == Session::LaunchQuantisation::beat ? 2 : 3, juce::dontSendNotification);
         {
@@ -5828,6 +5835,14 @@ private:
         repaint();
     }
     void togglePlay() { if (state.playing) session.stop(); else report (session.play()); refresh(); }
+    // Capture MIDI into the Session's empty slots in Session View, otherwise into the Arrangement.
+    void captureFromUI()
+    {
+        juce::StringArray created;
+        const auto result = session.captureMidi (showSession ? Session::CaptureDestination::session : Session::CaptureDestination::arrangement, created);
+        report (result, "Captured MIDI into " + juce::String (created.size()) + (created.size() == 1 ? " clip." : " clips."));
+        refresh();
+    }
     // After opening a project, names the plug-ins kept as placeholders because they could not load.
     juce::String missingPluginSummary() const
     {
@@ -8073,6 +8088,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (! state.playing && state.insertMarker == 0 && state.position == 0, "a second Stop returns to the start");
         session.setInsertMarker (3); refresh();
         check (handleKey (juce::KeyPress (juce::KeyPress::homeKey)) && state.insertMarker == 0 && state.position == 0, "Home returns to the start");
+        check (! captureButton.isEnabled() && handleKey (juce::KeyPress ('C', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)),
+               "Capture MIDI waits for played notes; Shift+Cmd+C asks for it");
         check (session.removeTrack (lane).wasOk(), "remove the transport track"); refresh();
         // The piano roll follows its clip's playhead too.
         const int previousTrack = selectedTrack;

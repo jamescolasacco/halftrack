@@ -1177,3 +1177,7 @@ UI change in `src/ArrangementAutomation.*` (new), `src/MainComponent.cpp` and `C
 ## Session performance capture — 2026-10-21
 
 Engine change in `src/Session.cpp` and `tests/LauncherTests.cpp`, with documentation. See [the contract](research/performance-capture-contract.md).
+
+## Capture MIDI — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/CaptureMidiTests.cpp` (new), with documentation. An input change can replace the engine's input instances, so the MIDI-mapping remote and the capture taps now re-attach after each one. See [the contract](research/capture-midi-contract.md).

@@ -60,6 +60,7 @@ int runMidiMonitorTests (const juce::File&);
 int runTransportTests (const juce::File&);
 int runMissingMediaTests (const juce::File&);
 int runPluginAutomationTests (const juce::File&);
+int runCaptureMidiTests (const juce::File&);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -227,6 +228,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-midi-mapping");
             setApplicationReturnValue (runMidiMappingTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-capture-midi"))
+        {
+            const int i = args.indexOf ("--self-test-capture-midi");
+            setApplicationReturnValue (runCaptureMidiTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-plugin-automation"))

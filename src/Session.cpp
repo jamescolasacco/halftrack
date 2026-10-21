@@ -1574,6 +1574,42 @@ private:
     std::vector<juce::WeakReference<te::InputDeviceInstance>> observed;
 };
 
+// Capture MIDI: one per MIDI input instance, timing the notes it receives for the message thread.
+class MidiCaptureTap final : public te::InputDeviceInstance::Consumer, private juce::AsyncUpdater
+{
+public:
+    using Handler = std::function<void (te::InputDeviceInstance&, const juce::MidiMessage&, double receivedMs)>;
+    MidiCaptureTap (te::InputDeviceInstance& in, Handler handler) : instance (&in), handle (std::move (handler)) { in.addConsumer (this); }
+    ~MidiCaptureTap() override { if (instance != nullptr) instance->removeConsumer (this); cancelPendingUpdate(); }
+    te::InputDeviceInstance* get() const { return instance.get(); }
+private:
+    struct Entry { juce::MidiMessage message; double ms = 0; };
+    void handleIncomingMidiMessage (const juce::MidiMessage& m, te::MPESourceID) override
+    {
+        if (! m.isNoteOnOrOff()) return;
+        {
+            const juce::SpinLock::ScopedLockType lock (mutex);
+            if (count < ring.size()) ring[(head + count++) % ring.size()] = { m, juce::Time::getMillisecondCounterHiRes() };
+        }
+        triggerAsyncUpdate();
+    }
+    void handleAsyncUpdate() override
+    {
+        std::array<Entry, 256> batch; size_t n = 0;
+        {
+            const juce::SpinLock::ScopedLockType lock (mutex);
+            for (; n < count; ++n) batch[n] = ring[(head + n) % ring.size()];
+            head = (head + n) % ring.size(); count = 0;
+        }
+        for (size_t i = 0; i < n; ++i) if (instance != nullptr) handle (*instance, batch[i].message, batch[i].ms);
+    }
+    std::array<Entry, 256> ring;
+    size_t head = 0, count = 0;
+    juce::SpinLock mutex;
+    juce::WeakReference<te::InputDeviceInstance> instance;
+    Handler handle;
+};
+
 struct Session::Impl
 {
     explicit Impl (Session& s, bool devices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType)
@@ -1608,7 +1644,7 @@ struct Session::Impl
         gesture.reset();
         meters.clear();
         grooveWatcher.watch ({});
-        remoteRest.stopTimer(); remoteWatch.stopTimer(); remote.detach();
+        remoteRest.stopTimer(); remoteWatch.stopTimer(); remote.detach(); captureTaps.clear(); captured.clear();
         preview.reset();
         edit.reset();
         // Unsaved sessions are deliberately retained in the temp directory for recovery.
@@ -2583,8 +2619,8 @@ struct Session::Impl
         edit->editFileRetriever = [this] { return editLocation(); };
         grooveWatcher.watch (edit->state);
         midiLearnTarget.clear();
-        remote.attach (edit.get());
-        if (useDevices && ! remoteWatch.isTimerRunning()) { remoteWatch.tick = [this] { remote.attach (edit.get()); }; remoteWatch.startTimer (1000); }
+        remote.attach (edit.get()); attachCapture();
+        if (useDevices && ! remoteWatch.isTimerRunning()) { remoteWatch.tick = [this] { remote.attach (edit.get()); attachCapture(); }; remoteWatch.startTimer (1000); }
         flushStructuralUpdates();
         edit->playInStopEnabled = true;
         edit->getAutomationRecordManager().setReadingAutomation (true);
@@ -2627,6 +2663,7 @@ struct Session::Impl
         // has registered its MIDI consumer and is silently dropped.
         for (auto* device : edit->getAllInputDevices()) device->flushRecordingStateUpdates();
         edit->dispatchPendingUpdatesSynchronously();
+        remote.attach (edit.get()); attachCapture(); // Input instances can be replaced by an input change.
         // Release only tracks that actually lost monitoring. No processor is
         // reset from the message thread while audio can use it.
         if (stopped.isEmpty()) return;
@@ -2641,7 +2678,7 @@ struct Session::Impl
     {
         if (! useDevices) return;
         edit->getTransport().ensureContextAllocated();
-        remote.attach (edit.get());
+        remote.attach (edit.get()); attachCapture();
     }
     // Enabling a device rebuilds every context's device list. Tracktion stops the play head
     // while clearing the old graph but leaves the transport playing, and its timer then stops
@@ -2690,6 +2727,50 @@ struct Session::Impl
     // MIDI mappings: the learn target, the remote inputs, and the gesture that groups a controller's moves.
     String midiLearnTarget;
     MidiRemote remote { [this] (int channel, int controller, int value) { owner.handleMidiControl (channel, controller, value); } };
+    // Capture MIDI: the notes played into each armed or In-monitored MIDI track, newest last.
+    struct CapturedNote { int channel = 1, pitch = 60; float velocity = 0; double onMs = 0, offMs = -1, onBeat = 0, offBeat = 0; bool timed = false; };
+    std::map<te::EditItemID, std::vector<CapturedNote>> captured;
+    std::vector<std::unique_ptr<MidiCaptureTap>> captureTaps;
+    static constexpr size_t maximumCapturedNotes = 4096;
+    void attachCapture()
+    {
+        std::vector<te::InputDeviceInstance*> wanted;
+        if (edit != nullptr) for (auto* in : edit->getAllInputDevices()) if (in->getInputDevice().isMidi()) wanted.push_back (in);
+        std::erase_if (captureTaps, [&] (const auto& tap) { return tap->get() == nullptr || std::find (wanted.begin(), wanted.end(), tap->get()) == wanted.end(); });
+        for (auto* in : wanted)
+            if (std::none_of (captureTaps.begin(), captureTaps.end(), [in] (const auto& tap) { return tap->get() == in; }))
+                captureTaps.push_back (std::make_unique<MidiCaptureTap> (*in, [this] (te::InputDeviceInstance& i, const juce::MidiMessage& m, double ms) { captureNote (i, m, ms); }));
+    }
+    // The beat a note arrived at while the transport plays, from the play head less its wait.
+    std::optional<double> arrivalBeat (double receivedMs) const
+    {
+        auto& transport = edit->getTransport();
+        if (! transport.isPlaying()) return std::nullopt;
+        auto* context = transport.getCurrentPlaybackContext(); if (context == nullptr) return std::nullopt;
+        const auto waited = std::max (0.0, (juce::Time::getMillisecondCounterHiRes() - receivedMs) / 1000.0);
+        return edit->tempoSequence.toBeats (context->getPosition() - te::TimeDuration::fromSeconds (waited)).inBeats();
+    }
+    void captureNote (te::InputDeviceInstance& in, const juce::MidiMessage& m, double receivedMs)
+    {
+        const auto beat = arrivalBeat (receivedMs);
+        for (auto target : in.getTargets())
+        {
+            auto* t = dynamic_cast<te::AudioTrack*> (te::findTrackForID (*edit, target));
+            if (t == nullptr || ! static_cast<bool> (t->state.getProperty (midiTrackProperty))) continue;
+            const bool monitored = static_cast<int> (t->state.getProperty (monitorProperty, 0)) == static_cast<int> (MonitorMode::on);
+            if (! in.isRecordingEnabled (target) && ! monitored) continue;
+            auto& notes = captured[target];
+            if (m.isNoteOn())
+            {
+                if (notes.size() >= maximumCapturedNotes) notes.erase (notes.begin());
+                notes.push_back ({ m.getChannel(), m.getNoteNumber(), m.getFloatVelocity(), receivedMs, -1, beat.value_or (0), 0, beat.has_value() });
+            }
+            else
+                for (auto it = notes.rbegin(); it != notes.rend(); ++it)
+                    if (it->offMs < 0 && it->channel == m.getChannel() && it->pitch == m.getNoteNumber())
+                    { it->offMs = receivedMs; it->offBeat = beat.value_or (it->onBeat); break; }
+        }
+    }
     struct RemoteRest final : juce::Timer
     {
         std::function<void()> tick;
@@ -3611,6 +3692,89 @@ Result Session::exportMidiClip (const String& id, const File& destination)
      stream->flush();if(stream->getStatus().failed())return stream->getStatus();}
     if(!temporary.overwriteTargetFileWithTemporary())return Result::fail("Could not replace the MIDI destination.");
     return Result::ok();
+}
+bool Session::hasCapturedMidi() const
+{ return std::any_of (impl->captured.begin(), impl->captured.end(), [] (const auto& entry) { return ! entry.second.empty(); }); }
+Result Session::captureMidi (CaptureDestination destination, juce::StringArray& createdClipIds)
+{
+    createdClipIds.clear();
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before capturing MIDI.");
+    if (! hasCapturedMidi()) return Result::fail ("Play some notes into an armed or In-monitored MIDI track first.");
+    const auto now = juce::Time::getMillisecondCounterHiRes();
+    const auto nowBeat = impl->arrivalBeat (now);
+    const auto meter = snapshot().timeSignature;
+    const double bar = std::max (1.0, meter.beatsPerBar());
+    const double bpm = std::clamp (snapshot().tempo, 20.0, 999.0);
+    auto captured = std::move (impl->captured); impl->captured.clear();
+    beginEditGesture ("Capture MIDI");
+    Result result = Result::ok();
+    for (auto& [trackId, notes] : captured)
+    {
+        auto* track = dynamic_cast<te::AudioTrack*> (te::findTrackForID (*impl->edit, trackId));
+        if (track == nullptr || notes.empty()) continue;
+        // The material since the last pause of more than ten seconds.
+        size_t first = 0;
+        double latestEnd = notes[0].offMs < 0 ? now : notes[0].offMs;
+        for (size_t i = 1; i < notes.size(); ++i)
+        {
+            if (notes[i].onMs - latestEnd > 10000) first = i;
+            latestEnd = std::max (latestEnd, notes[i].offMs < 0 ? now : notes[i].offMs);
+        }
+        std::vector<Impl::CapturedNote> phrase (notes.begin() + (std::ptrdiff_t) first, notes.end());
+        for (auto& n : phrase) if (n.offMs < 0) { n.offMs = now; n.offBeat = nowBeat.value_or (n.onBeat); }
+        // Notes played with the transport running keep their beats; otherwise they are timed at the tempo.
+        const bool timed = std::all_of (phrase.begin(), phrase.end(), [] (const auto& n) { return n.timed; });
+        std::vector<MidiNoteInfo> written;
+        double startBeat = 0, length = bar;
+        if (timed)
+        {
+            double low = phrase[0].onBeat, high = phrase[0].offBeat;
+            for (const auto& n : phrase) { low = std::min (low, n.onBeat); high = std::max (high, n.offBeat); }
+            startBeat = std::floor (std::max (0.0, low) / bar) * bar;
+            length = std::max (bar, std::ceil ((high - startBeat) / bar - 1e-9) * bar);
+            for (const auto& n : phrase)
+                written.push_back ({ {}, n.pitch, std::max (0.0, n.onBeat - startBeat), std::max (1.0 / 960, n.offBeat - n.onBeat), n.velocity });
+        }
+        else
+        {
+            const auto origin = phrase[0].onMs;
+            double high = 0;
+            for (const auto& n : phrase)
+            {
+                const auto on = (n.onMs - origin) / 60000.0 * bpm, off = (n.offMs - origin) / 60000.0 * bpm;
+                written.push_back ({ {}, n.pitch, on, std::max (1.0 / 960, off - on), n.velocity });
+                high = std::max (high, off);
+            }
+            length = std::max (bar, std::ceil (high / bar - 1e-9) * bar);
+            startBeat = beatsAt (snapshot().insertMarker);
+        }
+        const auto id = track->itemID.toString();
+        String clipId;
+        if (destination == CaptureDestination::session)
+        {
+            int scene = -1;
+            const auto slots = track->getClipSlotList().getClipSlots();
+            for (int i = 0; i < slots.size() && scene < 0; ++i) if (slots[i]->getClip() == nullptr) scene = i;
+            if (scene < 0) { result = Result::fail ("\"" + track->getName() + "\" has no empty slot to capture into."); continue; }
+            if (result = addMidiClipToSlot (id, scene, length); result.failed()) continue;
+            clipId = track->getClipSlotList().getClipSlots()[scene]->getClip()->itemID.toString();
+        }
+        else
+        {
+            const auto before = snapshot();
+            if (result = addMidiClip (id, startBeat, length); result.failed()) continue;
+            for (const auto& t : snapshot().tracks)
+                if (t.id == id) for (const auto& c : t.clips)
+                    if (std::none_of (before.tracks.begin(), before.tracks.end(), [&] (const auto& b) { return std::any_of (b.clips.begin(), b.clips.end(), [&] (const auto& old) { return old.id == c.id; }); }))
+                        clipId = c.id;
+        }
+        juce::StringArray inserted;
+        if (clipId.isNotEmpty()) { if (result = addMidiNotes (clipId, written, inserted); result.wasOk()) createdClipIds.add (clipId); }
+    }
+    endEditGesture();
+    if (createdClipIds.isEmpty() && result.wasOk()) return Result::fail ("No MIDI track could take the captured notes.");
+    return result;
 }
 Result Session::addMidiClip (const String& trackId, double start, double length)
 {
