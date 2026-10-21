@@ -1039,3 +1039,12 @@ Root change. It touches:
 
 Samples can be auditioned from the browser without touching the project. See [the contract](research/preview-contract.md).
 
+## MIDI mapping — 2026-10-21
+
+Root change. It touches:
+
+- the MIDI remote consumer, mapping storage, learning and controller handling in `src/Session.*`;
+- `tests/MidiMappingTests.cpp`, the suite registration and documentation.
+
+MIDI controllers can be learned onto mixer and device controls and then drive them. The Map Mode user interface follows. See [the contract](research/midi-mapping-contract.md).
+

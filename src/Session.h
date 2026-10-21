@@ -346,6 +346,15 @@ public:
         int countInBars = 0; // 0, 1 or 2 bars of the project meter.
         bool operator== (const MetronomeSettings&) const = default;
     };
+    // A MIDI mapping (see setMidiLearnTarget): a controller on a channel and the target it drives
+    // between minimum and maximum, in the target's own units.
+    struct MidiMapping
+    {
+        juce::String target;
+        int channel = 1, controller = 0;
+        float minimum = 0, maximum = 1;
+        bool operator== (const MidiMapping&) const = default;
+    };
     struct Snapshot
     {
         juce::String name;
@@ -366,6 +375,8 @@ public:
         std::vector<GrooveInfo> grooves; // The groove pool, in pool order.
         bool automationArm = false, punchIn = false, punchOut = false;
         juce::File previewing; // The file the browser preview is playing, if any.
+        std::vector<MidiMapping> midiMappings; // Those whose targets exist.
+        juce::String midiLearnTarget;
         float previewVolumeDb = 0;
         bool automationOverridden = false; // Some lane with points is switched off.
         float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
@@ -550,6 +561,21 @@ public:
     // the range when recording stops (audio keeps its timing), and captured automation respects it.
     juce::Result setPunchIn (bool);
     juce::Result setPunchOut (bool);
+    // MIDI mappings, after the reference's MIDI Map Mode. A controller (a CC on a channel) drives one
+    // target and a target has at most one controller: a track's volume or pan ("mixer:<track>:volume"
+    // or ":pan"), the master volume ("master") or a native device control ("device:<plugin>:<index>").
+    // The controller's 0-127 moves the control's fader or knob position between minimum and maximum,
+    // in the control's own units. Every enabled MIDI input acts as a remote control.
+    // While a learn target is set, the next controller maps to it (replacing the target's mapping and
+    // the controller's previous one) and moves nothing. An empty target ends learning.
+    juce::Result setMidiLearnTarget (const juce::String& target);
+    juce::Result removeMidiMapping (const juce::String& target);
+    juce::Result setMidiMappingRange (const juce::String& target, float minimum, float maximum);
+    // A controller change, as it arrives from a MIDI input. Moves from one controller are one undo step
+    // until it rests for half a second.
+    juce::Result handleMidiControl (int channel, int controller, int value);
+    // A target's range in its own units, or nothing for an unknown target.
+    std::optional<std::pair<float, float>> midiTargetRange (const juce::String& target) const;
     // Knob-position mapping of a native control, used by automation editors; integer controls round.
     static float deviceAutomationValueToProportion (EffectKind, int parameter, float value);
     static float deviceAutomationProportionToValue (EffectKind, int parameter, float proportion);

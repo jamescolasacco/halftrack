@@ -327,3 +327,13 @@ These are simplest-default choices pending reference measurement:
 - **Volume.** The preview volume runs from −70 to +6 dB and is not saved.
 - **Project changes.** Opening another project does not stop a preview.
 
+### MIDI mapping defaults
+
+These are simplest-default choices pending reference measurement:
+
+- **Inputs.** Every enabled MIDI input acts as a remote, with no per-port Remote switch.
+- **Absolute values.** Controllers are absolute, with no takeover mode.
+- **Undo.** A controller's moves are one undo step until it rests for half a second.
+- **Learning.** Learning moves nothing.
+- **Deleted devices.** A deleted device's mappings stay stored but inert.
+

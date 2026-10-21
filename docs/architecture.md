@@ -690,3 +690,7 @@ A pass keeps the lane's original points and its recorded points, and rewrites th
 
 `Session::Impl` owns a second `te::Edit` for preview, made by `createEditForPreviewingFile`. It plays on the same `DeviceManager`, which mixes every allocated playback context. It is created per previewed file, destroyed by `stopPreview` and before the project Edit at shutdown, and never enters the project's state or undo history.
 
+## MIDI remote control
+
+`MidiRemote`, owned by `Session::Impl`, is an `InputDeviceInstance::Consumer` on every MIDI input instance of the current Edit. It is reattached on load, on input refresh and every second, and is held through weak references. On the MIDI thread it copies controller changes into a fixed 256-entry ring under a spin lock. An `AsyncUpdater` drains the ring on the message thread into `Session::handleMidiControl`. That function learns or applies mappings stored in the Edit's `HALFTRACKMIDIMAP`, resolving targets with the same lane keys and tapers as automation capture.
+

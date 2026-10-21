@@ -1429,6 +1429,41 @@ juce::Result runRangeExportTaskCancellationTests (const juce::File& directory)
 }
 #endif
 
+// MIDI mappings: a Halftrack child of the Edit with one MAPPING per controller.
+const juce::Identifier midiMapType { "HALFTRACKMIDIMAP" }, midiMappingType { "MAPPING" };
+Session::MidiMapping readMidiMapping (const juce::ValueTree& v)
+{
+    return { v["target"].toString(), static_cast<int> (v["channel"]), static_cast<int> (v["controller"]),
+             static_cast<float> (v["minimum"]), static_cast<float> (v["maximum"]) };
+}
+juce::ValueTree midiMappingTree (const Session::MidiMapping& m)
+{
+    juce::ValueTree v (midiMappingType);
+    v.setProperty ("target", m.target, nullptr); v.setProperty ("channel", m.channel, nullptr); v.setProperty ("controller", m.controller, nullptr);
+    v.setProperty ("minimum", m.minimum, nullptr); v.setProperty ("maximum", m.maximum, nullptr);
+    return v;
+}
+Result validateMidiMappings (const juce::ValueTree& state)
+{
+    int maps = 0;
+    for (const auto& map : state)
+    {
+        if (! map.hasType (midiMapType)) continue;
+        if (++maps > 1 || map.getNumChildren() > 4096) return Result::fail ("The project's MIDI mappings are invalid.");
+        std::set<String> targets; std::set<int> controllers;
+        for (const auto& m : map)
+        {
+            const auto whole = [&] (const char* key, double low, double high) { return finiteProperty (m[key], low, high) && static_cast<double> (m[key]) == std::floor (static_cast<double> (m[key])); };
+            const auto target = m["target"].toString();
+            const auto kind = target.upToFirstOccurrenceOf (":", false, false);
+            if (! m.hasType (midiMappingType) || ! (kind == "mixer" || kind == "device" || target == "master") || ! whole ("channel", 1, 16) || ! whole ("controller", 0, 127)
+                || ! finiteProperty (m["minimum"], -1.0e6, 1.0e6) || ! finiteProperty (m["maximum"], -1.0e6, 1.0e6)
+                || ! targets.insert (target).second || ! controllers.insert (static_cast<int> (m["channel"]) * 128 + static_cast<int> (m["controller"])).second)
+                return Result::fail ("The project contains an invalid MIDI mapping.");
+        }
+    }
+    return Result::ok();
+}
 // Defined with the range edits below.
 namespace
 {
@@ -1463,6 +1498,53 @@ private:
     void valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int) override { if (inPool (parent) || child.hasType (groovePoolType)) restart(); }
 };
 
+// MIDI remote control: every MIDI input's controller changes reach the message thread, where the
+// Session applies its MIDI mappings. The MIDI thread only copies them into a fixed ring.
+class MidiRemote final : public te::InputDeviceInstance::Consumer, private juce::AsyncUpdater
+{
+public:
+    explicit MidiRemote (std::function<void (int, int, int)> handler) : handle (std::move (handler)) {}
+    ~MidiRemote() override { detach(); cancelPendingUpdate(); }
+    // Message thread: consume every MIDI input instance of the Edit, and only those.
+    void attach (te::Edit* edit)
+    {
+        std::vector<te::InputDeviceInstance*> wanted;
+        if (edit != nullptr) for (auto* in : edit->getAllInputDevices()) if (in->getInputDevice().isMidi()) wanted.push_back (in);
+        const auto isWanted = [&] (te::InputDeviceInstance* in) { return std::find (wanted.begin(), wanted.end(), in) != wanted.end(); };
+        for (auto& in : observed) if (in != nullptr && ! isWanted (in.get())) in->removeConsumer (this);
+        std::erase_if (observed, [&] (const auto& in) { return in == nullptr || ! isWanted (in.get()); });
+        for (auto* in : wanted)
+            if (std::none_of (observed.begin(), observed.end(), [in] (const auto& o) { return o.get() == in; })) { in->addConsumer (this); observed.emplace_back (in); }
+    }
+    void detach() { for (auto& in : observed) if (in != nullptr) in->removeConsumer (this); observed.clear(); }
+private:
+    struct Message { int channel = 1, controller = 0, value = 0; };
+    void handleIncomingMidiMessage (const juce::MidiMessage& m, te::MPESourceID) override
+    {
+        if (! m.isController()) return;
+        {
+            const juce::SpinLock::ScopedLockType lock (mutex);
+            if (count < ring.size()) ring[(head + count++) % ring.size()] = { m.getChannel(), m.getControllerNumber(), m.getControllerValue() };
+        }
+        triggerAsyncUpdate();
+    }
+    void handleAsyncUpdate() override
+    {
+        std::array<Message, 256> batch; size_t n = 0;
+        {
+            const juce::SpinLock::ScopedLockType lock (mutex);
+            for (; n < count; ++n) batch[n] = ring[(head + n) % ring.size()];
+            head = (head + n) % ring.size(); count = 0;
+        }
+        for (size_t i = 0; i < n; ++i) handle (batch[i].channel, batch[i].controller, batch[i].value);
+    }
+    std::array<Message, 256> ring;
+    size_t head = 0, count = 0;
+    juce::SpinLock mutex;
+    std::function<void (int, int, int)> handle;
+    std::vector<juce::WeakReference<te::InputDeviceInstance>> observed;
+};
+
 struct Session::Impl
 {
     explicit Impl (Session& s, bool devices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType)
@@ -1493,6 +1575,7 @@ struct Session::Impl
         gesture.reset();
         meters.clear();
         grooveWatcher.watch ({});
+        remoteRest.stopTimer(); remoteWatch.stopTimer(); remote.detach();
         preview.reset();
         edit.reset();
         // Unsaved sessions are deliberately retained in the temp directory for recovery.
@@ -2337,6 +2420,9 @@ struct Session::Impl
         resetTapTempo();
         edit->editFileRetriever = [this] { return editLocation(); };
         grooveWatcher.watch (edit->state);
+        midiLearnTarget.clear();
+        remote.attach (edit.get());
+        if (useDevices && ! remoteWatch.isTimerRunning()) { remoteWatch.tick = [this] { remote.attach (edit.get()); }; remoteWatch.startTimer (1000); }
         flushStructuralUpdates();
         edit->playInStopEnabled = true;
         edit->getAutomationRecordManager().setReadingAutomation (true);
@@ -2393,6 +2479,7 @@ struct Session::Impl
     {
         if (! useDevices) return;
         edit->getTransport().ensureContextAllocated();
+        remote.attach (edit.get());
     }
     // Enabling a device rebuilds every context's device list. Tracktion stops the play head
     // while clearing the old graph but leaves the transport playing, and its timer then stops
@@ -2412,6 +2499,18 @@ struct Session::Impl
     }
     Session& owner;
     te::Engine engine;
+    // MIDI mappings: the learn target, the remote inputs, and the gesture that groups a controller's moves.
+    String midiLearnTarget;
+    MidiRemote remote { [this] (int channel, int controller, int value) { owner.handleMidiControl (channel, controller, value); } };
+    struct RemoteRest final : juce::Timer
+    {
+        std::function<void()> tick;
+        void timerCallback() override { tick(); }
+    } remoteRest;
+    bool remoteGesture = false;
+    uint32_t lastRemote = 0;
+    // Input instances are rebuilt when devices come and go, so the remote reattaches each second.
+    RemoteRest remoteWatch;
     // Browser preview: its own Edit, playing beside the project's.
     std::unique_ptr<te::Edit> preview;
     File previewSource;
@@ -2483,6 +2582,9 @@ Session::Snapshot Session::snapshot() const
     s.punchIn = impl->punchIn(); s.punchOut = impl->punchOut();
     s.previewing = impl->previewPlaying() ? impl->previewSource : File();
     s.previewVolumeDb = impl->previewVolumeDb;
+    for (const auto& m : e.state.getChildWithName (midiMapType))
+        if (auto mapping = readMidiMapping (m); midiTargetRange (mapping.target)) s.midiMappings.push_back (mapping);
+    s.midiLearnTarget = impl->midiLearnTarget;
     s.automationOverridden = ! impl->overriddenLanes().isEmpty();
     const auto quantisation = e.getLaunchQuantisation().type.get();
     s.launchQuantisation = quantisation == te::LaunchQType::none ? LaunchQuantisation::none
@@ -2674,6 +2776,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateTrackDelays (state); result.failed()) return result;
     if (auto result = validateClipScales (state); result.failed()) return result;
     if (auto result = validateGroovePool (state); result.failed()) return result;
+    if (auto result = validateMidiMappings (state); result.failed()) return result;
     if (state.hasProperty (automationArmProperty) && ! (finiteProperty (state[automationArmProperty], 0, 1) && (state[automationArmProperty].toString().trim() == "0" || state[automationArmProperty].toString().trim() == "1")))
         return Result::fail ("The project's Automation Arm setting is invalid.");
     for (const auto& property : { punchInProperty, punchOutProperty })
@@ -5581,6 +5684,122 @@ Result Session::setDeviceAutomation (const String& pluginId, int parameter, cons
     device->refreshAutomation();
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->changed(); return Result::ok();
+}
+std::optional<std::pair<float, float>> Session::midiTargetRange (const String& target) const
+{
+    const auto parts = juce::StringArray::fromTokens (target, ":", "");
+    if (target == "master") return std::pair { -100.0f, 6.0f };
+    if (parts.size() == 3 && parts[0] == "mixer" && impl->track (parts[1]) != nullptr)
+    {
+        if (parts[2] == "volume") return std::pair { -100.0f, 6.0f };
+        if (parts[2] == "pan") return std::pair { -1.0f, 1.0f };
+    }
+    if (parts.size() == 3 && parts[0] == "device" && parts[2].containsOnly ("0123456789"))
+        if (auto* device = impl->nativeDevice (parts[1]))
+        {
+            const auto fields = effectParameters (device->getKind());
+            const int index = parts[2].getIntValue();
+            if (juce::isPositiveAndBelow (index, (int) fields.size())) return std::pair { fields[(size_t) index].minimum, fields[(size_t) index].maximum };
+        }
+    return std::nullopt;
+}
+Result Session::setMidiLearnTarget (const String& target)
+{
+    if (target.isNotEmpty() && ! midiTargetRange (target)) return Result::fail ("That control cannot be mapped.");
+    if (impl->midiLearnTarget == target) return Result::ok();
+    impl->midiLearnTarget = target;
+    sendChangeMessage(); return Result::ok();
+}
+Result Session::removeMidiMapping (const String& target)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto map = impl->edit->state.getChildWithName (midiMapType);
+    for (const auto& m : map)
+        if (m["target"].toString() == target)
+        {
+            impl->transaction ("Remove MIDI mapping");
+            map.removeChild (m, &impl->edit->getUndoManager());
+            impl->changed(); return Result::ok();
+        }
+    return Result::fail ("That control has no MIDI mapping.");
+}
+Result Session::setMidiMappingRange (const String& target, float minimum, float maximum)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    const auto range = midiTargetRange (target);
+    if (! range || ! std::isfinite (minimum) || ! std::isfinite (maximum) || minimum < range->first || minimum > range->second || maximum < range->first || maximum > range->second)
+        return Result::fail ("Choose a minimum and maximum within the control's range.");
+    auto map = impl->edit->state.getChildWithName (midiMapType);
+    for (auto m : map)
+        if (m["target"].toString() == target)
+        {
+            if (readMidiMapping (m).minimum == minimum && readMidiMapping (m).maximum == maximum) return Result::ok();
+            impl->transaction ("MIDI mapping range");
+            m.setProperty ("minimum", minimum, &impl->edit->getUndoManager()); m.setProperty ("maximum", maximum, &impl->edit->getUndoManager());
+            impl->changed(); return Result::ok();
+        }
+    return Result::fail ("That control has no MIDI mapping.");
+}
+Result Session::handleMidiControl (int channel, int controller, int value)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (channel < 1 || channel > 16 || controller < 0 || controller > 127 || value < 0 || value > 127) return Result::fail ("Invalid MIDI controller message.");
+    auto* undo = &impl->edit->getUndoManager();
+    auto map = impl->edit->state.getChildWithName (midiMapType);
+    if (impl->midiLearnTarget.isNotEmpty())
+    {
+        const auto range = midiTargetRange (impl->midiLearnTarget);
+        if (! range) { impl->midiLearnTarget.clear(); sendChangeMessage(); return Result::fail ("The control being mapped no longer exists."); }
+        const MidiMapping mapping { impl->midiLearnTarget, channel, controller, range->first, range->second };
+        for (const auto& m : map)
+            if (readMidiMapping (m) == mapping) return Result::ok();
+        impl->transaction ("MIDI mapping");
+        map = impl->edit->state.getOrCreateChildWithName (midiMapType, undo);
+        // A controller drives one target, and a target has one controller.
+        for (int i = map.getNumChildren(); --i >= 0;)
+        {
+            const auto existing = readMidiMapping (map.getChild (i));
+            if (existing.target == mapping.target || (existing.channel == channel && existing.controller == controller)) map.removeChild (i, undo);
+        }
+        map.appendChild (midiMappingTree (mapping), undo);
+        impl->changed(); return Result::ok();
+    }
+    std::optional<MidiMapping> mapping;
+    for (const auto& m : map)
+        if (const auto candidate = readMidiMapping (m); candidate.channel == channel && candidate.controller == controller) mapping = candidate;
+    if (! mapping) return Result::ok();
+    const auto lane = impl->laneFor (mapping->target);
+    if (! lane) return Result::ok();
+    // The controller moves the fader or knob position between the mapping's ends.
+    const auto from = lane->proportion (mapping->minimum), to = lane->proportion (mapping->maximum);
+    const auto target = lane->value (from + (to - from) * (float) value / 127.0f);
+    // A controller's moves form one gesture until it rests.
+    if (! impl->remoteGesture && ! impl->gesture) { beginEditGesture ("MIDI control"); impl->remoteGesture = true; }
+    impl->lastRemote = juce::Time::getMillisecondCounter();
+    if (! impl->remoteRest.isTimerRunning())
+    {
+        impl->remoteRest.tick = [this]
+        {
+            if (! impl->remoteGesture) { impl->remoteRest.stopTimer(); return; }
+            if (juce::Time::getMillisecondCounter() - impl->lastRemote < 500) return;
+            impl->remoteGesture = false; impl->remoteRest.stopTimer(); endEditGesture();
+        };
+        impl->remoteRest.startTimer (100);
+    }
+    const auto parts = juce::StringArray::fromTokens (mapping->target, ":", "");
+    if (mapping->target == "master") return setMasterGain (target);
+    if (parts[0] == "mixer")
+    {
+        const auto tracks = te::getAudioTracks (*impl->edit);
+        for (int i = 0; i < tracks.size(); ++i)
+            if (tracks[i]->itemID.toString() == parts[1]) return parts[2] == "pan" ? setTrackPan (i, target) : setTrackGain (i, target);
+        return Result::ok();
+    }
+    auto* device = impl->nativeDevice (parts[1]);
+    if (device == nullptr) return Result::ok();
+    auto settings = device->readSettings();
+    settings.values[(size_t) parts[2].getIntValue()] = target;
+    return setNativeEffectSettings (parts[1], settings);
 }
 Result Session::previewFile (const File& file)
 {
