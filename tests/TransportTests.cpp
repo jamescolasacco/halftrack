@@ -66,7 +66,10 @@ int runTransportTests (const juce::File& artifacts)
         ok (s.saveProject (root.getChildFile ("Transport").getChildFile ("Transport.halftrack")), "save a recording destination");
         ok (s.setTrackInput (0, s.inputNames()[0]), "route the input"); ok (s.setTrackArmed (0, true), "arm the track");
         s.setInsertMarker (3); s.stop();
-        ok (s.continuePlayback(), "play away from the marker"); pumpSyntheticTestDevice (s, blocksPerSecond / 2); s.stop();
+        ok (s.continuePlayback(), "play away from the marker");
+        // Arming rebuilds the graph, which can hold playback back for some blocks on a slow machine.
+        for (int i = 0; i < 40 && s.snapshot().position <= 3.3; ++i) pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+        s.stop();
         check (s.snapshot().position > 3.3, "playback stopped after the marker");
         ok (s.record(), "Record");
         pumpSyntheticTestDevice (s, blocksPerSecond);

@@ -1627,32 +1627,32 @@ private:
 class MidiCaptureTap final : public te::InputDeviceInstance::Consumer, private juce::AsyncUpdater
 {
 public:
-    using Handler = std::function<void (te::InputDeviceInstance&, const juce::MidiMessage&, double receivedMs)>;
+    // The engine stamps each message with its arrival in the audio device's stream time.
+    using Handler = std::function<void (te::InputDeviceInstance&, const juce::MidiMessage&)>;
     MidiCaptureTap (te::InputDeviceInstance& in, Handler handler) : instance (&in), handle (std::move (handler)) { in.addConsumer (this); }
     ~MidiCaptureTap() override { if (instance != nullptr) instance->removeConsumer (this); cancelPendingUpdate(); }
     te::InputDeviceInstance* get() const { return instance.get(); }
 private:
-    struct Entry { juce::MidiMessage message; double ms = 0; };
     void handleIncomingMidiMessage (const juce::MidiMessage& m, te::MPESourceID) override
     {
         if (! m.isNoteOnOrOff()) return;
         {
             const juce::SpinLock::ScopedLockType lock (mutex);
-            if (count < ring.size()) ring[(head + count++) % ring.size()] = { m, juce::Time::getMillisecondCounterHiRes() };
+            if (count < ring.size()) ring[(head + count++) % ring.size()] = m;
         }
         triggerAsyncUpdate();
     }
     void handleAsyncUpdate() override
     {
-        std::array<Entry, 256> batch; size_t n = 0;
+        std::array<juce::MidiMessage, 256> batch; size_t n = 0;
         {
             const juce::SpinLock::ScopedLockType lock (mutex);
             for (; n < count; ++n) batch[n] = ring[(head + n) % ring.size()];
             head = (head + n) % ring.size(); count = 0;
         }
-        for (size_t i = 0; i < n; ++i) if (instance != nullptr) handle (*instance, batch[i].message, batch[i].ms);
+        for (size_t i = 0; i < n; ++i) if (instance != nullptr) handle (*instance, batch[i]);
     }
-    std::array<Entry, 256> ring;
+    std::array<juce::MidiMessage, 256> ring;
     size_t head = 0, count = 0;
     juce::SpinLock mutex;
     juce::WeakReference<te::InputDeviceInstance> instance;
@@ -2853,7 +2853,7 @@ struct Session::Impl
     String midiLearnTarget;
     MidiRemote remote { [this] (int channel, int controller, int value) { owner.handleMidiControl (channel, controller, value); } };
     // Capture MIDI: the notes played into each armed or In-monitored MIDI track, newest last.
-    struct CapturedNote { int channel = 1, pitch = 60; float velocity = 0; double onMs = 0, offMs = -1, onBeat = 0, offBeat = 0; bool timed = false; };
+    struct CapturedNote { int channel = 1, pitch = 60; float velocity = 0; double onTime = 0, offTime = -1, onBeat = 0, offBeat = 0; bool timed = false; }; // Times in stream seconds.
     std::map<te::EditItemID, std::vector<CapturedNote>> captured;
     std::vector<std::unique_ptr<MidiCaptureTap>> captureTaps;
     static constexpr size_t maximumCapturedNotes = 4096;
@@ -2864,20 +2864,20 @@ struct Session::Impl
         std::erase_if (captureTaps, [&] (const auto& tap) { return tap->get() == nullptr || std::find (wanted.begin(), wanted.end(), tap->get()) == wanted.end(); });
         for (auto* in : wanted)
             if (std::none_of (captureTaps.begin(), captureTaps.end(), [in] (const auto& tap) { return tap->get() == in; }))
-                captureTaps.push_back (std::make_unique<MidiCaptureTap> (*in, [this] (te::InputDeviceInstance& i, const juce::MidiMessage& m, double ms) { captureNote (i, m, ms); }));
+                captureTaps.push_back (std::make_unique<MidiCaptureTap> (*in, [this] (te::InputDeviceInstance& i, const juce::MidiMessage& m) { captureNote (i, m); }));
     }
-    // The beat a note arrived at while the transport plays, from the play head less its wait.
-    std::optional<double> arrivalBeat (double receivedMs) const
+    // The beat a stream time fell on while the transport plays, mapped as the engine maps recorded MIDI.
+    std::optional<double> arrivalBeat (double streamTime) const
     {
         auto& transport = edit->getTransport();
         if (! transport.isPlaying()) return std::nullopt;
         auto* context = transport.getCurrentPlaybackContext(); if (context == nullptr) return std::nullopt;
-        const auto waited = std::max (0.0, (juce::Time::getMillisecondCounterHiRes() - receivedMs) / 1000.0);
-        return edit->tempoSequence.toBeats (context->getPosition() - te::TimeDuration::fromSeconds (waited)).inBeats();
+        return edit->tempoSequence.toBeats (context->globalStreamTimeToEditTime (streamTime)).inBeats();
     }
-    void captureNote (te::InputDeviceInstance& in, const juce::MidiMessage& m, double receivedMs)
+    void captureNote (te::InputDeviceInstance& in, const juce::MidiMessage& m)
     {
-        const auto beat = arrivalBeat (receivedMs);
+        const auto received = m.getTimeStamp();
+        const auto beat = arrivalBeat (received);
         for (auto target : in.getTargets())
         {
             auto* t = dynamic_cast<te::AudioTrack*> (te::findTrackForID (*edit, target));
@@ -2888,12 +2888,12 @@ struct Session::Impl
             if (m.isNoteOn())
             {
                 if (notes.size() >= maximumCapturedNotes) notes.erase (notes.begin());
-                notes.push_back ({ m.getChannel(), m.getNoteNumber(), m.getFloatVelocity(), receivedMs, -1, beat.value_or (0), 0, beat.has_value() });
+                notes.push_back ({ m.getChannel(), m.getNoteNumber(), m.getFloatVelocity(), received, -1, beat.value_or (0), 0, beat.has_value() });
             }
             else
                 for (auto it = notes.rbegin(); it != notes.rend(); ++it)
-                    if (it->offMs < 0 && it->channel == m.getChannel() && it->pitch == m.getNoteNumber())
-                    { it->offMs = receivedMs; it->offBeat = beat.value_or (it->onBeat); break; }
+                    if (it->offTime < 0 && it->channel == m.getChannel() && it->pitch == m.getNoteNumber())
+                    { it->offTime = received; it->offBeat = beat.value_or (it->onBeat); break; }
         }
     }
     struct RemoteRest final : juce::Timer
@@ -4021,7 +4021,7 @@ Result Session::captureMidi (CaptureDestination destination, juce::StringArray& 
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->anyRecording()) return Result::fail ("Stop recording before capturing MIDI.");
     if (! hasCapturedMidi()) return Result::fail ("Play some notes into an armed or In-monitored MIDI track first.");
-    const auto now = juce::Time::getMillisecondCounterHiRes();
+    const auto now = impl->engine.getDeviceManager().getCurrentStreamTime();
     const auto nowBeat = impl->arrivalBeat (now);
     const auto meter = snapshot().timeSignature;
     const double bar = std::max (1.0, meter.beatsPerBar());
@@ -4035,14 +4035,14 @@ Result Session::captureMidi (CaptureDestination destination, juce::StringArray& 
         if (track == nullptr || notes.empty()) continue;
         // The material since the last pause of more than ten seconds.
         size_t first = 0;
-        double latestEnd = notes[0].offMs < 0 ? now : notes[0].offMs;
+        double latestEnd = notes[0].offTime < 0 ? now : notes[0].offTime;
         for (size_t i = 1; i < notes.size(); ++i)
         {
-            if (notes[i].onMs - latestEnd > 10000) first = i;
-            latestEnd = std::max (latestEnd, notes[i].offMs < 0 ? now : notes[i].offMs);
+            if (notes[i].onTime - latestEnd > 10) first = i;
+            latestEnd = std::max (latestEnd, notes[i].offTime < 0 ? now : notes[i].offTime);
         }
         std::vector<Impl::CapturedNote> phrase (notes.begin() + (std::ptrdiff_t) first, notes.end());
-        for (auto& n : phrase) if (n.offMs < 0) { n.offMs = now; n.offBeat = nowBeat.value_or (n.onBeat); }
+        for (auto& n : phrase) if (n.offTime < 0) { n.offTime = now; n.offBeat = nowBeat.value_or (n.onBeat); }
         // Notes played with the transport running keep their beats; otherwise they are timed at the tempo.
         const bool timed = std::all_of (phrase.begin(), phrase.end(), [] (const auto& n) { return n.timed; });
         std::vector<MidiNoteInfo> written;
@@ -4058,11 +4058,11 @@ Result Session::captureMidi (CaptureDestination destination, juce::StringArray& 
         }
         else
         {
-            const auto origin = phrase[0].onMs;
+            const auto origin = phrase[0].onTime;
             double high = 0;
             for (const auto& n : phrase)
             {
-                const auto on = (n.onMs - origin) / 60000.0 * bpm, off = (n.offMs - origin) / 60000.0 * bpm;
+                const auto on = (n.onTime - origin) / 60.0 * bpm, off = (n.offTime - origin) / 60.0 * bpm;
                 written.push_back ({ {}, n.pitch, on, std::max (1.0 / 960, off - on), n.velocity });
                 high = std::max (high, off);
             }

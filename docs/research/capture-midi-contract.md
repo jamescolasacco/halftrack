@@ -4,7 +4,7 @@ As in the reference, Halftrack keeps listening to MIDI played into armed or In-m
 
 ## Behaviour
 
-- **Listening.** A capture tap on each MIDI input instance records note-ons and note-offs with their arrival time, the track, and (while the transport plays) the beat they arrived at: the play head's position less the time they waited. The taps re-attach whenever the edit's inputs change, since the engine can replace its input instances then.
+- **Listening.** A capture tap on each MIDI input instance records note-ons and note-offs with the track, their arrival in the audio device's stream time (as the engine stamps them), and, while the transport plays, the beat that time fell on, mapped as the engine maps recorded MIDI. The taps re-attach whenever the edit's inputs change, since the engine can replace its input instances then.
 - **Which tracks.** A track keeps notes only when its input is armed or its monitoring is In. Each track keeps at most 4096 notes.
 - **Capturing** (`Session::captureMidi`, the Capture button, Shift+Cmd+C) takes each track's phrase since its last pause of over ten seconds and ends any held notes:
   - **played while the transport ran:** notes keep their beats in a clip from the bar the first fell in, lasting whole bars;

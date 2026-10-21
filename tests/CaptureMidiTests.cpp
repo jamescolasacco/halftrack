@@ -90,14 +90,16 @@ int runCaptureMidiTests (const juce::File&)
 
         // Running: at the beats they were played, in the bar they fall in.
         s.seek (0); ok (s.play(), "play");
-        pumpSyntheticTestDevice (s, (int) std::lround (2.75 * blocksPerSecond)); // Beat 5.5.
+        pumpSyntheticTestDevice (s, (int) std::lround (2.5 * blocksPerSecond));
+        for (int i = 0; i < 400 && s.snapshot().position < 2.75; ++i) pumpSyntheticTestDevice (s, 1); // Beat 5.5, however late playback started.
+        const auto playedBeat = s.snapshot().position * 2;
         controller.play (67, .25);
         pumpSyntheticTestDevice (s, blocksPerSecond / 2);
         ok (s.captureMidi (Session::CaptureDestination::arrangement, created), "Capture while playing");
         s.stop();
         captured = clips();
         check (captured.size() == 1 && std::abs (captured[0].startBeat - 4) < 1e-6 && std::abs (captured[0].lengthBeats - 4) < 1e-6
-               && captured[0].notes.size() == 1 && captured[0].notes[0].pitch == 67 && std::abs (captured[0].notes[0].startBeat - 1.5) < .15,
+               && captured[0].notes.size() == 1 && captured[0].notes[0].pitch == 67 && std::abs (captured[0].notes[0].startBeat - (playedBeat - 4)) < .15,
                "the note keeps its beat, in the second bar");
         s.undo();
 

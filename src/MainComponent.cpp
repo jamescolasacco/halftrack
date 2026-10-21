@@ -7434,7 +7434,8 @@ void MainComponent::Impl::runExportInteractionChecks (const juce::File& audioFix
     { if (! condition) throw std::runtime_error (message); std::cout << "PASS export UI " << message << std::endl; };
     auto waitFor = [] (const std::function<bool()>& completed)
     {
-        const auto deadline = juce::Time::getMillisecondCounterHiRes() + 2000;
+        // Generous, since a confirmed stem export renders inside the callback on slow CI machines.
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + 20000;
         while (! completed() && juce::Time::getMillisecondCounterHiRes() < deadline)
             juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
         return completed();

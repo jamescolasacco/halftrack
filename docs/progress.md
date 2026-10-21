@@ -1204,3 +1204,10 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **Loading.** A track that sends to a return may now also play into another track. Only returns are refused a track output.
 
 See [the contract](research/routing-contract.md).
+
+## CI timing fixes — 2026-10-21
+
+Engine and test change in `src/Session.cpp`, `tests/CaptureMidiTests.cpp` and `tests/TransportTests.cpp`.
+
+- **Capture MIDI** timed notes by the wall clock, so the phrase's rhythm depended on how fast the audio device ran; on Windows and Linux CI the synthetic device does not run in real time. Notes now keep the engine's stream-time stamps and map to beats as recorded MIDI does. With a real device this is the same timing, minus the message thread's delay.
+- **Two tests** assumed playback starts on the first pumped block. They now pump until the play head reaches the position under test.
