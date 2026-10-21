@@ -10,6 +10,7 @@
 #include <array>
 #include <set>
 #include <cstdlib>
+#include <filesystem>
 
 namespace halftrack
 {
@@ -968,6 +969,39 @@ private:
     bool useDevices;
 };
 
+// Test engines keep Tracktion's settings and temporary files in a folder owned by
+// this process, so test runs (concurrent ones in other checkouts included) never
+// share a device setup, MIDI enablement or wave-device layout. Test Sessions in one
+// process share the folder. It is removed at exit unless a storage is still alive.
+class TestPropertyStorage final : public te::PropertyStorage
+{
+public:
+    TestPropertyStorage() : PropertyStorage ("Halftrack Tests") { ++live; }
+    ~TestPropertyStorage() override { --live; }
+    File getAppPrefsFolder() override { auto& folder = processFolder().file; folder.createDirectory(); return folder; }
+    File getAppCacheFolder() override { return getAppPrefsFolder(); }
+private:
+    struct Folder
+    {
+        File file = File::getSpecialLocation (File::tempDirectory).getChildFile ("Halftrack-test-settings-" + juce::Uuid().toString());
+        std::string utf8 = file.getFullPathName().toStdString();
+        // Static teardown: use only the standard library, as JUCE's own statics may be gone.
+        ~Folder()
+        {
+            std::error_code ignored;
+            if (live == 0) std::filesystem::remove_all (std::u8string (reinterpret_cast<const char8_t*> (utf8.data()), utf8.size()), ignored);
+        }
+    };
+    static Folder& processFolder() { static Folder folder; return folder; }
+    static inline std::atomic<int> live { 0 };
+};
+
+std::unique_ptr<te::PropertyStorage> settingsStorage (bool devices)
+{
+    if (devices) return std::make_unique<te::PropertyStorage> ("Halftrack");
+    return std::make_unique<TestPropertyStorage>();
+}
+
 class PluginWindow final : public juce::DocumentWindow
 {
 public:
@@ -1262,7 +1296,7 @@ juce::Result runRangeExportTaskCancellationTests (const juce::File& directory)
 struct Session::Impl
 {
     explicit Impl (Session& s, bool devices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType)
-        : owner (s), engine (devices ? "Halftrack" : "Halftrack Tests", std::make_unique<UIBehaviour> (s, devices),
+        : owner (s), engine (settingsStorage (devices), std::make_unique<UIBehaviour> (s, devices),
                             std::make_unique<Behaviour> (devices)), useDevices (devices)
     {
         engine.getPluginManager().createBuiltInType<TrackMixer>();

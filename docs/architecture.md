@@ -32,6 +32,12 @@ MIDI-device discovery is deferred while any engine context records. The pinned d
 
 JUCE provides CoreAudio/AU on macOS, ASIO/system audio on Windows, and the available Linux audio backends. VST3 is shared. CLAP is planned, not enabled. Separate-process plug-in discovery is configured through the engine. The pinned scanner patch synchronizes IPC replies and connection state, stops callbacks before destroying their storage, and refuses to fall back into the host when its child cannot start. See [source pins and tests](dependencies.md#tracktion-scanner-isolation-patch). On Windows, that serialized scanner worker also queries the retained process handle for confirmed exit; coordinator teardown then bypasses a futile shutdown message while preserving disconnect. Alive-worker timeouts and other platforms keep their existing behavior. The test-only observation and notification-suppression seam has no instance state and is excluded without tests. The project format does not translate an AU state into a VST3 or CLAP state.
 
+## Test engine settings
+
+The application (`Session()`, devices enabled) keeps Tracktion's default settings storage: `Settings.xml` and the engine's `Temporary` folder live in the user application-data folder under `Halftrack`. Test engines (`Session (false, …)`, including those with an injected synthetic device type) use a `PropertyStorage` whose prefs and cache folder is `Halftrack-test-settings-<uuid>` in JUCE's temporary directory, created once per process. Before this, every test process on the machine, in every checkout, shared `Halftrack Tests/Settings.xml` in the application-data folder. Each process's delayed saves overwrote the others' state. Device setups, MIDI enablement, virtual MIDI devices, count-in mode and wave-device layouts carried over between runs.
+
+Test Sessions in one process still share the folder, so a setting one Session saves reaches later Sessions in that process. The folder is removed during static teardown at exit, unless a test storage is still alive; a crash leaves it in the temporary directory. The Session suite starts a second process (`--self-test-settings-probe`) that saves a one-input device setup. The first process then checks that the second removed its folder and that a new Session in the first process opens both generated inputs. The child gets `-ApplePersistenceIgnoreState YES`, so macOS's crash-recovery prompt, which can follow a killed Halftrack process, cannot block it.
+
 ## MIDI interface
 
 The engine agent maintains this section alongside `src/Session.h`.
