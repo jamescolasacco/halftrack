@@ -1244,3 +1244,10 @@ See [the contract](research/audio-engine-contract.md).
 Engine change in `src/Session.cpp`.
 
 - **Auditioning** a take lane, or ending it, rebuilt the graph on the engine's next timer tick. On the slower Windows CI machine the first blocks after ending an audition could still play the auditioned lane. Both now flush pending clip-list updates and rebuild the graph before returning.
+
+## Ledger re-score — 2026-10-21
+
+Documentation only, in `docs/feature-parity.md` and `docs/progress-metric.md`.
+
+- **Twelve stale rows** (REC-001, PLG-001/003/006/007/013/014/016, PRJ-001/003, UX-004, QA-001) read NOT IMPLEMENTED although existing tests exercised them. Each now cites its evidence and gaps.
+- **Others stay unimplemented.** The same audit kept AUD-001/005/006/007/008/012, REC-006/007/011, PLG-005/008/009/010/015, PRJ-007/014, UX-010 and QA-002/004 unimplemented, since no test exercises them.
