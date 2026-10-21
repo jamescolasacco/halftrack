@@ -998,6 +998,62 @@ Engine and UI change. It touches:
 
 The Tuner is a Utilities device that passes audio unchanged and shows the nearest note, with cents or Hz and a target meter. The new `tuner-acceptance` suite checks detection accuracy and offline and live readings. See [the contract](research/native-effects-contract.md#tuner-2026-10-20).
 
+## Edits during Session takes — 2026-10-20
+
+Engine owns the guards in `src/Session.cpp` and the test in `tests/MidiInputTests.cpp`. Cross-area edits: `newProject` (project lifecycle, root) now ends Session takes through `stop()` before it replaces the edit, as `loadProject` already did. The other cross-area edits are in `docs/architecture.md` and `docs/open-questions.md`.
+
+Session takes leave the transport out of recording, so edits guarded only by `TransportControl::isRecording` were audited against them. A new generated-signal test gives each group of edits a fresh project with a MIDI take from the generated controller. It plays a key before and after the edits and ends the take. On the unfixed code, run with failures logged rather than thrown, these edits lost the take:
+
+- undo;
+- removing the recording track;
+- deleting its scene;
+- audio or stem export;
+- freeze;
+- flattening a frozen recording track.
+
+Creating a MIDI clip in the recording slot, or importing audio into it, was accepted, and the finished take then replaced that clip. After New Project during a take, input assignment stayed refused because the old take was never ended. On the unfixed code, these kept the take: reordering, duplicating, grouping and ungrouping tracks, clearing slots, MIDI import and saving. Removing other tracks and the other scene edits ran there only after the take was lost. Their code is unchanged, and they keep the take in the fixed run.
+
+The fixes:
+
+- Undo and redo, export, stems, freeze and flatten now also refuse during Session takes, through a shared `Impl::anyRecording()`.
+- Removing the recording track, deleting a scene with a recording slot, and adding or importing a clip into that slot are refused for that track, scene or slot only.
+- New Project ends the take.
+
+With the fixes every check passes. The policy is in [open questions](open-questions.md#edits-during-session-takes) and the [Session recording contract](research/session-recording-contract.md).
+
+MIDI input (55 s, 867 checks), MIDI monitoring (13 s, 173), Session (60 s, 1190) and UI (16 s, 668) suites pass locally on the Mac. The full 38-suite CTest run also passes (585 s, alongside another worktree's run). The build used a private copy of the pinned sources. Seeking, arming or monitoring the recording track itself, Arrangement clip and time edits, automation, follow actions and recording settings are not yet audited for Session takes.
+
+## Remaining edits during Session takes — 2026-10-20
+
+Engine owns the changes in `src/Session.cpp` and the test in `tests/MidiInputTests.cpp`. Cross-area edits: `docs/architecture.md` and `docs/open-questions.md`.
+
+This finishes the audit of edits that were refused only while the transport recorded. The new generated-signal test, `playbackAndArrangementEditsDuringSessionTakes`, uses the earlier `SessionTake` fixture: a MIDI take from the generated controller with keys played around the edits. On the unfixed code, run with failures logged rather than thrown, two scenarios failed:
+
+- A seek during the take moved the play head while the slot kept recording. Ending the take after one more key gave a 6.34-beat clip, and that key lasted 5.19 beats where it was held for about 0.21 beats.
+- Disarming the recording track was accepted. The engine kept the take, but the slot recorded on a track that reported itself unarmed.
+
+These kept the take on the unfixed code and need no change:
+
+- monitoring the recording track, and replacing its instrument;
+- Arrangement audio trim, reverse, split, duplicate, cut, paste and move;
+- Arrangement MIDI duplicate, cut, paste and move on the recording track;
+- Insert Time and Delete Time;
+- track volume and pan, device and master automation;
+- a follow action, the count-in and recording quantization.
+
+The fixes:
+
+- `seek`, and locator navigation through it, now ends any recording before moving the play head, through `Impl::anyRecording()`. The take keeps the keys played before the seek, and the transport stops, as during Arrangement recording.
+- `setTrackArmed` refuses to disarm a track whose Session take records.
+
+With the fixes every check passes. The policy is in [open questions](open-questions.md#edits-during-session-takes) and the [Session recording contract](research/session-recording-contract.md). Loop and tempo changes during a take are not yet audited, and reference behavior for seeking or disarming during a take is unmeasured.
+
+MIDI input (61 s, 984 checks), MIDI monitoring (14 s, 173), Session (61 s, 1190) and UI (17 s, 671) suites pass locally on the Mac. The build used a private copy of the pinned sources.
+
+## Audio-device changes during takes — 2026-10-20
+
+Root owns the device-stop watch in `src/Session.cpp`, its scenarios in `tests/SessionTests.cpp`, the callback root in `tests/realtime_audit.py` and documentation. Measured first on the synthetic device: an input-channel change through the `AudioDeviceManager` and a same-layout driver restart each lost both Arrangement and Session slot takes. The transport stopped, Stop produced no clip, and slot takes still reported recording. Now any device stop during a take calls Stop before the engine's device rebuild. The take ends where the device stopped and is kept: 23,808 of 24,064 recorded frames in all four scenarios. A further take records on the rebuilt devices. The new test failed without the fix. Audio Settings is not disabled during recording (see [open questions](open-questions.md#audio-device-changes-during-takes)). The MIDI input (35.9 s), MIDI monitoring (25.8 s), UI (16.0 s) and Session (64.0 s) suites pass locally on the Mac, and the source guard inspects 185 bodies. Physical drivers and hot-unplug are untested.
+
 ## Automation capture and override — 2026-10-21
 
 Root change. It touches:
