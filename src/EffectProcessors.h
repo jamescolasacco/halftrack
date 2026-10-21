@@ -343,5 +343,29 @@ private:
     double rate = 48000, dry = 1;
     std::array<Line, 3> lines;
 };
+
+// Erosion after the reference's: a very short delay modulated by a sine at Freq, by noise
+// band-filtered around Freq (Filter Width octaves wide), or a blend. Amount sets the modulation
+// depth, up to half a millisecond peak to peak; at 0 the input passes unchanged. Stereo Width
+// moves the right channel's modulator from the left's (mono) to its own quadrature sine and
+// independent noise (stereo). While the transport plays, the sine and the noise follow the
+// transport position, so renders and playback agree; stopped, they run on from where they were.
+class Erosion
+{
+public:
+    static constexpr double maximumDepthSeconds = .0005;
+    void prepare (double rate) noexcept;
+    void configure (const float* values) noexcept; // noise blend, frequency, amount, filter width, stereo width.
+    void reset() noexcept;
+    void syncTo (double seconds) noexcept;
+    void tick (double& left, double& right) noexcept;
+private:
+    double noise (int channel) noexcept;
+    double rate = 48000, phase = 0, increment = 0, blend = 0, depth = 0, width = 0, frequency = 4000;
+    int64_t sample = 0; // The noise is a function of the sample position.
+    std::array<std::array<Biquad, 2>, 2> band; // High- and low-pass per channel.
+    std::array<std::array<float, 64>, 2> history {};
+    size_t write = 0;
+};
 }
 

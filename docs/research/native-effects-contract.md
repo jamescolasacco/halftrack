@@ -264,3 +264,30 @@ Halftrack's choices:
 
 The X-Y filter display and measured comparison with the reference are missing.
 
+## Erosion (2026-10-21)
+
+Erosion follows the manual's description in the [audio effect reference](https://www.ableton.com/en/live-manual/12/live-audio-effect-reference/), consulted 2026-10-21. It degrades the signal by modulating a short delay with a sine and filtered noise. Its controls are:
+
+- **Freq:** the sine's frequency and the noise filter's centre.
+- **Amount:** the modulation depth.
+- **Noise Blend:** 0% is sine only, 100% noise only.
+- **Filter Width:** the noise filter's bandwidth.
+- **Stereo Width:** mono at 0% to stereo at 100%.
+
+Halftrack's model:
+
+- **Delay.** The delay swings between 0 and a depth of up to 0.5 ms, read with linear interpolation, so Amount 0 passes the input bit for bit.
+- **Noise.** The noise is white noise through 12 dB/oct high- and low-pass sections Filter Width octaves apart around Freq.
+- **Stereo.** Stereo Width blends the right modulator from the left's to a quadrature sine and independent noise.
+- **Transport lock.** While the transport plays, the sine's phase and the counter-based noise follow the transport position, so renders match.
+- **Ranges.** Freq runs from 800 Hz to 18 kHz and Filter Width from 0.1 to 6 octaves.
+
+`tests/ExtendedEffectsTests.cpp` checks:
+
+- **Bypass.** Amount 0 is bit-exact.
+- **Sine modulation.** The carrier and sidebands of a 2 kHz tone at full depth with a 900 Hz sine (index π) match J0, J1 and J2 within 5%.
+- **Noise.** Noise modulation spreads the sidebands.
+- **Stereo Width.** 0% keeps the channels identical, and 100% separates them.
+
+The shared device checks include engine-render equality. The X-Y display and measured comparison with the reference are missing.
+

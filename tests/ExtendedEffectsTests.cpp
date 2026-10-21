@@ -491,6 +491,48 @@ void filterDelayTests()
     }
     check (process (sine (440, .3, 48000), defaultEffectSettings (Kind::filterDelay)).getMagnitude (0, 24000, 24000) > .3, "the default lines echo the input");
 }
+// Erosion: a sine-modulated delay is phase modulation, so a tone's sidebands follow Bessel
+// functions of the modulation index 2·pi·f·(depth/2).
+double bessel (int order, double x)
+{
+    double sum = 0, factorial = 1;
+    for (int k = 0; k < 40; ++k)
+    {
+        if (k > 0) factorial *= k;
+        double other = 1; for (int i = 2; i <= k + order; ++i) other *= i;
+        sum += (k % 2 == 0 ? 1 : -1) * std::pow (x / 2, 2 * k + order) / (factorial * other);
+    }
+    return sum;
+}
+void erosionTests()
+{
+    {
+        const auto in = sine (1000, .5, 4800, 48000, .3);
+        const auto out = process (in, with (Kind::erosion, { { "amount", 0 } }));
+        bool same = true;
+        for (int c = 0; c < 2; ++c) for (int n = 0; n < in.getNumSamples(); ++n) same = same && out.getSample (c, n) == in.getSample (c, n);
+        check (same, "Erosion with no Amount passes audio unchanged");
+    }
+    // A 2 kHz tone through a full-depth (0.5 ms) delay swung by a 900 Hz sine: index pi. With 900 Hz
+    // the sidebands folded below 0 Hz land between the measured ones.
+    const auto modulated = process (sine (2000, .5, 48000), with (Kind::erosion, { { "amount", 1 }, { "frequencyHz", 900 } }));
+    const auto beta = 2 * pi * 2000 * effects::Erosion::maximumDepthSeconds / 2;
+    const auto level = [&] (const juce::AudioBuffer<float>& x, double hz) { return amplitudeAt (x, 0, hz, 24000, 48000); };
+    bool sidebands = true;
+    for (const auto [hz, order] : { std::pair { 2000.0, 0 }, { 2900.0, 1 }, { 1100.0, 1 }, { 3800.0, 2 }, { 200.0, 2 } })
+        sidebands = sidebands && std::abs (level (modulated, hz) - .5 * std::abs (bessel (order, beta))) < .05 * .5 * std::abs (bessel (order, beta)) + 1e-3;
+    check (sidebands, "the sine modulation places Bessel sidebands at 2 kHz +/- multiples of 900 Hz");
+    const auto noisy = process (sine (2000, .5, 48000), with (Kind::erosion, { { "amount", 1 }, { "frequencyHz", 900 }, { "noiseBlend", 1 } }));
+    check (level (noisy, 2900) < .3 * level (modulated, 2900) && noisy.getRMSLevel (0, 24000, 24000) > .3, "noise modulation spreads the sidebands instead");
+    {
+        const auto mono = process (sine (2000, .5, 48000), with (Kind::erosion, { { "amount", 1 }, { "noiseBlend", .5f } }));
+        const auto wide = process (sine (2000, .5, 48000), with (Kind::erosion, { { "amount", 1 }, { "noiseBlend", .5f }, { "stereoWidth", 1 } }));
+        double sameMono = 0, sameWide = 0;
+        for (int n = 0; n < 48000; ++n)
+        { sameMono = std::max (sameMono, (double) std::abs (mono.getSample (0, n) - mono.getSample (1, n))); sameWide = std::max (sameWide, (double) std::abs (wide.getSample (0, n) - wide.getSample (1, n))); }
+        check (sameMono == 0 && sameWide > .05, "Stereo Width 0% modulates both channels alike, 100% independently");
+    }
+}
 void eqThreeTests()
 {
     for (int steep = 0; steep < 2; ++steep)
@@ -565,6 +607,6 @@ void shifterTests()
 void runExtendedEffectsTests()
 {
     saturatorTests(); overdriveTests(); autoFilterTests(); autoPanTests(); modulatedDelayTests();
-    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); beatRepeatTests(); filterDelayTests(); glueTests(); shifterTests();
+    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); beatRepeatTests(); filterDelayTests(); erosionTests(); glueTests(); shifterTests();
 }
 }

@@ -694,5 +694,66 @@ void FilterDelay::tick (double& left, double& right) noexcept
     }
     left = outL; right = outR;
 }
+
+void Erosion::prepare (double sampleRate) noexcept { rate = sampleRate; reset(); }
+void Erosion::configure (const float* v) noexcept
+{
+    blend = std::clamp ((double) v[0], 0.0, 1.0);
+    frequency = v[1]; increment = (double) v[1] / rate;
+    depth = std::clamp ((double) v[2], 0.0, 1.0) * maximumDepthSeconds * rate;
+    width = std::clamp ((double) v[4], 0.0, 1.0);
+    const auto half = std::pow (2.0, (double) v[3] / 2);
+    for (auto& channel : band)
+    {
+        channel[0].c = highPassSection (std::max (20.0, v[1] / half), .70710678118654752, rate);
+        channel[1].c = lowPassSection (std::min (rate * .45, v[1] * half), .70710678118654752, rate);
+    }
+}
+void Erosion::reset() noexcept
+{
+    phase = 0; write = 0; sample = 0;
+    for (auto& h : history) h.fill (0.0f);
+    for (auto& channel : band) for (auto& s : channel) s.clear();
+}
+void Erosion::syncTo (double seconds) noexcept
+{
+    const auto cycles = seconds * frequency;
+    phase = cycles - std::floor (cycles);
+    sample = (int64_t) std::llround (seconds * rate);
+}
+double Erosion::noise (int channel) noexcept
+{
+    // A counter-based generator: the same sample position always gives the same noise.
+    auto r = (uint64_t) sample * 0x9e3779b97f4a7c15ull + (uint64_t) (channel + 1) * 0xbf58476d1ce4e5b9ull;
+    r = (r ^ (r >> 30)) * 0xbf58476d1ce4e5b9ull; r = (r ^ (r >> 27)) * 0x94d049bb133111ebull; r ^= r >> 31;
+    const auto white = (double) (r >> 11) * (2.0 / 9007199254740992.0) - 1;
+    // Band-filtered noise keeps a modulation level comparable to the sine's.
+    return band[(size_t) channel][1].tick (band[(size_t) channel][0].tick (white)) * 2;
+}
+void Erosion::tick (double& left, double& right) noexcept
+{
+    const double in[] { left, right };
+    for (size_t c = 0; c < 2; ++c) history[c][write] = (float) in[c];
+    if (depth > 0)
+    {
+        const auto sineLeft = std::sin (2 * pi * phase);
+        const auto sineRight = (1 - width) * sineLeft + width * std::cos (2 * pi * phase);
+        const auto noiseLeft = blend > 0 ? noise (0) : 0.0;
+        const auto noiseRight = blend > 0 ? (1 - width) * noiseLeft + width * noise (1) : 0.0;
+        const double modulators[] { (1 - blend) * sineLeft + blend * noiseLeft, (1 - blend) * sineRight + blend * noiseRight };
+        double* out[] { &left, &right };
+        for (size_t c = 0; c < 2; ++c)
+        {
+            // The delay swings between 0 and the depth, so the input is never read ahead.
+            const auto delay = std::clamp (depth * .5 * (1 + modulators[c]), 0.0, (double) history[c].size() - 2);
+            const auto whole = (size_t) delay; const auto fraction = delay - (double) whole;
+            const auto a = history[c][(write + history[c].size() - whole) % history[c].size()], b = history[c][(write + history[c].size() - whole - 1) % history[c].size()];
+            *out[c] = a + (b - a) * fraction;
+        }
+    }
+    phase += increment; phase -= std::floor (phase);
+    ++sample;
+    write = (write + 1) % history[0].size();
+}
 }
 

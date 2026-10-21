@@ -377,3 +377,14 @@ These are simplest-default choices pending reference measurement:
 - **Ranges:** 1–2,000 ms, ±33% swing, −36 to +6 dB line volume, and Dry down to −70 dB, which is off.
 - **Defaults:** lines 1 and 3 on at 1/8 and 1/4 with 50% feedback.
 
+### Erosion defaults
+
+These are simplest-default choices pending reference measurement:
+
+- **Depth:** a 0.5 ms maximum.
+- **Noise level:** the band-noise scaling.
+- **Ranges:** Freq from 800 Hz to 18 kHz and Filter Width from 0.1 to 6 octaves.
+- **Defaults:** 4 kHz and Amount 30%.
+
+The Live 12.4 redesign ("Erosion Legacy" for older Sets) is not distinguished.
+
