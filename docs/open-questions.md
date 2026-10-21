@@ -248,3 +248,7 @@ The note tools use Halftrack's own algorithms and parameter sets (for example, S
 ### Timeline navigation defaults
 
 Follow pages the view (the playhead starts each new page) rather than scrolling continuously, and scrolling by hand while playing switches Follow off until it is turned back on. Z adds 5% margins around the selection. These are simplest-default choices pending reference measurement.
+
+### Clip scale defaults
+
+Scales belong to clips (there is no project-wide current scale), the piano roll highlights rather than folds, and Fit to Scale breaks ties downward. Sixteen common scales are offered. These are simplest-default choices pending reference measurement.

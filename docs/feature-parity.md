@@ -173,7 +173,7 @@ Stage: **Further implementation authorized**. Unverified rows are proposed check
 | MID-008 | Generative tools | PARTIAL — Euclidean and seeded random (Seed) generators with exact pattern, range and repeatability tests; Rhythm, Shape, Stacks and reference comparison missing | PARTIAL |
 | MID-009 | MPE recording/editing | Record and edit per-note pitch, pressure, slide, and release data; preserve association after trimming and copying. | NOT IMPLEMENTED / UNVERIFIED |
 | MID-010 | MPE routing | Verify member-channel allocation, zones, pitch range, note stealing, and plug-in delivery. | NOT IMPLEMENTED / UNVERIFIED |
-| MID-011 | Scales and alternate tunings | Test scale display, note quantization, tuning import/mapping, bypass, and compatible instrument/plug-in behavior. | NOT IMPLEMENTED / UNVERIFIED |
+| MID-011 | Scales and alternate tunings | PARTIAL — per-clip scale (16 modes, any root) with piano-roll highlighting and a Fit to Scale note tool; membership, nearest-tone fitting, undo, duplication, reopen and corrupt-file rejection tested. Fold, scale-aware devices, tunings and reference comparison missing | PARTIAL |
 | MID-012 | MIDI file import/export | Round-trip supported event types, tempo and meter maps, track/channel assignments, and fractional timing. | PARTIAL — PPQ type 0/1 import, channel tracks, notes/CC/program/bend/pressure/SysEx round trips, clip export, native undo/persistence and synth render oracle; tempo/meter-map import, SMPTE/type 2 and same-pitch overlap resolution missing |
 | MID-013 | MIDI ports and mappings | Exercise input/output filtering, virtual ports, remote mappings, learn, pickup/scaling, relative controls, and persistence. | NOT IMPLEMENTED / UNVERIFIED |
 
