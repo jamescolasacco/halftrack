@@ -74,3 +74,39 @@ Ten further original devices share the same packet, validation, history, editor 
 | Frequency Shifter | Single-sideband shift ±5 kHz via a two-path IIR quadrature network, optional opposite right-channel shift, or ring modulation. | Three shifts place the wanted sideband within 0.5% with the image and carrier below −40 dB; opposite stereo and ring sidebands measured. |
 
 The quadrature network uses the published coefficients from Olli Niemitalo's IIR Hilbert transformer design; its image rejection is about 49 dB at 1 kHz. Known gaps: no oversampling or anti-aliasing on any waveshaper, no sidechain input for the compressors, no tempo-synced phaser/flanger rate, no Chorus-Ensemble "Ensemble"/"Vibrato" modes, no Auto Filter morph/vowel/DJ circuits, no Shifter pitch mode, and no measured numerical comparison with the reference devices.
+
+## Channel EQ (2026-10-20)
+
+Channel EQ follows the manual's description in the [audio effect reference](https://www.ableton.com/en/live-manual/12/live-audio-effect-reference/), consulted 2026-10-20. The manual gives:
+
+- an HP 80 Hz switch;
+- Low, a 100 Hz shelf of ±15 dB;
+- Mid, a ±12 dB peak swept from 120 Hz to 7.5 kHz;
+- High, a shelf of up to +15 dB. When cutting, a low-pass is added whose cutoff falls from 20 kHz to 8 kHz as the gain goes from 0 to −15 dB;
+- Output.
+
+It is the first device kind numbered after the racks.
+
+Halftrack's own choices, where the manual is silent:
+
+- the high-pass is a second-order Butterworth;
+- the shelves use RBJ sections with Q 1/√2, and the High shelf's corner is 8 kHz;
+- the Mid peak has Q 0.7;
+- the low-pass is a second-order Butterworth whose cutoff moves evenly in octaves;
+- Output runs from −12 to +12 dB.
+
+Sections at 0 dB are exact identities, so the defaults pass audio unchanged.
+
+`tests/ExtendedEffectsTests.cpp` checks closed-form properties rather than re-running the device's formulas:
+
+- the 80 Hz high-pass is 3.01 dB down at its corner and flat at 1 kHz;
+- each shelf is at exactly half its gain at its corner;
+- the peak reaches exactly ±12 dB at 120 Hz, 1 kHz, 2.5 kHz and 7.5 kHz;
+- the low-pass cutoff is exact at 0, −7.5 and −15 dB;
+- at −15 dB the shelf's half cut and the low-pass's 3 dB add at 8 kHz;
+- Output scales exactly;
+- both channels are filtered alike;
+- out-of-range values are rejected.
+
+Channel EQ also passes the shared device checks. Its spectrum display and measured comparison with the reference are missing.
+

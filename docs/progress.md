@@ -983,3 +983,7 @@ The piano-roll header now lays itself out to the editor's width, so the Scale co
 
 The new `grooves-acceptance` suite measures rendered onsets and accents. See [the groove contract](research/grooves-contract.md).
 
+## Channel EQ — 2026-10-20
+
+Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Session.h` and `tests/ExtendedEffectsTests.cpp`, with documentation. Channel EQ joins the native audio effects under EQ & Filters. It is the first device kind numbered after the racks; device loops now skip racks instead of assuming plain devices come first. See [the contract](research/native-effects-contract.md#channel-eq-2026-10-20).
+

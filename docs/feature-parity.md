@@ -382,7 +382,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-004 | Auto Shift | PITCH | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-005 | Beat Repeat | TIME | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-006 | Cabinet | FILTER | NOT IMPLEMENTED / UNVERIFIED |
-| AFX-007 | Channel EQ | FILTER | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-007 | Channel EQ | PARTIAL — HP 80 Hz, 100 Hz low shelf ±15 dB, 120 Hz–7.5 kHz mid peak ±12 dB, high shelf whose cut adds a 20–8 kHz low-pass, and output, with closed-form section checks ([contract](research/native-effects-contract.md#channel-eq-2026-10-20)); the spectrum display, undocumented slopes and reference comparison missing | PARTIAL |
 | AFX-008 | Chorus-Ensemble (12.2.1 behavior) | PARTIAL — original 1–3 voice modulated-delay chorus with spread/feedback; Ensemble/Vibrato modes and parity missing | PARTIAL |
 | AFX-009 | Compressor | Linked peak/RMS compressor, soft knee, makeup and parallel mix; independent dynamics tests and native project/editor integration. Sidechain/lookahead and numerical parity remain missing or unverified. [contract](research/native-effects-contract.md). | PARTIAL — automated three-platform acceptance |
 | AFX-010 | Corpus | RESONANCE | NOT IMPLEMENTED / UNVERIFIED |

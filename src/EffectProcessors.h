@@ -36,6 +36,10 @@ std::array<double, 5> lowPassSection (double frequency, double q, double rate) n
 std::array<double, 5> highPassSection (double frequency, double q, double rate) noexcept;
 std::array<double, 5> allPassSection (double frequency, double q, double rate) noexcept;
 std::array<double, 5> bandPassOctaves (double frequency, double octaves, double rate) noexcept;
+// Peak and shelf sections; 0 dB gives the identity section.
+std::array<double, 5> peakSection (double frequency, double gainDb, double q, double rate) noexcept;
+std::array<double, 5> lowShelfSection (double frequency, double gainDb, double q, double rate) noexcept;
+std::array<double, 5> highShelfSection (double frequency, double gainDb, double q, double rate) noexcept;
 
 // Shapes: sine, triangle, rising saw, falling saw, square, held random.
 struct Lfo
@@ -221,5 +225,24 @@ private:
     bool ring = false, opposite = false;
     Ramp shift;
     std::array<Quadrature, 2> networks;
+};
+
+// Channel EQ after the reference's: a switchable 80 Hz high-pass, a 100 Hz low shelf, a sweepable
+// mid peak, and a high shelf that, when cutting, also lowers a low-pass from 20 kHz to 8 kHz.
+// The corner frequencies and slopes the reference does not document are Halftrack's choices.
+class ChannelEq
+{
+public:
+    static constexpr double highPassHz = 80, lowShelfHz = 100, highShelfHz = 8000, midQ = .7, butterworthQ = .70710678118654752;
+    // The low-pass cutoff for a High cut: 20 kHz at 0 dB down to 8 kHz at -15 dB, evenly in octaves.
+    static double lowPassHz (double highDb) noexcept { return 20000 * std::pow (.4, std::clamp (-highDb, 0.0, 15.0) / 15); }
+    void prepare (double rate) noexcept;
+    void configure (const float* values) noexcept; // highPass, lowDb, midDb, midHz, highDb.
+    void reset() noexcept;
+    void tick (double& left, double& right) noexcept;
+private:
+    double rate = 48000;
+    bool highPass = false, lowPass = false;
+    std::array<std::array<Biquad, 5>, 2> sections; // High-pass, low shelf, mid peak, high shelf, low-pass.
 };
 }

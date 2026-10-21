@@ -98,6 +98,7 @@ private:
     effects::ModulatedDelay modulatedDelay;
     effects::Phaser phaser;
     effects::ThreeBandEq eqThree;
+    effects::ChannelEq channelEq;
     effects::GlueCompressor glue;
     effects::FrequencyShifter shifter;
     int ramp = 0;

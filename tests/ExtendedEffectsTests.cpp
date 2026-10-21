@@ -263,6 +263,49 @@ void phaserTests()
     check (maximum > 3 * minimum, "LFO depth moves the phaser notches across a fixed tone");
 }
 
+// Channel EQ: closed-form properties of its sections. A Butterworth section is 3.01 dB down at its
+// corner, a peak reaches its full gain at its centre, and a shelf is at half its gain at its corner.
+void channelEqTests()
+{
+    const auto gainAt = [] (const Settings& s, double f, int channel = 0)
+    { return db (amplitudeAt (process (sine (f, .2, 48000), s), channel, f, 24000, 48000) / .2); };
+    {
+        const auto in = sine (440, .5, 4800, 48000, .25);
+        const auto out = process (in, defaultEffectSettings (Kind::channelEq));
+        bool same = true;
+        for (int c = 0; c < 2; ++c) for (int n = 0; n < in.getNumSamples(); ++n) same = same && out.getSample (c, n) == in.getSample (c, n);
+        check (same, "Channel EQ at its defaults passes audio through unchanged");
+    }
+    const auto hp = with (Kind::channelEq, { { "highPass", 1 } });
+    check (std::abs (gainAt (hp, 80) + 3.0103) < .05 && std::abs (gainAt (hp, 1000)) < .05 && gainAt (hp, 20) < -23,
+           "HP 80 Hz is a second-order Butterworth high-pass at 80 Hz");
+    check (std::abs (gainAt (with (Kind::channelEq, { { "lowDb", 15 } }), 100) - 7.5) < .05 && std::abs (gainAt (with (Kind::channelEq, { { "lowDb", -15 } }), 100) + 7.5) < .05
+           && gainAt (with (Kind::channelEq, { { "lowDb", 15 } }), 20) > 14 && std::abs (gainAt (with (Kind::channelEq, { { "lowDb", 15 } }), 8000)) < .1,
+           "Low is a 100 Hz shelf: half its gain at 100 Hz, nearly all of it at 20 Hz, none at 8 kHz");
+    for (const float centre : { 120.0f, 1000.0f, 2500.0f, 7500.0f })
+        check (std::abs (gainAt (with (Kind::channelEq, { { "midDb", 12 }, { "midHz", centre } }), centre) - 12) < .05
+               && std::abs (gainAt (with (Kind::channelEq, { { "midDb", -12 }, { "midHz", centre } }), centre) + 12) < .05,
+               "Mid peaks at exactly +/-12 dB at " + juce::String (centre) + " Hz");
+    check (std::abs (gainAt (with (Kind::channelEq, { { "highDb", 15 } }), 8000) - 7.5) < .05 && std::abs (gainAt (with (Kind::channelEq, { { "highDb", 15 } }), 100)) < .05,
+           "a High boost is an 8 kHz shelf alone");
+    check (std::abs (effects::ChannelEq::lowPassHz (0) - 20000) < 1e-9 && std::abs (effects::ChannelEq::lowPassHz (-15) - 8000) < 1e-9
+           && std::abs (effects::ChannelEq::lowPassHz (-7.5) - std::sqrt (20000.0 * 8000)) < 1e-6 && effects::ChannelEq::lowPassHz (15) == 20000,
+           "a High cut moves the low-pass from 20 kHz to 8 kHz evenly in octaves");
+    check (std::abs (gainAt (with (Kind::channelEq, { { "highDb", -15 } }), 8000) - (-7.5 - 3.0103)) < .05,
+           "at -15 dB the shelf's half cut and the 8 kHz low-pass's 3 dB add at 8 kHz");
+    {
+        const auto in = sine (1000, .2, 9600, 48000, .5);
+        const auto flat = process (in, with (Kind::channelEq, { { "midDb", 6 } })), quiet = process (in, with (Kind::channelEq, { { "midDb", 6 }, { "outputDb", -6 } }));
+        double worst = 0;
+        for (int c = 0; c < 2; ++c) for (int n = 0; n < in.getNumSamples(); ++n) worst = std::max (worst, std::abs (quiet.getSample (c, n) - std::pow (10.0, -6 / 20.0) * flat.getSample (c, n)));
+        check (worst < 1e-6 && std::abs (amplitudeAt (flat, 1, 1000, 4800, 9600) / amplitudeAt (flat, 0, 1000, 4800, 9600) - .5) < 1e-6,
+               "Output scales exactly, and both channels are filtered alike");
+    }
+    auto bad = defaultEffectSettings (Kind::channelEq); bad.values[3] = 100;
+    auto loud = defaultEffectSettings (Kind::channelEq); loud.values[2] = 13;
+    check (! validEffectSettings (bad) && ! validEffectSettings (loud) && std::string (effectCategory (Kind::channelEq)) == "EQ & Filters" && ! Session::isRackKind (Kind::channelEq),
+           "Channel EQ rejects a mid frequency below 120 Hz and a mid gain past 12 dB");
+}
 void eqThreeTests()
 {
     for (int steep = 0; steep < 2; ++steep)
@@ -337,6 +380,6 @@ void shifterTests()
 void runExtendedEffectsTests()
 {
     saturatorTests(); overdriveTests(); autoFilterTests(); autoPanTests(); modulatedDelayTests();
-    phaserTests(); eqThreeTests(); glueTests(); shifterTests();
+    phaserTests(); eqThreeTests(); channelEqTests(); glueTests(); shifterTests();
 }
 }

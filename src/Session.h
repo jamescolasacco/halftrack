@@ -80,10 +80,12 @@ public:
         polySynth, fmSynth, drumKit, wavetableSynth, sampler, drumSampler,
         // Racks hold parallel chains of devices. Instrument and Drum Racks are instruments; a MIDI
         // Effect Rack is a MIDI effect; an Audio Effect Rack is an audio device.
-        instrumentRack, audioEffectRack, midiEffectRack, drumRack };
+        instrumentRack, audioEffectRack, midiEffectRack, drumRack,
+        // Devices added after the racks.
+        channelEq };
     // Every persisted kind, racks included. Devices added after the racks follow them, so loop over
     // all kinds and skip racks rather than assuming plain devices come first.
-    static constexpr int deviceKindCount = 34;
+    static constexpr int deviceKindCount = 35;
     static constexpr bool isRackKind (EffectKind kind) noexcept
     { return kind == EffectKind::instrumentRack || kind == EffectKind::audioEffectRack || kind == EffectKind::midiEffectRack || kind == EffectKind::drumRack; }
     static constexpr int drumPadCount = 16; // Drum Sampler pads play notes 36 (C1) to 51.

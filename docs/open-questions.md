@@ -280,3 +280,12 @@ These are simplest-default choices pending reference measurement:
 - **Frozen tracks.** Pool edits are allowed while frozen tracks use the groove, and are heard once the track is unfrozen.
 - **MIDI export.** MIDI export writes the clip's own, ungrooved notes.
 
+### Channel EQ defaults
+
+The reference does not document these, so they are simplest-default choices pending reference measurement:
+
+- the 80 Hz high-pass and the High cut's low-pass are second-order Butterworth filters;
+- the High shelf's corner is 8 kHz;
+- the Mid peak's Q is 0.7;
+- Output runs from −12 to +12 dB.
+

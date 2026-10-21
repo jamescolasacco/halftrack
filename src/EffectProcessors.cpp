@@ -58,6 +58,26 @@ std::array<double, 5> allPassSection (double frequency, double q, double rate) n
     const auto p = prewarp (frequency, q, rate);
     return normalise (1 - p.alpha, -2 * p.cosine, 1 + p.alpha, 1 + p.alpha, -2 * p.cosine, 1 - p.alpha);
 }
+std::array<double, 5> peakSection (double frequency, double gainDb, double q, double rate) noexcept
+{
+    if (gainDb == 0) return { 1, 0, 0, 0, 0 };
+    const auto p = prewarp (frequency, q, rate); const auto a = std::pow (10.0, gainDb / 40);
+    return normalise (1 + p.alpha * a, -2 * p.cosine, 1 - p.alpha * a, 1 + p.alpha / a, -2 * p.cosine, 1 - p.alpha / a);
+}
+std::array<double, 5> lowShelfSection (double frequency, double gainDb, double q, double rate) noexcept
+{
+    if (gainDb == 0) return { 1, 0, 0, 0, 0 };
+    const auto p = prewarp (frequency, q, rate); const auto a = std::pow (10.0, gainDb / 40), root = 2 * std::sqrt (a) * p.alpha;
+    return normalise (a * ((a + 1) - (a - 1) * p.cosine + root), 2 * a * ((a - 1) - (a + 1) * p.cosine), a * ((a + 1) - (a - 1) * p.cosine - root),
+                      (a + 1) + (a - 1) * p.cosine + root, -2 * ((a - 1) + (a + 1) * p.cosine), (a + 1) + (a - 1) * p.cosine - root);
+}
+std::array<double, 5> highShelfSection (double frequency, double gainDb, double q, double rate) noexcept
+{
+    if (gainDb == 0) return { 1, 0, 0, 0, 0 };
+    const auto p = prewarp (frequency, q, rate); const auto a = std::pow (10.0, gainDb / 40), root = 2 * std::sqrt (a) * p.alpha;
+    return normalise (a * ((a + 1) + (a - 1) * p.cosine + root), -2 * a * ((a - 1) + (a + 1) * p.cosine), a * ((a + 1) + (a - 1) * p.cosine - root),
+                      (a + 1) - (a - 1) * p.cosine + root, 2 * ((a - 1) - (a + 1) * p.cosine), (a + 1) - (a - 1) * p.cosine - root);
+}
 std::array<double, 5> bandPassOctaves (double frequency, double octaves, double rate) noexcept
 {
     const auto omega = 2 * pi * std::clamp (frequency, 5.0, rate * .45) / rate, s = std::sin (omega);
@@ -437,5 +457,32 @@ void FrequencyShifter::tick (double& left, double& right) noexcept
         *channels[channel] = ring ? x * c : i * c + direction * q * s;
     }
     phase += shift.tick() / rate; phase -= std::floor (phase);
+}
+
+void ChannelEq::prepare (double sampleRate) noexcept { rate = sampleRate; reset(); }
+void ChannelEq::configure (const float* v) noexcept
+{
+    highPass = v[0] != 0; lowPass = v[4] < 0;
+    for (auto& channel : sections)
+    {
+        channel[0].c = highPassSection (highPassHz, butterworthQ, rate);
+        channel[1].c = lowShelfSection (lowShelfHz, v[1], butterworthQ, rate);
+        channel[2].c = peakSection (v[3], v[2], midQ, rate);
+        channel[3].c = highShelfSection (highShelfHz, v[4], butterworthQ, rate);
+        channel[4].c = lowPassSection (lowPassHz (v[4]), butterworthQ, rate);
+    }
+}
+void ChannelEq::reset() noexcept { for (auto& channel : sections) for (auto& s : channel) s.clear(); }
+void ChannelEq::tick (double& left, double& right) noexcept
+{
+    double* channels[] { &left, &right };
+    for (size_t c = 0; c < 2; ++c)
+    {
+        auto& s = sections[c]; auto x = *channels[c];
+        if (highPass) x = s[0].tick (x);
+        x = s[3].tick (s[2].tick (s[1].tick (x)));
+        if (lowPass) x = s[4].tick (x);
+        *channels[c] = x;
+    }
 }
 }
