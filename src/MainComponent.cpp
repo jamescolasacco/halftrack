@@ -6698,7 +6698,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at.toFloat(), juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f,
                                      0, 0, 0, 0, &c, &c, now, down.toFloat(), now, 1, dragged);
         };
-        const auto pump = [] { juce::MessageManager::getInstance()->runDispatchLoopUntil (30); };
+        // Runs the message loop until the condition holds, for commands the editor defers, giving up after two seconds.
+        const auto pumpUntil = [&] (auto condition)
+        {
+            for (const auto deadline = juce::Time::getMillisecondCounter() + 2000; ! condition() && juce::Time::getMillisecondCounter() < deadline;)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+        };
         const auto rackInfo = [&] { refresh(); return currentTrack()->instrument; };
         chooser->setSelectedId (2 + (int) Session::EffectKind::instrumentRack - (int) Session::EffectKind::polySynth, juce::sendNotificationSync); refresh();
         auto* editor = findNamed (deviceChain, "Rack editor");
@@ -6761,8 +6766,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "the selected chain's devices show their own controls inline");
         power->setToggleState (false, juce::dontSendNotification); power->onClick();
         check (! rackInfo().chains[0].devices[0].enabled, "a chain device's power button bypasses it");
-        dynamic_cast<juce::Button*> (named (*editor, "Remove chain device"))->onClick(); pump(); refresh();
-        check (rackInfo().chains[0].devices.empty(), "a chain device's remove button deletes it");
+        dynamic_cast<juce::Button*> (named (*editor, "Remove chain device"))->onClick();
+        pumpUntil ([&] { return rackInfo().chains[0].devices.empty(); });
+        const auto* rackError = dynamic_cast<juce::Label*> (named (*editor, "Rack error"));
+        check (rackInfo().chains[0].devices.empty(), "a chain device's remove button deletes it"
+               + (rackError != nullptr && rackError->getText().isNotEmpty() ? ": " + rackError->getText() : juce::String()));
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
             {
