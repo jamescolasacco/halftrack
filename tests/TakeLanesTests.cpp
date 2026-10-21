@@ -12,6 +12,7 @@ namespace halftrack
 {
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
 float pumpSyntheticTestDevice (Session&, int blocks);
+juce::AudioBuffer<float> captureSyntheticTestDevice (Session&, int blocks);
 namespace
 {
 void check (bool v, const juce::String& text)
@@ -81,6 +82,31 @@ int runTakeLanesTests (const juce::File& artifacts)
         ok (s.cycleTake (trackId, .25, .5, true), "and again");
         check (inRange (sorted (track().clips), .3).file == first.file, "wrapping back to Take 1");
         check (s.cycleTake (trackId, 10, 11, true).failed(), "a range no lane covers cannot cycle");
+
+        // Auditioning: Take 2 plays in place of the main lane, which the snapshot keeps showing.
+        const auto hear = [&] { s.seek (.25); ok (s.play(), "play"); auto out = captureSyntheticTestDevice (s, 30); s.stop(); return out; };
+        const auto difference = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+        {
+            // The first block follows the transport starting, so comparison begins at the second.
+            float worst = 0;
+            for (int c = 0; c < 2; ++c) for (int n = 256; n < std::min (a.getNumSamples(), b.getNumSamples()); ++n) worst = std::max (worst, std::abs (a.getSample (c, n) - b.getSample (c, n)));
+            return worst;
+        };
+        ok (s.setTrackArmed (0, false), "disarm, so only the clips play"); pumpSyntheticTestDevice (s, 8);
+        const auto mainHeard = hear();
+        check (mainHeard.getMagnitude (0, mainHeard.getNumSamples()) > .01f && difference (mainHeard, hear()) < 1e-6f, "the main lane plays the same way twice");
+        const auto shown = track().clips;
+        ok (s.auditionTakeLane (laneTwo), "audition Take 2");
+        check (track().auditionLane == laneTwo && track().clips.size() == shown.size() && track().clips[0].id == shown[0].id,
+               "the auditioned track still shows its main lane");
+        check (difference (mainHeard, hear()) > .01f, "auditioning plays Take 2 where the main lane plays Take 1");
+        s.stopAuditioning();
+        check (track().auditionLane.isEmpty() && difference (mainHeard, hear()) < 1e-6f, "stopping the audition brings the main lane back exactly");
+        ok (s.auditionTakeLane (laneOne), "audition Take 1");
+        ok (s.setTrackPan (0, .25f), "an edit while auditioning");
+        check (track().auditionLane.isEmpty() && track().pan == .25f && track().clips.size() == shown.size(), "the edit ends the audition and applies to the main lane");
+        s.undo();
+        check (track().pan == 0 && difference (mainHeard, hear()) < 1e-6f, "undo then leaves the main lane as it was");
 
         // Managing lanes.
         juce::String added;

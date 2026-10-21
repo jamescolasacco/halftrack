@@ -491,7 +491,7 @@ Dragging a warp marker snaps to the coarsest power-of-two fraction of a beat tha
 
 These are simplest defaults pending a comparison with the reference:
 
-- **Storage.** Take lanes are kept as saved clip states on their track, so they do not play; auditioning them is not implemented yet.
+- **Storage.** Take lanes are kept as saved clip states on their track, so they play only while auditioned. Auditioning swaps them in for the main lane, and any edit, undo, save, export or recording ends it, where the reference lets take lanes be edited while auditioned.
 - **Loop recording.** It still makes the engine's single clip with takes, which is not split into lanes.
 - **Comp edges** get no automatic crossfades.
 - **Showing lanes** is a per-track view choice and is not saved.

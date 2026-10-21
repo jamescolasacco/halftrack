@@ -706,6 +706,12 @@ public:
             return false;
         }
         if ((code == 'T' || code == 't') && ! cmd && shift && key.getModifiers().isAltDown() && ! showSession) { insertTakeLaneFromUI(); return true; }
+        if ((code == 'T' || code == 't') && ! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && takeSelection.laneId.isNotEmpty())
+        {
+            for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused; focused = focused->getParentComponent())
+                if (dynamic_cast<juce::TextEditor*> (focused)) return false;
+            toggleAudition (takeSelection.laneId); return true;
+        }
         if (code == juce::KeyPress::returnKey && ! cmd && ! showSession && ! showPiano && takeSelection.active()) { compSelectedTake(); return true; }
         if ((code == 'A' || code == 'a') && ! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession)
         {
@@ -844,6 +850,13 @@ private:
     {
         if (const auto* track = currentTrack(); track != nullptr && ! track->isReturn)
         { juce::String id; report (session.insertTakeLane (track->id, id)); takeLanesShown.insert (track->id); refresh(); resized(); }
+    }
+    void toggleAudition (const juce::String& laneId)
+    {
+        bool auditioned = false;
+        for (const auto& t : state.tracks) auditioned = auditioned || t.auditionLane == laneId;
+        if (auditioned) session.stopAuditioning(); else report (session.auditionTakeLane (laneId));
+        refresh();
     }
     void compSelectedTake()
     {
@@ -1538,22 +1551,43 @@ private:
         juce::Colour colour;
         juce::TextButton hide { "x" };
     };
-    // A take lane's header: its name, which double-clicking renames, and a button that deletes it.
+    // A small speaker, lit while its take lane is auditioned.
+    class SpeakerButton final : public juce::Button
+    {
+    public:
+        SpeakerButton() : juce::Button ("Audition take lane") { setClickingTogglesState (false); }
+        void paintButton (juce::Graphics& g, bool over, bool) override
+        {
+            const auto b = getLocalBounds().toFloat().reduced (3);
+            g.setColour (getToggleState() ? orange : over ? ink : muted);
+            juce::Path speaker;
+            speaker.startNewSubPath (b.getX(), b.getCentreY() - b.getHeight() * .18f); speaker.lineTo (b.getX() + b.getWidth() * .3f, b.getCentreY() - b.getHeight() * .18f);
+            speaker.lineTo (b.getX() + b.getWidth() * .6f, b.getY()); speaker.lineTo (b.getX() + b.getWidth() * .6f, b.getBottom());
+            speaker.lineTo (b.getX() + b.getWidth() * .3f, b.getCentreY() + b.getHeight() * .18f); speaker.lineTo (b.getX(), b.getCentreY() + b.getHeight() * .18f); speaker.closeSubPath();
+            g.fillPath (speaker);
+            if (getToggleState()) g.drawLine (b.getRight() - 2, b.getY() + 2, b.getRight() - 2, b.getBottom() - 2, 1.5f);
+        }
+    };
+    // A take lane's header: its name, which double-clicking renames, its audition switch and a button
+    // that deletes it.
     class TakeLaneHeader final : public juce::Component
     {
     public:
         explicit TakeLaneHeader (Impl& o) : owner (o)
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &name, &remove }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &name, &remove, &audition }) addAndMakeVisible (c);
+            audition.setTooltip ("Audition this take lane in place of the main lane  |  T"); audition.setWantsKeyboardFocus (false);
+            audition.onClick = [this] { owner.toggleAudition (laneId); };
             name.setName ("Take lane name"); name.setEditable (false, true, false); name.setFont (font (10.5f));
             name.setColour (juce::Label::textColourId, ink); name.setTooltip ("Double-click to rename this take lane");
             name.onTextChange = [this] { owner.report (owner.session.renameTakeLane (laneId, name.getText())); owner.refresh(); };
             remove.setName ("Delete take lane"); remove.setWantsKeyboardFocus (false); remove.setTooltip ("Delete this take lane and its takes");
             remove.onClick = [this] { owner.report (owner.session.removeTakeLane (laneId)); owner.refresh(); };
         }
-        void set (const juce::String& id, const juce::String& text, juce::Colour c)
+        void set (const juce::String& id, const juce::String& text, juce::Colour c, bool auditioned)
         {
             laneId = id; colour = c; setTitle (text);
+            audition.setToggleState (auditioned, juce::dontSendNotification);
             if (! name.isBeingEdited() && name.getText() != text) name.setText (text, juce::dontSendNotification);
             repaint();
         }
@@ -1562,13 +1596,14 @@ private:
             g.fillAll (juce::Colour (0xff2e2e2e)); g.setColour (colour.withAlpha (.6f)); g.fillRect (0, 0, 4, getHeight());
             g.setColour (line); g.drawRect (getLocalBounds());
         }
-        void resized() override { name.setBounds (10, 4, getWidth() - 50, 18); remove.setBounds (getWidth() - 34, 4, 24, 18); }
+        void resized() override { name.setBounds (10, 4, getWidth() - 78, 18); audition.setBounds (getWidth() - 62, 4, 22, 18); remove.setBounds (getWidth() - 34, 4, 24, 18); }
         juce::String laneId;
     private:
         Impl& owner;
         juce::Colour colour;
         juce::Label name;
         juce::TextButton remove { "x" };
+        SpeakerButton audition;
     };
     class Canvas final : public juce::Component, private juce::ChangeListener
     {
@@ -1611,7 +1646,7 @@ private:
                     if (takes >= takeHeaders.size()) { takeHeaders.push_back (std::make_unique<TakeLaneHeader> (owner)); addAndMakeVisible (*takeHeaders.back()); layout = true; }
                     const auto& track = owner.state.tracks[(size_t) lane.index];
                     const auto& take = track.takeLanes[(size_t) lane.take];
-                    takeHeaders[takes]->set (take.id, take.name, track.colour);
+                    takeHeaders[takes]->set (take.id, take.name, track.colour, track.auditionLane == take.id);
                     ++takes;
                 }
             if (takeHeaders.size() != takes) { takeHeaders.resize (takes); layout = true; }
@@ -8292,6 +8327,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         timeSelection = { .25, .5, { trackId } };
         check (handleKey (juce::KeyPress (juce::KeyPress::downKey, juce::ModifierKeys::commandModifier, 0)), "Cmd+Down is handled"); refresh();
         check (playing (.3) == takeTwo, "Cmd+Down cycles the range to the next take");
+        auto* speaker = dynamic_cast<juce::Button*> (findNamed (*header, "Audition take lane"));
+        check (speaker != nullptr, "each take lane header has an audition switch");
+        speaker->onClick(); refresh();
+        check (state.tracks[(size_t) t].auditionLane == state.tracks[(size_t) t].takeLanes[0].id && speaker->getToggleState(), "the switch auditions its lane");
+        check (handleKey (juce::KeyPress ('T')) && state.tracks[(size_t) t].auditionLane.isEmpty() && ! speaker->getToggleState(),
+               "T stops auditioning the selected lane");
         timeSelection = {};
         check (handleKey (juce::KeyPress ('T', juce::ModifierKeys::shiftModifier | juce::ModifierKeys::altModifier, 0)) && state.tracks[(size_t) t].takeLanes.size() == 3,
                "Shift+Option+T inserts a take lane");

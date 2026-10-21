@@ -2276,6 +2276,7 @@ struct Session::Impl
     }
     void transaction (const String& name)
     {
+        endAudition(); // Edits apply to the main lane, never to an audition.
         flushStructuralUpdates();
         if (! gesture) edit->getUndoManager().beginNewTransaction (name);
     }
@@ -2442,6 +2443,20 @@ struct Session::Impl
                                     [] (float v) { return v; }, [] (float p) { return p; } };
             }
         return std::nullopt;
+    }
+    // Auditioning a take lane: the main lane's clip states, with their places in the track, rest aside
+    // while copies of the lane's clips play. The same states return, so undo history stays valid.
+    struct Audition { te::EditItemID trackId; String laneId; std::vector<std::pair<int, juce::ValueTree>> main; std::vector<juce::ValueTree> inserted; };
+    std::optional<Audition> audition;
+    void endAudition()
+    {
+        if (! audition) return;
+        auto stash = std::move (*audition); audition.reset();
+        auto* t = dynamic_cast<te::AudioTrack*> (te::findTrackForID (*edit, stash.trackId));
+        if (t == nullptr) return;
+        for (auto& v : stash.inserted) if (v.getParent().isValid()) v.getParent().removeChild (v, nullptr);
+        for (auto& [index, v] : stash.main) t->state.addChild (v, std::min (index, t->state.getNumChildren()), nullptr);
+        edit->restartPlayback();
     }
     // Take lanes: the track's lanes, made when asked; a lane by id, with its track.
     juce::ValueTree takeLanes (te::AudioTrack& t, bool create)
@@ -3005,7 +3020,13 @@ Session::Snapshot Session::snapshot() const
             auto& m = impl->meter (info.id, level->measurer);
             info.peakL = m.read (0); info.peakR = m.read (1);
         }
-        for (auto* c : t->getClips()) info.clips.push_back (describeClip (*c));
+        if (impl->audition && impl->audition->trackId == t->itemID)
+        {
+            // An auditioned track still shows its main lane.
+            for (const auto& [index, v] : impl->audition->main) info.clips.push_back (describeLaneClip (v, e));
+            info.auditionLane = impl->audition->laneId;
+        }
+        else for (auto* c : t->getClips()) info.clips.push_back (describeClip (*c));
         for (auto lane : t->state.getChildWithName (takeLanesType))
         {
             TakeLaneInfo laneInfo { lane[te::IDs::id].toString(), lane[te::IDs::name].toString(), {} };
@@ -3094,6 +3115,7 @@ Result Session::newProject()
     auto options = te::Edit::Options { impl->engine, state, te::ProjectItemID::fromProperty (state, te::IDs::projectID) };
     options.numAudioTracks = 0; options.defaultMasterVolumedB = 0;
     options.editFileRetriever = [this] { return impl->editLocation(); };
+    impl->audition.reset(); // Its states belong to the replaced Edit.
     impl->edit = std::make_unique<te::Edit> (std::move (options));
     ++impl->projectGeneration;
     impl->edit->getMasterVolumePlugin()->setVolumeDb (0);
@@ -3212,6 +3234,7 @@ Result Session::loadProject (const File& file)
     endEditGesture(); closePluginEditors(); stop(); impl->meters.clear();
     impl->projectFile = file;
     impl->pristineNewDocument = false;
+    impl->audition.reset(); // Its states belong to the replaced Edit.
     impl->edit = std::move (candidate);
     ++impl->projectGeneration;
     for (auto* t : te::getAudioTracks (*impl->edit))
@@ -3397,6 +3420,7 @@ Result Session::recoverProject (const File& recovery, File& recoveredFrom)
 Result Session::saveProject (const File& destination)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    impl->endAudition(); // The main lane is what is saved.
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before saving.");
     auto file = destination.withFileExtension (".halftrack");
     auto assets = file.getSiblingFile (file.getFileNameWithoutExtension() + " Assets");
@@ -3847,6 +3871,24 @@ Result Session::exportMidiClip (const String& id, const File& destination)
     if(!temporary.overwriteTargetFileWithTemporary())return Result::fail("Could not replace the MIDI destination.");
     return Result::ok();
 }
+Result Session::auditionTakeLane (const String& laneId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before auditioning a take.");
+    auto [track, lane] = impl->takeLane (laneId);
+    if (track == nullptr) return Result::fail ("Take lane not found.");
+    if (impl->audition && impl->audition->laneId == laneId) return Result::ok();
+    impl->endAudition();
+    Impl::Audition audition { track->itemID, laneId, {}, {} };
+    for (auto* c : track->getClips()) audition.main.push_back ({ track->state.indexOf (c->state), c->state });
+    std::sort (audition.main.begin(), audition.main.end(), [] (const auto& a, const auto& b) { return a.first < b.first; });
+    for (auto it = audition.main.rbegin(); it != audition.main.rend(); ++it) track->state.removeChild (it->second, nullptr);
+    for (auto clip : lane) { auto copy = impl->freshClipCopy (clip); track->state.appendChild (copy, nullptr); audition.inserted.push_back (copy); }
+    impl->audition = std::move (audition);
+    impl->edit->restartPlayback();
+    sendChangeMessage(); return Result::ok();
+}
+void Session::stopAuditioning() { impl->endAudition(); sendChangeMessage(); }
 Result Session::insertTakeLane (const String& trackId, String& laneId)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -6817,6 +6859,7 @@ void Session::stop()
 Result Session::record()
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    impl->endAudition();
     if (impl->edit->getTransport().isRecording()) return Result::ok();
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail ("Choose an audio device in Audio Settings.");
     bool armed = false;
@@ -7065,6 +7108,7 @@ void Session::endEditGesture()
 void Session::undo()
 {
     if (impl->exporting || impl->anyRecording()) return;
+    impl->endAudition();
     const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
     impl->resetTapTempo();
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
@@ -7073,6 +7117,7 @@ void Session::undo()
 void Session::redo()
 {
     if (impl->exporting || impl->anyRecording()) return;
+    impl->endAudition();
     const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
     impl->resetTapTempo();
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
@@ -7158,6 +7203,7 @@ Result Session::exportAudio (const File& file, ExportFormat format, double rate,
 
 Result Session::exportAudio (const File& file, const AudioExportSettings& settings)
 {
+    impl->endAudition(); // Exports render the main lane.
     const auto format = settings.format;
     const double rate = settings.sampleRate, tailSeconds = settings.tailSeconds;
     const int bits = settings.bitDepth;

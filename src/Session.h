@@ -322,6 +322,7 @@ public:
         SynthSettings synth;
         AutomationLane volumeAutomation, panAutomation;
         std::vector<TakeLaneInfo> takeLanes; // Top to bottom.
+        juce::String auditionLane; // The take lane playing in place of the main lane, if any.
         MonitorMode monitor = MonitorMode::off;
         juce::String inputName;
         std::vector<ClipInfo> clips;
@@ -444,6 +445,11 @@ public:
     juce::Result renameTakeLane (const juce::String& laneId, const juce::String& name);
     juce::Result compTake (const juce::String& laneId, double startSeconds, double endSeconds);
     juce::Result cycleTake (const juce::String& trackId, double startSeconds, double endSeconds, bool next);
+    // Auditions a take lane: it plays in place of its track's main lane, which the snapshot keeps
+    // showing, until another lane is auditioned, auditioning stops, or anything is edited, undone,
+    // redone, recorded, saved or exported. The swap keeps no undo history.
+    juce::Result auditionTakeLane (const juce::String& laneId);
+    void stopAuditioning();
     // Capture MIDI: the notes played into armed or In-monitored MIDI tracks are kept. Capturing turns
     // each track's latest phrase (since its last pause of over ten seconds) into a clip, bar-aligned:
     // in the Arrangement at the beats it was played while the transport ran, otherwise from the
