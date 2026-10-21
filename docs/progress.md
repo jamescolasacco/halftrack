@@ -1185,3 +1185,12 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 ## Warp markers — 2026-10-21
 
 Engine change in `src/Session.*`, `tests/WarpTests.cpp`, `cmake/PatchWarpTiming.cmake` (new) and `CMakeLists.txt`, with documentation. A Tracktion patch fixes warp-marker timing. The clip-gain, clip-activation and stretch-alignment patches now accept its output hash. See [the contract](research/warp-contract.md#warp-markers-2026-10-21).
+
+## Take lanes and comping — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/TakeLanesTests.cpp` (new), with documentation.
+
+- **Recording.** A recording pass on an armed track now replaces the main lane's earlier material under it, as in the reference. Earlier recordings overlapped and both played.
+- **A fix.** Comping and performance capture removed clips while iterating the track's live clip list; both now iterate a copy.
+
+See [the contract](research/take-lanes-contract.md).

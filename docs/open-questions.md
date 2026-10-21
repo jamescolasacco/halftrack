@@ -486,3 +486,12 @@ These are simplest defaults pending a comparison with the reference:
 ### Warp marker grid
 
 Dragging a warp marker snaps to the coarsest power-of-two fraction of a beat that is at least 12 pixels wide at the current zoom. This is the simplest default pending a comparison with the reference's adaptive grid.
+
+### Take lane scope
+
+These are simplest defaults pending a comparison with the reference:
+
+- **Storage.** Take lanes are kept as saved clip states on their track, so they do not play; auditioning them is not implemented yet.
+- **Loop recording.** It still makes the engine's single clip with takes, which is not split into lanes.
+- **Comp edges** get no automatic crossfades.
+- **Showing lanes** is a per-track view choice and is not saved.

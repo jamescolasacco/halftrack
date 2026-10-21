@@ -305,6 +305,9 @@ public:
         RackChainSettings settings;
         std::vector<PluginInfo> devices; // MIDI effects, then at most one instrument, then audio effects.
     };
+    // A take lane: recorded or added takes kept below a track's main lane, as in the reference's
+    // comping. Take lane clips do not play; comping copies a range of a lane into the main lane.
+    struct TakeLaneInfo { juce::String id, name; std::vector<ClipInfo> clips; };
     struct TrackInfo
     {
         juce::String id, name;
@@ -318,6 +321,7 @@ public:
         std::vector<SendInfo> sends;
         SynthSettings synth;
         AutomationLane volumeAutomation, panAutomation;
+        std::vector<TakeLaneInfo> takeLanes; // Top to bottom.
         MonitorMode monitor = MonitorMode::off;
         juce::String inputName;
         std::vector<ClipInfo> clips;
@@ -431,6 +435,15 @@ public:
     void stopPreview();
     juce::Result setPreviewVolume (float decibels); // -70 to +6 dB.
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
+    // Take lanes. Arrangement recording puts each pass on an armed track in a take lane (reusing a lane
+    // with nothing at or after the pass's start) as well as the main lane. Comping copies a lane's
+    // material in a time range into the main lane, replacing what was there, as one undo step;
+    // cycling replaces it with the next or previous lane holding material in the range.
+    juce::Result insertTakeLane (const juce::String& trackId, juce::String& laneId);
+    juce::Result removeTakeLane (const juce::String& laneId);
+    juce::Result renameTakeLane (const juce::String& laneId, const juce::String& name);
+    juce::Result compTake (const juce::String& laneId, double startSeconds, double endSeconds);
+    juce::Result cycleTake (const juce::String& trackId, double startSeconds, double endSeconds, bool next);
     // Capture MIDI: the notes played into armed or In-monitored MIDI tracks are kept. Capturing turns
     // each track's latest phrase (since its last pause of over ten seconds) into a clip, bar-aligned:
     // in the Arrangement at the beats it was played while the transport ran, otherwise from the

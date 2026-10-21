@@ -27,6 +27,9 @@ using juce::String;
 const juce::Identifier monitorProperty { "halftrackMonitor" };
 // The clip's last engine warp marker is Halftrack's end marker, not one of the clip's own; markers
 // paused while warp is off resume with it.
+// Take lanes: a track's lanes of takes, each holding clip states that do not play, and the lane a
+// comped main-lane clip was copied from.
+const juce::Identifier takeLanesType { "HALFTRACKTAKELANES" }, takeLaneType { "TAKELANE" }, compSourceProperty { "halftrackCompSource" };
 const juce::Identifier implicitWarpEndProperty { "halftrackWarpEnd" }, warpMarkersPausedProperty { "halftrackWarpMarkersPaused" };
 const juce::Identifier recordQuantisationProperty { "halftrackRecordQuantisation" };
 const juce::Identifier countInProperty { "halftrackCountInBars" };
@@ -1113,6 +1116,31 @@ Session::ClipInfo describeClip (te::Clip& clip)
     }
     return result;
 }
+// A take lane clip, from its saved state: its place, source file or notes.
+Session::ClipInfo describeLaneClip (const juce::ValueTree& state, te::Edit& edit)
+{
+    Session::ClipInfo result;
+    result.id = state[te::IDs::id].toString(); result.name = state[te::IDs::name].toString();
+    result.start = state[te::IDs::start]; result.length = state[te::IDs::length]; result.sourceOffset = state[te::IDs::offset];
+    const auto beats = edit.tempoSequence.toBeats (te::TimeRange (te::TimePosition::fromSeconds (result.start), te::TimeDuration::fromSeconds (result.length)));
+    result.startBeat = beats.getStart().inBeats(); result.lengthBeats = beats.getLength().inBeats();
+    result.active = ! static_cast<bool> (state.getProperty (te::IDs::mute, false));
+    if (state.hasType (te::IDs::AUDIOCLIP))
+    {
+        result.isAudio = true;
+        result.file = te::SourceFileReference::findFileFromString (edit, state[te::IDs::source].toString());
+        result.mediaMissing = ! result.file.existsAsFile();
+    }
+    else if (state.hasType (te::IDs::MIDICLIP))
+    {
+        result.isMidi = true;
+        for (auto note : state.getChildWithName (te::IDs::SEQUENCE))
+            if (note.hasType (te::IDs::NOTE))
+                result.notes.push_back ({ note.getProperty (midiNoteIDProperty).toString(), static_cast<int> (note[te::IDs::p]), static_cast<double> (note[te::IDs::b]),
+                                          static_cast<double> (note[te::IDs::l]), static_cast<int> (note[te::IDs::v]) / 127.0f, true });
+    }
+    return result;
+}
 
 class Behaviour final : public te::EngineBehaviour
 {
@@ -1842,7 +1870,8 @@ struct Session::Impl
                 if (splittableAt (*track, from).wasOk() && splittableAt (*track, to).wasOk())
                 {
                     splitTrackAt (*track, from, undo); splitTrackAt (*track, to, undo);
-                    for (auto* c : track->getClips())
+                    const auto existing = track->getClips(); // Removing clips changes the track's list.
+                    for (auto* c : existing)
                         if (c->getPosition().getStart() >= from - te::TimeDuration::fromSeconds (1e-6) && c->getPosition().getEnd() <= to + te::TimeDuration::fromSeconds (1e-6)) c->removeFromParent();
                 }
                 auto state = source->state.createCopy();
@@ -2414,6 +2443,66 @@ struct Session::Impl
             }
         return std::nullopt;
     }
+    // Take lanes: the track's lanes, made when asked; a lane by id, with its track.
+    juce::ValueTree takeLanes (te::AudioTrack& t, bool create)
+    {
+        auto lanes = t.state.getChildWithName (takeLanesType);
+        if (! lanes.isValid() && create) { lanes = juce::ValueTree (takeLanesType); t.state.appendChild (lanes, &edit->getUndoManager()); }
+        return lanes;
+    }
+    std::pair<te::AudioTrack*, juce::ValueTree> takeLane (const String& id)
+    {
+        for (auto* t : te::getAudioTracks (*edit))
+            for (auto lane : t->state.getChildWithName (takeLanesType))
+                if (lane[te::IDs::id].toString() == id) return { t, lane };
+        return { nullptr, {} };
+    }
+    juce::ValueTree newTakeLane (te::AudioTrack& t)
+    {
+        auto lanes = takeLanes (t, true);
+        juce::ValueTree lane (takeLaneType);
+        lane.setProperty (te::IDs::id, juce::Uuid().toString(), nullptr);
+        lane.setProperty (te::IDs::name, "Take " + String (lanes.getNumChildren() + 1), nullptr);
+        lanes.appendChild (lane, &edit->getUndoManager());
+        return lane;
+    }
+    // A copy of a clip's state with fresh identities.
+    juce::ValueTree freshClipCopy (const juce::ValueTree& state)
+    {
+        auto copy = state.createCopy();
+        te::EditItemID::remapIDs (copy, nullptr, *edit);
+        renewMidiNoteIDs (copy);
+        copy.removeProperty (compSourceProperty, nullptr);
+        return copy;
+    }
+    // Splits the earlier clips under a new one at its edges and removes what lies beneath it. The new
+    // clip does not cross its own edges, so only earlier material is split.
+    void replaceUnder (te::AudioTrack& t, te::Clip& above, const std::set<String>& earlier)
+    {
+        const auto range = above.getPosition().time;
+        auto* undo = &edit->getUndoManager();
+        for (const auto at : { range.getStart(), range.getEnd() })
+            if (splittableAt (t, at).wasOk()) splitTrackAt (t, at, undo);
+        const auto clips = t.getClips(); // Removing clips changes the track's list.
+        for (auto* c : clips)
+            if (c != &above && c->getClipSlot() == nullptr && earlier.count (c->itemID.toString()) != 0
+                && c->getPosition().getStart() >= range.getStart() - te::TimeDuration::fromSeconds (1e-6) && c->getPosition().getEnd() <= range.getEnd() + te::TimeDuration::fromSeconds (1e-6))
+                c->removeFromParent();
+    }
+    // A recorded pass goes into the first take lane with nothing at or after its start, or a new one.
+    void keepTake (te::AudioTrack& t, te::Clip& recorded)
+    {
+        const auto start = recorded.getPosition().getStart().inSeconds();
+        juce::ValueTree target;
+        for (auto lane : takeLanes (t, false))
+        {
+            bool free = true;
+            for (auto clip : lane) free = free && static_cast<double> (clip[te::IDs::start]) + static_cast<double> (clip[te::IDs::length]) <= start + 1e-9;
+            if (free) { target = lane; break; }
+        }
+        if (! target.isValid()) target = newTakeLane (t);
+        target.appendChild (freshClipCopy (recorded.state), &edit->getUndoManager());
+    }
     // An external plug-in parameter's lane, in 0-1 values; one undo step unless written internally.
     Result setExternalAutomation (te::ExternalPlugin& plugin, int parameter, const AutomationLane& lane)
     {
@@ -2917,6 +3006,12 @@ Session::Snapshot Session::snapshot() const
             info.peakL = m.read (0); info.peakR = m.read (1);
         }
         for (auto* c : t->getClips()) info.clips.push_back (describeClip (*c));
+        for (auto lane : t->state.getChildWithName (takeLanesType))
+        {
+            TakeLaneInfo laneInfo { lane[te::IDs::id].toString(), lane[te::IDs::name].toString(), {} };
+            for (auto clip : lane) laneInfo.clips.push_back (describeLaneClip (clip, e));
+            info.takeLanes.push_back (std::move (laneInfo));
+        }
         info.launcherActive = t->playSlotClips.get() || (t->launcherOwnership.load (std::memory_order_acquire) & 1) != 0;
         info.frozen = t->isFrozen (te::Track::individualFreeze);
         info.crossfade = static_cast<CrossfadeAssign> (juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (crossfadeProperty, 0))));
@@ -3108,6 +3203,12 @@ Result Session::loadProject (const File& file)
                 // Anchor their media before edits; only the saved copy is relative.
                 reference.source.setValue (resolved.getFullPathName(), nullptr);
             }
+    // Take lane audio is anchored the same way.
+    for (auto* t : te::getAudioTracks (*candidate))
+        for (auto lane : t->state.getChildWithName (takeLanesType))
+            for (auto clip : lane)
+                if (clip.hasType (te::IDs::AUDIOCLIP))
+                    clip.setProperty (te::IDs::source, te::SourceFileReference::findFileFromString (*candidate, clip[te::IDs::source].toString()).getFullPathName(), nullptr);
     endEditGesture(); closePluginEditors(); stop(); impl->meters.clear();
     impl->projectFile = file;
     impl->pristineNewDocument = false;
@@ -3329,6 +3430,28 @@ Result Session::saveProject (const File& destination)
             node.setProperty (te::IDs::source, target.getRelativePathFrom (file.getParentDirectory()), nullptr);
             sources.emplace_back (c, target);
         }
+    // Take lane audio is collected the same way.
+    std::vector<std::pair<juce::ValueTree, File>> laneSources;
+    for (auto* t : te::getAudioTracks (*impl->edit))
+        for (auto lane : t->state.getChildWithName (takeLanesType))
+            for (auto clip : lane)
+                if (clip.hasType (te::IDs::AUDIOCLIP))
+                {
+                    const auto original = te::SourceFileReference::findFileFromString (*impl->edit, clip[te::IDs::source].toString());
+                    auto node = findStateWithID (state, clip[te::IDs::id]);
+                    if (! original.existsAsFile()) { node.setProperty (te::IDs::source, original.getRelativePathFrom (file.getParentDirectory()), nullptr); continue; }
+                    File target;
+                    if (original.isAChildOf (assets)) target = original;
+                    else if (auto it = copied.find (original.getFullPathName()); it != copied.end()) target = it->second;
+                    else
+                    {
+                        target = assets.getNonexistentChildFile (original.getFileNameWithoutExtension(), original.getFileExtension(), true);
+                        if (! original.copyFileTo (target)) return Result::fail ("Could not collect audio: " + original.getFileName());
+                        copied[original.getFullPathName()] = target;
+                    }
+                    node.setProperty (te::IDs::source, target.getRelativePathFrom (file.getParentDirectory()), nullptr);
+                    laneSources.emplace_back (clip, target);
+                }
     // Sampler and drum pad samples are collected the same way and saved relative to the project.
     struct CollectedSample { NativeEffectPlugin* native; int slot; File target; };
     std::vector<CollectedSample> samples;
@@ -3372,6 +3495,7 @@ Result Session::saveProject (const File& destination)
         // Native listeners refresh playback, but relocation adds no undo action.
         clip->getSourceFileReference().source.setValue (source.getFullPathName(), nullptr);
     for (auto& collected : samples) collected.native->relocateSample (collected.slot, collected.target);
+    for (auto& [clip, source] : laneSources) clip.setProperty (te::IDs::source, source.getFullPathName(), nullptr);
     impl->edit->resetChangedStatus();
     impl->explicitChanges = false;
     sendChangeMessage();
@@ -3383,6 +3507,11 @@ juce::Array<File> Session::missingMedia() const
     juce::Array<File> missing;
     for (auto* t : te::getAudioTracks (*impl->edit))
     {
+        for (auto lane : t->state.getChildWithName (takeLanesType))
+            for (auto clip : lane)
+                if (clip.hasType (te::IDs::AUDIOCLIP))
+                    if (const auto f = te::SourceFileReference::findFileFromString (*impl->edit, clip[te::IDs::source].toString()); f != File() && ! f.existsAsFile())
+                        missing.addIfNotAlreadyThere (f);
         for (auto* c : allTrackClips (*t))
             if (c->usesSourceFile())
                 if (const auto f = c->getSourceFileReference().getFile(); f != File() && ! f.existsAsFile()) missing.addIfNotAlreadyThere (f);
@@ -3426,6 +3555,11 @@ Result Session::locateMissingMedia (const File& folder, int& found)
     };
     for (auto* t : te::getAudioTracks (*impl->edit))
     {
+        for (auto lane : t->state.getChildWithName (takeLanesType))
+            for (auto clip : lane)
+                if (clip.hasType (te::IDs::AUDIOCLIP))
+                    if (const auto f = te::SourceFileReference::findFileFromString (*impl->edit, clip[te::IDs::source].toString()); f != File() && ! f.existsAsFile())
+                        if (const auto replacement = match (f); replacement != File()) clip.setProperty (te::IDs::source, replacement.getFullPathName(), nullptr);
         for (auto* c : allTrackClips (*t))
             if (c->usesSourceFile())
                 if (const auto f = c->getSourceFileReference().getFile(); f != File() && ! f.existsAsFile())
@@ -3712,6 +3846,90 @@ Result Session::exportMidiClip (const String& id, const File& destination)
      stream->flush();if(stream->getStatus().failed())return stream->getStatus();}
     if(!temporary.overwriteTargetFileWithTemporary())return Result::fail("Could not replace the MIDI destination.");
     return Result::ok();
+}
+Result Session::insertTakeLane (const String& trackId, String& laneId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* track = impl->track (trackId);
+    if (track == nullptr || isReturn (*track)) return Result::fail ("Choose an audio or MIDI track for the take lane.");
+    impl->transaction ("Insert take lane");
+    laneId = impl->newTakeLane (*track)[te::IDs::id].toString();
+    impl->changed(); return Result::ok();
+}
+Result Session::removeTakeLane (const String& laneId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto [track, lane] = impl->takeLane (laneId);
+    if (track == nullptr) return Result::fail ("Take lane not found.");
+    impl->transaction ("Delete take lane");
+    lane.getParent().removeChild (lane, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::renameTakeLane (const String& laneId, const String& name)
+{
+    auto [track, lane] = impl->takeLane (laneId);
+    if (track == nullptr) return Result::fail ("Take lane not found.");
+    if (name.trim().isEmpty()) return Result::fail ("Enter a name for the take lane.");
+    if (lane[te::IDs::name].toString() == name.trim()) return Result::ok();
+    impl->transaction ("Rename take lane");
+    lane.setProperty (te::IDs::name, name.trim(), &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::compTake (const String& laneId, double startSeconds, double endSeconds)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before comping.");
+    auto [track, lane] = impl->takeLane (laneId);
+    if (track == nullptr) return Result::fail ("Take lane not found.");
+    if (auto frozen = impl->unfrozen (track); frozen.failed()) return frozen;
+    if (! std::isfinite (startSeconds) || ! std::isfinite (endSeconds) || endSeconds <= startSeconds || startSeconds < 0)
+        return Result::fail ("Select a time range in the take lane.");
+    const auto from = te::TimePosition::fromSeconds (startSeconds), to = te::TimePosition::fromSeconds (endSeconds);
+    for (const auto at : { from, to }) if (auto r = splittableAt (*track, at); r.failed()) return r;
+    impl->transaction ("Comp take");
+    auto* undo = &impl->edit->getUndoManager();
+    // The main lane's material in the range gives way to the take's.
+    for (const auto at : { from, to }) splitTrackAt (*track, at, undo);
+    const auto existing = track->getClips(); // Removing clips changes the track's list.
+    for (auto* c : existing)
+        if (c->getPosition().getStart() >= from - te::TimeDuration::fromSeconds (1e-6) && c->getPosition().getEnd() <= to + te::TimeDuration::fromSeconds (1e-6)) c->removeFromParent();
+    for (auto clip : lane)
+    {
+        const double start = clip[te::IDs::start], end = start + static_cast<double> (clip[te::IDs::length]);
+        const auto a = std::max (start, startSeconds), b = std::min (end, endSeconds);
+        if (b <= a + 1e-6) continue;
+        auto copy = impl->freshClipCopy (clip);
+        copy.setProperty (te::IDs::start, a, nullptr);
+        copy.setProperty (te::IDs::length, b - a, nullptr);
+        copy.setProperty (te::IDs::offset, static_cast<double> (clip[te::IDs::offset]) + (a - start), nullptr);
+        copy.setProperty (compSourceProperty, laneId, nullptr);
+        track->insertClipWithState (copy);
+    }
+    impl->changed(); return Result::ok();
+}
+Result Session::cycleTake (const String& trackId, double startSeconds, double endSeconds, bool next)
+{
+    auto* track = impl->track (trackId);
+    if (track == nullptr) return Result::fail ("Track not found.");
+    std::vector<String> candidates;
+    for (auto lane : impl->takeLanes (*track, false))
+    {
+        bool has = false;
+        for (auto clip : lane)
+            has = has || (static_cast<double> (clip[te::IDs::start]) < endSeconds && static_cast<double> (clip[te::IDs::start]) + static_cast<double> (clip[te::IDs::length]) > startSeconds);
+        if (has) candidates.push_back (lane[te::IDs::id].toString());
+    }
+    if (candidates.empty()) return Result::fail ("No take lane holds material in this range.");
+    // The lane the main lane's material in the range came from, if any.
+    String current;
+    for (auto* c : track->getClips())
+        if (c->getPosition().getStart().inSeconds() < endSeconds && c->getPosition().getEnd().inSeconds() > startSeconds)
+            current = c->state[compSourceProperty].toString();
+    auto at = std::find (candidates.begin(), candidates.end(), current);
+    size_t index = at == candidates.end() ? (next ? 0 : candidates.size() - 1)
+                 : next ? ((size_t) std::distance (candidates.begin(), at) + 1) % candidates.size()
+                        : ((size_t) std::distance (candidates.begin(), at) + candidates.size() - 1) % candidates.size();
+    return compTake (candidates[index], startSeconds, endSeconds);
 }
 bool Session::hasCapturedMidi() const
 { return std::any_of (impl->captured.begin(), impl->captured.end(), [] (const auto& entry) { return ! entry.second.empty(); }); }
@@ -6581,6 +6799,17 @@ void Session::stop()
                     }
             }
         impl->applyPunch();
+        // Each pass recorded on an armed track is kept in a take lane too, and replaces the main lane's
+        // earlier material under it.
+        for (auto* track : te::getAudioTracks (*impl->edit))
+            if (auto* input = impl->input (*track); input != nullptr && input->isRecordingEnabled (track->itemID))
+            {
+                std::vector<te::Clip*> recorded;
+                for (auto* clip : track->getClips())
+                    if (! impl->clipsBeforeRecording.count (clip->itemID.toString()) && clip->getClipSlot() == nullptr) recorded.push_back (clip);
+                for (auto* clip : recorded) impl->keepTake (*track, *clip);
+                for (auto* clip : recorded) impl->replaceUnder (*track, *clip, impl->clipsBeforeRecording);
+            }
         impl->changed();
     }
     sendChangeMessage();

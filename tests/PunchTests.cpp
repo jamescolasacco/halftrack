@@ -19,12 +19,20 @@ void check (bool v, const juce::String& text)
 { if (! v) throw std::runtime_error (text.toStdString()); std::cout << "PASS punch: " << text << std::endl; }
 void ok (const juce::Result& r, const juce::String& text) { check (r.wasOk(), text + (r.failed() ? ": " + r.getErrorMessage() : "")); }
 constexpr int blocksPerSecond = 48000 / 256;
-// The track's clips not in `known`, which then holds them all.
+// The track's newly recorded clips: those whose id and file are not in `known`, which then holds
+// them all. A pass replaces the main lane's earlier material under it, so pieces of earlier takes
+// can have new ids but keep their files.
 std::vector<Session::ClipInfo> fresh (Session& s, int track, std::set<juce::String>& known)
 {
     std::vector<Session::ClipInfo> result;
     const auto snapshot = s.snapshot();
-    for (const auto& clip : snapshot.tracks[(size_t) track].clips) if (known.insert (clip.id).second) result.push_back (clip);
+    for (const auto& clip : snapshot.tracks[(size_t) track].clips)
+    {
+        const auto file = clip.file.getFullPathName();
+        const bool newFile = clip.isMidi || file.isEmpty() || known.count ("file:" + file) == 0;
+        if (known.insert (clip.id).second && newFile) result.push_back (clip);
+        if (file.isNotEmpty()) known.insert ("file:" + file);
+    }
     return result;
 }
 // Records from 0 to about `seconds`.
