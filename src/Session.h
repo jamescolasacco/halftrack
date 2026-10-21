@@ -267,7 +267,20 @@ public:
         bool mediaMissing = false; // An audio clip whose file is not on disk plays silence.
     };
     struct LocatorInfo { juce::String id, name; double position = 0; };
-    struct SceneInfo { juce::String id, name; };
+    // The project meter. Beats are quarter notes at every meter, so a bar is numerator x 4 / denominator beats.
+    struct TimeSignature
+    {
+        int numerator = 4, denominator = 4;
+        double beatsPerBar() const noexcept { return numerator * 4.0 / denominator; }
+        bool operator== (const TimeSignature&) const = default;
+    };
+    // A scene's tempo and meter, when set, become the project's as the scene launches.
+    struct SceneInfo
+    {
+        juce::String id, name;
+        std::optional<double> tempo;
+        std::optional<TimeSignature> timeSignature;
+    };
     struct SlotInfo
     {
         juce::String id;
@@ -351,13 +364,6 @@ public:
     {
         double beat = 0, bpm = 120;
         bool operator== (const TempoPoint&) const = default;
-    };
-    // The project meter. Beats are quarter notes at every meter, so a bar is numerator x 4 / denominator beats.
-    struct TimeSignature
-    {
-        int numerator = 4, denominator = 4;
-        double beatsPerBar() const noexcept { return numerator * 4.0 / denominator; }
-        bool operator== (const TimeSignature&) const = default;
     };
     struct MetronomeSettings
     {
@@ -467,6 +473,9 @@ public:
     juce::Result duplicateScene (const juce::String& sceneId, juce::String& duplicatedSceneId);
     juce::Result moveScene (const juce::String& sceneId, int destinationIndex);
     juce::Result renameScene (int sceneIndex, const juce::String& name);
+    // Each is one undo step; an empty value clears it. Tempos run 20 to 999 BPM, meters 1 to 99 over 1, 2, 4, 8 or 16.
+    juce::Result setSceneTempo (const juce::String& sceneId, std::optional<double> bpm);
+    juce::Result setSceneTimeSignature (const juce::String& sceneId, std::optional<TimeSignature>);
     juce::Result importAudioToSlot (const juce::File&, int trackIndex, int sceneIndex);
     juce::Result addMidiClipToSlot (const juce::String& trackId, int sceneIndex, double lengthBeats = 4);
     juce::Result clearSlot (int trackIndex, int sceneIndex);

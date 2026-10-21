@@ -63,6 +63,7 @@ int runPluginAutomationTests (const juce::File&);
 int runCaptureMidiTests (const juce::File&);
 int runTakeLanesTests (const juce::File&);
 int runRoutingTests (const juce::File&);
+int runSceneTempoTests (const juce::File&);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -236,6 +237,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-routing");
             setApplicationReturnValue (runRoutingTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-scene-tempo"))
+        {
+            const int i = args.indexOf ("--self-test-scene-tempo");
+            setApplicationReturnValue (runSceneTempoTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-take-lanes"))

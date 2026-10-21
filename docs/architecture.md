@@ -539,6 +539,10 @@ Generated native-driver tests check source sound before and after copying, copie
 Session-menu and scene-context Up/Down actions resolve captured identity against current rows. Selection and the open clip editor retain their stable IDs while the view scrolls to the selected scene. Generated native-driver tests move sounding and queued scenes and check actual output across the pending quantization boundary, plus every row's IDs, both move directions, undo/redo, no-ops, failed-command history and save/reopen.
 
 
+## Scene tempo and time signature
+
+`SceneInfo::tempo` and `SceneInfo::timeSignature` are optional scene properties (`halftrackSceneTempo`, `halftrackSceneNumerator`, `halftrackSceneDenominator`), set by `setSceneTempo` and `setSceneTimeSignature` as one undo step each and validated on load. `launchScene` passes the scene to `Impl::scheduleSceneChange` with its launch boundary. With no boundary the change applies at once; otherwise a 2 ms message-thread timer compares the playback context's sync point, which holds the end of the block the engine is processing, with the boundary, and applies the change as one "Launch scene" undo step once it is reached. `cancelLaunches` clears a waiting change. Tempo and meter edits stay on the message thread; the audio callback is not involved. See the [contract](research/scene-tempo-contract.md).
+
 ## Immediate MIDI input activation
 
 Input assignment, arming, monitoring and their history now complete pending native input-state and graph updates before returning. `finishInputChange` then releases sustain/notes only for tracks that lost monitoring; unrelated voices retain their original behavior. This closes the interval in which a new controller event could reach the previous routing graph.

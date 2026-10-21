@@ -33,6 +33,8 @@ const juce::Identifier takeLanesType { "HALFTRACKTAKELANES" }, takeLaneType { "T
 const juce::Identifier implicitWarpEndProperty { "halftrackWarpEnd" }, warpMarkersPausedProperty { "halftrackWarpMarkersPaused" };
 const juce::Identifier recordQuantisationProperty { "halftrackRecordQuantisation" };
 const juce::Identifier countInProperty { "halftrackCountInBars" };
+const juce::Identifier sceneTempoProperty { "halftrackSceneTempo" }, sceneNumeratorProperty { "halftrackSceneNumerator" },
+                       sceneDenominatorProperty { "halftrackSceneDenominator" };
 const juce::Identifier midiTrackProperty { "halftrackMidiTrack" };
 const juce::Identifier groupFoldedProperty { "halftrackGroupFolded" };
 const juce::Identifier launchModeProperty { "halftrackLaunchMode" };
@@ -679,6 +681,26 @@ Result validateRecordQuantisation(const juce::ValueTree& state)
     const auto value=std::strtod(text.c_str(),&end);
     if(text.empty() || end!=text.c_str()+text.size() || !std::isfinite(value) || value<0 || value>6 || std::floor(value)!=value)
         return Result::fail("Invalid project recording quantization.");
+    return Result::ok();
+}
+bool validSceneMeter (int numerator, int denominator)
+{ return numerator >= 1 && numerator <= 99 && denominator >= 1 && denominator <= 16 && (denominator & (denominator - 1)) == 0; }
+// A scene's tempo and meter are optional; a meter has both of its parts.
+Result validateSceneSettings (const juce::ValueTree& state)
+{
+    for (const auto& scene : state.getChildWithName (te::IDs::SCENES))
+    {
+        if (! scene.hasType (te::IDs::SCENE)) continue;
+        if (scene.hasProperty (sceneTempoProperty) && ! finiteProperty (scene[sceneTempoProperty], te::TempoSetting::minBPM, te::TempoSetting::maxBPM))
+            return Result::fail ("A scene has an invalid tempo.");
+        if (scene.hasProperty (sceneNumeratorProperty) != scene.hasProperty (sceneDenominatorProperty)
+            || (scene.hasProperty (sceneNumeratorProperty)
+                && (! finiteProperty (scene[sceneNumeratorProperty], 1, 99) || ! finiteProperty (scene[sceneDenominatorProperty], 1, 16)
+                    || std::floor ((double) scene[sceneNumeratorProperty]) != (double) scene[sceneNumeratorProperty]
+                    || ! validSceneMeter ((int) scene[sceneNumeratorProperty], (int) scene[sceneDenominatorProperty])
+                    || (double) (int) scene[sceneDenominatorProperty] != (double) scene[sceneDenominatorProperty])))
+            return Result::fail ("A scene has an invalid time signature.");
+    }
     return Result::ok();
 }
 Result validateMetronome (const juce::ValueTree& state)
@@ -1748,6 +1770,58 @@ struct Session::Impl
             t->launcherOwnership.fetch_add (2, std::memory_order_acq_rel);
         }
         heldSlots.clear();
+        pendingSceneChange.reset(); sceneWatch.stopTimer();
+    }
+    te::Scene* scene (const String& id) const
+    {
+        for (auto* s : edit->getSceneList().getScenes()) if (s->state.getProperty ("halftrackSceneID").toString() == id) return s;
+        return nullptr;
+    }
+    // A launched scene's tempo and meter wait for its launch boundary, which the message thread
+    // watches through the engine's sync point, and then become the project's as one undo step.
+    struct SceneChange { std::optional<te::MonotonicBeat> at; std::optional<double> bpm; std::optional<Session::TimeSignature> meter; };
+    std::optional<SceneChange> pendingSceneChange;
+    struct SceneWatch final : juce::Timer
+    {
+        std::function<void()> tick;
+        void timerCallback() override { tick(); }
+    } sceneWatch;
+    void scheduleSceneChange (const te::Scene& scene, std::optional<te::MonotonicBeat> boundary)
+    {
+        SceneChange change { boundary, {}, {} };
+        if (scene.state.hasProperty (sceneTempoProperty)) change.bpm = (double) scene.state[sceneTempoProperty];
+        if (scene.state.hasProperty (sceneNumeratorProperty))
+            change.meter = Session::TimeSignature { (int) scene.state[sceneNumeratorProperty], (int) scene.state[sceneDenominatorProperty] };
+        if (! change.bpm && ! change.meter) return; // A scene without them leaves the earlier launch's change waiting.
+        pendingSceneChange = change;
+        if (! boundary) { watchSceneChange(); return; }
+        sceneWatch.tick = [this] { watchSceneChange(); };
+        sceneWatch.startTimer (2);
+    }
+    void watchSceneChange()
+    {
+        if (! pendingSceneChange) { sceneWatch.stopTimer(); return; }
+        if (pendingSceneChange->at)
+        {
+            auto* context = edit->getTransport().getCurrentPlaybackContext();
+            const auto sync = context != nullptr ? context->getSyncPoint() : std::nullopt;
+            if (! sync || sync->monotonicBeat.v < pendingSceneChange->at->v) return;
+        }
+        const auto change = *pendingSceneChange;
+        pendingSceneChange.reset(); sceneWatch.stopTimer();
+        // The tempo and meter are not edited while a take records, as elsewhere.
+        if (exporting || edit->getTransport().isRecording()) return;
+        auto& sequence = edit->tempoSequence;
+        auto* tempo = sequence.getNumTempos() == 1 ? sequence.getTempo (0) : nullptr; // Automated tempos are kept.
+        auto* meter = sequence.getNumTimeSigs() == 1 ? sequence.getTimeSig (0) : nullptr;
+        const bool newTempo = change.bpm && tempo != nullptr && tempo->getBpm() != *change.bpm;
+        const bool newMeter = change.meter && meter != nullptr
+                              && (meter->numerator.get() != change.meter->numerator || meter->denominator.get() != change.meter->denominator);
+        if (! newTempo && ! newMeter) return;
+        transaction ("Launch scene");
+        if (newTempo) { resetTapTempo(); changeTempo (*tempo, *change.bpm); }
+        if (newMeter) { meter->numerator = change.meter->numerator; meter->denominator = change.meter->denominator; }
+        changed();
     }
     // Next boundary on a launch grid, wrapping into the transport loop like the engine's play head.
     std::optional<te::MonotonicBeat> boundaryOn (te::LaunchQType type) const
@@ -2971,7 +3045,13 @@ Session::Snapshot Session::snapshot() const
     for (auto* marker : e.getMarkerManager().getMarkers())
         s.locators.push_back ({ marker->itemID.toString(), marker->getName(), marker->getPosition().getStart().inSeconds() });
     for (auto* scene : e.getSceneList().getScenes())
-        s.scenes.push_back ({ scene->state.getProperty ("halftrackSceneID").toString(), scene->name.get() });
+    {
+        SceneInfo info { scene->state.getProperty ("halftrackSceneID").toString(), scene->name.get(), {}, {} };
+        if (scene->state.hasProperty (sceneTempoProperty)) info.tempo = (double) scene->state[sceneTempoProperty];
+        if (scene->state.hasProperty (sceneNumeratorProperty))
+            info.timeSignature = TimeSignature { (int) scene->state[sceneNumeratorProperty], (int) scene->state[sceneDenominatorProperty] };
+        s.scenes.push_back (std::move (info));
+    }
     for (const auto& groove : e.state.getChildWithName (groovePoolType)) s.grooves.push_back (readGroove (groove));
     s.grooveAmount = grooveAmount (e.state);
     s.automationArm = impl->automationArmed();
@@ -3179,6 +3259,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateSlots (validateSlots, state); result.failed()) return result;
     if (auto result = validateProjectTempo (state); result.failed()) return result;
     if (auto result = validateMetronome (state); result.failed()) return result;
+    if (auto result = validateSceneSettings (state); result.failed()) return result;
     if (auto result = validateRecordQuantisation (state); result.failed()) return result;
     if (auto result = validateCrossfade (state); result.failed()) return result;
     if (auto result = validateMasterVolume (state); result.failed()) return result;
@@ -4230,6 +4311,37 @@ Result Session::renameScene (int index, const String& name)
     impl->transaction ("Rename scene"); list.getScenes()[index]->name = name.trim();
     impl->changed(); return Result::ok();
 }
+Result Session::setSceneTempo (const String& sceneId, std::optional<double> bpm)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* scene = impl->scene (sceneId); if (scene == nullptr) return Result::fail ("Scene not found.");
+    if (bpm && (! std::isfinite (*bpm) || *bpm < te::TempoSetting::minBPM || *bpm > te::TempoSetting::maxBPM))
+        return Result::fail ("Choose a scene tempo from 20 to 999 BPM.");
+    if (scene->state.hasProperty (sceneTempoProperty) ? bpm == (double) scene->state[sceneTempoProperty] : ! bpm) return Result::ok();
+    impl->transaction ("Scene tempo");
+    auto* undo = &impl->edit->getUndoManager();
+    if (bpm) scene->state.setProperty (sceneTempoProperty, *bpm, undo); else scene->state.removeProperty (sceneTempoProperty, undo);
+    impl->changed(); return Result::ok();
+}
+Result Session::setSceneTimeSignature (const String& sceneId, std::optional<TimeSignature> meter)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* scene = impl->scene (sceneId); if (scene == nullptr) return Result::fail ("Scene not found.");
+    if (meter && ! validSceneMeter (meter->numerator, meter->denominator))
+        return Result::fail ("Choose a scene time signature of 1 to 99 over 1, 2, 4, 8 or 16.");
+    const auto current = scene->state.hasProperty (sceneNumeratorProperty)
+        ? std::optional<TimeSignature> ({ (int) scene->state[sceneNumeratorProperty], (int) scene->state[sceneDenominatorProperty] }) : std::nullopt;
+    if (current == meter) return Result::ok();
+    impl->transaction ("Scene time signature");
+    auto* undo = &impl->edit->getUndoManager();
+    if (meter)
+    {
+        scene->state.setProperty (sceneNumeratorProperty, meter->numerator, undo);
+        scene->state.setProperty (sceneDenominatorProperty, meter->denominator, undo);
+    }
+    else { scene->state.removeProperty (sceneNumeratorProperty, undo); scene->state.removeProperty (sceneDenominatorProperty, undo); }
+    impl->changed(); return Result::ok();
+}
 Result Session::importAudioToSlot (const File& source, int trackIndex, int sceneIndex)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -4435,6 +4547,7 @@ Result Session::launchScene (int sceneIndex)
     const auto boundary = impl->launchBoundary();
     for (auto* track : te::getAudioTracks (*impl->edit))
         if (! isReturn (*track)) impl->queueTrack (*track, track->getClipSlotList().getClipSlots()[sceneIndex]->getClip(), boundary);
+    impl->scheduleSceneChange (*impl->edit->getSceneList().getScenes()[sceneIndex], boundary);
     if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().play (false);
     sendChangeMessage(); return Result::ok();
 }

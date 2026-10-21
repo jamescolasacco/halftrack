@@ -2522,6 +2522,14 @@ private:
         }
     };
 
+    // A scene's tempo and meter as its launcher cell shows them, or empty.
+    static juce::String sceneSettingsText (const Session::SceneInfo& scene)
+    {
+        juce::String text;
+        if (scene.tempo) text << juce::String (*scene.tempo, 2);
+        if (scene.timeSignature) text << (text.isEmpty() ? "" : "  ") << scene.timeSignature->numerator << "/" << scene.timeSignature->denominator;
+        return text;
+    }
     class LauncherGrid final : public juce::Component, private juce::ScrollBar::Listener
     {
     public:
@@ -2700,8 +2708,18 @@ private:
                 const auto cell = juce::Rectangle<int> (sceneX, sceneY (scene), sceneWidth, rowHeight).reduced (1, 0).withTrimmedBottom (1);
                 const bool selected = owner.state.scenes[(size_t) scene].id == owner.selectedSceneId;
                 g.setColour (selected ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff383838)); g.fillRect (cell);
-                g.setColour (selected ? orange : ink.withAlpha (0.8f)); drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
-                g.setColour (ink); g.setFont (font (10.5f)); g.drawText (owner.state.scenes[(size_t) scene].name, cell.withTrimmedLeft (20).withTrimmedRight (6), juce::Justification::centredLeft, true);
+                // A scene that changes the tempo or meter shows them and lights its launch button.
+                const auto& info = owner.state.scenes[(size_t) scene];
+                const auto settings = sceneSettingsText (info);
+                g.setColour (selected ? orange : settings.isNotEmpty() ? green : ink.withAlpha (0.8f)); drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
+                auto nameArea = cell.withTrimmedLeft (20).withTrimmedRight (6);
+                if (settings.isNotEmpty())
+                {
+                    const juce::Font small (font (9.5f));
+                    g.setColour (muted); g.setFont (small);
+                    g.drawText (settings, nameArea.removeFromRight (juce::jmin (76, juce::GlyphArrangement::getStringWidthInt (small, settings) + 6)), juce::Justification::centredRight, false);
+                }
+                g.setColour (ink); g.setFont (font (10.5f)); g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
             }
             g.restoreState();
             const auto stopAll = stopAllBounds();
@@ -3022,12 +3040,14 @@ private:
         {
             juce::PopupMenu menu; menu.addItem (1, "Launch Scene"); menu.addItem (2, "Rename Scene..."); menu.addItem (3, "Delete Scene");menu.addItem(4,"Duplicate Scene");
             menu.addSeparator();menu.addItem(5,"Move Scene Up",scene>0&&!owner.state.recording);menu.addItem(6,"Move Scene Down",scene+1<(int)owner.state.scenes.size()&&!owner.state.recording);
+            menu.addSeparator(); menu.addItem (7, "Scene Tempo..."); menu.addItem (8, "Scene Time Signature...");
             const auto id = owner.state.scenes[(size_t) scene].id; auto safe = juce::Component::SafePointer<Impl> (&owner);
             menu.showMenuAsync (juce::PopupMenu::Options(), [safe, id] (int choice)
             {
                 if (safe == nullptr) return; const auto index = safe->launcherIndices ({}, id).second; if (index < 0) return;
                 if(choice==4){safe->duplicateSceneFromUI(id);return;}
                 if(choice==5||choice==6){safe->moveSceneFromUI(id,choice==5?-1:1);return;}
+                if (choice == 7 || choice == 8) { safe->sceneSettingsDialog (index, choice == 7); return; }
                 if (choice == 1) safe->report (safe->session.launchScene (index)); if (choice == 2) safe->renameSceneDialog (index); if (choice == 3) safe->report (safe->session.removeScene (index)); safe->refresh();
             });
         }
@@ -5796,6 +5816,43 @@ private:
             if (safe == nullptr || safeDialog == nullptr || result != 1) return;
             const int index = safe->launcherIndices ({}, id).second; if (index < 0) return;
             safe->report (safe->session.renameScene (index, safeDialog->getTextEditorContents ("name"))); safe->refresh();
+        }), true);
+    }
+    // A scene's tempo or time signature; leaving the field empty clears it.
+    void sceneSettingsDialog (int scene, bool tempo)
+    {
+        if (scene < 0 || scene >= (int) state.scenes.size()) return;
+        const auto& info = state.scenes[(size_t) scene];
+        const auto id = info.id;
+        auto* dialog = new juce::AlertWindow (tempo ? "Scene Tempo" : "Scene Time Signature",
+                                              tempo ? "Launching the scene sets this tempo, from 20 to 999 BPM. Leave it empty for none."
+                                                    : "Launching the scene sets this time signature, such as 3/4. Leave it empty for none.",
+                                              juce::MessageBoxIconType::NoIcon);
+        juce::String current;
+        if (tempo && info.tempo) current = juce::String (*info.tempo, 2);
+        if (! tempo && info.timeSignature) current << info.timeSignature->numerator << "/" << info.timeSignature->denominator;
+        dialog->addTextEditor ("value", current, tempo ? "BPM" : "Meter");
+        dialog->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey)); dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
+        auto safe = juce::Component::SafePointer<Impl> (this); auto safeDialog = juce::Component::SafePointer<juce::AlertWindow> (dialog);
+        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog, id, tempo] (int result)
+        {
+            if (safe == nullptr || safeDialog == nullptr || result != 1) return;
+            const auto text = safeDialog->getTextEditorContents ("value").trim();
+            if (tempo)
+            {
+                // Anything but a plain number is refused by the Session with its range message.
+                const bool number = text.containsOnly ("0123456789.") && text.containsAnyOf ("0123456789");
+                safe->report (safe->session.setSceneTempo (id, text.isEmpty() ? std::nullopt : std::optional<double> (number ? text.getDoubleValue() : -1)));
+            }
+            else
+            {
+                const auto top = text.upToFirstOccurrenceOf ("/", false, false).trim(), bottom = text.fromFirstOccurrenceOf ("/", false, false).trim();
+                const bool parts = text.contains ("/") && top.containsOnly ("0123456789") && bottom.containsOnly ("0123456789") && top.isNotEmpty() && bottom.isNotEmpty();
+                safe->report (safe->session.setSceneTimeSignature (id, text.isEmpty() ? std::nullopt
+                    : std::optional<Session::TimeSignature> ({ parts ? top.getIntValue() : 0, parts ? bottom.getIntValue() : 0 })));
+            }
+            safe->refresh();
         }), true);
     }
     void importSlotDialog (int track, int scene)
@@ -10139,6 +10196,36 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check ((state.tracks[0].output == Session::TrackOutput { Session::OutputKind::track, state.tracks[1].id }), "choosing a track routes into it");
         session.undo(); session.undo(); refresh();
         check (state.tracks[0].output == Session::TrackOutput {} && output->getText() == "Master", "undo returns the strip to Master");
+        // Scene tempo and time signature, from the scene menu's dialogs.
+        const auto answer = [&] (const juce::String& text)
+        {
+            alerts.back()->getTextEditor ("value")->setText (text); alerts.back()->exitModalState (1);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100); refresh();
+        };
+        const auto sceneAlerts = alerts.size();
+        sceneSettingsDialog (1, true);
+        check (alerts.size() == sceneAlerts + 1 && alerts.back()->getTextEditor ("value")->getText().isEmpty(), "Scene Tempo asks for a tempo");
+        answer ("140");
+        check (state.scenes[1].tempo == 140.0, "the dialog sets the scene's tempo");
+        sceneSettingsDialog (1, false); answer ("7/8");
+        check (state.scenes[1].timeSignature == Session::TimeSignature { 7, 8 }, "and its time signature");
+        check (sceneSettingsText (state.scenes[1]) == "140.00  7/8", "the scene shows both beside its name");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto image = directory.getChildFile ("session-scene-tempo.png");
+                if (auto stream = image.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (launcher.createComponentSnapshot (launcher.getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << image.getFullPathName() << std::endl;
+            }
+        sceneSettingsDialog (1, false); answer ("7/9");
+        check (state.scenes[1].timeSignature == Session::TimeSignature { 7, 8 } && status.contains ("1 to 99 over 1, 2, 4, 8 or 16"), "an invalid meter is refused with its reason");
+        sceneSettingsDialog (1, true);
+        check (alerts.back()->getTextEditor ("value")->getText() == "140.00", "the dialog shows the current tempo");
+        answer ("");
+        check (! state.scenes[1].tempo && state.scenes[1].timeSignature, "an empty field clears the tempo");
+        session.undo(); session.undo(); session.undo(); refresh();
+        check (! state.scenes[1].tempo && ! state.scenes[1].timeSignature, "each dialog is one undo step");
     }
     check (session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "prepare follow-action UI clip"); refresh(); showSessionView(); selectLauncherSlot (0, 0);
     const auto followClipId = selectedSlot()->clip.id;

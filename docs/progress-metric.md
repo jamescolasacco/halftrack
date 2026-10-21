@@ -1,6 +1,6 @@
 # Recorded implementation coverage
 
-Current implementation checkpoint: track output routing, 2026-10-21. **119 of 246 tracked active feature areas have partial implementation evidence: 48.4%.** None of these broad rows establishes complete measured reference parity.
+Current implementation checkpoint: scene tempo and time signature, 2026-10-21. **120 of 246 tracked active feature areas have partial implementation evidence: 48.8%.** None of these broad rows establishes complete measured reference parity.
 
 This is recorded partial coverage, not percentage finished, remaining engineering time, or a weighted feature score. The initial inventory is not exhaustive, some existing behavior is recorded only in preview rows, and items vary greatly in size. Static decompiler coverage uses a different denominator and must never be reported as application completion.
 
@@ -129,3 +129,5 @@ Warp markers add bounded partial coverage for WRP-003: 117/246 (47.6%).
 Take lanes and comping add bounded partial coverage for REC-010: 118/246 (48.0%).
 
 Track output routing adds bounded partial coverage for MIX-004: 119/246 (48.4%).
+
+Scene tempo and time signature add bounded partial coverage for SES-005: 120/246 (48.8%).

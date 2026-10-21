@@ -503,3 +503,11 @@ These are simplest defaults pending a comparison with the reference:
 - **Monitoring.** A track routed into another is heard through the destination whatever the destination's Monitor setting; the reference manual does not say.
 - **Destinations.** Only ordinary audio and instrument tracks are offered. Return tracks, group tracks, Ext. Out and devices' sidechain inputs are not.
 - **Fixed outputs.** Returns play into Master and grouped tracks into their group.
+
+### Scene tempo and time signature
+
+These are simplest defaults pending a comparison with the reference:
+
+- **Timing.** A quantized launch changes the tempo and meter at its launch boundary, not on the click.
+- **History.** Each change a launch makes is one undo step named "Launch scene", since the tempo is project content; the reference's handling is unknown.
+- **Exceptions.** An automated tempo or a meter with several changes is left as it is, and nothing changes while the Arrangement records.
