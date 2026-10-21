@@ -251,3 +251,7 @@ Follow pages the view (the playhead starts each new page) rather than scrolling 
 ### Clip scale defaults
 
 Scales belong to clips (there is no project-wide current scale), the piano roll highlights rather than folds, and Fit to Scale breaks ties downward. Sixteen common scales are offered. These are simplest-default choices pending reference measurement.
+
+### Crash recovery defaults
+
+There is one recovery copy, written every 30 seconds while there are unsaved changes. A recovered project opens untitled rather than reattaching to its saved file, so the user chooses where to save it. These are simplest-default choices pending reference measurement.

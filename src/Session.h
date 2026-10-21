@@ -308,6 +308,11 @@ public:
     juce::Result newProject();
     juce::Result loadProject (const juce::File&);
     juce::Result saveProject (const juce::File&); // Copies media into <name> Assets beside the .halftrack file.
+    // Crash recovery. writeRecovery atomically writes the open project, media by absolute path, without
+    // collecting media or changing the project's file, history or unsaved state. recoverProject opens one
+    // as an untitled project with unsaved changes and reports the project it was recovered from.
+    juce::Result writeRecovery (const juce::File&);
+    juce::Result recoverProject (const juce::File& recovery, juce::File& recoveredFrom);
     juce::Result addAudioTrack (juce::String name = {});
     juce::Result addMidiTrack (juce::String name = {});
     juce::Result addReturnTrack (juce::String name = {});

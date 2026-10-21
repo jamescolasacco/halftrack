@@ -612,6 +612,42 @@ public:
         return false;
     }
 
+    // Crash recovery: every 30 s, unsaved work is copied to the recovery file; once saved it is removed.
+    juce::File recoveryFile;
+    int recoveryTicks = 0;
+    bool recoveryPending = false; // The recovery prompt is open; its copy must survive until answered.
+    static constexpr int recoveryIntervalTicks = 24 * 30;
+    void enableRecovery (const juce::File& file)
+    {
+        recoveryFile = file; recoveryTicks = 0;
+        if (recoveryFile.existsAsFile()) offerRecovery();
+    }
+    void clearRecovery() { if (recoveryFile != juce::File()) recoveryFile.deleteFile(); }
+    void autosave()
+    {
+        if (recoveryFile == juce::File() || recoveryPending || session.isExporting() || state.recording) return;
+        if (! state.dirty) { clearRecovery(); return; }
+        if (const auto result = session.writeRecovery (recoveryFile); result.failed()) { status = result.getErrorMessage(); statusFrames = 24 * 5; }
+    }
+    void offerRecovery()
+    {
+        auto* dialog = new juce::AlertWindow ("Recover unsaved work?",
+            "Halftrack closed before your last changes were saved. Recover them as an untitled project, or discard them.", juce::MessageBoxIconType::QuestionIcon);
+        dialog->addButton ("Recover", 1, juce::KeyPress (juce::KeyPress::returnKey)); dialog->addButton ("Discard", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
+        recoveryPending = true;
+        auto safe = juce::Component::SafePointer<Impl> (this);
+        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe] (int result)
+        {
+            if (safe == nullptr) return;
+            safe->recoveryPending = false;
+            if (result != 1) { safe->clearRecovery(); return; }
+            juce::File from;
+            const auto recovered = safe->session.recoverProject (safe->recoveryFile, from);
+            safe->report (recovered, from != juce::File() ? "Recovered unsaved work from " + from.getFileName() + ". Use Save As to keep it." : "Recovered unsaved work. Save it to keep it.");
+            if (recovered.wasOk()) safe->resetView();
+        }), true);
+    }
     void ensureSaved (std::function<void()> action)
     {
         if (session.isExporting())
@@ -5108,6 +5144,7 @@ private:
         if (statusFrames > 0 && --statusFrames == 0) status.clear();
         ++ticks;
         refresh();
+        if (recoveryFile != juce::File() && ++recoveryTicks >= recoveryIntervalTicks) { recoveryTicks = 0; autosave(); }
     }
     void changeListenerCallback (juce::ChangeBroadcaster* source) override
     {
@@ -8848,7 +8885,40 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (staleText == nullptr && ! label->isBeingEdited() && std::abs (state.masterGainDb) < .001f && ! session.canUndo(),
             "project replacement discards stale master text even when its displayed level did not change");
     }
-
+    {
+        // Crash recovery: unsaved work is copied on the autosave tick, a saved project removes the copy,
+        // and a copy left from a crash is offered at startup and recovers as unsaved work.
+        const auto folder = audioFixture.getParentDirectory().getChildFile ("recovery-ui-" + juce::Uuid().toString());
+        const auto copy = folder.getChildFile ("Recovery.halftrack");
+        check (session.newProject().wasOk(), "start a new project for recovery"); refresh();
+        enableRecovery (copy);
+        check (! copy.exists() && ! recoveryPending, "no copy is offered when none exists");
+        check (session.setTrackGain (0, -7).wasOk(), "make an unsaved change"); refresh();
+        recoveryTicks = recoveryIntervalTicks - 1; timerCallback();
+        check (copy.existsAsFile(), "the autosave tick writes a recovery copy of unsaved work");
+        const auto saved = folder.getChildFile ("Saved").getChildFile ("Saved.halftrack");
+        check (saved.getParentDirectory().createDirectory().wasOk() && session.saveProject (saved).wasOk(), "save the project"); refresh();
+        recoveryTicks = recoveryIntervalTicks - 1; timerCallback();
+        check (! copy.exists(), "once the work is saved the copy is removed");
+        check (session.setTrackGain (0, -11).wasOk(), "change the saved project"); refresh();
+        check (session.writeRecovery (copy).wasOk() && session.newProject().wasOk(), "leave a copy behind, as a crash would"); refresh();
+        const auto alertsBefore = alerts.size();
+        enableRecovery (copy);
+        check (recoveryPending && alerts.size() == alertsBefore + 1 && alerts.back() != nullptr, "a leftover copy is offered at startup");
+        recoveryTicks = recoveryIntervalTicks - 1; timerCallback();
+        check (copy.existsAsFile(), "the copy survives the autosave tick while the prompt is open");
+        alerts.back()->exitModalState (1);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (100); refresh();
+        check (! recoveryPending && state.dirty && state.projectFile == juce::File() && std::abs (state.tracks[0].gainDb + 11) < 1e-3,
+               "Recover opens the unsaved work as an untitled project");
+        check (session.newProject().wasOk(), "discard the recovered work"); refresh();
+        check (session.writeRecovery (copy).wasOk(), "leave another copy"); enableRecovery (copy);
+        alerts.back()->exitModalState (0);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+        check (! copy.exists() && ! state.dirty, "Discard deletes the copy and keeps the open project");
+        recoveryFile = juce::File();
+        folder.deleteRecursively();
+    }
 }
 
 int MainComponent::runExportInteractionTests()
@@ -8908,5 +8978,10 @@ MainComponent::MainComponent (Session& session) : impl (std::make_unique<Impl> (
 MainComponent::~MainComponent() = default;
 void MainComponent::resized() { impl->setBounds (getLocalBounds()); }
 bool MainComponent::keyPressed (const juce::KeyPress& key) { return impl->handleKey (key); }
-void MainComponent::requestClose (std::function<void()> onClose) { impl->ensureSaved (std::move (onClose)); }
+void MainComponent::requestClose (std::function<void()> onClose)
+{
+    // Once the unsaved work is saved or discarded, its recovery copy is no longer needed.
+    impl->ensureSaved ([this, onClose = std::move (onClose)] { impl->clearRecovery(); onClose(); });
+}
+void MainComponent::enableRecovery (const juce::File& file) { impl->enableRecovery (file); }
 }

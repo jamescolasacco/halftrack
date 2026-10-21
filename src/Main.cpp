@@ -47,6 +47,7 @@ int runMidiControllerTests (const juce::File&);
 int runRangeEditTests (const juce::File&);
 int runTimeSignatureTests (const juce::File&);
 int runMidiToolTests (const juce::File&);
+int runRecoveryTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
@@ -206,6 +207,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-groups");
             setApplicationReturnValue (runGroupTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-recovery"))
+        {
+            const int i = args.indexOf ("--self-test-recovery");
+            setApplicationReturnValue (runRecoveryTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-midi-tools"))
@@ -437,6 +444,8 @@ public:
                     "Could not open project", result.getErrorMessage());
         }
         window = std::make_unique<Window> (*session);
+        window->content->enableRecovery (juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                                             .getChildFile ("Halftrack").getChildFile ("Recovery").getChildFile ("Recovery.halftrack"));
     }
 
     void shutdown() override { window.reset(); session.reset(); }

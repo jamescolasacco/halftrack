@@ -286,6 +286,10 @@ The meter is the engine tempo sequence's first `TimeSigSetting`; `setTimeSignatu
 
 A MIDI clip's scale is three properties on its state, read by `clipScale` into `ClipInfo::scale` and written by `setClipScale`. `Session::scaleIntervals`, `inScale` and `fitToScale` are pure helpers shared by the piano roll's row highlighting and the Fit to Scale note tool. See the [scale contract](research/scales-contract.md).
 
+## Crash recovery
+
+`Session::writeRecovery` serialises the live edit (absolute media, `halftrackRecoveryOf` naming the saved project) without touching the project file or history, and `recoverProject` reuses `loadProject`'s validation before detaching the result from any file. `MainComponent::Impl` owns the 30-second autosave tick, the startup prompt and removing the copy once work is saved or discarded; `Main.cpp` chooses the application-data location. See the [recovery contract](research/recovery-contract.md).
+
 ## Audio warping
 
 `ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).

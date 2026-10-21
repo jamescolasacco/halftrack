@@ -2412,6 +2412,32 @@ Result Session::loadProject (const File& file)
     return Result::ok();
 }
 
+Result Session::writeRecovery (const File& destination)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Recovery copies wait until recording stops.");
+    if (auto r = destination.getParentDirectory().createDirectory(); r.failed()) return r;
+    impl->edit->flushState();
+    juce::XmlElement document ("HALFTRACK");
+    document.setAttribute ("version", 1);
+    if (impl->projectFile != File()) document.setAttribute ("halftrackRecoveryOf", impl->projectFile.getFullPathName());
+    document.addChildElement (impl->edit->state.createCopy().createXml().release());
+    juce::TemporaryFile temp (destination);
+    if (! document.writeTo (temp.getFile()) || ! temp.overwriteTargetFileWithTemporary()) return Result::fail ("Could not write the recovery copy.");
+    return Result::ok();
+}
+Result Session::recoverProject (const File& recovery, File& recoveredFrom)
+{
+    auto xml = juce::XmlDocument::parse (recovery);
+    if (xml == nullptr || ! xml->hasTagName ("HALFTRACK")) return Result::fail ("The recovery copy could not be read.");
+    const auto origin = xml->getStringAttribute ("halftrackRecoveryOf");
+    if (auto r = loadProject (recovery); r.failed()) return r;
+    // The recovered work is unsaved and has no file, so nothing is overwritten without a Save As.
+    impl->projectFile = File{};
+    impl->explicitChanges = true; impl->pristineNewDocument = false;
+    recoveredFrom = origin.isNotEmpty() && File::isAbsolutePath (origin) ? File (origin) : File{};
+    sendChangeMessage(); return Result::ok();
+}
 Result Session::saveProject (const File& destination)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
