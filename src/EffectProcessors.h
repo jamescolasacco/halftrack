@@ -245,4 +245,33 @@ private:
     bool highPass = false, lowPass = false;
     std::array<std::array<Biquad, 5>, 2> sections; // High-pass, low shelf, mid peak, high shelf, low-pass.
 };
+
+// Pedal after the reference's: an Overdrive, Distortion or Fuzz stage driven by Gain, then a
+// three-band EQ (a 100 Hz bass peak, a switchable 500 Hz / 1 kHz / 2 kHz mid that is narrower at
+// lower settings, and a 3.3 kHz treble shelf) whose resonance rises with boost, an optional Sub
+// shelf below 250 Hz, and a DC blocker. The curves and drive range are Halftrack's.
+class Pedal
+{
+public:
+    static constexpr double bassHz = 100, trebleHz = 3300, subHz = 250, subDb = 6, dcHz = 10;
+    static constexpr std::array<double, 3> midHz { 500, 1000, 2000 }, midQ { 1.4, 1.0, .7 };
+    // Gain 0-1 drives the stage from +6 dB to +42 dB; even Gain 0 distorts a loud input.
+    static double driveFor (double gain) noexcept { return std::pow (10.0, (6 + 36 * std::clamp (gain, 0.0, 1.0)) / 20); }
+    // Overdrive is a warm asymmetric soft clip, Distortion a tight symmetric one, Fuzz a hard,
+    // strongly asymmetric one.
+    static double shape (int type, double x) noexcept;
+    // Boosting a band raises its resonance; cutting keeps it broad.
+    static double resonance (double baseQ, double gainDb) noexcept { return baseQ * (1 + .04 * std::max (0.0, gainDb)); }
+    void prepare (double rate) noexcept;
+    void configure (const float* values) noexcept; // type, gain, output, bass, mid, mid frequency, treble, sub, mix.
+    void reset() noexcept;
+    void tick (double& left, double& right) noexcept;
+private:
+    double rate = 48000, drive = 1, dcPole = 0;
+    int type = 0;
+    bool sub = false;
+    std::array<std::array<Biquad, 4>, 2> eq; // Bass, mid, treble, sub.
+    std::array<double, 2> dcInput {}, dcOutput {};
+};
 }
+

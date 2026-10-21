@@ -1108,3 +1108,7 @@ MIDI controllers can be learned onto mixer and device controls and then drive th
 
 UI change in `src/MainComponent.cpp` and `src/NativeEffectEditor.cpp`, with the UI suite and documentation. The MIDI switch (Cmd/Ctrl+M) highlights mappable controls in blue. Clicking one learns it, and the browser area lists the mappings with Min, Max and remove. See [the contract](research/midi-mapping-contract.md#map-mode).
 
+## Pedal — 2026-10-21
+
+Engine-area change in `src/EffectProcessors.*`, `src/NativeEffects.*`, `src/Session.h` and `tests/ExtendedEffectsTests.cpp`, with documentation. Pedal joins the Distortion devices. See [the contract](research/native-effects-contract.md#pedal-2026-10-21).
+

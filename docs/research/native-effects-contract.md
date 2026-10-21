@@ -162,3 +162,39 @@ The device shares the Tuner's analysis tap. The ring now keeps both channels and
 
 Moving the display between the device chain and the main window, the hover readout and measured comparison with the reference are missing.
 
+## Pedal (2026-10-21)
+
+Pedal follows the manual's description in the [audio effect reference](https://www.ableton.com/en/live-manual/12/live-audio-effect-reference/), consulted 2026-10-21. The manual gives:
+
+- **Types and level:** Overdrive, Distortion and Fuzz, with Gain (0% still distorts) and Output.
+- **EQ after the distortion,** whose resonance increases with boost:
+  - Bass, a 100 Hz peak;
+  - Mid, switched between 500 Hz, 1 kHz and 2 kHz and narrower at lower settings;
+  - Treble, a shelf near 3.3 kHz.
+- **Sub:** a shelf boosting below 250 Hz.
+- **Dry/Wet.**
+
+Halftrack's own choices:
+
+- **Drive:** Gain drives the stage from +6 to +42 dB.
+- **Curves:**
+  - Overdrive is `tanh(x + 0.2) − tanh(0.2)`, a warm asymmetric soft clip;
+  - Distortion is `2/π·atan(3x)`, tight and symmetric;
+  - Fuzz is `tanh(4(x + 0.35x²))`, hard and strongly asymmetric.
+- **Filtering:** a 10 Hz one-pole DC blocker follows the curves.
+- **EQ sections:** RBJ sections whose Q is multiplied by 1 + 0.04 per dB of boost.
+  - Bass has Q 0.7.
+  - Mid has Q 1.4, 1.0 or 0.7 for its three frequencies.
+  - Treble is a Q 1/√2 shelf.
+- **Sub:** a fixed +6 dB shelf.
+- **Ranges:** ±12 dB bands, and Output from −36 to +12 dB with a default of −12.
+- **Keys:** Type and Gain use the keys `pedalType` and `pedalGain`, because the plugin state's own `type` property would collide.
+
+`tests/ExtendedEffectsTests.cpp` checks:
+
+- **EQ, through the near-linear small-signal path:** Bass and each Mid reach exactly ±12 dB at their centres, Treble is at half its boost at 3.3 kHz, and Sub adds 3 dB at 250 Hz and about 6 dB at 25 Hz. A bigger boost is more resonant, and the 500 Hz Mid is narrower than the 2 kHz one.
+- **Harmonics, from a half-scale 1 kHz tone:** Distortion has no even harmonics, Overdrive adds them and Fuzz more, and every type distorts more with more Gain.
+- **Mix and Output:** fully dry passes audio unchanged, and Output scales exactly.
+
+The Hi-Quality (oversampling) mode and measured comparison with the reference are missing.
+

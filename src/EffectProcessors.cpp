@@ -485,4 +485,44 @@ void ChannelEq::tick (double& left, double& right) noexcept
         *channels[c] = x;
     }
 }
+
+double Pedal::shape (int type, double x) noexcept
+{
+    switch (type)
+    {
+        case 0: return std::tanh (x + .2) - std::tanh (.2);
+        case 1: return 2 / pi * std::atan (3 * x);
+        default: return std::tanh (4 * (x + .35 * x * x));
+    }
 }
+void Pedal::prepare (double sampleRate) noexcept { rate = sampleRate; dcPole = std::exp (-2 * pi * dcHz / rate); reset(); }
+void Pedal::configure (const float* v) noexcept
+{
+    type = (int) v[0]; drive = driveFor (v[1]); sub = v[7] != 0;
+    const auto mid = (size_t) std::clamp ((int) v[5], 0, 2);
+    for (auto& channel : eq)
+    {
+        channel[0].c = peakSection (bassHz, v[3], resonance (.7, v[3]), rate);
+        channel[1].c = peakSection (midHz[mid], v[4], resonance (midQ[mid], v[4]), rate);
+        channel[2].c = highShelfSection (trebleHz, v[6], resonance (.70710678118654752, v[6]), rate);
+        channel[3].c = lowShelfSection (subHz, subDb, .70710678118654752, rate);
+    }
+}
+void Pedal::reset() noexcept { for (auto& channel : eq) for (auto& s : channel) s.clear(); dcInput = {}; dcOutput = {}; }
+void Pedal::tick (double& left, double& right) noexcept
+{
+    double* channels[] { &left, &right };
+    for (size_t c = 0; c < 2; ++c)
+    {
+        const auto shaped = shape (type, *channels[c] * drive);
+        // The asymmetric curves leave DC; a one-pole high-pass removes it.
+        const auto blocked = shaped - dcInput[c] + dcPole * dcOutput[c];
+        dcInput[c] = shaped; dcOutput[c] = finite (blocked);
+        auto& s = eq[c];
+        auto x = s[2].tick (s[1].tick (s[0].tick (dcOutput[c])));
+        if (sub) x = s[3].tick (x);
+        *channels[c] = x;
+    }
+}
+}
+

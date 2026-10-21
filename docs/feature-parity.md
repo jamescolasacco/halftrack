@@ -403,7 +403,7 @@ Stage: **Further implementation authorized**; Pack/legacy entries require versio
 | AFX-025 | Looper | LOOPER | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-026 | Multiband Dynamics | DYNAMICS | NOT IMPLEMENTED / UNVERIFIED |
 | AFX-027 | Overdrive | PARTIAL — original band-pass drive with tone and dynamics restoration; measured-direction tests only; parity unmeasured | PARTIAL |
-| AFX-028 | Pedal | NONLINEAR | NOT IMPLEMENTED / UNVERIFIED |
+| AFX-028 | Pedal | PARTIAL — Overdrive/Distortion/Fuzz curves with Gain and Output, post-drive Bass (100 Hz), switchable Mid (500/1k/2k, narrower lower) and Treble (3.3 kHz shelf) with boost-dependent resonance, Sub shelf and Dry/Wet; exact EQ sections, harmonic character and mix tested ([contract](research/native-effects-contract.md#pedal-2026-10-21)). Hi-Quality oversampling and reference comparison missing | PARTIAL |
 | AFX-029 | Phaser-Flanger | PARTIAL — separate original Phaser (2–12 all-pass stages) and Flanger devices; Doubler mode, envelope and tempo sync missing | PARTIAL |
 | AFX-030 | Redux | Original Bitcrusher: signed quantization, fractional sample holding, drive, wet output and mix. Hand-calculated samples, held tail, history/project/editor and allocation tests pass locally. Reference filters, jitter, legacy mode and numerical identity are unverified. | PARTIAL — original native reduction device |
 | AFX-031 | Resonators | RESONANCE | NOT IMPLEMENTED / UNVERIFIED |

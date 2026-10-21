@@ -306,6 +306,50 @@ void channelEqTests()
     check (! validEffectSettings (bad) && ! validEffectSettings (loud) && std::string (effectCategory (Kind::channelEq)) == "EQ & Filters" && ! Session::isRackKind (Kind::channelEq),
            "Channel EQ rejects a mid frequency below 120 Hz and a mid gain past 12 dB");
 }
+// Pedal: the EQ through the drive stage's near-linear small-signal path, then the curves'
+// harmonics. A peak reaches its gain at its centre and a shelf half its gain at its corner.
+void pedalTests()
+{
+    const auto relative = [] (std::initializer_list<std::pair<const char*, float>> values, double f)
+    {
+        const auto level = [&] (std::initializer_list<std::pair<const char*, float>> v)
+        { return amplitudeAt (process (sine (f, 1e-4, 48000), with (Kind::pedal, v)), 0, f, 24000, 48000); };
+        return db (level (values) / level ({}));
+    };
+    check (std::abs (relative ({ { "bassDb", 12 } }, 100) - 12) < .05 && std::abs (relative ({ { "bassDb", -12 } }, 100) + 12) < .05, "Bass peaks at exactly +/-12 dB at 100 Hz");
+    bool mids = true;
+    for (const auto [choice, hz] : { std::pair { 0, 500.0 }, { 1, 1000.0 }, { 2, 2000.0 } })
+        mids = mids && std::abs (relative ({ { "midDb", 12 }, { "midFrequency", (float) choice } }, hz) - 12) < .05;
+    check (mids, "Mid peaks at exactly +12 dB at 500 Hz, 1 kHz and 2 kHz");
+    check (std::abs (relative ({ { "trebleDb", 12 } }, 3300) - 6) < .05 && std::abs (relative ({ { "trebleDb", 12 } }, 100)) < .1, "Treble is a 3.3 kHz shelf: half its boost at 3.3 kHz, none at 100 Hz");
+    check (std::abs (relative ({ { "sub", 1 } }, 250) - 3) < .05 && relative ({ { "sub", 1 } }, 25) > 5.5 && std::abs (relative ({ { "sub", 1 } }, 5000)) < .05,
+           "Sub is a 6 dB shelf below 250 Hz");
+    check (relative ({ { "midDb", 12 } }, 1500) / 12 < relative ({ { "midDb", 4 } }, 1500) / 4, "a bigger boost is more resonant");
+    check (relative ({ { "midDb", 6 }, { "midFrequency", 0 } }, 700) / 6 < relative ({ { "midDb", 6 }, { "midFrequency", 2 } }, 2800) / 6, "the 500 Hz mid is narrower than the 2 kHz one");
+    // Harmonics of a 1 kHz tone at half scale.
+    const auto harmonics = [] (int type, float gain)
+    {
+        const auto out = process (sine (1000, .5, 48000), with (Kind::pedal, { { "pedalType", (float) type }, { "pedalGain", gain } }));
+        const auto fundamental = amplitudeAt (out, 0, 1000, 24000, 48000);
+        return std::pair { db (amplitudeAt (out, 0, 2000, 24000, 48000) / fundamental), db (amplitudeAt (out, 0, 3000, 24000, 48000) / fundamental) };
+    };
+    const auto overdrive = harmonics (0, .5f), distortion = harmonics (1, .5f), fuzz = harmonics (2, .5f);
+    check (distortion.first < -80 && distortion.second > -30, "Distortion is symmetric: odd harmonics only");
+    check (overdrive.first > -40 && fuzz.first > overdrive.first, "Overdrive adds even harmonics and Fuzz more of them");
+    bool rising = true;
+    for (int type = 0; type < 3; ++type) rising = rising && harmonics (type, 1).second > harmonics (type, 0).second;
+    check (rising, "more Gain means more distortion for every type");
+    {
+        const auto in = sine (440, .5, 4800, 48000, .3);
+        const auto dry = process (in, with (Kind::pedal, { { "mix", 0 } }));
+        bool same = true;
+        for (int c = 0; c < 2; ++c) for (int n = 0; n < in.getNumSamples(); ++n) same = same && dry.getSample (c, n) == in.getSample (c, n);
+        const auto loud = process (in, with (Kind::pedal, { { "outputDb", 0 } })), quiet = process (in, with (Kind::pedal, { { "outputDb", -6 } }));
+        double worst = 0;
+        for (int c = 0; c < 2; ++c) for (int n = 0; n < in.getNumSamples(); ++n) worst = std::max (worst, std::abs (quiet.getSample (c, n) - std::pow (10.0, -6 / 20.0) * loud.getSample (c, n)));
+        check (same && worst < 1e-6, "fully dry passes audio unchanged and Output scales exactly");
+    }
+}
 void eqThreeTests()
 {
     for (int steep = 0; steep < 2; ++steep)
@@ -380,6 +424,6 @@ void shifterTests()
 void runExtendedEffectsTests()
 {
     saturatorTests(); overdriveTests(); autoFilterTests(); autoPanTests(); modulatedDelayTests();
-    phaserTests(); eqThreeTests(); channelEqTests(); glueTests(); shifterTests();
+    phaserTests(); eqThreeTests(); channelEqTests(); pedalTests(); glueTests(); shifterTests();
 }
 }

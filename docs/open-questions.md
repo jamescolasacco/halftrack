@@ -349,3 +349,11 @@ These are simplest-default choices pending reference measurement:
 - **Learning.** Learning moves nothing.
 - **Deleted devices.** A deleted device's mappings stay stored but inert.
 
+### Pedal defaults
+
+The manual does not give these, so they are simplest-default choices pending reference measurement:
+
+- **Curves:** the drive curves and the +6 to +42 dB drive range.
+- **EQ:** ±12 dB bands, the resonance slope, and a +6 dB Sub shelf.
+- **Output:** −36 to +12 dB, defaulting to −12 dB.
+

@@ -101,6 +101,7 @@ private:
     effects::Phaser phaser;
     effects::ThreeBandEq eqThree;
     effects::ChannelEq channelEq;
+    effects::Pedal pedal;
     effects::GlueCompressor glue;
     effects::FrequencyShifter shifter;
     int ramp = 0;
