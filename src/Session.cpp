@@ -54,6 +54,7 @@ const juce::Identifier crossfadeProperty { "halftrackCrossfade" };
 const juce::Identifier crossfaderProperty { "halftrackCrossfader" };
 const juce::Identifier manualPanProperty { "halftrackManualPan" };
 const juce::Identifier automationArmProperty { "halftrackAutomationArm" };
+const juce::Identifier punchInProperty { "halftrackPunchIn" }, punchOutProperty { "halftrackPunchOut" };
 
 const juce::Identifier& manualAutomationProperty (Session::AutomationTarget target)
 { return target == Session::AutomationTarget::volume ? manualVolumeProperty : manualPanProperty; }
@@ -1427,6 +1428,12 @@ juce::Result runRangeExportTaskCancellationTests (const juce::File& directory)
 }
 #endif
 
+// Defined with the range edits below.
+namespace
+{
+bool canSplitMidiAt (const te::MidiClip&, te::TimePosition);
+te::MidiClip* splitMidiClipAt (te::MidiClip&, te::TimePosition, juce::UndoManager*);
+}
 // The engine does not watch Halftrack's groove state, so playback is rebuilt when it changes,
 // undo and redo included. Only the Session's current Edit is restarted: a replaced Edit being
 // destroyed is never touched.
@@ -2167,6 +2174,43 @@ struct Session::Impl
         current.enabled = false; writeLane (*lane, current);
     }
     double playheadBeat() const { return std::max (0.0, edit->tempoSequence.toBeats (edit->getTransport().getPosition()).inBeats()); }
+    // Punch-In and Punch-Out bound recording by the loop brace.
+    bool punchIn() const { return edit->state.getProperty (punchInProperty, false); }
+    bool punchOut() const { return edit->state.getProperty (punchOutProperty, false); }
+    te::TimeRange loopRange() const { return edit->getTransport().getLoopRange(); }
+    std::set<String> clipsBeforeRecording;
+    // Trims the clips this recording created to the punch range, removing those wholly outside it.
+    void applyPunch()
+    {
+        if (! punchIn() && ! punchOut()) return;
+        const auto range = loopRange();
+        auto* undo = &edit->getUndoManager();
+        for (auto* track : te::getAudioTracks (*edit))
+        {
+            const auto clips = track->getClips();
+            for (auto* clip : clips)
+            {
+                if (clipsBeforeRecording.contains (clip->itemID.toString())) continue;
+                te::Clip::Ptr current = clip;
+                const auto p = current->getPosition();
+                const auto start = punchIn() ? std::max (p.getStart(), range.getStart()) : p.getStart();
+                const auto end = punchOut() ? std::min (p.getEnd(), range.getEnd()) : p.getEnd();
+                if (end <= start + te::TimeDuration::fromSeconds (1.0e-3)) { current->removeFromParent(); continue; }
+                if (auto* midi = dynamic_cast<te::MidiClip*> (current.get()))
+                {
+                    // MIDI clips split at the punch points, keeping zero offsets, and lose their outer parts.
+                    if (start > p.getStart() && canSplitMidiAt (*midi, start))
+                        if (auto* right = splitMidiClipAt (*midi, start, undo)) { midi->removeFromParent(); current = right; }
+                    if (auto* inner = dynamic_cast<te::MidiClip*> (current.get()); inner && end < p.getEnd() && canSplitMidiAt (*inner, end))
+                        if (auto* outer = splitMidiClipAt (*inner, end, undo)) outer->removeFromParent();
+                    continue;
+                }
+                // Audio keeps its timing: the source offset moves with the start.
+                if (start > p.getStart()) current->setStart (start, true, false);
+                if (end < p.getEnd()) current->setEnd (end, true);
+            }
+        }
+    }
     // A capture pass replaces the lane from its first written beat. While it runs the lane holds its
     // last value ahead; when it finishes at `end`, the earlier automation resumes just after.
     void writePass (const CapturePass& pass, const LaneAccess& lane, std::optional<double> end)
@@ -2202,13 +2246,25 @@ struct Session::Impl
         writeLane (lane, out);
     }
     void finishPass (const String& key, const CapturePass& pass)
-    { if (const auto lane = laneFor (key)) writePass (pass, *lane, playheadBeat()); }
+    {
+        auto end = playheadBeat();
+        if (punchOut()) end = std::min (end, edit->tempoSequence.toBeats (loopRange().getEnd()).inBeats());
+        if (const auto lane = laneFor (key)) writePass (pass, *lane, end);
+    }
     // Writes `value` into the lane at the playhead. Moves within 1/64 beat replace the last point.
     void capture (const String& key, float value)
     {
         const auto lane = laneFor (key); if (! lane) return;
         const auto beat = playheadBeat();
         auto found = captures.find (key);
+        // Punch-In ignores moves before the loop start; Punch-Out ends a pass at the loop end.
+        const auto range = edit->tempoSequence.toBeats (loopRange());
+        if (punchIn() && beat < range.getStart().inBeats()) return;
+        if (punchOut() && beat > range.getEnd().inBeats())
+        {
+            if (found != captures.end()) { writePass (found->second, *lane, range.getEnd().inBeats()); captures.erase (found); }
+            return;
+        }
         // A loop wrap ends the pass at the loop end and starts another at the loop start.
         if (found != captures.end() && ! found->second.recorded.empty() && beat < found->second.recorded.back().beat - 1e-9)
         { writePass (found->second, *lane, found->second.recorded.back().beat); captures.erase (found); found = captures.end(); }
@@ -2412,6 +2468,7 @@ Session::Snapshot Session::snapshot() const
     for (const auto& groove : e.state.getChildWithName (groovePoolType)) s.grooves.push_back (readGroove (groove));
     s.grooveAmount = grooveAmount (e.state);
     s.automationArm = impl->automationArmed();
+    s.punchIn = impl->punchIn(); s.punchOut = impl->punchOut();
     s.automationOverridden = ! impl->overriddenLanes().isEmpty();
     const auto quantisation = e.getLaunchQuantisation().type.get();
     s.launchQuantisation = quantisation == te::LaunchQType::none ? LaunchQuantisation::none
@@ -2605,6 +2662,9 @@ Result Session::loadProject (const File& file)
     if (auto result = validateGroovePool (state); result.failed()) return result;
     if (state.hasProperty (automationArmProperty) && ! (finiteProperty (state[automationArmProperty], 0, 1) && (state[automationArmProperty].toString().trim() == "0" || state[automationArmProperty].toString().trim() == "1")))
         return Result::fail ("The project's Automation Arm setting is invalid.");
+    for (const auto& property : { punchInProperty, punchOutProperty })
+        if (state.hasProperty (property) && state[property].toString().trim() != "0" && state[property].toString().trim() != "1")
+            return Result::fail ("The project's punch settings are invalid.");
     restoreManualMixerState (state);
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
@@ -5498,6 +5558,22 @@ Result Session::setDeviceAutomation (const String& pluginId, int parameter, cons
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->changed(); return Result::ok();
 }
+Result Session::setPunchIn (bool on)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing the punch switches.");
+    if (impl->punchIn() == on) return Result::ok();
+    impl->edit->state.setProperty (punchInProperty, on, nullptr); // A transport setting, outside the undo history.
+    impl->changed(); return Result::ok();
+}
+Result Session::setPunchOut (bool on)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing the punch switches.");
+    if (impl->punchOut() == on) return Result::ok();
+    impl->edit->state.setProperty (punchOutProperty, on, nullptr);
+    impl->changed(); return Result::ok();
+}
 Result Session::setAutomationArm (bool on)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -5675,6 +5751,7 @@ void Session::stop()
                         note->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), undo);
                     }
             }
+        impl->applyPunch();
         impl->changed();
     }
     sendChangeMessage();
@@ -5688,6 +5765,8 @@ Result Session::record()
     for (auto* t : te::getAudioTracks (*impl->edit)) if (auto* d = impl->input (*t)) armed |= d->isRecordingEnabled (t->itemID);
     if (! armed && ! impl->automationArmed()) return Result::fail ("Assign an input and arm at least one track, or turn on Automation Arm, before recording.");
     impl->captures.clear(); impl->captureTransaction = false;
+    impl->clipsBeforeRecording.clear();
+    for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* c : t->getClips()) impl->clipsBeforeRecording.insert (c->itemID.toString());
     const auto quantisation=snapshot().recordQuantisation;
     if(quantisation!=RecordQuantisation::none)
     {

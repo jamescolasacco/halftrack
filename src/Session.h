@@ -364,7 +364,7 @@ public:
         std::vector<SceneInfo> scenes;
         std::vector<LocatorInfo> locators;
         std::vector<GrooveInfo> grooves; // The groove pool, in pool order.
-        bool automationArm = false;
+        bool automationArm = false, punchIn = false, punchOut = false;
         bool automationOverridden = false; // Some lane with points is switched off.
         float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
@@ -537,6 +537,12 @@ public:
     // reading until reEnableAutomation, which re-enables every overridden lane in one undo step.
     juce::Result setAutomationArm (bool);
     juce::Result reEnableAutomation();
+    // Punch-In and Punch-Out, after the reference: the loop brace marks the punch range whether or not
+    // the loop plays. With Punch-In on, Arrangement recording keeps only what arrives from the loop
+    // start; with Punch-Out on, only what arrives before the loop end. Recorded clips are trimmed to
+    // the range when recording stops (audio keeps its timing), and captured automation respects it.
+    juce::Result setPunchIn (bool);
+    juce::Result setPunchOut (bool);
     // Knob-position mapping of a native control, used by automation editors; integer controls round.
     static float deviceAutomationValueToProportion (EffectKind, int parameter, float value);
     static float deviceAutomationProportionToValue (EffectKind, int parameter, float proportion);

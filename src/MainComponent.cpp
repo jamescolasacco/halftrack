@@ -257,13 +257,13 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &automationArmButton, &reEnableButton, &followButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
+                 &playButton, &stopButton, &recordButton, &automationArmButton, &reEnableButton, &punchInButton, &punchOutButton, &followButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &ruler, &viewport,
                  &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipGroove, &deviceChain })
             addAndMakeVisible (child);
 
-        for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &automationArmButton, &reEnableButton, &followButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
+        for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &automationArmButton, &reEnableButton, &punchInButton, &punchOutButton, &followButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
                  &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton, &folderButton,
                  &upButton, &zoomIn, &zoomOut, &fitButton })
         {
@@ -360,6 +360,14 @@ public:
         loopButton.setClickingTogglesState (true);
         loopButton.setTooltip ("Loop the marked time range. Shift-drag the ruler to change it.  |  Cmd/Ctrl+L");
         loopButton.onClick = [this] { session.setLoop (loopButton.getToggleState(), state.loopStart, state.loopEnd); refresh(); };
+        // Punch-In and Punch-Out flank the loop brace's fields, as in the reference.
+        punchInButton.setName ("Punch-In"); punchOutButton.setName ("Punch-Out");
+        punchInButton.setTooltip ("Punch-In: Arrangement recording keeps only what arrives from the loop start");
+        punchOutButton.setTooltip ("Punch-Out: Arrangement recording keeps only what arrives before the loop end");
+        for (auto* punch : { &punchInButton, &punchOutButton })
+        { punch->setColour (juce::TextButton::buttonOnColourId, orange); punch->setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a)); }
+        punchInButton.onClick = [this] { report (session.setPunchIn (! state.punchIn)); refresh(); };
+        punchOutButton.onClick = [this] { report (session.setPunchOut (! state.punchOut)); refresh(); };
         clickButton.setName("Metronome"); clickSettingsButton.setName("Metronome settings");
         clickButton.setClickingTogglesState(true); clickButton.setTooltip("Enable the metronome");
         clickSettingsButton.setTooltip("Count-in, accent, recording-only click and click level");
@@ -495,7 +503,7 @@ public:
         pianoTab.setBounds (bar.removeFromRight (40)); bar.removeFromRight (10);
         cpuBounds = bar.removeFromRight (56); bar.removeFromRight (8);
         // Transport is centred on the window, independent of the side groups.
-        constexpr int transportWidth = 92 + 6 + 3 * 28 + 2 + 2 * 28 + 4 + 50 + 10 + 78 + 3 + 48 + 3 + 78;
+        constexpr int transportWidth = 92 + 6 + 3 * 28 + 2 + 2 * 28 + 4 + 50 + 10 + 30 + 2 + 78 + 3 + 48 + 3 + 78 + 2 + 30;
         auto centre = juce::Rectangle<int> (juce::jmax (bar.getX(), getWidth() / 2 - transportWidth / 2), bar.getY(), transportWidth, bar.getHeight());
         positionLabel.setBounds (centre.removeFromLeft (92)); centre.removeFromLeft (6);
         playButton.setBounds (centre.removeFromLeft (28));
@@ -503,9 +511,11 @@ public:
         recordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (2);
         automationArmButton.setBounds (centre.removeFromLeft (28)); reEnableButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4);
         followButton.setBounds (centre.removeFromLeft (50)); centre.removeFromLeft (10);
+        punchInButton.setBounds (centre.removeFromLeft (30)); centre.removeFromLeft (2);
         loopStartLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (3);
         loopButton.setBounds (centre.removeFromLeft (48)); centre.removeFromLeft (3);
-        loopLengthLabel.setBounds (centre.removeFromLeft (78));
+        loopLengthLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (2);
+        punchOutButton.setBounds (centre.removeFromLeft (30));
         auto status = bar.withLeft (centre.getRight() + 12);
         backToArrangement.setBounds (status.removeFromLeft (124)); status.removeFromLeft (8);
         projectLabel.setBounds (status);
@@ -4676,6 +4686,7 @@ private:
     juce::AudioThumbnailCache thumbnailCache { 128 };
     TransportButton playButton { TransportButton::play }, stopButton { TransportButton::stop }, recordButton { TransportButton::record };
     AutomationButton automationArmButton { AutomationButton::arm }, reEnableButton { AutomationButton::reEnable };
+    juce::TextButton punchInButton { "In" }, punchOutButton { "Out" };
     juce::TextButton followButton { "Follow" }, tapButton { "TAP" }, loopButton { "Loop" }, clickButton { "Metro" }, clickSettingsButton { "..." }, audioButton { "Audio" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
                      sessionTab { "Session" }, arrangementTab { "Arrange" }, pianoTab { "Clip" }, importButton { "Import Audio" },
                      filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" },
@@ -5282,6 +5293,8 @@ private:
         automationArmButton.setToggleState (state.automationArm, juce::dontSendNotification);
         reEnableButton.setToggleState (state.automationOverridden, juce::dontSendNotification); reEnableButton.setEnabled (state.automationOverridden);
         loopButton.setToggleState (state.looping, juce::dontSendNotification);
+        punchInButton.setToggleState (state.punchIn, juce::dontSendNotification); punchOutButton.setToggleState (state.punchOut, juce::dontSendNotification);
+        punchInButton.setEnabled (! state.recording); punchOutButton.setEnabled (! state.recording);
         clickButton.setToggleState(state.metronome.enabled,juce::dontSendNotification);
         quantisation.setSelectedId (state.launchQuantisation == Session::LaunchQuantisation::none ? 1 : state.launchQuantisation == Session::LaunchQuantisation::beat ? 2 : 3, juce::dontSendNotification);
         {
@@ -9110,6 +9123,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (! state.automationArm && ! automationArmButton.getToggleState(), "Automation Arm starts off");
     automationArmButton.onClick(); refresh(); check (state.automationArm && automationArmButton.getToggleState(), "the Automation Arm button arms automation recording");
     automationArmButton.onClick(); refresh(); check (! state.automationArm, "and disarms it");
+    check (! state.punchIn && ! state.punchOut && punchInButton.getX() < loopStartLabel.getX() && punchOutButton.getX() > loopLengthLabel.getX(),
+           "Punch-In and Punch-Out flank the loop fields, both off");
+    punchInButton.onClick(); punchOutButton.onClick(); refresh();
+    check (state.punchIn && state.punchOut && punchInButton.getToggleState() && punchOutButton.getToggleState(), "the punch buttons switch punching on");
+    punchInButton.onClick(); punchOutButton.onClick(); refresh();
+    check (! state.punchIn && ! state.punchOut, "and off again");
     check (session.setTrackAutomation (automationTrackId, Session::AutomationTarget::volume, {}).wasOk(),
         "clear automation from the selected mixer"); refresh();
     check (automatedGain->isEnabled() && automatedGain->findColour (juce::Slider::thumbColourId) == orange, "clearing the lane restores the plain fader");

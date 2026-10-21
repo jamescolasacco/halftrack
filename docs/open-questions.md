@@ -307,3 +307,7 @@ These are simplest-default choices pending reference measurement:
 - **Persistence.** Automation Arm is saved with the project and is not undoable.
 - **Read switch.** An override and the automation editor's Read switch are the same state.
 
+### Punch defaults
+
+Halftrack records the whole pass and trims new takes to the brace when recording stops. Recording starts where playback starts, with no pre-roll tied to the punch point. Existing clips are never trimmed. These are simplest-default choices pending reference measurement.
+

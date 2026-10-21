@@ -1008,3 +1008,13 @@ Root change. It touches:
 
 Automated faders were locked until their points were cleared. Now moving one overrides its automation, as in Live, until Re-Enable Automation. With Automation Arm on, recording writes moves into the lanes. See [the contract](research/automation-capture-contract.md).
 
+## Punch-In and Punch-Out — 2026-10-21
+
+Root change. It touches:
+
+- the punch switches, the take trimming in `stop()` and punch-aware capture in `src/Session.*`;
+- the control-bar buttons in `src/MainComponent.cpp`;
+- `tests/PunchTests.cpp`, the UI suite, the suite registration and documentation.
+
+Arrangement recording can now be limited to the loop brace with separate Punch-In and Punch-Out switches, as in Live. See [the contract](research/punch-contract.md).
+
