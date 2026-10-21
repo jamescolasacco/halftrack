@@ -1543,6 +1543,13 @@ private:
                         }
                         else thumbnail->drawChannels (g, visible.toNearestInt(), clip.sourceOffset + startSeconds, clip.sourceOffset + endSeconds, 0.9f);
                     }
+                    if (clip.mediaMissing)
+                    {
+                        // A clip whose file is missing plays silence until it is located.
+                        g.setColour (juce::Colours::black.withAlpha (.35f)); g.fillRect (bounds);
+                        g.setColour (red); g.setFont (font (10.5f, true));
+                        g.drawText ("Missing: " + clip.file.getFileName(), bounds.reduced (6, 2).withTrimmedTop (16), juce::Justification::topLeft, true);
+                    }
                     if (track.frozen)
                     {
                         // Frozen clips play their render: an icy hatch marks them as locked.
@@ -5614,7 +5621,17 @@ private:
         return names.isEmpty() ? juce::String()
                                : "Missing plug-ins kept as placeholders: " + names.joinIntoString (", ") + ". Scan them in Scan / Manage Plug-ins and reopen the project to use them.";
     }
-    void reportOpened (const juce::Result& result) { if (result.wasOk()) { refresh(); report (result, missingPluginSummary()); } else report (result); }
+    juce::String missingMediaSummary() const
+    {
+        const auto count = session.missingMedia().size();
+        return count == 0 ? juce::String() : juce::String (count) + (count == 1 ? " media file is" : " media files are") + " missing. Use File > Locate Missing Media to find them.";
+    }
+    void reportOpened (const juce::Result& result)
+    {
+        if (result.failed()) { report (result); return; }
+        refresh();
+        report (result, (missingPluginSummary() + " " + missingMediaSummary()).trim());
+    }
     void addTrack()
     {
         showPiano = false;
@@ -5706,6 +5723,7 @@ private:
             popup.addItem (3, "Save Project"); popup.addItem (4, "Save Project As..."); popup.addItem (11, "Save as Default Set", userLibrary != juce::File()); popup.addSeparator();
             popup.addItem (5, "Import Audio...", currentTrack() == nullptr || ! currentTrack()->isReturn); popup.addItem (6, "Export Arrangement Audio...", ! state.tracks.empty()); popup.addSeparator();
             popup.addItem (9, "Import MIDI File..."); popup.addItem (10, "Export Selected MIDI Clip...", currentMidiClip() != nullptr); popup.addSeparator();
+            popup.addItem (12, "Locate Missing Media...", ! session.missingMedia().isEmpty()); popup.addSeparator();
             popup.addItem (7, "Audio Setup..."); popup.addItem (8, "Manage Plug-ins...");
         }
         else if (index == 1)
@@ -5774,6 +5792,7 @@ private:
             case 8: showPlugins(); break;
             case 9: importMidiDialog(); break;
             case 10: exportMidiDialog(); break;
+            case 12: locateMediaDialog(); break;
             case 20: session.undo(); break;
             case 21: session.redo(); break;
             case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); break;
@@ -5832,6 +5851,25 @@ private:
                 safe->report (result, "Project and media saved."); safe->refresh();
                 if (result.wasOk() && onSaved) onSaved();
             });
+    }
+    // Searches a chosen folder for the project's missing files, as the reference's File Manager does.
+    void locateMediaDialog()
+    {
+        const auto missing = session.missingMedia();
+        if (missing.isEmpty()) { report (juce::Result::ok(), "No media is missing."); return; }
+        chooser = std::make_unique<juce::FileChooser> ("Search a folder for " + juce::String (missing.size()) + " missing file" + (missing.size() == 1 ? "" : "s"),
+                                                       juce::File::getSpecialLocation (juce::File::userHomeDirectory));
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+            [safe = juce::Component::SafePointer<Impl> (this), total = missing.size()] (const juce::FileChooser& fc)
+            {
+                if (safe == nullptr || fc.getResult() == juce::File()) return;
+                safe->locateMedia (fc.getResult(), total);
+            });
+    }
+    void locateMedia (const juce::File& folder, int total)
+    {
+        int found = 0; const auto result = session.locateMissingMedia (folder, found); refresh();
+        report (result, "Found " + juce::String (found) + " of " + juce::String (total) + " missing file" + (total == 1 ? "." : "s."));
     }
     void openDialog()
     {

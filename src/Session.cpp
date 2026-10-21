@@ -1038,6 +1038,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
     if (clip.usesSourceFile()) result.file = clip.getSourceFileReference().getFile();
     if (auto* audio = dynamic_cast<te::WaveAudioClip*> (&clip))
     {
+        result.mediaMissing = ! result.file.existsAsFile();
         result.isAudio = true; result.audio = audioSettings (*audio);
         result.sourceLength = audio->getSourceLength().inSeconds(); result.canEditAudioRange = canEditAudioRange (*audio);
         result.canEditAudioFades = audio->getClipSlot() == nullptr;
@@ -2848,7 +2849,7 @@ Result Session::loadProject (const File& file)
             {
                 auto& reference = c->getSourceFileReference();
                 const auto resolved = reference.getFile();
-                if (! resolved.existsAsFile()) return Result::fail ("Missing audio file: " + resolved.getFullPathName());
+                // A missing file keeps its reference; the clip plays silence until it is located.
                 // In-memory undo can retain detached clip trees across Save As.
                 // Anchor their media before edits; only the saved copy is relative.
                 reference.source.setValue (resolved.getFullPathName(), nullptr);
@@ -3055,7 +3056,12 @@ Result Session::saveProject (const File& destination)
         {
             if (! c->usesSourceFile()) continue;
             auto original = c->getSourceFileReference().getFile();
-            if (! original.existsAsFile()) return Result::fail ("Missing audio file: " + original.getFullPathName());
+            if (! original.existsAsFile())
+            {
+                // Nothing to collect: keep the reference to where the file was.
+                findStateWithID (state, c->state.getProperty (te::IDs::id)).setProperty (te::IDs::source, original.getRelativePathFrom (file.getParentDirectory()), nullptr);
+                continue;
+            }
             File target;
             if (original.isAChildOf (assets)) target = original;
             else if (auto it = copied.find (original.getFullPathName()); it != copied.end()) target = it->second;
@@ -3080,7 +3086,11 @@ Result Session::saveProject (const File& destination)
         {
             const auto original = native->sampleFile (slot);
             if (original == File()) continue;
-            if (! original.existsAsFile()) return Result::fail ("Missing sample: " + original.getFullPathName());
+            if (! original.existsAsFile())
+            {
+                findStateWithID (state, native->state.getProperty (te::IDs::id)).setProperty (sampleSlotProperty (native->getKind(), slot), original.getRelativePathFrom (file.getParentDirectory()), nullptr);
+                continue;
+            }
             File target;
             if (original.isAChildOf (assets)) target = original;
             else if (auto it = copied.find (original.getFullPathName()); it != copied.end()) target = it->second;
@@ -3114,6 +3124,72 @@ Result Session::saveProject (const File& destination)
     return Result::ok();
 }
 
+juce::Array<File> Session::missingMedia() const
+{
+    juce::Array<File> missing;
+    for (auto* t : te::getAudioTracks (*impl->edit))
+    {
+        for (auto* c : allTrackClips (*t))
+            if (c->usesSourceFile())
+                if (const auto f = c->getSourceFileReference().getFile(); f != File() && ! f.existsAsFile()) missing.addIfNotAlreadyThere (f);
+        if (auto* native = Impl::nativeInstrument (*t))
+            Impl::visitDevices (*native, [&] (NativeEffectPlugin& d)
+            {
+                for (int slot = 0; slot < sampleSlotCount (d.getKind()); ++slot)
+                    if (const auto f = d.sampleFile (slot); f != File() && ! f.existsAsFile()) missing.addIfNotAlreadyThere (f);
+            });
+    }
+    return missing;
+}
+Result Session::locateMissingMedia (const File& folder, int& found)
+{
+    found = 0;
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before locating media.");
+    if (! folder.isDirectory()) return Result::fail ("Choose a folder to search.");
+    const auto missing = missingMedia();
+    if (missing.isEmpty()) return Result::ok();
+    std::map<String, File> candidates; // By lower-case name; the first readable match wins.
+    std::set<String> wanted;
+    for (const auto& f : missing) wanted.insert (f.getFileName().toLowerCase());
+    juce::AudioFormatManager formats; formats.registerBasicFormats();
+    int visited = 0;
+    for (const auto& entry : juce::RangedDirectoryIterator (folder, true, "*", File::findFiles))
+    {
+        if (++visited > 200000) break; // A bounded search of very large folders.
+        const auto name = entry.getFile().getFileName().toLowerCase();
+        if (wanted.count (name) == 0 || candidates.count (name) != 0) continue;
+        if (std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (entry.getFile())); reader != nullptr && reader->lengthInSamples > 0)
+            candidates[name] = entry.getFile();
+    }
+    std::set<String> relinked;
+    const auto match = [&] (const File& f) -> File
+    {
+        const auto it = candidates.find (f.getFileName().toLowerCase());
+        if (it == candidates.end()) return {};
+        relinked.insert (f.getFullPathName());
+        return it->second;
+    };
+    for (auto* t : te::getAudioTracks (*impl->edit))
+    {
+        for (auto* c : allTrackClips (*t))
+            if (c->usesSourceFile())
+                if (const auto f = c->getSourceFileReference().getFile(); f != File() && ! f.existsAsFile())
+                    if (const auto replacement = match (f); replacement != File())
+                        c->getSourceFileReference().source.setValue (replacement.getFullPathName(), nullptr);
+        if (auto* native = Impl::nativeInstrument (*t))
+            Impl::visitDevices (*native, [&] (NativeEffectPlugin& d)
+            {
+                for (int slot = 0; slot < sampleSlotCount (d.getKind()); ++slot)
+                    if (const auto f = d.sampleFile (slot); f != File() && ! f.existsAsFile())
+                        if (const auto replacement = match (f); replacement != File())
+                            d.state.setProperty (sampleSlotProperty (d.getKind(), slot), replacement.getFullPathName(), nullptr); // Reloads the sample.
+            });
+    }
+    found = (int) relinked.size();
+    if (found > 0) { impl->edit->restartPlayback(); impl->explicitChanges = true; impl->pristineNewDocument = false; }
+    sendChangeMessage(); return Result::ok();
+}
 Result Session::addAudioTrack (String name)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

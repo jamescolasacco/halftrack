@@ -58,6 +58,7 @@ int runSpectrumTests (const juce::File&);
 int runPreviewTests (const juce::File&);
 int runMidiMonitorTests (const juce::File&);
 int runTransportTests (const juce::File&);
+int runMissingMediaTests (const juce::File&);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
@@ -225,6 +226,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-midi-mapping");
             setApplicationReturnValue (runMidiMappingTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-missing-media"))
+        {
+            const int i = args.indexOf ("--self-test-missing-media");
+            setApplicationReturnValue (runMissingMediaTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-transport"))

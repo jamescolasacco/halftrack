@@ -135,8 +135,10 @@ void structureTests (const juce::File& root, const juce::File& audio)
     auto missing = reopened.tracks[0].slots[0].clip.file;
     auto held = missing.getSiblingFile ("temporarily-hidden.wav");
     check (missing.moveFileTo (held), "temporarily hide generated slot source");
-    check (session.loadProject (moved.getChildFile ("Set.halftrack")).failed(), "missing slot media rejects load");
-    check (session.snapshot().tracks.back().slots[1].clip.id == midiId, "rejected load preserves current project");
+    // As in the reference, missing media no longer refuses the project; the slot clip is marked.
+    ok (session.loadProject (moved.getChildFile ("Set.halftrack")), "a project with missing slot media opens");
+    check (session.snapshot().tracks[0].slots[0].clip.mediaMissing && session.missingMedia().contains (missing)
+           && session.snapshot().tracks.back().slots[1].clip.id == midiId, "the slot clip is marked missing and the rest of the project opens");
     check (held.moveFileTo (missing), "restore generated source");
 }
 void saveAsAudioTests (const juce::File& root)

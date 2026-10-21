@@ -1161,3 +1161,7 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 ## Missing plug-in placeholders — 2026-10-21
 
 Engine and UI change in `src/Session.*` and `src/MainComponent.cpp`, with the persistence suite and documentation. Opening a project no longer fails when an external plug-in cannot load. See [the contract](research/missing-plugins-contract.md).
+
+## Missing media — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/NativeEffects.cpp`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/MissingMediaTests.cpp` (new), with documentation. Opening and saving no longer fail when audio files or samples are missing. See [the contract](research/missing-media-contract.md).

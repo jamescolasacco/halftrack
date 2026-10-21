@@ -217,9 +217,10 @@ void engineTests (const juce::File& root)
     check (s.snapshot().tracks.back().instrument.sample == info.sample, "duplicated tracks keep the sample");
     check (info.sample.deleteFile(), "remove the collected sample");
     const auto tracks = s.snapshot().tracks.size();
-    const auto missing = s.loadProject (moved.getChildFile ("Sampler.halftrack"));
-    check (missing.failed() && missing.getErrorMessage().startsWith ("Missing sample") && s.snapshot().tracks.size() == tracks && s.snapshot().tracks.back().instrument.sample == info.sample,
-           "a missing sample rejects loading and keeps the open project");
+    // As in the reference, a missing sample no longer refuses the project; it is reported missing.
+    ok (s.loadProject (moved.getChildFile ("Sampler.halftrack")), "a project with a missing sample opens");
+    check (s.snapshot().tracks.size() == tracks - 1 && s.missingMedia().contains (info.sample) && s.snapshot().tracks.back().instrument.sample == info.sample,
+           "the missing sample keeps its reference and is reported missing");
 }
 
 namespace dp = instruments::drumSampler;
@@ -341,8 +342,12 @@ void drumEngineTests (const juce::File& root)
     ok (s.loadProject (moved.getChildFile ("Beat.halftrack")), "open the moved kit");
     ok (s.exportWav (render, 48000, 32, .5), "render the moved kit");
     check (difference (read (render), rendered) == 0 && instrument (s).padSamples[1].isAChildOf (moved), "the moved kit resolves its own pad samples and renders identically");
-    check (instrument (s).padSamples[1].deleteFile(), "remove a collected pad sample");
-    check (s.loadProject (moved.getChildFile ("Beat.halftrack")).failed(), "a missing pad sample rejects loading");
+    const auto gone = instrument (s).padSamples[1];
+    check (gone.deleteFile(), "remove a collected pad sample");
+    // As in the reference, the kit still opens; the missing pad keeps its reference.
+    ok (s.loadProject (moved.getChildFile ("Beat.halftrack")), "a kit with a missing pad sample opens");
+    check (s.missingMedia().size() == 1 && s.missingMedia()[0] == gone && instrument (s).padSamples[1] == gone && instrument (s).padSamples[0].existsAsFile(),
+           "only the missing pad is reported, with its reference kept");
 }
 }
 int runSamplerTests (const juce::File& artifacts)

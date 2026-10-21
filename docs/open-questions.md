@@ -442,3 +442,7 @@ These are simplest defaults pending a comparison with the reference:
 - **The marker** flashes across every lane. The reference shows it on the track that was clicked.
 - **Clicks** snap the marker to the grid, unless Alt is held.
 - **Scrubbing.** Clicks in the ruler jump immediately. Quantized scrub jumps and holding to loop a section are not implemented.
+
+### Missing media matching
+
+Locate Missing Media matches files by name only, case-insensitively, taking the first readable audio file found. The reference also compares size and checksums; Halftrack does not yet store them. A file moved while the project is open may keep playing from the engine's open handle until the project is reopened, even though it is reported missing.

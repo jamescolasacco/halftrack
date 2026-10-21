@@ -1064,7 +1064,9 @@ juce::Result NativeEffectPlugin::resolveSamples (juce::ValueTree& tree, const ju
             const auto path = tree[name].toString();
             if (path.isEmpty()) continue;
             const auto file = directory.getChildFile (path);
-            if (const auto problem = samplerSampleProblem (file); problem.isNotEmpty()) return juce::Result::fail (problem);
+            // A missing sample keeps its reference and plays nothing until it is located.
+            if (file.existsAsFile())
+                if (const auto problem = samplerSampleProblem (file); problem.isNotEmpty()) return juce::Result::fail (problem);
             tree.setProperty (name, file.getFullPathName(), nullptr);
         }
     }

@@ -259,6 +259,7 @@ public:
         std::vector<ControllerLane> controllers; // Lanes with points, by controller number.
         ScaleSettings scale;
         juce::String grooveId; // The pool groove a MIDI clip plays with; empty for None.
+        bool mediaMissing = false; // An audio clip whose file is not on disk plays silence.
     };
     struct LocatorInfo { juce::String id, name; double position = 0; };
     struct SceneInfo { juce::String id, name; };
@@ -396,7 +397,13 @@ public:
     Snapshot snapshot() const;
     juce::Result newProject();
     juce::Result loadProject (const juce::File&);
-    juce::Result saveProject (const juce::File&); // Copies media into <name> Assets beside the .halftrack file.
+    juce::Result saveProject (const juce::File&);
+    // Audio files and samples the project refers to that are not on disk. Opening and saving keep
+    // their references, and clips whose file is missing play silence.
+    juce::Array<juce::File> missingMedia() const;
+    // Searches `folder` and its subfolders for missing files by name and relinks each readable
+    // match; `found` is how many files were relinked. Not undoable; the project then needs saving.
+    juce::Result locateMissingMedia (const juce::File& folder, int& found); // Copies media into <name> Assets beside the .halftrack file.
     // Crash recovery. writeRecovery atomically writes the open project, media by absolute path, without
     // collecting media or changing the project's file, history or unsaved state. recoverProject opens one
     // as an untitled project with unsaved changes and reports the project it was recovered from.
