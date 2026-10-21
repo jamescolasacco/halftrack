@@ -1339,3 +1339,11 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **Presets for plug-ins.** Save Preset now works for plug-ins too. The preset keeps the plug-in and its state, is listed under the plug-in in the browser, and loads in one undo step.
 
 See [the presets contract](research/presets-contract.md#plug-in-presets).
+
+## Multi-clip editing — 2026-10-21
+
+UI change in `src/MainComponent.cpp`, with documentation.
+
+- **Several clips in the editor.** Shift-clicking Arrangement MIDI clips shows them together in the piano roll, the others' notes dimmed where they fall. Clicking a dimmed note edits its clip with that note selected, and Fit covers the shown clips.
+
+See [the contract](research/multi-clip-editing-contract.md).

@@ -1895,7 +1895,7 @@ private:
                     const auto& clip = track.clips[(size_t) c];
                     auto bounds = clipBounds (clip, t);
                     if (bounds.getRight() < 0 || bounds.getX() > tw) continue;
-                    const bool selected = t == owner.selectedTrack && c == owner.selectedClip;
+                    const bool selected = (t == owner.selectedTrack && c == owner.selectedClip) || owner.isExtraMidiClip (clip.id);
                     auto colour = track.colour;
                     if (colour.isTransparent()) colour = juce::Colour (0xff76b5bf);
                     if (!clip.active) colour=muted;
@@ -2118,6 +2118,8 @@ private:
             }
             grabKeyboardFocus(); fadeDrag = 0; rangeDrag = 0; dragClipId.clear();
             const auto previousTrack = owner.selectedTrack, previousClip = owner.selectedClip;
+            const auto* previousMidi = owner.currentMidiClip();
+            const auto previousMidiId = previousMidi != nullptr && owner.selectedLauncherClipId.isEmpty() ? previousMidi->id : juce::String();
             auto track = owner.trackAtY (e.y);
             if (track < 0) return;
             owner.selectedClip = -1;
@@ -2130,6 +2132,13 @@ private:
                 for (int c = (int) clips.size() - 1; c >= 0; --c)
                     if (clipBounds (clips[(size_t) c], track).contains (e.position))
                     {
+                        // Shift-clicking a MIDI clip shows it in the editor with the clips already shown.
+                        if (e.mods.isShiftDown() && ! e.mods.isAltDown() && clips[(size_t) c].isMidi && previousMidiId.isNotEmpty() && previousMidiId != clips[(size_t) c].id)
+                        {
+                            if (! owner.isExtraMidiClip (previousMidiId)) owner.extraMidiClipIds.push_back (previousMidiId);
+                            std::erase (owner.extraMidiClipIds, clips[(size_t) c].id);
+                        }
+                        else if (! e.mods.isPopupMenu()) owner.extraMidiClipIds.clear();
                         owner.selectedClip = c;
                         owner.timeSelection = {};
                         draggedClip = c;
@@ -2152,6 +2161,7 @@ private:
                     }
             }
             draggedClip = -1;
+            owner.extraMidiClipIds.clear();
             // Dragging over empty lane space selects time; Shift-click extends the selection.
             if (! e.mods.isPopupMenu())
             {
@@ -3935,7 +3945,10 @@ private:
         {
             const auto* clip = owner.currentMidiClip();
             viewBeat = 0;
-            pixelsPerBeat = juce::jlimit (12.0, 240.0, gridBounds().getWidth() / juce::jmax (4.0, clip != nullptr ? clip->lengthBeats : 16.0));
+            // Fits the edited clip and the shown clips after it.
+            auto length = clip != nullptr ? clip->lengthBeats : 16.0;
+            if (clip != nullptr) for (const auto* other : owner.extraMidiClips()) length = juce::jmax (length, other->startBeat - clip->startBeat + other->lengthBeats);
+            pixelsPerBeat = juce::jlimit (12.0, 240.0, gridBounds().getWidth() / juce::jmax (4.0, length));
             updateScroll(); repaint();
         }
         void resized() override
@@ -4019,6 +4032,18 @@ private:
             const auto clipEnd = (float) (keysWidth + (clip->lengthBeats - viewBeat) * pixelsPerBeat);
             if (clipEnd < grid.getRight()) { g.setColour (background.withAlpha (0.7f)); g.fillRect (clipEnd, (float) gridTop, grid.getRight() - clipEnd, (float) grid.getHeight()); }
             g.reduceClipRegion (grid);
+            // Other shown clips' notes, dimmed, where they fall against this clip.
+            for (const auto* other : owner.extraMidiClips())
+            {
+                const auto from = (float) (keysWidth + (other->startBeat - clip->startBeat - viewBeat) * pixelsPerBeat);
+                g.setColour (juce::Colours::white.withAlpha (0.035f)); g.fillRect (from, (float) gridTop, (float) (other->lengthBeats * pixelsPerBeat), (float) grid.getHeight());
+                for (const auto& note : other->notes)
+                {
+                    const auto r = ghostBounds (*other, note);
+                    g.setColour (juce::Colour (0xff5d6e6a).withAlpha (note.active ? 0.75f : 0.35f)); g.fillRect (r);
+                    g.setColour (juce::Colour (0xff2a3633)); g.drawRect (r, 1.0f);
+                }
+            }
             for (const auto& note : clip->notes)
             {
                 auto r = noteBounds (note);
@@ -4081,6 +4106,20 @@ private:
             if (! gridBounds().contains (e.getPosition())) return;
             grabKeyboardFocus();
             endGesture(); originalNotes.clear(); drawing = false; marquee = false;
+            // A note of another shown clip makes that clip the edited one, with the note selected,
+            // keeping the view where it was.
+            if (std::none_of (clip->notes.begin(), clip->notes.end(), [&] (const auto& n) { return noteBounds (n).contains (e.position); }))
+                for (const auto* other : owner.extraMidiClips())
+                    for (const auto& note : other->notes)
+                        if (ghostBounds (*other, note).contains (e.position))
+                        {
+                            const auto otherId = other->id, noteId = note.id;
+                            const auto shift = other->startBeat - clip->startBeat;
+                            owner.focusMidiClip (otherId);
+                            viewBeat = juce::jmax (0.0, viewBeat - shift);
+                            selectedNoteIds = { noteId }; selectedNoteId = noteId;
+                            updateScroll(); repaint(); return;
+                        }
             for (auto it = clip->notes.rbegin(); it != clip->notes.rend(); ++it)
                 if (noteBounds (*it).contains (e.position))
                 {
@@ -4677,6 +4716,12 @@ private:
             if (next != viewBeat) { viewBeat = next; updateScroll(); repaint(); }
         }
         double visibleStartBeat() const noexcept { return viewBeat; }
+        // A note of another shown clip, placed against the edited clip's start.
+        juce::Rectangle<float> ghostBounds (const Session::ClipInfo& other, const Session::MidiNoteInfo& note) const
+        {
+            const auto* clip = owner.currentMidiClip();
+            return noteBounds (note).translated ((float) ((clip != nullptr ? other.startBeat - clip->startBeat : 0.0) * pixelsPerBeat), 0);
+        }
     private:
     public:
         // A note tool's settings, applied to the selected notes (or every note) each time Apply is pressed.
@@ -6087,6 +6132,38 @@ private:
         return track->clips[(size_t) selectedClip].isAudio ? &track->clips[(size_t) selectedClip] : nullptr;
     }
     juce::Colour selectedTrackColour() const { const auto* track = currentTrack(); return track != nullptr ? track->colour : muted; }
+    // Multi-clip editing: other Arrangement MIDI clips the editor shows beside the focused one, as
+    // the reference's MIDI editor does for several selected clips.
+    std::vector<juce::String> extraMidiClipIds;
+    bool isExtraMidiClip (const juce::String& id) const
+    { return std::find (extraMidiClipIds.begin(), extraMidiClipIds.end(), id) != extraMidiClipIds.end(); }
+    std::pair<int, int> locateClip (const juce::String& id) const
+    {
+        for (int t = 0; t < (int) state.tracks.size(); ++t)
+            for (int c = 0; c < (int) state.tracks[(size_t) t].clips.size(); ++c)
+                if (state.tracks[(size_t) t].clips[(size_t) c].id == id) return { t, c };
+        return { -1, -1 };
+    }
+    std::vector<const Session::ClipInfo*> extraMidiClips() const
+    {
+        std::vector<const Session::ClipInfo*> result;
+        const auto* focused = currentMidiClip();
+        if (focused == nullptr || selectedLauncherClipId.isNotEmpty()) return result;
+        for (const auto& id : extraMidiClipIds)
+            if (const auto [t, c] = locateClip (id); t >= 0 && id != focused->id)
+                if (const auto& clip = state.tracks[(size_t) t].clips[(size_t) c]; clip.isMidi) result.push_back (&clip);
+        return result;
+    }
+    // Makes another shown clip the one the editor edits, keeping the one it edited in view.
+    void focusMidiClip (const juce::String& id)
+    {
+        const auto [t, c] = locateClip (id);
+        if (t < 0) return;
+        if (const auto* focused = currentMidiClip(); focused != nullptr && focused->id != id && ! isExtraMidiClip (focused->id)) extraMidiClipIds.push_back (focused->id);
+        std::erase (extraMidiClipIds, id);
+        selectTrack (t); selectedClip = c; selectedLauncherClipId.clear();
+        refresh();
+    }
     // The Session MIDI clip an open clip view edits, which has launch settings.
     const Session::ClipInfo* sessionMidiClip() const { return showSession && selectedLauncherClipId.isNotEmpty() ? currentMidiClip() : nullptr; }
     const Session::ClipInfo* currentMidiClip() const
@@ -8822,6 +8899,57 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (std::abs (pianoRoll.visibleStartBeat() - 24) < 1e-6, "the piano roll pages to the playhead at beat 24");
         session.stop(); session.seek (0); closeClipView(); refresh();
         check (session.removeTrack ((int) state.tracks.size() - 1).wasOk(), "remove the follow track"); refresh();
+        selectTrack (previousTrack); refresh();
+    }
+    {
+        // Multi-clip editing: Shift-clicking another MIDI clip shows both in the editor, the other
+        // clip's notes dimmed where they fall; clicking one of them edits that clip with the note selected.
+        const int previousTrack = selectedTrack;
+        check (session.addMidiTrack ("Multi").wasOk(), "add a MIDI track for multi-clip editing"); refresh();
+        const int lane = (int) state.tracks.size() - 1;
+        selectTrack (lane); refresh();
+        const auto trackId = currentTrack()->id;
+        check (session.addMidiClip (trackId, 0, 4).wasOk() && session.addMidiClip (trackId, 4, 4).wasOk(), "two MIDI clips side by side"); refresh();
+        const auto firstId = state.tracks[(size_t) lane].clips[0].id, secondId = state.tracks[(size_t) lane].clips[1].id;
+        check (session.addMidiNote (firstId, 60, 0, 1, .8f).wasOk() && session.addMidiNote (secondId, 64, 1, 1, .8f).wasOk(), "a note in each clip"); refresh();
+        showArrangementView(); refresh();
+        auto clipClick = [&] (const juce::String& id, int modifiers)
+        {
+            const auto [t, c] = locateClip (id);
+            const auto at = canvas.clipBounds (state.tracks[(size_t) t].clips[(size_t) c], t).getCentre();
+            const auto now = juce::Time::getCurrentTime();
+            const juce::MouseEvent e (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers),
+                                      1.0f, 0, 0, 0, 0, &canvas, &canvas, now, at, now, 1, false);
+            canvas.mouseDown (e); canvas.mouseUp (e); refresh();
+        };
+        clipClick (secondId, 0);
+        check (currentMidiClip() != nullptr && currentMidiClip()->id == secondId && extraMidiClipIds.empty(), "a click selects one MIDI clip");
+        clipClick (firstId, juce::ModifierKeys::shiftModifier);
+        check (currentMidiClip()->id == firstId && extraMidiClipIds == std::vector<juce::String> { secondId } && extraMidiClips().size() == 1,
+               "Shift-click shows the second clip with the one already shown");
+        openPianoRoll(); refresh(); pianoRoll.fit();
+        const auto& shown = *extraMidiClips().front();
+        const auto ghost = pianoRoll.ghostBounds (shown, shown.notes.front()).getCentre();
+        check (getComponentAt (getLocalPoint (&pianoRoll, ghost.toInt())) == &pianoRoll, "Fit shows the other clip's note, four beats on");
+        const auto withGhost = pianoRoll.createComponentSnapshot (pianoRoll.getLocalBounds()).getPixelAt (ghost.roundToInt().x, ghost.roundToInt().y);
+        const auto keep = extraMidiClipIds; extraMidiClipIds.clear();
+        const auto without = pianoRoll.createComponentSnapshot (pianoRoll.getLocalBounds()).getPixelAt (ghost.roundToInt().x, ghost.roundToInt().y);
+        extraMidiClipIds = keep;
+        check (withGhost != without, "the editor draws it");
+        const auto now = juce::Time::getCurrentTime();
+        const juce::MouseEvent onGhost (juce::Desktop::getInstance().getMainMouseSource(), ghost, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                        &pianoRoll, &pianoRoll, now, ghost, now, 1, false);
+        pianoRoll.mouseDown (onGhost); pianoRoll.mouseUp (onGhost); refresh();
+        check (currentMidiClip()->id == secondId && extraMidiClipIds == std::vector<juce::String> { firstId }, "clicking its note makes that clip the edited one");
+        pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::deleteKey)); refresh();
+        check (state.tracks[(size_t) lane].clips[1].notes.empty() && state.tracks[(size_t) lane].clips[0].notes.size() == 1,
+               "with its note selected, so Delete removes that note only");
+        session.undo(); refresh();
+        check (state.tracks[(size_t) lane].clips[1].notes.size() == 1, "undo restores it");
+        clipClick (firstId, 0);
+        check (currentMidiClip()->id == firstId && extraMidiClipIds.empty() && extraMidiClips().empty(), "a plain click edits one clip again");
+        closeClipView();
+        check (session.removeTrack (lane).wasOk(), "remove the multi-clip track"); refresh();
         selectTrack (previousTrack); refresh();
     }
     {
