@@ -12,6 +12,7 @@
 
 namespace halftrack
 {
+namespace racks { class RackEngine; }
 struct EffectParameter
 {
     const char* key;
@@ -30,6 +31,7 @@ const char* effectCategory (Session::EffectKind) noexcept;
 bool effectUsesTempo (Session::EffectKind) noexcept;
 bool effectIsMidi (Session::EffectKind) noexcept;
 bool effectIsInstrument (Session::EffectKind) noexcept;
+bool effectIsRack (Session::EffectKind) noexcept;
 double effectTailSeconds (Session::EffectKind, double sampleRate) noexcept;
 double effectLatencySeconds (Session::EffectKind, double sampleRate) noexcept;
 // Index of a named control in the kind's parameter table, or -1.
@@ -124,12 +126,12 @@ public:
     juce::String getPluginType() override { return xmlTypeName; }
     juce::String getSelectableDescription() override { return getName(); }
     void initialise (const tracktion::PluginInitialisationInfo&) override;
-    void deinitialise() override {}
+    void deinitialise() override;
     void reset() override;
     void applyToBuffer (const tracktion::PluginRenderContext&) override;
     bool noTail() override { return kind == Session::EffectKind::compressor || kind == Session::EffectKind::gate || kind == Session::EffectKind::autoPan || kind == Session::EffectKind::glueCompressor; }
-    double getLatencySeconds() override { return effectLatencySeconds (kind, sampleRate); }
-    double getTailLength() const override { return effectTailSeconds (kind, sampleRate); }
+    double getLatencySeconds() override;
+    double getTailLength() const override;
     bool takesMidiInput() override { return effectIsMidi (kind) || effectIsInstrument (kind); }
     bool takesAudioInput() override { return ! effectIsMidi (kind) && ! effectIsInstrument (kind); }
     bool isSynth() override { return effectIsInstrument (kind); }
@@ -155,8 +157,20 @@ public:
     void refreshAutomation();
     // After Save collects a sample, point at the copy without decoding it again or adding history.
     void relocateSample (int slot, const juce::File&);
+    // A rack kind's chains, or nullptr for a plain device.
+    racks::RackEngine* rackEngine() const noexcept { return rack.get(); }
+    // Audio thread, from an enclosing rack right before it processes this device: control values
+    // its macros drive (NaN where none does), valid until the rack clears them after the block.
+    void setRackControls (const float* values) noexcept { rackControls = values; }
+    // Audio thread, from an enclosing rack: an instrument fades its voices out from this sample
+    // of the next block, as a Drum Rack choke group does.
+    void chokeAt (int sample) noexcept;
 private:
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
+    void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
+    void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;
+    void valueTreeChildOrderChanged (juce::ValueTree&, int, int) override;
+    bool rackStructure (const juce::ValueTree& parent) const;
     void publish();
     void timerCallback() override;
     const Session::EffectKind kind;
@@ -182,6 +196,10 @@ private:
     std::array<juce::File, Session::drumPadCount> loadedSamples;
     Session::EffectSettings pendingSettings;
     bool pending = false, writing = false;
+    std::unique_ptr<racks::RackEngine> rack;
+    const float* rackControls = nullptr; // Audio thread.
+    std::array<int, 16> chokes {};       // Audio thread: pending choke samples.
+    int chokeCount = 0;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NativeEffectPlugin)
 };
 // Compact editors are three rows of small controls for the inline device view.

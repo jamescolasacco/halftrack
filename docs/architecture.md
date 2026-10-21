@@ -230,6 +230,16 @@ Native effect kinds 24–27 (Poly Synth, FM Synth, Drum Kit, Wavetable) are inst
 
 `EffectKind::sampler` (kind 28) is a native instrument that plays one decoded sample. `setInstrumentSample(trackId, file)` validates the file and sets the plugin's `halftrackSample` property (an absolute path in the live edit) inside one undo transaction, replacing a non-Sampler instrument through the shared `replaceInstrument` helper. The plugin decodes on the message thread and publishes an immutable `instruments::SampleData` through an atomic pointer. The audio thread acknowledges each pointer it adopts, and older data is freed only after that acknowledgement. Save collects samples into the Assets folder with clip media and writes project-relative paths; `relocateSample` then follows the copy without decoding or history. `NativeEffectPlugin::resolveSamples` makes saved paths absolute before the candidate edit is built and rejects missing or unreadable samples. `PluginInfo::sample` reports the file; the instrument panel's `SampleView` shows it. The Drum Sampler (kind 29) generalizes this to 16 sample slots (`sampleSlotCount`/`sampleSlotProperty`), each with its own published and acknowledged pointer, and `setDrumPadSample` loads or clears a pad. Its 81 controls led to the 128-value settings packet. The instrument panel's `DrumPanel` shows the pads. See the [sampler contract](research/sampler-contract.md).
 
+## Racks
+
+Native kinds 30–33 are racks: `instrumentRack`, `audioEffectRack`, `midiEffectRack` and `drumRack`. `Session::effectKindCount` (30) still bounds plain devices; `deviceKindCount` (34) bounds persisted kinds. Instrument and Drum Racks take an instrument's place through `setTrackInstrument`, a MIDI Effect Rack sits with the MIDI effects and an Audio Effect Rack with the audio devices. A rack's `EffectSettings` hold its 16 macros (0–127) and, at `rackChainSelector`, its chain selector, so `setNativeEffectSettings` and `setDeviceAutomation` set and automate them like any control.
+
+The model is the rack plugin's own engine tree (`src/Racks.h` names the identifiers): `RACKCHAIN` children hold `RackChainSettings` (name, volume, pan, activator, solo, key/velocity/select zones, and for Drum Rack pads the receive note, play note, choke group and sends) and, inside each chain, the chain's device `PLUGIN`s (native devices and the channel Utility); a Drum Rack's `RACKRETURN` children are return chains; `MACROMAPPING` children map a macro to a device control, a chain's volume, pan or send, or the chain selector, between a minimum and maximum. Rack, chain and device IDs are engine item IDs, remapped when a track or chain is copied. `PluginInfo` reports `isRack`, `chains`, `returns` (`RackChainInfo` with nested `PluginInfo` devices), `mappings`, `visibleMacros` and `macroNames`; `racks::locate` finds any device or chain in a snapshot.
+
+Commands, each one validated undo step: `addRackChain`, `removeRackChain`, `moveRackChain`, `duplicateRackChain`, `setRackChainSettings`; `addRackDevice`, `addRackUtility`, `removeRackDevice`, `moveRackDevice`, `setRackDeviceEnabled`, `setRackDeviceSample`, `showDeviceEditor`; `setRackMacroMapping`, `removeRackMacroMapping`, `setRackVisibleMacros`, `setRackMacroName`; `setDrumRackPadSample`, `swapDrumRackPads`, `addRackReturn`, `removeRackReturn`; `groupDevices`, `groupInstrument` and `ungroupRack`. Devices inside racks use the ordinary `setNativeEffectSettings`, `setUtilitySettings` and `setDeviceAutomation`. Chains keep MIDI effects, one instrument, then audio devices, and racks nest four deep. `racks::validateRack` checks the whole subtree (limits, IDs, properties, device order and mapping targets) when a project loads, before the open project is replaced.
+
+`RackEngine` (`src/Racks.*`) runs inside the rack's `NativeEffectPlugin`. On the message thread a tree change re-creates and initialises inner plugins and builds an immutable `Layout` (chains, devices, zones, mappings, compensation delays), published through an atomic pointer; the audio thread acknowledges each layout it adopts and older ones are freed only after that. `process` works through the block in preallocated chunks: it routes each chain its share of the MIDI with sample offsets (key and velocity zones, Drum Rack receive/play notes and chokes), runs each chain's devices with a chunk context, applies 5 ms gain ramps for the chain selector, volume, pan, activator and solo, and sums chains and Drum Rack sends into fixed buffers. Shorter chains are delayed to the longest chain's latency, and the chain mix by the returns' latency. Macro values reach mapped controls through `NativeEffectPlugin::setRackControls`, a fixed array, at block rate. The realtime source guard covers `RackEngine::process` and the choke path, and `tests/RackTests.cpp` audits allocation in the rack callback. The device view's `makeRackEditor` (`src/RackEditor.*`) shows macros, chains or the Drum Rack pad grid, the zone editor or pad controls, and the chain's devices. See the [rack contract](research/racks-contract.md).
+
 ## MIDI transformations
 
 `transformMidiNotes(clipId, noteIds, operation, gridBeats)` operates on stable note IDs in arrangement or Session clips. It resolves the whole selection and computes proposed note values before calling the existing `updateMidiNotes` batch validator. One native undo transaction changes the complete group; invalid IDs, bounds, grids, or a too-large stretch preserve notes and history. Empty API selection is a no-op. The piano-roll Note tools menu and Cmd/Ctrl+U deliberately select all clip notes when the UI selection is empty. Cmd/Ctrl+Shift+U quantizes endings.
@@ -263,6 +273,35 @@ Tracks carry an undoable `halftrackCrossfade` side (0 none, 1 A, 2 B) and the ed
 ## Freeze and Flatten
 
 `setTrackFrozen` writes the engine's `frozenIndividually` track property through the undo manager; the engine's listener renders the freeze (or removes it) synchronously. `Impl::unfrozen` guards device, instrument, clip and note commands on frozen tracks. `flattenTrack` converts the engine's freeze render into a WAV in Assets, unfreezes outside history (the engine cannot render during undo), then in one transaction removes instrument and device plugins and clips, clears MIDI state and inserts the audio clip. Native instruments and the built-in synth report `producesAudioWhenNoAudioInput` so the engine's audio-node check accepts MIDI-only freezes. See the [freeze contract](research/freeze-contract.md).
+
+
+## Track Delay
+
+`TrackDelayPlugin` (in `src/Session.cpp`) sits after a track's devices and before its sends and mixer once a delay is set. Positive delays run through a ring buffer allocated in `initialise`; negative delays are reported as latency, and the engine's delay compensation moves the track earlier. Device insertion keeps new devices ahead of it. See the [track delay contract](research/track-delay-contract.md).
+
+## MIDI controller lanes
+
+`setMidiControllerLane` maps Halftrack lanes onto the engine's MIDI controller events in the clip's sequence (CC values stored as 14-bit, pitch bend offset by 8192) and replaces a lane in one transaction. `describeClip` groups them back into `ClipInfo::controllers`. Insert and Delete Time carry them with notes. The piano roll's `LaneView` edits velocities through `updateMidiNotes` and lanes through `setMidiControllerLane`, previewing locally until release. See the [controller lane contract](research/midi-controllers-contract.md).
+
+## Arrangement time selection
+
+`Impl::timeSelection` holds the selected range and track IDs; the canvas sets it from drags over empty lane space and draws it over the selected lanes. `splitRange`, `deleteRange` and `duplicateRange` validate every edge with `splittableAt`, then cut tracks with `splitTrackAt`, which uses the engine's split for audio and `splitMidiClipAt` for MIDI so both halves keep zero offset. See the [selection contract](research/arrangement-selection-contract.md).
+
+## Time signature
+
+The meter is the engine tempo sequence's first `TimeSigSetting`; `setTimeSignature` edits it in one transaction and `validateProjectTempo` rejects meter maps. The engine behaviour reports that a beat does not depend on the meter, so every Halftrack beat stays a quarter note. The UI derives bar lengths from `Snapshot::timeSignature`. See the [time signature contract](research/time-signature-contract.md).
+
+## MIDI note tools
+
+`src/NoteTools.*` holds each tool's field table and a pure `notetools::run` from notes to notes. `Session::applyNoteTool` validates the settings and every resulting note, then removes the chosen notes and adds the result in one transaction. The piano roll's `NoteToolPanel` edits a tool's settings and applies it to the selection. See the [note tool contract](research/midi-tools-contract.md).
+
+## Clip scales
+
+A MIDI clip's scale is three properties on its state, read by `clipScale` into `ClipInfo::scale` and written by `setClipScale`. `Session::scaleIntervals`, `inScale` and `fitToScale` are pure helpers shared by the piano roll's row highlighting and the Fit to Scale note tool. See the [scale contract](research/scales-contract.md).
+
+## Crash recovery
+
+`Session::writeRecovery` serialises the live edit (absolute media, `halftrackRecoveryOf` naming the saved project) without touching the project file or history, and `recoverProject` reuses `loadProject`'s validation before detaching the result from any file. `MainComponent::Impl` owns the 30-second autosave tick, the startup prompt and removing the copy once work is saved or discarded; `Main.cpp` chooses the application-data location. See the [recovery contract](research/recovery-contract.md).
 
 ## Audio warping
 

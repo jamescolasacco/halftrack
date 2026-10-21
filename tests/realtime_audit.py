@@ -19,7 +19,9 @@ import unittest
 ROOTS = {
     "src/Session.cpp": ("applyToBuffer",),  # Original TrackMixer normalization wrapper.
     "src/SubtractiveSynth.cpp": ("SubtractiveSynthDSP::render", "SubtractiveSynthPlugin::applyToBuffer"),
-    "src/NativeEffects.cpp": ("NativeEffectDSP::processSamples", "NativeEffectPlugin::applyToBuffer", "NativeEffectPlugin::processMidi", "NativeEffectPlugin::renderInstrument"),
+    "src/NativeEffects.cpp": ("NativeEffectDSP::processSamples", "NativeEffectPlugin::applyToBuffer", "NativeEffectPlugin::processMidi", "NativeEffectPlugin::renderInstrument", "NativeEffectPlugin::chokeAt"),
+    # Rack chains: layout adoption, MIDI routing, chain processing and mixing.
+    "src/Racks.cpp": ("RackEngine::process", "RackEngine::chokeAt"),
     "src/Instruments.cpp": (
         "InstrumentDSP::render",
         "InstrumentDSP::noteOn",
@@ -30,6 +32,7 @@ ROOTS = {
         "InstrumentDSP::reset",
         "InstrumentDSP::setSample",
         "InstrumentDSP::setPadSample",
+        "InstrumentDSP::chokeAll",
     ),
     "src/MidiEffects.cpp": (
         "Processor::process",

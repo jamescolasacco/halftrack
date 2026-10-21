@@ -210,12 +210,49 @@ The crossfader uses the dipless curve (a side stays at 0 dB until the fader cros
 
 ### Time edit defaults
 
-The loop range stands in for an Arrangement time selection. MIDI clips crossing an edit are extended or shortened in place, not split. A note crossing the inserted point keeps its length, and automation is not given boundary points at the cut, so a ramp across deleted time joins its neighbours. Tempo is constant, so tempo events are not moved. These are simplest-default choices pending reference measurement.
+Insert Silence and Delete Time use the Arrangement time selection, or the loop range when nothing is selected. MIDI clips crossing an Insert Silence or Delete Time edit are extended or shortened in place, not split. A note crossing the inserted point keeps its length, and automation is not given boundary points at the cut, so a ramp across deleted time joins its neighbours. Tempo is constant, so tempo events are not moved. These are simplest-default choices pending reference measurement.
 
 ### Follow action chance defaults
 
 The follow-action time is one value shared by both actions, and a No action choice is final for that launch (it is not evaluated again on later loops). Random choice uses the engine's unseeded generator, so tests check deterministic chances exactly and an even chance statistically. These are simplest-default choices pending reference measurement.
 
+
+### Track Delay defaults
+
+Track Delay runs from −1000 to +1000 ms in milliseconds only. It applies after the track's devices and before its sends, so pre- and post-fader sends both carry it, and MIDI is not delayed separately because native instruments come before it. A positively delayed track can replay up to the delay time of pre-seek audio after a jump. These are simplest-default choices pending reference measurement.
+
+### MIDI controller lane defaults
+
+Controller lanes are step-wise (a value holds until the next point) rather than ramped envelopes, and drawing writes one point per grid step. Channel mode messages (CC 120–127) are not editable. Deleting time keeps the last value set inside the deleted range at the cut. These are simplest-default choices pending reference measurement.
+
 ### Input changes during Session takes
 
 While a Session slot take records, input assignment is refused on every track, as during Arrangement recording. Enabling a device would discard the take, and replacing or disconnecting the recording track's input would leave the take without the input that stops it. A narrower rule could still allow assigning already-enabled inputs to other tracks; the reference application's behavior is unmeasured. Arming and monitoring stay available during a take. A MIDI device that appears during a take is discovered when the take ends. Audio-device changes in Audio Settings take the same device-list rebuild during any recording, Arrangement or Session. Code inspection shows the rebuild discards the take, but this is unmeasured, and refusing versus deferring those changes is undecided. Other edits refused only during Arrangement recording have not been audited for Session takes. These are undo, removing tracks, and editing scenes or slots.
+
+### Arrangement selection defaults
+
+Split, Delete Selection, Duplicate Selection and Consolidate act on clips only; automation in the selection stays where it is. Consolidated audio is rendered at the audio device's rate, without the track's devices, and plays unwarped. Duplicate replaces the material in the time after the selection, and the selection moves onto the copy. Notes crossing a MIDI split become two notes. These are simplest-default choices pending reference measurement.
+
+### Rack defaults
+
+An empty effect rack passes its input and an empty Instrument or Drum Rack is silent. Zone fades are linear: key and velocity fades scale the note's velocity; selector fades scale an Instrument or Audio Effect Rack chain's output and a MIDI Effect Rack chain's velocity. The chain selector moves in whole steps from 0 to 127. Gains ramp over 5 ms. Chain mute and solo act on a chain's output, except in MIDI Effect Racks, where they stop new notes. A choke fades the choked pad's instrument voices over 5 ms, and audio effects after the instrument keep ringing. Chain pan uses the track mixer's law. Macro mappings interpolate in knob position, so a volume mapping follows the fader taper. A macro's first mapping takes the control's current position, and removing a mapping leaves the control where the macro put it. Macro automation applies at block rate. Grouping copies built-in devices into a one-chain rack; third-party plug-ins cannot go in racks yet. Only one-chain Instrument, Audio Effect and MIDI Effect Racks can be ungrouped. Chain Selector MIDI controller filtering, macro variations, randomize, hot-swap, chain colors, Drum Rack pad routing to the project's returns, and extracting chains are not implemented. These are simplest-default choices pending reference measurement.
+
+### Time signature defaults
+
+The project has one meter, and beats are quarter notes at every meter, so the tempo counts quarter notes and 6/8 has three beats per bar. The metronome clicks quarter notes and accents bars. Importing a MIDI file does not change the project meter. These are simplest-default choices pending reference measurement.
+
+### MIDI note tool defaults
+
+The note tools use Halftrack's own algorithms and parameter sets (for example, Strum keeps each note's end, and Connect interpolates passing-note pitches linearly). They apply on demand rather than previewing live. Generators add notes across the whole clip and replace only chosen notes. These are simplest-default choices pending reference measurement.
+
+### Timeline navigation defaults
+
+Follow pages the view (the playhead starts each new page) rather than scrolling continuously, and scrolling by hand while playing switches Follow off until it is turned back on. Z adds 5% margins around the selection. These are simplest-default choices pending reference measurement.
+
+### Clip scale defaults
+
+Scales belong to clips (there is no project-wide current scale), the piano roll highlights rather than folds, and Fit to Scale breaks ties downward. Sixteen common scales are offered. These are simplest-default choices pending reference measurement.
+
+### Crash recovery defaults
+
+There is one recovery copy, written every 30 seconds while there are unsaved changes. A recovered project opens untitled rather than reattaching to its saved file, so the user chooses where to save it. These are simplest-default choices pending reference measurement.

@@ -16,6 +16,8 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
     void requestClose (std::function<void()> onClose);
+    // Keeps a recovery copy of unsaved work in this file and offers to recover one left by a crash.
+    void enableRecovery (const juce::File&);
    #if HALFTRACK_TESTS_ENABLED
     static int runInteractionTests();
     static int runExportInteractionTests();

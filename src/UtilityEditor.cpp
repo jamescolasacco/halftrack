@@ -1,4 +1,5 @@
 #include "UtilityEditor.h"
+#include "Racks.h"
 #include <array>
 #include <optional>
 #if HALFTRACK_TESTS_ENABLED
@@ -130,9 +131,9 @@ public:
 private:
     std::optional<Session::UtilitySettings> settings() const
     {
-        for (const auto& track : session.snapshot().tracks)
-            for (const auto& plugin : track.plugins)
-                if (plugin.id == pluginId && plugin.isUtility) return plugin.utility;
+        // On a track or inside a rack's chain.
+        const auto snapshot = session.snapshot();
+        if (const auto where = racks::locate (snapshot, pluginId); where.device != nullptr && where.device->isUtility) return where.device->utility;
         return {};
     }
     template <typename Edit> void edit (Edit&& update)

@@ -77,9 +77,49 @@ public:
         // MIDI effects process notes before a MIDI track's instrument.
         arpeggiator, chord, scale, pitch, velocity, random, noteLength,
         // Instruments replace a MIDI track's built-in synthesizer through setTrackInstrument.
-        polySynth, fmSynth, drumKit, wavetableSynth, sampler, drumSampler };
-    static constexpr int effectKindCount = 30;
+        polySynth, fmSynth, drumKit, wavetableSynth, sampler, drumSampler,
+        // Racks hold parallel chains of devices. Instrument and Drum Racks are instruments; a MIDI
+        // Effect Rack is a MIDI effect; an Audio Effect Rack is an audio device.
+        instrumentRack, audioEffectRack, midiEffectRack, drumRack };
+    static constexpr int effectKindCount = 30; // Plain devices; the rack kinds follow them.
+    static constexpr int deviceKindCount = 34; // Every persisted kind, racks included.
     static constexpr int drumPadCount = 16; // Drum Sampler pads play notes 36 (C1) to 51.
+    // A rack's EffectSettings hold its macros (0-127) and then its chain selector (0-127), so the
+    // ordinary device commands set and automate them.
+    static constexpr int rackMacroCount = 16, rackChainSelector = 16;
+    static constexpr int maximumRackChains = 128, maximumRackReturns = 6, maximumChainDevices = 32, maximumMacroMappings = 256;
+    // A zone passes values from low to high. Values below fadeLow or above fadeHigh are inside its
+    // fade ranges, which fall linearly to the zone's edges.
+    struct RackZone
+    {
+        int low = 0, high = 127, fadeLow = 0, fadeHigh = 127;
+        bool operator== (const RackZone&) const = default;
+    };
+    struct RackChainSettings
+    {
+        juce::String name;
+        float volumeDb = 0, pan = 0; // -100 dB is silence; pan uses the track mixer's law.
+        bool active = true, solo = false; // Active is the chain activator.
+        RackZone key, velocity { 1, 127, 1, 127 }, select { 0, 0, 0, 0 };
+        int receiveNote = 36; // Drum Rack chains: the pad's note, or -1 for All Notes.
+        int playNote = 60;    // Drum Rack chains: the note the chain's devices receive.
+        int chokeGroup = 0;   // Drum Rack chains: 0 for none, or 1 to 16.
+        // Drum Rack chains: post-fader sends to the rack's return chains, -100 dB for off.
+        std::array<float, maximumRackReturns> sendsDb { -100, -100, -100, -100, -100, -100 };
+        bool operator== (const RackChainSettings&) const = default;
+    };
+    // A macro drives one target between minimum and maximum, in the target's own units; a minimum
+    // above the maximum inverts it. The target is a device inside the rack and one of its controls,
+    // a chain (parameter 0 volume, 1 pan, 2 to 7 its sends) or the rack itself (its chain selector).
+    struct MacroMapping
+    {
+        int macro = 0;
+        juce::String targetId;
+        int parameter = 0;
+        float minimum = 0, maximum = 1;
+        bool operator== (const MacroMapping&) const = default;
+    };
+    struct RackChainInfo;
     struct EffectSettings
     {
         EffectKind kind = EffectKind::equalizer;
@@ -104,6 +144,16 @@ public:
     static float automationValueToProportion (AutomationTarget, float value);
     static float automationProportionToValue (AutomationTarget, float proportion);
     enum class NoteTransform { quantizeStarts, quantizeEnds, reverse, invertPitch, legato, halfTime, doubleTime, fixedLength };
+    // Note tools after the reference's transformation and generative tools; settings follow each
+    // tool's field table in NoteTools.h. Appended tools keep their value; never reorder.
+    enum class NoteTool { strum, chop, span, recombine, velocityShaper, arpeggiate, ornament, connect, euclidean, seed, fitToScale };
+    static constexpr int noteToolCount = 11;
+    struct NoteToolSettings
+    {
+        NoteTool tool = NoteTool::strum;
+        std::array<double, 8> values {};
+        bool operator== (const NoteToolSettings&) const = default;
+    };
     struct MidiNoteInfo
     {
         juce::String id;
@@ -112,6 +162,35 @@ public:
         float velocity = 0.8f;
         bool active = true;
     };
+    // MIDI controller lanes in a clip: CC numbers 0-119, plus pitch bend and channel pressure.
+    // Each point's value holds until the next point (step playback).
+    static constexpr int pitchBendLane = 128, channelPressureLane = 129;
+    struct ControllerPoint
+    {
+        double beat = 0; // From the clip start.
+        int value = 0;   // 0-127, or -8192 to 8191 for pitch bend.
+        bool operator== (const ControllerPoint&) const = default;
+    };
+    struct ControllerLane
+    {
+        int controller = 0;
+        std::vector<ControllerPoint> points;
+        bool operator== (const ControllerLane&) const = default;
+    };
+    // A clip's scale: the piano roll highlights its notes and Fit to Scale moves notes into it.
+    // Scale modes are appended only; never reorder.
+    static constexpr int scaleModeCount = 16;
+    struct ScaleSettings
+    {
+        bool enabled = false;
+        int root = 0; // Pitch class, 0 = C.
+        int mode = 0; // Index into scaleModeName / scaleIntervals.
+        bool operator== (const ScaleSettings&) const = default;
+    };
+    static const char* scaleModeName (int mode) noexcept;
+    static uint16_t scaleIntervals (int mode) noexcept; // Bit n set when the scale holds n semitones above its root.
+    static bool inScale (const ScaleSettings&, int pitch) noexcept; // Every pitch is in a disabled scale.
+    static int fitToScale (const ScaleSettings&, int pitch) noexcept; // The nearest scale pitch; ties go down.
     enum class FadeCurve { linear = 1, convex, concave, sCurve };
     // Warped audio follows the project tempo; its length is fixed in beats.
     enum class WarpMode { off, stretch, efficient };
@@ -145,6 +224,8 @@ public:
         LaunchSettings launch;
         double startBeat = 0, lengthBeats = 0;
         std::vector<MidiNoteInfo> notes;
+        std::vector<ControllerLane> controllers; // Lanes with points, by controller number.
+        ScaleSettings scale;
     };
     struct LocatorInfo { juce::String id, name; double position = 0; };
     struct SceneInfo { juce::String id, name; };
@@ -168,6 +249,18 @@ public:
         // Arrangement automation of native device controls, in the controls' own units.
         struct ControlAutomation { int parameter = 0; AutomationLane lane; bool operator== (const ControlAutomation&) const = default; };
         std::vector<ControlAutomation> automation;
+        // Racks: chains in order, a Drum Rack's return chains and the macro mappings.
+        bool isRack = false;
+        int visibleMacros = 8;
+        std::array<juce::String, rackMacroCount> macroNames; // Names given to macros; empty for automatic names.
+        std::vector<RackChainInfo> chains, returns;
+        std::vector<MacroMapping> mappings;
+    };
+    struct RackChainInfo
+    {
+        juce::String id;
+        RackChainSettings settings;
+        std::vector<PluginInfo> devices; // MIDI effects, then at most one instrument, then audio effects.
     };
     struct TrackInfo
     {
@@ -177,6 +270,7 @@ public:
         bool mute = false, solo = false, armed = false, isMidi = false, isReturn = false;
         bool frozen = false; // Plays a render of its clips and devices; devices and clips are locked.
         CrossfadeAssign crossfade = CrossfadeAssign::none;
+        double delayMs = 0; // Track Delay: positive plays later, negative earlier.
         SendMode sendMode = SendMode::post;
         std::vector<SendInfo> sends;
         SynthSettings synth;
@@ -199,11 +293,18 @@ public:
         bool mute = false, solo = false, folded = false;
         juce::StringArray memberIds; // Track order.
     };
+    // The project meter. Beats are quarter notes at every meter, so a bar is numerator x 4 / denominator beats.
+    struct TimeSignature
+    {
+        int numerator = 4, denominator = 4;
+        double beatsPerBar() const noexcept { return numerator * 4.0 / denominator; }
+        bool operator== (const TimeSignature&) const = default;
+    };
     struct MetronomeSettings
     {
         bool enabled = false, accent = true, recordingOnly = false;
         float gain = .6f;
-        int countInBars = 0; // 0, 1 or 2; current project meter is 4/4.
+        int countInBars = 0; // 0, 1 or 2 bars of the project meter.
         bool operator== (const MetronomeSettings&) const = default;
     };
     struct Snapshot
@@ -213,6 +314,7 @@ public:
         uint64_t projectGeneration = 0; // Transient identity; changes only on successful New/Load.
         bool dirty = false, playing = false, recording = false, looping = false;
         double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
+        TimeSignature timeSignature;
         float masterPeakL = 0, masterPeakR = 0, masterGainDb = 0;
         float crossfader = 0; // -1 is fully A, +1 fully B.
         AutomationLane masterVolumeAutomation;
@@ -232,6 +334,11 @@ public:
     juce::Result newProject();
     juce::Result loadProject (const juce::File&);
     juce::Result saveProject (const juce::File&); // Copies media into <name> Assets beside the .halftrack file.
+    // Crash recovery. writeRecovery atomically writes the open project, media by absolute path, without
+    // collecting media or changing the project's file, history or unsaved state. recoverProject opens one
+    // as an untitled project with unsaved changes and reports the project it was recovered from.
+    juce::Result writeRecovery (const juce::File&);
+    juce::Result recoverProject (const juce::File& recovery, juce::File& recoveredFrom);
     juce::Result addAudioTrack (juce::String name = {});
     juce::Result addMidiTrack (juce::String name = {});
     juce::Result addReturnTrack (juce::String name = {});
@@ -270,7 +377,13 @@ public:
     juce::Result setMidiNotesActive (const juce::String& clipId, const juce::StringArray& noteIds, bool active);
     juce::Result splitMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, double splitBeat, juce::StringArray& insertedIds);
     juce::Result transformMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, NoteTransform, double gridBeats);
+    // Applies a note tool in one undo step. A transformation replaces the chosen notes with its
+    // result; a generator (Euclidean, Seed) fills the clip, replacing any chosen notes.
+    juce::Result applyNoteTool (const juce::String& clipId, const juce::StringArray& noteIds, const NoteToolSettings&, juce::StringArray& resultIds);
     juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);
+    // Replaces one controller lane of a MIDI clip in one undo step; no points removes the lane.
+    juce::Result setMidiControllerLane (const juce::String& clipId, int controller, const std::vector<ControllerPoint>& points);
+    juce::Result setClipScale (const juce::String& clipId, const ScaleSettings&);
     juce::Result removeMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds);
     juce::Result setSynthSettings (const juce::String& trackId, const SynthSettings&);
     // Replaces a MIDI track's instrument in one undo step; nullopt restores the built-in synth.
@@ -306,6 +419,19 @@ public:
     juce::Result setAudioClipWarp (const juce::String& clipId, const WarpSettings&);
     juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
     juce::Result splitAudioClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
+    // Splits an unlooped Arrangement MIDI clip; notes crossing the split become two notes and each
+    // controller's value at the split starts the right-hand clip.
+    juce::Result splitMidiClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
+    // Arrangement time-selection edits on the given tracks, each one undo step. Split cuts clips at
+    // both edges; Delete removes the material inside; Duplicate copies it to just after the
+    // selection, replacing what was there. Clips crossing an edge must be splittable there.
+    juce::Result splitRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
+    juce::Result deleteRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
+    juce::Result duplicateRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
+    // Consolidate replaces each track's material in the selection with one clip spanning it: MIDI
+    // clips join into one MIDI clip, and audio clips render (without devices) into a new file in
+    // the project's Assets. Tracks without clips in the selection are left alone.
+    juce::Result consolidateRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds, juce::StringArray& newClipIds);
     // Insert Silence: everything at or after start moves later by length across all tracks, locators
     // and automation; clips crossing start split (audio) or open a gap between their notes (MIDI).
     juce::Result insertTime (double startSeconds, double lengthSeconds);
@@ -330,6 +456,10 @@ public:
     juce::Result renameTrack (int trackIndex, const juce::String&);
     juce::Result setMasterGain (float decibels);
     juce::Result setTrackCrossfade (const juce::String& trackId, CrossfadeAssign);
+    // Track Delay moves a track's output (after its devices, before its sends and mixer) from
+    // -1000 ms to +1000 ms; negative delays use the engine's delay compensation.
+    static constexpr double maximumTrackDelayMs = 1000;
+    juce::Result setTrackDelay (const juce::String& trackId, double milliseconds);
     juce::Result setCrossfader (float position);
     // Dipless crossfader law: a side keeps unity until the fader passes the centre toward the other side.
     static float crossfadeGain (CrossfadeAssign, float position);
@@ -354,6 +484,8 @@ public:
     juce::Result record();
     void seek (double seconds);
     void setTempo (double bpm);
+    // One project meter: numerator 1-99 over 1, 2, 4, 8 or 16. Tempo stays in quarter notes per minute.
+    juce::Result setTimeSignature (int numerator, int denominator);
     juce::Result tapTempo (double monotonicSeconds); // Message-thread tap time, not project time.
     juce::Result setMetronome (const MetronomeSettings&);
     juce::Result setRecordQuantisation (RecordQuantisation);
@@ -385,7 +517,46 @@ public:
     juce::AudioPluginFormatManager& pluginFormats();
     juce::File pluginScanDeadMansFile() const;
     juce::Result addNativeEffect (int trackIndex, EffectKind);
+    // Devices inside racks share these commands and setDeviceAutomation with track devices.
     juce::Result setNativeEffectSettings (const juce::String& pluginId, const EffectSettings&);
+    // Racks: each command is one undo step and validates everything before changing the project.
+    juce::Result addRackChain (const juce::String& rackId, const juce::String& name, juce::String& chainId, int index = -1);
+    juce::Result removeRackChain (const juce::String& chainId);
+    juce::Result moveRackChain (const juce::String& chainId, int destinationIndex);
+    juce::Result duplicateRackChain (const juce::String& chainId, juce::String& duplicateId);
+    juce::Result setRackChainSettings (const juce::String& chainId, const RackChainSettings&);
+    // Chains keep MIDI effects, then one instrument, then audio effects; an instrument replaces the chain's instrument.
+    juce::Result addRackDevice (const juce::String& chainId, EffectKind, juce::String& deviceId, int index = -1);
+    // Adds a channel Utility among a chain's audio devices.
+    juce::Result addRackUtility (const juce::String& chainId, juce::String& deviceId, int index = -1);
+    juce::Result removeRackDevice (const juce::String& deviceId);
+    juce::Result moveRackDevice (const juce::String& deviceId, int destinationIndex);
+    juce::Result setRackDeviceEnabled (const juce::String& deviceId, bool);
+    // Opens a device's own window, for devices on tracks or inside racks.
+    juce::Result showDeviceEditor (const juce::String& deviceId);
+    // Loads an audio file into a Sampler inside a rack.
+    juce::Result setRackDeviceSample (const juce::String& deviceId, const juce::File&);
+    // Adds the mapping, replacing any mapping of the same target control. The first mapping of a
+    // macro moves the macro to the control's current position.
+    juce::Result setRackMacroMapping (const juce::String& rackId, const MacroMapping&);
+    juce::Result removeRackMacroMapping (const juce::String& rackId, int macro, const juce::String& targetId, int parameter);
+    juce::Result setRackVisibleMacros (const juce::String& rackId, int count);
+    // Names a macro (1-64 characters); an empty name returns it to its automatic name.
+    juce::Result setRackMacroName (const juce::String& rackId, int macro, const juce::String& name);
+    // Drum Rack: a sample on a pad (note 0-127) goes into the pad's Sampler, or a new chain that
+    // receives the note and plays it at C3 with a one-shot Sampler; an empty file removes the pad's chains.
+    juce::Result setDrumRackPadSample (const juce::String& rackId, int note, const juce::File&, juce::String& chainId);
+    // Swaps two pads' chains by exchanging their receive notes.
+    juce::Result swapDrumRackPads (const juce::String& rackId, int note, int otherNote);
+    juce::Result addRackReturn (const juce::String& rackId, const juce::String& name, juce::String& returnId);
+    juce::Result removeRackReturn (const juce::String& returnId);
+    // Group: wraps built-in devices of one track (by ID, all MIDI effects or all audio devices) in
+    // track order into a new rack with one chain, at the first device's position. groupInstrument
+    // wraps the instrument and the built-in audio devices after it into an Instrument Rack.
+    juce::Result groupDevices (int trackIndex, const juce::StringArray& pluginIds, juce::String& rackId);
+    juce::Result groupInstrument (const juce::String& trackId, juce::String& rackId);
+    // Ungroup: puts a one-chain rack's devices back on its track in the rack's place.
+    juce::Result ungroupRack (const juce::String& rackId);
     juce::Result addUtility (int trackIndex);
     juce::Result setUtilitySettings (const juce::String& pluginId, const UtilitySettings&);
     juce::Result movePlugin (int trackIndex, int pluginIndex, int destinationIndex);

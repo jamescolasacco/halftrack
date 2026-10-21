@@ -42,10 +42,17 @@ int runFreezeTests (const juce::File&);
 int runStemExportTests (const juce::File&);
 int runCrossfadeTests (const juce::File&);
 int runTimeEditTests (const juce::File&);
+int runTrackDelayTests (const juce::File&);
+int runMidiControllerTests (const juce::File&);
+int runRangeEditTests (const juce::File&);
+int runTimeSignatureTests (const juce::File&);
+int runMidiToolTests (const juce::File&);
+int runRecoveryTests (const juce::File&);
 int runGroupTests (const juce::File&);
 int runPluginScanTests (const juce::File&);
 int runPluginEditorTests (const juce::File&);
 int runSendReturnTests (const juce::File&);
+int runRackTests (const juce::File&);
 #if JUCE_MAC
 juce::Result registerAudioUnitTestFixture();
 int runAudioUnitTests (const juce::File&);
@@ -203,6 +210,42 @@ public:
             setApplicationReturnValue (runGroupTests (juce::File (args[i + 1])));
             quit(); return;
         }
+        if (args.contains ("--self-test-recovery"))
+        {
+            const int i = args.indexOf ("--self-test-recovery");
+            setApplicationReturnValue (runRecoveryTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-midi-tools"))
+        {
+            const int i = args.indexOf ("--self-test-midi-tools");
+            setApplicationReturnValue (runMidiToolTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-time-signature"))
+        {
+            const int i = args.indexOf ("--self-test-time-signature");
+            setApplicationReturnValue (runTimeSignatureTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-range-edit"))
+        {
+            const int i = args.indexOf ("--self-test-range-edit");
+            setApplicationReturnValue (runRangeEditTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-midi-controllers"))
+        {
+            const int i = args.indexOf ("--self-test-midi-controllers");
+            setApplicationReturnValue (runMidiControllerTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-track-delay"))
+        {
+            const int i = args.indexOf ("--self-test-track-delay");
+            setApplicationReturnValue (runTrackDelayTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
         if (args.contains ("--self-test-time-edit"))
         {
             const int i = args.indexOf ("--self-test-time-edit");
@@ -231,6 +274,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-device-automation");
             setApplicationReturnValue (runDeviceAutomationTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-racks"))
+        {
+            const int i = args.indexOf ("--self-test-racks");
+            setApplicationReturnValue (runRackTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-sampler"))
@@ -404,6 +453,8 @@ public:
                     "Could not open project", result.getErrorMessage());
         }
         window = std::make_unique<Window> (*session);
+        window->content->enableRecovery (juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                                             .getChildFile ("Halftrack").getChildFile ("Recovery").getChildFile ("Recovery.halftrack"));
     }
 
     void shutdown() override { window.reset(); session.reset(); }

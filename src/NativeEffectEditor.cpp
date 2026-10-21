@@ -1,4 +1,5 @@
 #include "NativeEffects.h"
+#include "Racks.h"
 #include <complex>
 #include <optional>
 #if HALFTRACK_TESTS_ENABLED
@@ -160,11 +161,26 @@ public:
     }
     void synchronise()
     {
-        const auto value = settings(); const bool enabled = value.has_value() && ! session.isExporting();
+        auto value = settings(); const bool enabled = value.has_value() && ! session.isExporting();
         const auto specs = effectParameters (kind);
+        // A control a rack's macro drives shows the macro's value and cannot be edited directly.
+        std::array<bool, maximumControls> mapped {};
+        if (value)
+        {
+            const auto snapshot = session.snapshot();
+            if (const auto where = racks::locate (snapshot, pluginId); where.rack != nullptr)
+                for (size_t i = 0; i < specs.size(); ++i)
+                    if (const auto driven = racks::macroValue (*where.rack, pluginId, (int) i))
+                    {
+                        mapped[i] = true; value->values[i] = *driven;
+                        const auto tip = "Mapped to " + racks::macroName (*where.rack, racks::macroOf (*where.rack, pluginId, (int) i));
+                        sliders[i].setTooltip (tip); choices[i].setTooltip (tip);
+                    }
+        }
         for (size_t i = 0; i < specs.size(); ++i)
         {
-            sliders[i].setEnabled (enabled); choices[i].setEnabled (enabled);
+            sliders[i].setEnabled (enabled && ! mapped[i]); choices[i].setEnabled (enabled && ! mapped[i]);
+            if (! mapped[i]) { sliders[i].setTooltip ({}); choices[i].setTooltip ({}); }
             if (value) { sliders[i].setValue (value->values[i], juce::dontSendNotification); choices[i].setSelectedId ((int)value->values[i]+1, juce::dontSendNotification); }
         }
         if (value && kind == Session::EffectKind::equalizer)
@@ -207,13 +223,41 @@ public:
             if (event.eventComponent == &sliders[i] || event.eventComponent == &choices[i])
             {
                 juce::PopupMenu menu; menu.addItem (1, "Show Automation for " + juce::String (effectParameters (kind)[i].label));
+                // Inside a rack, a control can be mapped to one of the rack's macros, or unmapped.
+                juce::String rackId; int mappedTo = -1;
+                {
+                    const auto snapshot = session.snapshot();
+                    if (const auto where = racks::locate (snapshot, pluginId); where.rack != nullptr)
+                    {
+                        rackId = where.rack->id; mappedTo = racks::macroOf (*where.rack, pluginId, (int) i);
+                        juce::PopupMenu macros;
+                        for (int m = 0; m < Session::rackMacroCount; ++m) macros.addItem (100 + m, racks::macroName (*where.rack, m), m != mappedTo);
+                        menu.addSeparator(); menu.addSubMenu ("Map to Macro", macros);
+                        if (mappedTo >= 0) menu.addItem (2, "Remove Mapping from " + racks::macroName (*where.rack, mappedTo));
+                    }
+                }
                 auto safe = juce::Component::SafePointer<NativeEffectEditor> (this);
-                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (event.eventComponent),
-                                    [safe, i] (int choice) { if (safe != nullptr && choice == 1) safe->requestAutomation ((int) i); });
+                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (event.eventComponent), [safe, i, rackId, mappedTo] (int choice)
+                {
+                    if (safe == nullptr) return;
+                    if (choice == 1) safe->requestAutomation ((int) i);
+                    else if (choice == 2) safe->mapToMacro ((int) i, rackId, -1, mappedTo);
+                    else if (choice >= 100) safe->mapToMacro ((int) i, rackId, choice - 100, mappedTo);
+                });
                 return;
             }
     }
     void requestAutomation (int parameter) { finishGesture(); if (showAutomation) showAutomation (parameter); }
+    // Maps a control to a macro over its whole range (macro -1 removes the mapping from `previous`).
+    void mapToMacro (int parameter, const juce::String& rackId, int macro, int previous)
+    {
+        finishGesture();
+        const auto& field = effectParameters (kind)[(size_t) parameter];
+        const auto result = macro < 0 ? session.removeRackMacroMapping (rackId, previous, pluginId, parameter)
+                                      : session.setRackMacroMapping (rackId, { macro, pluginId, parameter, field.minimum, field.maximum });
+        error.setText (result.failed() ? result.getErrorMessage() : juce::String(), juce::dontSendNotification);
+        synchronise();
+    }
 private:
     // Instruments and other large devices use a compact eight-column grid.
     bool dense() const noexcept { return effectParameters (kind).size() > 16; }
@@ -223,11 +267,7 @@ private:
     std::optional<Session::EffectSettings> settings() const
     {
         const auto snapshot = session.snapshot();
-        for (const auto& track : snapshot.tracks)
-        {
-            if (track.instrument.isNativeEffect && track.instrument.id == pluginId) return track.instrument.effect;
-            for (const auto& p : track.plugins) if (p.id == pluginId && p.isNativeEffect) return p.effect;
-        }
+        if (const auto where = racks::locate (snapshot, pluginId); where.device != nullptr && where.device->isNativeEffect) return where.device->effect;
         return {};
     }
     void edit (size_t index, float v)

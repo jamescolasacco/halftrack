@@ -1,6 +1,6 @@
 # Recorded implementation coverage
 
-Current implementation checkpoint: track volume/pan and master-volume automation, 2026-10-20. **38 of 246 tracked active feature areas have partial implementation evidence: 15.4%.** None of these broad rows establishes complete measured reference parity.
+Current implementation checkpoint: crash recovery, 2026-10-20. **86 of 246 tracked active feature areas have partial implementation evidence: 35.0%.** None of these broad rows establishes complete measured reference parity.
 
 This is recorded partial coverage, not percentage finished, remaining engineering time, or a weighted feature score. The initial inventory is not exhaustive, some existing behavior is recorded only in preview rows, and items vary greatly in size. Static decompiler coverage uses a different denominator and must never be reported as application completion.
 
@@ -8,7 +8,7 @@ This is recorded partial coverage, not percentage finished, remaining engineerin
 
 The [capability ledger](feature-parity.md) has 275 identified rows. Excluding PRE preview-check rows, OUT scope/watchlist rows, EXT programmable-environment rows and rows explicitly OUT OF SCOPE leaves 246 active rows. Count each active row whose status contains PARTIAL once. No fractional credit or estimated effort weighting is assigned.
 
-The partial rows are REC-003/005/008, ARR-003/005/006/008/009/011/012, SES-001/002/004/008, WRP-001, MID-001/002/006/012, MIX-001/003/007/013, PRJ-002/005/006/012, UX-001/002, QA-003 and AFX-009/011/015/020/024/030/032/040. The [progress log](progress.md), ledger and per-feature contracts record what each actually does and what remains missing.
+The partial rows are REC-003/005/008, ARR-001/002/003/004/005/006/007/008/009/010/011/012, SES-001/002/003/004/006/008, WRP-001/002/004/008, MID-001/002/005/006/007/008/011/012, MIX-001/003/005/007/008/009/010/011/012/013, PRJ-002/004/005/006/012/013, UX-001/002, QA-003, AFX-002/003/008/009/011/015/016/020/021/024/027/029/030/032/034/035/040, MFX-001/003/004/005/006/007/008, INS-001/003/009/011/013, RCK-001/002/003/004 and MXL-006. The [progress log](progress.md), ledger and per-feature contracts record what each actually does and what remains missing.
 
 Before audio editing, source `b342496` had 19 partial rows with the same denominator: 7.7%. The six added rows are ARR-003/005/006/008/012 and WRP-001. Their evidence and boundaries are in the [audio-editing contract](research/audio-clip-editing-contract.md). Timeline gestures improve those existing rows without increasing their count.
 
@@ -47,3 +47,21 @@ Graphical track volume and pan automation adds bounded partial coverage for MIX-
 Exact selected-range export deepens PRJ-012 without adding a row: coverage remains 38/246 (15.4%). Equality to slices of complete Halftrack renders proves the exercised internal history/selection behavior, not matching reference-application audio.
 
 Master-volume automation and corrected single-point hosted playback deepen MIX-013 without adding a row: coverage remains 38/246 (15.4%). REA integration and static adapter evidence add no implementation credit.
+
+A recount of the ledger at the Audio Effect Rack checkpoint finds 72/246 partial rows (29.3%). The rows added after the 38/246 entry above (effects, MIDI effects, instruments, Session launching and recording, groups, freeze, stems and racks) were recorded in the progress log and ledger as they landed, without updating this count. Audio Effect Racks add RCK-003. This remains unweighted partial coverage, not clone completion.
+
+Track Delay adds bounded partial coverage for MIX-008: 73/246 (29.7%). Sample-exact impulse renders do not establish reference ranges, units or placement.
+
+MIDI controller lanes add bounded partial coverage for MID-005: 74/246 (30.1%). Step-wise lanes with measured pitch and sustain renders do not establish ramped envelopes or reference behaviour.
+
+The Arrangement time selection adds bounded partial coverage for ARR-004: 75/246 (30.5%). Sample-exact range edits do not establish the reference's grid, automation or clipboard behaviour.
+
+MIDI note tools add bounded partial coverage for MID-007 and MID-008: 77/246 (31.3%). Hand-computed results establish Halftrack's own algorithms, not the reference tools' output.
+
+Timeline navigation adds bounded partial coverage for ARR-001: 78/246 (31.7%). UI tests of Follow and zoom do not establish the reference's scrolling behaviour.
+
+Clip scales add bounded partial coverage for MID-011: 79/246 (32.1%). Exact scale arithmetic does not establish the reference's scale list, folding or tuning support.
+
+Racks add partial evidence for MIX-009/010/011/012 and RCK-001/004 and replace the earlier Audio Effect Rack behind RCK-003: 85/246 (34.6%). Variations, randomize, third-party plug-ins in racks and reference comparison remain missing.
+
+Crash recovery adds bounded partial coverage for PRJ-004: 86/246 (35.0%). Tested recovery copies do not cover interrupted recordings.

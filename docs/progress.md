@@ -880,6 +880,15 @@ Root owns `insertTime`/`deleteTime` in `src/Session.*`, the Edit menu commands a
 
 Root owns the change in `src/Session.*`, the follow dialog, `tests/FollowActionTests.cpp`, a hash-gated engine patch and documentation. Session clips now carry action A and action B with a chance of A, matching the reference Launch box. Any and Other are added as actions. The dialog edits both actions and the percentage. Generated-signal tests check 0% and 100% chances, both outcomes at 50%, Other never replaying the same clip, No action continuing play (needing the engine patch), validation, persistence and corrupted-weight rejection.
 
+
+## Track Delay — 2026-10-20
+
+Root owns Track Delay across `src/Session.*`, the Session mixer strip, `tests/TrackDelayTests.cpp`, the suite registration and documentation. Tracks can be delayed or pre-delayed by up to a second. Positive delays use a preallocated ring buffer in a new owned device, which the existing `applyToBuffer` source-guard root covers; negative delays use the engine's delay compensation. The new `track-delay-acceptance` suite locates impulses to the sample. All 40 suites and the source guard (186 bodies) pass locally on the Mac, run directly because of the launch prompt noted above. See [the track delay contract](research/track-delay-contract.md).
+
+## MIDI controller lanes — 2026-10-20
+
+Root owns controller lanes across `src/Session.*`, the piano roll in `src/MainComponent.cpp`, `tests/MidiControllerTests.cpp`, the suite registration and documentation. MIDI clips can hold pitch bend, channel pressure and CC 0–119 lanes, edited in a lane under the notes that also shows and edits note velocities. Time edits, MIDI files, duplicates and reopening keep the lanes. The new `midi-controllers-acceptance` suite measures bent pitch to 0.05 Hz and the sustain pedal's hold and release, and the UI suite covers the lane. See [the controller lane contract](research/midi-controllers-contract.md).
+
 ## Input changes during playback — 2026-10-20
 
 Engine owns the fix in `src/Session.*` and its test in `tests/MidiInputTests.cpp`. Cross-area edit: the Session-recording check in UI-owned `src/MainComponent.cpp` loses its "let it settle" pump, which no longer has a purpose.
@@ -895,6 +904,44 @@ Engine owns the guard in `src/Session.*` and its test in `tests/MidiInputTests.c
 Assigning a disabled input on any track during a Session slot take lost the take, which a generated-signal run reproduced. Enabling the device rebuilt every playback context's device list. The engine stops all input recordings with their recordings discarded while rebuilding. The slot then stayed marked as recording, and ending the take produced no clip. A MIDI device appearing during the take took the same path. The existing guards did not apply because a Session take never sets the transport recording. `setTrackInput` now refuses while any Session take records, before it enables a device. The refusal also covers the recording track's own input, which its take stops on. A new patch extends the MIDI-discovery deferral to recording inputs, so a device added during a take is discovered after it. Arming and monitoring other tracks stay allowed and keep the take. The policy is recorded in [open questions](open-questions.md#input-changes-during-session-takes).
 
 The new test records a MIDI take and a generated audio take. During the MIDI take it tries to assign a disabled controller and the disabled audio input, and to disconnect the recording track. It also arms and monitors another track. During the audio take it tries to assign a disabled controller. A virtual MIDI device is added during each take. Both takes keep all their material: four keys, and 40,960 samples of the generated input. It failed in three configurations. Without any fix the first refusal check failed. With the guard alone the discovery check failed. With the patch alone the device-enablement check failed. The patch chain was checked on isolated pinned sources: fresh, repeated and unknown-input runs. MIDI input (43 s, 640 checks), MIDI monitoring (14 s, 173), Session (62 s, 1190) and UI (10 s, 643) suites pass locally on the Mac. Audio-device changes during any recording, physical MIDI hot-plug and the other Arrangement-only recording guards are unverified for Session takes.
+
+## Arrangement time selection — 2026-10-20
+
+Root owns the selection across `src/Session.*`, the Arrangement canvas and Edit menu in `src/MainComponent.cpp`, `tests/RangeEditTests.cpp`, the suite registration and documentation. Dragging over empty lane space selects time across tracks. Split, Duplicate (Cmd/Ctrl+D), Delete and Loop Selection act on it, and Insert Silence and Delete Time now use it in place of the loop range. MIDI clips can be split, with crossing notes divided and controller values carried. The new `range-edit-acceptance` suite compares renders sample by sample, and the UI suite covers selecting, duplicating and deleting. See [the selection contract](research/arrangement-selection-contract.md).
+
+## Racks — 2026-10-20
+
+Engine owns racks across `src/Session.*`, the new `src/Racks.*`, the rack kinds in `src/NativeEffects.*`, the choke path in `src/Instruments.*` and `tests/RackTests.cpp`. Cross-area edits: the UI's new `src/RackEditor.*` and the rack device view, device selection and grouping in `src/MainComponent.cpp`, Map to Macro in `src/NativeEffectEditor.cpp`, rack lookups in `src/AutomationEditor.cpp` and `src/UtilityEditor.cpp`, and root's `CMakeLists.txt`, `src/Main.cpp` and documentation.
+
+Instrument, Audio Effect, MIDI Effect and Drum Racks hold parallel chains of built-in devices and Utilities with volume, pan, activator, solo, key, velocity and chain select zones, sixteen macros and, in Drum Racks, 128 pad chains with choke groups and in-rack returns. Devices can be grouped into racks and one-chain racks ungrouped. They replace the earlier Audio Effect Rack from main, reverted on the merged side with its author's agreement. The engine's `RackType` was not used, because its wiring has no key, velocity or selector zones, per-pad notes or chokes. Halftrack's own `RackEngine` runs the chains inside the rack device's callback, adopting new layouts without allocating or locking.
+
+The new `racks-acceptance` suite renders generated signals against computed sums, zone and fade arithmetic, exact pad samples and choke ramps, checks undo, save/move/reopen and eight malformed files, and audits heap calls in the rack callback. The UI suite drives the rack editor, the Drum Rack pad grid and device grouping. The source guard covers the rack callback and the choke path. Racks (461 checks), UI (728), utility, freeze, instruments and sampler suites and the source guard (206 bodies) pass locally on the Mac.
+
+Freeze and Flatten could leave a stray unnamed undo step, which the engine's undo timer opened after the freeze property changed. Flatten now opens its own transaction first, and Freeze holds an undo-transaction inhibitor while the render updates. See the [rack contract](research/racks-contract.md).
+
+## Consolidate — 2026-10-20
+
+Root owns `consolidateRange` in `src/Session.*`, Cmd/Ctrl+J and the Edit menu item, the consolidation block of `tests/RangeEditTests.cpp` and documentation. Consolidate replaces each selected track's material with one clip spanning the selection. MIDI clips join, and audio clips render (without devices) into a new file in Assets. The range-edit suite checks that a muted track with clip gain, a fade and a gap renders identically after consolidation, and that the MIDI join keeps every note and controller point.
+
+## Time signature — 2026-10-20
+
+Root owns the meter across `src/Session.*`, the control bar, rulers and grids in `src/MainComponent.cpp`, `tests/TimeSignatureTests.cpp`, the meter checks in `tests/MetronomeTests.cpp`, the suite registration and documentation. Projects can be in any meter from 1 to 99 over 1, 2, 4, 8 or 16, with beats kept as quarter notes. Launch quantisation, metronome accents, count-in, rulers, grids, clip creation, position fields and MIDI file export follow the meter. A 3/4 bar-quantized launch lands on sample 72000, and 3/4 and 5/4 clicks match exactly. See [the time signature contract](research/time-signature-contract.md).
+
+## MIDI note tools — 2026-10-20
+
+Root owns the note tools across `src/NoteTools.*` (new), `applyNoteTool` in `src/Session.*`, the piano roll's Transform and Generate menus and settings window in `src/MainComponent.cpp`, `tests/MidiToolTests.cpp`, the suite registration and documentation. Ten tools are available: Strum, Chop, Span, Recombine, Velocity Shaper, Arpeggiate, Ornament, Connect, Euclidean and Seed. The new `midi-tools-acceptance` suite compares every tool's output with hand-computed notes. See [the note tool contract](research/midi-tools-contract.md).
+
+## Timeline navigation — 2026-10-20
+
+UI change in `src/MainComponent.cpp`. A Follow switch (Cmd/Ctrl+F) keeps the playhead in view by paging the Arrangement and the piano roll, and turns off when you scroll by hand during playback. Z zooms the Arrangement to the time selection or selected clip, and X zooms back. The UI suite covers both. See [the navigation contract](research/timeline-navigation-contract.md).
+
+## Clip scales — 2026-10-20
+
+Root owns clip scales across `src/Session.*`, the Fit to Scale tool in `src/NoteTools.cpp`, the piano roll's scale controls and highlighting in `src/MainComponent.cpp`, tests in `tests/MidiToolTests.cpp` and the UI suite, and documentation. A MIDI clip can carry a root and one of sixteen scales. The piano roll lights its rows, and Fit to Scale moves notes to the nearest scale tone. See [the scale contract](research/scales-contract.md).
+
+## Crash recovery — 2026-10-20
+
+Root owns recovery across `src/Session.*`, `src/MainComponent.*`, `src/Main.cpp`, `tests/RecoveryTests.cpp`, the UI suite, the suite registration and documentation. Unsaved work is copied every 30 seconds to the application-data folder. After a crash, Halftrack offers to recover it as an untitled project, which renders identically to the lost session, and the saved project file is never overwritten. See [the recovery contract](research/recovery-contract.md).
 
 ## Per-process test settings — 2026-10-20
 
