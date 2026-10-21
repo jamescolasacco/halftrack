@@ -231,7 +231,7 @@ While a Session slot take records, input assignment is refused on every track, a
 
 ### Arrangement selection defaults
 
-Split, Delete Selection, Duplicate Selection and Consolidate act on clips only; automation in the selection stays where it is. Consolidated audio is rendered at the audio device's rate, without the track's devices, and plays unwarped. Duplicate replaces the material in the time after the selection, and the selection moves onto the copy. Notes crossing a MIDI split become two notes. These are simplest-default choices pending reference measurement.
+Duplicate Selection copies the selected tracks' automation with one-millisecond edge points, and Delete Selection clears it inside the selection while keeping the edge values; Split and Consolidate leave automation alone. Consolidated audio is rendered at the audio device's rate, without the track's devices, and plays unwarped. Duplicate replaces the material in the time after the selection, and the selection moves onto the copy. Notes crossing a MIDI split become two notes. These are simplest-default choices pending reference measurement.
 
 ### Rack defaults
 

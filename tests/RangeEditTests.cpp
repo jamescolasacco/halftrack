@@ -123,6 +123,28 @@ int runRangeEditTests (const juce::File& artifacts)
         check (same (all, { { 62, 0, 1 }, { 60, 1, 2 }, { 60, 3, 2 }, { 64, 5, 1 } }), "the MIDI copy of beats 1 to 3 lands on beats 3 to 5");
         s.undo(); check (clips (s, 0).size() == 1 && clips (s, 1).size() == 1 && error (render (s, file), 0, frames, source) < 1e-6, "one undo removes the copy and its splits");
 
+        // Automation on the selected tracks moves with Duplicate and is cleared by Delete.
+        const auto trackId = s.snapshot().tracks[0].id;
+        ok (s.setTrackAutomation (trackId, Session::AutomationTarget::volume, { true, { { 0, -12 }, { 2, -12 }, { 3, 0 } } }), "volume holds -12 dB to beat 2, then rises to 0 dB at beat 3");
+        const auto lane = [&] { const auto snapshot = s.snapshot(); return snapshot.tracks[0].volumeAutomation.points; };
+        ok (s.duplicateRange (ids(), .5, 1.5), "duplicate beats 1 to 3 with their automation");
+        {
+            const auto p = lane();
+            check (p.size() == 7 && near (p[0].beat, 0) && near (p[1].beat, 2) && std::abs (p[2].beat - 2.998) < 1e-6 && near (p[3].beat, 3) && near (p[4].beat, 4)
+                   && std::abs (p[5].beat - 4.998) < 1e-6 && near (p[6].beat, 5)
+                   && std::abs (p[0].value + 12) < 1e-3 && std::abs (p[1].value + 12) < 1e-3 && std::abs (p[3].value + 12) < 1e-3 && std::abs (p[4].value + 12) < 1e-3
+                   && std::abs (p[6].value) < 1e-3 && std::abs (p[2].value - p[5].value) < 1e-4 && p[2].value > -1, "the copy repeats the hold and the rise on beats 3 to 5, then returns to the original");
+        }
+        s.undo(); check (lane().size() == 3, "undo restores the lane with the clips");
+        ok (s.deleteRange (ids(), 1, 2), "delete beats 2 to 4");
+        {
+            const auto p = lane();
+            check (p.size() == 3 && near (p[0].beat, 0) && near (p[1].beat, 2) && near (p[2].beat, 4) && std::abs (p[1].value + 12) < 1e-3 && std::abs (p[2].value) < 1e-3,
+                   "Delete clears the points inside the selection and keeps the values at its edges");
+        }
+        s.undo(); check (lane().size() == 3, "undo restores the cleared automation");
+        ok (s.setTrackAutomation (trackId, Session::AutomationTarget::volume, { true, {} }), "clear the lane");
+
         // Rejections leave the project unchanged.
         check (s.splitRange ({ "missing" }, 1, 2).failed() && s.deleteRange (ids(), 2, 1).failed() && s.duplicateRange (ids(), 1, std::nan ("")).failed(),
                "unknown tracks and invalid ranges are rejected");

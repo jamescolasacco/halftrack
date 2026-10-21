@@ -4106,6 +4106,57 @@ std::vector<te::AutomationCurve*> arrangementCurves (te::Edit& edit)
     if (auto master = edit.getMasterVolumePlugin()) add (*master);
     return curves;
 }
+// The curves of one track's devices and mixer that hold points, including devices inside racks.
+std::vector<te::AutomationCurve*> trackCurves (te::AudioTrack& track)
+{
+    std::vector<te::AutomationCurve*> curves;
+    const std::function<void (te::Plugin&)> add = [&curves, &add] (te::Plugin& plugin)
+    {
+        for (auto* parameter : plugin.getAutomatableParameters()) if (parameter->getCurve().getNumPoints() > 0) curves.push_back (&parameter->getCurve());
+        if (auto* native = dynamic_cast<NativeEffectPlugin*> (&plugin); native != nullptr && native->rackEngine() != nullptr)
+            for (auto* inner : native->rackEngine()->devices()) add (*inner);
+    };
+    for (auto* plugin : track.pluginList.getPlugins()) add (*plugin);
+    return curves;
+}
+struct CurvePoint { te::TimePosition time; float value, shape; };
+std::vector<CurvePoint> curvePoints (const te::AutomationCurve& curve)
+{
+    std::vector<CurvePoint> points;
+    for (int i = 0; i < curve.getNumPoints(); ++i) points.push_back ({ curve.getPointTime (i), curve.getPointValue (i), curve.getPointCurve (i) });
+    return points;
+}
+void rebuildCurve (te::AutomationCurve& curve, te::Edit& edit, std::vector<CurvePoint> points, juce::UndoManager* undo)
+{
+    std::stable_sort (points.begin(), points.end(), [] (const auto& a, const auto& b) { return a.time < b.time; });
+    curve.clear (undo);
+    for (const auto& p : points) curve.addPoint (te::EditPosition (edit.tempoSequence.toBeats (p.time)), p.value, p.shape, undo);
+}
+// A hair before an edge, so a curve can change value there while its points stay strictly ordered.
+const auto edgeGap = te::TimeDuration::fromSeconds (.001);
+// Delete Selection clears a curve inside [from, to), keeping its values at both edges.
+void clearCurveRange (te::AutomationCurve& curve, te::Edit& edit, te::TimePosition from, te::TimePosition to, juce::UndoManager* undo)
+{
+    const auto before = curve.getValueAt (from, 0.0f), after = curve.getValueAt (to, 0.0f);
+    std::vector<CurvePoint> points;
+    for (const auto& p : curvePoints (curve)) if (p.time < from || p.time > to) points.push_back (p);
+    points.push_back ({ from, before, 0 }); points.push_back ({ to, after, 0 });
+    rebuildCurve (curve, edit, points, undo);
+}
+// Duplicate Selection copies a curve's [from, to) shape to [to, to + length), restoring the original after it.
+void duplicateCurveRange (te::AutomationCurve& curve, te::Edit& edit, te::TimePosition from, te::TimePosition to, juce::UndoManager* undo)
+{
+    const auto length = to - from;
+    const auto after = to + length;
+    const auto start = curve.getValueAt (from, 0.0f), end = curve.getValueAt (to - edgeGap, 0.0f), resume = curve.getValueAt (after, 0.0f);
+    const auto original = curvePoints (curve);
+    std::vector<CurvePoint> points;
+    for (const auto& p : original) if (p.time < to - edgeGap || p.time > after) points.push_back (p);
+    points.push_back ({ to - edgeGap, end, 0 }); points.push_back ({ to, start, 0 });
+    for (const auto& p : original) if (p.time > from && p.time < to - edgeGap) points.push_back ({ p.time + length, p.value, p.shape });
+    points.push_back ({ after - edgeGap, end, 0 }); points.push_back ({ after, resume, 0 });
+    rebuildCurve (curve, edit, points, undo);
+}
 // Removes points in `removed` and moves points at or after `from` by `delta`.
 void shiftCurve (te::AutomationCurve& curve, te::Edit& edit, te::TimePosition from, te::TimeDuration delta, std::optional<te::TimeRange> removed, juce::UndoManager* undo)
 {
@@ -4269,6 +4320,7 @@ Result Session::deleteRange (const juce::StringArray& trackIds, double start, do
     }
     endEditGesture(); closePluginEditors();
     impl->transaction ("Delete selection");
+    for (auto* t : tracks) for (auto* curve : trackCurves (*t)) clearCurveRange (*curve, *impl->edit, from, to, &impl->edit->getUndoManager());
     for (auto* t : tracks)
     {
         for (const auto at : { from, to }) splitTrackAt (*t, at, &impl->edit->getUndoManager());
@@ -4276,6 +4328,7 @@ Result Session::deleteRange (const juce::StringArray& trackIds, double start, do
         for (auto* c : clips)
             if (c->getPosition().getStart() >= from - te::TimeDuration::fromSeconds (1e-6) && c->getPosition().getEnd() <= to + te::TimeDuration::fromSeconds (1e-6)) c->removeFromParent();
     }
+    impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }
 Result Session::duplicateRange (const juce::StringArray& trackIds, double start, double end)
@@ -4298,6 +4351,7 @@ Result Session::duplicateRange (const juce::StringArray& trackIds, double start,
     endEditGesture(); closePluginEditors();
     impl->transaction ("Duplicate selection");
     auto* undo = &impl->edit->getUndoManager();
+    for (auto* t : tracks) for (auto* curve : trackCurves (*t)) duplicateCurveRange (*curve, *impl->edit, from, to, undo);
     for (auto* t : tracks)
     {
         for (const auto at : { from, to, after }) splitTrackAt (*t, at, undo);
@@ -4320,6 +4374,7 @@ Result Session::duplicateRange (const juce::StringArray& trackIds, double start,
             te::insertClipCopy (*t, copy);
         }
     }
+    impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }
 Result Session::consolidateRange (const juce::StringArray& trackIds, double start, double end, juce::StringArray& newClipIds)

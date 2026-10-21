@@ -15,6 +15,10 @@ The Arrangement has a time selection, after the reference's selection editing ([
   - ranges shorter than 1 ms, non-finite, or past the 48-hour timeline;
   - edits while recording or exporting.
 - Return tracks in the set are ignored.
+- Automation on the selected tracks (mixer and device lanes, including devices in racks) follows the edit:
+  - Duplicate copies each lane's shape over the selection into the time after it. One-millisecond edge points let the value change at the copy's edges, and the original resumes after it.
+  - Delete clears each lane inside the selection, keeping its values at both edges.
+  - Split and Consolidate leave automation unchanged.
 - `consolidateRange(trackIds, start, end, newClipIds)` replaces each track's material in the selection with one clip spanning it, in one undo step:
   - MIDI clips join into one MIDI clip that holds their notes and controller points at their original times.
   - Audio clips render into a new 32-bit WAV in the project's Assets at the audio device's rate, through the engine's renderer without the track's devices or mixer. Clip gain, fades, warping and gaps are baked in, and the new clip plays unwarped.
@@ -44,6 +48,7 @@ The Arrangement has a time selection, after the reference's selection editing ([
 - deletion, which leaves exact silence and keeps the rest of the render unchanged;
 - duplication, where 1.5–2.5 s plays the copy of 0.5–1.5 s and the MIDI copy lands note for note;
 - undo of each edit;
+- the exact point layout of a duplicated hold-and-rise volume lane and of a cleared one, with undo;
 - consolidation at 44.1 kHz of a muted track whose clips have −6 dB gain, a fade-in and a gap, rendering identically to the original clips, from a 3.5 s file in Assets, with two MIDI clips joined note for note and controller point for point, and undo;
 - rejection of unknown tracks, invalid ranges, warped clips crossing an edge, and frozen tracks.
 
@@ -51,7 +56,6 @@ The UI suite drags a selection, duplicates it with Cmd/Ctrl+D, deletes it, undoe
 
 ## Not implemented
 
-- Automation inside the selection, which stays in place for Split, Delete and Duplicate.
 - Selecting time on the ruler or across group lanes.
 - Cut, Copy and Paste of a time range.
 - Crop.
