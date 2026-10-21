@@ -7775,7 +7775,35 @@ private:
         explicit AudioSetupPanel (Impl& o) : owner (o), devices (o.session.audioDeviceManager(), 0, 128, 0, 128, true, true, true, false)
         {
             addAndMakeVisible (devices);
-            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth, &mpe }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth, &mpe, &inputConfig }) addAndMakeVisible (c);
+            // Input Config: each pair of input channels as one stereo input or two mono ones, and which are on.
+            inputConfig.setName ("Input config"); inputConfig.setTooltip ("Input Config: use each pair of input channels as one stereo input or two mono inputs, and choose which inputs are on");
+            inputConfig.onClick = [this]
+            {
+                juce::PopupMenu menu;
+                const auto groups = owner.session.audioInputGroups();
+                auto* device = owner.session.audioDeviceManager().getCurrentAudioDevice();
+                const int channels = device != nullptr ? device->getInputChannelNames().size() : 0;
+                for (int first = 0; first + 1 < channels; first += 2)
+                {
+                    const auto stereo = std::any_of (groups.begin(), groups.end(), [first] (const auto& g) { return g.firstChannel == first && g.channels == 2; });
+                    menu.addSectionHeader ("Inputs " + juce::String (first + 1) + "/" + juce::String (first + 2));
+                    menu.addItem (1000 + first, "Stereo", true, stereo); menu.addItem (2000 + first, "Two Mono", true, ! stereo);
+                }
+                menu.addSectionHeader ("On");
+                for (int i = 0; i < (int) groups.size(); ++i) menu.addItem (i + 1, groups[(size_t) i].name, true, groups[(size_t) i].enabled);
+                auto safe = juce::Component::SafePointer<AudioSetupPanel> (this);
+                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&inputConfig), [safe, groups] (int chosen)
+                {
+                    if (safe == nullptr || chosen <= 0) return;
+                    auto& session = safe->owner.session;
+                    if (chosen >= 2000) safe->owner.report (session.setAudioInputPairStereo (chosen - 2000, false));
+                    else if (chosen >= 1000) safe->owner.report (session.setAudioInputPairStereo (chosen - 1000, true));
+                    else if (juce::isPositiveAndBelow (chosen - 1, (int) groups.size()))
+                        safe->owner.report (session.setAudioInputEnabled (groups[(size_t) chosen - 1].name, ! groups[(size_t) chosen - 1].enabled));
+                    safe->owner.refresh();
+                });
+            };
             // MPE controllers record their notes' own pitch bend, slide and pressure.
             mpe.setName ("MPE inputs"); mpe.setTooltip ("MPE: choose the MIDI inputs that are MPE controllers");
             mpe.onClick = [this]
@@ -7814,9 +7842,11 @@ private:
         {
             auto area = getLocalBounds();
             auto row = area.removeFromBottom (40).reduced (16, 8);
-            typeLabel.setBounds (row.removeFromLeft (120)); type.setBounds (row.removeFromLeft (90)); row.removeFromLeft (24);
-            depthLabel.setBounds (row.removeFromLeft (80)); depth.setBounds (row.removeFromLeft (70)); row.removeFromLeft (24);
+            inputConfig.setBounds (row.removeFromLeft (130)); row.removeFromLeft (8);
             mpe.setBounds (row.removeFromLeft (130));
+            row = area.removeFromBottom (36).reduced (16, 4);
+            typeLabel.setBounds (row.removeFromLeft (120)); type.setBounds (row.removeFromLeft (90)); row.removeFromLeft (24);
+            depthLabel.setBounds (row.removeFromLeft (80)); depth.setBounds (row.removeFromLeft (70));
             devices.setBounds (area);
         }
     private:
@@ -7824,9 +7854,9 @@ private:
         juce::AudioDeviceSelectorComponent devices;
         juce::Label typeLabel, depthLabel;
         juce::ComboBox type, depth;
-        juce::TextButton mpe { "MPE Inputs..." };
+        juce::TextButton mpe { "MPE Inputs..." }, inputConfig { "Input Config..." };
     };
-    void showAudioSettings() { showDialog ("Halftrack - Audio & MIDI Setup", std::make_unique<AudioSetupPanel> (*this), 660, 640); }
+    void showAudioSettings() { showDialog ("Halftrack - Audio & MIDI Setup", std::make_unique<AudioSetupPanel> (*this), 660, 680); }
     void showPlugins()
     {
         auto list = std::make_unique<juce::PluginListComponent> (session.pluginFormats(), session.knownPlugins(), session.pluginScanDeadMansFile(), nullptr, false);
@@ -10446,6 +10476,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         && std::abs (currentMidiClip()->notes.front().startBeat-unquantized.front().startBeat) < 1e-8,
         "one production undo restores quantized group");
 
+    {
+        // Audio & MIDI Setup lays out its recording and input settings inside the dialog.
+        AudioSetupPanel panel (*this); panel.setSize (660, 680);
+        auto* inputs = findNamed (panel, "Input config"); auto* mpeInputs = findNamed (panel, "MPE inputs"); auto* fileType = findNamed (panel, "Record file type");
+        check (inputs && mpeInputs && fileType && panel.getLocalBounds().contains (inputs->getBounds()) && panel.getLocalBounds().contains (mpeInputs->getBounds())
+                   && panel.getLocalBounds().contains (fileType->getBounds()) && ! inputs->getBounds().intersects (mpeInputs->getBounds()),
+               "Audio & MIDI Setup shows Input Config and MPE Inputs beside the recording format");
+    }
     check (session.newProject().wasOk() && session.importAudio(audioFixture,0).wasOk(), "prepare arrangement audio command fixture"); refresh();
     {
         // Slice to New MIDI Track from the clip menu selects the new Drum Rack track.

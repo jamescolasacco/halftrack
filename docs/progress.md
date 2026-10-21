@@ -1386,3 +1386,11 @@ Engine and UI change in `src/Session.*`, `src/Instruments.*` and `src/Subtractiv
 - **An engine fix.** Expressive notes in MIDI clips played at half their time at 120 BPM; they are now placed in beats.
 
 See [the contract](research/mpe-contract.md).
+
+## Input configuration — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/InputConfigTests.cpp` (new), with documentation.
+
+- **Input Config.** Audio & MIDI Setup sets each pair of input channels as one stereo input or two mono inputs, and switches inputs on and off.
+
+See [the contract](research/input-config-contract.md).

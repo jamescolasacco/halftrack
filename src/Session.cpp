@@ -4106,6 +4106,47 @@ Result Session::sliceToNewMidiTrack (const String& clipId, SliceBy by, String& t
     if (result.failed()) { if (created && canUndo()) undo(); trackId.clear(); return result; }
     return Result::ok();
 }
+std::vector<Session::AudioInputGroup> Session::audioInputGroups() const
+{
+    std::vector<AudioInputGroup> result;
+    for (auto* device : impl->engine.getDeviceManager().getWaveInputDevices())
+        if (! device->isTrackDevice())
+            result.push_back ({ device->getName(), (int) device->deviceDescription.getDeviceChannelRange().first, (int) device->deviceDescription.getNumChannels(), device->isEnabled() });
+    std::stable_sort (result.begin(), result.end(), [] (const auto& a, const auto& b) { return a.firstChannel < b.firstChannel; });
+    return result;
+}
+Result Session::setAudioInputPairStereo (int firstChannel, bool stereo)
+{
+    if (impl->anyRecording()) return Result::fail ("Stop recording before changing the input configuration.");
+    if (firstChannel < 0 || firstChannel % 2 != 0) return Result::fail ("Choose the first channel of an input pair.");
+    auto& devices = impl->engine.getDeviceManager();
+    for (auto* device : devices.getWaveInputDevices())
+    {
+        if (device->isTrackDevice() || (int) device->deviceDescription.getDeviceChannelRange().first != firstChannel) continue;
+        const auto channels = device->deviceDescription.getNumChannels();
+        auto* audio = devices.deviceManager.getCurrentAudioDevice();
+        if (stereo && channels == 1 && (audio == nullptr || firstChannel + 1 >= audio->getInputChannelNames().size()))
+            return Result::fail ("That input has no second channel to pair with.");
+        if ((stereo ? 2u : 1u) == channels) return Result::ok();
+        devices.setDeviceNumChannels (*device, stereo ? 2 : 1);
+        devices.dispatchPendingUpdates();
+        impl->refreshInputs(); impl->changed();
+        return Result::ok();
+    }
+    return Result::fail ("There is no input at that channel.");
+}
+Result Session::setAudioInputEnabled (const String& inputName, bool enabled)
+{
+    if (impl->anyRecording()) return Result::fail ("Stop recording before changing the input configuration.");
+    auto& devices = impl->engine.getDeviceManager();
+    for (auto* device : devices.getWaveInputDevices())
+        if (! device->isTrackDevice() && device->getName() == inputName)
+        {
+            if (device->isEnabled() != enabled) { devices.setDeviceEnabled (*device, enabled); devices.dispatchPendingUpdates(); impl->refreshInputs(); impl->changed(); }
+            return Result::ok();
+        }
+    return Result::fail ("That input is not available.");
+}
 Result Session::setMidiInputMpe (const String& inputName, bool on)
 {
     for (auto device : impl->engine.getDeviceManager().getMidiInDevices())

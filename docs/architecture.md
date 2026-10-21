@@ -221,6 +221,10 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `setAudioEngineEnabled (false)` calls `stop()`, which keeps takes and cancels launches, then `AudioDeviceManager::closeAudioDevice()`; `true` calls `restartLastAudioDevice()`. `Impl::engineOff` only selects the message the device checks give; `isAudioEngineEnabled()` is true whenever a device is open. See the [contract](research/audio-engine-contract.md).
 
+## Input configuration
+
+`audioInputGroups`, `setAudioInputPairStereo` and `setAudioInputEnabled` change the engine's wave input device descriptions (channel counts and enablement), flush the device manager's pending updates and refresh the Session's inputs. The engine keeps the layout with its device settings. See the [contract](research/input-config-contract.md).
+
 ## Device restarts
 
 `DeviceStopWatch` notes, when the device stops on the message thread, whether playback was running without a take. When the device starts again, `DeviceRestart` checks every 20 ms for up to a second and calls `TransportControl::play` once the engine's timer has stopped the transport, until the play head runs. `Session::stop` cancels it.

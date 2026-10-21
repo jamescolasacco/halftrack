@@ -734,6 +734,14 @@ public:
     juce::Result setTrackMute (int trackIndex, bool);
     juce::Result setTrackSolo (int trackIndex, bool);
     juce::StringArray inputNames (bool midi = false) const;
+    // Input configuration, after the reference's Input Config: each pair of the audio device's
+    // input channels is one stereo input or two mono ones, and each input can be switched off.
+    // Inputs are named by their channels; a track keeps an input that still exists. Kept with the
+    // device settings.
+    struct AudioInputGroup { juce::String name; int firstChannel = 0, channels = 2; bool enabled = true; bool operator== (const AudioInputGroup&) const = default; };
+    std::vector<AudioInputGroup> audioInputGroups() const;
+    juce::Result setAudioInputPairStereo (int firstChannel, bool stereo);
+    juce::Result setAudioInputEnabled (const juce::String& inputName, bool);
     // An MPE controller's input, after the reference's per-input MPE switch: its notes record with
     // their own pitch bend, slide and pressure, a lower zone of 15 member channels. Kept with the
     // device settings.

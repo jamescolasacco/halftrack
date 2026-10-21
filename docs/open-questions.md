@@ -563,3 +563,7 @@ These are simplest defaults pending a comparison with the reference:
 - **Zones.** MPE plays and records in a fixed lower zone of 15 member channels with a 48-semitone bend range.
 - **Instruments.** The native instruments respond to MPE pitch bend but not yet to slide or pressure.
 - **Ramps.** Expression ramps between drawn points in 1/64-beat steps.
+
+### Input configuration
+
+A pair of input channels is a stereo input or two mono inputs, not both at once as the reference allows. This is the engine's device model; offering both would need a second device over the same channels.
