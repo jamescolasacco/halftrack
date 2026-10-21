@@ -516,6 +516,6 @@ These are simplest defaults pending a comparison with the reference:
 
 These are simplest defaults pending a comparison with the reference:
 
-- **Tap.** A track takes another track's output after its devices and mixer (the reference's Post Mixer); Pre FX and Post FX are not offered yet.
+- **Pre FX on an instrument track** is taken after the instrument, so it carries audio; the reference manual does not say where its audio Pre FX tap sits.
 - **One destination.** As with hardware inputs, a source feeds one track at a time; choosing it for another track moves it.
 - **Exports** include a routed input while it is monitored In, or Auto and armed, as playback hears it.

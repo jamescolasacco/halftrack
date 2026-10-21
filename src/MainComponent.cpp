@@ -1122,10 +1122,10 @@ private:
             monitor.setTooltip ("Input monitoring: Off, Auto while armed, or always In");
             input.onChange = [this]
             {
-                // Tracks follow the devices, from item firstSourceItem on.
-                const int item = input.getSelectedId();
-                if (juce::isPositiveAndBelow (item - firstSourceItem, inputSourceIds.size()))
-                    owner.report (owner.session.setTrackInputTrack (trackId, inputSourceIds[item - firstSourceItem]));
+                // Tracks follow the devices, from item firstSourceItem on, three taps to a track.
+                const int item = input.getSelectedId(), source = (item - firstSourceItem) / 3;
+                if (item >= firstSourceItem && source < inputSourceIds.size())
+                    owner.report (owner.session.setTrackInputTrack (trackId, inputSourceIds[source], static_cast<Session::InputTap> ((item - firstSourceItem) % 3)));
                 else owner.report (owner.session.setTrackInput (index, item == 1 ? juce::String() : input.getText()));
                 owner.refresh();
             };
@@ -1185,13 +1185,19 @@ private:
                 input.addItem ("No input", 1);
                 for (int n = 0; n < inputNames.size(); ++n) input.addItem (inputNames[n], n + 2);
                 if (! sourceLabels.isEmpty()) input.addSectionHeading ("Tracks");
-                for (int n = 0; n < sourceLabels.size(); ++n) input.addItem (sourceLabels[n], firstSourceItem + n);
+                for (int n = 0; n < sourceLabels.size(); ++n)
+                {
+                    juce::PopupMenu taps;
+                    for (int tap = 0; tap < 3; ++tap)
+                        taps.addItem (firstSourceItem + n * 3 + tap, sourceLabels[n] + " | " + juce::StringArray { "Pre FX", "Post FX", "Post Mixer" }[tap]);
+                    input.getRootMenu()->addSubMenu (sourceLabels[n], taps);
+                }
             }
             inputSourceIds = sources;
             if (input.getNumItems() == 0) input.addItem ("No input", 1);
             input.setSelectedId (inputNames.indexOf (track.inputName) + 2, juce::dontSendNotification);
             if (track.inputTrackId.isNotEmpty() && sources.contains (track.inputTrackId))
-                input.setSelectedId (firstSourceItem + sources.indexOf (track.inputTrackId), juce::dontSendNotification);
+                input.setSelectedId (firstSourceItem + sources.indexOf (track.inputTrackId) * 3 + static_cast<int> (track.inputTap), juce::dontSendNotification);
             if (track.inputName.isEmpty() && track.inputTrackId.isEmpty()) input.setSelectedId (1, juce::dontSendNotification);
             monitor.setSelectedId (track.monitor == Session::MonitorMode::on ? 3 : track.monitor == Session::MonitorMode::automatic ? 2 : 1, juce::dontSendNotification);
             if (columnLayout) { syncSends (track); syncOutput (track); }
@@ -10224,11 +10230,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tracks[0].output == Session::TrackOutput {} && output->getText() == "Master", "undo returns the strip to Master");
         // Audio From another track, from the input chooser's Tracks section.
         auto* inputChooser = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Track audio input"));
-        check (inputChooser != nullptr && inputChooser->indexOfItemId (1000) >= 0 && inputChooser->getItemText (inputChooser->indexOfItemId (1000)) == state.tracks[1].name,
-               "the input chooser lists the other track");
+        check (inputChooser != nullptr && inputChooser->indexOfItemId (1002) >= 0 && inputChooser->getItemText (inputChooser->indexOfItemId (1002)) == state.tracks[1].name + " | Post Mixer",
+               "the input chooser lists the other track's taps");
         const int inputBefore = inputChooser->getSelectedId();
-        inputChooser->setSelectedId (1000, juce::sendNotificationSync); refresh();
-        check (state.tracks[0].inputTrackId == state.tracks[1].id && inputChooser->getText() == state.tracks[1].name, "choosing it takes that track's audio");
+        inputChooser->setSelectedId (1001, juce::sendNotificationSync); refresh();
+        check (state.tracks[0].inputTrackId == state.tracks[1].id && state.tracks[0].inputTap == Session::InputTap::postFX
+               && inputChooser->getText() == state.tracks[1].name + " | Post FX", "choosing one takes that track's audio at that tap");
         session.undo(); refresh();
         check (state.tracks[0].inputTrackId.isEmpty() && inputChooser->getSelectedId() == inputBefore, "undo returns the chooser to the earlier input");
         // Scene tempo and time signature, from the scene menu's dialogs.

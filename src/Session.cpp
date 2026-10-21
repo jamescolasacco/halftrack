@@ -33,6 +33,7 @@ const juce::Identifier takeLanesType { "HALFTRACKTAKELANES" }, takeLaneType { "T
 const juce::Identifier implicitWarpEndProperty { "halftrackWarpEnd" }, warpMarkersPausedProperty { "halftrackWarpMarkersPaused" };
 const juce::Identifier recordQuantisationProperty { "halftrackRecordQuantisation" };
 const juce::Identifier countInProperty { "halftrackCountInBars" };
+const juce::Identifier inputTapProperty { "halftrackInputTap" }; // Read by the track-inputs engine patch.
 const juce::Identifier sceneTempoProperty { "halftrackSceneTempo" }, sceneNumeratorProperty { "halftrackSceneNumerator" },
                        sceneDenominatorProperty { "halftrackSceneDenominator" };
 const juce::Identifier midiTrackProperty { "halftrackMidiTrack" };
@@ -3120,7 +3121,12 @@ Session::Snapshot Session::snapshot() const
         if (auto* input = impl->input (*t))
         {
             if (! input->getInputDevice().isTrackDevice()) info.inputName = input->getInputDevice().getName();
-            else if (auto* source = impl->sourceOf (input->getInputDevice())) info.inputTrackId = source->itemID.toString();
+            else if (auto* source = impl->sourceOf (input->getInputDevice()))
+            {
+                info.inputTrackId = source->itemID.toString();
+                if (auto* destination = te::getDestination (*input, *t, 0))
+                    info.inputTap = static_cast<InputTap> (juce::jlimit (0, 2, static_cast<int> (destination->state.getProperty (inputTapProperty, 2))));
+            }
             info.armed = input->isRecordingEnabled (t->itemID);
             info.monitor = static_cast<MonitorMode> (input->getInputDevice().getMonitorMode());
         }
@@ -4002,7 +4008,7 @@ juce::StringArray Session::inputSources (const String& trackId) const
         if (t != destination && ! isReturn (*t) && ! impl->feeds (*destination, *t)) result.add (t->itemID.toString());
     return result;
 }
-Result Session::setTrackInputTrack (const String& trackId, const String& sourceTrackId)
+Result Session::setTrackInputTrack (const String& trackId, const String& sourceTrackId, InputTap tap)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (trackId); if (t == nullptr) return Result::fail ("Track not found.");
@@ -4013,7 +4019,16 @@ Result Session::setTrackInputTrack (const String& trackId, const String& sourceT
         return Result::fail ("That track cannot feed this one: choose a track with audio output that this track does not play into.");
     auto* source = impl->track (sourceTrackId);
     auto& device = source->getWaveInputDevice();
-    if (auto* current = impl->input (*t); current != nullptr && &current->getInputDevice() == &device) return Result::ok();
+    if (auto* current = impl->input (*t); current != nullptr && &current->getInputDevice() == &device)
+    {
+        // The same source: only the tap changes.
+        auto* destination = te::getDestination (*current, *t, 0);
+        if (destination == nullptr) return Result::fail ("Input destination is unavailable.");
+        if (static_cast<int> (destination->state.getProperty (inputTapProperty, 2)) == static_cast<int> (tap)) return Result::ok();
+        impl->transaction ("Input tap");
+        destination->state.setProperty (inputTapProperty, static_cast<int> (tap), &impl->edit->getUndoManager());
+        impl->edit->restartPlayback(); impl->changed(); return Result::ok();
+    }
     const auto monitored = impl->monitoredMidiTracks();
     const bool playing = impl->edit->getTransport().isPlaying();
     // The track device and its instance exist while some track takes its audio.
@@ -4029,7 +4044,9 @@ Result Session::setTrackInputTrack (const String& trackId, const String& sourceT
     t->state.setProperty (monitorProperty, static_cast<int> (MonitorMode::off), undo);
     for (auto* d : impl->edit->getAllInputDevices())
         if (d->getTargets().contains (t->itemID)) { [[maybe_unused]] auto r = d->removeTarget (t->itemID, undo); }
-    if (auto result = selected->setTarget (t->itemID, true, undo, 0); ! result) return Result::fail (result.error());
+    auto result = selected->setTarget (t->itemID, true, undo, 0);
+    if (! result) return Result::fail (result.error());
+    (*result)->state.setProperty (inputTapProperty, static_cast<int> (tap), undo);
     selected->setRecordingEnabled (t->itemID, false);
     device.setMonitorMode (te::InputDevice::MonitorMode::off);
     impl->finishInputChange (monitored); impl->changed(); return Result::ok();

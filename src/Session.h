@@ -324,6 +324,7 @@ public:
     // A track's output ("Audio To"): Master, Sends Only, or another audio track, whose devices and
     // mixer then play it as if it were that track's input.
     enum class OutputKind { master, sendsOnly, track };
+    enum class InputTap { preFX, postFX, postMixer };
     struct TrackOutput { OutputKind kind = OutputKind::master; juce::String trackId; bool operator== (const TrackOutput&) const = default; };
     struct TrackInfo
     {
@@ -344,6 +345,7 @@ public:
         MonitorMode monitor = MonitorMode::off;
         juce::String inputName;
         juce::String inputTrackId; // When the input is another track's output (Audio From a track), that track.
+        InputTap inputTap = InputTap::postMixer;
         std::vector<ClipInfo> clips;
         std::vector<PluginInfo> plugins; // MIDI effects, then audio devices; never the instrument.
         PluginInfo instrument;           // isNativeEffect when a native instrument replaces the built-in synth.
@@ -613,11 +615,12 @@ public:
     juce::Result setTrackOutput (const juce::String& trackId, const TrackOutput&);
     // The audio tracks a track's output can go to, in order.
     juce::StringArray outputDestinations (const juce::String& trackId) const;
-    // Audio From another track: its output, after its devices and mixer, becomes this audio
-    // track's input, monitored and recorded like any input. Sources are the tracks with audio
-    // output that this one does not feed, so routes cannot loop.
+    // Audio From another track: its audio becomes this audio track's input, monitored and recorded
+    // like any input. Sources are the tracks with audio output that this one does not feed, so
+    // routes cannot loop. The tap is taken before the source's effects (after an instrument),
+    // after them, or after its mixer.
     juce::StringArray inputSources (const juce::String& trackId) const;
-    juce::Result setTrackInputTrack (const juce::String& trackId, const juce::String& sourceTrackId);
+    juce::Result setTrackInputTrack (const juce::String& trackId, const juce::String& sourceTrackId, InputTap = InputTap::postMixer);
     // Automates one native device control (by parameter index) with values in the control's own units,
     // or one of an external plug-in's parameters (by its index in pluginParameters) with values 0-1.
     juce::Result setDeviceAutomation (const juce::String& pluginId, int parameter, const AutomationLane&);

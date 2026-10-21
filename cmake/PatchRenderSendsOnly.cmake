@@ -8,7 +8,7 @@ function(halftrack_patch_render_sends_only source_dir)
     set(original0 "31fb6f4d5b21355a67867c71461c26b17464e450c3c0e945173dd99f8550b074")
     set(patched0 "51ef9b7dfa77221251da5f43f77f91110f8b375de8974e6f45cac2c08c98ad48")
     set(count0 1)
-    set(downstream0 "e871f1b3ca972a8b8a56cccc53b2958c5fcbaf9767a4f5ec1e1767b4bc34d20a") # The later render track-inputs patch.
+    set(downstream0 "06c1d2be2f00c494f5db33c2b5ced64f9395e9fb7e16e4e8002ef7beacfa9ee8") # The later render track-inputs patch.
     set(before0_0 [=[        if (auto node = createNodeForTrack (*t, params))
             trackNodes.push_back (std::move (node));
     }

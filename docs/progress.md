@@ -1251,3 +1251,9 @@ Documentation only, in `docs/feature-parity.md` and `docs/progress-metric.md`.
 
 - **Twelve stale rows** (REC-001, PLG-001/003/006/007/013/014/016, PRJ-001/003, UX-004, QA-001) read NOT IMPLEMENTED although existing tests exercised them. Each now cites its evidence and gaps.
 - **Others stay unimplemented.** The same audit kept AUD-001/005/006/007/008/012, REC-006/007/011, PLG-005/008/009/010/015, PRJ-007/014, UX-010 and QA-002/004 unimplemented, since no test exercises them.
+
+## Audio From taps — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `cmake/PatchRenderTrackInputs.cmake` and its accepting patches, and `tests/AudioFromTests.cpp`, with documentation.
+
+- **Taps.** A track taking another track's audio chooses its Pre FX, Post FX or Post Mixer tap from the input chooser's submenu for that track. Pre FX and Post FX stay audible while the source is muted by solo, as in the reference.

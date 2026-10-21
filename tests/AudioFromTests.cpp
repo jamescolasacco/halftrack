@@ -66,7 +66,41 @@ int runAudioFromTests (const juce::File& artifacts)
         ok (s.setTrackGain (0, -6), "A at -6 dB");
         pumpSyntheticTestDevice (s, 8);
         check (near (heard (s), .5f * g * g), "after A's mixer");
-        ok (s.setTrackGain (0, 0), "A back to 0 dB"); ok (s.setTrackGain (1, 0), "B back to 0 dB");
+        ok (s.setTrackGain (1, 0), "B back to 0 dB");
+
+        // Taps, with a -6 dB Utility on A before its -6 dB mixer.
+        ok (s.addUtility (0), "add a Utility to A");
+        const auto utility = s.snapshot().tracks[0].plugins.back();
+        auto settings = utility.utility; settings.gainDb = -6;
+        ok (s.setUtilitySettings (utility.id, settings), "the Utility at -6 dB");
+        pumpSyntheticTestDevice (s, 8);
+        check (trackB().inputTap == Session::InputTap::postMixer && near (heard (s), .5f * g * g), "Post Mixer follows A's devices and mixer");
+        ok (s.setTrackInputTrack (b, a, Session::InputTap::postFX), "tap A Post FX");
+        pumpSyntheticTestDevice (s, 8);
+        check (trackB().inputTap == Session::InputTap::postFX && near (heard (s), .5f * g), "Post FX follows A's devices but not its mixer");
+        {
+            const auto file = root.getChildFile ("post-fx.wav");
+            ok (s.exportWav (file, 48000, 32, 0), "export the Post FX tap");
+            juce::AudioFormatManager formats; formats.registerBasicFormats();
+            std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+            juce::AudioBuffer<float> x (2, (int) reader->lengthInSamples); reader->read (&x, 0, x.getNumSamples(), 0, true, true);
+            check (x.getNumSamples() > 24000 && near (x.getSample (0, 24000), .5f * g), "the export takes the same tap");
+        }
+        ok (s.setTrackInputTrack (b, a, Session::InputTap::preFX), "tap A Pre FX");
+        pumpSyntheticTestDevice (s, 8);
+        check (trackB().inputTap == Session::InputTap::preFX && near (heard (s), .5f), "Pre FX comes before A's devices");
+        s.undo();
+        check (trackB().inputTap == Session::InputTap::postFX, "each tap change is one undo step");
+        s.redo();
+        ok (s.setTrackSolo (1, true), "solo B, which mutes A");
+        pumpSyntheticTestDevice (s, 8);
+        check (near (heard (s), .5f), "soloed, B still hears A Pre FX");
+        ok (s.setTrackInputTrack (b, a, Session::InputTap::postMixer), "tap A Post Mixer");
+        pumpSyntheticTestDevice (s, 8);
+        check (std::abs (heard (s)) < 1e-6f, "but not Post Mixer, after A's muting");
+        ok (s.setTrackSolo (1, false), "unsolo B");
+        ok (s.removePlugin (0, (int) s.snapshot().tracks[0].plugins.size() - 1), "remove the Utility");
+        ok (s.setTrackGain (0, 0), "A back to 0 dB");
 
         // Loops.
         check (s.inputSources (a).isEmpty() && s.setTrackInputTrack (a, b).failed(), "A cannot take audio from B, which it feeds");
