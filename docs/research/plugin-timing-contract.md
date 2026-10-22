@@ -22,6 +22,14 @@ As in the reference, an instrument plug-in dropped on a MIDI track becomes its i
 
 The browser lists plug-ins under their makers ("Unknown Maker" when none is given), by name. Each row shows its role, format and channels. A MIDI effect plug-in goes on a MIDI track ahead of its instrument and is refused on audio tracks. The UI suite checks the grouping, the summaries for an instrument, a MIDI effect, an audio effect with channels and one without, and the audio-track refusal, using stand-in descriptions.
 
+## Architectures
+
+Halftrack runs natively, as arm64 on Apple silicon and x86_64 on Intel Macs, Windows and Linux, and bridges no plug-ins between architectures.
+
+`src/PluginBinary.*` reads which architectures a plug-in's binary holds, from its header. It handles thin and universal Mach-O, PE and ELF, and the binary inside a `.vst3` or `.component` bundle, including the per-architecture folders of Windows and Linux VST3 bundles. When a plug-in lacks this process's architecture, inserting it fails with an explanation, and a placeholder for it in an opened project gives the same reason. The explanation names the plug-in, what it is built for, what Halftrack runs as, and says to install a matching version. For example: "“Foreign Probe” is built for Intel (x86_64) only, and Halftrack runs as Arm (arm64)…".
+
+`tests/PluginBinaryTests.cpp` writes headers for each format and checks the architectures found, and that other files and missing ones name none. It then builds a bundle for the other architecture and checks its explanation, that a native bundle gets none, and that inserting the foreign one fails with the explanation.
+
 ## What a hosted plug-in is told
 
 `tests/TestProbePlugin.cpp` builds the Halftrack Test Probe, a VST3 instrument that writes what its host tells it into its audio:

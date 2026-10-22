@@ -10,6 +10,7 @@
 #include "Spectrum.h"
 #include "MidiMonitor.h"
 #include "WarpStretchers.h"
+#include "PluginBinary.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 #include <array>
@@ -4153,6 +4154,8 @@ Session::Snapshot Session::snapshot() const
                 device.missing = true; device.loadError = external->getLoadError();
                 // The engine's generic message says nothing useful.
                 if (device.loadError.isEmpty() || device.loadError.containsIgnoreCase ("couldn't be loaded")) device.loadError = "It is not installed, or has not been scanned.";
+                if (juce::File::isAbsolutePath (external->desc.fileOrIdentifier))
+                    if (const auto problem = pluginbinary::architectureProblem (juce::File (external->desc.fileOrIdentifier), device.name); problem.isNotEmpty()) device.loadError = problem;
             }
             info.plugins.push_back (std::move (device));
         }
@@ -9994,7 +9997,13 @@ Result Session::addPlugin (int index, const juce::PluginDescription& description
     if (! plugin) return Result::fail ("The plug-in could not be loaded.");
     auto* external = dynamic_cast<te::ExternalPlugin*> (plugin.get());
     if (! external || (! external->getAudioPluginInstance() && ! external->isInitialisingAsync()))
+    {
+        // A plug-in built for another architecture says so, rather than only failing to load.
+        if (juce::File::isAbsolutePath (description.fileOrIdentifier))
+            if (const auto problem = pluginbinary::architectureProblem (juce::File (description.fileOrIdentifier), description.name); problem.isNotEmpty())
+                return Result::fail (problem);
         return Result::fail (external ? external->getLoadError() : "The plug-in could not be instantiated.");
+    }
     if (description.isInstrument)
     {
         // As in the reference, an instrument takes the place of the MIDI track's instrument.

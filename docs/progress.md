@@ -1545,3 +1545,11 @@ Engine and UI change in `src/Session.*` and `src/MainComponent.cpp`, with docume
 - **Focus checks.** The UI suite's text-focus checks now report a skip when the system keeps another app in front, as it does while someone uses the machine. Wherever the app can become active, as on CI, they still must pass.
 
 See [the contract](research/plugin-timing-contract.md#classification).
+
+## Plug-in architectures — 2026-10-21
+
+Engine change in `src/PluginBinary.*` (new), `src/Session.cpp`, `src/Main.cpp`, `CMakeLists.txt` and `tests/PluginBinaryTests.cpp` (new), with documentation.
+
+- **Architectures.** A plug-in built only for another CPU architecture (an Intel-only plug-in on Apple silicon, say) is now explained when inserted or opened, instead of only failing to load. The explanation says what it is built for and what to install.
+
+See [the contract](research/plugin-timing-contract.md#architectures).
