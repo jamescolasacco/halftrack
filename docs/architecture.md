@@ -229,6 +229,8 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `themes` (in `src/Theme.*`) maps every interface colour, authored for Dark, into the current theme. Named palette colours are `themes::Colour` values that resolve when used; literal colours go through `themes::colour`. `themes::apply` recolours the colours components set on themselves, keeping their Dark originals. `MainComponent` sets the saved theme before building its components, and `Impl::applyInterfaceLook` follows the preferences' theme and zoom. See the [themes contract](research/themes-contract.md).
 
+`scripts/evidence_report.py` ties the capability ledger to the tests: [docs/evidence-map.md](evidence-map.md) names each PARTIAL row's suites, the script checks the map against the ledger and CMakeLists.txt, and in CI it turns CTest's JUnit output into per-row evidence. See the [regression evidence contract](research/regression-evidence-contract.md).
+
 `inputpermission` (in `src/InputPermission*`) reads and requests the system's audio input permission: AVFoundation on macOS, always granted elsewhere. `Session::Impl::hardwareInputAllowed` gates arming, monitoring and recording of hardware wave inputs on it. Sessions without devices, and tests through `setInputPermissionSource`, use a stand-in. See the [input permission contract](research/input-permission-contract.md).
 
 `buildinfo` (in `src/BuildInfo.*`) reports the CMake project version and the source commit that `cmake/WriteBuildInfo.cmake` writes to a generated header at each build. `--version` and About Halftrack show them. See the [packaging contract](research/packaging-contract.md).

@@ -1634,3 +1634,12 @@ Engine change in `src/Session.*`, `src/InputPermission*` (new; AVFoundation on m
 - **Withdrawn permission.** Permission withdrawn after arming refuses the recording.
 
 See [the contract](research/input-permission-contract.md).
+
+## Regression evidence — 2026-10-21
+
+QA change in `scripts/evidence_report.py` (new), `tests/test_evidence_report.py` (new), `docs/evidence-map.md` (new) and the CI workflow, with documentation.
+
+- **Evidence map.** Every partial ledger row is tied to the suites that exercise it, or to the hand checks it rests on. A tooling test keeps the map in step with the ledger and the build.
+- **Run evidence.** CI writes CTest's results as JUnit. A report gives each row's commit, environment, commands, and expected and actual results.
+
+See [the contract](research/regression-evidence-contract.md).

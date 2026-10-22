@@ -52,10 +52,13 @@ jobs:
         run: cmake --build build --config Release --parallel 3
       - name: Test shared behavior
         if: runner.os != 'Linux'
-        run: ctest --test-dir build -C Release --output-on-failure
+        run: ctest --test-dir build -C Release --output-on-failure --output-junit test-artifacts/ctest.xml
       - name: Test shared behavior with virtual display
         if: runner.os == 'Linux'
-        run: xvfb-run -a -s "-screen 0 1280x900x24" ctest --test-dir build -C Release --output-on-failure
+        run: xvfb-run -a -s "-screen 0 1280x900x24" ctest --test-dir build -C Release --output-on-failure --output-junit test-artifacts/ctest.xml
+      - name: Tie the results to the capability ledger
+        if: always() && hashFiles('build/test-artifacts/ctest.xml') != ''
+        run: python scripts/evidence_report.py --junit build/test-artifacts/ctest.xml --python-result passed --out build/test-artifacts/evidence.json --markdown build/test-artifacts/evidence.md
       - name: Package preview with licenses and source references
         run: python scripts/package_preview.py
       - name: Install, identify and remove the package
