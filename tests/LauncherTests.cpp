@@ -281,6 +281,14 @@ void audioTests (const juce::File& root, const juce::File& first, const juce::Fi
     registerConstant (buffers, engine, state.tracks[0].slots[0].clip.file, 0.12f);
     registerConstant (buffers, engine, state.tracks[0].slots[1].clip.file, 0.28f);
     registerConstant (buffers, engine, state.tracks[1].slots[1].clip.file, 0.12f);
+    // A triplet grid, as the reference offers: 1/8T at 120 BPM is a third of a beat, 8000 samples.
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::eighthTriplet), "an eighth-triplet launch grid");
+    ok (session.play(), "start the transport");
+    player.process (4800);
+    ok (session.launchSlot (0, 0), "queue slot A on the triplet grid");
+    const auto triplet = player.process (12000);
+    check (std::abs (onset (triplet) - 3200) <= 256, "it starts on the next eighth triplet: " + juce::String (onset (triplet)));
+    ok (session.stopAllLauncherClips(), "stop it"); session.stop(); session.seek (0); player.process (4800);
     ok (session.setLaunchQuantisation (Session::LaunchQuantisation::beat), "one-beat launch grid");
     ok (session.play(), "start empty transport");
     auto silence = player.process (4800);

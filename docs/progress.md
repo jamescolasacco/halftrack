@@ -2111,3 +2111,7 @@ Engine and QA areas. From a static reading of the reference's transport code.
 ## Mixer sections — 2026-10-22
 
 UI area. View > Mixer Controls shows and hides the Session mixer's In/Out, Sends, Returns, Mixer, Track Delay and Crossfader sections, as the reference's View menu does. The defaults are those of its built-in default Set, so Track Delay and the crossfader are now hidden at first. The strips lay out and size themselves from the sections shown, and the choice is kept with the project. See [the contract](research/mixer-sections-contract.md).
+
+## Triplet launch grids — 2026-10-22
+
+Engine and UI areas. The global launch quantization offers the reference's grids: None, 8, 4, 2 and 1 Bars, 1/2, 1/2T, 1/4, 1/4T, 1/8, 1/8T, 1/16, 1/16T and 1/32. It offered only None, 1/4 and 1 Bar before. Clips' and the preferences' grids gain the same triplets. The launcher suite checks a launch on the eighth-triplet grid, and the UI suite checks the menu.

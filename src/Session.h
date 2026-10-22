@@ -14,7 +14,9 @@ namespace halftrack
 class Session final : public juce::ChangeBroadcaster
 {
 public:
-    enum class LaunchQuantisation { none, beat, bar };
+    // The global launch grid, as the reference's: None, 8 Bars to 1 Bar, then 1/2 to 1/32 with the
+    // triplets (launchQuantisations lists them in its menu's order). Later values keep the first ones' numbers.
+    enum class LaunchQuantisation { none, beat, bar, eightBars, fourBars, twoBars, half, halfTriplet, quarterTriplet, eighth, eighthTriplet, sixteenth, sixteenthTriplet, thirtysecond };
     enum class RecordQuantisation { none, quarter, eighth, eighthTriplet, sixteenth, sixteenthTriplet, thirtysecond };
     enum class MonitorMode { off, automatic, on };
     enum class SendMode { pre, post };
@@ -45,7 +47,8 @@ public:
     // Clip launch behaviour on press/release of its launch button.
     enum class LaunchMode { trigger, gate, toggle, repeat };
     // Per-clip launch grid; global follows the project setting.
-    enum class ClipQuantisation { global, none, eightBars, fourBars, twoBars, bar, half, quarter, eighth, sixteenth, thirtysecond };
+    // A clip's launch grid: Global, then the reference's choices (clipQuantisations gives its menu's order).
+    enum class ClipQuantisation { global, none, eightBars, fourBars, twoBars, bar, half, quarter, eighth, sixteenth, thirtysecond, halfTriplet, quarterTriplet, eighthTriplet, sixteenthTriplet };
     struct LaunchSettings
     {
         LaunchMode mode = LaunchMode::trigger;
@@ -742,6 +745,9 @@ public:
     juce::Result stopAllLauncherClips();
     juce::Result returnToArrangement();
     juce::Result setLaunchQuantisation (LaunchQuantisation);
+    // The grids in the reference's menu order, with its names.
+    static std::vector<std::pair<juce::String, LaunchQuantisation>> launchQuantisations();
+    static std::vector<std::pair<juce::String, ClipQuantisation>> clipQuantisations();
     juce::Result addMidiNote (const juce::String& clipId, int pitch, double startBeat, double lengthBeats, float velocity);
     // Input IDs are ignored. Successful insertion replaces insertedIds in input order; failure leaves it unchanged.
     juce::Result addMidiNotes (const juce::String& clipId, const std::vector<MidiNoteInfo>& notes, juce::StringArray& insertedIds);

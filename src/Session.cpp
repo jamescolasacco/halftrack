@@ -98,9 +98,13 @@ void writeGrid (juce::ValueTree owner, const Session::EditGrid& g)
     v.setProperty ("intervalPixels", g.intervalPixels, nullptr); v.setProperty ("tuplet", g.tuplet, nullptr); v.setProperty ("snap", g.snap, nullptr);
 }
 // Engine grid for each ClipQuantisation; Global is resolved from the project setting.
-constexpr std::array<te::LaunchQType, 11> clipLaunchGrids { te::LaunchQType::none, te::LaunchQType::none, te::LaunchQType::eightBars, te::LaunchQType::fourBars,
+constexpr std::array<te::LaunchQType, 15> clipLaunchGrids { te::LaunchQType::none, te::LaunchQType::none, te::LaunchQType::eightBars, te::LaunchQType::fourBars,
     te::LaunchQType::twoBars, te::LaunchQType::bar, te::LaunchQType::half, te::LaunchQType::quarter, te::LaunchQType::eighth, te::LaunchQType::sixteenth,
-    te::LaunchQType::thirtySecond };
+    te::LaunchQType::thirtySecond, te::LaunchQType::halfT, te::LaunchQType::quarterT, te::LaunchQType::eighthT, te::LaunchQType::sixteenthT };
+// The global grid's engine types, by Session::LaunchQuantisation.
+constexpr std::array<te::LaunchQType, 14> globalLaunchGrids { te::LaunchQType::none, te::LaunchQType::quarter, te::LaunchQType::bar, te::LaunchQType::eightBars,
+    te::LaunchQType::fourBars, te::LaunchQType::twoBars, te::LaunchQType::half, te::LaunchQType::halfT, te::LaunchQType::quarterT, te::LaunchQType::eighth,
+    te::LaunchQType::eighthT, te::LaunchQType::sixteenth, te::LaunchQType::sixteenthT, te::LaunchQType::thirtySecond };
 Session::LaunchSettings clipLaunchSettings (const juce::ValueTree& state)
 {
     Session::LaunchSettings settings;
@@ -3343,7 +3347,7 @@ struct Session::Impl
     static bool validPreferences (const Preferences& p)
     {
         return juce::isPositiveAndBelow ((int) p.defaultWarpMode, 8) && p.defaultWarpMode != WarpMode::off
-            && juce::isPositiveAndBelow ((int) p.defaultLaunchMode, 4) && juce::isPositiveAndBelow ((int) p.defaultLaunchQuantisation, 11)
+            && juce::isPositiveAndBelow ((int) p.defaultLaunchMode, 4) && juce::isPositiveAndBelow ((int) p.defaultLaunchQuantisation, (int) clipLaunchGrids.size())
             && juce::isPositiveAndBelow (p.theme, Preferences::themeCount) && p.zoomPercent >= 50 && p.zoomPercent <= 200 && p.zoomPercent % 25 == 0
             && std::isfinite (p.driverErrorCompensationMs) && std::abs (p.driverErrorCompensationMs) <= 200
             && juce::isPositiveAndBelow ((int) p.metronomeSound, Session::metronomeSoundCount)
@@ -3366,7 +3370,7 @@ struct Session::Impl
         {
             // Settings an older file lacks keep their defaults; a newer file's unknown ones are ignored.
             const int arm = number ("exclusiveArm", 1, 2), solo = number ("exclusiveSolo", 1, 2), warp = number ("defaultWarpMode", (int) read.defaultWarpMode, 8);
-            const int autoWarp = number ("autoWarpLongSamples", 0, 2), mode = number ("defaultLaunchMode", 0, 4), grid = number ("defaultLaunchQuantisation", 0, 11);
+            const int autoWarp = number ("autoWarpLongSamples", 0, 2), mode = number ("defaultLaunchMode", 0, 4), grid = number ("defaultLaunchQuantisation", 0, (int) clipLaunchGrids.size());
             const int look = number ("theme", 0, Preferences::themeCount), zoom = number ("zoomPercent", 100, 201);
             valid = arm >= 0 && solo >= 0 && warp >= 0 && autoWarp >= 0 && mode >= 0 && grid >= 0 && look >= 0 && zoom >= 0;
             read = { arm == 1, solo == 1, (WarpMode) warp, autoWarp == 1, (LaunchMode) mode, (ClipQuantisation) grid, look, zoom };
@@ -5220,8 +5224,8 @@ Session::Snapshot Session::snapshot() const
     s.keyLearnTarget = impl->keyLearnTarget;
     s.automationOverridden = ! impl->overriddenLanes().isEmpty();
     const auto quantisation = e.getLaunchQuantisation().type.get();
-    s.launchQuantisation = quantisation == te::LaunchQType::none ? LaunchQuantisation::none
-        : quantisation == te::LaunchQType::quarter ? LaunchQuantisation::beat : LaunchQuantisation::bar;
+    s.launchQuantisation = LaunchQuantisation::bar;
+    for (size_t i = 0; i < globalLaunchGrids.size(); ++i) if (globalLaunchGrids[i] == quantisation) s.launchQuantisation = static_cast<LaunchQuantisation> (i);
     int index = 0;
     std::map<String, int> linkSizes;
     for (auto* t : te::getAudioTracks (e)) if (const auto link = t->state[linkProperty].toString(); link.isNotEmpty()) ++linkSizes[link];
@@ -7377,16 +7381,24 @@ Result Session::copySlotClips (const std::vector<SlotRef>& slots, bool cut)
 Result Session::setLaunchQuantisation (LaunchQuantisation quantisation)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    te::LaunchQType type;
-    switch (quantisation)
-    {
-        case LaunchQuantisation::none: type = te::LaunchQType::none; break;
-        case LaunchQuantisation::beat: type = te::LaunchQType::quarter; break;
-        case LaunchQuantisation::bar: type = te::LaunchQType::bar; break;
-        default: return Result::fail ("Unknown launch quantisation.");
-    }
+    if (static_cast<int> (quantisation) < 0 || static_cast<int> (quantisation) >= (int) globalLaunchGrids.size()) return Result::fail ("Unknown launch quantisation.");
+    const auto type = globalLaunchGrids[static_cast<size_t> (quantisation)];
     impl->transaction ("Launch quantisation"); impl->edit->getLaunchQuantisation().type = type;
     impl->changed(); return Result::ok();
+}
+std::vector<std::pair<String, Session::LaunchQuantisation>> Session::launchQuantisations()
+{
+    using Q = LaunchQuantisation;
+    return { { "None", Q::none }, { "8 Bars", Q::eightBars }, { "4 Bars", Q::fourBars }, { "2 Bars", Q::twoBars }, { "1 Bar", Q::bar }, { "1/2", Q::half },
+             { "1/2T", Q::halfTriplet }, { "1/4", Q::beat }, { "1/4T", Q::quarterTriplet }, { "1/8", Q::eighth }, { "1/8T", Q::eighthTriplet },
+             { "1/16", Q::sixteenth }, { "1/16T", Q::sixteenthTriplet }, { "1/32", Q::thirtysecond } };
+}
+std::vector<std::pair<String, Session::ClipQuantisation>> Session::clipQuantisations()
+{
+    using Q = ClipQuantisation;
+    return { { "Global", Q::global }, { "None", Q::none }, { "8 Bars", Q::eightBars }, { "4 Bars", Q::fourBars }, { "2 Bars", Q::twoBars }, { "1 Bar", Q::bar },
+             { "1/2", Q::half }, { "1/2T", Q::halfTriplet }, { "1/4", Q::quarter }, { "1/4T", Q::quarterTriplet }, { "1/8", Q::eighth }, { "1/8T", Q::eighthTriplet },
+             { "1/16", Q::sixteenth }, { "1/16T", Q::sixteenthTriplet }, { "1/32", Q::thirtysecond } };
 }
 Result Session::setClipLaunchSettings (const String& id, const LaunchSettings& settings)
 {

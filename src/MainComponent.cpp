@@ -440,13 +440,11 @@ public:
         positionLabel.setTooltip ("Song position in bars, beats and sixteenths");
         loopStartLabel.setName ("Loop start"); loopLengthLabel.setName ("Loop length");
         quantisation.setName ("Global launch quantization");
-        quantisation.addItem ("None", 1); quantisation.addItem ("1/4", 2); quantisation.addItem ("1 Bar", 3);
+        for (const auto& [name, value] : Session::launchQuantisations()) quantisation.addItem (name, (int) value + 1); // In the reference's order.
         quantisation.setTooltip ("Global launch quantization for clips and scenes. View switches do not change what is playing.");
         quantisation.onChange = [this]
         {
-            const auto q = quantisation.getSelectedId() == 1 ? Session::LaunchQuantisation::none
-                         : quantisation.getSelectedId() == 2 ? Session::LaunchQuantisation::beat : Session::LaunchQuantisation::bar;
-            report (session.setLaunchQuantisation (q)); refresh();
+            report (session.setLaunchQuantisation (static_cast<Session::LaunchQuantisation> (quantisation.getSelectedId() - 1))); refresh();
         };
         backToArrangement.setName ("Return to Arrangement");
         backToArrangement.setTooltip ("Release Session overrides so tracks play their arrangement again");
@@ -4088,7 +4086,7 @@ private:
             for (auto* text : { "Trigger", "Gate", "Toggle", "Repeat" }) mode.addItem (text, mode.getNumItems() + 1);
             mode.setTooltip ("Launch mode: Trigger starts on press, Gate plays while held, Toggle starts and stops on press, Repeat retriggers on the grid while held");
             grid.setName ("Launch quantization");
-            for (auto* text : { "Global", "None", "8 Bars", "4 Bars", "2 Bars", "1 Bar", "1/2", "1/4", "1/8", "1/16", "1/32" }) grid.addItem (text, grid.getNumItems() + 1);
+            for (const auto& [text, value] : Session::clipQuantisations()) grid.addItem (text, (int) value + 1); // In the reference's order.
             grid.setTooltip ("Launch quantization for this clip; Global follows the control bar");
             legato.setName ("Launch legato"); legato.setClickingTogglesState (true);
             legato.setWantsKeyboardFocus (false); legato.setMouseClickGrabsKeyboardFocus (false);
@@ -8939,7 +8937,7 @@ private:
         punchInButton.setEnabled (! state.recording); punchOutButton.setEnabled (! state.recording);
         captureButton.setEnabled (! state.recording && session.hasCapturedMidi());
         clickButton.setToggleState(state.metronome.enabled,juce::dontSendNotification);
-        quantisation.setSelectedId (state.launchQuantisation == Session::LaunchQuantisation::none ? 1 : state.launchQuantisation == Session::LaunchQuantisation::beat ? 2 : 3, juce::dontSendNotification);
+        quantisation.setSelectedId ((int) state.launchQuantisation + 1, juce::dontSendNotification);
         {
             const bool overridden = std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& track) { return track.launcherActive; });
             backToArrangement.setEnabled (overridden); backToArrangement.setToggleState (overridden, juce::dontSendNotification);
@@ -10380,8 +10378,7 @@ private:
             for (const auto* name : { "Beats", "Tones", "Texture", "Re-Pitch", "Complex", "Complex Pro", "Complex (Efficient)" }) warp.addItem (name, id++);
             id = 1;
             for (const auto* name : { "Trigger", "Gate", "Toggle", "Repeat" }) mode.addItem (name, id++);
-            id = 1;
-            for (const auto* name : { "Global", "None", "8 Bars", "4 Bars", "2 Bars", "1 Bar", "1/2", "1/4", "1/8", "1/16", "1/32" }) grid.addItem (name, id++);
+            for (const auto& [name, value] : Session::clipQuantisations()) grid.addItem (name, (int) value + 1);
             for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord, &startPlayback }) b->onClick = [this] { apply(); };
             warp.onChange = mode.onChange = grid.onChange = theme.onChange = zoom.onChange = follow.onChange = [this] { apply(); };
             reset.onClick = [this] { owner.report (owner.session.resetPreferences(), "Preferences reset to their defaults."); sync(); };
@@ -10410,7 +10407,7 @@ private:
             p.createFadesOnClipEdges = edgeFades.getToggleState();
             p.defaultWarpMode = warpModes[(size_t) juce::jlimit (0, (int) std::size (warpModes) - 1, warp.getSelectedId() - 1)];
             p.defaultLaunchMode = (Session::LaunchMode) juce::jlimit (0, 3, mode.getSelectedId() - 1);
-            p.defaultLaunchQuantisation = (Session::ClipQuantisation) juce::jlimit (0, 10, grid.getSelectedId() - 1);
+            p.defaultLaunchQuantisation = (Session::ClipQuantisation) juce::jlimit (0, (int) Session::clipQuantisations().size() - 1, grid.getSelectedId() - 1);
             p.theme = juce::jlimit (0, Session::Preferences::themeCount - 1, theme.getSelectedId() - 1);
             p.zoomPercent = zoom.getSelectedId() > 0 ? zoom.getSelectedId() : 100;
             p.scrollFollow = follow.getSelectedId() == 2;
@@ -12848,6 +12845,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
            "slot-clear undo restores clip identity and notes");
     auto* launchGrid = dynamic_cast<juce::ComboBox*> (findNamed (*this, "Global launch quantization"));
     check (launchGrid != nullptr, "global launch quantization has a named native control");
+    {
+        juce::StringArray offered; for (int i = 0; i < launchGrid->getNumItems(); ++i) offered.add (launchGrid->getItemText (i));
+        check (offered.joinIntoString (",") == "None,8 Bars,4 Bars,2 Bars,1 Bar,1/2,1/2T,1/4,1/4T,1/8,1/8T,1/16,1/16T,1/32",
+               "the global launch quantization offers the reference's grids, triplets included: " + offered.joinIntoString (","));
+        launchGrid->setSelectedId (launchGrid->getItemId (offered.indexOf ("1/8T")), juce::sendNotificationSync);
+        check (state.launchQuantisation == Session::LaunchQuantisation::eighthTriplet, "choosing 1/8T sets an eighth-triplet launch grid");
+    }
     launchGrid->setSelectedId (1, juce::sendNotificationSync);
     check (state.launchQuantisation == Session::LaunchQuantisation::none, "quantization control updates the actual launcher setting");
     auto launchPoint = launcher.launchPoint (midiTrack, 0);

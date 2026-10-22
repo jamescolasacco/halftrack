@@ -15,7 +15,7 @@ Launch buttons are press/release pairs: `pressSlot(track, scene)` and `releaseSl
 | Toggle | launches; if the clip is playing or queued, stops it (a queued launch is cancelled) | ignored |
 | Repeat | launches, then restarts the clip every grid step while held | stops on the clip's grid |
 
-Clip quantization offers Global (the control bar setting), None, 8/4/2/1 Bars, 1/2, 1/4, 1/8, 1/16 and 1/32. Grids come from the engine's tempo-sequence quantiser, so bar grids follow the time signature. A transport loop wraps a boundary past the loop end to the first grid point inside the loop, as the global grid already does. With None, or with Global set to None, Repeat does not retrigger.
+Clip quantization offers Global (the control bar setting), None, 8/4/2/1 Bars, 1/2, 1/2T, 1/4, 1/4T, 1/8, 1/8T, 1/16, 1/16T and 1/32, the reference's choices in its order. The control bar's global grid offers the same, without Global (`Session::launchQuantisations` and `clipQuantisations` list them; values added for the triplets keep the earlier ones' stored numbers). The launcher suite starts a clip on an eighth-triplet grid exactly a third of a beat in, and the UI suite finds the global menu's fourteen grids in order and chooses 1/8T. Grids come from the engine's tempo-sequence quantiser, so bar grids follow the time signature. A transport loop wraps a boundary past the loop end to the first grid point inside the loop, as the global grid already does. With None, or with Global set to None, Repeat does not retrigger.
 
 Legato starts the launched clip from the playing clip's position on that track instead of from its start. It uses the engine's `LaunchHandle::playSynced`.
 
