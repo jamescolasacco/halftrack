@@ -1276,7 +1276,15 @@ private:
                 {
                     const int item = output.getSelectedId();
                     Session::TrackOutput chosen;
-                    if (item == 2) chosen.kind = Session::OutputKind::sendsOnly;
+                    if (item >= firstPortItem)
+                    {
+                        // MIDI To: a port and channel.
+                        const int port = (item - firstPortItem) / 16;
+                        if (! juce::isPositiveAndBelow (port, outputPorts.size())) return;
+                        chosen = { Session::OutputKind::midiPort, {}, outputPorts[port], (item - firstPortItem) % 16 + 1 };
+                    }
+                    else if (midiTo) chosen.kind = Session::OutputKind::master; // No Output.
+                    else if (item == 2) chosen.kind = Session::OutputKind::sendsOnly;
                     else if (juce::isPositiveAndBelow (item - 3, outputIds.size())) chosen = { Session::OutputKind::track, outputIds[item - 3] };
                     owner.report (owner.session.setTrackOutput (trackId, chosen)); owner.refresh();
                 };
@@ -1460,6 +1468,34 @@ private:
         // Sends Only or one of the tracks they may play into.
         void syncOutput (const Session::TrackInfo& track)
         {
+            // A MIDI track without an instrument chooses MIDI To instead: No Output, or a channel
+            // of each port whose Track switch is on (and of its current port, if that is off).
+            midiTo = track.isMidi && ! track.hasInstrument && track.groupId.isEmpty();
+            if (midiTo)
+            {
+                juce::StringArray ports;
+                for (const auto& port : owner.session.midiOutputPorts()) if (port.track) ports.add (port.name);
+                if (track.output.kind == Session::OutputKind::midiPort && ! ports.contains (track.output.port)) ports.add (track.output.port);
+                if (ports != outputPorts || outputLabels != juce::StringArray { "MIDI To" })
+                {
+                    outputPorts = ports; outputLabels = { "MIDI To" }; output.clear (juce::dontSendNotification);
+                    output.addItem ("No Output", 1);
+                    for (int i = 0; i < ports.size(); ++i)
+                    {
+                        juce::PopupMenu channels;
+                        for (int channel = 1; channel <= 16; ++channel) channels.addItem (firstPortItem + i * 16 + channel - 1, ports[i] + " | Ch. " + juce::String (channel));
+                        output.getRootMenu()->addSubMenu (ports[i], channels);
+                    }
+                }
+                outputIds.clear();
+                const int port = outputPorts.indexOf (track.output.port);
+                output.setSelectedId (track.output.kind == Session::OutputKind::midiPort && port >= 0 ? firstPortItem + port * 16 + track.output.midiChannel - 1 : 1, juce::dontSendNotification);
+                output.setTooltip ("MIDI To: the MIDI port and channel this track's MIDI plays to.");
+                output.setEnabled (! owner.session.isExporting());
+                return;
+            }
+            outputPorts.clear();
+            output.setTooltip ("Audio To: where this track plays. With Sends Only, only its sends are heard.");
             juce::StringArray ids, labels;
             if (track.isReturn) labels.add ("Master");
             else if (track.groupId.isNotEmpty()) labels.add ("Group");
@@ -1621,6 +1657,9 @@ private:
         juce::StringArray controlLabels;
         juce::String shownKey, deviceSignature;
         juce::StringArray inputNames, sendReturnIds, outputIds, outputLabels, inputSourceIds, inputSourceLabels;
+        juce::StringArray outputPorts; // MIDI To: the ports offered, by item.
+        bool midiTo = false;
+        static constexpr int firstPortItem = 1000;
         static constexpr int firstSourceItem = 1000;
         std::vector<std::unique_ptr<juce::Slider>> sends;
         std::unique_ptr<juce::TextButton> sideA, sideB;
@@ -5836,10 +5875,12 @@ private:
                     instrument.addItem (effectName ((Session::EffectKind) kind), 2 + kind - (int) Session::EffectKind::polySynth);
             for (const auto kind : { Session::EffectKind::instrumentRack, Session::EffectKind::drumRack })
                 instrument.addItem (effectName (kind), 2 + (int) kind - (int) Session::EffectKind::polySynth);
+            instrument.addSeparator(); instrument.addItem ("No Instrument", noInstrumentId);
             instrument.onChange = [this]
             {
                 const auto* track = owner.currentTrack(); if (track == nullptr || ! track->isMidi) return;
                 const int id = instrument.getSelectedId();
+                if (id == noInstrumentId) { owner.report (owner.session.removeTrackInstrument (track->id)); owner.refresh(); return; }
                 const std::optional<Session::EffectKind> kind = id <= 1 ? std::nullopt
                     : std::optional<Session::EffectKind> ((Session::EffectKind) ((int) Session::EffectKind::polySynth + id - 2));
                 owner.report (owner.session.setTrackInstrument (track->id, kind)); owner.refresh();
@@ -5859,7 +5900,8 @@ private:
             const auto* track = owner.currentTrack();
             if (track == nullptr || ! track->isMidi) { setVisible (false); return; }
             setVisible (true);
-            native = track->instrument.isNativeEffect; nativeSettings = track->instrument.effect;
+            empty = ! track->hasInstrument;
+            native = ! empty && track->instrument.isNativeEffect; nativeSettings = track->instrument.effect;
             // The Drum Sampler's pad grid replaces the generic control layout.
             if (! native || drumSampler()) { nativeEditor.reset(); nativeEditorId.clear(); }
             else if (nativeEditorId != track->instrument.id)
@@ -5869,14 +5911,14 @@ private:
                     : makeNativeEffectEditor (owner.session, track->instrument.id, true, [automation, id = track->instrument.id] (int parameter) { automation (id, parameter); });
                 addAndMakeVisible (*nativeEditor); nativeEditorId = track->instrument.id;
             }
-            instrument.setSelectedId (native ? 2 + (int) nativeSettings.kind - (int) Session::EffectKind::polySynth : 1, juce::dontSendNotification);
+            instrument.setSelectedId (empty ? noInstrumentId : native ? 2 + (int) nativeSettings.kind - (int) Session::EffectKind::polySynth : 1, juce::dontSendNotification);
             sample.setVisible (sampler());
             if (sampler()) sample.show (track->instrument);
             drumPads.setVisible (drumSampler());
             if (drumSampler()) drumPads.show (track->instrument);
             instrument.setEnabled (! owner.session.isExporting());
-            waveform.setVisible (! native); edit.setVisible (native); group.setVisible (native);
-            for (auto& control : controls) control.setVisible (! native);
+            waveform.setVisible (! native && ! empty); edit.setVisible (native); group.setVisible (native);
+            for (auto& control : controls) control.setVisible (! native && ! empty);
             waveform.setSelectedId (track->synth.waveform + 1, juce::dontSendNotification);
             const float values[] { track->synth.cutoffHz, track->synth.resonance, track->synth.attackSeconds, track->synth.decaySeconds, track->synth.sustain, track->synth.releaseSeconds, track->synth.level, track->synth.pulseWidth * 100 };
             for (int i = 0; i < 8; ++i) controls[(size_t) i].setValue (values[i], juce::dontSendNotification);
@@ -5886,6 +5928,7 @@ private:
         int preferredWidth() const
         {
             if (drumSampler()) return DrumPanel::gridWidth + DrumPanel::controlsWidth + 24;
+            if (empty) return 330;
             return native && nativeEditor ? juce::jmax (330, nativeEditor->getWidth() + 4 + sampleWidth()) : 536;
         }
         bool sampler() const { return native && nativeSettings.kind == Session::EffectKind::sampler; }
@@ -5896,8 +5939,15 @@ private:
             g.fillAll (juce::Colour (0xff303030));
             g.setColour (juce::Colour (0xff4a4a4a)); g.fillRect (0, 0, getWidth(), 26);
             g.setColour (ink); g.setFont (font (11.0f, true));
-            g.drawText (native ? juce::String (effectName (nativeSettings.kind)) : juce::String ("Halftrack Synth"), 9, 0, native ? juce::jmin (185, getWidth() - 305) : 185, 26, juce::Justification::centredLeft, true);
-            if (native) { g.setColour (line); g.drawRect (getLocalBounds()); return; }
+            g.drawText (empty ? juce::String ("No Instrument") : native ? juce::String (effectName (nativeSettings.kind)) : juce::String ("Halftrack Synth"), 9, 0,
+                        native ? juce::jmin (185, getWidth() - 305) : 185, 26, juce::Justification::centredLeft, true);
+            if (empty)
+            {
+                g.setColour (muted); g.setFont (font (10.5f));
+                g.drawFittedText ("This MIDI track has no instrument. Choose one above, or play its MIDI to a MIDI port with MIDI To in its mixer strip.",
+                                  getLocalBounds().withTrimmedTop (26).reduced (12), juce::Justification::centred, 4);
+            }
+            if (native || empty) { g.setColour (line); g.drawRect (getLocalBounds()); return; }
             g.setColour (muted); g.setFont (font (9.5f));
             const auto width = (getWidth() - 16) / 8;
             for (int i = 0; i < 8; ++i) g.drawText (names[i], 8 + i * width, 30, width, 14, juce::Justification::centred);
@@ -5906,7 +5956,7 @@ private:
         void resized() override
         {
             waveform.setBounds (getWidth() - 118, 3, 107, 20);
-            instrument.setBounds (getWidth() - (native ? 118 : 262), 3, native ? 107 : 138, 20);
+            instrument.setBounds (getWidth() - (native ? 118 : empty ? 149 : 262), 3, native ? 107 : 138, 20);
             edit.setBounds (getWidth() - 236, 3, 112, 20);
             group.setBounds (getWidth() - 296, 3, 56, 20);
             sample.setBounds (2, 28, sampleWidth() - 4, juce::jmax (40, getHeight() - 30));
@@ -5919,7 +5969,8 @@ private:
         Impl& owner;
         juce::ComboBox waveform, instrument;
         juce::TextButton edit { "Edit instrument..." }, group { "Group" };
-        bool native = false;
+        bool native = false, empty = false;
+        static constexpr int noInstrumentId = 1000;
         Session::EffectSettings nativeSettings;
         std::unique_ptr<juce::Component> nativeEditor;
         juce::String nativeEditorId;
@@ -8253,10 +8304,29 @@ private:
     class AudioSetupPanel final : public juce::Component
     {
     public:
-        explicit AudioSetupPanel (Impl& o) : owner (o), devices (o.session.audioDeviceManager(), 0, 128, 0, 128, true, true, true, false)
+        // The engine keeps its own MIDI outputs, so the device selector's MIDI output chooser, which
+        // sets one the engine never reads, is left out; MIDI Ports sets them.
+        explicit AudioSetupPanel (Impl& o) : owner (o), devices (o.session.audioDeviceManager(), 0, 128, 0, 128, true, false, true, false)
         {
             addAndMakeVisible (devices);
-            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth, &mpe, &inputConfig }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth, &mpe, &inputConfig, &midiPorts }) addAndMakeVisible (c);
+            // MIDI Ports, after the reference's: Track offers an output to MIDI tracks' MIDI To, and
+            // Sync sends it MIDI Clock while the transport plays.
+            midiPorts.setName ("MIDI ports"); midiPorts.setTooltip ("MIDI Ports: Track lets MIDI tracks play to an output; Sync sends it MIDI Clock");
+            midiPorts.onClick = [this]
+            {
+                juce::PopupMenu menu;
+                const auto ports = owner.session.midiOutputPorts();
+                for (int i = 0; i < (int) ports.size(); ++i)
+                {
+                    menu.addSectionHeader (ports[(size_t) i].name);
+                    menu.addItem (1 + i * 2, "Track", true, ports[(size_t) i].track);
+                    menu.addItem (2 + i * 2, "Sync", true, ports[(size_t) i].sync);
+                }
+                if (ports.empty()) menu.addItem (-1, "No MIDI outputs", false);
+                auto safe = juce::Component::SafePointer<AudioSetupPanel> (this);
+                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&midiPorts), [safe, ports] (int chosen) { if (safe != nullptr) safe->toggleMidiPort (ports, chosen); });
+            };
             // Input Config: each pair of input channels as one stereo input or two mono ones, and which are on.
             inputConfig.setName ("Input config"); inputConfig.setTooltip ("Input Config: use each pair of input channels as one stereo input or two mono inputs, and choose which inputs are on");
             inputConfig.onClick = [this]
@@ -8313,6 +8383,15 @@ private:
             };
             sync();
         }
+        // Item 1 + 2i is port i's Track switch and 2 + 2i its Sync switch.
+        void toggleMidiPort (const std::vector<Session::MidiOutputPortInfo>& ports, int chosen)
+        {
+            const int index = (chosen - 1) / 2;
+            if (chosen <= 0 || ! juce::isPositiveAndBelow (index, (int) ports.size())) return;
+            const auto& port = ports[(size_t) index];
+            const bool track = chosen % 2 == 1 ? ! port.track : port.track, sync = chosen % 2 == 0 ? ! port.sync : port.sync;
+            owner.report (owner.session.setMidiOutputPort (port.name, track, sync)); owner.refresh();
+        }
         void sync()
         {
             const auto format = owner.session.recordingFormat();
@@ -8324,7 +8403,8 @@ private:
             auto area = getLocalBounds();
             auto row = area.removeFromBottom (40).reduced (16, 8);
             inputConfig.setBounds (row.removeFromLeft (130)); row.removeFromLeft (8);
-            mpe.setBounds (row.removeFromLeft (130));
+            mpe.setBounds (row.removeFromLeft (130)); row.removeFromLeft (8);
+            midiPorts.setBounds (row.removeFromLeft (130));
             row = area.removeFromBottom (36).reduced (16, 4);
             typeLabel.setBounds (row.removeFromLeft (120)); type.setBounds (row.removeFromLeft (90)); row.removeFromLeft (24);
             depthLabel.setBounds (row.removeFromLeft (80)); depth.setBounds (row.removeFromLeft (70));
@@ -8335,7 +8415,7 @@ private:
         juce::AudioDeviceSelectorComponent devices;
         juce::Label typeLabel, depthLabel;
         juce::ComboBox type, depth;
-        juce::TextButton mpe { "MPE Inputs..." }, inputConfig { "Input Config..." };
+        juce::TextButton mpe { "MPE Inputs..." }, inputConfig { "Input Config..." }, midiPorts { "MIDI Ports..." };
     };
     // The Info View, after the reference's: what the control under the pointer is and does, from its
     // name and tooltip, and when it cannot be used now.
@@ -9630,8 +9710,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     int nativeInstruments = 0;
     for (int kind = 0; kind < Session::deviceKindCount; ++kind)
         if (effectIsInstrument ((Session::EffectKind) kind) && ! Session::isRackKind ((Session::EffectKind) kind)) ++nativeInstruments;
-    check (chooser != nullptr && editInstrument != nullptr && chooser->getNumItems() == 3 + nativeInstruments,
-           "instrument chooser lists the built-in synth, every native instrument and both instrument racks");
+    check (chooser != nullptr && editInstrument != nullptr && chooser->getNumItems() == 4 + nativeInstruments && chooser->getItemText (chooser->getNumItems() - 1) == "No Instrument",
+           "instrument chooser lists the built-in synth, every native instrument, both instrument racks and No Instrument");
     chooser->setSelectedId (3, juce::sendNotificationSync); refresh();
     check (currentTrack()->instrument.isNativeEffect && currentTrack()->instrument.effect.kind == Session::EffectKind::fmSynth
                && editInstrument->isVisible() && ! waveform->isVisible() && ! cutoff->isVisible(),
@@ -12269,6 +12349,40 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check ((state.tracks[0].output == Session::TrackOutput { Session::OutputKind::track, state.tracks[1].id }), "choosing a track routes into it");
         session.undo(); session.undo(); refresh();
         check (state.tracks[0].output == Session::TrackOutput {} && output->getText() == "Master", "undo returns the strip to Master");
+        {
+            // A MIDI track without an instrument: No Instrument in its device view, then MIDI To
+            // from its strip, offering a channel of each port whose Track switch is on.
+            check (session.addMidiTrack ("Hardware").wasOk(), "add a MIDI track for MIDI To"); refresh();
+            const int lane = (int) state.tracks.size() - 1; selectTrack (lane); refresh();
+            auto* chooser = dynamic_cast<juce::ComboBox*> (findNamed (deviceChain, "Track instrument"));
+            check (chooser != nullptr && chooser->indexOfItemId (1000) >= 0, "the instrument chooser offers No Instrument");
+            chooser->setSelectedId (1000, juce::sendNotificationSync); refresh();
+            check (! state.tracks[(size_t) lane].hasInstrument && chooser->getText() == "No Instrument", "choosing it removes the track's instrument");
+            std::vector<juce::ComboBox*> outputs;
+            std::function<void (juce::Component&)> collect = [&] (juce::Component& parent)
+            { for (auto* child : parent.getChildren()) { if (child->getName() == "Track output") if (auto* box = dynamic_cast<juce::ComboBox*> (child)) outputs.push_back (box); collect (*child); } };
+            collect (launcher);
+            juce::ComboBox* midiTo = nullptr;
+            for (auto* box : outputs) if (box->getNumItems() > 0 && box->getItemText (0) == "No Output") midiTo = box;
+            check (midiTo != nullptr && midiTo->getText() == "No Output", "its strip's output chooser becomes MIDI To");
+            if (const auto ports = session.midiOutputPorts(); ! ports.empty())
+            {
+                AudioSetupPanel setup (*this); setup.setSize (660, 680);
+                setup.toggleMidiPort (ports, 1); refresh();
+                check (session.midiOutputPorts()[0].track && midiTo->indexOfItemId (1004) >= 0, "MIDI Ports switches the suite's port's Track on, and MIDI To offers its channels");
+                midiTo->setSelectedId (1004, juce::sendNotificationSync); refresh();
+                check ((state.tracks[(size_t) lane].output == Session::TrackOutput { Session::OutputKind::midiPort, {}, ports[0].name, 5 }) && midiTo->getText() == ports[0].name + " | Ch. 5",
+                       "choosing a port's channel plays the track there");
+                session.undo(); refresh();
+                check (state.tracks[(size_t) lane].output.kind == Session::OutputKind::master && midiTo->getText() == "No Output", "undo returns it to No Output");
+                setup.toggleMidiPort (session.midiOutputPorts(), 1); refresh();
+                check (! session.midiOutputPorts()[0].track, "and MIDI Ports switches Track off again");
+            }
+            else std::cout << "SKIP UI MIDI To ports: this system cannot make a virtual MIDI port" << std::endl;
+            chooser->setSelectedId (1, juce::sendNotificationSync); refresh();
+            check (state.tracks[(size_t) lane].hasInstrument && midiTo->getItemText (0) == "Master", "the built-in synth comes back, with Audio To");
+            check (session.removeTrack (lane).wasOk(), "remove the MIDI To track"); refresh();
+        }
         // Audio From another track, from the input chooser's Tracks section.
         auto* inputChooser = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Track audio input"));
         check (inputChooser != nullptr && inputChooser->indexOfItemId (1002) >= 0 && inputChooser->getItemText (inputChooser->indexOfItemId (1002)) == state.tracks[1].name + " | Post Mixer",
@@ -12798,7 +12912,11 @@ int MainComponent::runInteractionTests()
             for (int i = 0; i < audio.getNumSamples(); ++i) audio.setSample (0, i, 0.1f * std::sin ((float) i * 0.031f));
             if (! writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples())) throw std::runtime_error ("Could not finish UI audio-drop fixture");
         }
-        Session session (false, makeSyntheticTestDeviceType());
+        // A virtual MIDI port of the suite's own, where the system can make one, for MIDI To.
+        struct Ignore final : juce::MidiInputCallback { void handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage&) override {} } ignore;
+        const auto portPrefix = "Halftrack UI Port " + juce::Uuid().toString().substring (0, 8);
+        auto port = juce::MidiInput::createNewDevice (portPrefix + " Out", &ignore);
+        Session session (false, makeSyntheticTestDeviceType(), port != nullptr ? portPrefix : juce::String());
         MainComponent component (session);
         component.impl->captureTestErrors = true;
         component.impl->runInteractionChecks (audioFixture.getFile());

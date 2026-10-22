@@ -6,7 +6,8 @@ function(halftrack_patch_tracktion source_dir)
     file(SHA256 "${source}" source_hash)
     if(source_hash STREQUAL "04869fc7afd45b70fdadebd891742c57c77101ac58e9227298d3531aafef3d32"
        OR source_hash STREQUAL "49374cb08b8752baa385b18806c2824005cd1e0bb67481a373638977b3dbf498"
-       OR source_hash STREQUAL "896d6fc2b35ecaaffb1a8bca4b453880e01328a29eae4ee5e222c02da570ed36") # Later MIDI device and input take rescan patches.
+       OR source_hash STREQUAL "896d6fc2b35ecaaffb1a8bca4b453880e01328a29eae4ee5e222c02da570ed36" # Later MIDI device and input take rescan patches,
+       OR source_hash STREQUAL "e653f519cdc6ae62cd56be45919cdfd5030e041a35e84ee77c18fadc4b008c91") # and the MIDI ports patch.
         return()
     endif()
     if(NOT source_hash STREQUAL "28f900c36a68f768706bad72ef7d65cac7ff2adc313f7aa0c2b047cab398696e")

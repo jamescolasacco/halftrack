@@ -621,3 +621,7 @@ Release builds are unsigned (ad-hoc on macOS) and Halftrack never checks for upd
 ### Plug-in sidechain controls and default tap
 
 The reference's plug-in sidechain has Gain, Mix and Mute controls that Halftrack does not have yet. The manual names no default tap; Halftrack uses Post FX because every track-sourced sidechain in the reference's demo sets reads it, which is evidence of use rather than a measured default. Whether the reference's sidechain switch turns on by itself when a source is chosen is unmeasured; Halftrack switches it on.
+
+### MIDI ports on Windows and clock after rebuilds
+
+Windows cannot make virtual MIDI ports, so the MIDI ports suite skips there and Windows MIDI output is checked only by building; Linux runs it only where the ALSA sequencer is available. The engine's clock restarts when the playback graph is rebuilt (after a settings change) and names its position again at the next beat, so a slave device can miss up to a beat of clocks; the reference's behaviour in that case is unmeasured.

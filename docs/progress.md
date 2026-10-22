@@ -1593,3 +1593,14 @@ Engine change in `src/Session.cpp` and `tests/FreezeTests.cpp`, with documentati
 - **Found, not fixed.** Undoing an Unfreeze leaves any track unfrozen. A track taking a frozen track's audio Post Mixer (the default tap) hears nothing; Pre FX and Post FX work. Exports render frozen tracks from their clips, so the earlier export comparisons never played a freeze; the contract's evidence now says so.
 
 See [the contract](research/freeze-contract.md#corrections).
+
+## MIDI output ports — 2026-10-21
+
+Engine change in `src/Session.*`, `cmake/PatchMidiPorts.cmake` (new), the earlier patches on its four files (to accept its hashes) and `tests/MidiPortTests.cpp` (new). The UI change is in `src/MainComponent.cpp`; the root change in `CMakeLists.txt` and `src/Main.cpp`. Documentation updated.
+
+- **Ports.** Each MIDI output port has Track and Sync switches, set from a MIDI Ports menu in Audio & MIDI Setup. Both start off, as in the reference.
+- **Empty MIDI tracks.** A MIDI track's instrument can be removed (No Instrument). The track then plays its MIDI to a port on a chosen channel (MIDI To), from its strip's output chooser.
+- **Clock.** Sync sends MIDI Clock with Song Position, Start, Continue and Stop.
+- **Tests.** Measured through a virtual port in real time. Test Sessions see only the ports they make.
+
+See [the contract](research/midi-ports-contract.md).

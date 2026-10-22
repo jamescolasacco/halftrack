@@ -393,8 +393,16 @@ public:
     struct TakeLaneInfo { juce::String id, name; std::vector<ClipInfo> clips; };
     // A track's output ("Audio To"): Master, Sends Only, or another audio track, whose devices and
     // mixer then play it as if it were that track's input.
-    enum class OutputKind { master, sendsOnly, track };
-    struct TrackOutput { OutputKind kind = OutputKind::master; juce::String trackId; bool operator== (const TrackOutput&) const = default; };
+    // A MIDI track without an instrument plays its MIDI to a MIDI port instead ("MIDI To"), on one channel.
+    enum class OutputKind { master, sendsOnly, track, midiPort };
+    struct TrackOutput
+    {
+        OutputKind kind = OutputKind::master;
+        juce::String trackId;
+        juce::String port;   // midiPort: the MIDI output port's name.
+        int midiChannel = 1; // midiPort: 1-16.
+        bool operator== (const TrackOutput&) const = default;
+    };
     struct TrackInfo
     {
         juce::String id, name;
@@ -418,6 +426,7 @@ public:
         std::vector<ClipInfo> clips;
         std::vector<PluginInfo> plugins; // MIDI effects, then audio devices; never the instrument.
         PluginInfo instrument;           // isNativeEffect when a native instrument replaces the built-in synth.
+        bool hasInstrument = false;      // A MIDI track with an instrument, built in, native or hosted; MIDI tracks can have none.
         std::vector<SlotInfo> slots;
         bool launcherActive = false;
         juce::String groupId; // Empty for ungrouped tracks.
@@ -498,7 +507,9 @@ public:
         double countInBeatsRemaining = 0;
     };
 
-    explicit Session (bool enableAudioDevices = true, std::unique_ptr<juce::AudioIODeviceType> customDeviceType = {});
+    // A Session without audio devices uses no physical MIDI ports either, unless midiPortPrefix
+    // names some: then only ports whose names start with it are used, as a test's own ports are.
+    explicit Session (bool enableAudioDevices = true, std::unique_ptr<juce::AudioIODeviceType> customDeviceType = {}, juce::String midiPortPrefix = {});
     ~Session() override;
     Snapshot snapshot() const;
     juce::Result newProject();
@@ -618,7 +629,17 @@ public:
     juce::Result removeMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds);
     juce::Result setSynthSettings (const juce::String& trackId, const SynthSettings&);
     // Replaces a MIDI track's instrument in one undo step; nullopt restores the built-in synth.
+    // Giving an instrument to a track playing to a MIDI port returns its output to Master.
     juce::Result setTrackInstrument (const juce::String& trackId, std::optional<EffectKind> instrument);
+    // Removes a MIDI track's instrument in one undo step, as deleting it in the reference does; the
+    // track's MIDI can then play to a MIDI port.
+    juce::Result removeTrackInstrument (const juce::String& trackId);
+    // MIDI output ports, as the reference's MIDI Ports preferences list them. Track offers a port to
+    // MIDI tracks' MIDI To; Sync sends it MIDI Clock with Song Position, Start, Continue and Stop
+    // while the transport plays. Kept with the engine's device settings, not the project.
+    struct MidiOutputPortInfo { juce::String name; bool track = false, sync = false; bool operator== (const MidiOutputPortInfo&) const = default; };
+    std::vector<MidiOutputPortInfo> midiOutputPorts() const;
+    juce::Result setMidiOutputPort (const juce::String& name, bool track, bool sync);
     juce::Result showInstrumentEditor (int trackIndex);
     // Loads an audio file into the track's Sampler, switching the instrument to a Sampler first if needed (one undo step).
     juce::Result setInstrumentSample (const juce::String& trackId, const juce::File& sample);

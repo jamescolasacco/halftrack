@@ -67,6 +67,9 @@ const juce::Identifier hostedInstrumentProperty { "halftrackInstrument" }; // A 
 // A hosted plug-in's sidechain tap (InputTap, Post FX by default) and whether it is off; the
 // engine's node builder reads both (see cmake/PatchSidechainTaps.cmake).
 const juce::Identifier sidechainTapProperty { "halftrackSidechainTap" }, sidechainOffProperty { "halftrackSidechainOff" };
+// A MIDI track playing to a MIDI port: the channel (1-16) its MIDI goes out on. The engine's node
+// builder applies it (see cmake/PatchMidiPorts.cmake); its presence marks the output as a port.
+const juce::Identifier midiOutChannelProperty { "halftrackMidiOutChannel" };
 const juce::Identifier returnBusProperty { "halftrackReturnBus" };
 const juce::Identifier returnModeProperty { "halftrackReturnSendMode" };
 const juce::Identifier sendReturnProperty { "halftrackSendReturnID" };
@@ -1050,6 +1053,20 @@ Result validateHostedInstruments (const juce::ValueTree& state)
     for (const auto& child : state) if (auto result = validateHostedInstruments (child); result.failed()) return result;
     return Result::ok();
 }
+// A MIDI port output's channel is 1-16, on a MIDI track.
+Result validateMidiPortOutputs (const juce::ValueTree& state)
+{
+    if (state.hasProperty (midiOutChannelProperty))
+    {
+        const auto& value = state[midiOutChannelProperty];
+        const int channel = static_cast<int> (value);
+        if (! state.hasType (te::IDs::TRACK) || ! static_cast<bool> (state.getProperty (midiTrackProperty, false)) || ! (value.isInt() || value.isInt64() || value.toString().containsOnly ("0123456789"))
+            || channel < 1 || channel > 16)
+            return Result::fail ("The project contains an invalid MIDI port output.");
+    }
+    for (const auto& child : state) if (auto result = validateMidiPortOutputs (child); result.failed()) return result;
+    return Result::ok();
+}
 // A sidechain names an audio or MIDI track of the project, other than a return, with a known tap.
 Result validateSidechains (const juce::ValueTree& edit)
 {
@@ -1527,10 +1544,14 @@ Session::ClipInfo describeLaneClip (const juce::ValueTree& state, te::Edit& edit
 class Behaviour final : public te::EngineBehaviour
 {
 public:
-    explicit Behaviour (bool devices) : useDevices (devices) {}
+    Behaviour (bool devices, juce::String portPrefix) : useDevices (devices), midiPortPrefix (std::move (portPrefix)) {}
     bool autoInitialiseDeviceManager() override { return useDevices; }
     bool shouldOpenAudioInputByDefault() override { return false; }
-    bool usePhysicalMidiDevices() override { return useDevices; }
+    // Without devices, only the MIDI ports a test makes (named with its prefix) are used.
+    bool usePhysicalMidiDevices() override { return useDevices || midiPortPrefix.isNotEmpty(); }
+    bool shouldUsePhysicalMidiDevice (const juce::MidiDeviceInfo& info, bool) override { return midiPortPrefix.isEmpty() || info.name.startsWith (midiPortPrefix); }
+    // As in the reference, a MIDI output plays nothing until its Track or Sync switch is on.
+    bool shouldOpenMidiOutputByDefault() override { return false; }
     bool shouldOpenMidiInputByDefault() override { return false; }
     bool addSystemAudioIODeviceTypes() override { return useDevices; }
     bool canScanPluginsOutOfProcess() override { return useDevices; }
@@ -1626,6 +1647,7 @@ public:
     }
 private:
     bool useDevices;
+    juce::String midiPortPrefix;
 };
 
 // Test engines keep Tracktion's settings and temporary files in a folder owned by
@@ -2177,9 +2199,9 @@ private:
 
 struct Session::Impl
 {
-    explicit Impl (Session& s, bool devices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType)
+    explicit Impl (Session& s, bool devices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType, const juce::String& midiPortPrefix)
         : owner (s), engine (settingsStorage (devices), std::make_unique<UIBehaviour> (s, devices),
-                            std::make_unique<Behaviour> (devices)), useDevices (devices)
+                            std::make_unique<Behaviour> (devices, midiPortPrefix)), useDevices (devices)
     {
         engine.getPluginManager().createBuiltInType<TrackMixer>();
         engine.getPluginManager().createBuiltInType<TrackDelayPlugin>();
@@ -2776,6 +2798,25 @@ struct Session::Impl
         return found;
     }
     // A loaded external plug-in on a track, by id.
+    te::MidiOutputDevice* midiOutput (const String& name) const
+    {
+        auto& devices = engine.getDeviceManager();
+        for (int i = 0; i < devices.getNumMidiOutDevices(); ++i)
+            if (auto* device = devices.getMidiOutDevice (i); device != nullptr && device->getName() == name) return device;
+        return nullptr;
+    }
+    // A port's Track switch: it is offered to MIDI tracks' MIDI To while it is open.
+    static String midiPortTrackItem (const te::MidiOutputDevice& device) { return "halftrackTrack " + device.getName(); }
+    bool midiPortTrack (te::MidiOutputDevice& device) const
+    { return device.isEnabled() && static_cast<bool> (engine.getPropertyStorage().getPropertyItem (te::SettingID::midiout, midiPortTrackItem (device), false)); }
+    // An instrument arriving on a track that played to a MIDI port: as in the reference, its output
+    // returns to Master, in the same undo step.
+    void instrumentArrived (te::AudioTrack& track)
+    {
+        if (! track.state.hasProperty (midiOutChannelProperty)) return;
+        track.getOutput().setOutputToDefaultDevice (false);
+        track.state.removeProperty (midiOutChannelProperty, &edit->getUndoManager());
+    }
     te::ExternalPlugin* externalPlugin (const String& id, te::AudioTrack** owner = nullptr) const
     {
         for (auto* t : te::getAudioTracks (*edit))
@@ -3006,6 +3047,7 @@ struct Session::Impl
         transaction (name);
         if (current) { current->windowState->closeWindowExplicitly(); current->deleteFromParent(); }
         track.pluginList.insertPlugin (plugin, index, nullptr);
+        instrumentArrived (track);
         changed(); return Result::ok();
     }
     void transaction (const String& name)
@@ -4079,8 +4121,14 @@ struct Session::Impl
     DeviceStopWatch deviceStops { *this };
 };
 
-Session::Session (bool enableAudioDevices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType)
-    : impl (std::make_unique<Impl> (*this, enableAudioDevices, std::move (customDeviceType))) { warp::registerStretchers(); impl->loadPreferences(); if (enableAudioDevices) impl->ensureComputerKeyboard(); newProject(); }
+Session::Session (bool enableAudioDevices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType, juce::String midiPortPrefix)
+    : impl (std::make_unique<Impl> (*this, enableAudioDevices, std::move (customDeviceType), midiPortPrefix))
+{
+    warp::registerStretchers(); impl->loadPreferences();
+    if (enableAudioDevices) impl->ensureComputerKeyboard();
+    else if (midiPortPrefix.isNotEmpty()) impl->engine.getDeviceManager().rescanMidiDeviceListSynchronously();
+    newProject();
+}
 Session::~Session() { closePluginEditors(); }
 
 Session::Snapshot Session::snapshot() const
@@ -4202,8 +4250,10 @@ Session::Snapshot Session::snapshot() const
             info.takeLanes.push_back (std::move (laneInfo));
         }
         info.launcherActive = t->playSlotClips.get() || (t->launcherOwnership.load (std::memory_order_acquire) & 1) != 0;
-        if (auto* destination = t->getOutput().getDestinationTrack()) info.output = { OutputKind::track, destination->itemID.toString() };
+        if (const int channel = static_cast<int> (t->state.getProperty (midiOutChannelProperty, 0)); channel > 0) info.output = { OutputKind::midiPort, {}, t->getOutput().getOutputName(), channel };
+        else if (auto* destination = t->getOutput().getDestinationTrack()) info.output = { OutputKind::track, destination->itemID.toString() };
         else if (t->getOutput().outputsToNone()) info.output = { OutputKind::sendsOnly, {} };
+        info.hasInstrument = info.isMidi && Impl::instrument (*t) != nullptr;
         info.frozen = t->isFrozen (te::Track::individualFreeze);
         info.crossfade = static_cast<CrossfadeAssign> (juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (crossfadeProperty, 0))));
         if (auto* delay = t->pluginList.findFirstPluginOfType<TrackDelayPlugin>()) info.delayMs = delay->milliseconds.get();
@@ -4384,6 +4434,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateTrackLinks (state); result.failed()) return result;
     if (auto result = validateHostedInstruments (state); result.failed()) return result;
     if (auto result = validateSidechains (state); result.failed()) return result;
+    if (auto result = validateMidiPortOutputs (state); result.failed()) return result;
     if (auto result = validateClipScales (state); result.failed()) return result;
     if (auto result = validateGroovePool (state); result.failed()) return result;
     if (auto result = validateMidiMappings (state); result.failed()) return result;
@@ -5385,25 +5436,40 @@ Result Session::setTrackOutput (const String& trackId, const TrackOutput& output
     if (impl->anyRecording()) return Result::fail ("Stop recording before changing a track's output.");
     auto* t = impl->track (trackId); if (t == nullptr) return Result::fail ("Track not found.");
     TrackOutput current;
-    if (auto* destination = t->getOutput().getDestinationTrack()) current = { OutputKind::track, destination->itemID.toString() };
+    if (const int channel = static_cast<int> (t->state.getProperty (midiOutChannelProperty, 0)); channel > 0) current = { OutputKind::midiPort, {}, t->getOutput().getOutputName(), channel };
+    else if (auto* destination = t->getOutput().getDestinationTrack()) current = { OutputKind::track, destination->itemID.toString() };
     else if (t->getOutput().outputsToNone()) current = { OutputKind::sendsOnly, {} };
-    if (output.kind != OutputKind::track ? output.kind == current.kind : output == current) return Result::ok();
+    if (output.kind == OutputKind::master || output.kind == OutputKind::sendsOnly ? output.kind == current.kind : output == current) return Result::ok();
     if (output.kind != OutputKind::master && isReturn (*t)) return Result::fail ("Return tracks play into Master.");
     if (output.kind != OutputKind::master && t->getParentFolderTrack() != nullptr) return Result::fail ("Tracks in a group play into the group.");
     te::AudioTrack* destination = nullptr;
+    te::MidiOutputDevice* port = nullptr;
     if (output.kind == OutputKind::track)
     {
         if (! outputDestinations (trackId).contains (output.trackId))
             return Result::fail ("That track cannot take this track's output: choose another audio track that does not play back into this one.");
         destination = impl->track (output.trackId);
     }
+    if (output.kind == OutputKind::midiPort)
+    {
+        if (! static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) || Impl::instrument (*t) != nullptr)
+            return Result::fail ("Only a MIDI track without an instrument plays to a MIDI port.");
+        if (output.midiChannel < 1 || output.midiChannel > 16) return Result::fail ("MIDI channels are 1 to 16.");
+        port = impl->midiOutput (output.port);
+        if (port == nullptr || ! impl->midiPortTrack (*port)) return Result::fail ("Choose a MIDI port whose Track switch is on in the MIDI Ports settings.");
+    }
     impl->transaction ("Set track output");
+    auto* undo = &impl->edit->getUndoManager();
     switch (output.kind)
     {
         case OutputKind::master: t->getOutput().setOutputToDefaultDevice (false); break;
         case OutputKind::sendsOnly: t->getOutput().setOutputToNone(); break;
         case OutputKind::track: t->getOutput().setOutputToTrack (destination); break;
+        // By name, which the engine also resolves, so a project names the port on any machine.
+        case OutputKind::midiPort: t->getOutput().setOutputToDeviceID (port->getName()); break;
     }
+    if (output.kind == OutputKind::midiPort) t->state.setProperty (midiOutChannelProperty, output.midiChannel, undo);
+    else t->state.removeProperty (midiOutChannelProperty, undo);
     impl->edit->restartPlayback(); impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::auditionTakeLane (const String& laneId)
@@ -6664,6 +6730,44 @@ Result Session::setTrackInstrument (const String& trackId, std::optional<EffectK
     }
     else state.setProperty (te::IDs::type, SubtractiveSynthPlugin::xmlTypeName, nullptr);
     return impl->replaceInstrument (*track, state, "Change instrument");
+}
+Result Session::removeTrackInstrument (const String& trackId)
+{
+    if (auto frozen = impl->unfrozen (impl->track (trackId)); frozen.failed()) return frozen;
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* track = impl->track (trackId);
+    if (! track || ! track->state.getProperty (midiTrackProperty, false)) return Result::fail ("Instruments need a MIDI track.");
+    auto* current = Impl::instrument (*track);
+    if (current == nullptr) return Result::ok();
+    closePluginEditors();
+    impl->transaction ("Remove instrument");
+    current->deleteFromParent();
+    impl->changed(); return Result::ok();
+}
+std::vector<Session::MidiOutputPortInfo> Session::midiOutputPorts() const
+{
+    std::vector<MidiOutputPortInfo> ports;
+    auto& devices = impl->engine.getDeviceManager();
+    for (int i = 0; i < devices.getNumMidiOutDevices(); ++i)
+        if (auto* device = devices.getMidiOutDevice (i))
+            ports.push_back ({ device->getName(), impl->midiPortTrack (*device), device->isEnabled() && device->isSendingClock() });
+    return ports;
+}
+Result Session::setMidiOutputPort (const String& name, bool track, bool sync)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before changing MIDI ports.");
+    auto* device = impl->midiOutput (name);
+    if (device == nullptr) return Result::fail ("That MIDI port is not available.");
+    impl->engine.getPropertyStorage().setPropertyItem (te::SettingID::midiout, Impl::midiPortTrackItem (*device), track);
+    device->setSendingClock (sync);
+    // A port opens while either switch is on, and the engine reopens its devices synchronously.
+    if (device->isEnabled() != (track || sync))
+    {
+        device->setEnabled (track || sync);
+        impl->engine.getDeviceManager().rescanMidiDeviceListSynchronously();
+    }
+    impl->edit->restartPlayback(); sendChangeMessage(); return Result::ok();
 }
 Result Session::setInstrumentSample (const String& trackId, const File& sample)
 {
@@ -10169,6 +10273,7 @@ Result Session::addPlugin (int index, const juce::PluginDescription& description
         external->state.setProperty (hostedInstrumentProperty, true, nullptr);
         if (current) { current->windowState->closeWindowExplicitly(); current->deleteFromParent(); }
         t->pluginList.insertPlugin (plugin, index, nullptr);
+        impl->instrumentArrived (*t);
         impl->changed(); return Result::ok();
     }
     auto insertIndex = isReturn (*t) ? 1 : 0;

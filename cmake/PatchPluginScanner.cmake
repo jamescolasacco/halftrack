@@ -15,7 +15,8 @@ function(halftrack_patch_plugin_scanner source_dir)
         set(needs_patch_${index} FALSE)
         if(source_hash STREQUAL "${patched_${index}}"
            OR (index EQUAL 1 AND source_hash STREQUAL "fe49e3934dc91d709c99293a2a8c5dbc7f582c10bcd389a2d9aeb15fec8305cf") # The later MIDI-device patch,
-           OR (index EQUAL 1 AND source_hash STREQUAL "5721d06c407ce781dee9c3e804981f3a283fc98d26d412f2ce27246381ba9eaa")) # and the MIDI variations patch after it.
+           OR (index EQUAL 1 AND source_hash STREQUAL "5721d06c407ce781dee9c3e804981f3a283fc98d26d412f2ce27246381ba9eaa") # the MIDI variations patch after it,
+           OR (index EQUAL 1 AND source_hash STREQUAL "546f1bc2652ba56474e93efabe4f054f8c699cebb2fb446b341a6e176af339e3")) # and the MIDI ports patch after that.
             continue()
         endif()
         if(NOT source_hash STREQUAL "${original_${index}}"

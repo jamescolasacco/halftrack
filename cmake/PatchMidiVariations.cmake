@@ -11,6 +11,7 @@ function(halftrack_patch_midi_variations source_dir)
     set(original0 "fe49e3934dc91d709c99293a2a8c5dbc7f582c10bcd389a2d9aeb15fec8305cf")
     set(patched0 "5721d06c407ce781dee9c3e804981f3a283fc98d26d412f2ce27246381ba9eaa")
     set(count0 1)
+    set(downstream0 "546f1bc2652ba56474e93efabe4f054f8c699cebb2fb446b341a6e176af339e3") # The later MIDI ports patch.
     set(before0_0 [=[    virtual juce::MidiMessageSequence createPlaybackMidiSequence (const MidiList& list, MidiClip& clip, MidiList::TimeBase tb, bool generateMPE)
     {
         return MidiList::createDefaultPlaybackMidiSequence (list, clip, tb, generateMPE);
@@ -36,7 +37,7 @@ function(halftrack_patch_midi_variations source_dir)
     set(original1 "06c1d2be2f00c494f5db33c2b5ced64f9395e9fb7e16e4e8002ef7beacfa9ee8")
     set(patched1 "bfc26bb83dcc389b9b3cd64db016f5e493e7f1f982b7c8910be6524c30703766")
     set(count1 1)
-    set(downstream1 "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647") # The later sidechain taps patch.
+    set(downstream1 "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647" "1a07134c8c4c2a229b4da262dc6b547d3ab1302496fd5e5fbf1d375e9614517a") # The later sidechain taps and MIDI ports patches.
     set(before1_0 [=[        std::vector<juce::MidiMessageSequence> sequences;
         sequences.emplace_back (clip.getSequence().exportToPlaybackMidiSequence (clip, timeBase, generateMPE));]=])
     set(after1_0 [=[        std::vector<juce::MidiMessageSequence> sequences;
@@ -121,7 +122,7 @@ function(halftrack_patch_midi_variations source_dir)
     static constexpr int maxEmptyLoops = 64;]=])
     foreach(index RANGE 0 2)
         file(SHA256 "${source${index}}" hash)
-        if(hash STREQUAL "${patched${index}}" OR (DEFINED downstream${index} AND hash STREQUAL "${downstream${index}}"))
+        if(hash STREQUAL "${patched${index}}" OR (DEFINED downstream${index} AND hash IN_LIST downstream${index}))
             set(write${index} FALSE)
             continue()
         endif()
