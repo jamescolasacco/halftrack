@@ -89,7 +89,7 @@ On systems that cannot make virtual MIDI ports (Windows, or Linux without the AL
 - **Undo and editing.** The tempo it sets is not an undo step. The tempo field and TAP step aside meanwhile, and setting the tempo otherwise is ignored.
 - **One tempo.** External Sync needs a single tempo, not a tempo map.
 
-**Evidence.** `tests/ExternalSyncTests.cpp` makes a virtual MIDI port and sends it clock in real time, pumping the synthetic device in step. The test's own ticks jitter by a few milliseconds, so the clock's readings are checked to half a BPM. While playing, the tempo follows the clock's within 2%, since the phase correction moves it by a percent for each hundredth of a beat the loaded machine's blocks lag. It checks:
+**Evidence.** `tests/ExternalSyncTests.cpp` makes a virtual MIDI port and sends it clock in real time, pumping the synthetic device in step. The test's own ticks jitter with the machine's scheduling, by more than a millisecond on a loaded CI runner, so the clock's readings are checked to 2% of the tempo sent, and the tempo against the reading: to half a BPM while stopped, and to 2% while playing, since the phase correction moves it by a percent for each hundredth of a beat the loaded machine's blocks lag. It checks:
 
 - the port is offered as an input;
 - with External Sync off, the clock's 120 BPM is read but not followed;
