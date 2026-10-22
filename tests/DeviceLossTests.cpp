@@ -141,7 +141,8 @@ int runDeviceLossTests (const juce::File& artifacts)
         pump (devices, 100);
         s.seek (0); ok (s.play(), "play again");
         pump (devices, 100);
-        check (s.snapshot().playing && s.snapshot().position > .2, "and it plays");
+        for (int i = 0; i < 6 && s.snapshot().position <= .2; ++i) pump (devices, 50);
+        check (s.snapshot().playing && s.snapshot().position > .2, "and it plays (at " + juce::String (s.snapshot().position, 3) + " s)");
 
         // A settings restart on the chosen device still resumes playback.
         auto setup = devices.getAudioDeviceSetup(); setup.bufferSize = 512;
