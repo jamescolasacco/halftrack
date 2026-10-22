@@ -10867,7 +10867,12 @@ Result Session::exportStems (const File& folder, const AudioExportSettings& sett
         if (! track.isReturn) stems.push_back ({ track.name, track.id, std::nullopt });
     }
     for (const auto& track : snapshot.tracks) if (track.isReturn) stems.push_back ({ track.name, track.id, std::nullopt });
-    stems.push_back ({ "Master", std::nullopt, std::nullopt, true });
+    if (settings.stemTracks.isEmpty()) stems.push_back ({ "Master", std::nullopt, std::nullopt, true });
+    else
+    {
+        std::erase_if (stems, [&] (const Stem& stem) { return ! settings.stemTracks.contains (stem.trackId.value_or (stem.groupId.value_or (String()))); });
+        if (stems.empty()) return Result::fail ("None of the chosen tracks is in the project.");
+    }
     std::vector<File> files; std::set<String> used;
     for (const auto& stem : stems)
     {

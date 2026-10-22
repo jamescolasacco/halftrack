@@ -76,6 +76,17 @@ int runStemExportTests (const juce::File& artifacts)
         ok (s.setTrackMute (0, true), "mute the first track");
         ok (s.exportStems (folder, settings, files, true), "replace the stems");
         check (read (folder.getChildFile ("Song Lead.wav")).getMagnitude (0, 2000, 44000) < 1e-6 && s.snapshot().tracks[0].mute, "a muted track exports a silent stem and stays muted");
+        ok (s.setTrackMute (0, false), "unmute it");
+        // Selected Tracks Only, or one track: just those stems, without Master.
+        const auto chosen = root.getChildFile ("Chosen");
+        settings.stemTracks = { s.snapshot().tracks[0].id, group };
+        ok (s.exportStems (chosen, settings, files), "export the first track and the group");
+        names.clear(); for (const auto& f : files) names.add (juce::File (f).getFileName());
+        check (names == juce::StringArray { "Song Lead.wav", "Song Keys.wav" } && ! chosen.getChildFile ("Song Master.wav").exists() && ! chosen.getChildFile ("Song Pad.wav").exists(),
+               "only the chosen track and group are rendered, without Master: " + names.joinIntoString (", "));
+        check (error (read (chosen.getChildFile ("Song Keys.wav")), [&] (int n) { return half * b (n); }) < 1e-5, "and they sound as the full export's do");
+        settings.stemTracks = { "missing" };
+        check (s.exportStems (root.getChildFile ("None"), settings, files).failed() && files.isEmpty(), "a choice with no track in the project is refused");
         std::cout << "Stems passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL stems: " << e.what() << std::endl; return 1; }

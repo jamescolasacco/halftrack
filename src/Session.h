@@ -31,6 +31,9 @@ public:
         // Exact [start, end) seconds, rounded to output frames. Requires zero tail.
         std::optional<juce::Range<double>> timeRange;
         bool stems = false; // Chosen in the export window: render every track to its own file with exportStems.
+        // With stems, only these tracks and groups, each to its own file and without Master: the
+        // reference's Selected Tracks Only, or a single track chosen by name. Empty renders them all.
+        juce::StringArray stemTracks;
         // Export Video: also a QuickTime movie beside the audio (its name with .mov), of the picture of
         // the video clip under the export's start for the exported time, with the exported sound. An
         // existing movie there is kept unless replaceVideo says to replace it.

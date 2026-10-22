@@ -9188,6 +9188,17 @@ private:
     class AudioExportDialog final : public juce::AlertWindow
     {
     public:
+        // The tracks the Rendered Track menu offers after Master and All Individual Tracks: Selected
+        // Tracks Only, then each track and group by name, as the reference's does.
+        void setTracks (const std::vector<std::pair<juce::String, juce::String>>& tracks, const juce::StringArray& selected)
+        {
+            auto* rendered = getComboBoxComponent ("rendered");
+            selectedTracks = selected;
+            rendered->addItem ("Selected Tracks Only", 3); rendered->setItemEnabled (3, ! selected.isEmpty());
+            int id = 4;
+            for (const auto& [trackId, name] : tracks) { renderedTracks.add (trackId); rendered->addItem (name, id++); }
+        }
+        juce::StringArray renderedTracks, selectedTracks;
         AudioExportDialog (juce::Component& parent, Theme& look, juce::Range<double> loop, bool hasVideo = false)
             : AlertWindow ("Export Audio", {}, juce::MessageBoxIconType::NoIcon, &parent), capturedLoop (loop)
         {
@@ -9328,7 +9339,12 @@ private:
         const auto normalization = dialog.getComboBoxComponent ("normalization")->getSelectedItemIndex();
         settings.normalizePeak = normalization > 0;
         settings.peakCeilingDb = normalization == 2 ? -3.0f : normalization == 3 ? 0.0f : -1.0f;
-        settings.stems = dialog.getComboBoxComponent ("rendered")->getSelectedItemIndex() == 1;
+        // Rendered Track: Master, All Individual Tracks, Selected Tracks Only, or one track by name.
+        const auto rendered = dialog.getComboBoxComponent ("rendered")->getSelectedItemIndex();
+        settings.stems = rendered >= 1;
+        if (rendered == 2) settings.stemTracks = dialog.selectedTracks;
+        if (rendered >= 3) settings.stemTracks = { dialog.renderedTracks[rendered - 3] };
+        if (rendered >= 2 && settings.stemTracks.isEmpty()) return juce::Result::fail ("Select the tracks to render first.");
         if (auto* videoChoice = dialog.getComboBoxComponent ("video")) settings.video = videoChoice->isEnabled() && videoChoice->getSelectedItemIndex() == 1 && ! settings.stems;
         const auto mode = dialog.getComboBoxComponent ("range")->getSelectedItemIndex();
         if (mode == 0) return juce::Result::ok();
@@ -9364,6 +9380,14 @@ private:
         const bool hasVideo = std::any_of (current.tracks.begin(), current.tracks.end(), [] (const auto& t)
         { return std::any_of (t.clips.begin(), t.clips.end(), [] (const auto& c) { return c.videoFile != juce::File(); }); });
         auto* alert = new AudioExportDialog (*this, theme, { current.loopStart, current.loopEnd }, hasVideo);
+        {
+            std::vector<std::pair<juce::String, juce::String>> tracks; juce::StringArray selected;
+            for (const auto& group : current.groups) tracks.push_back ({ group.id, group.name });
+            for (const auto& track : current.tracks) tracks.push_back ({ track.id, track.name });
+            if (const auto* track = currentTrack()) selected.add (track->id);
+            for (const auto& id : multiSelectedTracks) selected.addIfNotAlreadyThere (id);
+            alert->setTracks (tracks, selected);
+        }
         alerts.emplace_back (alert);
         auto safe = juce::Component::SafePointer<Impl> (this);
         auto dialog = juce::Component::SafePointer<AudioExportDialog> (alert);
@@ -10691,7 +10715,20 @@ void MainComponent::Impl::runExportInteractionChecks (const juce::File& audioFix
         AudioExportDialog stemsDialog (*this, theme, { 0, 1 });
         stemsDialog.getComboBoxComponent ("rendered")->setSelectedItemIndex (1, juce::sendNotificationSync);
         Session::AudioExportSettings stemSettings;
-        check (readAudioExportSettings (stemsDialog, stemSettings).wasOk() && stemSettings.stems, "All Individual Tracks selects stem export");
+        check (readAudioExportSettings (stemsDialog, stemSettings).wasOk() && stemSettings.stems && stemSettings.stemTracks.isEmpty(), "All Individual Tracks selects stem export");
+        {
+            // Selected Tracks Only, and a single track by name.
+            AudioExportDialog chosenDialog (*this, theme, { 0, 1 });
+            chosenDialog.setTracks ({ { "first", "First" }, { "second", "Second" } }, { "second" });
+            auto* rendered = chosenDialog.getComboBoxComponent ("rendered");
+            check (rendered->getNumItems() == 5 && rendered->getItemText (2) == "Selected Tracks Only" && rendered->getItemText (3) == "First", "Rendered Track offers Selected Tracks Only and each track");
+            Session::AudioExportSettings chosen;
+            rendered->setSelectedItemIndex (2, juce::sendNotificationSync);
+            check (readAudioExportSettings (chosenDialog, chosen).wasOk() && chosen.stems && chosen.stemTracks == juce::StringArray { "second" }, "Selected Tracks Only renders the selected tracks");
+            rendered->setSelectedItemIndex (3, juce::sendNotificationSync);
+            check (readAudioExportSettings (chosenDialog, chosen).wasOk() && chosen.stems && chosen.stemTracks == juce::StringArray { "first" }, "a track chosen by name renders it alone");
+            chosenDialog.setVisible (false);
+        }
         stemsDialog.setVisible (false);
         juce::TemporaryFile stemFolder;
         performStemExport (stemFolder.getFile(), stemSettings, session.snapshot().projectGeneration);
@@ -14613,7 +14650,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         dialog->getComboBoxComponent ("action")->setSelectedItemIndex (action, juce::sendNotificationSync);
         check (dialog->getTextEditor ("beats")->isEnabled() == (action != 0), "Off disables timed follow input");
         dialog->getTextEditor ("beats")->setText (beats); dialog->exitModalState (result);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil (20); refresh();
+        // The dialog applies its choice in a callback after it closes, which a loaded machine can take
+        // a moment to deliver.
+        for (int wait = 0; wait < 10; ++wait) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+        refresh();
     };
     finishFollowDialog ((int) Session::FollowAction::cycle, "2.5", 1);
     check (selectedSlot()->clip.follow == Session::FollowSettings { Session::FollowAction::cycle, 2.5 }, "production follow dialog sets actual native beat timing");

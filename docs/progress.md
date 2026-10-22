@@ -1891,3 +1891,11 @@ UI area.
 - **Scroll follow.** Preferences > Follow Behavior offers Page (as before) or Scroll, as the reference's does; Scroll keeps the play head in the middle of the Arrangement and piano roll once it reaches it. It is saved with the preferences.
 - **A fix.** Changing any setting in the Preferences panel no longer resets Driver Error Compensation, which the panel does not show.
 - **Measured.** The preferences suite and the UI suite.
+
+## Rendering selected tracks — 2026-10-22
+
+Engine and UI areas.
+
+- **Rendered Track.** Export Audio's Rendered Track offers Selected Tracks Only and each track or group by name, after Master and All Individual Tracks, as the reference's does. They render just those stems, without Master (`AudioExportSettings::stemTracks`).
+- **A wait fixed.** The follow-action dialog's UI check now waits long enough for the dialog's closing callback.
+- **Measured.** The stems suite and the export UI checks.
