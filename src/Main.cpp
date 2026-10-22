@@ -782,6 +782,13 @@ public:
             quit();
             return;
         }
+        if (args.contains ("--self-test-separation"))
+        {
+            const int i = args.indexOf ("--self-test-separation");
+            setApplicationReturnValue (MainComponent::runSeparationStressTests (juce::File (args[i + 1])));
+            quit();
+            return;
+        }
         if (args.contains ("--self-test-ui"))
         {
             setApplicationReturnValue (MainComponent::runInteractionTests());

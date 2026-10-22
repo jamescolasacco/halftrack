@@ -11,6 +11,7 @@
 #include "NativeEffects.h"
 #include "RackEditor.h"
 #include "SoundSimilarity.h"
+#include "../tests/RealtimeDevice.h" // The audio-thread separation test plays through it.
 #include "NoteTools.h"
 #include "Packs.h"
 #include "Session.h"
@@ -903,6 +904,7 @@ public:
 
    #if HALFTRACK_TESTS_ENABLED
     void runInteractionChecks (const juce::File& audioFixture);
+    int runSeparationStress (const juce::File& root);
     void runExportInteractionChecks (const juce::File& audioFixture);
     bool captureTestErrors = false;
     std::function<void (const Session::AudioExportSettings&, uint64_t)> testExportDestination;
@@ -13114,6 +13116,141 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (canvas.getTitle() == "Arrangement" && launcher.getTitle() == "Session" && pianoRoll.getTitle().isNotEmpty() && deviceChain.getTitle() == "Devices" && browserList.getTitle() == "Browser",
                "the major regions have titles and descriptions for a screen reader");
         closeClipView(); showArrangementView(); refresh();
+    }
+}
+
+// Records the real-time device's generated input while the message thread searches a large
+// browser library, paints the whole window and resizes it, for eight seconds. The audio thread
+// must keep its deadlines and the take must hold every sample in order.
+int MainComponent::Impl::runSeparationStress (const juce::File& root)
+{
+    auto check = [] (bool condition, const juce::String& message)
+    {
+        if (! condition) throw std::runtime_error (message.toStdString());
+        std::cout << "PASS separation: " << message << std::endl;
+    };
+    auto* device = dynamic_cast<RealtimeTestDevice*> (session.audioDeviceManager().getCurrentAudioDevice());
+    check (device != nullptr, "the Session plays through the real-time test device");
+    check (session.saveProject (root.getChildFile ("Stress").getChildFile ("Stress.halftrack")).wasOk(), "save a recording destination");
+    const auto inputs = session.inputNames();
+    check (! inputs.isEmpty() && session.setTrackInput (0, inputs[0]).wasOk() && session.setTrackArmed (0, true).wasOk(), "arm track 1 with the generated input");
+    // Work for the audio thread meanwhile: a clip playing through an EQ, and a synth playing chords.
+    {
+        juce::AudioBuffer<float> tone (2, 48000 * 10);
+        for (int i = 0; i < tone.getNumSamples(); ++i) for (int c = 0; c < 2; ++c) tone.setSample (c, i, .2f * (float) std::sin (i * .05 + c));
+        const auto file = root.getChildFile ("tone.wav");
+        juce::WavAudioFormat wav; std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+        auto writer = stream ? wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (2).withBitsPerSample (24)) : nullptr;
+        check (writer && writer->writeFromAudioSampleBuffer (tone, 0, tone.getNumSamples()), "write a playing clip");
+    }
+    check (session.importAudio (root.getChildFile ("tone.wav"), 1, 0).wasOk() && session.addNativeEffect (1, Session::EffectKind::eqThree).wasOk(), "track 2 plays a clip through an EQ Three");
+    check (session.addMidiTrack ("Chords").wasOk(), "add a synth track");
+    {
+        const auto synth = session.snapshot().tracks.back().id;
+        check (session.setTrackInstrument (synth, Session::EffectKind::polySynth).wasOk() && session.addMidiClip (synth, 0, 32).wasOk(), "a Poly Synth with a clip");
+        std::vector<Session::MidiNoteInfo> notes;
+        for (int beat = 0; beat < 32; beat += 2) for (const int pitch : { 48, 55, 60, 64, 67, 72 }) notes.push_back ({ {}, pitch, (double) beat, 1.9, .7f });
+        juce::StringArray ids;
+        check (session.addMidiNotes (session.snapshot().tracks.back().clips[0].id, notes, ids).wasOk(), "six-note chords every half bar");
+    }
+    refresh();
+    // A browser library of 3000 names in 30 folders, indexed before the take.
+    setBrowserCategory (BrowserCategory::samples);
+    browserFolder = root.getChildFile ("Library"); updateBrowser();
+    for (int i = 0; i < 2000 && (browserIndex.status().indexing || browserLoading); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
+    check (browserIndex.status().entries >= 3000, "the library is indexed (" + juce::String ((int) browserIndex.status().entries) + " entries)");
+
+    const int before = device->blocks();
+    session.seek (0);
+    check (session.record().wasOk(), "record");
+    const juce::StringArray queries { "sound 1", "folder 2", "sound 77", "zzz", "sound", "folder 29 sound 5", "o" };
+    int searches = 0, paints = 0, resizes = 0;
+    const auto start = juce::Time::getMillisecondCounterHiRes();
+    while (juce::Time::getMillisecondCounterHiRes() - start < 8000)
+    {
+        browserSearch.setText (queries[searches % queries.size()], juce::dontSendNotification); updateBrowser(); ++searches;
+        [[maybe_unused]] const auto image = createComponentSnapshot (getLocalBounds(), true, 1.0f); ++paints;
+        setSize (resizes % 2 == 0 ? 1100 : 1440, resizes % 2 == 0 ? 760 : 900); ++resizes;
+        refresh();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (4);
+    }
+    const double seconds = (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
+    check (session.snapshot().recording, "it was recording throughout");
+    session.stop();
+    // The take arrives once the engine has finished writing it.
+    const auto takeClips = [this] { const auto now = session.snapshot(); return now.tracks.empty() ? std::vector<Session::ClipInfo> {} : now.tracks[0].clips; };
+    for (int i = 0; i < 500 && takeClips().empty(); ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+    for (const auto& clip : session.snapshot().tracks[0].clips) std::cout << "DEBUG clip audio " << (int) clip.isAudio << " file " << clip.file.getFullPathName() << " exists " << (int) clip.file.existsAsFile() << std::endl;
+    const int after = device->blocks();
+    browserSearch.setText ({}, juce::dontSendNotification); updateBrowser();
+
+    // Deadlines: each callback should finish within its block period and start on time.
+    const double period = 1000.0 * RealtimeTestDevice::blockSize / RealtimeTestDevice::rate;
+    std::vector<float> durations, lateness;
+    for (int block = before; block < after; ++block) { durations.push_back (device->duration (block)); lateness.push_back (device->late (block)); }
+    const int blocks = (int) durations.size();
+    check (blocks >= 0.9 * seconds * 1000.0 / period, juce::String (blocks) + " callbacks in " + juce::String (seconds, 1) + " s while the interface worked: the audio thread kept running");
+    const auto overrun = std::count_if (durations.begin(), durations.end(), [period] (float d) { return d > period; });
+    const auto lateStarts = std::count_if (lateness.begin(), lateness.end(), [period] (float d) { return d > period; });
+    std::vector<float> sorted = durations; std::sort (sorted.begin(), sorted.end());
+    std::vector<float> lateSorted = lateness; std::sort (lateSorted.begin(), lateSorted.end());
+    const auto percentile = [] (const std::vector<float>& v, double p) { return v.empty() ? 0.0f : v[(size_t) std::min ((double) v.size() - 1, p * (double) v.size())]; };
+    std::cout << "SEPARATION " << searches << " searches, " << paints << " full paints, " << resizes << " resizes; callbacks: median "
+              << juce::String (percentile (sorted, .5), 3) << " ms, 99th " << juce::String (percentile (sorted, .99), 3) << " ms, longest "
+              << juce::String (sorted.empty() ? 0.0f : sorted.back(), 3) << " ms of a " << juce::String (period, 2) << " ms period; start late at the 99th "
+              << juce::String (percentile (lateSorted, .99), 3) << " ms, at most " << juce::String (lateSorted.empty() ? 0.0f : lateSorted.back(), 3) << " ms" << std::endl;
+    check (searches > 50 && paints > 50 && resizes > 50, "the interface searched, painted and resized throughout");
+    check (overrun <= blocks / 100, juce::String ((int) overrun) + " of " + juce::String (blocks) + " callbacks ran past their block period (at most 1%)");
+    check (lateStarts <= blocks / 100, juce::String ((int) lateStarts) + " started a period late (at most 1%)");
+
+    // The take: the generated input, every sample in order from its first.
+    const auto take = [&] { for (const auto& clip : takeClips()) if (clip.isAudio) return clip.file; return juce::File(); }();
+    check (take.existsAsFile(), "the take was saved");
+    juce::AudioFormatManager formats; formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (take));
+    check (reader != nullptr && reader->lengthInSamples > (juce::int64) (RealtimeTestDevice::rate * (seconds - 1)), "the take lasts the recording (" + juce::String ((double) reader->lengthInSamples / RealtimeTestDevice::rate, 2) + " s)");
+    juce::AudioBuffer<float> recorded ((int) reader->numChannels, (int) reader->lengthInSamples);
+    reader->read (&recorded, 0, recorded.getNumSamples(), 0, true, true);
+    // Find where in the generated signal the take begins (the signals repeat every 2400 samples).
+    int offset = -1;
+    for (int k = 0; k < 2400 && offset < 0; ++k)
+    {
+        bool same = true;
+        for (int n = 0; n < 64 && same; ++n)
+            same = std::abs (recorded.getSample (0, n) - RealtimeTestDevice::generated (0, k + n)) < 1e-3f && std::abs (recorded.getSample (1, n) - RealtimeTestDevice::generated (1, k + n)) < 1e-3f;
+        if (same) offset = k;
+    }
+    check (offset >= 0, "the take begins with the generated input");
+    int wrong = 0, firstWrong = -1;
+    for (int n = 0; n < recorded.getNumSamples(); ++n)
+        for (int c = 0; c < 2; ++c)
+            if (std::abs (recorded.getSample (c, n) - RealtimeTestDevice::generated (c, offset + n)) >= 1e-3f) { if (firstWrong < 0) firstWrong = n; ++wrong; }
+    check (wrong == 0, "every one of its " + juce::String (recorded.getNumSamples()) + " samples follows in order, none lost or repeated" + (wrong > 0 ? " (first wrong at " + juce::String (firstWrong) + ")" : juce::String()));
+    std::cout << "Separation passed: " << root.getFullPathName() << std::endl;
+    return 0;
+}
+
+int MainComponent::runSeparationStressTests (const juce::File& artifacts)
+{
+    try
+    {
+        const auto root = artifacts.getChildFile ("separation-" + juce::Uuid().toString());
+        for (int folder = 0; folder < 30; ++folder)
+            for (int sound = 0; sound < 100; ++sound)
+            {
+                const auto file = root.getChildFile ("Library").getChildFile ("Folder " + juce::String (folder)).getChildFile ("Sound " + juce::String (sound) + ".wav");
+                if (! file.getParentDirectory().createDirectory().wasOk() || ! file.replaceWithText ({})) throw std::runtime_error ("could not write the library");
+            }
+        Session session (false, std::make_unique<RealtimeTestDeviceType>());
+        MainComponent component (session);
+        component.setSize (1440, 900);
+        component.impl->captureTestErrors = true;
+        return component.impl->runSeparationStress (root);
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "FAIL separation: " << error.what() << std::endl;
+        return 1;
     }
 }
 

@@ -23,6 +23,8 @@ public:
    #if HALFTRACK_TESTS_ENABLED
     static int runInteractionTests();
     static int runExportInteractionTests();
+    // Audio-thread separation: recording from a real-time device thread while the interface works.
+    static int runSeparationStressTests (const juce::File& artifacts);
    #endif
 
 private:

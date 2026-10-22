@@ -1663,3 +1663,13 @@ Engine-independent content handling in `src/Packs.*` (new), with `tests/PackTest
 - **The UI.** The File menu installs packs; the browser lists, opens and uninstalls them.
 
 See [the contract](research/packs-contract.md).
+
+## Audio-thread separation — 2026-10-21
+
+QA change in `tests/RealtimeDevice.h` (new) and the separation test in `src/MainComponent.cpp`; the root change in `CMakeLists.txt` and `src/Main.cpp`. Documentation updated.
+
+- **Real-time device.** A test device calls the engine from a real-time thread of its own.
+- **Stress.** While it records with a clip and a synth playing, the interface searches, paints and resizes continuously.
+- **Checks.** Callback deadlines and the take's every sample are checked, and the timings are printed.
+
+See [the contract](research/separation-stress-contract.md).

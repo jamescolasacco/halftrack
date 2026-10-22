@@ -127,6 +127,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | QA-002 | fuzz, graph-edits, large-session, soak, stuck-notes |  |
 | QA-003 | python, session |  |
 | QA-004 | wav-decoder |  |
+| QA-005 | separation |  |
 | QA-006 | fuzz, graph-edits, large-session, soak, stuck-notes |  |
 | QA-007 | fuzz, graph-edits, large-session, soak, stuck-notes |  |
 | QA-008 | fuzz, graph-edits, large-session, soak, stuck-notes |  |

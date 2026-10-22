@@ -319,6 +319,8 @@ if(BUILD_TESTING)
     add_test(NAME plugin-timing-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-plugin-timing ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(plugin-timing-acceptance PROPERTIES TIMEOUT 180
         ENVIRONMENT "HALFTRACK_TEST_PROBE_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestProbe_VST3>/../..")
+    add_test(NAME separation-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-separation ${CMAKE_BINARY_DIR}/test-artifacts)
+    set_tests_properties(separation-acceptance PROPERTIES TIMEOUT 120)
     add_test(NAME packs-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-packs ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(packs-acceptance PROPERTIES TIMEOUT 60)
     add_test(NAME similarity-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-similarity ${CMAKE_BINARY_DIR}/test-artifacts)
