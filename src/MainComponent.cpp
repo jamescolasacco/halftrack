@@ -6047,6 +6047,8 @@ private:
 
     // A hosted plug-in's controls in its panel: Configure chooses which of its parameters show here,
     // four to a column, where they can be automated and MIDI mapped like a device's own controls.
+    // A plug-in with a sidechain input shows, as in the reference, its sidechain at the left: the
+    // switch, the track it hears (Audio From) and that track's tap.
     class PluginControls final : public juce::Component
     {
     public:
@@ -6056,9 +6058,59 @@ private:
             configure.setWantsKeyboardFocus (false);
             configure.setTooltip ("Choose which of this plug-in's parameters show here, where they can be automated and MIDI mapped.");
             configure.onClick = [this] { showConfigureMenu(); };
+            for (auto* c : std::initializer_list<juce::Component*> { &sidechainOn, &sidechainSource, &sidechainTap }) { addChildComponent (c); c->setWantsKeyboardFocus (false); }
+            sidechainOn.setName ("Sidechain on"); sidechainSource.setName ("Sidechain source"); sidechainTap.setName ("Sidechain tap");
+            sidechainOn.setTooltip ("Feed the plug-in's sidechain input from the chosen track.");
+            sidechainSource.setTooltip ("The track whose audio the plug-in's sidechain hears. It is not heard through this track.");
+            sidechainTap.setTooltip ("Where that track's audio is taken: before its devices, after them, or after its mixer.");
+            sidechainOn.setColour (juce::TextButton::buttonOnColourId, orange);
+            int item = 1;
+            for (const auto* tap : { "Pre FX", "Post FX", "Post Mixer" }) sidechainTap.addItem (tap, item++);
+            sidechainOn.onClick = [this] { auto next = sidechain; next.on = ! next.on; setSidechain (next); };
+            sidechainSource.onChange = [this]
+            {
+                // Choosing a track switches the sidechain on; No Input keeps the switch as it is.
+                auto next = sidechain;
+                const int index = sidechainSource.getSelectedItemIndex() - 1;
+                next.sourceTrackId = juce::isPositiveAndBelow (index, sourceIds.size()) ? sourceIds[index] : juce::String();
+                if (next.sourceTrackId.isNotEmpty() && next.sourceTrackId != sidechain.sourceTrackId) next.on = true;
+                setSidechain (next);
+            };
+            sidechainTap.onChange = [this] { auto next = sidechain; next.tap = static_cast<Session::InputTap> (juce::jlimit (0, 2, sidechainTap.getSelectedId() - 1)); setSidechain (next); };
         }
+        void setSidechain (const Session::SidechainSettings& next) { owner.report (owner.session.setPluginSidechain (pluginId, next)); owner.refresh(); }
         void sync (const Session::PluginInfo& info)
         {
+            if (hasSidechain != info.canSidechain)
+            {
+                hasSidechain = info.canSidechain;
+                for (auto* c : std::initializer_list<juce::Component*> { &sidechainOn, &sidechainSource, &sidechainTap }) c->setVisible (hasSidechain);
+                resized();
+            }
+            if (hasSidechain)
+            {
+                sidechain = info.sidechain;
+                sidechainOn.setTitle (info.name + " sidechain"); sidechainSource.setTitle (info.name + " sidechain source"); sidechainTap.setTitle (info.name + " sidechain tap");
+                sidechainOn.setToggleState (sidechain.on, juce::dontSendNotification);
+                // The tracks it can hear, then the current source even if it is no longer offered.
+                sourceIds = owner.session.sidechainSources (pluginId);
+                if (sidechain.sourceTrackId.isNotEmpty() && ! sourceIds.contains (sidechain.sourceTrackId)) sourceIds.add (sidechain.sourceTrackId);
+                juce::StringArray names { "No Input" };
+                for (const auto& sourceId : sourceIds)
+                {
+                    juce::String name = "Track";
+                    for (const auto& track : owner.state.tracks) if (track.id == sourceId) name = track.name;
+                    names.add (name);
+                }
+                if (names != sourceNames)
+                {
+                    sourceNames = names; sidechainSource.clear (juce::dontSendNotification);
+                    for (int i = 0; i < names.size(); ++i) sidechainSource.addItem (names[i], i + 1);
+                }
+                sidechainSource.setSelectedItemIndex (sidechain.sourceTrackId.isEmpty() ? 0 : sourceIds.indexOf (sidechain.sourceTrackId) + 1, juce::dontSendNotification);
+                sidechainTap.setSelectedId (static_cast<int> (sidechain.tap) + 1, juce::dontSendNotification);
+                sidechainTap.setEnabled (sidechain.sourceTrackId.isNotEmpty());
+            }
             const auto parameters = owner.session.pluginParameters (pluginId);
             if (info.configured != shown || parameters.size() != parameterCount)
             {
@@ -6092,25 +6144,28 @@ private:
                 }
             repaint();
         }
-        int preferredWidth() const { return juce::jmax (184, 8 + columns() * (controlWidth + 8)); }
+        int preferredWidth() const { return left() + juce::jmax (184, 8 + columns() * (controlWidth + 8)); }
         void resized() override
         {
-            configure.setBounds (6, 4, 76, 20);
+            sidechainOn.setBounds (6, 4, sidechainWidth - 12, 20); sidechainSource.setBounds (6, 30, sidechainWidth - 12, 22); sidechainTap.setBounds (6, 56, sidechainWidth - 12, 22);
+            configure.setBounds (left() + 6, 4, 76, 20);
             for (size_t i = 0; i < controls.size(); ++i)
             {
-                const int column = (int) i / rows, row = (int) i % rows, x = 6 + column * (controlWidth + 8), y = 30 + row * 36;
+                const int column = (int) i / rows, row = (int) i % rows, x = left() + 6 + column * (controlWidth + 8), y = 30 + row * 36;
                 controls[i]->label.setBounds (x, y, controlWidth, 14); controls[i]->slider.setBounds (x, y + 15, controlWidth, 16);
             }
         }
         void paint (juce::Graphics& g) override
         {
+            if (hasSidechain) { g.setColour (line); g.drawVerticalLine (sidechainWidth, 4.0f, (float) getHeight() - 4.0f); }
             if (! controls.empty()) return;
             g.setColour (muted); g.setFont (font (10.5f));
-            g.drawFittedText ("Configure to show this plug-in's parameters here.\nOpen its window for every control.", getLocalBounds().withTrimmedTop (28).reduced (8), juce::Justification::centred, 4);
+            g.drawFittedText ("Configure to show this plug-in's parameters here.\nOpen its window for every control.", getLocalBounds().withTrimmedLeft (left()).withTrimmedTop (28).reduced (8), juce::Justification::centred, 4);
         }
-        static constexpr int rows = 4, controlWidth = 148;
+        static constexpr int rows = 4, controlWidth = 148, sidechainWidth = 128;
     private:
         struct Control { int parameter = 0; juce::Slider slider; juce::Label label; };
+        int left() const { return hasSidechain ? sidechainWidth : 0; }
         int columns() const { return ((int) controls.size() + rows - 1) / rows; }
         void showConfigureMenu()
         {
@@ -6136,6 +6191,16 @@ private:
         std::vector<int> shown;
         size_t parameterCount = 0;
         std::vector<std::unique_ptr<Control>> controls;
+        bool hasSidechain = false;
+        Session::SidechainSettings sidechain;
+        juce::TextButton sidechainOn { "Sidechain" };
+        juce::ComboBox sidechainSource, sidechainTap;
+        juce::StringArray sourceIds, sourceNames;
+    public:
+        // The sidechain controls, for the UI suite.
+        juce::Button& sidechainSwitch() { return sidechainOn; }
+        juce::ComboBox& sidechainSourceChooser() { return sidechainSource; }
+        juce::ComboBox& sidechainTapChooser() { return sidechainTap; }
     };
 
     // One device in the inline chain: a title bar (on/off, name, window, remove)
@@ -10227,6 +10292,54 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         selectTrack (instrumentTrack); refresh();
     }
     else std::cout << "SKIP UI Configure: HALFTRACK_TEST_PLUGIN is not set" << std::endl;
+    if (const auto* sidechainPath = std::getenv ("HALFTRACK_TEST_SIDECHAIN_PLUGIN"))
+    {
+        // A plug-in with a sidechain input shows its sidechain at the left of its panel. Choosing a
+        // track there switches it on, the tap chooser picks where the audio is taken, and the
+        // switch turns it off again.
+        const int previousTrack = selectedTrack;
+        juce::OwnedArray<juce::PluginDescription> descriptions;
+        for (auto* format : session.pluginFormats().getFormats())
+            if (format->getName() == "VST3") format->findAllTypesForFile (descriptions, juce::File (juce::String::fromUTF8 (sidechainPath)).getFullPathName());
+        check (! descriptions.isEmpty(), "scan the sidechain fixture");
+        session.knownPlugins().addType (*descriptions[0]);
+        if (state.tracks.size() < 2 || state.tracks[1].isReturn) { check (session.addAudioTrack ("Sidechain source").wasOk(), "add a source track"); refresh(); }
+        selectTrack (0); report (session.addPlugin (0, *descriptions[0])); refresh();
+        check (state.tracks[0].plugins.size() == 1 && state.tracks[0].plugins[0].canSidechain, "the fixture is the track's only device and can take a sidechain");
+        const auto pluginId = state.tracks[0].plugins[0].id;
+        const auto settings = [&] { return state.tracks[0].plugins[0].sidechain; };
+        auto* on = dynamic_cast<juce::Button*> (findNamed (deviceChain, "Sidechain on"));
+        auto* source = dynamic_cast<juce::ComboBox*> (findNamed (deviceChain, "Sidechain source"));
+        auto* tap = dynamic_cast<juce::ComboBox*> (findNamed (deviceChain, "Sidechain tap"));
+        auto* configure = findNamed (deviceChain, "Configure plug-in");
+        check (on && source && tap && configure && on->isVisible() && source->isVisible() && tap->isVisible(), "its panel shows the sidechain switch, source and tap");
+        check (source->getText() == "No Input" && ! on->getToggleState() && ! tap->isEnabled() && configure->getX() >= PluginControls::sidechainWidth,
+               "with No Input and the switch off, left of Configure");
+        check (on->getTitle() == descriptions[0]->name + " sidechain" && source->getTitle().endsWith ("sidechain source"), "the controls have spoken titles naming the plug-in");
+        const auto sources = session.sidechainSources (pluginId);
+        check (! sources.isEmpty() && source->getNumItems() == sources.size() + 1, "the source chooser offers No Input and each track it can hear");
+        source->setSelectedItemIndex (1, juce::sendNotificationSync); refresh();
+        check (settings() == Session::SidechainSettings { true, sources[0], Session::InputTap::postFX } && on->getToggleState() && tap->isEnabled() && tap->getText() == "Post FX",
+               "choosing a track switches the sidechain on and feeds it Post FX");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("plugin-sidechain.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (deviceChain.createComponentSnapshot (deviceChain.getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        tap->setSelectedId (3, juce::sendNotificationSync); refresh();
+        check (settings().tap == Session::InputTap::postMixer, "the tap chooser takes it Post Mixer");
+        on->onClick(); refresh();
+        check (! settings().on && settings().sourceTrackId == sources[0] && ! on->getToggleState(), "the switch turns it off and keeps the track");
+        session.undo(); session.undo(); session.undo(); refresh();
+        check (settings() == Session::SidechainSettings {} && source->getText() == "No Input", "each was one undo step");
+        report (session.removePlugin (0, 0)); refresh();
+        check (state.tracks[0].plugins.empty(), "remove the sidechain fixture");
+        selectTrack (previousTrack); refresh();
+    }
+    else std::cout << "SKIP UI sidechain: HALFTRACK_TEST_SIDECHAIN_PLUGIN is not set" << std::endl;
     {
         // The computer MIDI keyboard: M turns it on; a note key plays instead of its shortcut and its
         // release ends the note; X and Z move the octave and say so; M again turns it off.

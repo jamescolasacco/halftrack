@@ -29,7 +29,8 @@ function(halftrack_patch_clip_launcher source_dir)
        AND NOT source_hash STREQUAL "6bc90a7dae60e9a0ab3d01fd77b0f90377b8933a9fe11bccbb38b31f471f060d"
        AND NOT source_hash STREQUAL "51ef9b7dfa77221251da5f43f77f91110f8b375de8974e6f45cac2c08c98ad48" # The later render sends-only patch.
        AND NOT source_hash STREQUAL "06c1d2be2f00c494f5db33c2b5ced64f9395e9fb7e16e4e8002ef7beacfa9ee8" # The later render track-inputs patch,
-       AND NOT source_hash STREQUAL "bfc26bb83dcc389b9b3cd64db016f5e493e7f1f982b7c8910be6524c30703766") # and the MIDI variations patch after it.
+       AND NOT source_hash STREQUAL "bfc26bb83dcc389b9b3cd64db016f5e493e7f1f982b7c8910be6524c30703766" # the MIDI variations patch after it,
+       AND NOT source_hash STREQUAL "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647") # and the sidechain taps patch.
         message(FATAL_ERROR "Halftrack launcher patch requires pinned source: ${source}; unexpected SHA256 ${source_hash}.")
     endif()
     set(source "${source_dir}/modules/tracktion_engine/model/tracks/tracktion_AudioTrack.h")
@@ -538,7 +539,8 @@ function(halftrack_patch_clip_launcher source_dir)
     if(NOT source_hash STREQUAL "31fb6f4d5b21355a67867c71461c26b17464e450c3c0e945173dd99f8550b074"
        AND NOT source_hash STREQUAL "51ef9b7dfa77221251da5f43f77f91110f8b375de8974e6f45cac2c08c98ad48" # Already carrying the later render sends-only patch,
        AND NOT source_hash STREQUAL "06c1d2be2f00c494f5db33c2b5ced64f9395e9fb7e16e4e8002ef7beacfa9ee8" # or the render track-inputs patch after it,
-       AND NOT source_hash STREQUAL "bfc26bb83dcc389b9b3cd64db016f5e493e7f1f982b7c8910be6524c30703766") # or the MIDI variations patch after that.
+       AND NOT source_hash STREQUAL "bfc26bb83dcc389b9b3cd64db016f5e493e7f1f982b7c8910be6524c30703766" # or the MIDI variations patch after that,
+       AND NOT source_hash STREQUAL "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647") # or the sidechain taps patch after that.
         file(READ "${source}" content)
         set(before [=[    if (arrangerNodes.empty() && launcherNodes.empty())
         return {};]=])

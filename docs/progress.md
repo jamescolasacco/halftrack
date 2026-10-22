@@ -1572,3 +1572,14 @@ Root change in `CMakeLists.txt`, `cmake/WriteBuildInfo.cmake` (new), `src/BuildI
 - **Package check.** CI installs each package into a fresh folder, checks its licenses, source and versions against the commit, runs the installed `--version`, then removes it.
 
 See [the contract](research/packaging-contract.md).
+
+## Plug-in sidechains — 2026-10-21
+
+Engine change in `src/Session.*`, `cmake/PatchSidechainTaps.cmake` (new), the earlier node-builder patches (to accept its hash), `tests/SidechainTests.cpp` and `tests/TestSidechainPlugin.cpp` (new). The UI change is in `src/MainComponent.cpp`; the root change in `CMakeLists.txt` and `src/Main.cpp`. Documentation updated.
+
+- **Sidechains.** A hosted plug-in with a sidechain input takes another track's audio there, at its Pre FX, Post FX or Post Mixer tap, from a column at the left of its device panel. Post FX is the default, as in every sidechain of the reference's demo sets.
+- **Buses.** Hosted plug-ins report their main and auxiliary buses.
+- **Loops.** Loops through sidechains are refused, as are track inputs and outputs that would loop through one.
+- **Delay compensation, renders and project changes.** A delayed source stays in step to the sample. Renders, stems, freezes, saving, duplication and removing the source all keep the sidechain.
+
+See [the contract](research/plugin-sidechain-contract.md).
