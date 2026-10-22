@@ -988,8 +988,15 @@ public:
     juce::Result addUtility (int trackIndex);
     juce::Result setUtilitySettings (const juce::String& pluginId, const UtilitySettings&);
     juce::Result movePlugin (int trackIndex, int pluginIndex, int destinationIndex);
-    // Inserts a hosted plug-in after the track's instrument. An instrument plug-in instead becomes a
-    // MIDI track's instrument, replacing the one it had (one undo step), and is refused elsewhere.
+    // A hosted plug-in's role, from its description rather than its file: an instrument, a MIDI
+    // effect (one whose category says MIDI, as Audio Units' MIDI processors do), or an audio effect.
+    enum class PluginRole { instrument, audioEffect, midiEffect };
+    static PluginRole pluginRole (const juce::PluginDescription&);
+    // "Instrument", "Audio Effect" or "MIDI Effect", its format, and its main channel counts when known.
+    static juce::String pluginSummary (const juce::PluginDescription&);
+    // Inserts a hosted audio effect after the track's instrument. An instrument plug-in instead
+    // becomes a MIDI track's instrument, replacing the one it had (one undo step); a MIDI effect
+    // goes on a MIDI track ahead of its instrument. Both are refused on audio tracks.
     juce::Result addPlugin (int trackIndex, const juce::PluginDescription&);
     juce::Result setPluginEnabled (int trackIndex, int pluginIndex, bool);
     juce::Result removePlugin (int trackIndex, int pluginIndex);

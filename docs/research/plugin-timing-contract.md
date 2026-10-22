@@ -10,6 +10,18 @@ As in the reference, an instrument plug-in dropped on a MIDI track becomes its i
 - **The device chain.** It shows the plug-in as a device, and hides the built-in synth's panel, which no longer plays.
 - **Load validation.** On load, a track may hold one plug-in instrument, on a MIDI track; otherwise the project is refused.
 
+## Classification
+
+`Session::pluginRole` classifies a scanned plug-in from its description, not its file:
+
+- **Instrument:** the description says so.
+- **MIDI effect:** its category mentions MIDI, as Audio Units' MIDI processors do. A VST3 scan reports no channels and no MIDI role, so a VST3 MIDI effect lists as an audio effect.
+- **Audio effect:** anything else.
+
+`pluginSummary` adds the format, and the main channel counts when the scan knew them.
+
+The browser lists plug-ins under their makers ("Unknown Maker" when none is given), by name. Each row shows its role, format and channels. A MIDI effect plug-in goes on a MIDI track ahead of its instrument and is refused on audio tracks. The UI suite checks the grouping, the summaries for an instrument, a MIDI effect, an audio effect with channels and one without, and the audio-track refusal, using stand-in descriptions.
+
 ## What a hosted plug-in is told
 
 `tests/TestProbePlugin.cpp` builds the Halftrack Test Probe, a VST3 instrument that writes what its host tells it into its audio:

@@ -1536,3 +1536,12 @@ Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`
 - **Timing.** A VST3 probe instrument shows the host delivering notes and beats at exact samples, both offline and live at two block sizes.
 
 See [the contract](research/plugin-timing-contract.md).
+
+## Plug-in classification — 2026-10-21
+
+Engine and UI change in `src/Session.*` and `src/MainComponent.cpp`, with documentation.
+
+- **Classification.** Plug-ins are classified as instruments, audio effects or MIDI effects from their descriptions. The browser lists them under their makers with their role, format and known channels. MIDI effect plug-ins go ahead of a MIDI track's instrument.
+- **Focus checks.** The UI suite's text-focus checks now report a skip when the system keeps another app in front, as it does while someone uses the machine. Wherever the app can become active, as on CI, they still must pass.
+
+See [the contract](research/plugin-timing-contract.md#classification).

@@ -9960,12 +9960,33 @@ Result Session::movePlugin (int t, int p, int destination)
     parent.moveChild (parent.indexOf (state), parent.indexOf (list[destination]->state), &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
+Session::PluginRole Session::pluginRole (const juce::PluginDescription& description)
+{
+    // A scan may not know a plug-in's channels (VST3 descriptions report none), so a MIDI effect is
+    // one whose category says so, as Audio Units' MIDI processors do.
+    if (description.isInstrument) return PluginRole::instrument;
+    if (description.category.containsIgnoreCase ("MIDI")) return PluginRole::midiEffect;
+    return PluginRole::audioEffect;
+}
+juce::String Session::pluginSummary (const juce::PluginDescription& description)
+{
+    const auto role = pluginRole (description);
+    const auto dot = " " + juce::String::charToString ((juce::juce_wchar) 0x00b7) + " "; // A middle dot.
+    auto summary = juce::String (role == PluginRole::instrument ? "Instrument" : role == PluginRole::midiEffect ? "MIDI Effect" : "Audio Effect")
+                 + dot + description.pluginFormatName;
+    // Channel counts only when the scan knew them.
+    if (description.numInputChannels > 0 || description.numOutputChannels > 0)
+        summary << dot << description.numInputChannels << " in, " << description.numOutputChannels << " out";
+    return summary;
+}
 Result Session::addPlugin (int index, const juce::PluginDescription& description)
 {
     if (auto frozen = impl->unfrozen (impl->track (index)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (! t->pluginList.canInsertPlugin()) return Result::fail ("This track's device chain is full.");
+    const auto role = pluginRole (description);
+    if (role == PluginRole::midiEffect && ! static_cast<bool> (t->state.getProperty (midiTrackProperty, false))) return Result::fail ("MIDI effect plug-ins go on MIDI tracks.");
     impl->transaction ("Add plug-in");
     // Tracktion resolves its persisted plug-in identity through this registry.
     knownPlugins().addType (description);
@@ -9988,7 +10009,7 @@ Result Session::addPlugin (int index, const juce::PluginDescription& description
         impl->changed(); return Result::ok();
     }
     auto insertIndex = isReturn (*t) ? 1 : 0;
-    if (auto* source = Impl::instrument (*t)) insertIndex = t->pluginList.indexOf (source) + 1;
+    if (auto* source = Impl::instrument (*t)) insertIndex = t->pluginList.indexOf (source) + (role == PluginRole::midiEffect ? 0 : 1);
     t->pluginList.insertPlugin (plugin, insertIndex, nullptr);
     impl->changed(); return Result::ok();
 }
