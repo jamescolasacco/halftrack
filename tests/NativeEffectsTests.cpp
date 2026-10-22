@@ -6,6 +6,7 @@
 #include <stdexcept>
 namespace halftrack
 {
+void useHardClipEdges();
 void runExtendedEffectsTests();
 namespace
 {
@@ -472,6 +473,7 @@ void projectTests(const juce::File& root)
 }
 int runNativeEffectsTests(const juce::File& artifacts)
 {
+    useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
     try {const auto root=artifacts.getChildFile("effects-"+juce::Uuid().toString());ok(root.createDirectory(),"create fixtures");equalizerTests();compressorTests();delayTests();syncedDelayTests();reverbTests();bitcrusherTests();gateTests();limiterTests();runExtendedEffectsTests();lifecycleTests();projectTests(root);runNativeEffectEditorTests(root);std::cout<<"Native effects passed: "<<root.getFullPathName()<<std::endl;return 0;}
     catch(const std::exception& e){std::cerr<<"FAIL native effects: "<<e.what()<<std::endl;return 1;}
 }

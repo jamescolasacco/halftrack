@@ -10,6 +10,7 @@
 // reaches the sidechain, as each setting, undo, mute, removal, reload and duplicate changes it.
 namespace halftrack
 {
+void useHardClipEdges();
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
 float pumpSyntheticTestDevice (Session&, int blocks);
 juce::AudioBuffer<float> captureSyntheticTestDevice (Session&, int blocks);
@@ -75,6 +76,7 @@ int runSidechainTests (const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root = artifacts.getChildFile ("sidechain-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
         const auto half = constant (root.getChildFile ("half.wav"), .5f), quarter = constant (root.getChildFile ("quarter.wav"), .25f);
         Session s (false, makeSyntheticTestDeviceType());

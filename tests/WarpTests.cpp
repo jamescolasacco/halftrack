@@ -10,6 +10,7 @@
 // project's beat grid, preserved pitch and exact restoration when warp is off.
 namespace halftrack
 {
+void useHardClipEdges();
 namespace
 {
 using Warp = Session::WarpSettings;
@@ -86,6 +87,7 @@ int runWarpTests (const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root = artifacts.getChildFile ("warp-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
         check (Session::estimateClipTempo (4) == 120 && Session::estimateClipTempo (3) == 80 && Session::estimateClipTempo (2.5) == 96
                && Session::estimateClipTempo (1) == 120 && Session::estimateClipTempo (.75) == 80 && Session::estimateClipTempo (10) == 96,

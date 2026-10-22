@@ -9,6 +9,7 @@
 // existing material, then into another project, and each track is rendered on its own.
 namespace halftrack
 {
+void useHardClipEdges();
 namespace
 {
 void check (bool v, const juce::String& text)
@@ -49,6 +50,7 @@ int runRangeClipboardTests (const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root = artifacts.getChildFile ("range-clipboard-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
         const auto render = root.getChildFile ("stems");
         const auto clicks = root.getChildFile ("clicks.wav");

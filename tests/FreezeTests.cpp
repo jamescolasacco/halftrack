@@ -12,6 +12,7 @@
 // audio, through the synthetic device, since exports render frozen tracks from their clips.
 namespace halftrack
 {
+void useHardClipEdges();
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
 float pumpSyntheticTestDevice (Session&, int blocks);
 juce::AudioBuffer<float> captureSyntheticTestDevice (Session&, int blocks);
@@ -112,6 +113,7 @@ int runFreezeTests (const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root = artifacts.getChildFile ("freeze-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
         const auto source = root.getChildFile ("source.wav");
         {

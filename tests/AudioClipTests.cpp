@@ -8,6 +8,7 @@
 #include <stdexcept>
 namespace halftrack
 {
+void useHardClipEdges();
 namespace
 {
 void check(bool value,const juce::String& text){if(!value)throw std::runtime_error(text.toStdString());std::cout<<"PASS audio clips: "<<text<<std::endl;}
@@ -216,6 +217,7 @@ int runAudioClipTests(const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root=artifacts.getChildFile("audio-clips-"+juce::Uuid().toString());ok(root.createDirectory(),"create fixtures");
         const auto file=root.getChildFile("source.wav"),render=root.getChildFile("render.wav"),project=root.getChildFile("session.halftrack");
         juce::AudioBuffer<float>source(2,48000);

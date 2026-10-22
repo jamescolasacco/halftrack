@@ -20,6 +20,7 @@
 #include <array>
 #include <bitset>
 #include <set>
+#include <atomic>
 #include <cstdlib>
 #include <filesystem>
 
@@ -700,21 +701,114 @@ juce::Array<te::Clip*> allTrackClips (te::AudioTrack& track)
     return result;
 }
 
+// Default edge fades, after the reference's: a clip edge marked default fades over 4 ms with the
+// smoothstep, less where the clip is too short for both, and where two clips touch with default
+// edges the later one starts early by the earlier one's fade-out, playing the material before its
+// start, so the two crossfade before the boundary. Nothing derived is stored: the engine asks for
+// these when it builds a clip's node.
+const juce::Identifier defaultFadeInProperty { "halftrackDefaultFadeIn" }, defaultFadeOutProperty { "halftrackDefaultFadeOut" };
+constexpr double defaultFadeSeconds = .004;
+// Create Fades on Clip Edges, mirrored for the helpers below that split clips outside a Session.
+std::atomic<bool> fadesOnClipEdges { true };
+bool hasDefaultFade (const te::Clip& clip, bool in) { return static_cast<bool> (clip.state.getProperty (in ? defaultFadeInProperty : defaultFadeOutProperty, false)); }
+void setDefaultFade (te::Clip& clip, bool in, bool on, juce::UndoManager* undo)
+{
+    if (dynamic_cast<te::WaveAudioClip*> (&clip) == nullptr) return;
+    const auto& key = in ? defaultFadeInProperty : defaultFadeOutProperty;
+    if (on) clip.state.setProperty (key, true, undo); else clip.state.removeProperty (key, undo);
+}
+// A new audio clip's edges follow the preference.
+void giveDefaultFades (te::Clip& clip, juce::UndoManager* undo)
+{
+    setDefaultFade (clip, true, fadesOnClipEdges, undo); setDefaultFade (clip, false, fadesOnClipEdges, undo);
+}
+// After a split, the two edges it made are default fades, or hard edges, by the preference.
+void resetSplitEdges (te::Clip& left, te::Clip* right, juce::UndoManager* undo)
+{
+    setDefaultFade (left, false, fadesOnClipEdges, undo);
+    if (right != nullptr) setDefaultFade (*right, true, fadesOnClipEdges, undo);
+}
+// The clip ending where this one starts, when both edges are default and this one has the material
+// before its start to play.
+te::WaveAudioClip* crossfadePartner (const te::WaveAudioClip& clip)
+{
+    if (! hasDefaultFade (clip, true) || clip.getClipSlot() != nullptr || clip.isLooping()
+        || clip.getPosition().getOffset().inSeconds() < defaultFadeSeconds - 1e-9) return nullptr;
+    auto* track = dynamic_cast<te::ClipTrack*> (clip.getTrack());
+    if (track == nullptr) return nullptr;
+    const auto start = clip.getPosition().getStart().inSeconds();
+    for (auto* other : track->getClips())
+        if (auto* wave = dynamic_cast<te::WaveAudioClip*> (other); wave != nullptr && wave != &clip && ! wave->disabled && hasDefaultFade (*wave, false)
+            && std::abs (wave->getPosition().getEnd().inSeconds() - start) < 1e-7)
+            return wave;
+    return nullptr;
+}
+struct EdgeFades { double in = 0, out = 0; int inType = 1, outType = 1; double preRoll = 0; };
+// A clip's own edge fades: a default edge is 4 ms, and when both are and the clip is shorter than
+// both, each takes half; a default edge beside an ordinary fade takes what is left.
+EdgeFades ownFades (const te::WaveAudioClip& clip)
+{
+    EdgeFades f;
+    const bool in = hasDefaultFade (clip, true), out = hasDefaultFade (clip, false), crossing = crossfadePartner (clip) != nullptr;
+    f.in = in ? defaultFadeSeconds : clip.getFadeIn().inSeconds();
+    f.out = out ? defaultFadeSeconds : clip.getFadeOut().inSeconds();
+    f.inType = in ? (int) te::AudioFadeCurve::smoothstep : (int) clip.getFadeInType();
+    f.outType = out ? (int) te::AudioFadeCurve::smoothstep : (int) clip.getFadeOutType();
+    const auto length = clip.getPosition().getLength().inSeconds();
+    const auto inside = crossing ? 0.0 : f.in; // A crossfade's fade-in lies before the clip.
+    if (inside + f.out > length)
+    {
+        if (in && out && ! crossing) f.in = f.out = length / 2;
+        else if (in && ! crossing) f.in = std::max (0.0, length - f.out);
+        else if (out) f.out = std::max (0.0, length - inside);
+    }
+    return f;
+}
+// What a clip plays with: its own fades, or, crossfading with the clip before it, a fade-in as long
+// as that clip's fade-out, played that long before its start.
+EdgeFades clipFades (const te::WaveAudioClip& clip)
+{
+    auto f = ownFades (clip);
+    if (const auto* before = crossfadePartner (clip))
+    {
+        const auto earlier = ownFades (*before);
+        f.in = f.preRoll = earlier.out; f.inType = earlier.outType;
+    }
+    return f;
+}
+
 Session::AudioClipSettings audioSettings (const te::WaveAudioClip& clip)
 {
-    return { clip.getGainDB(), clip.getFadeIn().inSeconds(), clip.getFadeOut().inSeconds(),
+    Session::AudioClipSettings s { clip.getGainDB(), clip.getFadeIn().inSeconds(), clip.getFadeOut().inSeconds(),
         static_cast<Session::FadeCurve> (clip.getFadeInType()), static_cast<Session::FadeCurve> (clip.getFadeOutType()),
         static_cast<int> (clip.state.getProperty (transposeProperty, 0)), static_cast<float> (static_cast<double> (clip.state.getProperty (detuneProperty, 0.0))) };
+    if (clip.getClipSlot() == nullptr && (hasDefaultFade (clip, true) || hasDefaultFade (clip, false)))
+    {
+        // Default edges show the fades they play, crossfades as the clip's own default fade-in.
+        const auto f = ownFades (clip);
+        s.defaultFadeIn = hasDefaultFade (clip, true); s.defaultFadeOut = hasDefaultFade (clip, false);
+        if (s.defaultFadeIn) { s.fadeInSeconds = crossfadePartner (clip) != nullptr ? clipFades (clip).in : f.in; s.fadeInCurve = Session::FadeCurve::smoothstep; }
+        if (s.defaultFadeOut) { s.fadeOutSeconds = f.out; s.fadeOutCurve = Session::FadeCurve::smoothstep; }
+    }
+    return s;
 }
 bool validAudioSettings (const Session::AudioClipSettings& s, double length)
 {
-    const auto curve = [] (auto v) { return static_cast<int> (v) >= 1 && static_cast<int> (v) <= 4; };
+    const auto curve = [] (auto v) { return static_cast<int> (v) >= 1 && static_cast<int> (v) <= 5; };
     return std::isfinite (s.gainDb) && s.gainDb >= -100 && s.gainDb <= 24
         && std::isfinite (s.fadeInSeconds) && std::isfinite (s.fadeOutSeconds)
         && s.fadeInSeconds >= 0 && s.fadeOutSeconds >= 0
         && s.fadeInSeconds + s.fadeOutSeconds <= length + 1e-10
         && curve (s.fadeInCurve) && curve (s.fadeOutCurve)
         && s.transposeSemitones >= -48 && s.transposeSemitones <= 48 && std::isfinite (s.detuneCents) && s.detuneCents >= -50 && s.detuneCents <= 50;
+}
+// Whether a clip's fades fit a length: a default edge has no length of its own and shortens to fit.
+bool fadesFit (const te::WaveAudioClip& clip, double length)
+{
+    auto s = audioSettings (clip);
+    if (s.defaultFadeIn) { s.fadeInSeconds = 0; s.fadeInCurve = Session::FadeCurve::linear; }
+    if (s.defaultFadeOut) { s.fadeOutSeconds = 0; s.fadeOutCurve = Session::FadeCurve::linear; }
+    return validAudioSettings (s, length);
 }
 bool canEditAudioRange (const te::WaveAudioClip& clip)
 {
@@ -1042,7 +1136,7 @@ Result validateAudioClips (const juce::ValueTree& state)
             || ! parse (te::IDs::fadeOut, 0, out) || ! parse (te::IDs::length, 0, length)
             || ! parse (te::IDs::fadeInType, 1, inType) || ! parse (te::IDs::fadeOutType, 1, outType)
             || ! parse (te::IDs::isReversed, 0, reversed) || (reversed != 0 && reversed != 1)
-            || gain < -100 || gain > 24 || length < 0 || inType < 1 || inType > 4 || outType < 1 || outType > 4
+            || gain < -100 || gain > 24 || length < 0 || inType < 1 || inType > 5 || outType < 1 || outType > 5
             || std::floor (inType) != inType || std::floor (outType) != outType
             || ! validAudioSettings ({ static_cast<float> (gain), in, out,
                 static_cast<Session::FadeCurve> (static_cast<int> (inType)),
@@ -1674,6 +1768,19 @@ public:
     bool shouldProcessMutedTracks() override { return true; }
     // A beat is a quarter note at every meter: 6/8 is three beats per bar, and the tempo counts quarter notes.
     bool lengthOfOneBeatDependsOnTimeSignature() override { return false; }
+    // Default edge fades and crossfades, derived when a clip's node is built (on the message thread).
+    void adjustAudioClipFades (te::AudioClipBase& clip, te::TimeDuration& in, te::TimeDuration& out, int& inType, int& outType) override
+    {
+        const auto* wave = dynamic_cast<const te::WaveAudioClip*> (&clip);
+        if (wave == nullptr || wave->getClipSlot() != nullptr || ! (hasDefaultFade (*wave, true) || hasDefaultFade (*wave, false))) return;
+        const auto f = clipFades (*wave);
+        in = te::TimeDuration::fromSeconds (f.in); out = te::TimeDuration::fromSeconds (f.out); inType = f.inType; outType = f.outType;
+    }
+    te::TimeDuration getAudioClipPreRoll (te::AudioClipBase& clip) override
+    {
+        const auto* wave = dynamic_cast<const te::WaveAudioClip*> (&clip);
+        return wave != nullptr && hasDefaultFade (*wave, true) ? te::TimeDuration::fromSeconds (clipFades (*wave).preRoll) : te::TimeDuration();
+    }
     // Device chains are open-ended; the engine's 16-plugin default includes the mixer and meter.
     te::EditLimits getEditLimits() override { te::EditLimits limits; limits.maxPluginsOnTrack = 64; return limits; }
     // Graph building runs on the message thread, never in the audio callback.
@@ -2792,6 +2899,7 @@ struct Session::Impl
             if ((clip = te::insertMIDIClip (*slot, "MIDI clip", edit->tempoSequence.toTime (beats)).get()) != nullptr) applyLaunchDefaults (*clip);
         if (clip == nullptr) { changed(); return; }
         auto* undo = &edit->getUndoManager();
+        giveDefaultFades (*clip, undo); // Kept for when it reaches the Arrangement.
         clip->setPosition ({ { te::TimePosition(), edit->tempoSequence.toTime (beats.getEnd()) }, te::TimeDuration() });
         if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
         {
@@ -3175,7 +3283,7 @@ struct Session::Impl
     }
     void loadPreferences()
     {
-        prefs = {}; prefsProblem.clear();
+        prefs = {}; prefsProblem.clear(); fadesOnClipEdges = prefs.createFadesOnClipEdges;
         const auto file = prefsFile();
         if (! file.existsAsFile()) return;
         auto xml = juce::XmlDocument::parse (file);
@@ -3201,9 +3309,11 @@ struct Session::Impl
             const int audioUnits = number ("useAudioUnits", 1, 2), vst3System = number ("useVst3SystemFolders", 1, 2), vst3Custom = number ("useVst3CustomFolder", 0, 2);
             read.useAudioUnits = audioUnits == 1; read.useVst3SystemFolders = vst3System == 1; read.useVst3CustomFolder = vst3Custom == 1;
             read.vst3CustomFolder = xml->getStringAttribute ("vst3CustomFolder");
-            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && validPreferences (read);
+            const int edgeFades = number ("createFadesOnClipEdges", 1, 2);
+            read.createFadesOnClipEdges = edgeFades == 1;
+            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && validPreferences (read);
         }
-        if (valid) { prefs = read; return; }
+        if (valid) { prefs = read; fadesOnClipEdges = prefs.createFadesOnClipEdges; return; }
         // Set an unreadable file aside rather than lose it, and keep the defaults.
         const auto aside = file.getSiblingFile ("Halftrack Preferences (unreadable).xml");
         aside.deleteFile();
@@ -3223,12 +3333,14 @@ struct Session::Impl
         xml.setAttribute ("startRecordingOnSceneLaunch", next.startRecordingOnSceneLaunch ? 1 : 0);
         xml.setAttribute ("useAudioUnits", next.useAudioUnits ? 1 : 0); xml.setAttribute ("useVst3SystemFolders", next.useVst3SystemFolders ? 1 : 0);
         xml.setAttribute ("useVst3CustomFolder", next.useVst3CustomFolder ? 1 : 0); xml.setAttribute ("vst3CustomFolder", next.vst3CustomFolder);
+        xml.setAttribute ("createFadesOnClipEdges", next.createFadesOnClipEdges ? 1 : 0);
         const auto file = prefsFile();
         if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
         juce::TemporaryFile temporary (file);
         if (! xml.writeTo (temporary.getFile()) || ! temporary.overwriteTargetFileWithTemporary())
             return Result::fail ("The preferences could not be saved to " + file.getFullPathName() + ".");
         prefs = next;
+        fadesOnClipEdges = prefs.createFadesOnClipEdges;
         return Result::ok();
     }
     // New Session clips launch as the preferences say.
@@ -6689,6 +6801,7 @@ Result Session::importAudioToSlot (const File& source, int trackIndex, int scene
     clip->setAutoTempo (true); clip->setAutoPitch (false); clip->setUsesProxy (false);
     clip->setLoopRange (range);
     clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
+    giveDefaultFades (*clip, &impl->edit->getUndoManager()); // Kept for when it reaches the Arrangement.
     impl->applyLaunchDefaults (*clip);
     // Session clips always follow the tempo, in the preferred warp mode.
     if (impl->prefs.defaultWarpMode != WarpMode::stretch)
@@ -8237,6 +8350,7 @@ Result Session::flattenTrack (const String& trackId)
     clip->getSourceFileReference().setToFile (file, te::SourceFileReference::PathStyle::alwaysAbsolute, false);
     clip->setAutoTempo (false); clip->setAutoPitch (false);
     clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
+    giveDefaultFades (*clip, &impl->edit->getUndoManager());
     impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::removeTrack (int index)
@@ -8277,6 +8391,7 @@ Result Session::importAudio (const File& source, int index, double start)
     clip->getSourceFileReference().setToFile (file, te::SourceFileReference::PathStyle::alwaysAbsolute, false);
     clip->setAutoTempo (false); clip->setAutoPitch (false);
     clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
+    giveDefaultFades (*clip, &impl->edit->getUndoManager());
     // Auto-Warp Long Samples: a long sample is taken for a song. Its tempo and first beat come from
     // its content: the clip starts on the first beat, with a warp marker there. A sound with no
     // steady beat to find takes the tempo of whole bars.
@@ -8656,9 +8771,25 @@ Result Session::setAudioClipSettings (const String& id, const AudioClipSettings&
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     impl->endAudition(); // No pointer may refer to an audition's copies.
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
-    if (! validAudioSettings (settings, clip->getPosition().getLength().inSeconds()))
-        return Result::fail ("Clip gain, fades or transposition are outside their supported range. Fades must fit inside the clip.");
     const auto previous = audioSettings (*clip);
+    if ((settings.defaultFadeIn || settings.defaultFadeOut) && clip->getClipSlot() != nullptr)
+        return Result::fail ("Default fades are for Arrangement clips.");
+    // A default edge given another length or curve becomes an ordinary fade; a default edge's
+    // length is not its own, so it does not count towards fitting the fades in.
+    const auto resolved = [] (const AudioClipSettings& before, AudioClipSettings after)
+    {
+        if (before.defaultFadeIn && (after.fadeInSeconds != before.fadeInSeconds || after.fadeInCurve != before.fadeInCurve)) after.defaultFadeIn = false;
+        if (before.defaultFadeOut && (after.fadeOutSeconds != before.fadeOutSeconds || after.fadeOutCurve != before.fadeOutCurve)) after.defaultFadeOut = false;
+        return after;
+    };
+    const auto fits = [] (AudioClipSettings s, double length)
+    {
+        if (s.defaultFadeIn) { s.fadeInSeconds = 0; s.fadeInCurve = FadeCurve::linear; }
+        if (s.defaultFadeOut) { s.fadeOutSeconds = 0; s.fadeOutCurve = FadeCurve::linear; }
+        return validAudioSettings (s, length);
+    };
+    if (! fits (resolved (previous, settings), clip->getPosition().getLength().inSeconds()))
+        return Result::fail ("Clip gain, fades or transposition are outside their supported range. Fades must fit inside the clip.");
     const auto pitched = settings.transposeSemitones != 0 || settings.detuneCents != 0;
     if (pitched && (previous.transposeSemitones != settings.transposeSemitones || previous.detuneCents != settings.detuneCents))
         if (const auto mode = warpSettings (*clip).mode; mode == WarpMode::off || mode == WarpMode::repitch)
@@ -8668,8 +8799,8 @@ Result Session::setAudioClipSettings (const String& id, const AudioClipSettings&
         return Result::fail ("Manual fade editing is available for Arrangement clips.");
     // Linked audio clips take the fade changes: a fade-in on those starting with this clip, a
     // fade-out on those whose fade-out starts where this one's did. Their gain and pitch stay.
-    const bool fadeIn = previous.fadeInSeconds != settings.fadeInSeconds || previous.fadeInCurve != settings.fadeInCurve;
-    const bool fadeOut = previous.fadeOutSeconds != settings.fadeOutSeconds || previous.fadeOutCurve != settings.fadeOutCurve;
+    const bool fadeIn = previous.fadeInSeconds != settings.fadeInSeconds || previous.fadeInCurve != settings.fadeInCurve || previous.defaultFadeIn != settings.defaultFadeIn;
+    const bool fadeOut = previous.fadeOutSeconds != settings.fadeOutSeconds || previous.fadeOutCurve != settings.fadeOutCurve || previous.defaultFadeOut != settings.defaultFadeOut;
     std::vector<std::pair<te::WaveAudioClip*, AudioClipSettings>> linked;
     if (fadeIn || fadeOut)
         for (auto* other : impl->linkedClips (*clip))
@@ -8677,24 +8808,32 @@ Result Session::setAudioClipSettings (const String& id, const AudioClipSettings&
             {
                 const auto own = audioSettings (*wave);
                 auto next = own;
-                if (fadeIn) { next.fadeInSeconds = settings.fadeInSeconds; next.fadeInCurve = settings.fadeInCurve; }
-                if (fadeOut && std::abs (own.fadeOutSeconds - previous.fadeOutSeconds) < .001) { next.fadeOutSeconds = settings.fadeOutSeconds; next.fadeOutCurve = settings.fadeOutCurve; }
+                if (fadeIn) { next.fadeInSeconds = settings.fadeInSeconds; next.fadeInCurve = settings.fadeInCurve; next.defaultFadeIn = settings.defaultFadeIn; }
+                if (fadeOut && std::abs (own.fadeOutSeconds - previous.fadeOutSeconds) < .001)
+                { next.fadeOutSeconds = settings.fadeOutSeconds; next.fadeOutCurve = settings.fadeOutCurve; next.defaultFadeOut = settings.defaultFadeOut; }
                 if (next == own) continue;
                 if (auto frozen = impl->unfrozen (wave->getClipTrack()); frozen.failed()) return frozen;
-                if (! validAudioSettings (next, wave->getPosition().getLength().inSeconds()))
+                if (! fits (resolved (own, next), wave->getPosition().getLength().inSeconds()))
                     return Result::fail ("The fades do not fit \"" + wave->getName() + "\" on a linked track.");
                 linked.push_back ({ wave, next });
             }
     if (previous == settings && ! clip->getAutoCrossfade() && linked.empty()) return Result::ok();
     impl->transaction ("Audio clip gain and fades");
-    const auto apply = [this] (te::WaveAudioClip& target, const AudioClipSettings& before, const AudioClipSettings& after)
+    const auto apply = [this, resolved] (te::WaveAudioClip& target, const AudioClipSettings& before, const AudioClipSettings& requested)
     {
+        const auto after = resolved (before, requested);
         target.setAutoCrossfade (false); target.setGainDB (after.gainDb);
-        // Clear first so the engine's one-edge setters cannot rescale the other edge.
-        target.setFadeIn ({}); target.setFadeOut (te::TimeDuration::fromSeconds (after.fadeOutSeconds));
-        target.setFadeIn (te::TimeDuration::fromSeconds (after.fadeInSeconds));
-        target.setFadeInType (static_cast<te::AudioFadeCurve::Type> (after.fadeInCurve));
-        target.setFadeOutType (static_cast<te::AudioFadeCurve::Type> (after.fadeOutCurve));
+        // Clear first so the engine's one-edge setters cannot rescale the other edge. A default edge
+        // keeps no length of its own.
+        target.setFadeIn ({}); target.setFadeOut (te::TimeDuration::fromSeconds (after.defaultFadeOut ? 0.0 : after.fadeOutSeconds));
+        target.setFadeIn (te::TimeDuration::fromSeconds (after.defaultFadeIn ? 0.0 : after.fadeInSeconds));
+        if (! after.defaultFadeIn) target.setFadeInType (static_cast<te::AudioFadeCurve::Type> (after.fadeInCurve));
+        if (! after.defaultFadeOut) target.setFadeOutType (static_cast<te::AudioFadeCurve::Type> (after.fadeOutCurve));
+        if (target.getClipSlot() == nullptr)
+        {
+            setDefaultFade (target, true, after.defaultFadeIn, &impl->edit->getUndoManager());
+            setDefaultFade (target, false, after.defaultFadeOut, &impl->edit->getUndoManager());
+        }
         if (before.transposeSemitones != after.transposeSemitones || before.detuneCents != after.detuneCents)
         {
             auto* undo = &impl->edit->getUndoManager();
@@ -8736,7 +8875,7 @@ Result Session::setAudioClipRange (const String& id, double start, double length
     const auto sourceLength = clip->getSourceLength().inSeconds();
     if (! std::isfinite (start) || ! std::isfinite (length) || ! std::isfinite (offset)
         || start < 0 || length < .001 || start + length > te::Edit::maximumLength || offset < 0
-        || offset + length > sourceLength + 1e-9 || ! validAudioSettings (audioSettings (*clip), length))
+        || offset + length > sourceLength + 1e-9 || ! fadesFit (*clip, length))
         return Result::fail ("The range must fit the source and existing fades, with at least 1 ms of audio.");
     const auto p = clip->getPosition();
     if (p.getStart().inSeconds() == start && p.getLength().inSeconds() == length && p.offset.inSeconds() == offset) return Result::ok();
@@ -8750,7 +8889,7 @@ Result Session::setAudioClipRange (const String& id, double start, double length
             const auto from = q.getStart().inSeconds() + startShift, span = q.getLength().inSeconds() + endShift - startShift, skip = q.offset.inSeconds() + offsetShift;
             if (auto frozen = impl->unfrozen (wave->getClipTrack()); frozen.failed()) return frozen;
             if (! canEditAudioRange (*wave) || from < 0 || span < .001 || from + span > te::Edit::maximumLength || skip < 0
-                || skip + span > wave->getSourceLength().inSeconds() + 1e-9 || ! validAudioSettings (audioSettings (*wave), span))
+                || skip + span > wave->getSourceLength().inSeconds() + 1e-9 || ! fadesFit (*wave, span))
                 return Result::fail ("\"" + wave->getName() + "\" on a linked track cannot be trimmed there.");
             linked.push_back ({ wave, { { te::TimePosition::fromSeconds (from), te::TimePosition::fromSeconds (from + span) }, te::TimeDuration::fromSeconds (skip) } });
         }
@@ -8776,6 +8915,7 @@ Result Session::splitAudioClip (const String& id, double at, String& rightId)
     impl->transaction ("Split audio clip");
     auto* second = clip->getClipTrack()->splitClip (*clip, when);
     if (! second) return Result::fail ("The audio clip could not be split.");
+    resetSplitEdges (*clip, second, &impl->edit->getUndoManager());
     for (auto* other : linked) splitTrackAt (*other, when, &impl->edit->getUndoManager());
     rightId = second->itemID.toString(); impl->changed(); return Result::ok();
 }
@@ -8975,7 +9115,7 @@ void splitTrackAt (te::AudioTrack& track, te::TimePosition at, juce::UndoManager
         const auto p = clip->getPosition();
         if (p.getStart() >= at || p.getEnd() <= at) continue;
         if (auto* midi = dynamic_cast<te::MidiClip*> (clip)) splitMidiClipAt (*midi, at, undo);
-        else track.splitClip (*clip, at);
+        else resetSplitEdges (*clip, track.splitClip (*clip, at), undo);
     }
 }
 }
@@ -9219,7 +9359,7 @@ Result Session::pasteRange (const String& firstTrackId, double start)
         }
         te::Clip* after = nullptr;
         if (auto* midi = dynamic_cast<te::MidiClip*> (clip)) after = splitMidiClipAt (*midi, at, undo);
-        else after = track.splitClip (*clip, at);
+        else { after = track.splitClip (*clip, at); resetSplitEdges (*clip, after, undo); }
         if (after == nullptr) return clip;
         if (right) { clip->removeFromParent(); return after; }
         after->removeFromParent(); return clip;
@@ -9348,6 +9488,7 @@ Result Session::consolidateRange (const juce::StringArray& trackIds, double star
             if (! clip) return Result::fail ("The consolidated clip could not be created.");
             clip->setAutoTempo (false); clip->setAutoPitch (false);
             clip->setFadeIn (te::TimeDuration()); clip->setFadeOut (te::TimeDuration());
+            giveDefaultFades (*clip, &impl->edit->getUndoManager());
             newClipIds.add (clip->itemID.toString());
             continue;
         }
@@ -9420,7 +9561,11 @@ Result Session::insertTime (double start, double length)
                 for (auto* event : events)
                     if (event->getBeatPosition().inBeats() >= split.inBeats() - 1e-9) event->setBeatPosition (event->getBeatPosition() + deltaBeats, undo);
             }
-            else if (auto* right = track->splitClip (*clip, from)) right->setStart (from + delta, false, true);
+            else if (auto* right = track->splitClip (*clip, from))
+            {
+                resetSplitEdges (*clip, right, &impl->edit->getUndoManager());
+                right->setStart (from + delta, false, true);
+            }
         }
     }
     for (auto* marker : impl->edit->getMarkerManager().getMarkers())
@@ -9506,10 +9651,10 @@ Result Session::deleteTime (double start, double length)
                 continue;
             }
             te::Clip* middle = clip;
-            if (p.getStart() < from) middle = track->splitClip (*clip, from);
+            if (p.getStart() < from) { middle = track->splitClip (*clip, from); resetSplitEdges (*clip, middle, &impl->edit->getUndoManager()); }
             if (middle == nullptr) continue;
             te::Clip* after = nullptr;
-            if (middle->getPosition().getEnd() > to) after = track->splitClip (*middle, to);
+            if (middle->getPosition().getEnd() > to) { after = track->splitClip (*middle, to); resetSplitEdges (*middle, after, &impl->edit->getUndoManager()); }
             middle->removeFromParent();
             if (after != nullptr) after->setStart (after->getPosition().getStart() - delta, false, true);
         }
@@ -10710,6 +10855,7 @@ void Session::stop()
                     for (auto* clip : recorded) for (auto* pass : impl->splitLoopPasses (*track, *clip, *loopRecording)) passes.push_back (pass);
                     recorded = passes;
                 }
+                for (auto* clip : recorded) giveDefaultFades (*clip, &impl->edit->getUndoManager()); // As new clips are.
                 for (auto* clip : recorded) impl->keepTake (*track, *clip);
                 // In order, so the last pass is left on top in the main lane, as the reference copies it there.
                 auto earlier = impl->clipsBeforeRecording;

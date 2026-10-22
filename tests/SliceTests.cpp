@@ -9,6 +9,7 @@
 // new tempo, landing on the new beats.
 namespace halftrack
 {
+void useHardClipEdges();
 namespace
 {
 void check (bool v, const juce::String& text)
@@ -43,6 +44,7 @@ int runSliceTests (const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root = artifacts.getChildFile ("slicing-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
         const auto hits = root.getChildFile ("hits.wav");
         {

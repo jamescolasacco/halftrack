@@ -47,7 +47,7 @@ public:
         for (size_t i = 0; i < curves.size(); ++i)
         {
             auto& curve = curves[i]; curve.setName (i == 0 ? "fadeInCurve" : "fadeOutCurve");
-            curve.addItemList ({ "Linear", "Convex", "Concave", "S-curve" }, 1);
+            curve.addItemList ({ "Linear", "Convex", "Concave", "S-curve", "Smooth" }, 1);
             curve.onChange = [this, i]
             {
                 if (auto clip = findClip())
@@ -59,6 +59,20 @@ public:
                 sync();
             };
             addAndMakeVisible (curve);
+            // A default edge fade, as Create Fades on Clip Edges gives: 4 ms along the smoothstep.
+            auto& standard = defaults[i]; standard.setButtonText ("Default"); standard.setName (i == 0 ? "defaultFadeIn" : "defaultFadeOut");
+            standard.setTooltip ("Default: a 4 ms smooth fade, crossfading with a clip that touches this edge with a default fade of its own");
+            standard.onClick = [this, i]
+            {
+                if (auto clip = findClip())
+                {
+                    auto value = clip->audio;
+                    if (i == 0) value.defaultFadeIn = defaults[i].getToggleState(); else value.defaultFadeOut = defaults[i].getToggleState();
+                    showResult (session.setAudioClipSettings (clipId, value));
+                }
+                sync();
+            };
+            addAndMakeVisible (standard);
         }
         const std::array<const char*, 3> fields { "Start (s)", "Length (s)", "Source offset (s)" };
         for (size_t i = 0; i < range.size(); ++i)
@@ -113,8 +127,8 @@ public:
         for (int i = 0; i < 3; ++i)
         {
             labels[(size_t)i].setBounds (24, 160+i*46, 80, 30);
-            sliders[(size_t)i].setBounds (104, 160+i*46, width-80-(i == 0 ? 0 : 114), 30);
-            if (i > 0) curves[(size_t)i-1].setBounds (getWidth()-130, 160+i*46, 106, 28);
+            sliders[(size_t)i].setBounds (104, 160+i*46, width-80-(i == 0 ? 0 : 198), 30);
+            if (i > 0) { curves[(size_t)i-1].setBounds (getWidth()-130, 160+i*46, 106, 28); defaults[(size_t)i-1].setBounds (getWidth()-214, 160+i*46, 80, 28); }
             const auto fieldWidth = (width-24)/3;
             rangeLabels[(size_t)i].setBounds (24+i*(fieldWidth+12), 315, fieldWidth, 22);
             range[(size_t)i].setBounds (24+i*(fieldWidth+12), 339, fieldWidth, 27);
@@ -134,7 +148,8 @@ public:
             {
                 const auto a = x*juce::MathConstants<double>::halfPi;
                 switch (kind) { case Session::FadeCurve::convex: return std::sin(a); case Session::FadeCurve::concave: return 1-std::cos(a);
-                    case Session::FadeCurve::sCurve: return (1-x)*(1-std::cos(a))+x*std::sin(a); default: return x; }
+                    case Session::FadeCurve::sCurve: return (1-x)*(1-std::cos(a))+x*std::sin(a);
+                    case Session::FadeCurve::smoothstep: return x*x*(3-2*x); default: return x; }
             };
             juce::Path envelope;
             for (int x=0;x<=500;++x)
@@ -175,8 +190,9 @@ private:
         reverse.setToggleState (clip && clip->reversed, juce::dontSendNotification);
         for(auto& slider:sliders)slider.setEnabled(enabled);
         for(auto& curve:curves)curve.setEnabled(enabled);
+        for(auto& standard:defaults)standard.setEnabled(enabled);
         if (clip && ! clip->canEditAudioFades)
-        { sliders[1].setEnabled(false);sliders[2].setEnabled(false);for(auto& curve:curves)curve.setEnabled(false); }
+        { sliders[1].setEnabled(false);sliders[2].setEnabled(false);for(auto& curve:curves)curve.setEnabled(false);for(auto& standard:defaults)standard.setEnabled(false); }
         const bool editable = enabled && clip->canEditAudioRange;
         for(auto& field:range)field.setEnabled(editable); apply.setEnabled(editable);
         if(clip)
@@ -185,6 +201,7 @@ private:
             for(int i=1;i<3;++i)sliders[(size_t)i].setRange(0,juce::jmax(.001,clip->length));
             sliders[1].setValue(clip->audio.fadeInSeconds,juce::dontSendNotification);sliders[2].setValue(clip->audio.fadeOutSeconds,juce::dontSendNotification);
             curves[0].setSelectedId((int)clip->audio.fadeInCurve,juce::dontSendNotification);curves[1].setSelectedId((int)clip->audio.fadeOutCurve,juce::dontSendNotification);
+            defaults[0].setToggleState(clip->audio.defaultFadeIn,juce::dontSendNotification);defaults[1].setToggleState(clip->audio.defaultFadeOut,juce::dontSendNotification);
             if(!rangeDirty)
             { range[0].setText(juce::String(clip->start,9),false);range[1].setText(juce::String(clip->length,9),false);range[2].setText(juce::String(clip->sourceOffset,9),false); }
         }
@@ -194,7 +211,7 @@ private:
     void finishGesture(){if(dragging){dragging=false;session.endEditGesture();}}
     void changeListenerCallback(juce::ChangeBroadcaster*) override {sync();}
     Session& session;juce::String clipId;std::array<juce::Slider,3>sliders;std::array<juce::Label,3>labels,rangeLabels;
-    std::array<juce::ComboBox,2>curves;std::array<juce::TextEditor,3>range;juce::TextButton apply{"Apply range"};juce::ToggleButton reverse;juce::Label error;
+    std::array<juce::ComboBox,2>curves;std::array<juce::ToggleButton,2>defaults;std::array<juce::TextEditor,3>range;juce::TextButton apply{"Apply range"};juce::ToggleButton reverse;juce::Label error;
     juce::LookAndFeel_V4 look;
     bool dragging=false,rangeDirty=false;
 };
@@ -206,15 +223,24 @@ int runAudioClipEditorTests(const juce::File& source,const juce::File& artifacts
     auto check=[](bool v,const char* text){if(!v)throw std::runtime_error(text);std::cout<<"PASS audio editor: "<<text<<std::endl;};
     Session s(false);check(s.importAudio(source,0).wasOk(),"import editor fixture");const auto id=s.snapshot().tracks[0].clips[0].id;
     auto editor=makeAudioClipEditor(s,id);juce::ToggleButton* reverse=nullptr;juce::Slider* gain=nullptr;juce::TextButton* apply=nullptr;std::array<juce::TextEditor*,3>range{};
+    juce::ToggleButton* defaultIn=nullptr;
     for(auto* child:editor->getChildren())
     {
         if(auto* control=dynamic_cast<juce::Slider*>(child);control&&control->getName()=="clipGain")gain=control;
         if(auto* control=dynamic_cast<juce::TextButton*>(child);control&&control->getName()=="applyClipRange")apply=control;
         if(auto* control=dynamic_cast<juce::ToggleButton*>(child);control&&control->getName()=="reverseAudioClip")reverse=control;
+        if(auto* control=dynamic_cast<juce::ToggleButton*>(child);control&&control->getName()=="defaultFadeIn")defaultIn=control;
         if(auto* control=dynamic_cast<juce::TextEditor*>(child))
         {if(control->getName()=="Start (s)")range[0]=control;else if(control->getName()=="Length (s)")range[1]=control;else if(control->getName()=="Source offset (s)")range[2]=control;}
     }
-    check(gain&&apply&&range[0]&&range[1]&&range[2],"production controls exist");
+    check(gain&&apply&&range[0]&&range[1]&&range[2]&&defaultIn,"production controls exist");
+    // The Default switch gives the edge the default 4 ms fade, and off keeps it as an ordinary fade.
+    check(!defaultIn->getToggleState(),"the fade-in starts as an ordinary fade here");
+    defaultIn->setToggleState(true,juce::dontSendNotification);defaultIn->onClick();
+    {auto a=s.snapshot().tracks[0].clips[0].audio;check(a.defaultFadeIn&&std::abs(a.fadeInSeconds-.004)<1e-9&&a.fadeInCurve==Session::FadeCurve::smoothstep&&defaultIn->getToggleState(),"Default gives the fade-in the 4 ms smooth default");}
+    defaultIn->setToggleState(false,juce::dontSendNotification);defaultIn->onClick();
+    {auto a=s.snapshot().tracks[0].clips[0].audio;check(!a.defaultFadeIn&&std::abs(a.fadeInSeconds-.004)<1e-9,"switched off, it stays a 4 ms fade of its own");}
+    s.undo();s.undo();s.dispatchPendingMessages();check(s.snapshot().tracks[0].clips[0].audio.fadeInSeconds==0,"two undo steps return the hard edge");
     gain->onDragStart();gain->setValue(-12,juce::sendNotificationSync);gain->setValue(-6,juce::sendNotificationSync);gain->onDragEnd();
     check(s.snapshot().tracks[0].clips[0].audio.gainDb==-6,"gain control edits actual clip");s.undo();check(s.snapshot().tracks[0].clips[0].audio.gainDb==0,"one undo restores gain gesture");
     range[0]->setText("0.25");range[1]->setText("0.5");range[2]->setText("0.125");apply->onClick();

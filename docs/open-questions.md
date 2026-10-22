@@ -716,3 +716,14 @@ Defaults the reference's manual does not give:
 ### Start Recording on Scene Launch
 
 With the option on, a track already recording into a slot when another scene launches only ends that take; no new take begins in the launched scene's slot. Whether the reference starts recording there is unmeasured.
+
+### Default clip fades
+
+Halftrack's default fades follow a static reading of the reference's code ([contract](research/clip-fades-contract.md)). Defaults where it is incomplete:
+
+- **Material before the start.** A crossfade needs the later clip to have at least 4 ms of material before its start. Otherwise the two clips each fade on their own, leaving a short dip at the boundary. What the reference plays with less material is unresolved.
+- **Session clips.** The Clip Fade switch, and the launch fade-ins and stop fade-outs it gives, are not implemented. Session clips carry the default flags only for when they reach the Arrangement.
+- **Loop wraps.** Warped, looped clips do not overlap their loop wrap by min(half the loop, 4 ms) as the reference's do.
+- **Delete on a fade handle.** The Arrangement has no fade-handle selection. A fade returns to the default through the audio clip editor's Default switch.
+- **Sample alignment.** The reference evaluates its curve at points at most 32 samples apart and interpolates linearly, and rounds edges to 1/3843840 beat. Halftrack evaluates every sample. A split crossfade is exact either way, but single edges may differ from the reference's by up to about 0.02 of full scale. Unmeasured.
+

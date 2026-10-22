@@ -11,6 +11,7 @@
 // unlinked; links reopening from a saved project, and an invalid link refused on load.
 namespace halftrack
 {
+void useHardClipEdges();
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
 float pumpSyntheticTestDevice (Session&, int blocks);
 namespace
@@ -34,6 +35,7 @@ int runLinkedTrackTests (const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root = artifacts.getChildFile ("linked-tracks-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
         const auto source = root.getChildFile ("tone.wav"); tone (source, 2);
         const auto project = root.getChildFile ("Linked").getChildFile ("Linked.halftrack");

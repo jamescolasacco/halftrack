@@ -478,6 +478,16 @@ std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType()
     return std::make_unique<SyntheticDeviceType>();
 }
 
+// Switches Create Fades on Clip Edges off, for suites that compare clip renders sample for sample
+// with hard clip edges; the clip-fades suite covers the default fades. The preference is kept for
+// the rest of the test process.
+void useHardClipEdges (Session& session)
+{
+    auto preferences = session.preferences(); preferences.createFadesOnClipEdges = false;
+    if (session.setPreferences (preferences).failed()) throw std::runtime_error ("could not switch off Create Fades on Clip Edges");
+}
+void useHardClipEdges() { Session session (false); useHardClipEdges (session); }
+
 float pumpSyntheticTestDevice (Session& session, int blocks)
 {
     auto* device = dynamic_cast<SyntheticDevice*> (session.audioDeviceManager().getCurrentAudioDevice());

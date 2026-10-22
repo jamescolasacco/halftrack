@@ -32,7 +32,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | ARR-005 | midi-files, range-clipboard, ui |  |
 | ARR-006 | audio-clips, range-edit |  |
 | ARR-007 | time-edit |  |
-| ARR-008 | crossfade |  |
+| ARR-008 | crossfade, clip-fades, audio-clips, ui |  |
 | ARR-009 | locators |  |
 | ARR-010 | freeze |  |
 | ARR-011 | launcher, session-record |  |

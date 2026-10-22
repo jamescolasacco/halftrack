@@ -1958,3 +1958,18 @@ QA and root areas.
 - **Soak.** The macOS runner plays a one-minute soak (`HALFTRACK_SOAK_SECONDS=60`) instead of three. Its dispatch between synthetic blocks is several times slower than a desktop Mac's, so three minutes overran 600 s. Linux, Windows and local runs keep three.
 - **The lane click while playing** UI check now waits up to ten seconds of wall-clock time for the play head to move, not a count of blocks. If it fails, it says whether playback had started and which device is open; macOS CI has failed it since 4a45303, with playback found stopped.
 
+## Default clip fades — 2026-10-22
+
+Engine, UI and root areas.
+
+- **Default fades.** These follow a static reading of the reference's code (raw material ignored in `artifacts/reverse-engineering/fades/`). With Create Fades on Clip Edges on, the default, as in the reference:
+  - new audio clips, and the two edges every split makes, fade over 4 ms along the smoothstep 3x² − 2x³;
+  - touching clips with default edges crossfade, the later one playing the material before its start, so a split renders as the unsplit clip.
+
+  Setting a length or curve makes an edge an ordinary fade, and the audio clip editor's Default switches restore it.
+- **Engine patch.** `cmake/PatchClipFades.cmake` adds the smoothstep curve and two behaviour hooks. The node builder uses them so nothing derived is stored, and the earlier patches on those files accept its hashes.
+- **Tests.** Nineteen suites, and the UI suite, compare clip renders or fade values with hard edges. They now switch the preference off first, through a shared test helper (`useHardClipEdges`); the new suite covers the fades themselves.
+- **Measured.** The clip-fades suite (exact smoothstep edges at 48 kHz, a split within 1e-7 of the unsplit sine), the audio-clips editor checks and the UI suite.
+
+See [the contract](research/clip-fades-contract.md).
+

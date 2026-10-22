@@ -9,6 +9,7 @@
 // source sample by sample; MIDI results are compared note by note.
 namespace halftrack
 {
+void useHardClipEdges();
 namespace
 {
 constexpr double rate = 48000, pi = 3.14159265358979323846;
@@ -66,6 +67,7 @@ int runRangeEditTests (const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root = artifacts.getChildFile ("range-edit-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
         const auto wav = root.getChildFile ("source.wav"), file = root.getChildFile ("render.wav");
         write (wav);

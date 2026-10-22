@@ -10,6 +10,7 @@
 
 namespace halftrack
 {
+void useHardClipEdges();
 namespace
 {
 using Settings = Session::UtilitySettings;
@@ -286,6 +287,7 @@ int runUtilityTests (const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root = artifacts.getChildFile ("utility-" + juce::Uuid().toString()); ok (root.createDirectory(), "create disposable utility fixtures");
         signalTests(); integrationTests (root); runUtilityEditorTests (root);
         std::cout << "Utility acceptance passed: " << root.getFullPathName() << std::endl; return 0;

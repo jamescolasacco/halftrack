@@ -10,6 +10,7 @@
 
 namespace halftrack
 {
+void useHardClipEdges();
 namespace
 {
 using Mode = Session::SendMode;
@@ -451,6 +452,7 @@ int runSendReturnTests (const juce::File& destination)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root = destination.getChildFile ("sends-" + juce::Uuid().toString());
         ok (root.createDirectory(), "create private send/return artifacts");
         const auto a = fixture (root, "source-a", 1), b = fixture (root, "source-b", 9);

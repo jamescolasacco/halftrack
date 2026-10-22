@@ -8,6 +8,7 @@
 
 namespace halftrack
 {
+void useHardClipEdges();
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
 float pumpSyntheticTestDevice (Session&, int blocks);
 namespace
@@ -162,6 +163,7 @@ int runTrackDuplicateTests (const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root=artifacts.getChildFile("track-duplicate-"+juce::Uuid().toString());ok(root.createDirectory(),"create isolated fixtures");
         audioTests(root);midiTests(root);captureTests(root);std::cout<<"Track duplication tests passed: "<<root.getFullPathName()<<std::endl;return 0;
     }

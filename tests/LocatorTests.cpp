@@ -6,6 +6,7 @@
 
 namespace halftrack
 {
+void useHardClipEdges();
 namespace
 {
 void check(bool condition,const juce::String& message)
@@ -25,6 +26,7 @@ int runLocatorTests(const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root=artifacts.getChildFile("locators-"+juce::Uuid().toString());ok(root.createDirectory(),"create isolated fixtures");
         const auto project=root.getChildFile("song.halftrack"),render=root.getChildFile("mix.wav");
         Session s(false);juce::String start,verse,chorus;

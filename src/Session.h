@@ -269,7 +269,8 @@ public:
     // Reads a groove file in the reference's .agr format (plain or gzip XML) for addGroove; its id is empty.
     static juce::Result readGrooveFile (const juce::File&, GrooveInfo&);
     static const char* grooveBaseName (GrooveBase) noexcept;
-    enum class FadeCurve { linear = 1, convex, concave, sCurve };
+    // Smoothstep (3x^2 - 2x^3) is the shape of the reference's default fades.
+    enum class FadeCurve { linear = 1, convex, concave, sCurve, smoothstep };
     // Warped audio follows the project tempo; its length is fixed in beats. The stretching modes keep
     // its pitch; Re-Pitch plays it faster or slower, so its pitch follows the tempo. Stretch is the
     // reference's Complex and Efficient a cheaper Complex; Beats, Tones, Texture and Complex Pro
@@ -306,6 +307,11 @@ public:
         // semitones and -50 to 50 cents.
         int transposeSemitones = 0;
         float detuneCents = 0;
+        // Default edge fades, after the reference's Create Fades on Clip Edges: 4 ms smoothstep
+        // fades, shown above as their lengths; two touching clips' default edges crossfade. Setting
+        // a length or curve of an edge makes it an ordinary fade, and setting the flag again makes it
+        // the default. Arrangement clips only.
+        bool defaultFadeIn = false, defaultFadeOut = false;
         bool operator== (const AudioClipSettings&) const = default;
     };
     // A MIDI or warped audio clip's loop, in the beats of its content, after the reference's Loop
@@ -890,6 +896,9 @@ public:
         // Plug-In Sources, after the reference's Plug-Ins settings: Audio Units (macOS), the VST3
         // system folders, and a custom VST3 folder when its switch is on.
         bool useAudioUnits = true, useVst3SystemFolders = true, useVst3CustomFolder = false;
+        // Create Fades on Clip Edges, after the reference's (on by default): new audio clips, and the
+        // edges a split makes, get default fades.
+        bool createFadesOnClipEdges = true;
         juce::String vst3CustomFolder;
         bool operator== (const Preferences&) const = default;
     };

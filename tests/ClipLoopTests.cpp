@@ -13,6 +13,7 @@
 // undo step, invalid ones are refused, and loops reopen with the project.
 namespace halftrack
 {
+void useHardClipEdges();
 namespace te = tracktion::engine;
 namespace
 {
@@ -49,6 +50,7 @@ int runClipLoopTests (const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root = artifacts.getChildFile ("clip-loops-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
         const auto render = root.getChildFile ("render.wav");
         Session s (false);

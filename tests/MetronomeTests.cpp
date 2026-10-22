@@ -8,6 +8,7 @@
 
 namespace halftrack
 {
+void useHardClipEdges();
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
 float pumpSyntheticTestDevice(Session&,int);
 int64_t syntheticTestSamplePosition(Session&);
@@ -176,6 +177,7 @@ int runMetronomeTests(const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root=artifacts.getChildFile("metronome-"+juce::Uuid().toString());ok(root.createDirectory(),"create isolated metronome fixtures");
         for(double seconds:{-2.25,-1.0,-.25,0.0,.25,1.0,2.25})
             check(tracktion::graph::timeToSample(seconds,48000)==std::llround(seconds*48000),"graph sample conversion rounds signed time symmetrically");

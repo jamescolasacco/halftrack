@@ -12,6 +12,7 @@
 
 namespace halftrack
 {
+void useHardClipEdges();
 juce::Result registerAudioUnitTestFixture();
 namespace
 {
@@ -151,6 +152,7 @@ int runAudioUnitTests (const juce::File& destination)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto configured = juce::SystemStats::getEnvironmentVariable ("HALFTRACK_TEST_AU_PLUGIN", {});
         check (configured.isNotEmpty() && juce::File (configured).exists(), "controlled AUv2 fixture is supplied");
         ok (registerAudioUnitTestFixture(), "process-local fixture registration is idempotent");

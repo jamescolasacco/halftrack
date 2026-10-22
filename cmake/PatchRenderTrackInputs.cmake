@@ -11,7 +11,7 @@ function(halftrack_patch_render_track_inputs source_dir)
     set(original0 "51ef9b7dfa77221251da5f43f77f91110f8b375de8974e6f45cac2c08c98ad48")
     set(patched0 "06c1d2be2f00c494f5db33c2b5ced64f9395e9fb7e16e4e8002ef7beacfa9ee8")
     set(count0 5)
-    set(downstream0 "bfc26bb83dcc389b9b3cd64db016f5e493e7f1f982b7c8910be6524c30703766" "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647" "1a07134c8c4c2a229b4da262dc6b547d3ab1302496fd5e5fbf1d375e9614517a") # The later MIDI variations, sidechain taps and MIDI ports patches.
+    set(downstream0 "bfc26bb83dcc389b9b3cd64db016f5e493e7f1f982b7c8910be6524c30703766" "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647" "1a07134c8c4c2a229b4da262dc6b547d3ab1302496fd5e5fbf1d375e9614517a" "9e1afcb494391df977c7f7950ce8030410576a2fab891e757d30a0249f87d60c") # The later MIDI variations, sidechain taps, MIDI ports and clip fades patches.
     set(before0_0 [=[    int getMidiInputDeviceBusID (EditItemID trackItemID)
     {
         constexpr size_t midiMagicNum = 0x9a2762;

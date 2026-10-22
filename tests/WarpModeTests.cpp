@@ -9,6 +9,7 @@
 // pitch; Complex Pro keeps a harmonic sound's formant where Complex moves it with the pitch.
 namespace halftrack
 {
+void useHardClipEdges();
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
 float pumpSyntheticTestDevice (Session&, int blocks);
 juce::AudioBuffer<float> captureSyntheticTestDevice (Session&, int blocks);
@@ -83,6 +84,7 @@ int runWarpModeTests (const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root = artifacts.getChildFile ("warp-modes-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
         const auto sine = root.getChildFile ("sine.wav"), hits = root.getChildFile ("hits.wav"), vowel = root.getChildFile ("vowel.wav");
         write (sine, [] (int n) { return (float) (.5 * std::sin (juce::MathConstants<double>::twoPi * 1000 * n / rate)); }, at (4));

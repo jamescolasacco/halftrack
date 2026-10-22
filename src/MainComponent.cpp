@@ -46,6 +46,7 @@ namespace halftrack
 #if HALFTRACK_TESTS_ENABLED
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
 float pumpSyntheticTestDevice (Session&, int blocks);
+void useHardClipEdges (Session&);
 void withGeneratedMidiController (Session&, const std::function<void(const juce::String&)>&);
 #endif
 namespace
@@ -2478,6 +2479,7 @@ private:
                             if (type == Session::FadeCurve::convex) return std::sin (a);
                             if (type == Session::FadeCurve::concave) return 1-std::cos (a);
                             if (type == Session::FadeCurve::sCurve) return (1-x)*(1-std::cos (a))+x*std::sin (a);
+                            if (type == Session::FadeCurve::smoothstep) return x*x*(3-2*x);
                             return x;
                         };
                         juce::Path envelope;
@@ -10113,7 +10115,7 @@ private:
     public:
         explicit PreferencesPanel (Impl& o) : owner (o)
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &exclusiveArm, &exclusiveSolo, &autoWarp, &sceneRecord, &warpLabel, &warp, &modeLabel, &mode, &gridLabel, &grid, &themeLabel, &theme, &zoomLabel, &zoom, &followLabel, &follow, &reset })
+            for (auto* c : std::initializer_list<juce::Component*> { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord, &warpLabel, &warp, &modeLabel, &mode, &gridLabel, &grid, &themeLabel, &theme, &zoomLabel, &zoom, &followLabel, &follow, &reset })
                 addAndMakeVisible (c);
             // Look: the interface theme and the display zoom.
             themeLabel.setText ("Theme", juce::dontSendNotification); zoomLabel.setText ("Zoom Display", juce::dontSendNotification);
@@ -10124,6 +10126,8 @@ private:
             for (int percent = 50; percent <= 200; percent += 25) zoom.addItem (juce::String (percent) + "%", percent);
             exclusiveArm.setName ("Exclusive arm"); exclusiveSolo.setName ("Exclusive solo"); autoWarp.setName ("Auto-warp long samples");
             sceneRecord.setName ("Start recording on scene launch");
+            edgeFades.setName ("Create fades on clip edges");
+            edgeFades.setTooltip ("Create Fades on Clip Edges: new audio clips, and the edges a split makes, fade over 4 ms, and touching clips crossfade");
             sceneRecord.setTooltip ("Start Recording on Scene Launch: launching a scene also records into its empty slots on armed tracks");
             warp.setName ("Default warp mode"); mode.setName ("Default launch mode"); grid.setName ("Default launch quantization"); reset.setName ("Reset preferences");
             warpLabel.setText ("Default Warp Mode", juce::dontSendNotification); modeLabel.setText ("Default Launch Mode", juce::dontSendNotification);
@@ -10134,7 +10138,7 @@ private:
             for (const auto* name : { "Trigger", "Gate", "Toggle", "Repeat" }) mode.addItem (name, id++);
             id = 1;
             for (const auto* name : { "Global", "None", "8 Bars", "4 Bars", "2 Bars", "1 Bar", "1/2", "1/4", "1/8", "1/16", "1/32" }) grid.addItem (name, id++);
-            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &sceneRecord }) b->onClick = [this] { apply(); };
+            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord }) b->onClick = [this] { apply(); };
             warp.onChange = mode.onChange = grid.onChange = theme.onChange = zoom.onChange = follow.onChange = [this] { apply(); };
             reset.onClick = [this] { owner.report (owner.session.resetPreferences(), "Preferences reset to their defaults."); sync(); };
             sync();
@@ -10145,6 +10149,7 @@ private:
             exclusiveArm.setToggleState (p.exclusiveArm, juce::dontSendNotification); exclusiveSolo.setToggleState (p.exclusiveSolo, juce::dontSendNotification);
             autoWarp.setToggleState (p.autoWarpLongSamples, juce::dontSendNotification);
             sceneRecord.setToggleState (p.startRecordingOnSceneLaunch, juce::dontSendNotification);
+            edgeFades.setToggleState (p.createFadesOnClipEdges, juce::dontSendNotification);
             for (int i = 0; i < (int) std::size (warpModes); ++i) if (warpModes[i] == p.defaultWarpMode) warp.setSelectedId (i + 1, juce::dontSendNotification);
             mode.setSelectedId ((int) p.defaultLaunchMode + 1, juce::dontSendNotification); grid.setSelectedId ((int) p.defaultLaunchQuantisation + 1, juce::dontSendNotification);
             theme.setSelectedId (p.theme + 1, juce::dontSendNotification); zoom.setSelectedId (p.zoomPercent, juce::dontSendNotification);
@@ -10156,6 +10161,7 @@ private:
             auto p = owner.session.preferences();
             p.exclusiveArm = exclusiveArm.getToggleState(); p.exclusiveSolo = exclusiveSolo.getToggleState(); p.autoWarpLongSamples = autoWarp.getToggleState();
             p.startRecordingOnSceneLaunch = sceneRecord.getToggleState();
+            p.createFadesOnClipEdges = edgeFades.getToggleState();
             p.defaultWarpMode = warpModes[(size_t) juce::jlimit (0, (int) std::size (warpModes) - 1, warp.getSelectedId() - 1)];
             p.defaultLaunchMode = (Session::LaunchMode) juce::jlimit (0, 3, mode.getSelectedId() - 1);
             p.defaultLaunchQuantisation = (Session::ClipQuantisation) juce::jlimit (0, 10, grid.getSelectedId() - 1);
@@ -10167,7 +10173,7 @@ private:
         void resized() override
         {
             auto area = getLocalBounds().reduced (16);
-            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &sceneRecord }) { b->setBounds (area.removeFromTop (26)); area.removeFromTop (4); }
+            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord }) { b->setBounds (area.removeFromTop (26)); area.removeFromTop (4); }
             for (auto [label, box] : { std::pair<juce::Label*, juce::ComboBox*> { &warpLabel, &warp }, { &modeLabel, &mode }, { &gridLabel, &grid }, { &themeLabel, &theme }, { &zoomLabel, &zoom }, { &followLabel, &follow } })
             { auto row = area.removeFromTop (26); label->setBounds (row.removeFromLeft (190)); box->setBounds (row.removeFromLeft (180)); area.removeFromTop (6); }
             area.removeFromTop (10); reset.setBounds (area.removeFromTop (26).removeFromLeft (160));
@@ -10177,12 +10183,12 @@ private:
         static constexpr Session::WarpMode warpModes[] { Session::WarpMode::beats, Session::WarpMode::tones, Session::WarpMode::texture, Session::WarpMode::repitch,
                                                          Session::WarpMode::stretch, Session::WarpMode::complexPro, Session::WarpMode::efficient };
         juce::ToggleButton exclusiveArm { "Exclusive Arm" }, exclusiveSolo { "Exclusive Solo" }, autoWarp { "Auto-Warp Long Samples" },
-                           sceneRecord { "Start Recording on Scene Launch" };
+                           edgeFades { "Create Fades on Clip Edges" }, sceneRecord { "Start Recording on Scene Launch" };
         juce::Label warpLabel, modeLabel, gridLabel, themeLabel, zoomLabel, followLabel;
         juce::ComboBox warp, mode, grid, theme, zoom, follow;
         juce::TextButton reset { "Reset to Defaults" };
     };
-    void showPreferences() { showDialog ("Halftrack - Preferences", std::make_unique<PreferencesPanel> (*this), 440, 426); }
+    void showPreferences() { showDialog ("Halftrack - Preferences", std::make_unique<PreferencesPanel> (*this), 440, 456); }
     // What this copy of Halftrack is: its version, source commit and platform (selectable, to paste
     // into a report), its license, and where it keeps settings and the User Library.
     class AboutPanel final : public juce::Component
@@ -11143,6 +11149,8 @@ void MainComponent::Impl::runExportInteractionChecks (const juce::File& audioFix
 
 void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
 {
+    // Most checks read clip edges directly; the default fades have checks of their own below.
+    useHardClipEdges (session);
     auto check = [] (bool condition, const juce::String& message)
     {
         if (! condition) throw std::runtime_error (message.toStdString());
@@ -13559,7 +13567,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     }
     {
         // Preferences: the panel's switches edit them, and solo clicks follow Exclusive Solo.
-        PreferencesPanel panel (*this); panel.setSize (440, 364);
+        PreferencesPanel panel (*this); panel.setSize (440, 456);
         auto* exclusive = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Exclusive solo"));
         check (exclusive != nullptr && exclusive->getToggleState() == session.preferences().exclusiveSolo, "the Preferences panel shows Exclusive Solo");
         exclusive->setToggleState (false, juce::dontSendNotification); exclusive->onClick();
@@ -13571,13 +13579,18 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         auto* reset = dynamic_cast<juce::Button*> (findNamed (panel, "Reset preferences"));
         check (reset != nullptr, "the panel offers a reset"); reset->onClick();
         check (session.preferences() == Session::Preferences {} && exclusive->getToggleState(), "reset restores the defaults");
+        auto* edgeFades = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Create fades on clip edges"));
+        check (edgeFades != nullptr && edgeFades->getButtonText() == "Create Fades on Clip Edges" && edgeFades->getToggleState(),
+               "the panel offers Create Fades on Clip Edges, on by default as in the reference");
+        edgeFades->setToggleState (false, juce::dontSendNotification); edgeFades->onClick();
+        check (! session.preferences().createFadesOnClipEdges, "switching it off saves the preference");
         auto* resetButton = findNamed (panel, "Reset preferences");
         check (resetButton != nullptr && panel.getLocalBounds().contains (resetButton->getBounds()), "every preference fits in the panel");
     }
     {
         // Themes: choosing one in Preferences recolours the look-and-feel, the colours components
         // set on themselves and the painting; switching back restores Dark exactly.
-        PreferencesPanel panel (*this); panel.setSize (440, 364);
+        PreferencesPanel panel (*this); panel.setSize (440, 456);
         auto* themeChooser = dynamic_cast<juce::ComboBox*> (findNamed (panel, "Interface theme"));
         auto* zoomChooser = dynamic_cast<juce::ComboBox*> (findNamed (panel, "Display zoom"));
         check (themeChooser != nullptr && themeChooser->getNumItems() == themes::kindCount && themeChooser->getText() == "Dark" && zoomChooser != nullptr && zoomChooser->getText() == "100%",
@@ -13631,6 +13644,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (session.preferences().startRecordingOnSceneLaunch && session.preferences().scrollFollow, "switching it on sets it, keeping the others");
         }
         check (session.resetPreferences().wasOk(), "reset the preferences");
+        useHardClipEdges (session);
     }
     {
         // Plug-Ins settings: only a custom folder, holding the test plug-in when there is one, so
@@ -13667,6 +13681,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         custom->setToggleState (true, juce::sendNotificationSync);
         check (session.preferences().useVst3CustomFolder && settle() && inFolder() == expected, "and switching it on again finds them");
         check (session.resetPreferences().wasOk(), "restore the default sources");
+        useHardClipEdges (session);
         empty.deleteRecursively();
     }
     {
@@ -14489,6 +14504,27 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     canvas.mouseDown(fadeEvent(fadePoint,fadePoint));fadeTo=fadePoint-juce::Point<float>(1000,0);
     canvas.mouseDrag(fadeEvent(fadeTo,fadePoint,true));canvas.mouseUp(fadeEvent(fadeTo,fadePoint,true));
     check(state.tracks[0].clips[0].audio.fadeInSeconds==0,"fade-in clamps to zero");session.undo();refresh();
+    {
+        // With Create Fades on Clip Edges on, a new clip's fade handles sit 4 ms in, and dragging one
+        // makes it an ordinary fade that one undo returns to the default.
+        auto preferences = session.preferences(); preferences.createFadesOnClipEdges = true;
+        check (session.setPreferences (preferences).wasOk() && session.importAudio (audioFixture, 0, 2).wasOk(), "import a clip with default fades at 2 s");
+        viewStart = 1.99; updateScroll(); refresh(); selectedTrack = 0; selectedClip = (int) state.tracks[0].clips.size() - 1; refresh();
+        const auto clip = state.tracks[0].clips[(size_t) selectedClip];
+        auto handle = canvas.fadeHandle (clip, 0, false);
+        const auto clipLeft = canvas.fadeHandle (clip, 0, false).x - (float) (.004 * pixelsPerSecond);
+        check (clip.audio.defaultFadeIn && std::abs (clip.audio.fadeInSeconds - .004) < 1e-9 && std::abs (clipLeft - (float) ((2 - viewStart) * pixelsPerSecond)) < 1.5f,
+               "its fade-in handle is 4 ms into the clip");
+        canvas.mouseDown (fadeEvent (handle, handle)); const auto to = handle + juce::Point<float> (40, 0);
+        canvas.mouseDrag (fadeEvent (to, handle, true)); canvas.mouseUp (fadeEvent (to, handle, true));
+        const auto dragged = state.tracks[0].clips[(size_t) selectedClip].audio;
+        check (! dragged.defaultFadeIn && std::abs (dragged.fadeInSeconds - (.004 + 40 / pixelsPerSecond)) < 1e-6,
+               "dragging it makes it an ordinary fade, longer by the drag (" + juce::String (dragged.fadeInSeconds, 5) + " s, " + (dragged.defaultFadeIn ? "default" : "ordinary") + ")");
+        session.undo(); refresh();
+        check (state.tracks[0].clips[(size_t) selectedClip].audio.defaultFadeIn, "one undo returns it to the default fade");
+        session.undo(); viewStart = 0; updateScroll(); refresh(); selectedClip = 0;
+        useHardClipEdges (session);
+    }
     if(const auto path=juce::SystemStats::getEnvironmentVariable("HALFTRACK_UI_SNAPSHOT",{});path.isNotEmpty())
     {
         const juce::File requested(path);const auto output=requested.getSiblingFile(requested.getFileNameWithoutExtension()+"-audio.png");

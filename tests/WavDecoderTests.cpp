@@ -11,6 +11,7 @@
 // the format's quantization.
 namespace halftrack
 {
+void useHardClipEdges();
 namespace
 {
 void check (bool v, const juce::String& text)
@@ -71,6 +72,7 @@ int runWavDecoderTests (const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root = artifacts.getChildFile ("wav-decoder-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
         const auto source = root.getChildFile ("sine.wav");
         const auto sine = [] (int n) { return .5 * std::sin (juce::MathConstants<double>::twoPi * 440.0 * n / 48000); };

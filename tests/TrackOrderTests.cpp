@@ -6,6 +6,7 @@
 
 namespace halftrack
 {
+void useHardClipEdges();
 namespace
 {
 void check (bool value, const juce::String& message)
@@ -90,6 +91,7 @@ int runTrackOrderTests (const juce::File& artifacts)
 {
     try
     {
+        useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root = artifacts.getChildFile ("track-order-" + juce::Uuid().toString()); ok (root.createDirectory(), "create generated fixture directory");
         const auto a = root.getChildFile ("a.wav"), b = root.getChildFile ("b.wav"), output = root.getChildFile ("mix.wav"), project = root.getChildFile ("order.halftrack");
         for (int file = 0; file < 2; ++file)
