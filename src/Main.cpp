@@ -113,6 +113,7 @@ int runExternalSyncTests (const juce::File&);
 int runSceneCaptureTests (const juce::File&);
 int runSlotClipTests (const juce::File&);
 int runEditGridTests (const juce::File&);
+int runNotePreviewTests (const juce::File&);
 int runTempoAnalysisEvaluation (const juce::File& library, const juce::File& report);
 int runPackTests (const juce::File&);
 int runMackieTests (const juce::File&);
@@ -451,6 +452,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-edit-grid");
             setApplicationReturnValue (runEditGridTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-note-preview"))
+        {
+            const int i = args.indexOf ("--self-test-note-preview");
+            setApplicationReturnValue (runNotePreviewTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-external-sync"))

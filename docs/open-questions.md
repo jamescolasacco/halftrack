@@ -701,4 +701,14 @@ With Follow Behavior Scroll, the view keeps the play head at its middle once the
 
 ### Step recording
 
-The reference's step recording needs the MIDI editor's Preview switch on as well as the track armed. Halftrack's MIDI editor has no Preview switch yet, so arming is enough. Steps stop at the end of the clip's content, where the insert marker stops; whether the reference extends the clip when stepping past its end is unmeasured.
+Steps stop at the end of the clip's content, where the insert marker stops; whether the reference extends the clip when stepping past its end is unmeasured.
+
+### MIDI editor Preview
+
+Defaults the reference's manual does not give:
+
+- A ruler key sounds at velocity 100.
+- Notes transposed with the arrow keys sound for 200 ms.
+- At most eight notes sound at once.
+- A plain click on a key only sounds it; Shift-click selects that pitch's notes, as the manual says.
+- Moving a note sideways does not sound it again.

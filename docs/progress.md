@@ -1916,3 +1916,16 @@ Engine and UI areas.
 - **Measured.** The Capture MIDI suite and the UI suite (computer keyboard notes, no microphone).
 
 See [the contract](research/capture-midi-contract.md#step-recording).
+
+## MIDI editor Preview — 2026-10-22
+
+Engine and UI areas.
+
+- **The switch.** The piano roll's Preview switch sits above the keys, as the reference's does. It is off at first and saved with the project, not as an undo step. While it is on, it sounds the keys, clicked, drawn, dragged and transposed notes on the clip's track.
+- **Step recording now needs it on**, as in the reference.
+- **Key tracks.** Shift-clicking a key selects every note of that pitch.
+- **Engine.** `Session::previewNote` plays through the engine's live MIDI injection; that path's lock is noted in the real-time audit.
+- **Measured.** The new note-preview suite, which listens to the synthetic device's output, and the UI suite.
+
+See [the contract](research/note-preview-contract.md).
+

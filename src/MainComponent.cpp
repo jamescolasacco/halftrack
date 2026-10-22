@@ -5229,7 +5229,9 @@ private:
         {
             setName ("Piano roll editor");
             setWantsKeyboardFocus (true);
-            for (auto* c : std::initializer_list<juce::Component*> { &gridButton, &noteLength, &velocity, &noteTools, &laneChoice, &laneView, &scaleButton, &scaleRoot, &scaleMode, &horizontal, &vertical }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &gridButton, &noteLength, &velocity, &noteTools, &laneChoice, &laneView, &scaleButton, &scaleRoot, &scaleMode, &horizontal, &vertical, &previewSwitch }) addAndMakeVisible (c);
+            previewSwitch.setTooltip ("Preview: hear notes as you click the keys, add, select and move them; with the track armed, step record held keys with the arrow keys");
+            previewSwitch.onClick = [this] { silence(); owner.session.setNotePreview (previewSwitch.getToggleState()); };
             scaleButton.setName ("Scale"); scaleButton.setClickingTogglesState (true); scaleButton.setTooltip ("Scale: highlight this clip's scale in the note editor");
             scaleButton.setColour (juce::TextButton::buttonOnColourId, orange); scaleButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             scaleButton.setWantsKeyboardFocus (false); scaleButton.setMouseClickGrabsKeyboardFocus (false);
@@ -5328,6 +5330,7 @@ private:
             }
             if (const auto* note = selectedNote()) { drawVelocity = note->velocity; velocity.setValue (note->velocity, juce::dontSendNotification); }
             const bool active = clip != nullptr;
+            previewSwitch.setToggleState (owner.session.notePreview(), juce::dontSendNotification);
             gridButton.setEnabled (active); updateGridButton(); noteLength.setEnabled (active); velocity.setEnabled (active); noteTools.setEnabled (active); laneChoice.setEnabled (active);
             refreshLaneChoices (clip);
             const auto scale = clip != nullptr ? clip->scale : Session::ScaleSettings {};
@@ -5372,6 +5375,7 @@ private:
             if (laneView.isVisible()) laneView.setBounds (0, getHeight() - scrollSize - laneHeight, getWidth() - scrollSize, laneHeight);
             horizontal.setBounds (keysWidth, getHeight() - scrollSize, getWidth() - keysWidth - scrollSize, scrollSize);
             vertical.setBounds (getWidth() - scrollSize, gridTop, scrollSize, gridBounds().getHeight());
+            previewSwitch.setBounds (4, headerHeight + 3, keysWidth - 8, rulerHeight - 6); // Above the keys, as the reference's.
             updateScroll();
         }
         void paint (juce::Graphics& g) override
@@ -5521,7 +5525,25 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             const auto* clip = owner.currentMidiClip();
-            if (clip == nullptr || e.x < keysWidth) return;
+            if (clip == nullptr) return;
+            if (e.x < keysWidth)
+            {
+                // A key sounds its pitch while held (with Preview on); Shift-clicking one adds its
+                // notes to the selection, or takes them out if they all were selected.
+                if (e.y < gridTop || e.y >= gridBounds().getBottom() || e.mods.isPopupMenu()) return;
+                grabKeyboardFocus(); endGesture();
+                keyPitch = juce::jlimit (0, 127, topPitch - (e.y - gridTop) / rowHeight);
+                if (e.mods.isShiftDown())
+                {
+                    std::vector<juce::String> ids;
+                    for (const auto& note : clip->notes) if (note.pitch == keyPitch) ids.push_back (note.id);
+                    const bool all = ! ids.empty() && std::all_of (ids.begin(), ids.end(), [&] (const auto& id) { return selectedNoteIds.contains (id); });
+                    for (const auto& id : ids) if (all) selectedNoteIds.erase (id); else selectedNoteIds.insert (id);
+                    if (! ids.empty()) sync();
+                }
+                sound ({ { keyPitch, keyVelocity } });
+                return;
+            }
             // The loop brace and the start marker drag; the rest of the ruler places the insert marker.
             if (const int grabbed = braceAt (*clip, e.position); grabbed != 0)
             {
@@ -5570,6 +5592,7 @@ private:
                     }
                     else if (! selectedNoteIds.contains (note.id)) selectOnly (note.id);
                     selectedNoteId = note.id; original = note; originalNotes = selectedNotes();
+                    previewDelta = 0; if (! e.mods.isPopupMenu()) sound ({ { note.pitch, note.velocity } });
                     dragOrigin = e.position; dragClipId = clip->id;
                     resizeNote = e.x >= noteBounds (note).getRight() - 8;
                     if (e.mods.isPopupMenu()) { showNoteMenu(); return; }
@@ -5598,9 +5621,17 @@ private:
                 for (const auto& note : updated->notes)
                     if (std::none_of (oldNotes.begin(), oldNotes.end(), [&] (const auto& old) { return old.id == note.id; })) { selectOnly (note.id); original = note; originalNotes = { note }; break; }
             dragClipId = clipId; dragOrigin = e.position; resizeNote = true; drawing = true; sync();
+            sound ({ { pitch, drawVelocity } });
         }
         void mouseDrag (const juce::MouseEvent& e) override
         {
+            if (keyPitch >= 0)
+            {
+                // Dragging along the keys plays each one it reaches.
+                const auto pitch = juce::jlimit (0, 127, topPitch - (juce::jlimit (gridTop, gridBounds().getBottom() - 1, e.y) - gridTop) / rowHeight);
+                if (pitch != keyPitch) { keyPitch = pitch; sound ({ { pitch, keyVelocity } }); }
+                return;
+            }
             const auto* clip = owner.currentMidiClip();
             if (clip == nullptr || clip->id != dragClipId || e.mods.isPopupMenu() || ! e.mouseWasDraggedSinceMouseDown()) return;
             if (braceDrag != 0)
@@ -5661,10 +5692,17 @@ private:
                 if (snapsNotes (e.mods)) beatDelta = std::round ((original.startBeat + beatDelta) / snapBeats()) * snapBeats() - original.startBeat;
                 const auto pitchDelta = -(int) std::round ((e.y - dragOrigin.y) / rowHeight);
                 moveNotes (dragClipId, originalNotes, beatDelta, pitchDelta);
+                if (pitchDelta != previewDelta)
+                {
+                    // Moved to another pitch, the dragged note sounds there.
+                    previewDelta = pitchDelta;
+                    if (const auto* moved = selectedNote()) sound ({ { moved->pitch, moved->velocity } });
+                }
             }
         }
         void mouseUp (const juce::MouseEvent& e) override
         {
+            silence(); keyPitch = -1;
             endGesture(); drawing = false; originalNotes.clear(); braceDrag = 0;
             if (marquee)
             {
@@ -5737,7 +5775,15 @@ private:
                 if (code == juce::KeyPress::rightKey) beatDelta = snapBeats();
                 if (code == juce::KeyPress::upKey) pitchDelta = key.getModifiers().isShiftDown() ? 12 : 1;
                 if (code == juce::KeyPress::downKey) pitchDelta = key.getModifiers().isShiftDown() ? -12 : -1;
-                moveNotes (clip->id, selectedNotes(), beatDelta, pitchDelta); return true;
+                moveNotes (clip->id, selectedNotes(), beatDelta, pitchDelta);
+                if (pitchDelta != 0)
+                {
+                    // Transposed notes sound briefly.
+                    std::vector<std::pair<int, float>> moved;
+                    for (const auto& note : selectedNotes()) moved.push_back ({ note.pitch, note.velocity });
+                    sound (moved, true);
+                }
+                return true;
             }
             return owner.handleKey (key);
         }
@@ -5759,6 +5805,44 @@ private:
     private:
         Impl& owner;
         static constexpr int headerHeight = 37, rulerHeight = 23, gridTop = headerHeight + rulerHeight, keysWidth = 55, rowHeight = 15, scrollSize = 11;
+        // The Preview switch, drawn as headphones, lit when on.
+        struct PreviewSwitch final : juce::Button
+        {
+            PreviewSwitch() : juce::Button ("Preview") { setClickingTogglesState (true); setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); }
+            void paintButton (juce::Graphics& g, bool over, bool) override
+            {
+                const auto r = getLocalBounds().toFloat().reduced (.5f);
+                const bool on = getToggleState();
+                g.setColour (on ? orange : over ? themes::colour (0xff4a4a4a) : themes::colour (0xff363636)); g.fillRoundedRectangle (r, 2.0f);
+                g.setColour (on ? themes::colour (0xff1a1a1a) : themes::colour (0xffb4b4b4));
+                const auto c = r.getCentre(); const auto w = juce::jmin (r.getWidth(), r.getHeight()) * .62f;
+                juce::Path band; band.addCentredArc (c.x, c.y + w * .12f, w * .5f, w * .5f, 0, -juce::MathConstants<float>::halfPi, juce::MathConstants<float>::halfPi, true);
+                g.strokePath (band, juce::PathStrokeType (1.4f));
+                g.fillRoundedRectangle (c.x - w * .5f - 1.3f, c.y + w * .08f, 2.8f, w * .46f, 1.0f);
+                g.fillRoundedRectangle (c.x + w * .5f - 1.5f, c.y + w * .08f, 2.8f, w * .46f, 1.0f);
+            }
+        } previewSwitch;
+        // With Preview on, the notes it is sounding on the clip's track until released (at most 8).
+        static constexpr float keyVelocity = 100.0f / 127;
+        int keyPitch = -1, previewDelta = 0;
+        std::vector<int> sounding; juce::String soundingTrack;
+        juce::TimedCallback previewRelease { [this] { silence(); } };
+        void sound (const std::vector<std::pair<int, float>>& notes, bool briefly = false)
+        {
+            silence();
+            const auto* track = owner.currentTrack();
+            if (! owner.session.notePreview() || track == nullptr || ! track->isMidi) return;
+            soundingTrack = track->id;
+            for (const auto& [pitch, level] : notes)
+                if (sounding.size() < 8 && owner.session.previewNote (soundingTrack, pitch, level, true).wasOk()) sounding.push_back (pitch);
+            if (briefly && ! sounding.empty()) previewRelease.startTimer (200);
+        }
+        void silence()
+        {
+            previewRelease.stopTimer();
+            for (const auto pitch : sounding) owner.session.previewNote (soundingTrack, pitch, 0, false);
+            sounding.clear();
+        }
         // A ruler drag of the loop brace (1 its start, 2 its end, 3 all of it) or the start marker (4).
         int braceDrag = 0;
         Session::ClipLoop braceOrigin;
@@ -6476,7 +6560,7 @@ private:
         bool stepRecord (bool forward)
         {
             const auto* clip = owner.currentMidiClip(); const auto* track = owner.currentTrack();
-            if (clip == nullptr || track == nullptr || ! track->armed || owner.state.playing) return false;
+            if (clip == nullptr || track == nullptr || ! track->armed || ! owner.session.notePreview() || owner.state.playing) return false;
             const auto held = owner.session.heldInputNotes (track->id);
             if (held.empty()) return false;
             std::vector<int> pitches; for (const auto& note : held) pitches.push_back (note.pitch);
@@ -13133,12 +13217,65 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     const auto beforeCursorPaste = currentMidiClip()->notes;
     pianoRoll.keyPressed (pasteNotes);
     check (matchesCopiedGroup (addedSince (beforeCursorPaste), 5.25), "arrow key moves the insertion marker by one grid step when no notes are selected");
+    // The Preview switch above the keys: off at first; on, the keys sound while held.
+    juce::Button* previewSwitch = nullptr;
+    for (auto* child : pianoRoll.getChildren()) if (child->getName() == "Preview") previewSwitch = dynamic_cast<juce::Button*> (child);
+    check (previewSwitch != nullptr && previewSwitch->isVisible() && previewSwitch->getRight() <= 55 && ! previewSwitch->getToggleState() && ! session.notePreview() && ! state.playing,
+           "the piano roll's Preview switch sits above the keys, off at first");
+    {
+        const auto key60 = juce::Point<float> (20.0f, groupPoint (0, 60).y);
+        const auto pressKey = [&] (int modifiers)
+        {
+            pumpSyntheticTestDevice (session, 40);
+            pianoRoll.mouseDown (groupEvent (key60, key60, false, modifiers));
+            pumpSyntheticTestDevice (session, 20);
+            const auto held = pumpSyntheticTestDevice (session, 40);
+            pianoRoll.mouseUp (groupEvent (key60, key60, false, modifiers));
+            pumpSyntheticTestDevice (session, 60);
+            return std::pair { held, pumpSyntheticTestDevice (session, 40) };
+        };
+        check (pressKey (0).first < 1e-4f, "with Preview off, clicking a key is silent");
+        previewSwitch->setToggleState (true, juce::dontSendNotification); previewSwitch->onClick(); refresh();
+        check (session.notePreview() && previewSwitch->getToggleState(), "clicking the switch turns Preview on for the project");
+        const auto [held, released] = pressKey (0);
+        check (held > .01f && released < 1e-4f, "with Preview on, a key sounds while held and stops when released");
+        const auto pressAt = [&] (juce::Point<float> at)
+        {
+            pumpSyntheticTestDevice (session, 40);
+            pianoRoll.mouseDown (groupEvent (at, at, false, 0));
+            pumpSyntheticTestDevice (session, 20);
+            const auto sounding = pumpSyntheticTestDevice (session, 40);
+            pianoRoll.mouseUp (groupEvent (at, at, false, 0));
+            pumpSyntheticTestDevice (session, 60);
+            return std::pair { sounding, pumpSyntheticTestDevice (session, 40) };
+        };
+        const auto shown = currentMidiClip()->notes;
+        const auto visible = std::find_if (shown.begin(), shown.end(), [] (const auto& n) { return n.pitch <= 77 && n.pitch >= 50 && n.startBeat < 12; });
+        check (visible != shown.end(), "a note to click is in view");
+        const auto [clicked, afterClick] = pressAt (groupPoint (visible->startBeat + .02, visible->pitch));
+        check (clicked > .01f && afterClick < 1e-4f && currentMidiClip()->notes.size() == shown.size(), "clicking a note sounds it while held, without changing it");
+        const auto [drawn, afterDraw] = pressAt (groupPoint (juce::jmin (12.0, std::floor (contentEndBeat (*currentMidiClip()) - 1)) + .1, 71));
+        check (drawn > .01f && afterDraw < 1e-4f && currentMidiClip()->notes.size() == shown.size() + 1, "drawing a note sounds it while the button is down");
+        pianoRoll.keyPressed (undo);
+        check (currentMidiClip()->notes.size() == shown.size(), "undo removes the drawn note");
+        // Shift-clicking a key adds its notes to the selection, as the reference's does.
+        const auto before = currentMidiClip()->notes;
+        const auto sixties = std::count_if (before.begin(), before.end(), [] (const auto& n) { return n.pitch == 60; });
+        pianoRoll.keyPressed (escape);
+        pressKey (juce::ModifierKeys::shiftModifier);
+        pianoRoll.keyPressed (deleteNotes);
+        const auto after = currentMidiClip()->notes;
+        check (sixties > 0 && (std::ptrdiff_t) after.size() == (std::ptrdiff_t) before.size() - sixties && std::none_of (after.begin(), after.end(), [] (const auto& n) { return n.pitch == 60; }),
+               "Shift-clicking a key selects every note of its pitch, so Delete removes just those");
+        pianoRoll.keyPressed (undo);
+        check (currentMidiClip()->notes.size() == before.size(), "undo brings them back");
+    }
     // Step recording: with the clip's track armed and the transport stopped, the arrows enter held keys.
     {
         int stepTrack = -1;
         for (size_t i = 0; i < state.tracks.size(); ++i) if (state.tracks[i].id == currentTrack()->id) stepTrack = (int) i;
         check (session.setComputerKeyboardEnabled (true).wasOk() && session.setTrackInput (stepTrack, Session::computerKeyboardName).wasOk()
-                   && session.setTrackArmed (stepTrack, true).wasOk(), "arm the clip's track, played from the computer keyboard");
+                   && session.setTrackArmed (stepTrack, true).wasOk(), "arm the clip's track, played from the computer keyboard, with Preview on");
         pumpSyntheticTestDevice (session, 8); refresh();
         const auto right = juce::KeyPress (juce::KeyPress::rightKey), left = juce::KeyPress (juce::KeyPress::leftKey);
         const auto hold = [&] (int pitch, bool on) { check (session.computerKeyboardNote (pitch, on ? .8f : 0, on).wasOk(), on ? "hold a key" : "release a key"); pumpSyntheticTestDevice (session, 4); };
@@ -13147,6 +13284,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         markerClick (1);
         const auto beforeSteps = currentMidiClip()->notes;
         hold (60, true); hold (64, true);
+        session.setNotePreview (false); refresh();
+        pianoRoll.keyPressed (right);
+        check (addedSince (beforeSteps).empty(), "with Preview off, Right Arrow does not step record");
+        session.setNotePreview (true); refresh();
+        markerClick (1);
         pianoRoll.keyPressed (right);
         auto stepped = byStart (addedSince (beforeSteps));
         check (stepped.size() == 2 && stepped[0].pitch == 60 && stepped[1].pitch == 64 && stepped[0].startBeat == 1 && stepped[1].startBeat == 1
@@ -13179,7 +13321,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         pianoRoll.keyPressed (right);
         check (currentMidiClip()->notes.size() == beforeUnarmed, "an unarmed track does not step record");
         hold (67, false);
-        check (session.setTrackInput (stepTrack, {}).wasOk() && session.setComputerKeyboardEnabled (false).wasOk(), "disconnect the computer keyboard"); refresh();
+        check (session.setTrackInput (stepTrack, {}).wasOk() && session.setComputerKeyboardEnabled (false).wasOk(), "disconnect the computer keyboard");
+        previewSwitch->setToggleState (false, juce::dontSendNotification); previewSwitch->onClick(); refresh();
+        check (! session.notePreview(), "and switch Preview off again");
     }
 
     if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))

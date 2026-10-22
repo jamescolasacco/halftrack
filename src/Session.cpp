@@ -4053,6 +4053,7 @@ struct Session::Impl
     // Capture MIDI: the notes played into each armed or In-monitored MIDI track, newest last.
     struct CapturedNote { int channel = 1, pitch = 60; float velocity = 0; double onTime = 0, offTime = -1, onBeat = 0, offBeat = 0; bool timed = false; }; // Times in stream seconds.
     std::map<te::EditItemID, std::vector<CapturedNote>> captured;
+    std::map<te::EditItemID, std::set<int>> previewing; // The notes the MIDI editor's Preview is playing.
     std::vector<std::unique_ptr<MidiCaptureTap>> captureTaps;
     static constexpr size_t maximumCapturedNotes = 4096;
     void attachCapture()
@@ -4985,6 +4986,7 @@ Result Session::newProject()
     // The Impl, not Session::impl: the Edit is destroyed inside ~Impl, when impl is already null.
     options.editFileRetriever = [owner = impl.get()] { return owner->editLocation(); };
     impl->audition.reset(); // Its states belong to the replaced Edit.
+    impl->previewing.clear();
     impl->edit = std::make_unique<te::Edit> (std::move (options));
     ++impl->projectGeneration;
     impl->edit->getMasterVolumePlugin()->setVolumeDb (0);
@@ -5112,6 +5114,7 @@ Result Session::loadProject (const File& file)
     impl->projectFile = file;
     impl->pristineNewDocument = false;
     impl->audition.reset(); // Its states belong to the replaced Edit.
+    stopNotePreviews();
     impl->edit = std::move (candidate);
     ++impl->projectGeneration;
     for (auto* t : te::getAudioTracks (*impl->edit))
@@ -7651,6 +7654,33 @@ std::vector<Session::HeldNote> Session::heldInputNotes (const String& trackId)
     std::sort (held.begin(), held.end(), [] (const auto& a, const auto& b) { return a.pitch < b.pitch; });
     held.erase (std::unique (held.begin(), held.end(), [] (const auto& a, const auto& b) { return a.pitch == b.pitch; }), held.end());
     return held;
+}
+const juce::Identifier notePreviewProperty { "halftrackNotePreview" };
+bool Session::notePreview() const { return static_cast<bool> (impl->edit->state.getProperty (notePreviewProperty, false)); }
+void Session::setNotePreview (bool on)
+{
+    if (on == notePreview()) return;
+    if (! on) stopNotePreviews();
+    impl->edit->state.setProperty (notePreviewProperty, on, nullptr);
+    sendChangeMessage();
+}
+Result Session::previewNote (const String& trackId, int pitch, float velocity, bool on)
+{
+    auto* track = impl->track (trackId);
+    if (track == nullptr || ! track->state.getProperty (midiTrackProperty, false)) return Result::fail ("Notes preview on a MIDI track.");
+    if (! juce::isPositiveAndBelow (pitch, 128) || ! (velocity >= 0 && velocity <= 1)) return Result::fail ("Choose a note from 0 to 127 and a velocity from 0 to 1.");
+    auto& notes = impl->previewing[track->itemID];
+    if (notes.contains (pitch) == on) return Result::ok();
+    if (on) notes.insert (pitch); else notes.erase (pitch);
+    track->injectLiveMidiMessage (on ? juce::MidiMessage::noteOn (1, pitch, juce::jmax (1.0f / 127, velocity)) : juce::MidiMessage::noteOff (1, pitch), {});
+    return Result::ok();
+}
+void Session::stopNotePreviews()
+{
+    for (const auto& [id, notes] : impl->previewing)
+        if (auto* track = dynamic_cast<te::AudioTrack*> (te::findTrackForID (*impl->edit, id)))
+            for (auto pitch : notes) track->injectLiveMidiMessage (juce::MidiMessage::noteOff (1, pitch), {});
+    impl->previewing.clear();
 }
 Result Session::removeMidiNotes (const String& clipId, const juce::StringArray& noteIds)
 {

@@ -15,18 +15,16 @@ As in the reference, Halftrack keeps listening to MIDI played into armed or In-m
 
 ## Step recording
 
-As in the reference's MIDI editor, with the clip's track armed and the transport stopped, held keys are entered note by note from the insert marker.
+As in the reference's MIDI editor, with the clip's track armed, the editor's [Preview switch](note-preview-contract.md) on and the transport stopped, held keys are entered note by note from the insert marker.
 
 - **Right Arrow** adds every note held on the track's inputs at the insert marker, one grid step long at the velocity played, and moves the marker a step on.
   - Held through another Right Arrow, the same notes lengthen by a step.
   - A different chord held starts a new step.
 - **Left Arrow**, while the last step's notes are still held, takes them out and moves the marker back to where they began.
 - **Undo.** Each step, lengthening and removal is one undo step.
-- **Otherwise the arrows behave as usual.** With nothing held, the track unarmed, or the transport playing, they move the marker or the selected notes.
+- **Otherwise the arrows behave as usual.** With nothing held, the track unarmed, Preview off, or the transport playing, they move the marker or the selected notes.
 - **Held notes.** `Session::heldInputNotes` gives the notes held now from the capture taps above (after delivering pending ones), in pitch order with their channel and velocity.
-- **Simple defaults** (see [open questions](../open-questions.md)):
-  - Halftrack's MIDI editor has no Preview switch, which the reference also requires, so arming the track is enough.
-  - Steps stop at the end of the clip's content, where the insert marker stops.
+- **A simple default** (see [open questions](../open-questions.md)): steps stop at the end of the clip's content, where the insert marker stops.
 
 ## Evidence
 
@@ -43,11 +41,11 @@ The same suite checks that an armed track reports its held notes in pitch order 
 The main UI suite checks:
 
 - that the Capture button stays disabled until notes are played and that Shift+Cmd+C is handled;
-- step recording with notes held on the computer keyboard into an armed track:
+- step recording with notes held on the computer keyboard into an armed track (refused with Preview off):
   - Right Arrow adds a two-note chord a 1/16 step long at the velocity played;
   - holding through Right Arrow lengthens it, and Left Arrow takes it out and moves the marker back;
   - a new chord follows from the moved marker;
   - with nothing held the arrow only moves the marker, and an unarmed track does not step record;
   - each step is one undo step.
 
-Missing: tempo detection when stopped, the MIDI editor's Preview switch, MPE data, and capture of material longer than the reference's history.
+Missing: tempo detection when stopped, MPE data, and capture of material longer than the reference's history.

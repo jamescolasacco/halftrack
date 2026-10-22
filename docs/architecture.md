@@ -243,6 +243,8 @@ The Session keeps a range clipboard beside its single-clip ones: whole copies of
 
 `heldInputNotes (trackId)` flushes the capture taps and returns that track's kept notes that have no note-off yet, in pitch order. The piano roll's `stepRecord` uses it for step recording: it adds, lengthens and removes notes through the ordinary note edits, so each step is one undo step, and remembers only the last step's note ids and pitches. See the [Capture MIDI contract](research/capture-midi-contract.md#step-recording).
 
+`notePreview` and `setNotePreview` keep the MIDI editor's Preview switch as an edit property, set without undo, like the editing grid. `previewNote` injects note-ons and note-offs on channel 1 into a MIDI track through `te::AudioTrack::injectLiveMidiMessage` and records them in `Impl::previewing`, so `stopNotePreviews`, switching Preview off and loading a project can end them. `newProject` drops the record along with the old Edit. The piano roll's `sound` and `silence` keep the notes it started, at most eight, and end them on mouse-up or after 200 ms for arrow transpositions. See the [Preview contract](research/note-preview-contract.md).
+
 ## Audio engine switch
 
 `setAudioEngineEnabled (false)` calls `stop()`, which keeps takes and cancels launches, then `AudioDeviceManager::closeAudioDevice()`; `true` calls `restartLastAudioDevice()`. `Impl::engineOff` only selects the message the device checks give; `isAudioEngineEnabled()` is true whenever a device is open. See the [contract](research/audio-engine-contract.md).
