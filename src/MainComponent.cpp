@@ -5063,7 +5063,11 @@ private:
             snap.addItem ("1/4", 1); snap.addItem ("1/8", 2); snap.addItem ("1/16", 3); snap.addItem ("1/32", 4);
             snap.setName ("Note grid");
             snap.setSelectedId (3); snap.onChange = [this] { repaint(); };
-            snap.setTooltip ("Note grid resolution. Hold Alt/Option while dragging to bypass snapping.");
+           #if JUCE_MAC
+            snap.setTooltip ("Note grid resolution. Hold Cmd while dragging to bypass snapping.");
+           #else
+            snap.setTooltip ("Note grid resolution. Hold Alt while dragging to bypass snapping.");
+           #endif
             noteLength.addItem ("1/16", 1); noteLength.addItem ("1/8", 2); noteLength.addItem ("1/4", 3); noteLength.addItem ("1/2", 4); noteLength.addItem ("1 bar", 5);
             noteLength.setName ("New note length");
             noteLength.getProperties().set ("readWhenUsed", true); // Drawing a note reads it (defaultLength).

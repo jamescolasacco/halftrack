@@ -27,7 +27,7 @@ The Arrangement has a time selection, after the reference's selection editing ([
 
 ## Interface in the Arrangement
 
-- Dragging over empty lane space selects time, snapped to the grid (Alt bypasses it). Shift-click extends the selection from its far edge.
+- Dragging over empty lane space selects time, snapped to the grid (Cmd on the Mac, Alt elsewhere, bypasses it). Shift-click extends the selection from its far edge.
 - Clicking a clip or empty space clears the selection, and the click still moves the playhead.
 - With a selection:
   - Cmd/Ctrl+E splits.
