@@ -42,8 +42,8 @@ int runExternalSyncTests (const juce::File&)
         check (s.isMidiInputSync (port) && ! s.isExternalSync(), "it sends clock; External Sync is still off");
 
         // Sends clock ticks at a tempo for a time, pumping the device in real time beside them. The
-        // blocks keep up with the clock however slowly messages are dispatched, which happens on
-        // its own every 20 ms.
+        // blocks keep up with the clock however slowly messages are dispatched, which happens
+        // between them, at most every 2 ms.
         const auto run = [&] (double bpm, double seconds)
         {
             const auto start = juce::Time::getMillisecondCounterHiRes();
@@ -54,7 +54,7 @@ int runExternalSyncTests (const juce::File&)
             {
                 if (now >= start + ticks * tick) { clock->sendMessageNow (juce::MidiMessage::midiClock()); ++ticks; }
                 if (now >= start + blocks * block) { pumpSyntheticTestDeviceWithoutDispatch (s, 1); ++blocks; }
-                else if (now - dispatched >= 20) { juce::MessageManager::getInstance()->runDispatchLoopUntil (1); dispatched = juce::Time::getMillisecondCounterHiRes(); }
+                else if (now - dispatched >= 2) { juce::MessageManager::getInstance()->runDispatchLoopUntil (1); dispatched = juce::Time::getMillisecondCounterHiRes(); }
                 else juce::Thread::yield();
             }
         };
