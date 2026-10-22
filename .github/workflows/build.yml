@@ -56,6 +56,12 @@ jobs:
       - name: Test shared behavior with virtual display
         if: runner.os == 'Linux'
         run: xvfb-run -a -s "-screen 0 1280x900x24" ctest --test-dir build -C Release --output-on-failure --output-junit test-artifacts/ctest.xml
+      - name: Name a crashed self-test's frames
+        if: failure() && runner.os == 'Linux'
+        run: |
+          log=build/Testing/Temporary/LastTest.log
+          grep -q "self-test crashed" "$log" || exit 0
+          grep -o "Halftrack(+0x[0-9a-f]*)" "$log" | sed 's/.*(+\(0x[0-9a-f]*\))/\1/' | xargs addr2line -C -f -p -e build/Halftrack_artefacts/Release/Halftrack || true
       - name: Tie the results to the capability ledger
         if: always() && hashFiles('build/test-artifacts/ctest.xml') != ''
         run: python scripts/evidence_report.py --junit build/test-artifacts/ctest.xml --python-result passed --out build/test-artifacts/evidence.json --markdown build/test-artifacts/evidence.md
