@@ -113,6 +113,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | PRJ-012 | audio-export |  |
 | PRJ-013 | stems |  |
 | PRJ-014 | render-agreement |  |
+| PRJ-016 | packs, ui |  |
 | UX-001 | auto-arm, computer-keyboard, ui |  |
 | UX-002 | ui |  |
 | UX-003 | ui |  |

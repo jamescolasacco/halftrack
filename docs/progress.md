@@ -1653,3 +1653,13 @@ Engine change in `src/SoundSimilarity.*` (new) and `tests/SimilarityTests.cpp` (
 - **Evaluation.** It was evaluated on a generated library in CI and, by hand, on the reference's categorised drum one-shots.
 
 See [the contract](research/similarity-contract.md).
+
+## Packs — 2026-10-21
+
+Engine-independent content handling in `src/Packs.*` (new), with `tests/PackTests.cpp` (new). The UI change is in `src/MainComponent.cpp`; the root change in `CMakeLists.txt` (which now links JUCE's cryptography module, for SHA-256) and `src/Main.cpp`. Documentation updated.
+
+- **The format.** Halftrack's own content packs: a zip with a manifest of hashed files and versioned requirements.
+- **Installing and uninstalling.** Packs install verified and atomically into the User Library, refusing damaged, unsafe, unmet and downgrading installs. Uninstalls and upgrades keep the user's own files.
+- **The UI.** The File menu installs packs; the browser lists, opens and uninstalls them.
+
+See [the contract](research/packs-contract.md).

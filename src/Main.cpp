@@ -103,6 +103,7 @@ int runMidiPortTests (const juce::File&);
 int runThemeTests (const juce::File&);
 int runInputPermissionTests (const juce::File&);
 int runSimilarityTests (const juce::File&);
+int runPackTests (const juce::File&);
 int runSimilarityEvaluation (const juce::File& library, int perCategory, const juce::File& report);
 int runHardwareCheck (const juce::File&, const juce::String& deviceName, const juce::String& mode);
 int runMidiMappingTests (const juce::File&);
@@ -399,6 +400,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-similarity");
             setApplicationReturnValue (runSimilarityTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-packs"))
+        {
+            const int i = args.indexOf ("--self-test-packs");
+            setApplicationReturnValue (runPackTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-large-session"))

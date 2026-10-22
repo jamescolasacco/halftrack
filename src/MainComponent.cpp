@@ -12,6 +12,7 @@
 #include "RackEditor.h"
 #include "SoundSimilarity.h"
 #include "NoteTools.h"
+#include "Packs.h"
 #include "Session.h"
 
 #include <typeinfo>
@@ -528,7 +529,7 @@ public:
         if (! mapping()) // The mapping list replaces the browser in MIDI and Key Map Modes.
         g.drawText (browserCategory == BrowserCategory::instruments ? "INSTRUMENTS" : browserCategory == BrowserCategory::audioEffects ? "AUDIO EFFECTS"
                         : browserCategory == BrowserCategory::midiEffects ? "MIDI EFFECTS" : pluginBrowser() ? "PLUG-INS"
-                        : browserCategory == BrowserCategory::grooves ? "GROOVES" : browserFolder == juce::File() ? "SAMPLES"
+                        : browserCategory == BrowserCategory::grooves ? "GROOVES" : browserCategory == BrowserCategory::packs ? "PACKS" : browserFolder == juce::File() ? "SAMPLES"
                         : similarFile != juce::File() ? "SIMILAR TO " + similarFile.getFileNameWithoutExtension().toUpperCase() : browserFolder.getFileName().toUpperCase(),
                     browserList.getX() + 4, browserList.getY() - 22, browserList.getWidth() - 8 - indexWidth, 20, juce::Justification::centredLeft, true);
         if (indexWidth > 0)
@@ -537,11 +538,12 @@ public:
             g.drawText (indexText, browserList.getRight() - 4 - indexWidth, browserList.getY() - 22, indexWidth, 20, juce::Justification::centredRight, true);
             g.setFont (font (10.0f, true));
         }
-        if (! mapping() && (pluginBrowser() || sampleBrowser()) && getNumRows() == 0)
+        if (! mapping() && (pluginBrowser() || sampleBrowser() || browserCategory == BrowserCategory::packs) && getNumRows() == 0)
         {
             g.setFont (font (12.0f));
             juce::String message;
             if (pluginBrowser()) message = "No scanned plug-ins.\nUse Manage to scan your\nAudio Units and VST3 library.";
+            else if (browserCategory == BrowserCategory::packs) message = "No packs installed.\nInstall one with\nFile > Install Pack...";
             else if (browserFolder == juce::File()) message = "Choose an audio folder,\nor import audio to begin.\nYou can also drop files\ninto the arrangement.";
             else if (browserError.isNotEmpty()) message = "Cannot read this folder.\n" + browserError;
             else if (browserLoading)
@@ -1116,7 +1118,7 @@ private:
         std::string error;
     };
 
-    enum class BrowserCategory { instruments, audioEffects, midiEffects, plugins, samples, grooves, collection };
+    enum class BrowserCategory { instruments, audioEffects, midiEffects, plugins, samples, grooves, packs, collection };
     // Left column of the browser, as in the reference browser sidebar: the collections, then one row
     // per category.
     class BrowserCategories final : public juce::Component
@@ -1164,9 +1166,10 @@ private:
         juce::Rectangle<int> collectionBounds (int i) const { return { 0, headerHeight + i * rowHeight, getWidth() - 1, rowHeight }; }
         juce::Rectangle<int> rowBounds (int i) const { return { 0, categoriesTop() + i * rowHeight, getWidth() - 1, rowHeight }; }
         Impl& owner;
-        const std::array<std::pair<BrowserCategory, const char*>, 6> entries {{ { BrowserCategory::instruments, "Instruments" },
+        const std::array<std::pair<BrowserCategory, const char*>, 7> entries {{ { BrowserCategory::instruments, "Instruments" },
             { BrowserCategory::audioEffects, "Audio Effects" }, { BrowserCategory::midiEffects, "MIDI Effects" },
-            { BrowserCategory::plugins, "Plug-ins" }, { BrowserCategory::samples, "Samples" }, { BrowserCategory::grooves, "Grooves" } }};
+            { BrowserCategory::plugins, "Plug-ins" }, { BrowserCategory::samples, "Samples" }, { BrowserCategory::grooves, "Grooves" },
+            { BrowserCategory::packs, "Packs" } }};
     };
 
     // A linked track's header indicator: hovering outlines the tracks in its link; clicking selects them.
@@ -6697,7 +6700,23 @@ private:
     // Grooves list Halftrack's library (by index) and groove files in the User Library.
     // A row of the device lists. In a collection, samples and plug-ins are rows too.
     struct DeviceRow { juce::String label; bool header = false; int kind = -1; juce::File preset; int groove = -1; juce::File grooveFile; juce::File sample; juce::String pluginId;
-                       juce::String detail; }; // detail: a plug-in's role, format and channels.
+                       juce::String detail; // detail: a plug-in's role, format and channels, or a pack's version and author.
+                       juce::File pack; juce::String packId; };
+    // Packs install into the User Library's Packs folder.
+    juce::File packsFolder() const { return userLibrary != juce::File() ? userLibrary.getChildFile ("Packs") : juce::File(); }
+    void installPack (const juce::File& archive)
+    {
+        if (packsFolder() == juce::File()) { report (juce::Result::fail ("Packs need a User Library.")); return; }
+        report (packs::install (archive, packsFolder()), "Pack installed.");
+        if (browserCategory == BrowserCategory::packs) updateBrowser();
+    }
+    void uninstallPack (const juce::String& id)
+    {
+        juce::File kept;
+        const auto result = packs::uninstall (id, packsFolder(), kept);
+        report (result, kept != juce::File() ? "Pack removed. Your own files in it were kept in " + kept.getFullPathName() + "." : juce::String ("Pack removed."));
+        updateBrowser();
+    }
     Collections collections;
     int browserCollection = 0;
     void showBrowserCollection (int collection) { browserCollection = collection; setBrowserCategory (BrowserCategory::collection); }
@@ -7642,7 +7661,7 @@ private:
             popup.addItem (3, "Save Project"); popup.addItem (4, "Save Project As..."); popup.addItem (11, "Save as Default Set", userLibrary != juce::File()); popup.addSeparator();
             popup.addItem (5, "Import Audio...", currentTrack() == nullptr || ! currentTrack()->isReturn); popup.addItem (6, "Export Arrangement Audio...", ! state.tracks.empty()); popup.addSeparator();
             popup.addItem (9, "Import MIDI File..."); popup.addItem (10, "Export Selected MIDI Clip...", currentMidiClip() != nullptr); popup.addSeparator();
-            popup.addItem (12, "Locate Missing Media...", ! session.missingMedia().isEmpty()); popup.addSeparator();
+            popup.addItem (12, "Locate Missing Media...", ! session.missingMedia().isEmpty()); popup.addItem (15, "Install Pack...", packsFolder() != juce::File()); popup.addSeparator();
             popup.addItem (14, "Preferences..."); popup.addItem (7, "Audio Setup..."); popup.addItem (13, "Audio Engine On", true, session.isAudioEngineEnabled()); popup.addItem (8, "Manage Plug-ins...");
         }
         else if (index == 1)
@@ -7713,6 +7732,14 @@ private:
             case 6: exportDialog(); break;
             case 7: showAudioSettings(); break;
             case 14: showPreferences(); break;
+            case 15:
+            {
+                chooser = std::make_unique<juce::FileChooser> ("Install a Halftrack Pack", juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads"), "*.halftrackpack");
+                auto safe = juce::Component::SafePointer<Impl> (this);
+                chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                    [safe] (const juce::FileChooser& fc) { if (safe != nullptr && fc.getResult().existsAsFile()) safe->installPack (fc.getResult()); });
+                break;
+            }
             case 13:
             {
                 const bool on = ! session.isAudioEngineEnabled();
@@ -8864,7 +8891,7 @@ private:
         browserSearch.setTextToShowWhenEmpty ("Search (" + juce::String (browserCategory == BrowserCategory::collection ? Collections::name (browserCollection)
             : browserCategory == BrowserCategory::instruments ? "Instruments"
             : browserCategory == BrowserCategory::audioEffects ? "Audio Effects" : browserCategory == BrowserCategory::midiEffects ? "MIDI Effects"
-            : pluginBrowser() ? "Plug-ins" : browserCategory == BrowserCategory::grooves ? "Grooves" : "Samples") + ")", muted);
+            : pluginBrowser() ? "Plug-ins" : browserCategory == BrowserCategory::grooves ? "Grooves" : browserCategory == BrowserCategory::packs ? "Packs" : "Samples") + ")", muted);
         if (browserFolder != scannedBrowserFolder) startBrowserScan();
         const auto matches = [&query] (const juce::String& label) { return query.isEmpty() || label.containsIgnoreCase (query); };
         if (browserCategory == BrowserCategory::collection)
@@ -8905,6 +8932,17 @@ private:
                 for (const auto& entry : browserIndex.search (query.toStdString(), maximumSearchResults))
                     browserItems.push_back ({ juce::File (juce::String::fromUTF8 (entry.path.data(), (int) entry.path.size())), entry.directory, true });
             else browserItems = allBrowserItems;
+        }
+        else if (browserCategory == BrowserCategory::packs)
+        {
+            // Installed packs, each opening its files in the sample browser.
+            for (const auto& installed : packs::installed (packsFolder()))
+                if (matches (installed.manifest.name) || matches (installed.manifest.author))
+                {
+                    DeviceRow row { installed.manifest.name }; row.pack = installed.folder; row.packId = installed.manifest.id;
+                    row.detail = installed.manifest.version + (installed.manifest.author.isNotEmpty() ? juce::String::charToString (0x00b7) + installed.manifest.author : juce::String());
+                    deviceItems.push_back (row);
+                }
         }
         else if (browserCategory == BrowserCategory::grooves)
         {
@@ -9090,6 +9128,7 @@ private:
         {
             const auto item = deviceItems[(size_t) row]; if (item.header) return;
             if (item.sample != juce::File()) { useBrowserSample (item.sample); return; }
+            if (item.pack != juce::File()) { browserFolder = item.pack; browserSearch.clear(); setBrowserCategory (BrowserCategory::samples); return; }
             if (item.pluginId.isNotEmpty() && item.preset == juce::File())
             {
                 for (const auto& type : session.knownPlugins().getTypes())
@@ -9125,7 +9164,15 @@ private:
     // Right-click: the collections the item belongs to, ticked, each toggled by its choice (or keys 1 to 7).
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override
     {
-        if (! e.mods.isPopupMenu() || browserKey (row).isEmpty()) return;
+        if (! e.mods.isPopupMenu()) return;
+        if (browserCategory == BrowserCategory::packs && juce::isPositiveAndBelow (row, (int) deviceItems.size()) && deviceItems[(size_t) row].packId.isNotEmpty())
+        {
+            juce::PopupMenu packMenu; packMenu.addItem (1, "Uninstall Pack");
+            auto safe = juce::Component::SafePointer<Impl> (this);
+            packMenu.showMenuAsync (juce::PopupMenu::Options(), [safe, id = deviceItems[(size_t) row].packId] (int choice) { if (safe != nullptr && choice == 1) safe->uninstallPack (id); });
+            return;
+        }
+        if (browserKey (row).isEmpty()) return;
         juce::PopupMenu menu;
         for (int i = 0; i < Collections::count; ++i)
             menu.addItem (i + 1, Collections::name (i) + "  (" + juce::String (i + 1) + ")", true, collections.contains (browserKey (row), i));
@@ -9698,6 +9745,31 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         browserSearch.setText ({}, juce::sendNotificationSync);
         browserFolder = folder; updateBrowser(); setBrowserCategory (category);
         library.deleteRecursively();
+    }
+    {
+        // Packs: Install Pack puts a pack in the User Library, the Packs category lists it with its
+        // version and author, opening it browses its files, and Uninstall Pack removes it.
+        const auto category = browserCategory; const auto folder = browserFolder; const auto library = userLibrary;
+        const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-packs-ui-" + juce::Uuid().toString());
+        userLibrary = root.getChildFile ("User Library");
+        check (root.getChildFile ("contents/Samples/Kick.wav").getParentDirectory().createDirectory().wasOk() && root.getChildFile ("contents/Samples/Kick.wav").replaceWithText ("kick"), "pack contents");
+        packs::Manifest fields; fields.id = "org.halftrack.ui"; fields.name = "UI Drums"; fields.version = "1.4"; fields.author = "Halftrack Tests";
+        check (packs::create (root.getChildFile ("contents"), fields, root.getChildFile ("ui.halftrackpack")).wasOk(), "build a pack");
+        bool offered = false;
+        { const auto fileMenu = getMenuForIndex (0, {}); juce::PopupMenu::MenuItemIterator items (fileMenu); while (items.next()) offered = offered || (items.getItem().itemID == 15 && items.getItem().isEnabled); }
+        check (offered, "the File menu offers Install Pack");
+        setBrowserCategory (BrowserCategory::packs);
+        check (getNumRows() == 0, "with none installed, the Packs category is empty");
+        installPack (root.getChildFile ("ui.halftrackpack"));
+        check (getNumRows() == 1 && deviceItems[0].label == "UI Drums" && deviceItems[0].detail.startsWith ("1.4") && deviceItems[0].detail.contains ("Halftrack Tests"),
+               "Install Pack lists it with its version and author");
+        activateBrowserRow (0);
+        check (sampleBrowser() && browserFolder == userLibrary.getChildFile ("Packs/org.halftrack.ui"), "opening it browses its files");
+        setBrowserCategory (BrowserCategory::packs);
+        uninstallPack ("org.halftrack.ui");
+        check (getNumRows() == 0 && ! userLibrary.getChildFile ("Packs/org.halftrack.ui").exists(), "Uninstall Pack removes it");
+        userLibrary = library; browserFolder = folder; setBrowserCategory (category);
+        root.deleteRecursively();
     }
     {
         // MIDI Map Mode: the switch covers the work area, clicking a control learns it, and the list edits its mapping.
