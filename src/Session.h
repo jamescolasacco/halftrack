@@ -572,7 +572,12 @@ public:
         juce::String midiLearnTarget;
         std::vector<KeyMapping> keyMappings; // Those whose targets exist.
         juce::String keyLearnTarget;
-        float previewVolumeDb = 0;
+        float previewVolumeDb = -6; // The cue volume, which previews play at.
+        // The cue: Cue Out (empty for the Master Out's), the cue volume, whether Cue mode is chosen,
+        // whether Cue Out is apart from the Master Out so that it can apply, and whether it does.
+        juce::String cueOutput;
+        float cueVolumeDb = -6;
+        bool cueModeChosen = false, cueAvailable = false, cueMode = false;
         bool automationOverridden = false; // Some lane with points is switched off.
         float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
@@ -615,7 +620,20 @@ public:
     // project and outside it, at the preview volume. Another file replaces it; it stops at its end.
     juce::Result previewFile (const juce::File&);
     void stopPreview();
-    juce::Result setPreviewVolume (float decibels); // -70 to +6 dB.
+    juce::Result setPreviewVolume (float decibels); // The cue volume, -70 (off) to +6 dB.
+    // Cueing, after the reference's Cue Out, Cue Volume and Solo/Cue switch (static reading of its
+    // code). The click and previews always play on Cue Out at the cue volume, as do cued tracks.
+    // Cue mode turns the tracks' solo switches into cue switches: a cued track's Post FX signal,
+    // before its fader, pan and activator, is heard on Cue Out at unity, and it plays on to its own
+    // output as before. The switches keep their state between the modes, and groups cannot be
+    // cued. Cue mode needs a Cue Out sharing no channel with the Master Out; otherwise Solo
+    // applies, and the choice is kept for when it can. Cue Out and the mode are kept with the
+    // project, not as undo steps; the cue volume (-6 dB at first) is kept and is one.
+    juce::String cueOutput() const;
+    juce::Result setCueOutput (const juce::String& outputName); // Empty for the Master Out's.
+    float cueVolumeDb() const;
+    juce::Result setCueVolume (float decibels); // -70 (off) to +6 dB.
+    juce::Result setCueMode (bool cue);
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
     // Take lanes. Arrangement recording puts each pass on an armed track in a take lane (reusing a lane
     // with nothing at or after the pass's start) as well as the main lane. Comping copies a lane's

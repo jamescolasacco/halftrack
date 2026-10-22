@@ -853,7 +853,17 @@ A pass keeps the lane's original points and its recorded points, and rewrites th
 
 ## Browser preview
 
-`Session::Impl` owns a second `te::Edit` for preview, made by `createEditForPreviewingFile`. It plays on the same `DeviceManager`, which mixes every allocated playback context. It is created per previewed file, destroyed by `stopPreview` and before the project Edit at shutdown, and never enters the project's state or undo history.
+`Session::Impl` owns a second `te::Edit` for preview, made by `createEditForPreviewingFile`. Its track plays on Cue Out, or the default output while Cue Out shares the Master Out's, with its volume plug-in at the cue volume. It plays on the same `DeviceManager`, which mixes every allocated playback context. It is created per previewed file, destroyed by `stopPreview` and before the project Edit at shutdown, and never enters the project's state or undo history.
+
+## Cue output
+
+The cue lives in the project's Edit state: `halftrackCueOutput` (an output name, empty for the Master Out's), `halftrackCueVolume` (dB, −6 when missing), `halftrackCueMode`, and on each track `halftrackCue` while its switch cues rather than solos. `Impl::applyCue`, run at the start of `refreshRouting` and after undo and redo, does three things:
+
+- It resolves whether Cue Out is a separate device (switched on, sharing no channel with the Master Out) and whether Cue mode applies.
+- It moves every track's and group's switch between the engine's solo flag and `halftrackCue` when the mode changes. Neither move is an undo step.
+- It publishes the cued state, the cue's device ID and the gain to Halftrack's `Behaviour`, points the Edit's click output at the cue's device, and sets the preview Edit's track output and volume.
+
+The `Behaviour` answers the cue patch's hooks: `isTrackCued` and `getCueOutputDeviceID` when graphs are built, and `getCueGain` on the audio thread from a `std::atomic<float>`. `GrooveWatcher` restarts playback when a `halftrackCue` flag changes, so the graph follows. See the [contract](research/cue-contract.md) and the [cue patch](dependencies.md#tracktion-cue-patch).
 
 ## MIDI remote control
 

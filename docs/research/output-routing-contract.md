@@ -45,11 +45,14 @@ The UI suite checks:
 - that the master strip's Master Out chooser moves the master and back;
 - that Audio & MIDI Setup lays out Output Config beside Input Config.
 
+## Cue
+
+Cue Out, the cue volume and the Solo/Cue switch are in the [cue contract](cue-contract.md).
+
 ## Not yet
 
 These are recorded in the [open questions](../open-questions.md#output-routing):
 
-- Cue Out, and the Solo/Cue switch.
 - An Ext. Out to the master's own output.
 - The reference's channel naming ("3/4").
 - Undo of Master Out.

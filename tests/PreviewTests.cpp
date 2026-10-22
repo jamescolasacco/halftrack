@@ -46,10 +46,15 @@ int runPreviewTests (const juce::File& artifacts)
         const auto during = s.snapshot();
         // A loaded machine can take a moment to start the preview; its level is measured once it sounds.
         for (int wait = 0; wait < 40 && peak (s, 1) < .1f; ++wait) {}
-        check (during.previewing == tone && std::abs (peak (s, 40) - .5f) < .01f, "the preview sounds at the file's level");
+        // Previews play at the cue volume, -6 dB at first as in the reference's default Set.
+        check (during.previewing == tone && during.previewVolumeDb == -6 && during.cueVolumeDb == -6 && std::abs (peak (s, 40) - .5f * std::pow (10.0f, -6 / 20.0f)) < .01f,
+               "the preview sounds at the cue volume, -6 dB at first");
         check (during.tracks.size() == 2 && during.tracks[0].clips.empty() && ! during.dirty && ! s.canUndo(), "the project is untouched");
+        ok (s.setPreviewVolume (0), "the preview volume, which is the cue volume, at 0 dB");
+        captureSyntheticTestDevice (s, 10); // The volume glides to its new level.
+        check (std::abs (peak (s, 40) - .5f) < .01f && s.snapshot().previewVolumeDb == 0 && s.snapshot().cueVolumeDb == 0, "the preview sounds at the file's level");
         ok (s.setPreviewVolume (-6), "preview volume -6 dB");
-        captureSyntheticTestDevice (s, 10); // The master fader glides to its new level.
+        captureSyntheticTestDevice (s, 10);
         check (std::abs (peak (s, 40) - .5f * std::pow (10.0f, -6 / 20.0f)) < .01f && s.snapshot().previewVolumeDb == -6, "the preview volume scales it");
         check (s.setPreviewVolume (7).failed() && s.setPreviewVolume (-71).failed(), "volumes outside -70 to +6 dB are refused");
         captureSyntheticTestDevice (s, 200); // Past the one-second file.

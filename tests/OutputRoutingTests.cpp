@@ -108,6 +108,89 @@ int runOutputRoutingTests (const juce::File& artifacts)
             ok (next.setAudioOutputPairStereo (2, true), "and pair outputs 3 and 4 again");
             check (next.audioOutputGroups().size() == 2, "they are one stereo output again");
         }
+        {
+            // The cue, after the reference's (static reading of its code): Cue Out, the cue volume,
+            // and the Solo/Cue switch, whose cue hears a track before its fader, pan and activator.
+            Session s (false, makeFourOutputSyntheticTestDeviceType());
+            pumpSyntheticTestDevice (s, 8);
+            const auto groups = s.audioOutputGroups();
+            const auto mainOut = groups[0].name, otherOut = groups[1].name;
+            auto c = s.snapshot();
+            check (c.cueOutput.isEmpty() && c.cueVolumeDb == -6 && ! c.cueModeChosen && ! c.cueAvailable && ! c.cueMode,
+                   "at first the cue plays with the master, at -6 dB, in Solo mode");
+            check (s.setCueMode (true).failed(), "Cue mode needs a Cue Out apart from the Master Out");
+            ok (s.importAudio (tone, 0, 0), "a tone on track 1");
+            ok (s.setTrackGain (0, -12), "its fader at -12 dB"); ok (s.setTrackPan (0, -1), "panned hard left");
+            const auto plain = levels (s);
+            check (plain[0] > .01 && plain[2] < 1e-6 && plain[3] < 1e-6, "it plays on the master's outputs (" + describe (plain) + ")");
+            ok (s.setCueOutput (otherOut), "Cue Out to " + otherOut);
+            ok (s.setCueVolume (0), "the cue volume at unity");
+            ok (s.setCueMode (true), "Cue mode");
+            c = s.snapshot();
+            check (c.cueOutput == otherOut && c.cueModeChosen && c.cueAvailable && c.cueMode, "Cue mode applies with Cue Out apart from the Master Out");
+            ok (s.setTrackSolo (0, true), "cue the track with its switch");
+            auto r = levels (s);
+            const double full = .5 / std::sqrt (2.0); // The tone's own RMS.
+            const auto near = [] (double a, double b) { return std::abs (a - b) < 1e-3 * std::max (1.0, std::abs (b)) + 1e-6; };
+            check (s.snapshot().tracks[0].solo && near (r[0], plain[0]) && near (r[1], plain[1]) && near (r[2], full) && near (r[3], full),
+                   "it plays on to the master as before, and on Cue Out from before its fader and pan, at unity (" + describe (r) + ")");
+            ok (s.setTrackMute (0, true), "switch its activator off");
+            r = levels (s);
+            check (r[0] < 1e-6 && r[1] < 1e-6 && near (r[2], full) && near (r[3], full), "Cue Out still hears it, the master does not (" + describe (r) + ")");
+            ok (s.setTrackMute (0, false), "its activator on");
+            ok (s.setCueVolume (-6), "the cue volume at -6 dB");
+            r = levels (s);
+            const auto half = full * std::pow (10.0, -6 / 20.0);
+            check (near (r[2], half) && near (r[3], half) && near (r[0], plain[0]), "the cue volume sets Cue Out's level and not the master's (" + describe (r) + ")");
+            s.undo(); r = levels (s);
+            check (s.snapshot().cueVolumeDb == 0 && near (r[2], full), "the cue volume is one undo step");
+
+            // The switches keep their state between the modes.
+            ok (s.setCueMode (false), "Solo mode");
+            r = levels (s);
+            check (! s.snapshot().cueMode && s.snapshot().tracks[0].solo && r[2] < 1e-6 && r[3] < 1e-6 && near (r[0], plain[0]),
+                   "in Solo mode the switch solos the track, and Cue Out is silent (" + describe (r) + ")");
+            ok (s.setCueMode (true), "Cue mode again");
+            check (s.snapshot().tracks[0].solo && near (levels (s)[2], full), "and the switch cues it again");
+            ok (s.setMasterOutput (otherOut), "move the Master Out onto Cue Out");
+            c = s.snapshot();
+            check (c.cueModeChosen && ! c.cueAvailable && ! c.cueMode && c.tracks[0].solo, "Cue mode yields to Solo while they share outputs, keeping the choice and the switch");
+            ok (s.setMasterOutput (mainOut), "move the Master Out back");
+            check (s.snapshot().cueMode, "and Cue mode returns");
+            ok (s.setTrackSolo (0, false), "stop cueing the track");
+            juce::String group;
+            ok (s.groupTracks ({ s.snapshot().tracks[1].id }, group), "group the second track");
+            check (s.setGroupSolo (group, true).failed() && ! s.snapshot().groups[0].solo, "groups cannot be cued");
+            s.undo();
+
+            // The click and previews play on Cue Out, at the cue volume, in either mode.
+            ok (s.setTrackMute (0, true), "silence the track");
+            auto metronome = s.snapshot().metronome; metronome.enabled = true; metronome.gain = 1;
+            ok (s.setMetronome (metronome), "the metronome on");
+            r = levels (s);
+            check (r[0] < 1e-6 && r[1] < 1e-6 && r[2] > 1e-3 && r[3] > 1e-3, "the click plays on Cue Out (" + describe (r) + ")");
+            ok (s.setCueMode (false), "Solo mode");
+            r = levels (s);
+            check (r[0] < 1e-6 && r[2] > 1e-3, "and does in Solo mode too (" + describe (r) + ")");
+            metronome.enabled = false; ok (s.setMetronome (metronome), "the metronome off");
+            ok (s.previewFile (tone), "preview the tone");
+            pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+            auto x = captureSyntheticTestDeviceOutputs (s, blocksPerSecond / 4);
+            s.stopPreview();
+            check (x.getRMSLevel (0, 0, x.getNumSamples()) < 1e-6 && near (x.getRMSLevel (2, 0, x.getNumSamples()), full) && near (x.getRMSLevel (3, 0, x.getNumSamples()), full),
+                   "a preview plays on Cue Out at the cue volume");
+
+            // Kept with the project.
+            const auto project = root.getChildFile ("Cue").getChildFile ("Cue.halftrack");
+            ok (s.setCueMode (true), "Cue mode before saving");
+            ok (s.saveProject (project), "save");
+            ok (s.newProject(), "a new project");
+            c = s.snapshot();
+            check (c.cueOutput.isEmpty() && c.cueVolumeDb == -6 && ! c.cueModeChosen, "a new project starts with the cue's defaults");
+            ok (s.loadProject (project), "reopen the saved one");
+            c = s.snapshot();
+            check (c.cueOutput == otherOut && c.cueVolumeDb == 0 && c.cueMode, "Cue Out, the cue volume and Cue mode are kept with the project");
+        }
         root.deleteRecursively();
         std::cout << "Output routing passed" << std::endl;
         return 0;

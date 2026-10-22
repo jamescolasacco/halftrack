@@ -11,7 +11,7 @@ function(halftrack_patch_sidechain_taps source_dir)
     set(original0 "bfc26bb83dcc389b9b3cd64db016f5e493e7f1f982b7c8910be6524c30703766")
     set(patched0 "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647")
     set(count0 8)
-    set(downstream0 "1a07134c8c4c2a229b4da262dc6b547d3ab1302496fd5e5fbf1d375e9614517a" "9e1afcb494391df977c7f7950ce8030410576a2fab891e757d30a0249f87d60c") # The later MIDI ports and clip fades patches.
+    set(downstream0 "1a07134c8c4c2a229b4da262dc6b547d3ab1302496fd5e5fbf1d375e9614517a" "9e1afcb494391df977c7f7950ce8030410576a2fab891e757d30a0249f87d60c" "bbc12a579f50896a7be4a5c13127b63c47863b22986b776290a7d523f80866cf") # The later MIDI ports, clip fades and cue patches.
     set(before0_0 [=[    int getSidechainBusID (EditItemID sidechainSourceID)
     {]=])
     set(after0_0 [=[    // Halftrack: plug-ins read their sidechain at one of the source's taps instead.

@@ -8,7 +8,7 @@ function(halftrack_patch_render_sends_only source_dir)
     set(original0 "31fb6f4d5b21355a67867c71461c26b17464e450c3c0e945173dd99f8550b074")
     set(patched0 "51ef9b7dfa77221251da5f43f77f91110f8b375de8974e6f45cac2c08c98ad48")
     set(count0 1)
-    set(downstream0 "06c1d2be2f00c494f5db33c2b5ced64f9395e9fb7e16e4e8002ef7beacfa9ee8" "bfc26bb83dcc389b9b3cd64db016f5e493e7f1f982b7c8910be6524c30703766" "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647" "1a07134c8c4c2a229b4da262dc6b547d3ab1302496fd5e5fbf1d375e9614517a" "9e1afcb494391df977c7f7950ce8030410576a2fab891e757d30a0249f87d60c") # The later track-inputs, MIDI variations, sidechain taps, MIDI ports and clip fades patches.
+    set(downstream0 "06c1d2be2f00c494f5db33c2b5ced64f9395e9fb7e16e4e8002ef7beacfa9ee8" "bfc26bb83dcc389b9b3cd64db016f5e493e7f1f982b7c8910be6524c30703766" "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647" "1a07134c8c4c2a229b4da262dc6b547d3ab1302496fd5e5fbf1d375e9614517a" "9e1afcb494391df977c7f7950ce8030410576a2fab891e757d30a0249f87d60c" "bbc12a579f50896a7be4a5c13127b63c47863b22986b776290a7d523f80866cf") # The later track-inputs, MIDI variations, sidechain taps, MIDI ports, clip fades and cue patches.
     set(before0_0 [=[        if (auto node = createNodeForTrack (*t, params))
             trackNodes.push_back (std::move (node));
     }

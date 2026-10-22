@@ -48,6 +48,11 @@ const juce::Identifier countInProperty { "halftrackCountInBars" };
 // The metronome rhythm, read by the engine's click generator when it is prepared (PatchMetronomeRhythm).
 const juce::Identifier metronomeTickProperty { "halftrackMetronomeTick" };
 const juce::Identifier masterOutputProperty { "halftrackMasterOutput" };
+// The cue, after the reference's: Cue Out (an output's name, empty for the Master Out's), the cue
+// level in dB, the Solo/Cue switch, and a track's switch while it cues rather than solos.
+const juce::Identifier cueOutputProperty { "halftrackCueOutput" }, cueVolumeProperty { "halftrackCueVolume" }, cueModeProperty { "halftrackCueMode" },
+                       cueProperty { "halftrackCue" };
+constexpr float defaultCueVolumeDb = -6.0f; // As the reference's default Set has it.
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
 te::Edit::CountIn countInMode (int bars)
 {
@@ -1796,6 +1801,14 @@ public:
         const auto* wave = dynamic_cast<const te::WaveAudioClip*> (&clip);
         return wave != nullptr && hasDefaultFade (*wave, true) ? te::TimeDuration::fromSeconds (clipFades (*wave).preRoll) : te::TimeDuration();
     }
+    // The cue output (static reading of the reference): a cued track is heard on Cue Out from its
+    // Post FX tap, and the click plays there, at the cue level. The Session sets these.
+    bool isTrackCued (te::AudioTrack& t) override { return cueActive && static_cast<bool> (t.state.getProperty (cueProperty, false)); }
+    juce::String getCueOutputDeviceID (te::Edit&) override { return cueDevice; }
+    float getCueGain (te::Edit&) override { return cueGain.load (std::memory_order_relaxed); }
+    bool cueActive = false;
+    juce::String cueDevice;
+    std::atomic<float> cueGain { juce::Decibels::decibelsToGain (defaultCueVolumeDb, -70.0f) };
     // Device chains are open-ended; the engine's 16-plugin default includes the mixer and meter.
     te::EditLimits getEditLimits() override { te::EditLimits limits; limits.maxPluginsOnTrack = 64; return limits; }
     // Graph building runs on the message thread, never in the audio callback.
@@ -2344,7 +2357,7 @@ private:
     }
     void restart() { if (edit != nullptr && edit->state == state) edit->restartPlayback(); }
     void valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& id) override
-    { if (id == clipGrooveProperty || id == sidechainTapProperty || id == sidechainOffProperty || id == metronomeTickProperty || inPool (v)) restart(); }
+    { if (id == clipGrooveProperty || id == sidechainTapProperty || id == sidechainOffProperty || id == metronomeTickProperty || id == cueProperty || inPool (v)) restart(); }
     void valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child) override { if (inPool (parent) || child.hasType (groovePoolType)) restart(); }
     void valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int) override { if (inPool (parent) || child.hasType (groovePoolType)) restart(); }
 };
@@ -3459,8 +3472,65 @@ struct Session::Impl
             if (device->getName() == name && device->isEnabled() && device->getDeviceID() != devices.getDefaultWaveOutDeviceID())
             { devices.setDefaultWaveOutDevice (device->getDeviceID()); edit->restartPlayback(); }
     }
+    // The cue, after the reference's (static reading of its code). Its output carries the cue apart
+    // from the master when it is a Cue Out switched on and sharing no channel with the Master Out;
+    // otherwise the cue plays with the master, as the click and previews then do.
+    te::WaveOutputDevice* separateCueDevice() const
+    {
+        const auto name = edit->state[cueOutputProperty].toString();
+        if (name.isEmpty()) return nullptr;
+        auto& devices = engine.getDeviceManager();
+        auto* master = devices.getDefaultWaveOutDevice();
+        const auto channels = [] (const te::WaveOutputDevice& d)
+        { const auto first = (int) d.deviceDescription.getDeviceChannelRange().first; return juce::Range<int> (first, first + (int) d.deviceDescription.getNumChannels()); };
+        for (auto* device : devices.getWaveOutputDevices())
+            if (device->getName() == name && device->isEnabled() && device != master)
+                return master == nullptr || ! channels (*device).intersects (channels (*master)) ? device : nullptr;
+        return nullptr;
+    }
+    float cueVolumeDb() const { return edit->state.getProperty (cueVolumeProperty, defaultCueVolumeDb); }
+    bool cueActive() const { return dynamic_cast<Behaviour&> (engine.getEngineBehaviour()).cueActive; }
+    // Cue mode needs a separate Cue Out; otherwise Solo applies, and the choice is kept for when it
+    // is. A track's switch keeps its state between the modes: soloing in one, cueing in the other.
+    // The engine hears the cued tracks, and plays the click, on the cue's output at its level.
+    void applyCue()
+    {
+        auto& behaviour = dynamic_cast<Behaviour&> (engine.getEngineBehaviour());
+        auto* device = separateCueDevice();
+        const bool active = device != nullptr && static_cast<bool> (edit->state.getProperty (cueModeProperty, false));
+        for (auto* t : te::getAllTracks (*edit))
+        {
+            if (dynamic_cast<te::AudioTrack*> (t) == nullptr && dynamic_cast<te::FolderTrack*> (t) == nullptr) continue;
+            auto state = t->state;
+            if (active && static_cast<bool> (state.getProperty (te::IDs::solo, false)))
+            { state.setProperty (cueProperty, true, nullptr); state.setProperty (te::IDs::solo, false, nullptr); }
+            else if (! active && state.hasProperty (cueProperty))
+            { if (static_cast<bool> (state[cueProperty])) state.setProperty (te::IDs::solo, true, nullptr); state.removeProperty (cueProperty, nullptr); }
+        }
+        behaviour.cueGain = juce::Decibels::decibelsToGain (cueVolumeDb(), -70.0f);
+        const auto id = device != nullptr ? device->getDeviceID() : juce::String();
+        const bool changed = behaviour.cueActive != active || behaviour.cueDevice != id;
+        behaviour.cueActive = active; behaviour.cueDevice = id;
+        const auto click = device != nullptr ? device->getName() : te::DeviceManager::getDefaultAudioOutDeviceName (false);
+        if (edit->getClickTrackDevice() != click) edit->setClickTrackOutput (click);
+        else if (changed) edit->restartPlayback();
+        applyPreviewCue();
+    }
+    // A preview plays on the cue's output at the cue level.
+    void applyPreviewCue()
+    {
+        if (! preview) return;
+        auto* device = separateCueDevice();
+        for (auto* t : te::getAudioTracks (*preview))
+        {
+            if (device != nullptr) t->getOutput().setOutputToDeviceID (device->getDeviceID());
+            else t->getOutput().setOutputToDefaultDevice (false);
+            if (auto* volume = t->getVolumePlugin()) volume->setVolumeDb (cueVolumeDb());
+        }
+    }
     void refreshRouting()
     {
+        applyCue();
         // Derived gates are published through native graph updates on the message
         // thread. They never replace user send levels or create undo actions.
         const auto tracks = te::getAudioTracks (*edit);
@@ -4870,7 +4940,6 @@ struct Session::Impl
     // Browser preview: its own Edit, playing beside the project's.
     std::unique_ptr<te::Edit> preview;
     File previewSource;
-    float previewVolumeDb = 0;
     bool previewPlaying() const
     {
         if (! preview) return false;
@@ -5094,7 +5163,11 @@ Session::Snapshot Session::snapshot() const
     s.automationArm = impl->automationArmed();
     s.punchIn = impl->punchIn(); s.punchOut = impl->punchOut();
     s.previewing = impl->previewPlaying() ? impl->previewSource : File();
-    s.previewVolumeDb = impl->previewVolumeDb;
+    s.previewVolumeDb = s.cueVolumeDb = impl->cueVolumeDb();
+    s.cueOutput = cueOutput();
+    s.cueModeChosen = e.state.getProperty (cueModeProperty, false);
+    s.cueAvailable = impl->separateCueDevice() != nullptr;
+    s.cueMode = s.cueModeChosen && s.cueAvailable;
     for (const auto& m : e.state.getChildWithName (midiMapType))
         if (auto mapping = readMidiMapping (m); isMappableTarget (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
     s.midiLearnTarget = impl->midiLearnTarget;
@@ -5114,7 +5187,7 @@ Session::Snapshot Session::snapshot() const
         info.id = t->itemID.toString(); info.name = t->getName(); info.colour = t->getColour();
         if (const auto link = t->state[linkProperty].toString(); link.isNotEmpty() && linkSizes[link] > 1) info.linkId = link;
         info.autoArmed = info.id == impl->autoArmed;
-        info.mute = t->isMuted (false); info.solo = t->isSolo (false);
+        info.mute = t->isMuted (false); info.solo = t->isSolo (false) || static_cast<bool> (t->state.getProperty (cueProperty, false));
         info.isMidi = t->state.getProperty (midiTrackProperty, false);
         info.isReturn = isReturn (*t);
         if (const int height = t->state.getProperty (trackHeightProperty, 0); height >= Session::minimumTrackHeight && height <= Session::maximumTrackHeight) info.height = height;
@@ -5241,7 +5314,7 @@ Session::Snapshot Session::snapshot() const
         {
             GroupInfo group;
             group.id = folder->itemID.toString(); group.name = folder->getName(); group.colour = folder->getColour();
-            group.mute = folder->isMuted (false); group.solo = folder->isSolo (false);
+            group.mute = folder->isMuted (false); group.solo = folder->isSolo (false) || static_cast<bool> (folder->state.getProperty (cueProperty, false));
             group.folded = folder->state.getProperty (groupFoldedProperty, false);
             if (auto* v = folder->getVolumePlugin()) { group.gainDb = v->getVolumeDb(); group.pan = v->getPan(); }
             if (auto* level = folder->pluginList.findFirstPluginOfType<te::LevelMeterPlugin>())
@@ -8416,6 +8489,7 @@ Result Session::setGroupSolo (const String& groupId, bool value)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* folder = impl->group (groupId); if (! folder) return Result::fail ("Group not found.");
+    if (impl->cueActive()) return Result::fail ("Groups cannot be cued; cue their tracks.");
     impl->transaction ("Group solo");
     folder->state.setProperty (te::IDs::solo, value, &impl->edit->getUndoManager());
     impl->refreshRouting(); impl->changed(); return Result::ok();
@@ -10821,7 +10895,7 @@ Result Session::previewFile (const File& file)
     stopPreview();
     impl->preview = te::Edit::createEditForPreviewingFile (impl->engine, file, nullptr, false, false, nullptr, {});
     if (! impl->preview) return Result::fail ("This file cannot be previewed: " + file.getFileName());
-    impl->preview->getMasterVolumePlugin()->setVolumeDb (impl->previewVolumeDb);
+    impl->applyPreviewCue();
     auto& transport = impl->preview->getTransport();
     transport.ensureContextAllocated();
     transport.setPosition (te::TimePosition());
@@ -10836,12 +10910,36 @@ void Session::stopPreview()
     impl->preview.reset(); impl->previewSource = File();
     sendChangeMessage();
 }
-Result Session::setPreviewVolume (float decibels)
+Result Session::setPreviewVolume (float decibels) { return setCueVolume (decibels); }
+String Session::cueOutput() const { return impl->edit->state[cueOutputProperty].toString(); }
+Result Session::setCueOutput (const String& outputName)
 {
-    if (! std::isfinite (decibels) || decibels < -70 || decibels > 6) return Result::fail ("Choose a preview volume from -70 to +6 dB.");
-    impl->previewVolumeDb = decibels;
-    if (impl->preview) impl->preview->getMasterVolumePlugin()->setVolumeDb (decibels);
-    sendChangeMessage(); return Result::ok();
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before changing the Cue Out.");
+    if (outputName.isNotEmpty() && ! outputNames().contains (outputName)) return Result::fail ("Choose an output that is switched on in the Output Config.");
+    if (outputName == cueOutput()) return Result::ok();
+    impl->edit->state.setProperty (cueOutputProperty, outputName, nullptr);
+    impl->edit->markAsChanged();
+    impl->refreshRouting(); impl->changed(); return Result::ok();
+}
+float Session::cueVolumeDb() const { return impl->cueVolumeDb(); }
+Result Session::setCueVolume (float decibels)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! std::isfinite (decibels) || decibels < -70 || decibels > 6) return Result::fail ("Choose a cue volume from -70 to +6 dB.");
+    if (decibels == cueVolumeDb()) return Result::ok();
+    impl->transaction ("Cue volume");
+    impl->edit->state.setProperty (cueVolumeProperty, decibels, &impl->edit->getUndoManager());
+    impl->applyCue(); impl->changed(); return Result::ok();
+}
+Result Session::setCueMode (bool cue)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (cue && impl->separateCueDevice() == nullptr) return Result::fail ("Choose a Cue Out apart from the Master Out to cue.");
+    if (cue == static_cast<bool> (impl->edit->state.getProperty (cueModeProperty, false))) return Result::ok();
+    impl->edit->state.setProperty (cueModeProperty, cue, nullptr);
+    impl->edit->markAsChanged();
+    impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::setPunchIn (bool on)
 {
@@ -10895,8 +10993,10 @@ Result Session::setTrackSolo (int index, bool value)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
-    impl->transaction ("Track solo");
-    t->state.setProperty (te::IDs::solo, value, &impl->edit->getUndoManager());
+    // In Cue mode the switch cues the track.
+    const bool cueing = impl->cueActive();
+    impl->transaction (cueing ? "Track cue" : "Track solo");
+    t->state.setProperty (cueing ? cueProperty : te::IDs::solo, value, &impl->edit->getUndoManager());
     impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 
@@ -11550,6 +11650,7 @@ void Session::undo()
     const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
     impl->resetTapTempo();
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
+    impl->applyCue(); // A cue volume or switch undone, in either mode.
     impl->finishInputChange(monitored);sendChangeMessage();
 }
 void Session::redo()
@@ -11569,6 +11670,7 @@ void Session::redo()
         history.redo();
     }
     impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
+    impl->applyCue();
     impl->finishInputChange(monitored);sendChangeMessage();
 }
 bool Session::canUndo() const { return ! impl->exporting && ! impl->anyRecording() && impl->edit->getUndoManager().canUndo(); }

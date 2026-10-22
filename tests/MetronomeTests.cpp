@@ -44,6 +44,8 @@ struct Fixture
     {
         const auto big=root.getChildFile("big.wav"),little=root.getChildFile("little.wav");impulse(big,.5f);impulse(little,.25f);
         setClickFile(true,big.getFullPathName());setClickFile(false,little.getFullPathName());
+        // The click plays at the cue volume, -6 dB at first; at unity the clicks keep their levels.
+        check(session.setCueVolume(0).wasOk(),"the cue volume at unity");
         pumpSyntheticTestDevice(session,4);
     }
     ~Fixture(){session.stop();setClickFile(true,oldBig);setClickFile(false,oldLittle);}
@@ -80,6 +82,11 @@ void playback(const juce::File& root)
         session.seek(0);ok(session.play(),"start click playback");const auto audio=captureSyntheticTestDevice(session,400);session.stop();
         compareClicks(audio,tempo,.6f,true);
     }
+    // The click plays at the cue volume, as the reference's does.
+    session.setTempo(120);ok(session.setCueVolume(-6),"the cue volume at -6 dB");pumpSyntheticTestDevice(session,4); // A level change ramps over a block.
+    session.seek(0);ok(session.play(),"play the click at the cue volume");
+    compareClicks(captureSyntheticTestDevice(session,400),120,.6f*std::pow(10.0f,-6/20.0f),true);session.stop();
+    ok(session.setCueVolume(0),"the cue volume at unity again");pumpSyntheticTestDevice(session,4);
     // Odd meters accent every bar of quarter-note beats.
     for(int beats:{3,5})
     {

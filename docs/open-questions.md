@@ -336,7 +336,7 @@ The manual gives no numbers, so these are simplest-default choices pending refer
 These are simplest-default choices pending reference measurement:
 
 - **Playback.** Preview plays files once at their own tempo, like the reference's Raw mode.
-- **Volume.** The preview volume runs from −70 to +6 dB and is not saved.
+- **Volume.** The preview volume is the cue volume ([cue](#cue)): −70 to +6 dB, −6 dB at first, kept with the project.
 - **Project changes.** Opening another project does not stop a preview.
 
 ### MIDI mapping defaults
@@ -733,6 +733,16 @@ Halftrack's default fades follow a static reading of the reference's code ([cont
 - **Rhythm timing.** The reference snaps ticks to its tick grid from the time-signature section start, and while stopped times them in whole samples. Halftrack places them on the beat grid from the start; it has one meter per project.
 - **Punch-In with a count-in.** With Punch-In on, the click is silent before the punch-in point, as the reference's manual says. With a count-in as well, Halftrack keeps the count-in's clicks and lets the click run on through the pre-roll; how the reference combines the two is unmeasured.
 
+### Cue
+
+Defaults where the reference's cue is not followed exactly ([contract](research/cue-contract.md)):
+
+- **Groups.** A group cannot be cued; its switch is disabled in Cue mode. The reference cues a group from after its devices.
+- **Solo in Place.** Halftrack always keeps returns audible while soloing, as the reference's default does; the reference's switch for it is not offered.
+- **Undo.** Cue Out and the Solo/Cue mode are kept with the project without undo steps, as Halftrack's Master Out is. The switches are undo steps, as Halftrack's solo was; the reference makes neither the mode nor the switches undo steps, and probably makes Cue Out one.
+- **The level's ramp.** A cue level change ramps across one audio block; the reference ramps its cue gates over a length set elsewhere.
+- **MIDI.** A cued MIDI track is heard through its instrument; what the reference cues of a track's MIDI is unexamined.
+
 ### Output routing
 
 Defaults where the reference does not map onto the engine ([contract](research/output-routing-contract.md)):
@@ -740,5 +750,5 @@ Defaults where the reference does not map onto the engine ([contract](research/o
 - **Ext. Out to the master's output.** The reference lets a track play with Ext. Out to the same output as the master, bypassing the master's devices and volume. In the engine everything on the default output is the master, so that is refused.
 - **Names.** Outputs are named as the engine names them ("Left + Right", "3 + 4"), not the reference's "1/2" and "3/4".
 - **Undo.** Changing the Master Out is kept with the project and marks it changed, but is not an undo step.
-- **Cue.** Cue Out, the Solo/Cue switch and the cue level are not implemented.
+- **Cue.** See [the cue](#cue).
 

@@ -36,6 +36,10 @@ This follows a static reading of the reference's code (raw material in the ignor
 - **The menu.** Divisions that do not fit the project's meter are disabled; Auto and 1 Bar always fit.
 - **The engine.** A patch (`cmake/PatchMetronomeRhythm.cmake`) lets the click generator read the project's rhythm when it is prepared, resolve it as above, and place its ticks. Bars are numerator × 4 / denominator crotchets. The engine's own bar count treats a bar of 6/8 as six crotchets.
 
+## Level and output
+
+As the reference's metronome does (static reading), the click plays at the cue volume on Cue Out, in both modes, apart from the master's volume and meter ([cue contract](cue-contract.md)). Its own Click Level, Halftrack's, multiplies the cue volume. At the default cue volume of −6 dB, a click is half as loud as Click Level alone made it before.
+
 ## Punch-In
 
 As the reference's manual says, with Punch-In on "the metronome will only be audible after the punch-in point" (consulted 2026-10-22). Recording with Punch-In mutes the click before the loop's start. Without a count-in, `Session::record` gives the engine a click range from that point; the next Play clears it. With a count-in, the engine's count-in range is kept, so the click runs on through the pre-roll ([open questions](../open-questions.md#metronome)).
@@ -69,11 +73,12 @@ The same suite checks Rhythm by comparing playback clicks sample by sample:
 - crotchets in 7/8, which play as Auto;
 - the menu's list, the divisions that fit 6/8, 7/8, 3/2 and 4/4, a refused value, and undo.
 
+At the cue volume of −6 dB the click plays at half its level, sample by sample; the suite's other cases use a cue volume of 0 dB.
+
 With Punch-In and the brace at one second, a recording from the start clicks, sample by sample, only from one second on; an ordinary Play afterwards clicks from the start again.
 
 The UI suite chooses four bars, Wood and 1/8 from the menu.
 
 ## Not yet
 
-- The reference's levels and routing: its metronome plays at the Preview volume on the cue output.
 - Its count-in starting position: the reference rounds a count-in from mid-bar to the nearest bar line from the time-signature section start. Unmeasured, and Halftrack counts in whole bars before the position.

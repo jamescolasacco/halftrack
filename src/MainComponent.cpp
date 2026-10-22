@@ -1120,7 +1120,8 @@ private:
     {
         const auto current = session.snapshot();
         session.beginEditGesture ("Solo");
-        if (on && additive != session.preferences().exclusiveSolo)
+        // Exclusive, as the reference's: the others go, so a plain click on an engaged switch clears every one.
+        if (additive != session.preferences().exclusiveSolo)
         {
             for (int t = 0; t < (int) current.tracks.size(); ++t) if (t != trackIndex && current.tracks[(size_t) t].solo) session.setTrackSolo (t, false);
             for (const auto& g : current.groups) if (g.id != groupId && g.solo) session.setGroupSolo (g.id, false);
@@ -1485,6 +1486,7 @@ private:
             solo.onClick = [this] { owner.selectTrack (index); owner.soloFromUI (index, {}, solo.getToggleState(), juce::ModifierKeys::getCurrentModifiers().isCommandDown()); };
             arm.onClick = [this] { owner.selectTrack (index); owner.armFromUI (index, arm.getToggleState(), juce::ModifierKeys::getCurrentModifiers().isCommandDown()); };
             mute.setTooltip ("Track activator: click to mute or unmute"); solo.setTooltip ("Solo track"); arm.setTooltip ("Arm track for audio recording");
+            solo.setName ("Track solo");
             mute.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); mute.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             solo.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff57a7ff)); solo.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             arm.setName ("Record arm"); input.setName ("Track audio input"); monitor.setName ("Track monitoring");
@@ -1626,6 +1628,9 @@ private:
             mute.setToggleState (! track.mute, juce::dontSendNotification);
             mute.setButtonText (juce::String (position + 1));
             solo.setToggleState (track.solo, juce::dontSendNotification);
+            // In Cue mode the switch cues the track, as the reference's does.
+            solo.setButtonText (owner.state.cueMode ? "C" : "S");
+            solo.setTooltip (owner.state.cueMode ? "Cue track: hear it on Cue Out from before its fader" : "Solo track");
             arm.setToggleState (track.armed, juce::dontSendNotification);
             // An auto-armed track shows a lighter arm, as it follows the selection.
             arm.setColour (juce::TextButton::buttonOnColourId, track.autoArmed ? red.withAlpha (.55f) : red);
@@ -2059,6 +2064,7 @@ private:
             colour = g->colour; folded = g->folded; peakL = g->peakL; peakR = g->peakR; fold.folded = folded; fold.repaint();
             if (! name.isBeingEdited()) name.setText (g->name, juce::dontSendNotification);
             activator.setToggleState (! g->mute, juce::dontSendNotification); solo.setToggleState (g->solo, juce::dontSendNotification);
+            solo.setEnabled (! owner.state.cueMode); // Groups cannot be cued.
             activator.setButtonText ("G");
             if (! gain.isMouseButtonDown()) gain.setValue (g->gainDb, juce::dontSendNotification);
             if (! pan.isMouseButtonDown()) pan.setValue (g->pan, juce::dontSendNotification);
@@ -3860,16 +3866,51 @@ private:
                     owner.refresh();
                 };
                 addAndMakeVisible (output);
+                // The cue, as the reference's master track has it: Cue Out, the Solo/Cue switch and
+                // the cue volume, at which the click, previews and cued tracks play on Cue Out.
+                cueOutput.setName ("Cue Out"); cueOutput.setTooltip ("Cue Out: the audio output the click, previews and cued tracks play to.");
+                cueOutput.onChange = [this]
+                {
+                    const auto names = owner.session.outputNames();
+                    if (juce::isPositiveAndBelow (cueOutput.getSelectedId() - 1, names.size())) owner.report (owner.session.setCueOutput (names[cueOutput.getSelectedId() - 1]));
+                    owner.refresh();
+                };
+                addAndMakeVisible (cueOutput);
+                soloCue.setName ("Solo/Cue"); soloCue.setClickingTogglesState (false);
+                soloCue.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff57a7ff)); soloCue.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
+                soloCue.onClick = [this] { owner.report (owner.session.setCueMode (! owner.state.cueMode)); owner.refresh(); };
+                addAndMakeVisible (soloCue);
+                cueVolume.setName ("Cue volume"); cueVolume.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+                cueVolume.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0); cueVolume.setRange (-70, 6, .1); cueVolume.setSkewFactorFromMidPoint (-12);
+                cueVolume.setDoubleClickReturnValue (true, -6);
+                cueVolume.textFromValueFunction = [] (double v) { return v <= -70 ? juce::String ("-inf dB") : juce::String (v, 1) + " dB"; };
+                cueVolume.onDragStart = [this] { owner.session.beginEditGesture ("Cue volume"); };
+                cueVolume.onDragEnd = [this] { owner.session.endEditGesture(); };
+                cueVolume.onValueChange = [this] { owner.report (owner.session.setCueVolume ((float) cueVolume.getValue())); };
+                cueVolume.setPopupDisplayEnabled (true, true, nullptr);
+                addAndMakeVisible (cueVolume);
             }
             void sync()
             {
+                const auto names = owner.session.outputNames();
+                if (names != cueOutputNames) { cueOutputNames = names; cueOutput.clear (juce::dontSendNotification); for (int i = 0; i < names.size(); ++i) cueOutput.addItem (names[i], i + 1); }
+                const auto cue = owner.state.cueOutput.isNotEmpty() ? owner.state.cueOutput : owner.session.masterOutput();
+                cueOutput.setSelectedId (names.indexOf (cue) + 1, juce::dontSendNotification);
+                cueOutput.setEnabled (names.size() > 1 && ! owner.session.isExporting());
+                soloCue.setButtonText (owner.state.cueMode ? "Cue" : "Solo");
+                soloCue.setToggleState (owner.state.cueMode, juce::dontSendNotification);
+                soloCue.setEnabled (owner.state.cueAvailable && ! owner.session.isExporting());
+                soloCue.setTooltip (owner.state.cueAvailable ? "Solo/Cue: the tracks' switches solo them, or cue them on Cue Out"
+                                                             : "Solo/Cue: choose a Cue Out apart from the Master Out to cue tracks");
+                if (! cueVolume.isMouseButtonDown()) cueVolume.setValue (owner.state.cueVolumeDb, juce::dontSendNotification);
+                cueVolume.setTooltip ("Cue volume: " + cueVolume.getTextFromValue (cueVolume.getValue()) + ". The click, previews and cued tracks play at it. Double-click for -6 dB.");
+                cueVolume.setEnabled (! owner.session.isExporting());
                 if (! crossfader.isMouseButtonDown()) crossfader.setValue (owner.state.crossfader, juce::dontSendNotification);
                 crossfader.setEnabled (! owner.session.isExporting());
                 if (! gain.isMouseButtonDown()) gain.setValue (owner.state.masterGainDb, juce::dontSendNotification);
                 gain.setEnabled (! owner.session.isExporting());
                 showAutomationState (gain, owner.state.masterVolumeAutomation, "Master output level. Double-click for 0 dB.", "Master volume");
                 gain.getProperties().set ("midiMapTarget", "master");
-                const auto names = owner.session.outputNames();
                 if (names != outputNames) { outputNames = names; output.clear (juce::dontSendNotification); for (int i = 0; i < names.size(); ++i) output.addItem (names[i], i + 1); }
                 output.setSelectedId (names.indexOf (owner.session.masterOutput()) + 1, juce::dontSendNotification);
                 output.setEnabled (names.size() > 1 && ! owner.session.isExporting());
@@ -3877,13 +3918,16 @@ private:
             }
             void resized() override
             {
+                cueOutput.setBounds (5, 22, getWidth() - 10, 19);
                 output.setBounds (5, 46, getWidth() - 10, 19);
+                soloCue.setBounds (5, 72, 44, 18); cueVolume.setBounds (getWidth() - 39, 66, 32, 32);
                 gain.setBounds (6, 106 + TrackRow::outputRow, 54, getHeight() - 162 - TrackRow::outputRow); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22);
             }
             void paint (juce::Graphics& g) override
             {
                 g.fillAll (themes::colour (0xff383838));
-                g.setColour (muted); g.setFont (font (9.0f, true)); g.drawText ("MASTER", 6, 8, getWidth() - 12, 16, juce::Justification::centred);
+                g.setColour (muted); g.setFont (font (9.0f, true)); g.drawText ("MASTER", 6, 4, getWidth() - 12, 16, juce::Justification::centred);
+                g.drawText ("CUE", getWidth() - 39, 98, 32, 10, juce::Justification::centred);
                 g.drawText ("A", 4, getHeight() - 34, 12, 22, juce::Justification::centred); g.drawText ("B", getWidth() - 16, getHeight() - 34, 12, 22, juce::Justification::centred);
                 const juce::Rectangle<int> meter { 66, 110 + TrackRow::outputRow, 10, juce::jmax (10, getHeight() - 182 - TrackRow::outputRow) };
                 for (int channel = 0; channel < 2; ++channel)
@@ -3899,7 +3943,9 @@ private:
         private:
             Impl& owner;
             juce::Slider gain, crossfader;
-            juce::ComboBox output; juce::StringArray outputNames;
+            juce::ComboBox output, cueOutput; juce::StringArray outputNames, cueOutputNames;
+            juce::TextButton soloCue { "Solo" };
+            juce::Slider cueVolume;
             float peakL = 0, peakR = 0;
         } masterStrip { owner };
         juce::ScrollBar horizontal { false }, vertical { true };
@@ -15255,6 +15301,27 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (session.masterOutput() == outs[1] && masterOut->getText() == outs[1], "choosing another output moves the Master Out");
             masterOut->setSelectedId (1, juce::sendNotificationSync); refresh();
             check (session.masterOutput() == outs[0], "and back");
+            // The cue: Cue Out, the Solo/Cue switch and the cue volume, as the reference's master has them.
+            auto* cueOut = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Cue Out"));
+            auto* soloCue = dynamic_cast<juce::Button*> (findNamed (launcher, "Solo/Cue"));
+            auto* cueVolume = dynamic_cast<juce::Slider*> (findNamed (launcher, "Cue volume"));
+            check (cueOut != nullptr && soloCue != nullptr && cueVolume != nullptr && cueOut->isVisible() && cueOut->getText() == outs[0] && soloCue->getButtonText() == "Solo"
+                       && ! soloCue->isEnabled() && std::abs (cueVolume->getValue() - state.cueVolumeDb) < .01,
+                   "the master strip shows Cue Out with the master, Solo mode unavailable, and the cue volume (" + juce::String (cueOut == nullptr ? juce::String() : cueOut->getText())
+                       + ", " + juce::String (soloCue == nullptr ? juce::String() : soloCue->getButtonText()) + ")");
+            cueOut->setSelectedId (2, juce::sendNotificationSync); refresh();
+            check (session.cueOutput() == outs[1] && soloCue->isEnabled(), "choosing another Cue Out makes Cue mode available");
+            soloCue->triggerClick(); juce::MessageManager::getInstance()->runDispatchLoopUntil (50); refresh();
+            check (state.cueMode && soloCue->getButtonText() == "Cue", "the switch turns Cue mode on");
+            auto* trackSwitch = dynamic_cast<juce::Button*> (findNamed (*this, "Track solo"));
+            check (trackSwitch != nullptr && trackSwitch->getButtonText() == "C", "the tracks' switches become cue switches");
+            cueVolume->setValue (-12, juce::sendNotificationSync); refresh();
+            check (std::abs (state.cueVolumeDb + 12) < .01f, "the knob sets the cue volume");
+            soloCue->triggerClick(); juce::MessageManager::getInstance()->runDispatchLoopUntil (50); refresh();
+            check (! state.cueMode, "and the switch turns Solo mode on again");
+            session.undo(); refresh();
+            cueOut->setSelectedId (1, juce::sendNotificationSync); refresh();
+            check (state.cueOutput == outs[0] && ! soloCue->isEnabled(), "Cue Out back with the master leaves Cue mode unavailable");
         }
         output->setSelectedId (2, juce::sendNotificationSync); refresh();
         check (state.tracks[0].output.kind == Session::OutputKind::sendsOnly && output->getText() == "Sends Only", "choosing Sends Only routes the track");
@@ -15740,6 +15807,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tracks[1].solo && ! state.tracks[2].solo, "one undo removes the added solo");
         session.undo(); refresh();
         check (state.tracks[0].solo && ! state.tracks[1].solo, "another undo restores the first solo, in one step");
+        soloFromUI (2, {}, true, true); soloFromUI (0, {}, false, false); refresh();
+        check (! state.tracks[0].solo && ! state.tracks[2].solo, "a plain click on a soloed track releases every solo, as the reference's does");
         soloFromUI (0, {}, false, false); refresh();
         // One input belongs to one track, so an audio track and a MIDI track each take their own.
         const auto audioInputs = session.inputNames(), midiInputs = session.inputNames (true);

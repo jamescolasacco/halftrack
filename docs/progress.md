@@ -2057,3 +2057,14 @@ Engine, UI and QA areas.
 - **The reference's other time commands.** Cut Time, Paste Time and Duplicate Time act across every track, as Insert Silence and Delete Time do, each one undo step, from the Edit menu and Shift+Cmd/Ctrl+X, V and D.
 - **A fix.** Insert Silence inside an automation ramp stretched the ramp across the gap, changing how the lane played before the insertion point. It now holds the lane's value there across the gap.
 - **Measured.** The time-edit suite (layouts, refusals, undo, and a render in which a duplicate plays sample for sample as what it copies) and the UI suite. See [the contract](research/time-commands-contract.md).
+
+## The cue: Cue Out, the cue volume and the Solo/Cue switch — 2026-10-22
+
+Engine, UI and QA areas. Researched by static reading of the reference's code (findings in the ignored `artifacts/reverse-engineering/cue/`).
+
+- **Cue Out and the cue volume.** The master strip has a Cue Out chooser and a CUE knob. The click and previews always play on Cue Out at the cue volume, −6 dB at first as the reference's default Set has it, which the Samples browser's preview volume now also sets. Both are kept with the project.
+- **Cue mode.** With a Cue Out apart from the Master Out, the Solo/Cue switch turns the tracks' solo switches into cue switches. A cued track is heard on Cue Out from before its fader, pan and activator, as the reference's pre-fader listen is, while playing on as before. The switches keep their state between modes. Sharing outputs puts Solo back, keeping the choice.
+- **Exclusive solo.** A plain click on an engaged switch now clears every switch, as the reference's does.
+- **Engine.** A new patch, `cmake/PatchCue.cmake`, adds three behaviour hooks and the cue's sum on its device; every earlier patch on its two files accepts its results.
+- **Measured.** The output-routing suite, per output channel of a four-output synthetic device, and the metronome, preview and UI suites. See [the contract](research/cue-contract.md).
+- **Changed defaults.** The click and previews now play 6 dB quieter by default, at the reference's cue level.
