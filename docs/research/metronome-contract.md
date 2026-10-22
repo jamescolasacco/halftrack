@@ -10,7 +10,8 @@ The metronome follows the reference's Metronome Settings menu. The reference's m
 ## Count-In
 
 - **The choices.** Recording waits for none, one, two or four bars of the project's meter, as the reference's choices are. A bar lasts the meter's bar in crotchets: three in 6/8, three and a half in 7/8.
-- **The engine.** An engine patch (`cmake/PatchCountIn.cmake`, see [dependencies](../dependencies.md)) adds the four-bar mode and the bar length. Before it, a bar of 6/8 counted in six beats, and 7/8 could not be expressed.
+- **Where it starts** (static reading of the reference's code). A count-in starts on the bar line nearest to its bars before the recording's start, rounding a half away from zero: round((t − bars·B) / B)·B, with B the bar in crotchets. From a bar line it lasts its bars exactly; from mid-bar, between half a bar less and half a bar more. Its first click, accented, is at its start, and it clicks until the recording starts. The reference's count-in display runs from −2.1.1 for two bars, as its manual says.
+- **The engine.** An engine patch (`cmake/PatchCountIn.cmake`, see [dependencies](../dependencies.md)) adds the four-bar mode and the bar length. Before it, a bar of 6/8 counted in six beats, and 7/8 could not be expressed. A second (`cmake/PatchCountInStart.cmake`) places the start on that bar line. It also removes the engine's half-beat lead before the first click.
 - **Scope.** The count-in is an application setting, as the reference's is (static reading: its ASongPrefData, set without an undo step, and its Metronome device is not saved in Sets). It is kept with the preferences (`Preferences::countInBars`, None by default), not with a project. Setting it is not an undo step, and it cannot change while recording. Projects saved by earlier versions still validate their count-in, which is ignored.
 
 ## Sound
@@ -61,6 +62,8 @@ The metronome's menu has sections, as the reference's does:
 
 - clicks sample by sample against generated impulse sounds: beats, accents, gain, loops, count-ins of none, one, two and four bars, recording placement and export exclusion, as before;
 - one-bar count-ins in 6/8 (1.5 s at 120 BPM) and 7/8 (1.75 s);
+- one-bar count-ins from mid-bar in 4/4: six beats from beat 2, three from beat 3, five from beat 5;
+- that count-in clicks start exactly at the count-in's start;
 - that three bars is refused;
 - that the count-in survives undo, a new project and the next launch, and is not written into the project;
 - each sound's plain and accented tick: repeatable, at its designed peak, starting and ending in silence, ringing at its fundamental, with the accent higher;

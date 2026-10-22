@@ -239,12 +239,12 @@ void countIn(const juce::File& root)
         ok(session.setMetronome(settings),"select count-in without ongoing metronome");
         const auto inputs=session.inputNames();check(!inputs.isEmpty(),"generated audio capture input exists");ok(session.setTrackInput(0,inputs[0]),"assign generated count-in recording input");ok(session.setTrackArmed(0,true),"arm count-in recording");
         session.seek(start);const auto inputStart=syntheticTestSamplePosition(session);ok(session.record(),"record with count-in");
-        check(bars==0?session.snapshot().position==start:std::abs(session.snapshot().position-start+bars*2+.25)<1e-9,"recording starts at the exact native count-in boundary");
+        check(bars==0?session.snapshot().position==start:std::abs(session.snapshot().position-start+bars*2)<1e-9,"from a bar line the count-in lasts its bars exactly, clicking from its start");
         check(session.snapshot().countInBeatsRemaining==bars*4,"countdown is available at zero and nonzero timeline locations");
         auto forbidden=settings;forbidden.countInBars=bars==0?1:0;check(session.setMetronome(forbidden).failed(),"active count-in cannot be changed mid-take");
-        const int lead=bars>0?12000:0;
+        const int lead=0; // The first count-in click is at the count-in's start, as the reference's.
         const auto audio=captureSyntheticTestDevice(session,(bars*2*48000+lead+24000+255)/256);
-        compareClicks(audio,120,1,true,0,bars>0?bars*4:-1,bars>0?.25:0);session.stop();
+        compareClicks(audio,120,1,true,0,bars>0?bars*4:-1,0);session.stop();
         const auto state=session.snapshot();check(state.tracks[0].clips.size()==1,"count-in produces one completed audio take");
         check(std::abs(state.tracks[0].clips[0].start-start)<1.0/48000 && state.tracks[0].clips[0].length>.45 && state.tracks[0].clips[0].length<.55,
             "pre-roll is excluded from recorded take placement and duration; start="+juce::String(state.tracks[0].clips[0].start,9)+" length="+juce::String(state.tracks[0].clips[0].length,9));
@@ -276,9 +276,20 @@ void countIn(const juce::File& root)
         auto settings=session.snapshot().metronome;settings.countInBars=1;ok(session.setMetronome(settings),"count in one bar");
         const auto inputs=session.inputNames();ok(session.setTrackInput(0,inputs[0]),"assign an input");ok(session.setTrackArmed(0,true),"arm");
         session.seek(0);ok(session.record(),"record with a one-bar count-in");
-        check(std::abs(session.snapshot().position+beats*.5+.25)<1e-9 && session.snapshot().countInBeatsRemaining==beats,
+        check(std::abs(session.snapshot().position+beats*.5)<1e-9 && session.snapshot().countInBeatsRemaining==beats,
               "a bar of "+juce::String(numerator)+"/"+juce::String(denominator)+" counts in "+juce::String(beats,1)+" beats ("+juce::String(session.snapshot().position,4)+" s)");
         session.stop();settings.countInBars=0;ok(session.setMetronome(settings),"no count-in for what follows");
+    }
+    // From mid-bar the count-in starts on the bar line nearest to a bar before, rounding a half away
+    // from zero, as the reference's code has it: from beat 2 it lasts six beats, from beat 3 three.
+    for(const auto [beat,lasts]:{std::pair{2.0,6.0},std::pair{3.0,3.0},std::pair{5.0,5.0}})
+    {
+        Fixture f(root);auto& session=f.session;auto settings=session.snapshot().metronome;settings.countInBars=1;ok(session.setMetronome(settings),"count in one bar");
+        const auto inputs=session.inputNames();ok(session.setTrackInput(0,inputs[0]),"assign an input");ok(session.setTrackArmed(0,true),"arm");
+        session.seek(beat*.5);ok(session.record(),"record from beat "+juce::String(beat,0));
+        check(std::abs(session.snapshot().position-(beat-lasts)*.5)<1e-9 && std::abs(session.snapshot().countInBeatsRemaining-lasts)<1e-9,
+              "from beat "+juce::String(beat,0)+" it counts in "+juce::String(lasts,0)+" beats ("+juce::String(session.snapshot().position,4)+" s)");
+        session.stop();
     }
     {
         Fixture f(root);auto& session=f.session;auto settings=session.snapshot().metronome;
@@ -311,7 +322,7 @@ void punchIn(const juce::File& root)
     session.seek(0);ok(session.record(),"record from before the punch-in point");
     check(session.snapshot().position==0&&session.snapshot().countInBeatsRemaining==0,"the pre-roll plays at once, without counting in");session.stop();session.undo();
     session.seek(1.5);ok(session.record(),"record from inside the brace");
-    check(session.snapshot().countInBeatsRemaining==4&&session.snapshot().position<1.5-1,"it counts in from inside the punch window");session.stop();
+    check(std::abs(session.snapshot().countInBeatsRemaining-3)<1e-9&&session.snapshot().position==0,"it counts in from inside the punch window, from the nearest bar line");session.stop();
     settings.countInBars=0;ok(session.setMetronome(settings),"no count-in for what follows");
 }
 }

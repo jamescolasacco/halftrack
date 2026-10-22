@@ -655,12 +655,13 @@ void countInRecording()
     ok(session.setMetronome(click),"select one-bar MIDI count-in");
     ok(session.setTrackArmed(2,true),"arm count-in MIDI input");session.seek(start);ok(session.record(),"start MIDI count-in recording");
     const auto origin=f.devices.getCurrentStreamTime()+256.0/48000;pumpSyntheticTestDevice(session,4);
-    f.send(juce::MidiMessage::noteOn(1,60,(juce::uint8)80),origin+1.0);
-    f.send(juce::MidiMessage::noteOff(1,60),origin+1.2);
-    f.send(juce::MidiMessage::noteOn(1,64,(juce::uint8)90),origin+2.1);
-    f.send(juce::MidiMessage::noteOff(1,64),origin+2.4);
-    f.send(juce::MidiMessage::noteOn(1,67,(juce::uint8)100),origin+2.6);
-    f.send(juce::MidiMessage::noteOff(1,67),origin+2.9);
+    // The one-bar count-in lasts two seconds, its first click at its start; the second note crosses its end.
+    f.send(juce::MidiMessage::noteOn(1,60,(juce::uint8)80),origin+.75);
+    f.send(juce::MidiMessage::noteOff(1,60),origin+.95);
+    f.send(juce::MidiMessage::noteOn(1,64,(juce::uint8)90),origin+1.85);
+    f.send(juce::MidiMessage::noteOff(1,64),origin+2.15);
+    f.send(juce::MidiMessage::noteOn(1,67,(juce::uint8)100),origin+2.35);
+    f.send(juce::MidiMessage::noteOff(1,67),origin+2.65);
     pumpSyntheticTestDevice(session,600);session.stop();
     const auto state=session.snapshot();check(state.tracks[2].clips.size()==1,"MIDI count-in produces one clip");
     const auto clip=state.tracks[2].clips[0];check(clip.notes.size()==2,"notes fully inside the count-in are omitted");

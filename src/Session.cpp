@@ -5170,8 +5170,8 @@ Session::Snapshot Session::snapshot() const
     s.recordQuantisation=static_cast<RecordQuantisation>(static_cast<int>(e.state.getProperty(recordQuantisationProperty,0)));
     const auto clickRange=e.getClickTrackRange();
     if(s.recording && s.metronome.countInBars>0 && !clickRange.isEmpty())
-        s.countInBeatsRemaining=juce::jlimit(0.0,e.getNumCountInBeats(),
-            (e.tempoSequence.toBeats(clickRange.getEnd()).inBeats()+.5)-e.tempoSequence.toBeats(transport.getPosition()).inBeats());
+        s.countInBeatsRemaining=std::max(0.0,
+            e.tempoSequence.toBeats(clickRange.getEnd()).inBeats()-e.tempoSequence.toBeats(transport.getPosition()).inBeats());
     s.loopStart = transport.getLoopRange().getStart().inSeconds();
     s.loopEnd = transport.getLoopRange().getEnd().inSeconds();
     s.cpu = impl->engine.getDeviceManager().getCpuUsage();

@@ -97,7 +97,7 @@ Default: one named native audio or MIDI input per track, with exclusive assignme
 
 ### Metronome and count-in defaults
 
-Default: click Off, first-beat accent On, gain 60%, recording-only Off, count-in None. Expose zero/one/two 4/4 bars; keep the native half-beat preparation lead before the first count-in beat. Click and count-in use the main output and do not appear in offline exports. A count-in applies when recording begins from stopped; punching Record during playback does not rewind. Click settings belong to the project and undo together. Separate cue outputs, signature changes, subdivisions and custom samples require later controls and tests.
+Default: click Off, first-beat accent On, gain 60%, recording-only Off, count-in None. Expose zero/one/two 4/4 bars; the first count-in click is at the count-in's start, as the reference's. Click and count-in use the main output and do not appear in offline exports. A count-in applies when recording begins from stopped; punching Record during playback does not rewind. Click settings belong to the project and undo together. Separate cue outputs, signature changes, subdivisions and custom samples require later controls and tests.
 
 
 ### Recording quantization
@@ -729,7 +729,7 @@ Halftrack's default fades follow a static reading of the reference's code ([cont
 ### Metronome
 
 - **The sounds.** The reference's Classic, Click and Wood are its own samples, so Halftrack synthesises its own ticks to their character; they are not the same sounds.
-- **Count-in start.** The reference starts a count-in from mid-bar at the nearest bar line, roundNearest((t − bars·B − section start) / B)·B (static reading), so it is not always whole bars long. Halftrack counts in whole bars before the position.
+- **Count-in start.** As the reference's (static reading), a count-in starts on the bar line nearest to its bars before the start, from the timeline's start since Halftrack has one meter. The reference measures from the time-signature section's start. Its block-boundary delay of the start is not reproduced.
 - **Rhythm timing.** The reference snaps ticks to its tick grid from the time-signature section start, and while stopped times them in whole samples. Halftrack places them on the beat grid from the start; it has one meter per project.
 - **Punch-In and the click.** The reference's manual says that with Enable Only While Recording and Punch-In the click is heard only after the punch-in point, and Halftrack does so; a static reading of its code finds no punch term in the click, so this is unmeasured.
 

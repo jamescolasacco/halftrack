@@ -2088,3 +2088,12 @@ Engine, UI and QA areas.
 ## The Main track's name — 2026-10-22
 
 UI area. The reference's built-in default Set names its master track Main, as its Live 12 interface does. Halftrack's interface now says Main where it said Master: the Session grid's column, the mixer strip, Main Out, Audio To, the device chain, the automation editor, the export dialog, messages, and the stem of the whole mix (now "<project> Main.wav"). The Session API keeps its master names.
+
+## Count-in start and the punch window — 2026-10-22
+
+Engine and QA areas. From a static reading of the reference's transport code (findings in the ignored `artifacts/reverse-engineering/transport/`).
+
+- **Where a count-in starts.** On the bar line nearest to its bars before the recording's start, so from mid-bar it is not whole bars long. Its first click is at its start: the engine's half-beat lead before it is gone. A new engine patch, `cmake/PatchCountInStart.cmake`.
+- **The punch window.** A count-in comes only when recording starts inside the punch window; from before Punch-In's point the pre-roll plays at once.
+- **The punch click.** The pre-roll is silent only with Enable Only While Recording, which is what the reference's manual describes.
+- **Measured.** The metronome and MIDI input suites.
