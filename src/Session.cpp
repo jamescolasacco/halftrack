@@ -4567,10 +4567,25 @@ struct Session::Impl
         std::map<juce::String, std::unique_ptr<juce::TemporaryFile>> media; // By the audio's own path.
     };
     std::unique_ptr<RangeClipboard> rangeClipboard;
-    std::unique_ptr<juce::TemporaryFile> audioClipboardMedia;
-    // A copied Session clip, with its audio's own copy for an audio clip.
+    std::shared_ptr<juce::TemporaryFile> audioClipboardMedia;
+    // A copied clip as a Session clip, with its audio's own copy for an audio clip. A clip copy fills
+    // this and the Arrangement's clip clipboard alike, so it pastes in either view.
     juce::ValueTree slotClipboard;
-    std::unique_ptr<juce::TemporaryFile> slotClipboardMedia;
+    std::shared_ptr<juce::TemporaryFile> slotClipboardMedia;
+    bool slotClipboardFromArrangement = false; // Its launch settings are then the preferences' defaults.
+    // An Arrangement clip as a Session clip: at the start of time, a MIDI clip keeping its beats and
+    // its content start's beat.
+    juce::ValueTree asSlotClip (juce::ValueTree state, double lengthBeats, double offsetBeats, bool midi) const
+    {
+        auto& tempo = edit->tempoSequence;
+        state.setProperty (te::IDs::start, 0.0, nullptr);
+        if (midi)
+        {
+            state.setProperty (te::IDs::length, tempo.toTime (te::BeatPosition::fromBeats (lengthBeats)).inSeconds(), nullptr);
+            state.setProperty (te::IDs::offset, offsetBeats / tempo.getBeatsPerSecondAt (te::TimePosition()), nullptr);
+        }
+        return state;
+    }
     std::unique_ptr<te::Edit> edit;
     GrooveWatcher grooveWatcher { edit };
     std::unique_ptr<te::Edit::UndoTransactionInhibitor> gesture;
@@ -6571,22 +6586,28 @@ Result Session::copySlotClip (int trackIndex, int sceneIndex, bool cut)
     auto* clip = slot != nullptr ? slot->getClip() : nullptr;
     if (clip == nullptr) return Result::fail ("There is no clip in this slot.");
     auto copied = clip->state.createCopy();
-    std::unique_ptr<juce::TemporaryFile> media;
+    std::shared_ptr<juce::TemporaryFile> media;
+    // Read before a cut removes, and so deletes, the clip.
+    const bool midi = dynamic_cast<te::MidiClip*> (clip) != nullptr;
+    const auto lengthBeats = clip->getLengthInBeats().inBeats(), offsetBeats = clip->getOffsetInBeats().inBeats();
     if (auto* audio = dynamic_cast<te::WaveAudioClip*> (clip))
     {
         if (audio->getNumTakes (true) > 1 || audio->isCurrentTakeComp()) return Result::fail ("Copy a Session clip with a single take.");
         // A clipboard copy that pastes elsewhere keeps its own audio.
         const auto source = audio->getSourceFileReference().getFile();
         if (! source.existsAsFile()) return Result::fail ("The audio clip source is missing.");
-        media = std::make_unique<juce::TemporaryFile> (source.getFileExtension());
+        media = std::make_shared<juce::TemporaryFile> (source.getFileExtension());
         if (! source.copyFileTo (media->getFile())) return Result::fail ("Could not retain audio for the clipboard.");
         copied.removeChild (copied.getChildWithName (te::IDs::TAKES), nullptr);
         copied.setProperty (te::IDs::source, media->getFile().getFullPathName(), nullptr);
     }
-    else if (dynamic_cast<te::MidiClip*> (clip) == nullptr) return Result::fail ("Copy a MIDI or audio clip.");
+    else if (! midi) return Result::fail ("Copy a MIDI or audio clip.");
     if (cut) { impl->transaction ("Cut session clip"); clip->removeFromParent(); impl->changed(); }
-    impl->midiClipboard = {}; impl->midiClipboardBeats = 0; impl->audioClipboard = {}; impl->audioClipboardMedia.reset(); impl->rangeClipboard.reset();
-    impl->slotClipboard = std::move (copied); impl->slotClipboardMedia = std::move (media);
+    // The same copy pastes into the Arrangement.
+    impl->rangeClipboard.reset();
+    impl->midiClipboard = midi ? copied.createCopy() : juce::ValueTree(); impl->midiClipboardBeats = midi ? lengthBeats : 0; impl->midiClipboardOffsetBeats = midi ? offsetBeats : 0;
+    impl->audioClipboard = midi ? juce::ValueTree() : copied.createCopy(); impl->audioClipboardMedia = midi ? nullptr : media;
+    impl->slotClipboard = std::move (copied); impl->slotClipboardMedia = media; impl->slotClipboardFromArrangement = false;
     return Result::ok();
 }
 bool Session::hasSlotClipboard() const
@@ -6617,11 +6638,13 @@ Result Session::pasteSlotClip (int trackIndex, int sceneIndex)
     }
     impl->transaction ("Paste session clip");
     if (auto* replaced = to->getClip()) replaced->removeFromParent();
-    if (! te::insertClipCopy (*to, copy))
+    auto* inserted = te::insertClipCopy (*to, copy);
+    if (inserted == nullptr)
     {
         impl->edit->getUndoManager().undoCurrentTransactionOnly(); impl->changed(); collected.deleteFile();
         return Result::fail ("The clip could not be pasted.");
     }
+    if (impl->slotClipboardFromArrangement) impl->applyLaunchDefaults (*inserted);
     impl->changed(); return Result::ok();
 }
 Result Session::setLaunchQuantisation (LaunchQuantisation quantisation)
@@ -9177,7 +9200,9 @@ Result Session::copyMidiClip (const String& id, bool cut)
     const auto offsetBeats=clip->getOffsetInBeats().inBeats();
     if(cut){impl->transaction("Cut MIDI clip");clip->removeFromParent();impl->changed();}
     impl->midiClipboard=std::move(copied);impl->midiClipboardBeats=beats;impl->midiClipboardOffsetBeats=offsetBeats;
-    impl->rangeClipboard.reset(); impl->slotClipboard = {}; impl->slotClipboardMedia.reset();
+    // The same copy pastes into a Session slot.
+    impl->rangeClipboard.reset();
+    impl->slotClipboard = impl->asSlotClip (impl->midiClipboard.createCopy(), beats, offsetBeats, true); impl->slotClipboardMedia.reset(); impl->slotClipboardFromArrangement = true;
     impl->audioClipboard={};impl->audioClipboardMedia.reset();return Result::ok();
 }
 bool Session::hasMidiClipClipboard() const {return impl->midiClipboard.isValid();}
@@ -9234,7 +9259,7 @@ Result Session::copyAudioClip (const String& id, bool cut)
     // Retain an independent file before publishing the clipboard or removing a clip.
     const auto source = clip->getSourceFileReference().getFile();
     if (! source.existsAsFile()) return Result::fail ("The audio clip source is missing.");
-    auto media = std::make_unique<juce::TemporaryFile> (source.getFileExtension());
+    auto media = std::make_shared<juce::TemporaryFile> (source.getFileExtension());
     if (! source.copyFileTo (media->getFile())) return Result::fail ("Could not retain audio for the clipboard.");
     auto copied = clip->state.createCopy();
     // A one-take clip's selected source is already resolved above. Do not retain
@@ -9247,9 +9272,11 @@ Result Session::copyAudioClip (const String& id, bool cut)
         clip->removeFromParent();
         impl->changed();
     }
-    impl->midiClipboard = {}; impl->midiClipboardBeats = 0; impl->rangeClipboard.reset(); impl->slotClipboard = {}; impl->slotClipboardMedia.reset();
+    impl->midiClipboard = {}; impl->midiClipboardBeats = 0; impl->rangeClipboard.reset();
     impl->audioClipboard = std::move (copied);
-    impl->audioClipboardMedia = std::move (media);
+    impl->audioClipboardMedia = media;
+    // The same copy pastes into a Session slot.
+    impl->slotClipboard = impl->asSlotClip (impl->audioClipboard.createCopy(), 0, 0, false); impl->slotClipboardMedia = media; impl->slotClipboardFromArrangement = true;
     return Result::ok();
 }
 bool Session::hasAudioClipClipboard() const

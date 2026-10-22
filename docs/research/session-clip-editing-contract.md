@@ -21,7 +21,11 @@ The reference's Session View moves clips around its grid by drag-and-drop and ha
 **Clipboard.** `copySlotClip` copies a slot's clip, and with `cut` also removes it (one undo step). `pasteSlotClip` puts a copy into a slot of the clip's kind, replacing what is there (one undo step).
 
 - An audio clip's file is kept in a copy of its own, so it pastes into another project. The paste collects it into that project's assets, as an Arrangement audio paste does.
-- A Session copy replaces the Arrangement clipboard, and an Arrangement copy (a clip or a time selection) replaces the Session clipboard: there is one clipboard, as in the reference.
+- There is one clipboard, as in the reference, so a copied clip pastes in either view:
+  - A slot clip's copy also pastes into the Arrangement at the insert marker (`pasteMidiClip`, `pasteAudioClip`).
+  - An Arrangement clip's copy also pastes into a slot, taking the preferences' launch settings.
+  - A MIDI clip keeps its length in beats and its content start's beat either way, as the reference's manual describes for moving material between the views.
+  - A time selection's copy clears the Session form.
 
 **In the UI.**
 
@@ -42,11 +46,15 @@ The reference's Session View moves clips around its grid by drag-and-drop and ha
 - **Clipboard.** Copy, cut and paste work, a paste replaces the clip it lands on, and MIDI is refused on an audio track. Undo reverses a paste and a cut.
 - **One clipboard.** An Arrangement copy and a Session copy replace each other on the clipboard.
 - **Another project.** An audio clip pasted into a newly saved project has its file collected there.
+- **Between the views.**
+  - A three-beat Arrangement MIDI clip with a note on its second beat, pasted into a slot, keeps the note and its three beats, with a new identity.
+  - A four-beat slot clip pasted into the Arrangement at beat 17 keeps its four beats and note.
+  - A slot audio clip pasted into the Arrangement at one second has its audio collected.
 
-The UI suite drags a clip to another slot and copy-drags one with the platform's modifier. It also checks Cmd/Ctrl+C, V, D and X on the grid and Session > Paste Clip, with eight undo steps restoring the project.
+The UI suite drags a clip to another slot and copy-drags one with the platform's modifier. It also checks Cmd/Ctrl+C, V, D and X on the grid, Session > Paste Clip, and Cmd/Ctrl+V in the Arrangement pasting the copied Session clip at the insert marker, with nine undo steps restoring the project.
 
 ## Not yet covered
 
 - Selecting and moving several clips at once (Shift/Cmd-click, rubber-band selection).
-- Pasting Arrangement clips into slots and Session clips into the Arrangement, and dragging between the views.
+- Dragging clips between the views, and pasting a time selection (several tracks' clips) into the Session, which the reference lays out top to bottom.
 - Dragging a clip onto a group column or a scene's launch button.

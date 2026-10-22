@@ -624,7 +624,9 @@ public:
     // or the clip is in the last scene. `duplicateScene` is where it went.
     juce::Result duplicateSlotClip (int trackIndex, int sceneIndex, int& duplicateScene);
     // The Session clipboard: a slot's clip, its audio kept in a copy of its own, so it pastes into
-    // this or another project. A copy here replaces the Arrangement clipboard's, and theirs this.
+    // this or another project. There is one clipboard, as in the reference: a slot clip's copy also
+    // pastes into the Arrangement (pasteMidiClip, pasteAudioClip), and an Arrangement clip's into a
+    // slot, a MIDI clip keeping its beats. A time selection's copy clears it.
     juce::Result copySlotClip (int trackIndex, int sceneIndex, bool cut = false);
     bool hasSlotClipboard() const;
     juce::Result pasteSlotClip (int trackIndex, int sceneIndex);

@@ -13363,9 +13363,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (launcher.keyPressed (commandKey ('X')) && ! slots()[1].hasClip, "Cmd/Ctrl+X cuts it");
             menuItemSelected (86, 4);
             check (slots()[1].hasClip, "Session > Paste Clip pastes it back");
-            for (int step = 0; step < 8; ++step) session.undo();
+            // The same clipboard pastes into the Arrangement.
+            showArrangementView(); selectTrack (t); session.setInsertMarker (secondsAt (8)); refresh();
+            check (handleKey (commandKey ('V')) && ! state.tracks[(size_t) t].clips.empty() && std::abs (state.tracks[(size_t) t].clips.back().startBeat - 8) < 1e-6,
+                   "and Cmd/Ctrl+V in the Arrangement pastes the copied Session clip at the insert marker");
+            showSessionView();
+            for (int step = 0; step < 9; ++step) session.undo();
             refresh();
-            check ((int) state.tracks.size() == t, "eight undo steps remove the track");
+            check ((int) state.tracks.size() == t, "nine undo steps remove the track");
         }
         {
             // The editing grid: Cmd/Ctrl+1 to 5, the context menu's grid items and the View menu, at 80

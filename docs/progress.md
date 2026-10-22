@@ -1831,3 +1831,10 @@ Engine and UI areas.
 - **Measured.** The grid suite and the UI suite. The note-editing checks now fix the 1/16 grid they were written for.
 
 See [the contract](research/edit-grid-contract.md).
+
+## One clipboard for both views — 2026-10-22
+
+Engine area.
+
+- **Paste.** A copied Session clip pastes into the Arrangement, and a copied Arrangement clip into a slot, as with the reference's one clipboard. A MIDI clip keeps its beats and content start either way. Arrangement clips take the default launch settings in a slot.
+- **Measured.** `tests/SlotClipTests.cpp`.

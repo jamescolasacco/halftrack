@@ -121,7 +121,7 @@ The UI suite checks:
 
 ## Not implemented
 
-- Rubber-band (drag) selection of clips, and Shift-click that selects part of a clip, as the reference's selection of time does.
+- Shift-click that selects part of a clip as time, as the reference's does. (Dragging over empty space selects time, as in the reference; there is no rubber-band selection of clips in its Arrangement.)
 - Selecting time on the ruler or across group lanes.
 - Pasting automation onto controls the destination lacks: such shapes are skipped.
 - Crop.

@@ -155,13 +155,49 @@ int runSlotClipTests (const juce::File& artifacts)
         check (pitch (keys, 2) == 38, "the cut clip pastes");
         s.undo(); s.undo();
         check (pitch (bass, 1) == 38 && pitch (keys, 2) == 36, "undo reverses the paste and the cut");
-        ok (s.addMidiClip (s.snapshot().tracks[(size_t) bass].id, 0, 4), "an Arrangement clip");
-        ok (s.copyMidiClip (s.snapshot().tracks[(size_t) bass].clips[0].id), "copy it");
-        check (! s.hasSlotClipboard() && s.hasMidiClipClipboard(), "an Arrangement copy replaces the Session clipboard");
+        // One clipboard, as in the reference: an Arrangement clip's copy pastes into a slot, keeping its
+        // beats and notes, and a slot clip's copy pastes into the Arrangement.
+        const auto bassId = s.snapshot().tracks[(size_t) bass].id, keysId = s.snapshot().tracks[(size_t) keys].id, loopId = s.snapshot().tracks[(size_t) loop].id;
+        ok (s.addMidiClip (bassId, 8, 3), "a three-beat Arrangement clip at beat 9");
+        const auto arrangementClip = [&] (const juce::String& trackId, double beat)
+        {
+            const auto tracks = s.snapshot().tracks;
+            for (const auto& t : tracks) if (t.id == trackId) for (const auto& c : t.clips) if (std::abs (c.startBeat - beat) < 1e-6) return c;
+            return Session::ClipInfo {};
+        };
+        const auto arrangementId = arrangementClip (bassId, 8).id;
+        ok (s.addMidiNotes (arrangementId, { { "", 41, 1, .5, .8f } }, added), "a note on its second beat");
+        ok (s.copyMidiClip (arrangementId), "copy it");
+        check (s.hasSlotClipboard() && s.hasMidiClipClipboard(), "the copy pastes in either view");
+        const int lastScene = (int) s.snapshot().scenes.size() - 1;
+        check (! slots (keys)[(size_t) lastScene].hasClip, "the keys track's last slot is empty");
+        ok (s.pasteSlotClip (keys, lastScene), "paste it into that slot");
+        {
+            const auto slot = slots (keys)[(size_t) lastScene];
+            check (slot.hasClip && slot.clip.id != arrangementId && slot.clip.notes.size() == 1 && slot.clip.notes[0].pitch == 41 && std::abs (slot.clip.notes[0].startBeat - 1) < 1e-9
+                       && std::abs (slot.clip.lengthBeats - 3) < 1e-6,
+                   "it becomes a Session clip of its own, its note and three beats kept");
+        }
+        ok (s.copySlotClip (keys, 1), "copy a four-beat Session clip");
+        check (s.hasMidiClipClipboard() && s.hasSlotClipboard(), "it too pastes in either view");
+        juce::String pastedId;
+        ok (s.pasteMidiClip (keysId, s.secondsAt (16), pastedId), "paste it into the Arrangement at beat 17");
+        {
+            const auto pasted = arrangementClip (keysId, 16);
+            check (pasted.id == pastedId && std::abs (pasted.lengthBeats - 4) < 1e-6 && pasted.notes.size() == 1 && pasted.notes[0].pitch == 36,
+                   "it becomes an Arrangement clip there, its four beats and note kept");
+        }
 
-        // Audio pastes into another project, collected there.
+        // Audio pastes into the Arrangement, and into another project, collected there.
         ok (s.copySlotClip (loop, 3), "copy the tone's clip");
-        check (s.hasSlotClipboard() && ! s.hasMidiClipClipboard(), "and a Session copy replaces the Arrangement clipboard");
+        check (s.hasSlotClipboard() && s.hasAudioClipClipboard() && ! s.hasMidiClipClipboard(), "an audio copy replaces the MIDI one");
+        ok (s.pasteAudioClip (loopId, 1, pastedId), "paste the tone into the Arrangement at one second");
+        {
+            const auto tracks = s.snapshot().tracks;
+            bool found = false;
+            for (const auto& t : tracks) if (t.id == loopId) for (const auto& c : t.clips) found = found || (c.id == pastedId && c.isAudio && c.file.existsAsFile() && std::abs (c.start - 1) < 1e-6);
+            check (found, "it is an Arrangement audio clip there, its audio collected");
+        }
         ok (s.newProject(), "a new project");
         const auto project = root.getChildFile ("Other").getChildFile ("Other.halftrack");
         ok (s.saveProject (project), "saved");
