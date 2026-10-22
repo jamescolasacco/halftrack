@@ -165,6 +165,15 @@ public:
         // every timer and dispatch; it runs at full speed instead, as when the interface plays.
         std::unique_ptr<juce::ScopedLowPowerModeDisabler> fullSpeed;
         for (const auto& arg : args) if (arg.startsWith ("--self-test")) { fullSpeed = std::make_unique<juce::ScopedLowPowerModeDisabler>(); break; }
+        // A suite that crashes prints where, since CI keeps no core files. Printing in a signal
+        // handler is not safe in general, but the process is ending anyway.
+        for (const auto& arg : args)
+            if (arg.startsWith ("--self-test"))
+            {
+                juce::SystemStats::setApplicationCrashHandler ([] (void*)
+                { std::cerr << "Halftrack self-test crashed. Stack:\n" << juce::SystemStats::getStackBacktrace() << std::endl; });
+                break;
+            }
         #if JUCE_MAC
         if (args.contains ("--self-test-au"))
         {

@@ -136,6 +136,10 @@ target_link_libraries(Halftrack PRIVATE
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # Tracktion's wider atomic operations use the compiler runtime on Linux.
     target_link_libraries(Halftrack PRIVATE atomic)
+    # A crashing self-test prints its stack; exported symbols give it function names.
+    if(BUILD_TESTING)
+        target_link_options(Halftrack PRIVATE -rdynamic)
+    endif()
 endif()
 if(APPLE)
     target_compile_options(Halftrack PRIVATE -fno-aligned-allocation)
