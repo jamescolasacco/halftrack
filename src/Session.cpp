@@ -2249,6 +2249,12 @@ struct Session::Impl
         engine.getPluginManager().createBuiltInType<UtilityPlugin>();
         engine.getPluginManager().createBuiltInType<NativeEffectPlugin>();
         engine.getPluginManager().setUsesSeparateProcessForScanning (devices);
+        // Keep rendering through a CPU overload. The engine's default silences a callback once the load
+        // meter passes 0.98, and skips that callback's input and its block of time with it, so a take
+        // recorded across a stall lost a block and the transport fell behind. The meter stops at 1, so
+        // this limit is never reached: a callback that runs late is the driver's dropout, and every
+        // input block the driver delivers reaches the take (tests/RecordingStallTests.cpp).
+        engine.getDeviceManager().setCpuLimitBeforeMuting (2.0);
         if (customDeviceType)
         {
             auto& dm = engine.getDeviceManager();

@@ -642,6 +642,10 @@ The reference's Auto-Warp of a long sample places its first warp marker on the f
 
 The reference lets a clip's Start marker sit before its loop, so the content before the loop plays once. The engine counts a looped clip's offset from its loop's start, so Halftrack requires the start to lie in the loop. Turning a long looped MIDI clip's loop off keeps its length, playing silence after the content; a warped audio clip is shortened to end with its audio. The reference's handling of a long clip's unlooping was not measured. Simplest default: as described, with the start inside the loop.
 
-### A take's gap under heavy load
+### CPU overloads during takes
 
-Under heavy machine load (load average about 16, with four suites at once), the separation stress suite once found a gap in a take: the first wrong sample at 236544 of 375040, with 1465 callbacks in 8 s instead of 1500. Run alone it passes. The test device never skips input, and the engine's recording queue grows rather than dropping blocks, so the samples are lost elsewhere, perhaps where late callbacks' blocks are placed. Not yet found; a separate task investigates. Meanwhile, recording under such load may lose a few milliseconds.
+Under heavy machine load (load average about 16, with four suites at once), the separation stress suite once found a gap in a take: the first wrong sample at 236544 of 375040, a whole number of 256-sample blocks. The engine's device manager silenced any callback once its load meter passed 0.98. A silenced callback skipped the input, rendering and stream time together, so the take lost that block and the transport stopped for a block. Halftrack now keeps rendering at any load, and `tests/RecordingStallTests.cpp` drives the meter past 0.98 with injected stalls. Before the fix that suite lost 6 blocks in 450; after it, every sample was kept and the output never fell silent.
+
+Still open:
+- The gap seen once under real load was not reproduced again under that load. Generating it would have slowed another session's test runs on the same machine. Its block-aligned shape matches the silenced callbacks, and no other path in the engine was found to drop a block the driver delivered.
+- What the reference does at 100% CPU is unmeasured. It shows an overload indicator, but whether it ever skips input or rendering was not checked. Simplest default: never skip; a callback that runs late shows up as the driver's own dropout.
