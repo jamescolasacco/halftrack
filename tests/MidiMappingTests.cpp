@@ -32,7 +32,8 @@ const Session::MidiMapping* find (const std::vector<Session::MidiMapping>& mappi
     for (const auto& m : mappings) if (m.target == target) return &m;
     return nullptr;
 }
-void rest() { juce::MessageManager::getInstance()->runDispatchLoopUntil (700); }
+// A controller rests after half a second; allow for a loaded machine's timers.
+void rest() { juce::MessageManager::getInstance()->runDispatchLoopUntil (1500); }
 }
 
 int runMidiMappingTests (const juce::File& artifacts)

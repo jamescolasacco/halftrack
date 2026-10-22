@@ -10248,6 +10248,11 @@ Result Session::addPlugin (int index, const juce::PluginDescription& description
     if (! t->pluginList.canInsertPlugin()) return Result::fail ("This track's device chain is full.");
     const auto role = pluginRole (description);
     if (role == PluginRole::midiEffect && ! static_cast<bool> (t->state.getProperty (midiTrackProperty, false))) return Result::fail ("MIDI effect plug-ins go on MIDI tracks.");
+    // A plug-in built only for another architecture is explained without loading it: loading one
+    // can stop on a system error dialog (Windows) or start translation (Rosetta).
+    if (juce::File::isAbsolutePath (description.fileOrIdentifier))
+        if (const auto problem = pluginbinary::architectureProblem (juce::File (description.fileOrIdentifier), description.name); problem.isNotEmpty())
+            return Result::fail (problem);
     impl->transaction ("Add plug-in");
     // Tracktion resolves its persisted plug-in identity through this registry.
     knownPlugins().addType (description);
