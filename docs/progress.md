@@ -2110,4 +2110,4 @@ Engine and QA areas. From a static reading of the reference's transport code.
 
 ## Mixer sections — 2026-10-22
 
-UI area. View > Mixer Controls shows and hides the Session mixer's In/Out, Sends, Mixer, Track Delay and Crossfader sections, as the reference's View menu does. The defaults are those of its built-in default Set, so Track Delay and the crossfader are now hidden at first. The strips lay out and size themselves from the sections shown, and the choice is kept with the project. See [the contract](research/mixer-sections-contract.md).
+UI area. View > Mixer Controls shows and hides the Session mixer's In/Out, Sends, Returns, Mixer, Track Delay and Crossfader sections, as the reference's View menu does. The defaults are those of its built-in default Set, so Track Delay and the crossfader are now hidden at first. The strips lay out and size themselves from the sections shown, and the choice is kept with the project. See [the contract](research/mixer-sections-contract.md).

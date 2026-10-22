@@ -3380,6 +3380,7 @@ private:
             for (int t = 0; t < (int) owner.state.tracks.size(); ++t)
             {
                 const auto& track = owner.state.tracks[(size_t) t];
+                if (track.isReturn && ! owner.state.mixerSections.returns) continue; // The Returns section hidden.
                 if (track.groupId != open && track.groupId.isNotEmpty())
                     for (int g = 0; g < (int) owner.state.groups.size(); ++g)
                         if (owner.state.groups[(size_t) g].id == track.groupId) columns.push_back ({ -1, g });
@@ -9319,7 +9320,8 @@ private:
             // The Session mixer's sections, as the reference's View menu shows and hides them.
             juce::PopupMenu sections;
             const auto& shown = state.mixerSections;
-            sections.addItem (103, "In/Out", true, shown.inOut); sections.addItem (104, "Sends", true, shown.sends); sections.addItem (105, "Mixer", true, shown.mixer);
+            sections.addItem (103, "In/Out", true, shown.inOut); sections.addItem (104, "Sends", true, shown.sends); sections.addItem (108, "Returns", true, shown.returns);
+            sections.addItem (105, "Mixer", true, shown.mixer);
             sections.addItem (106, "Track Delay", true, shown.trackDelay); sections.addItem (107, "Crossfader", true, shown.crossfader);
             popup.addSubMenu ("Mixer Controls", sections);
            #if JUCE_MAC
@@ -9395,10 +9397,10 @@ private:
             case 89: { const auto [a, b] = editRange(); report (session.cutTime (a, b - a)); timeSelection = {}; refresh(); break; }
             case 101: report (session.pasteTime (pasteTimeTrack(), state.insertMarker)); refresh(); break;
             case 98: report (session.setSoloInPlace (! state.soloInPlace)); refresh(); break;
-            case 103: case 104: case 105: case 106: case 107:
+            case 103: case 104: case 105: case 106: case 107: case 108:
             {
                 auto shown = state.mixerSections;
-                auto& section = id == 103 ? shown.inOut : id == 104 ? shown.sends : id == 105 ? shown.mixer : id == 106 ? shown.trackDelay : shown.crossfader;
+                auto& section = id == 103 ? shown.inOut : id == 104 ? shown.sends : id == 105 ? shown.mixer : id == 106 ? shown.trackDelay : id == 107 ? shown.crossfader : shown.returns;
                 section = ! section;
                 session.setMixerSections (shown); refresh(); launcher.resized(); launcher.repaint();
                 break;
@@ -15371,6 +15373,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                    "hiding In/Out hides the routing choosers and shortens the strips");
             menuItemSelected (103, 3); refresh();
             check (state.mixerSections.inOut && input->isVisible(), "and showing it brings them back");
+            const auto columnsWithReturns = launcher.columnCount();
+            menuItemSelected (108, 3); refresh();
+            check (! state.mixerSections.returns && launcher.columnCount() == columnsWithReturns - 1, "hiding the Returns hides the return's column");
+            menuItemSelected (108, 3); refresh();
+            check (state.mixerSections.returns && launcher.columnCount() == columnsWithReturns, "and showing them brings it back");
         }
         auto* sideA = dynamic_cast<juce::Button*> (findNamed (launcher, "Crossfade A"));
         auto* fader = dynamic_cast<juce::Slider*> (findNamed (launcher, "Crossfader"));

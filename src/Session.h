@@ -546,11 +546,11 @@ public:
         bool operator== (const KeyMapping&) const = default;
     };
     // The Session mixer's sections, as the reference's View menu shows and hides them; its default
-    // Set shows In/Out, Sends and the Mixer and hides Track Delay and the Crossfader. Kept with the
+    // Set shows In/Out, Sends, the Returns and the Mixer and hides Track Delay and the Crossfader. Kept with the
     // project as view state, not as undo steps.
     struct MixerSections
     {
-        bool inOut = true, sends = true, mixer = true, trackDelay = false, crossfader = false;
+        bool inOut = true, sends = true, returns = true, mixer = true, trackDelay = false, crossfader = false;
         bool operator== (const MixerSections&) const = default;
     };
     struct Snapshot

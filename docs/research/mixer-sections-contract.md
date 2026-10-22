@@ -14,14 +14,15 @@ The reference's View menu shows and hides the Session mixer's sections, and its 
 
 ## Halftrack
 
-- **The sections.** View > Mixer Controls shows and hides five of them; `Session::setMixerSections` sets them. Each strip lays out only the sections shown, and the strips are as tall as those sections need.
+- **The sections.** View > Mixer Controls shows and hides six of them; `Session::setMixerSections` sets them. Each strip lays out only the sections shown, and the strips are as tall as those sections need.
   - **In/Out:** the tracks' input, monitoring and Audio To choosers, and the Main strip's Cue Out and Main Out.
   - **Sends:** the send knobs.
+  - **Returns:** the return tracks' columns.
   - **Mixer:** pan, volume with its meter, and the activator, solo and arm switches. On the Main strip, the Solo/Cue switch, the cue volume and the volume.
   - **Track Delay.**
   - **Crossfader:** the tracks' A/B assignment and the Main strip's crossfader.
 - **Defaults and storage.** The defaults are the reference's. The choice is kept with the project as view state, outside the undo history.
-- **Missing.** The Returns and Performance Impact sections are not offered; returns always show.
+- **Missing.** The Performance Impact section is not offered.
 
 ## Evidence
 
@@ -32,4 +33,5 @@ The UI suite checks:
 - that Track Delay and the crossfader are hidden at first;
 - that View > Mixer Controls shows them, the strips growing by 46 pixels;
 - that hiding In/Out hides the routing choosers and shortens the strips by 65 pixels;
-- that showing In/Out again brings them back.
+- that showing In/Out again brings them back;
+- that hiding the Returns removes the return's column, and showing them brings it back.

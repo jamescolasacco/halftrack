@@ -735,7 +735,7 @@ Halftrack's default fades follow a static reading of the reference's code ([cont
 
 ### Mixer sections
 
-The reference's Returns and Performance Impact sections are not offered: returns always show, and there is no performance meter. The Arrangement's own mixer sections (its `Arranger*` view states) are not switchable either ([contract](research/mixer-sections-contract.md)).
+The reference's Performance Impact section is not offered: there is no performance meter. The Arrangement's own mixer sections (its `Arranger*` view states) are not switchable either ([contract](research/mixer-sections-contract.md)).
 
 ### Song start
 
