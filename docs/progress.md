@@ -1775,3 +1775,12 @@ Engine and UI areas.
 - **Measured.** Through a virtual port in real time, the tempo follows 120 and then 90 BPM and the transport stays within 0.2 beats of the clock (`tests/ExternalSyncTests.cpp`).
 
 See [the contract](research/midi-ports-contract.md#external-sync-2026-10-22).
+
+## Capture and Insert Scene — 2026-10-22
+
+Engine and UI areas.
+
+- **Capture.** Session menu > Capture and Insert Scene (Cmd/Ctrl+Shift+I) inserts a scene after the selected one with copies of the clips now playing, one undo step.
+- **Measured.** Clips playing from two scenes are captured exactly and play when the new scene launches (`tests/SceneCaptureTests.cpp`).
+
+See [the contract](research/scene-capture-contract.md).

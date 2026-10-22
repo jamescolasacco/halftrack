@@ -6270,6 +6270,46 @@ Result Session::duplicateScene (const String& id, String& duplicatedId)
     impl->changed();
     return Result::ok();
 }
+Result Session::captureAndInsertScene (int after, String& capturedId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing scenes.");
+    auto& list = impl->edit->getSceneList();
+    if (list.getNumScenes() >= 256) return Result::fail ("This project has reached the scene limit.");
+    const int index = juce::isPositiveAndBelow (after, list.getNumScenes()) ? after + 1 : list.getNumScenes();
+    // What plays now: each ordinary track's playing slot clip.
+    struct Copy { te::AudioTrack* track; te::ClipCopy clip; };
+    std::vector<Copy> clips;
+    if (impl->edit->getTransport().isPlaying())
+        for (auto* track : te::getAudioTracks (*impl->edit))
+        {
+            if (isReturn (*track) || track->isFrozen (te::Track::anyFreeze)) continue;
+            for (auto* slot : track->getClipSlotList().getClipSlots())
+                if (auto* clip = slot->getClip(); clip != nullptr && (dynamic_cast<te::WaveAudioClip*> (clip) || dynamic_cast<te::MidiClip*> (clip)))
+                    if (auto handle = clip->getLaunchHandle(); handle && handle->getPlayingStatus() == te::LaunchHandle::PlayState::playing)
+                    {
+                        auto copy = te::ClipCopy::fromClip (*clip).withNewItemID (*impl->edit);
+                        renewMidiNoteIDs (copy.getState());
+                        clips.push_back ({ track, std::move (copy) });
+                        break;
+                    }
+        }
+    if (clips.empty()) return Result::fail ("No Session clips are playing to capture.");
+    impl->transaction ("Capture and insert scene");
+    auto* scene = list.insertScene (index);
+    if (scene == nullptr) return Result::fail ("The scene could not be inserted.");
+    capturedId = juce::Uuid().toString();
+    scene->state.setProperty ("halftrackSceneID", capturedId, &impl->edit->getUndoManager());
+    for (auto* track : te::getAudioTracks (*impl->edit)) track->getClipSlotList().ensureNumberOfSlots (list.getNumScenes());
+    for (auto& copy : clips)
+        if (auto* slot = copy.track->getClipSlotList().getClipSlots()[index]; slot == nullptr || ! te::insertClipCopy (*slot, copy.clip))
+        {
+            list.deleteScene (*scene);
+            impl->changed();
+            return Result::fail ("A playing clip could not be captured.");
+        }
+    impl->changed(); return Result::ok();
+}
 Result Session::moveScene (const String& id, int destination)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

@@ -833,6 +833,8 @@ public:
             { selectionCommand (code == 'E' ? 76 : code == 'D' ? 77 : code == 'C' ? 81 : 82); return true; }
             // A copied time selection pastes at the insert marker from the selected track.
             if (! shift && ! showSession && ! showPiano && code == 'V' && session.hasRangeClipboard()) { selectionCommand (83); return true; }
+            // Capture and Insert Scene, as in the reference.
+            if (code == 'I' && shift) { menuItemSelected (68, 4); return true; }
             if (code == 'I' && ! showSession) { menuItemSelected (74, 1); return true; }
             if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && shift && ! showSession) { menuItemSelected (75, 1); return true; }
             if (code == 'G') { if (shift) ungroupSelectedTrack(); else groupSelectedTracks(); return true; }
@@ -8327,6 +8329,7 @@ private:
             const bool sceneSelected = selectedSceneIndex() >= 0;
             popup.addItem (50, "Insert Scene"); popup.addItem (51, "Rename Selected Scene...", sceneSelected); popup.addItem (52, "Delete Selected Scene", sceneSelected);
             popup.addItem(56,"Duplicate Selected Scene",sceneSelected&&!state.recording&&state.scenes.size()<256);
+            popup.addItem (68, "Capture and Insert Scene", state.playing && ! state.recording && state.scenes.size() < 256);
             popup.addItem(57,"Move Selected Scene Up",selectedSceneIndex()>0&&!state.recording);
             popup.addItem(58,"Move Selected Scene Down",sceneSelected&&selectedSceneIndex()+1<(int)state.scenes.size()&&!state.recording);
             popup.addItem (59, "Selected Clip Follow Action...", selectedSlot() && selectedSlot()->hasClip && !state.recording);
@@ -8398,6 +8401,14 @@ private:
             case 50: addSceneFromUI(); break;
             case 51: renameSceneDialog (selectedSceneIndex()); break;
             case 56: if(selectedSceneIndex()>=0)duplicateSceneFromUI(selectedSceneId); break;
+            case 68:
+            {
+                juce::String captured;
+                const auto result = session.captureAndInsertScene (selectedSceneIndex(), captured);
+                report (result, "Captured the playing clips into a new scene.");
+                if (result.wasOk()) selectedSceneId = captured;
+                refresh(); break;
+            }
             case 57: case 58: moveSceneFromUI(selectedSceneId,id==57?-1:1); break;
             case 52: report (session.removeScene (selectedSceneIndex())); break;
             case 53: report (session.launchScene (selectedSceneIndex())); break;
@@ -12856,6 +12867,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             for (int step = 0; step < 5; ++step) session.undo();
             timeSelection = {}; selectTrack (0); selectedClip = 0; refresh();
             check ((int) state.tracks.size() == rangeTrack, "five undo steps remove the range track");
+        }
+        {
+            // Capture and Insert Scene: Cmd/Ctrl+Shift+I, which says when nothing plays to capture.
+            session.stop(); refresh();
+            const auto scenes = state.scenes.size();
+            check (handleKey (juce::KeyPress ('I', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)) && state.scenes.size() == scenes
+                       && status.contains ("No Session clips are playing"),
+                   "Cmd/Ctrl+Shift+I captures the playing clips, and says when there are none");
         }
        #if JUCE_MAC
         {

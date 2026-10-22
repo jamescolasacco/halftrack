@@ -582,6 +582,9 @@ public:
     juce::Result addScene (juce::String name = {});
     juce::Result removeScene (int sceneIndex);
     juce::Result duplicateScene (const juce::String& sceneId, juce::String& duplicatedSceneId);
+    // Capture and Insert Scene, after the reference: a new scene after the given one (or at the end)
+    // holding copies of the clips now playing, one per track. Refused when none plays. One undo step.
+    juce::Result captureAndInsertScene (int afterSceneIndex, juce::String& sceneId);
     juce::Result moveScene (const juce::String& sceneId, int destinationIndex);
     juce::Result renameScene (int sceneIndex, const juce::String& name);
     // Each is one undo step; an empty value clears it. Tempos run 20 to 999 BPM, meters 1 to 99 over 1, 2, 4, 8 or 16.
