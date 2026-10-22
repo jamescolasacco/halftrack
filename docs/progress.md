@@ -1573,9 +1573,20 @@ Root change in `CMakeLists.txt`, `cmake/WriteBuildInfo.cmake` (new), `src/BuildI
 
 See [the contract](research/packaging-contract.md).
 
+## Plug-in sidechains — 2026-10-21
+
+Engine change in `src/Session.*`, `cmake/PatchSidechainTaps.cmake` (new), the earlier node-builder patches (to accept its hash), `tests/SidechainTests.cpp` and `tests/TestSidechainPlugin.cpp` (new). The UI change is in `src/MainComponent.cpp`; the root change in `CMakeLists.txt` and `src/Main.cpp`. Documentation updated.
+
+- **Sidechains.** A hosted plug-in with a sidechain input takes another track's audio there, at its Pre FX, Post FX or Post Mixer tap, from a column at the left of its device panel. Post FX is the default, as in every sidechain of the reference's demo sets.
+- **Buses.** Hosted plug-ins report their main and auxiliary buses.
+- **Loops.** Loops through sidechains are refused, as are track inputs and outputs that would loop through one.
+- **Delay compensation, renders and project changes.** A delayed source stays in step to the sample. Renders, stems, freezes, saving, duplication and removing the source all keep the sidechain.
+
+See [the contract](research/plugin-sidechain-contract.md).
+
 ## Freezing Sends Only tracks — 2026-10-21
 
-Engine change in `src/Session.cpp` and `tests/FreezeTests.cpp`, with documentation. No engine patch: the render-graph file is being patched for sidechain taps at the same time.
+Engine change in `src/Session.cpp` and `tests/FreezeTests.cpp`, with documentation. No engine patch: the sidechain taps work was patching the same render-graph file at the time.
 
 - **Sends Only.** A Sends Only track now freezes. Its freeze render had been silent, because renders leave a Sends Only track's own output out of the mix, so the engine unfroze it. While a freeze renders, Session points the track at Master outside history, then back. Frozen, it still plays Sends Only.
 - **Silent start.** A newly frozen track, whatever its output, was silent for its first seconds of playback: the engine's file cache had failed to open the freeze file before the render wrote it, and retried 4–7 s later. Session now has the file validated after each freeze render.

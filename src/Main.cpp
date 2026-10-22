@@ -98,6 +98,7 @@ int runDeviceLossTests (const juce::File&);
 int runSoakTests (const juce::File&);
 int runPluginTimingTests (const juce::File&);
 int runPluginBinaryTests (const juce::File&);
+int runSidechainTests (const juce::File&);
 int runHardwareCheck (const juce::File&, const juce::String& deviceName, const juce::String& mode);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
@@ -354,6 +355,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-plugin-binary");
             setApplicationReturnValue (runPluginBinaryTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-sidechain"))
+        {
+            const int i = args.indexOf ("--self-test-sidechain");
+            setApplicationReturnValue (runSidechainTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-large-session"))

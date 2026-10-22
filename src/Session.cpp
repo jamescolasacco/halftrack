@@ -64,6 +64,9 @@ const juce::Identifier noteChanceProperty { "halftrackChance" }, noteVelocityRan
 const juce::Identifier returnProperty { "halftrackReturn" };
 const juce::Identifier linkProperty { "halftrackLink" }; // Linked-track editing: tracks with the same value edit together.
 const juce::Identifier hostedInstrumentProperty { "halftrackInstrument" }; // A hosted plug-in that is its track's instrument.
+// A hosted plug-in's sidechain tap (InputTap, Post FX by default) and whether it is off; the
+// engine's node builder reads both (see cmake/PatchSidechainTaps.cmake).
+const juce::Identifier sidechainTapProperty { "halftrackSidechainTap" }, sidechainOffProperty { "halftrackSidechainOff" };
 const juce::Identifier returnBusProperty { "halftrackReturnBus" };
 const juce::Identifier returnModeProperty { "halftrackReturnSendMode" };
 const juce::Identifier sendReturnProperty { "halftrackSendReturnID" };
@@ -132,6 +135,37 @@ std::vector<Session::PluginInfo::ControlAutomation> deviceAutomation (NativeEffe
         result.push_back (std::move (entry));
     }
     return result;
+}
+// A hosted plug-in has a sidechain input when it is loaded and its first auxiliary input has channels.
+bool hasSidechainInput (te::ExternalPlugin& plugin)
+{
+    if (plugin.getAudioPluginInstance() == nullptr) return false;
+    const auto buses = plugin.getBusses();
+    return buses.inputs.size() > 1 && buses.inputs[1].getNumChannels() > 0;
+}
+// A plug-in's sidechain as its state holds it. Without Halftrack's switch, a sidechain with a
+// source is on, as the engine plays it.
+Session::SidechainSettings sidechainSettings (const te::Plugin& plugin)
+{
+    Session::SidechainSettings settings;
+    const bool sourced = plugin.getSidechainSourceID().isValid();
+    if (sourced) settings.sourceTrackId = plugin.getSidechainSourceID().toString();
+    settings.on = ! static_cast<bool> (plugin.state.getProperty (sidechainOffProperty, ! sourced));
+    settings.tap = static_cast<Session::InputTap> (juce::jlimit (0, 2, static_cast<int> (plugin.state.getProperty (sidechainTapProperty, 1))));
+    return settings;
+}
+// Connects the plug-in's track (wire sources 0-1) to its main input and the sidechain source
+// (sources 2-3) to its first auxiliary input, folding a stereo pair onto a mono bus.
+void wireSidechain (te::ExternalPlugin& plugin, juce::UndoManager* undo)
+{
+    const auto buses = plugin.getBusses();
+    const int main = buses.inputs.empty() ? 0 : buses.inputs[0].getNumChannels();
+    const int side = buses.inputs.size() > 1 ? buses.inputs[1].getNumChannels() : 0;
+    for (int channel = 0; channel < 2; ++channel)
+    {
+        if (main > 0) plugin.makeConnection (channel, std::min (channel, main - 1), undo);
+        if (side > 0) plugin.makeConnection (2 + channel, main + std::min (channel, side - 1), undo);
+    }
 }
 // A native device as the snapshot reports it; a rack also reports its chains, devices and mappings.
 Session::PluginInfo describeDevice (NativeEffectPlugin& native)
@@ -1015,6 +1049,30 @@ Result validateHostedInstruments (const juce::ValueTree& state)
     }
     for (const auto& child : state) if (auto result = validateHostedInstruments (child); result.failed()) return result;
     return Result::ok();
+}
+// A sidechain names an audio or MIDI track of the project, other than a return, with a known tap.
+Result validateSidechains (const juce::ValueTree& edit)
+{
+    std::set<juce::String> tracks;
+    std::function<void (const juce::ValueTree&)> collect = [&] (const juce::ValueTree& v)
+    {
+        if (v.hasType (te::IDs::TRACK) && ! static_cast<bool> (v.getProperty (returnProperty, false))) tracks.insert (v[te::IDs::id].toString());
+        for (const auto& child : v) collect (child);
+    };
+    collect (edit);
+    std::function<Result (const juce::ValueTree&)> check = [&] (const juce::ValueTree& v) -> Result
+    {
+        if (v.hasType (te::IDs::PLUGIN))
+        {
+            const auto source = te::EditItemID::fromVar (v[te::IDs::sidechainSourceID]);
+            if (source.isValid() && tracks.count (source.toString()) == 0) return Result::fail ("The project contains a sidechain from a missing track.");
+            if (v.hasProperty (sidechainTapProperty) && ! juce::isPositiveAndBelow (static_cast<int> (v[sidechainTapProperty]), 3))
+                return Result::fail ("The project contains an invalid sidechain tap.");
+        }
+        for (const auto& child : v) if (auto result = check (child); result.failed()) return result;
+        return Result::ok();
+    };
+    return check (edit);
 }
 Result validateTrackLinks (const juce::ValueTree& state)
 {
@@ -2003,8 +2061,8 @@ te::MidiClip* splitMidiClipAt (te::MidiClip&, te::TimePosition, juce::UndoManage
 Result splittableAt (te::AudioTrack&, te::TimePosition);
 void splitTrackAt (te::AudioTrack&, te::TimePosition, juce::UndoManager*);
 }
-// The engine does not watch Halftrack's groove state, so playback is rebuilt when it changes,
-// undo and redo included. Only the Session's current Edit is restarted: a replaced Edit being
+// The engine does not watch Halftrack's groove state or plug-in sidechain taps, so playback is
+// rebuilt when they change, undo and redo included. Only the Session's current Edit is restarted: a replaced Edit being
 // destroyed is never touched.
 class GrooveWatcher final : private juce::ValueTree::Listener
 {
@@ -2026,7 +2084,8 @@ private:
         return false;
     }
     void restart() { if (edit != nullptr && edit->state == state) edit->restartPlayback(); }
-    void valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& id) override { if (id == clipGrooveProperty || inPool (v)) restart(); }
+    void valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& id) override
+    { if (id == clipGrooveProperty || id == sidechainTapProperty || id == sidechainOffProperty || inPool (v)) restart(); }
     void valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child) override { if (inPool (parent) || child.hasType (groovePoolType)) restart(); }
     void valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int) override { if (inPool (parent) || child.hasType (groovePoolType)) restart(); }
 };
@@ -3575,9 +3634,14 @@ struct Session::Impl
         for (auto* t : te::getAudioTracks (*edit)) if (&t->getWaveInputDevice() == &device) return t;
         return nullptr;
     }
-    // Whether a's audio reaches b, through track outputs and track-sourced inputs.
+    // Whether a's audio reaches b, through track outputs, track-sourced inputs and plug-in
+    // sidechains (whether on or off, so switching one on cannot feed back).
     bool feeds (te::AudioTrack& a, te::AudioTrack& b) const
     {
+        std::multimap<te::EditItemID, te::AudioTrack*> sidechains;
+        for (auto* t : te::getAudioTracks (*edit))
+            for (auto* p : t->pluginList.getPlugins())
+                if (p->getSidechainSourceID().isValid()) sidechains.emplace (p->getSidechainSourceID(), t);
         std::vector<te::AudioTrack*> pending { &a };
         std::set<te::AudioTrack*> seen;
         while (! pending.empty())
@@ -3586,6 +3650,7 @@ struct Session::Impl
             if (t == &b) return true;
             if (! seen.insert (t).second) continue;
             if (auto* destination = t->getOutput().getDestinationTrack()) pending.push_back (destination);
+            for (auto [from, to] = sidechains.equal_range (t->itemID); from != to; ++from) pending.push_back (from->second);
             for (auto* in : edit->getAllInputDevices())
                 if (&in->getInputDevice() == &t->getWaveInputDevice())
                     for (auto target : in->getTargets())
@@ -4182,6 +4247,14 @@ Session::Snapshot Session::snapshot() const
                 for (const auto& configured : external->state.getChildWithName (configureType))
                     for (size_t i = 0; i < parameters.size(); ++i)
                         if (parameters[i]->paramID == configured[te::IDs::id].toString()) { device.configured.push_back ((int) i); break; }
+                if (external->getAudioPluginInstance() != nullptr)
+                {
+                    const auto buses = external->getBusses();
+                    for (const auto& bus : buses.inputs) device.inputBuses.push_back (bus.getNumChannels());
+                    for (const auto& bus : buses.outputs) device.outputBuses.push_back (bus.getNumChannels());
+                    device.canSidechain = hasSidechainInput (*external);
+                }
+                device.sidechain = sidechainSettings (*external);
             }
             if (auto* external = dynamic_cast<te::ExternalPlugin*> (p); external && ! external->isInitialisingAsync() && external->getAudioPluginInstance() == nullptr)
             {
@@ -4310,6 +4383,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateTrackDelays (state); result.failed()) return result;
     if (auto result = validateTrackLinks (state); result.failed()) return result;
     if (auto result = validateHostedInstruments (state); result.failed()) return result;
+    if (auto result = validateSidechains (state); result.failed()) return result;
     if (auto result = validateClipScales (state); result.failed()) return result;
     if (auto result = validateGroovePool (state); result.failed()) return result;
     if (auto result = validateMidiMappings (state); result.failed()) return result;
@@ -6928,6 +7002,9 @@ Result Session::removeTrack (int index)
     if (isReturn (*t))
         for (auto* source : te::getAudioTracks (*impl->edit))
             if (auto* send = findSend (*source, t->itemID.toString())) send->deleteFromParent();
+    // Plug-ins taking their sidechain from it keep their sidechain, without a source.
+    for (auto* p : impl->edit->getPluginCache().getPlugins())
+        if (p->getSidechainSourceID() == t->itemID) p->state.removeProperty (te::IDs::sidechainSourceID, &impl->edit->getUndoManager());
     impl->edit->deleteTrack (t); impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::importAudio (const File& source, int index, double start)
@@ -8344,6 +8421,38 @@ Result Session::setPluginConfiguration (const String& pluginId, const std::vecto
         for (const auto& id : ids) { juce::ValueTree parameter (configuredType); parameter.setProperty (te::IDs::id, id, nullptr); configure.appendChild (parameter, nullptr); }
         external->state.appendChild (configure, undo);
     }
+    impl->changed(); return Result::ok();
+}
+juce::StringArray Session::sidechainSources (const String& pluginId) const
+{
+    juce::StringArray result;
+    te::AudioTrack* owner = nullptr;
+    auto* external = impl->externalPlugin (pluginId, &owner);
+    if (external == nullptr || owner == nullptr) return result;
+    for (auto* t : te::getAudioTracks (*impl->edit))
+        if (t != owner && ! isReturn (*t) && ! impl->feeds (*owner, *t)) result.add (t->itemID.toString());
+    return result;
+}
+Result Session::setPluginSidechain (const String& pluginId, const SidechainSettings& settings)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    te::AudioTrack* owner = nullptr;
+    auto* external = impl->externalPlugin (pluginId, &owner);
+    if (external == nullptr) return Result::fail ("Plug-in not found.");
+    if (! hasSidechainInput (*external)) return Result::fail ("This plug-in has no sidechain input.");
+    if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
+    if (! juce::isPositiveAndBelow (static_cast<int> (settings.tap), 3)) return Result::fail ("Unknown sidechain tap.");
+    auto* source = settings.sourceTrackId.isEmpty() ? nullptr : impl->track (settings.sourceTrackId);
+    if (settings.sourceTrackId.isNotEmpty() && (source == nullptr || ! sidechainSources (pluginId).contains (settings.sourceTrackId)))
+        return Result::fail ("That track cannot feed this sidechain: choose a track this one does not play into.");
+    if (sidechainSettings (*external) == settings) return Result::ok();
+    impl->transaction ("Sidechain");
+    auto* undo = &impl->edit->getUndoManager();
+    if (source != nullptr && external->getNumWires() == 0) wireSidechain (*external, undo);
+    if (source != nullptr) external->state.setProperty (te::IDs::sidechainSourceID, source->itemID.toVar(), undo);
+    else external->state.removeProperty (te::IDs::sidechainSourceID, undo);
+    external->state.setProperty (sidechainOffProperty, ! settings.on, undo);
+    external->state.setProperty (sidechainTapProperty, static_cast<int> (settings.tap), undo);
     impl->changed(); return Result::ok();
 }
 Result Session::setPluginParameterValue (const String& pluginId, int parameter, float value)

@@ -617,3 +617,7 @@ While the chosen interface is missing, choosing a different device by hand is no
 ### Signing, notarization and updates
 
 Release builds are unsigned (ad-hoc on macOS) and Halftrack never checks for updates. Developer ID signing, notarization and Windows Authenticode need accounts the project does not hold. An update service would contact the network, which Halftrack does not do. Default: manual updates, by installing a newer package; settings and the User Library carry over. Whether to add an opt-in update check is open.
+
+### Plug-in sidechain controls and default tap
+
+The reference's plug-in sidechain has Gain, Mix and Mute controls that Halftrack does not have yet. The manual names no default tap; Halftrack uses Post FX because every track-sourced sidechain in the reference's demo sets reads it, which is evidence of use rather than a measured default. Whether the reference's sidechain switch turns on by itself when a source is chosen is unmeasured; Halftrack switches it on.

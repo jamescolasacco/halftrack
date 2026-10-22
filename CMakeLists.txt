@@ -89,6 +89,8 @@ include(cmake/PatchWarpModes.cmake)
 halftrack_patch_warp_modes("${tracktion_SOURCE_DIR}")
 include(cmake/PatchMpeTiming.cmake)
 halftrack_patch_mpe_timing("${tracktion_SOURCE_DIR}")
+include(cmake/PatchSidechainTaps.cmake)
+halftrack_patch_sidechain_taps("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"
@@ -137,7 +139,7 @@ endif()
 include(CTest)
 target_compile_definitions(Halftrack PRIVATE HALFTRACK_TESTS_ENABLED=$<BOOL:${BUILD_TESTING}>)
 if(BUILD_TESTING)
-    target_sources(Halftrack PRIVATE tests/RealtimeTests.cpp tests/PluginScanTests.cpp tests/PluginEditorTests.cpp tests/SendReturnTests.cpp tests/UtilityTests.cpp tests/NativeEffectsTests.cpp tests/ExtendedEffectsTests.cpp tests/MidiEffectsTests.cpp tests/InstrumentsTests.cpp tests/WarpTests.cpp tests/GroupTests.cpp tests/LaunchModeTests.cpp tests/SamplerTests.cpp tests/DeviceAutomationTests.cpp tests/FreezeTests.cpp tests/StemExportTests.cpp tests/CrossfadeTests.cpp tests/TimeEditTests.cpp tests/RackTests.cpp tests/TrackDelayTests.cpp tests/MidiControllerTests.cpp tests/RangeEditTests.cpp tests/TimeSignatureTests.cpp tests/MidiToolTests.cpp tests/RecoveryTests.cpp tests/PresetTests.cpp tests/TempoMapTests.cpp tests/GrooveTests.cpp tests/TunerTests.cpp tests/AutomationCaptureTests.cpp tests/PunchTests.cpp tests/SpectrumTests.cpp tests/PreviewTests.cpp tests/MidiMonitorTests.cpp tests/TransportTests.cpp tests/MissingMediaTests.cpp tests/PluginAutomationTests.cpp tests/CaptureMidiTests.cpp tests/TakeLanesTests.cpp tests/RoutingTests.cpp tests/SceneTempoTests.cpp tests/AudioFromTests.cpp tests/AudioEngineTests.cpp tests/MultitrackRecordingTests.cpp tests/SessionRecordTests.cpp tests/NoteChanceTests.cpp tests/RepitchTests.cpp tests/SharedMediaTests.cpp tests/WavDecoderTests.cpp tests/RenderAgreementTests.cpp tests/RecordingFormatTests.cpp tests/DeviceSettingsTests.cpp tests/CollectionsTests.cpp tests/PluginPresetTests.cpp tests/ClipEnvelopeTests.cpp tests/WarpModeTests.cpp tests/SliceTests.cpp tests/MpeTests.cpp tests/InputConfigTests.cpp tests/FuzzTests.cpp tests/GraphEditTests.cpp tests/StuckNoteTests.cpp tests/LargeSessionTests.cpp tests/PreferencesTests.cpp tests/LinkedTrackTests.cpp tests/BrowserIndexTests.cpp tests/ParameterIdentityTests.cpp tests/ComputerKeyboardTests.cpp tests/KeyMapTests.cpp tests/AutoArmTests.cpp tests/HardwareCheck.cpp tests/DeviceLossTests.cpp tests/SoakTests.cpp tests/PluginTimingTests.cpp tests/PluginBinaryTests.cpp tests/MidiMappingTests.cpp tests/NoteToolsTests.cpp tests/AudioClipTests.cpp tests/LocatorTests.cpp tests/MidiFileTests.cpp tests/TrackOrderTests.cpp tests/TrackDuplicateTests.cpp tests/TempoTests.cpp tests/MidiInputTests.cpp tests/MetronomeTests.cpp tests/MasterVolumeTests.cpp tests/ClipActivationTests.cpp tests/AudioExportTests.cpp tests/FollowActionTests.cpp tests/AutomationTests.cpp)
+    target_sources(Halftrack PRIVATE tests/RealtimeTests.cpp tests/PluginScanTests.cpp tests/PluginEditorTests.cpp tests/SendReturnTests.cpp tests/UtilityTests.cpp tests/NativeEffectsTests.cpp tests/ExtendedEffectsTests.cpp tests/MidiEffectsTests.cpp tests/InstrumentsTests.cpp tests/WarpTests.cpp tests/GroupTests.cpp tests/LaunchModeTests.cpp tests/SamplerTests.cpp tests/DeviceAutomationTests.cpp tests/FreezeTests.cpp tests/StemExportTests.cpp tests/CrossfadeTests.cpp tests/TimeEditTests.cpp tests/RackTests.cpp tests/TrackDelayTests.cpp tests/MidiControllerTests.cpp tests/RangeEditTests.cpp tests/TimeSignatureTests.cpp tests/MidiToolTests.cpp tests/RecoveryTests.cpp tests/PresetTests.cpp tests/TempoMapTests.cpp tests/GrooveTests.cpp tests/TunerTests.cpp tests/AutomationCaptureTests.cpp tests/PunchTests.cpp tests/SpectrumTests.cpp tests/PreviewTests.cpp tests/MidiMonitorTests.cpp tests/TransportTests.cpp tests/MissingMediaTests.cpp tests/PluginAutomationTests.cpp tests/CaptureMidiTests.cpp tests/TakeLanesTests.cpp tests/RoutingTests.cpp tests/SceneTempoTests.cpp tests/AudioFromTests.cpp tests/AudioEngineTests.cpp tests/MultitrackRecordingTests.cpp tests/SessionRecordTests.cpp tests/NoteChanceTests.cpp tests/RepitchTests.cpp tests/SharedMediaTests.cpp tests/WavDecoderTests.cpp tests/RenderAgreementTests.cpp tests/RecordingFormatTests.cpp tests/DeviceSettingsTests.cpp tests/CollectionsTests.cpp tests/PluginPresetTests.cpp tests/ClipEnvelopeTests.cpp tests/WarpModeTests.cpp tests/SliceTests.cpp tests/MpeTests.cpp tests/InputConfigTests.cpp tests/FuzzTests.cpp tests/GraphEditTests.cpp tests/StuckNoteTests.cpp tests/LargeSessionTests.cpp tests/PreferencesTests.cpp tests/LinkedTrackTests.cpp tests/BrowserIndexTests.cpp tests/ParameterIdentityTests.cpp tests/ComputerKeyboardTests.cpp tests/KeyMapTests.cpp tests/AutoArmTests.cpp tests/HardwareCheck.cpp tests/DeviceLossTests.cpp tests/SoakTests.cpp tests/PluginTimingTests.cpp tests/PluginBinaryTests.cpp tests/SidechainTests.cpp tests/MidiMappingTests.cpp tests/NoteToolsTests.cpp tests/AudioClipTests.cpp tests/LocatorTests.cpp tests/MidiFileTests.cpp tests/TrackOrderTests.cpp tests/TrackDuplicateTests.cpp tests/TempoTests.cpp tests/MidiInputTests.cpp tests/MetronomeTests.cpp tests/MasterVolumeTests.cpp tests/ClipActivationTests.cpp tests/AudioExportTests.cpp tests/FollowActionTests.cpp tests/AutomationTests.cpp)
     set(HALFTRACK_GAIN_TEST_FORMATS VST3)
     if(APPLE)
         list(APPEND HALFTRACK_GAIN_TEST_FORMATS AU)
@@ -182,7 +184,20 @@ if(BUILD_TESTING)
     target_sources(HalftrackTestProbe PRIVATE tests/TestProbePlugin.cpp)
     target_compile_definitions(HalftrackTestProbe PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
     target_link_libraries(HalftrackTestProbe PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
-    add_dependencies(Halftrack HalftrackTestGain_VST3 HalftrackTestLatency_VST3 HalftrackTestProbe_VST3)
+    # An effect with a stereo sidechain input and auxiliary output that shows what reaches each input.
+    juce_add_plugin(HalftrackTestSidechain
+        BUNDLE_ID "org.halftrack.testsidechain"
+        COMPANY_NAME "Halftrack Contributors"
+        PLUGIN_MANUFACTURER_CODE Htrk
+        PLUGIN_CODE Htsc
+        FORMATS VST3
+        PRODUCT_NAME "Halftrack Test Sidechain"
+        IS_SYNTH FALSE NEEDS_MIDI_INPUT FALSE NEEDS_MIDI_OUTPUT FALSE
+        COPY_PLUGIN_AFTER_BUILD FALSE)
+    target_sources(HalftrackTestSidechain PRIVATE tests/TestSidechainPlugin.cpp)
+    target_compile_definitions(HalftrackTestSidechain PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+    target_link_libraries(HalftrackTestSidechain PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
+    add_dependencies(Halftrack HalftrackTestGain_VST3 HalftrackTestLatency_VST3 HalftrackTestProbe_VST3 HalftrackTestSidechain_VST3)
     if(APPLE)
         add_dependencies(Halftrack HalftrackTestGain_AU)
         add_test(NAME au-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-au ${CMAKE_BINARY_DIR}/test-artifacts)
@@ -297,6 +312,9 @@ if(BUILD_TESTING)
     add_test(NAME plugin-timing-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-plugin-timing ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(plugin-timing-acceptance PROPERTIES TIMEOUT 180
         ENVIRONMENT "HALFTRACK_TEST_PROBE_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestProbe_VST3>/../..")
+    add_test(NAME sidechain-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-sidechain ${CMAKE_BINARY_DIR}/test-artifacts)
+    set_tests_properties(sidechain-acceptance PROPERTIES TIMEOUT 180
+        ENVIRONMENT "HALFTRACK_TEST_SIDECHAIN_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestSidechain_VST3>/../..;HALFTRACK_TEST_LATENCY_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestLatency_VST3>/../..")
     add_test(NAME soak-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-soak ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(soak-acceptance PROPERTIES TIMEOUT 600)
     add_test(NAME device-loss-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-device-loss ${CMAKE_BINARY_DIR}/test-artifacts)
@@ -384,7 +402,7 @@ if(BUILD_TESTING)
         ENVIRONMENT "HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY=${CMAKE_BINARY_DIR}/test-artifacts/ui-snapshots")
     add_test(NAME ui-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-ui)
     set_tests_properties(ui-acceptance PROPERTIES TIMEOUT 90
-        ENVIRONMENT "HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY=${CMAKE_BINARY_DIR}/test-artifacts/ui-snapshots;HALFTRACK_TEST_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_VST3>/../..")
+        ENVIRONMENT "HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY=${CMAKE_BINARY_DIR}/test-artifacts/ui-snapshots;HALFTRACK_TEST_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_VST3>/../..;HALFTRACK_TEST_SIDECHAIN_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestSidechain_VST3>/../..")
     add_test(NAME launcher-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-launcher ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(launcher-acceptance PROPERTIES TIMEOUT 120)
     add_test(NAME session-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test ${CMAKE_BINARY_DIR}/test-artifacts)

@@ -339,6 +339,18 @@ public:
         ClipInfo clip;
         double playPositionBeats = -1;
     };
+    // Where another track's audio is taken: before its devices, after them, or after its mixer.
+    enum class InputTap { preFX, postFX, postMixer };
+    // A hosted plug-in's sidechain, as in the reference: a plug-in with an auxiliary audio input
+    // hears another track's audio there, at its Pre FX, Post FX (the default) or Post Mixer tap,
+    // while the sidechain is on. The source is not heard through the plug-in's track.
+    struct SidechainSettings
+    {
+        bool on = false;
+        juce::String sourceTrackId;
+        InputTap tap = InputTap::postFX;
+        bool operator== (const SidechainSettings&) const = default;
+    };
     struct PluginInfo
     {
         juce::String id, name;
@@ -358,6 +370,11 @@ public:
         std::vector<ControlAutomation> automation;
         // A hosted plug-in's configured parameters (see setPluginConfiguration), by index in pluginParameters.
         std::vector<int> configured;
+        // A loaded hosted plug-in's audio buses as channel counts: its main bus first, then any
+        // auxiliary inputs (sidechains) and outputs.
+        std::vector<int> inputBuses, outputBuses;
+        bool canSidechain = false; // It has an auxiliary input.
+        SidechainSettings sidechain;
         // Racks: chains in order, a Drum Rack's return chains and the macro mappings.
         bool isRack = false;
         int visibleMacros = 8;
@@ -377,7 +394,6 @@ public:
     // A track's output ("Audio To"): Master, Sends Only, or another audio track, whose devices and
     // mixer then play it as if it were that track's input.
     enum class OutputKind { master, sendsOnly, track };
-    enum class InputTap { preFX, postFX, postMixer };
     struct TrackOutput { OutputKind kind = OutputKind::master; juce::String trackId; bool operator== (const TrackOutput&) const = default; };
     struct TrackInfo
     {
@@ -752,6 +768,12 @@ public:
     // follows its parameter if a version of the plug-in reorders them. At most 128; one undo step.
     static constexpr int maximumConfiguredParameters = 128;
     juce::Result setPluginConfiguration (const juce::String& pluginId, const std::vector<int>& parameters);
+    // Tracks a hosted plug-in's sidechain may take audio from: the audio and MIDI tracks other than
+    // its own and the returns, minus those its track's audio reaches, which would feed back.
+    juce::StringArray sidechainSources (const juce::String& pluginId) const;
+    // Sets a hosted plug-in's sidechain as one undo step. The plug-in needs an auxiliary input; the
+    // source, if any, must be one of sidechainSources. A sidechain that is on without a source hears nothing.
+    juce::Result setPluginSidechain (const juce::String& pluginId, const SidechainSettings&);
     // Sets a hosted plug-in parameter (by index in pluginParameters) to a 0-1 value. Like a device
     // control, it is recorded while automation is captured and otherwise overrides its automation.
     juce::Result setPluginParameterValue (const juce::String& pluginId, int parameter, float value);
