@@ -1879,6 +1879,7 @@ Engine and UI areas.
 
 - **Heights.** Arrangement tracks resize from the split line under their headers, all at once with Option/Alt, and with Option/Alt +/- and Option/Alt-scrolling. Heights are saved with the project.
 - **Optimize.** H fits every track into the view and W fits the length, each toggling back, as in the reference.
+- **Folding.** Tracks fold to their header strip with a triangle, U for the selected tracks and Option/Alt+U for all, saved with the project.
 - **Measured.** The track order suite and the UI suite.
 
 See [the contract](research/track-heights-contract.md).

@@ -956,6 +956,7 @@ public:
         if (key.getModifiers().isAltDown() && ! cmd && ! showSession && (code == '=' || code == '+' || code == '-'))
         { scaleTrackHeight (selectedTrack, code == '-' ? 1 / 1.25 : 1.25); return true; }
         if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'H' || code == 'h')) { optimizeHeight(); return true; }
+        if (! cmd && ! shift && ! showSession && ! showPiano && (code == 'U' || code == 'u')) { toggleFold (key.getModifiers().isAltDown()); return true; }
         if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'W' || code == 'w')) { optimizeWidth(); return true; }
         if (key.getTextCharacter() == '+' || key.getTextCharacter() == '=') { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); return true; }
         if (key.getTextCharacter() == '-') { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); return true; }
@@ -1213,11 +1214,11 @@ private:
                     if (state.groups[(size_t) g].id == track.groupId) { lanes.push_back ({ true, g, y, groupHeight }); y += groupHeight; }
             open = track.groupId;
             const auto* group = groupInfo (track.groupId);
-            const int height = group != nullptr && group->folded ? 0 : track.height > 0 ? track.height : trackHeight;
+            const int height = group != nullptr && group->folded ? 0 : track.folded ? foldedTrackHeight : track.height > 0 ? track.height : trackHeight;
             lanes.push_back ({ false, t, y, height }); y += height;
-            if (height > 0 && takeLanesShown.count (track.id))
+            if (height > 0 && ! track.folded && takeLanesShown.count (track.id))
                 for (int k = 0; k < (int) track.takeLanes.size(); ++k) { lanes.push_back ({ false, t, y, takeLaneHeight, -1, k }); y += takeLaneHeight; }
-            if (automationMode && height > 0)
+            if (automationMode && height > 0 && ! track.folded)
                 if (const auto found = automationLanes.find (track.id); found != automationLanes.end())
                     for (int k = 0; k < found->second.size(); ++k) { lanes.push_back ({ false, t, y, automationLaneHeight, k }); y += automationLaneHeight; }
         }
@@ -1236,6 +1237,23 @@ private:
         refresh(); resized(); canvas.repaint();
     }
     juce::StringArray allArrangementTracks() const { juce::StringArray ids; for (const auto& t : state.tracks) ids.add (t.id); return ids; }
+    // Folding, as in the reference: a track's triangle folds it to its header strip, with Option/Alt
+    // every track; U folds or unfolds the selected tracks, and Option/Alt+U every track.
+    static constexpr int foldedTrackHeight = 24;
+    void foldTracks (const juce::StringArray& ids, bool folded)
+    {
+        for (const auto& id : ids) report (session.setTrackFolded (id, folded));
+        refresh(); resized(); canvas.repaint();
+    }
+    void toggleFold (bool every)
+    {
+        const auto* current = currentTrack();
+        if (current == nullptr) return;
+        juce::StringArray ids;
+        if (every) ids = allArrangementTracks();
+        else { ids.add (current->id); for (const auto& id : multiSelectedTracks) ids.addIfNotAlreadyThere (id); }
+        foldTracks (ids, ! current->folded);
+    }
     void scaleTrackHeight (int track, double factor)
     {
         if (! juce::isPositiveAndBelow (track, (int) state.tracks.size())) return;
@@ -1574,6 +1592,7 @@ private:
         {
             jassert (trackId == track.id);
             index = position;
+            if (folded != track.folded) { folded = track.folded; repaint(); }
             colour = track.colour;
             midi = track.isMidi; returnTrack = track.isReturn;
             if (linkId != track.linkId) { linkId = track.linkId; resized(); }
@@ -1817,6 +1836,13 @@ private:
             // Header strip in the track colour, then routing and mixer lines.
             const bool selected = owner.selectedTrack == index || owner.multiSelectedTracks.contains (trackId);
             g.setColour (selected ? colour.brighter (0.2f) : colour); g.fillRect (0, 0, getWidth() - 8, 24);
+            // The fold triangle: pointing right while folded, down while unfolded.
+            {
+                juce::Path triangle;
+                if (folded) triangle.addTriangle (7.0f, 7.0f, 7.0f, 17.0f, 14.0f, 12.0f);
+                else triangle.addTriangle (6.0f, 9.0f, 15.0f, 9.0f, 10.5f, 16.0f);
+                g.setColour (themes::colour (0xff141414)); g.fillPath (triangle);
+            }
             if (owner.multiSelectedTracks.contains (trackId)) { g.setColour (orange); g.drawRect (0, 0, getWidth() - 8, getHeight(), 2); }
             else if (linkId.isNotEmpty() && linkId == owner.hoveredLink) { g.setColour (ink); g.drawRect (0, 0, getWidth() - 8, getHeight(), 1); }
             g.setColour (muted); g.setFont (font (9.0f, true));
@@ -1857,7 +1883,7 @@ private:
                 return;
             }
             const int w = getWidth() - 8, half = (w - 40) / 2;
-            name.setBounds (6, 2, w - (linkId.isNotEmpty() ? 112 : 92), 20);
+            name.setBounds (18, 2, w - (linkId.isNotEmpty() ? 124 : 104), 20);
             link.setBounds (w - 106, 3, 20, 18);
             mute.setBounds (w - 84, 3, 26, 18); solo.setBounds (w - 56, 3, 26, 18); arm.setBounds (w - 28, 3, 26, 18);
             input.setBounds (36, 27, half, 18); monitor.setBounds (40 + half, 27, w - 44 - half, 18);
@@ -1878,8 +1904,10 @@ private:
         void mouseUp (const juce::MouseEvent&) override { heightAtDown = 0; }
         void mouseDown (const juce::MouseEvent& e) override
         {
-            heightAtDown = onSplitLine (e.getPosition()) && ! e.mods.isPopupMenu() ? getHeight() : 0;
+            heightAtDown = onSplitLine (e.getPosition()) && ! folded && ! e.mods.isPopupMenu() ? getHeight() : 0;
             if (heightAtDown > 0) return;
+            if (! columnLayout && ! e.mods.isPopupMenu() && e.x < 18 && e.y < 22)
+            { owner.selectTrack (index); owner.foldTracks (e.mods.isAltDown() ? owner.allArrangementTracks() : juce::StringArray { trackId }, ! folded); return; }
             if (! columnLayout && e.mods.isShiftDown() && ! e.mods.isPopupMenu())
             {
                 if (const auto* current = owner.currentTrack(); current != nullptr && current->id != trackId) owner.multiSelectedTracks.insert (current->id);
@@ -1894,6 +1922,7 @@ private:
         Impl& owner;
         int index;
         int heightAtDown = 0;
+        bool folded = false;
         juce::String trackId;
         juce::Colour colour;
         float peakL = 0, peakR = 0;
@@ -13671,6 +13700,18 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (handleKey (juce::KeyPress ('w', {}, 'w')) && handleKey (juce::KeyPress ('w', {}, 'w')) && pixelsPerSecond == zoomBefore && viewStart == startBefore, "W fits the width and W again restores the zoom");
             setTrackHeights (allArrangementTracks(), trackHeight);
             check (laneHeight (t) == trackHeight && state.tracks[0].height == 0, "back to the default height");
+            // Folding: the triangle, U, and Option/Alt+U for every track.
+            row = canvas.getComponentAt (canvas.timelineWidth() + 30, laneY (t) + 10);
+            while (row != nullptr && row->getParentComponent() != &canvas) row = row->getParentComponent();
+            const auto triangle = juce::Point<float> (10.0f, 12.0f);
+            row->mouseDown (rowEvent (triangle, triangle, 0, false)); row->mouseUp (rowEvent (triangle, triangle, 0, false)); refresh();
+            check (state.tracks[0].folded && laneHeight (t) == foldedTrackHeight && laneHeight (1) == trackHeight, "the triangle folds the track to its header strip");
+            selectTrack (t);
+            check (handleKey (juce::KeyPress ('u', {}, 'u')) && ! state.tracks[0].folded && laneHeight (t) == trackHeight, "U unfolds the selected track");
+            check (handleKey (juce::KeyPress ('u', juce::ModifierKeys::altModifier, 0)) && std::all_of (state.tracks.begin(), state.tracks.end(), [] (const auto& track) { return track.folded; }),
+                   "Option/Alt+U folds every track");
+            check (handleKey (juce::KeyPress ('u', juce::ModifierKeys::altModifier, 0)) && std::none_of (state.tracks.begin(), state.tracks.end(), [] (const auto& track) { return track.folded; }),
+                   "and again unfolds them all");
         }
         {
             // Create > Consolidate Time to New Scene makes a scene of the selected time.

@@ -51,7 +51,7 @@ const juce::Identifier groupFoldedProperty { "halftrackGroupFolded" };
 const juce::Identifier launchModeProperty { "halftrackLaunchMode" };
 const juce::Identifier launchQuantisationProperty { "halftrackLaunchQuantisation" };
 const juce::Identifier launchLegatoProperty { "halftrackLaunchLegato" };
-const juce::Identifier trackHeightProperty { "halftrackHeight" };
+const juce::Identifier trackHeightProperty { "halftrackHeight" }, trackFoldedProperty { "halftrackFolded" };
 // An editing grid: a HALFTRACKGRID child of the Edit for the Arrangement's, or of a clip for its
 // editor's. It is read back through validation, so a damaged or older one reads as the default, and
 // written without an undo manager, so it is neither an undo step nor an unsaved change.
@@ -4796,6 +4796,7 @@ Session::Snapshot Session::snapshot() const
         info.isMidi = t->state.getProperty (midiTrackProperty, false);
         info.isReturn = isReturn (*t);
         if (const int height = t->state.getProperty (trackHeightProperty, 0); height >= Session::minimumTrackHeight && height <= Session::maximumTrackHeight) info.height = height;
+        info.folded = t->state.getProperty (trackFoldedProperty, false);
         if (info.isReturn) info.sendMode = sendMode (*t);
         else for (auto* destination : te::getAudioTracks (e))
             if (isReturn (*destination))
@@ -9618,6 +9619,15 @@ Result Session::renameClip(const String& id,const String& name)
     // This command changes only the project-owned display name.
     found->state.setProperty(te::IDs::name,trimmed,&impl->edit->getUndoManager());
     impl->changed();return Result::ok();
+}
+Result Session::setTrackFolded (const String& trackId, bool folded)
+{
+    auto* track = impl->track (trackId);
+    if (track == nullptr) return Result::fail ("Track not found.");
+    if ((bool) track->state.getProperty (trackFoldedProperty, false) == folded) return Result::ok();
+    if (folded) track->state.setProperty (trackFoldedProperty, true, nullptr);
+    else track->state.removeProperty (trackFoldedProperty, nullptr);
+    sendChangeMessage(); return Result::ok();
 }
 Result Session::setTrackHeight (const String& trackId, int pixels)
 {

@@ -150,6 +150,11 @@ int runTrackOrderTests (const juce::File& artifacts)
             check (session.snapshot().tracks[0].id == id && session.snapshot().tracks[0].height == 140, "the height is saved with the project");
             ok (session.setTrackHeight (id, 0), "back to the default");
             check (session.snapshot().tracks[0].height == 0, "0 restores the default height");
+            ok (session.setTrackFolded (id, true), "fold it");
+            check (session.snapshot().tracks[0].folded && ! session.snapshot().tracks[1].folded && session.canUndo() == couldUndo, "it is folded, outside the undo history");
+            ok (session.saveProject (project), "save the fold"); ok (session.loadProject (project), "reopen");
+            check (session.snapshot().tracks[0].folded && session.setTrackFolded ("missing", true).failed(), "the fold is saved; a missing track is refused");
+            ok (session.setTrackFolded (id, false), "unfold it");
         }
         std::cout << "Track order tests passed: " << root.getFullPathName() << std::endl; return 0;
     }

@@ -455,6 +455,7 @@ public:
         bool mute = false, solo = false, armed = false, isMidi = false, isReturn = false;
         bool frozen = false; // Plays a render of its clips and devices; devices and clips are locked.
         int height = 0;      // Its Arrangement height in pixels, or 0 for the default.
+        bool folded = false; // Folded in the Arrangement to its header strip.
         CrossfadeAssign crossfade = CrossfadeAssign::none;
         double delayMs = 0; // Track Delay: positive plays later, negative earlier.
         SendMode sendMode = SendMode::post;
@@ -915,6 +916,8 @@ public:
     // reference saves its tracks' heights; 0 restores the default.
     static constexpr int minimumTrackHeight = 20, maximumTrackHeight = 600;
     juce::Result setTrackHeight (const juce::String& trackId, int pixels);
+    // Folding a track shows only its header strip in the Arrangement; saved the same way.
+    juce::Result setTrackFolded (const juce::String& trackId, bool folded);
     juce::Result setMasterGain (float decibels);
     juce::Result setTrackCrossfade (const juce::String& trackId, CrossfadeAssign);
     // Track Delay moves a track's output (after its devices, before its sends and mixer) from
