@@ -78,6 +78,7 @@ For several slots, the UI suite checks:
 
 - a Shift-click rectangle, and a Cmd/Ctrl-click leaving a slot out;
 - a group dragged two scenes with its selection, and Delete clearing it, undone;
+- Cmd/Ctrl+D copying the group into the empty slots below its span and selecting the copies;
 - Cmd/Ctrl+C and V pasting the group at the selected slot;
 - a rubber band drawn from an empty slot.
 

@@ -13797,6 +13797,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             session.undo(); refresh();
             check (has (ga, 2) && has (ga, 3) && has (gb, 2), "one undo brings them back");
             click (ga, 2, 0); click (gb, 3, juce::ModifierKeys::shiftModifier);
+            check (launcher.keyPressed (commandKey ('D')) && has (ga, 4) && has (ga, 5) && has (gb, 4) && ! has (gb, 5) && isSlotSelected (ga, 4),
+                   "Cmd/Ctrl+D copies the group into the empty slots below its span and selects the copies");
+            click (ga, 2, 0); click (gb, 3, juce::ModifierKeys::shiftModifier);
             check (launcher.keyPressed (commandKey ('C')) && session.hasSlotClipboard(), "Cmd/Ctrl+C copies the group");
             click (ga, 5, 0);
             check (selectedSlots.empty() && launcher.keyPressed (commandKey ('V')) && has (ga, 5) && has (ga, 6) && has (gb, 5) && ! has (gb, 6),
@@ -13809,7 +13812,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             }
             int steps = 0;
             while (state.tracks.size() > tracksBefore && steps < 20) { session.undo(); refresh(); ++steps; }
-            check (state.tracks.size() == tracksBefore && steps == 7, "seven undo steps remove it all: the tracks, clips, group move and paste");
+            check (state.tracks.size() == tracksBefore && steps == 8, "eight undo steps remove it all: the tracks, clips, group move, duplicate and paste");
             showArrangementView();
         }
         {
