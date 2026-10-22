@@ -4678,6 +4678,14 @@ private:
                 envelope.mouseDown (e, envelopeArea(), clip, [this] (double b) { return envelopeX (b); }, [this] (float x) { return envelopeBeat (x); }, first + length);
                 editingEnvelope = true; repaint(); return;
             }
+            // The loop brace along the top and the start marker along the bottom drag, as in the note editor.
+            if (clip.canLoop && (braceDrag = braceAt (e.position)) != 0)
+            {
+                // The view follows the loop as it changes, so the drag keeps the scale it began with.
+                braceOrigin = clip.loop; startOrigin = clip.contentStartBeat; braceDownX = e.position.x; draggedMarker = -1;
+                braceBeatsPerPixel = visibleBeats().second / std::max (1.0f, (float) waveBounds().getWidth());
+                return;
+            }
             draggedMarker = markersEditable() && waveBounds().contains (e.getPosition()) ? markerAt (e.position.x) : -1;
             if (draggedMarker >= 0) { owner.session.beginEditGesture ("Move warp marker"); gesture = true; repaint(); }
         }
@@ -4701,6 +4709,31 @@ private:
                 envelope.mouseDrag (e, envelopeArea(), [this] (float x) { return envelopeBeat (x); }, first + length);
                 repaint(); return;
             }
+            if (braceDrag != 0)
+            {
+                const auto delta = (e.position.x - braceDownX) * braceBeatsPerPixel;
+                const auto snap = [&] (double beat) { return e.mods.isAltDown() ? beat : std::round (beat / snapGrid()) * snapGrid(); };
+                const double shortest = e.mods.isAltDown() ? 1.0 / 64 : snapGrid(), audioEnd = sourceBeats (clip);
+                auto loop = braceOrigin;
+                auto start = startOrigin;
+                if (braceDrag == 1)
+                {
+                    const auto end = braceOrigin.start + braceOrigin.length;
+                    loop.start = juce::jlimit (0.0, end - shortest, snap (braceOrigin.start + delta)); loop.length = end - loop.start;
+                }
+                else if (braceDrag == 2) loop.length = juce::jlimit (shortest, audioEnd - loop.start, snap (braceOrigin.start + braceOrigin.length + delta) - loop.start);
+                else if (braceDrag == 3)
+                {
+                    loop.start = juce::jlimit (0.0, std::max (0.0, audioEnd - loop.length), snap (braceOrigin.start + delta));
+                    start = startOrigin + loop.start - braceOrigin.start;
+                }
+                else start = juce::jlimit (0.0, audioEnd - 1.0 / 64, snap (startOrigin + delta));
+                if (loop.on) start = juce::jlimit (loop.start, loop.start + loop.length - 1.0 / 1024, start);
+                if (loop == clip.loop && std::abs (start - clip.contentStartBeat) < 1e-9) return;
+                if (! gesture) { owner.session.beginEditGesture (braceDrag == 4 ? "Move clip start" : "Move clip loop"); gesture = true; }
+                owner.report (owner.session.setClipLoop (clip.id, loop, start)); owner.refresh(); sync();
+                return;
+            }
             if (draggedMarker < 0 || draggedMarker >= (int) clip.warpMarkers.size()) return;
             auto markers = clip.warpMarkers;
             auto beat = xBeat (e.position.x);
@@ -4716,7 +4749,7 @@ private:
         {
             if (editingEnvelope) { editingEnvelope = false; envelope.mouseUp (clip); repaint(); return; }
             if (gesture) { owner.session.endEditGesture(); gesture = false; }
-            draggedMarker = -1; repaint();
+            draggedMarker = -1; braceDrag = 0; repaint();
         }
         // The clip's content beats over the waveform, where its envelopes' points lie: from its
         // offset into the content, for its length.
@@ -4740,6 +4773,23 @@ private:
         juce::ComboBox envelopeChoice;
     private:
         int draggedMarker = -1;
+        // A drag of the loop brace (1 its start, 2 its end, 3 all of it) or the start marker (4).
+        int braceDrag = 0;
+        Session::ClipLoop braceOrigin;
+        double startOrigin = 0;
+        float braceDownX = 0;
+        double braceBeatsPerPixel = 0;
+        int braceAt (juce::Point<float> p) const
+        {
+            const auto wave = waveBounds().toFloat();
+            if (! wave.contains (p)) return 0;
+            if (std::abs (p.x - beatX (clip.contentStartBeat)) <= 6 && p.y >= wave.getBottom() - 12) return 4;
+            if (! clip.loop.on || p.y > wave.getY() + 8) return 0;
+            const auto from = beatX (clip.loop.start), to = beatX (clip.loop.start + clip.loop.length);
+            if (std::abs (p.x - from) <= 4) return 1;
+            if (std::abs (p.x - to) <= 4) return 2;
+            return p.x > from && p.x < to ? 3 : 0;
+        }
         bool editingEnvelope = false;
         static constexpr int envelopeChoiceBase = 1000;
         std::vector<EnvelopeChoice> envelopeList;
@@ -12421,6 +12471,24 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (session.setAudioClipWarp (clickClip, { Session::WarpMode::stretch, 120 }).wasOk(), "warp them");
             selectTrack (clickTrack); selectedClip = 0; refresh(); audioClipView.sync();
             check (findNamed (audioClipView, "Loop box") != nullptr && findNamed (audioClipView, "Loop box")->isVisible(), "a warped clip shows its Loop box");
+            {
+                // Its loop brace drags along the top of the waveform, on the zoom's grid.
+                check (session.setClipLoop (clickClip, { true, 0, 2 }, 0).wasOk(), "loop its first two beats"); refresh(); audioClipView.sync();
+                const auto braceEvent = [&] (float x, float y, float downX, bool dragged)
+                {
+                    const auto when = juce::Time::getCurrentTime();
+                    return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { x, y }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                             &audioClipView, &audioClipView, when, { downX, y }, when, 1, dragged);
+                };
+                // The view spans the loop, so its end is the waveform's right edge: grab it just inside.
+                const auto from = audioClipView.beatX (2) - 2, to = from + (audioClipView.beatX (2) - audioClipView.beatX (1));
+                audioClipView.mouseDown (braceEvent (from, 9, from, false)); audioClipView.mouseDrag (braceEvent (to, 9, from, true)); audioClipView.mouseUp (braceEvent (to, 9, from, true));
+                refresh(); audioClipView.sync();
+                const auto looped = state.tracks[(size_t) clickTrack].clips[0].loop;
+                check (looped.on && std::abs (looped.start) < 1e-6 && std::abs (looped.length - 3) < 1e-6, "dragging the brace's end lengthens the warped clip's loop to three beats");
+                session.undo(); session.undo(); refresh(); audioClipView.sync();
+                check (! state.tracks[(size_t) clickTrack].clips[0].loop.on, "two undo steps leave it unlooped");
+            }
             const auto transients = session.audioClipTransients (clickClip);
             check (transients.size() == 3 && std::abs (transients[1] - 0.75) < 1e-3, "the clip's transients are its three clicks");
             const auto beside = audioClipView.beatX (audioClipView.beatAtSource (transients[1])) + 3;
