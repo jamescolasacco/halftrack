@@ -102,6 +102,8 @@ int runSidechainTests (const juce::File&);
 int runMidiPortTests (const juce::File&);
 int runThemeTests (const juce::File&);
 int runInputPermissionTests (const juce::File&);
+int runSimilarityTests (const juce::File&);
+int runSimilarityEvaluation (const juce::File& library, int perCategory, const juce::File& report);
 int runHardwareCheck (const juce::File&, const juce::String& deviceName, const juce::String& mode);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
@@ -382,6 +384,21 @@ public:
         {
             const int i = args.indexOf ("--self-test-input-permission");
             setApplicationReturnValue (runInputPermissionTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        // Manual: --similarity-evaluate <library folder> [sounds per category] [report.json]
+        if (args.contains ("--similarity-evaluate"))
+        {
+            const int i = args.indexOf ("--similarity-evaluate");
+            setApplicationReturnValue (runSimilarityEvaluation (juce::File (args[i + 1]), i + 2 < args.size() ? args[i + 2].getIntValue() : 60,
+                                                                i + 3 < args.size() ? juce::File (args[i + 3]) : juce::File()));
+            quit();
+            return;
+        }
+        if (args.contains ("--self-test-similarity"))
+        {
+            const int i = args.indexOf ("--self-test-similarity");
+            setApplicationReturnValue (runSimilarityTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-large-session"))

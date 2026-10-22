@@ -1643,3 +1643,13 @@ QA change in `scripts/evidence_report.py` (new), `tests/test_evidence_report.py`
 - **Run evidence.** CI writes CTest's results as JUnit. A report gives each row's commit, environment, commands, and expected and actual results.
 
 See [the contract](research/regression-evidence-contract.md).
+
+## Similar sounds — 2026-10-21
+
+Engine change in `src/SoundSimilarity.*` (new) and `tests/SimilarityTests.cpp` (new). The UI change is in `src/MainComponent.cpp`; the root change in `CMakeLists.txt` and `src/Main.cpp`. Documentation updated.
+
+- **Show Similar Files.** Added to a sample's browser menu. It lists the sounds under the folder nearest it, measured on a worker thread.
+- **The measure.** It is Halftrack's own: envelope, spectral shape and 16 log bands.
+- **Evaluation.** It was evaluated on a generated library in CI and, by hand, on the reference's categorised drum one-shots.
+
+See [the contract](research/similarity-contract.md).

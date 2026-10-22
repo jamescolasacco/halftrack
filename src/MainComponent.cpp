@@ -10,6 +10,7 @@
 #include "Collections.h"
 #include "NativeEffects.h"
 #include "RackEditor.h"
+#include "SoundSimilarity.h"
 #include "NoteTools.h"
 #include "Session.h"
 
@@ -459,7 +460,7 @@ public:
         upButton.setTooltip ("Parent folder");
         browserSearch.setTextToShowWhenEmpty ("Search this folder", muted);
         browserSearch.setFont (font (12.0f));
-        browserSearch.onTextChange = [this] { updateBrowser(); };
+        browserSearch.onTextChange = [this] { similarFile = juce::File(); updateBrowser(); };
         // The large regions a screen reader moves between, each with what it holds.
         browserSearch.setTitle ("Browser search");
         browserList.setTitle ("Browser"); browserList.setDescription ("Devices, plug-ins, samples and grooves of the chosen category");
@@ -527,7 +528,8 @@ public:
         if (! mapping()) // The mapping list replaces the browser in MIDI and Key Map Modes.
         g.drawText (browserCategory == BrowserCategory::instruments ? "INSTRUMENTS" : browserCategory == BrowserCategory::audioEffects ? "AUDIO EFFECTS"
                         : browserCategory == BrowserCategory::midiEffects ? "MIDI EFFECTS" : pluginBrowser() ? "PLUG-INS"
-                        : browserCategory == BrowserCategory::grooves ? "GROOVES" : browserFolder == juce::File() ? "SAMPLES" : browserFolder.getFileName().toUpperCase(),
+                        : browserCategory == BrowserCategory::grooves ? "GROOVES" : browserFolder == juce::File() ? "SAMPLES"
+                        : similarFile != juce::File() ? "SIMILAR TO " + similarFile.getFileNameWithoutExtension().toUpperCase() : browserFolder.getFileName().toUpperCase(),
                     browserList.getX() + 4, browserList.getY() - 22, browserList.getWidth() - 8 - indexWidth, 20, juce::Justification::centredLeft, true);
         if (indexWidth > 0)
         {
@@ -6567,6 +6569,10 @@ private:
     juce::Rectangle<int> meterBounds, cpuBounds;
     juce::TextEditor browserSearch;
     juce::ListBox browserList;
+    similarity::FolderIndex similarIndex; // Show Similar Files: the browser folder's sounds, measured.
+    juce::File similarFile;
+    similarity::FolderIndex::Status shownSimilar;
+    double similarShownAt = 0;
     juce::Slider previewVolume;
     BrowserCategories browserCategories { *this };
     Canvas canvas;
@@ -8821,6 +8827,14 @@ private:
     void pollBrowserIndex()
     {
         if (! sampleBrowser()) return;
+        // Similar sounds fill in as the folder's sounds are measured.
+        if (similarFile != juce::File())
+        {
+            const auto now = similarIndex.status();
+            if (now.analysed != shownSimilar.analysed || now.analysing != shownSimilar.analysing)
+                if (! now.analysing || juce::Time::getMillisecondCounterHiRes() - similarShownAt >= 400)
+                { shownSimilar = now; similarShownAt = juce::Time::getMillisecondCounterHiRes(); updateBrowser(); }
+        }
         const auto now = browserIndex.status();
         if (now.indexing == shownIndex.indexing && now.entries == shownIndex.entries && now.unreadableFolders == shownIndex.unreadableFolders) return;
         if (now.indexing && juce::Time::getMillisecondCounterHiRes() - indexShownAt < 400) return;
@@ -8830,6 +8844,8 @@ private:
     juce::String browserIndexText() const
     {
         if (! sampleBrowser() || browserFolder == juce::File()) return {};
+        if (similarFile != juce::File())
+            return shownSimilar.analysing ? "Measuring " + juce::String (shownSimilar.analysed) + " of " + juce::String (shownSimilar.found) : juce::String();
         if (shownIndex.indexing) return "Indexing " + juce::String ((int) shownIndex.entries);
         if (shownIndex.truncated) return "First " + juce::String ((int) shownIndex.entries) + " items";
         if (shownIndex.unreadableFolders > 0) return juce::String ((int) shownIndex.unreadableFolders) + (shownIndex.unreadableFolders == 1 ? " folder unreadable" : " folders unreadable");
@@ -8877,8 +8893,15 @@ private:
         }
         else if (sampleBrowser())
         {
+            // Show Similar Files lists the sound, then the sounds under the folder most like it.
+            if (similarFile != juce::File() && (browserFolder != similarIndex.folder() || query.isNotEmpty())) similarFile = juce::File();
+            if (similarFile != juce::File())
+            {
+                browserItems.push_back ({ similarFile, false, true });
+                for (const auto& match : similarIndex.similarTo (similarFile, maximumSimilarFiles)) browserItems.push_back ({ match.file, false, true });
+            }
             // A search looks through everything under the folder; otherwise the folder's own items show.
-            if (query.isNotEmpty())
+            else if (query.isNotEmpty())
                 for (const auto& entry : browserIndex.search (query.toStdString(), maximumSearchResults))
                     browserItems.push_back ({ juce::File (juce::String::fromUTF8 (entry.path.data(), (int) entry.path.size())), entry.directory, true });
             else browserItems = allBrowserItems;
@@ -9106,8 +9129,27 @@ private:
         juce::PopupMenu menu;
         for (int i = 0; i < Collections::count; ++i)
             menu.addItem (i + 1, Collections::name (i) + "  (" + juce::String (i + 1) + ")", true, collections.contains (browserKey (row), i));
+        const bool sound = sampleBrowser() && juce::isPositiveAndBelow (row, (int) browserItems.size()) && ! browserItems[(size_t) row].directory && isAudio (browserItems[(size_t) row].file);
+        if (sound) { menu.addSeparator(); menu.addItem (showSimilarItem, "Show Similar Files"); }
         auto safe = juce::Component::SafePointer<Impl> (this);
-        menu.showMenuAsync (juce::PopupMenu::Options(), [safe, row] (int choice) { if (safe != nullptr && choice > 0) safe->toggleBrowserCollection (row, choice - 1); });
+        const auto file = sound ? browserItems[(size_t) row].file : juce::File();
+        menu.showMenuAsync (juce::PopupMenu::Options(), [safe, row, file] (int choice)
+        {
+            if (safe == nullptr || choice <= 0) return;
+            if (choice == showSimilarItem) safe->showSimilarFiles (file); else safe->toggleBrowserCollection (row, choice - 1);
+        });
+    }
+    static constexpr int showSimilarItem = 100, maximumSimilarFiles = 50;
+    // Show Similar Files, after the reference's: the folder's sounds most like this one, nearest
+    // first, filling in as they are measured. A search or another folder leaves it.
+    void showSimilarFiles (const juce::File& file)
+    {
+        if (browserFolder == juce::File() || ! file.existsAsFile()) return;
+        browserSearch.setText ({}, juce::dontSendNotification);
+        similarFile = file;
+        if (similarIndex.folder() != browserFolder || ! similarIndex.status().analysing) similarIndex.start (browserFolder);
+        shownSimilar = similarIndex.status(); similarShownAt = juce::Time::getMillisecondCounterHiRes();
+        updateBrowser(); browserList.selectRow (0, false, true);
     }
     void selectedRowsChanged (int) override { if (previewButton.getToggleState()) previewSelectedSample(); }
     // With Preview on, the selected sample plays; a folder or no selection stops the preview.
@@ -9610,6 +9652,50 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (status.contains ("has moved or been deleted") && getNumRows() == 0, "using a result that has gone says so and searches again");
         browserSearch.setText ({}, juce::sendNotificationSync); updateBrowser();
         check (getNumRows() == 2, "clearing the search shows the folder again");
+        browserFolder = folder; updateBrowser(); setBrowserCategory (category);
+        library.deleteRecursively();
+    }
+    {
+        // Show Similar Files: the sound first, then the folder's sounds nearest it, filling in as
+        // they are measured; a search leaves it.
+        const auto category = browserCategory; const auto folder = browserFolder;
+        const auto library = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-similar-ui-" + juce::Uuid().toString());
+        juce::Random random (7);
+        const auto write = [&] (const juce::String& name, bool kick)
+        {
+            juce::AudioBuffer<float> x (1, kick ? 36000 : 9600);
+            double phase = 0, previous = 0;
+            for (int i = 0; i < x.getNumSamples(); ++i)
+            {
+                const double t = i / 48000.0;
+                phase += juce::MathConstants<double>::twoPi * (50 + 100 * std::exp (-t / .03)) / 48000.0;
+                const double noise = random.nextDouble() * 2 - 1;
+                x.setSample (0, i, (float) (kick ? .8 * std::sin (phase) * std::exp (-t / (.2 + .02 * name.length()))
+                                                 : .5 * (noise - previous) * std::exp (-t / .04)));
+                previous = noise;
+            }
+            const auto file = library.getChildFile (name);
+            juce::WavAudioFormat wav; std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+            auto writer = stream ? wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (1).withBitsPerSample (16)) : nullptr;
+            check (writer && writer->writeFromAudioSampleBuffer (x, 0, x.getNumSamples()), "write " + name);
+        };
+        check (library.getChildFile ("Hats").createDirectory().wasOk(), "a library folder");
+        for (const auto* name : { "Kick A.wav", "Kick B.wav", "Kick Long.wav" }) write (name, true);
+        for (const auto* name : { "Hats/Hat A.wav", "Hats/Hat B.wav", "Hats/Hat C.wav" }) write (name, false);
+        setBrowserCategory (BrowserCategory::samples);
+        browserFolder = library; updateBrowser();
+        for (int i = 0; i < 1000 && (browserIndex.status().indexing || browserLoading); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
+        showSimilarFiles (library.getChildFile ("Kick A.wav"));
+        for (int i = 0; i < 2000 && similarIndex.status().analysing; ++i) juce::Thread::sleep (5);
+        pollBrowserIndex(); updateBrowser();
+        juce::StringArray shown; for (const auto& item : browserItems) shown.add (item.file.getFileName());
+        check (getNumRows() == 6 && shown[0] == "Kick A.wav" && shown[1].startsWith ("Kick") && shown[2].startsWith ("Kick") && shown[3].startsWith ("Hat"),
+               "Show Similar Files lists the kick, then the other kicks before the hi-hats (" + shown.joinIntoString (", ") + ")");
+        check (browserIndexText().isEmpty() && similarFile != juce::File(), "with every sound measured");
+        browserSearch.setText ("hat", juce::sendNotificationSync); updateBrowser();
+        const auto hats = std::count_if (browserItems.begin(), browserItems.end(), [] (const auto& item) { return ! item.directory && item.file.getFileName().startsWith ("Hat"); });
+        check (similarFile == juce::File() && hats == 3, "a search leaves it, finding the three hi-hats (" + juce::String (getNumRows()) + " rows)");
+        browserSearch.setText ({}, juce::sendNotificationSync);
         browserFolder = folder; updateBrowser(); setBrowserCategory (category);
         library.deleteRecursively();
     }
