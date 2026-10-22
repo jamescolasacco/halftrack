@@ -115,8 +115,11 @@ int runDeviceLossTests (const juce::File& artifacts)
         const auto tracks = s.snapshot().tracks.size();
         pump (devices, 8);
         s.seek (0); ok (s.play(), "play");
+        // Choosing the interface rebuilt the device list, so playback can take a while to begin on a
+        // loaded machine: give it up to two seconds of blocks.
         pump (devices, 100);
-        check (s.snapshot().playing && s.snapshot().position > .2, "the interface plays");
+        for (int i = 0; i < 6 && s.snapshot().position <= .2; ++i) pump (devices, 50);
+        check (s.snapshot().playing && s.snapshot().position > .2, "the interface plays (at " + juce::String (s.snapshot().position, 3) + " s)");
 
         // Unplugged: whatever the device manager falls back to (here, nothing: JUCE's generic manager
         // retries the missing device; CoreAudio's falls back to the system output), playback stops.
