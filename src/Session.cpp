@@ -3438,8 +3438,9 @@ struct Session::Impl
         // Any other edit ends a controller's gesture, so it is an undo step of its own.
         if (remoteGesture && ! applyingRemote) { remoteGesture = false; owner.endEditGesture(); }
         flushStructuralUpdates();
-        if (! gesture) edit->getUndoManager().beginNewTransaction (name);
+        if (! gesture && ! composite) edit->getUndoManager().beginNewTransaction (name);
     }
+    bool composite = false; // A command made of other edits keeps them in its one undo step.
     // The audio output a track plays to directly, other than the master's, if any.
     String externalOutput (const te::AudioTrack& t) const
     {
@@ -4907,6 +4908,31 @@ struct Session::Impl
     // A copy of several slots: each clip by its offset from the top-left one's track and scene.
     struct SlotEntry { int track = 0, scene = 0; juce::ValueTree state; std::shared_ptr<juce::TemporaryFile> media; };
     std::vector<SlotEntry> slotClipboardGroup;
+    // Every clipboard, set aside while a time command copies through the range clipboard.
+    struct Clipboards
+    {
+        juce::ValueTree audio, midi, slot;
+        double midiBeats = 0, midiOffsetBeats = 0;
+        std::shared_ptr<juce::TemporaryFile> audioMedia, slotMedia;
+        std::vector<SlotEntry> slotGroup;
+        std::unique_ptr<RangeClipboard> range;
+    };
+    Clipboards takeClipboards()
+    {
+        return { audioClipboard, midiClipboard, slotClipboard, midiClipboardBeats, midiClipboardOffsetBeats, audioClipboardMedia, slotClipboardMedia, slotClipboardGroup, std::move (rangeClipboard) };
+    }
+    void restoreClipboards (Clipboards c)
+    {
+        audioClipboard = c.audio; midiClipboard = c.midi; slotClipboard = c.slot; midiClipboardBeats = c.midiBeats; midiClipboardOffsetBeats = c.midiOffsetBeats;
+        audioClipboardMedia = c.audioMedia; slotClipboardMedia = c.slotMedia; slotClipboardGroup = c.slotGroup; rangeClipboard = std::move (c.range);
+    }
+    // The tracks the time commands copy and paste: every track but the returns, in order.
+    juce::StringArray timeTracks() const
+    {
+        juce::StringArray ids;
+        for (auto* t : te::getAudioTracks (*edit)) if (! isReturn (*t)) ids.add (t->itemID.toString());
+        return ids;
+    }
     // A copied clip state into a slot, replacing what is there; audio is collected into the project.
     Result pasteSlotState (te::ClipSlot& to, const juce::ValueTree& state, const juce::TemporaryFile* media, bool defaults)
     {
@@ -9200,12 +9226,29 @@ void shiftCurve (te::AutomationCurve& curve, te::Edit& edit, te::TimePosition fr
 {
     struct Point { te::TimePosition time; float value, shape; };
     std::vector<Point> points; bool changed = false;
+    // Time inserted where the lane moves holds the value there across the gap, so the lane plays as
+    // before up to the insertion point, and as before from the gap's end.
+    bool before = false, at = false; float shape = 0;
+    for (int i = 0; i < curve.getNumPoints(); ++i)
+    {
+        const auto time = curve.getPointTime (i);
+        if (time < from) { before = true; shape = curve.getPointCurve (i); }
+        at = at || time == from;
+    }
+    const bool holds = ! removed && before && curve.getPointTime (curve.getNumPoints() - 1) >= from;
+    const auto held = holds ? curve.getValueAt (from, 0.0f) : 0.0f;
     for (int i = 0; i < curve.getNumPoints(); ++i)
     {
         auto time = curve.getPointTime (i);
         if (removed && time >= removed->getStart() && time < removed->getEnd()) { changed = true; continue; }
         if (time >= from) { time = time + delta; changed = true; }
         points.push_back ({ time, curve.getPointValue (i), curve.getPointCurve (i) });
+    }
+    if (holds)
+    {
+        points.push_back ({ from, held, 0.0f });
+        if (! at) points.push_back ({ from + delta, held, shape });
+        std::sort (points.begin(), points.end(), [] (const Point& a, const Point& b) { return a.time < b.time; });
     }
     if (! changed) return;
     curve.clear (undo);
@@ -9848,6 +9891,62 @@ Result Session::deleteTime (double start, double length)
     for (auto* curve : arrangementCurves (*impl->edit)) shiftCurve (*curve, *impl->edit, to, te::TimeDuration() - delta, te::TimeRange (from, to), undo);
     impl->refreshParameterValues();
     impl->changed(); return Result::ok();
+}
+// The reference's Cut, Paste and Duplicate Time: as Delete Time and Insert Silence, across every
+// track, with the time's material through the range clipboard. Each is one undo step; a step that
+// fails undoes the others.
+Result Session::cutTime (double start, double length)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before cutting time.");
+    if (! std::isfinite (start) || ! std::isfinite (length) || start < 0 || length <= 0) return Result::fail ("Choose a start and a positive length of time to cut.");
+    const auto tracks = impl->timeTracks();
+    auto kept = impl->takeClipboards();
+    auto r = tracks.isEmpty() ? Result::ok() : copyRange (tracks, start, start + length);
+    if (r.wasOk())
+    {
+        impl->transaction ("Cut time");
+        const juce::ScopedValueSetter<bool> one (impl->composite, true);
+        r = deleteTime (start, length);
+        if (r.failed()) impl->edit->getUndoManager().undoCurrentTransactionOnly();
+    }
+    if (r.failed()) impl->restoreClipboards (std::move (kept));
+    impl->changed(); return r;
+}
+Result Session::pasteTime (const String& firstTrackId, double at)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before pasting time.");
+    if (impl->rangeClipboard == nullptr) return Result::fail ("Copy or cut time before pasting it.");
+    impl->transaction ("Paste time");
+    auto r = Result::ok();
+    {
+        const juce::ScopedValueSetter<bool> one (impl->composite, true);
+        r = insertTime (at, impl->rangeClipboard->length);
+        if (r.wasOk()) r = pasteRange (firstTrackId, at);
+    }
+    if (r.failed()) impl->edit->getUndoManager().undoCurrentTransactionOnly();
+    impl->changed(); return r;
+}
+Result Session::duplicateTime (double start, double end)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before duplicating time.");
+    if (! std::isfinite (start) || ! std::isfinite (end) || start < 0 || end <= start) return Result::fail ("Choose a span of time to duplicate.");
+    const auto tracks = impl->timeTracks();
+    // The copy goes through the range clipboard, which is then put back as it was.
+    auto kept = impl->takeClipboards();
+    auto r = tracks.isEmpty() ? Result::ok() : copyRange (tracks, start, end);
+    if (r.wasOk())
+    {
+        impl->transaction ("Duplicate time");
+        const juce::ScopedValueSetter<bool> one (impl->composite, true);
+        r = insertTime (end, end - start);
+        if (r.wasOk() && ! tracks.isEmpty()) r = pasteRange (tracks[0], end);
+        if (r.failed()) impl->edit->getUndoManager().undoCurrentTransactionOnly();
+    }
+    impl->restoreClipboards (std::move (kept));
+    impl->changed(); return r;
 }
 Result Session::duplicateAudioClip (const String& id, String& duplicateId)
 {

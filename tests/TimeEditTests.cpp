@@ -87,6 +87,18 @@ int runTimeEditTests (const juce::File& artifacts)
         check (st.audio.size() == before.audio.size() && near (st.audio[1].start, 3) && st.locators == before.locators && st.volume == before.volume
                && near (st.midi[0].length, 4), "one undo restores everything");
 
+        // Inserted inside the volume ramp (beats 2.5 to 8), the lane holds its value there across the
+        // gap, so it plays as before up to the insertion point and from the gap's end.
+        ok (s.insertTime (2, .5), "insert half a second at 2 s, inside the ramp");
+        st = read (s);
+        const auto& lane = st.volume.points;
+        const auto close = [] (float a, float b) { return std::abs (a - b) < 1e-3f; };
+        check (lane.size() == 4 && near (lane[0].beat, 2.5) && close (lane[0].value, -6) && near (lane[1].beat, 4) && near (lane[2].beat, 5)
+                   && close (lane[1].value, lane[2].value) && lane[1].value < -6.5f && lane[1].value > -11.5f && near (lane[3].beat, 9) && close (lane[3].value, -12),
+               "the ramp's value at the insertion point is held across the inserted beat (" + [&] { juce::String p; for (const auto& q : lane) p << juce::String (q.beat, 3) << ":" << juce::String (q.value, 3) << " "; return p.trim(); }() + ")");
+        s.undo(); st = read (s);
+        check (st.volume == before.volume, "one undo restores the ramp");
+
         // Delete the second between 1 s and 2 s.
         ok (s.deleteTime (1, 1), "delete from 1 s to 2 s");
         st = read (s);
@@ -100,6 +112,59 @@ int runTimeEditTests (const juce::File& artifacts)
         s.undo(); st = read (s);
         check (st.audio.size() == 2 && near (st.audio[0].length, 2) && st.locators == before.locators && st.volume == before.volume && st.midi[0].notes.size() == 3,
                "one undo restores the deleted time");
+
+        // Cut Time deletes as Delete Time does, keeping the time's material on the range clipboard.
+        check (s.pasteTime (s.snapshot().tracks[0].id, 3).failed(), "Paste Time needs copied time");
+        ok (s.cutTime (1, 1), "cut the second from 1 s to 2 s");
+        st = read (s);
+        check (st.audio.size() == 2 && near (st.audio[1].start, 2) && near (st.midi[0].length, 3) && st.midi[0].notes.size() == 2 && st.locators.size() == 1
+                   && st.volume.points.size() == 1 && near (st.volume.points[0].beat, 6),
+               "the time goes from every track, its locator and automation, as Delete Time does");
+        check (s.hasRangeClipboard() && near (s.rangeClipboardLength(), 1) && s.rangeClipboardTracks() == (int) s.snapshot().tracks.size(), "and the clipboard holds the second, from every track (" + juce::String (s.rangeClipboardLength(), 3) + " s, " + juce::String (s.rangeClipboardTracks()) + " tracks)");
+        s.undo(); st = read (s);
+        check (st.audio.size() == 2 && near (st.audio[0].length, 2) && st.locators == before.locators && st.volume == before.volume && st.midi[0].notes.size() == 3,
+               "one undo restores the cut time");
+
+        // Paste Time inserts the clipboard's length, as Insert Silence does, and pastes it there.
+        const auto audioTrack = s.snapshot().tracks[0].id;
+        check (s.pasteTime (keys, 3).failed(), "pasting audio and MIDI from the MIDI track onward is refused");
+        st = read (s);
+        check (st.audio.size() == 2 && near (st.audio[1].start, 3) && st.midi.size() == 1 && near (st.midi[0].length, 4), "and the refusal leaves the time it inserted undone");
+        ok (s.pasteTime (audioTrack, 3), "paste the second at 3 s");
+        st = read (s);
+        check (st.audio.size() == 3 && near (st.audio[1].start, 3) && near (st.audio[1].length, 1) && near (st.audio[1].sourceOffset, 1) && near (st.audio[2].start, 4),
+               "the copied audio fills the new second, and the later clip moves past it");
+        int notes = 0; double end = 0;
+        for (const auto& c : st.midi) { notes += (int) c.notes.size(); end = std::max (end, c.start + c.length); }
+        check (notes == 5 && near (end, 5), "the copied notes fill it on the MIDI track, which grows by the second");
+        check (st.locators == before.locators && ! st.volume.points.empty() && near (st.volume.points.back().beat, 10), "earlier locators stay and later automation moves");
+        s.undo(); st = read (s);
+        check (st.audio.size() == 2 && near (st.audio[1].start, 3) && st.midi.size() == 1 && near (st.midi[0].length, 4) && st.volume == before.volume,
+               "one undo removes the pasted time");
+
+        // Duplicate Time inserts a copy of the time just after it, and keeps the clipboard.
+        ok (s.copyRange ({ audioTrack }, 0, .25), "copy a quarter second");
+        ok (s.duplicateTime (1, 2), "duplicate the second from 1 s to 2 s");
+        st = read (s);
+        check (st.audio.size() == 3 && near (st.audio[0].length, 2) && near (st.audio[1].start, 2) && near (st.audio[1].length, 1) && near (st.audio[1].sourceOffset, 1)
+                   && near (st.audio[2].start, 4), "the second's audio repeats after it, and the later clip moves a second");
+        notes = 0; end = 0;
+        for (const auto& c : st.midi) { notes += (int) c.notes.size(); end = std::max (end, c.start + c.length); }
+        check (notes == 5 && near (end, 5), "so do its notes");
+        check (st.locators.size() == 2 && near (st.locators[0], 1.5) && near (st.locators[1], 3.5), "a locator after the copy moves");
+        check (near (s.rangeClipboardLength(), .25) && s.rangeClipboardTracks() == 1, "the clipboard is as it was");
+        ok (s.exportWav (render, rate, 32), "render the duplicate");
+        {
+            juce::AudioFormatManager formats; formats.registerBasicFormats(); std::unique_ptr<juce::AudioFormatReader> r (formats.createReaderFor (render));
+            juce::AudioBuffer<float> x (2, (int) r->lengthInSamples); r->read (&x, 0, x.getNumSamples(), 0, true, true);
+            // The copy sounds as the second it copies, automation and all: clear of the clip edges' fades,
+            // and of the volume's jump back at the copy's start, which the engine ramps over 15 ms.
+            double worst = 0; for (int n = 1200; n < 47600; ++n) worst = std::max (worst, (double) std::abs (x.getSample (0, 96000 + n) - x.getSample (0, 48000 + n)));
+            check (x.getMagnitude (0, 48000, 48000) > .05 && worst < 1e-6, "the duplicated second sounds as the second it copies (" + juce::String (worst, 9) + ")");
+        }
+        s.undo(); st = read (s);
+        check (st.audio.size() == 2 && near (st.audio[1].start, 3) && st.locators == before.locators && st.volume == before.volume && st.midi.size() == 1,
+               "one undo removes the duplicate");
 
         // A warped clip crossing the edit cannot be split, so nothing changes.
         Session warped (false);

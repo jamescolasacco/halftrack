@@ -844,6 +844,8 @@ public:
             { selectionCommand (code == 'E' ? 76 : code == 'D' ? 77 : code == 'C' ? 81 : 82); return true; }
             // A copied time selection pastes at the insert marker from the selected track.
             if (! shift && ! showSession && ! showPiano && code == 'V' && session.hasRangeClipboard()) { selectionCommand (83); return true; }
+            // Cut, Paste and Duplicate Time, as in the reference.
+            if (shift && ! showSession && ! showPiano && (code == 'X' || code == 'V' || code == 'D')) { menuItemSelected (code == 'X' ? 89 : code == 'V' ? 101 : 102, 1); return true; }
             // Capture and Insert Scene, as in the reference.
             if (code == 'I' && shift) { menuItemSelected (68, 4); return true; }
             if (code == 'I' && ! showSession) { menuItemSelected (74, 1); return true; }
@@ -1166,6 +1168,14 @@ private:
    #else
     static constexpr int bypassModifier = juce::ModifierKeys::altModifier;
    #endif
+    // Paste Time lands from the selected track, or from the first when the clipboard holds every track.
+    juce::String pasteTimeTrack() const
+    {
+        int tracks = 0; juce::String first;
+        for (const auto& t : state.tracks) if (! t.isReturn) { if (first.isEmpty()) first = t.id; ++tracks; }
+        const auto* track = currentTrack();
+        return track == nullptr || track->isReturn || session.rangeClipboardTracks() >= tracks ? first : track->id;
+    }
     // Time edits use the selection, or the loop range when nothing is selected.
     std::pair<double, double> editRange() const
     { return timeSelection.active() ? std::pair { timeSelection.start, timeSelection.end } : std::pair { state.loopStart, state.loopEnd }; }
@@ -9162,7 +9172,9 @@ private:
             popup.addSeparator();
             const bool range = (selection || state.loopEnd > state.loopStart) && ! state.recording;
             const juce::String source = selection ? "" : " (Loop Range)";
-            popup.addItem (74, "Insert Silence" + source, range); popup.addItem (75, "Delete Time" + source, range);
+            popup.addItem (74, "Insert Silence" + source, range); popup.addItem (89, "Cut Time" + source, range);
+            popup.addItem (101, "Paste Time", session.hasRangeClipboard() && ! showSession && ! state.recording && ! state.tracks.empty());
+            popup.addItem (102, "Duplicate Time" + source, range); popup.addItem (75, "Delete Time" + source, range);
         }
         else if (index == 2)
         {
@@ -9261,6 +9273,9 @@ private:
             case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); break;
             case 74: { const auto [a, b] = editRange(); report (session.insertTime (a, b - a)); refresh(); break; }
             case 75: { const auto [a, b] = editRange(); report (session.deleteTime (a, b - a)); timeSelection = {}; refresh(); break; }
+            case 89: { const auto [a, b] = editRange(); report (session.cutTime (a, b - a)); timeSelection = {}; refresh(); break; }
+            case 101: report (session.pasteTime (pasteTimeTrack(), state.insertMarker)); refresh(); break;
+            case 102: { const auto [a, b] = editRange(); report (session.duplicateTime (a, b)); refresh(); break; }
             case 76: case 77: case 78: case 79: case 80: case 81: case 82: case 83: selectionCommand (id); break;
             case 30: showPiano = false; addTrack(); resized(); break;
             case 33: addMidiTrack(); break;
@@ -12036,6 +12051,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         for (int step = 0; step < 3; ++step) session.undo();
         refresh();
         check (std::abs (clipStart() - 2) < 1e-6, "each time edit is one undo step");
+        // Cut, Paste and Duplicate Time, from the Edit menu and Shift+Cmd/Ctrl+V and D.
+        menuItemSelected (89, 1); refresh();
+        check (std::abs (clipStart() - 1.5) < 1e-6 && session.hasRangeClipboard() && std::abs (session.rangeClipboardLength() - .5) < 1e-9,
+               "Cut Time moves later clips back and keeps the time");
+        session.setInsertMarker (.5); refresh();
+        const auto shiftCommand = juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier;
+        check (handleKey (juce::KeyPress ('V', shiftCommand, 0)), "Shift+Cmd/Ctrl+V pastes time"); refresh();
+        check (std::abs (clipStart() - 2) < 1e-6, "Paste Time at the insert marker moves them on again");
+        check (handleKey (juce::KeyPress ('D', shiftCommand, 0)), "Shift+Cmd/Ctrl+D duplicates time"); refresh();
+        check (std::abs (clipStart() - 2.5) < 1e-6, "Duplicate Time inserts a copy of the loop range after it");
+        for (int step = 0; step < 3; ++step) session.undo();
+        refresh();
+        check (std::abs (clipStart() - 2) < 1e-6, "each is one undo step");
         deleteClipById (clipId); refresh();
     }
     {

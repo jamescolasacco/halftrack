@@ -2049,3 +2049,11 @@ Engine, UI and QA areas.
 - **Start Playback with Record.** A new preference, on by default. Off, Record pressed while stopped lights and waits until Play or a Session launch starts the transport; Shift reverses it, as the manual says.
 - **Engine use.** Ending a loop recording while playing stops the inputs unlooped first: the engine's way, switching the loop off, would stop the transport.
 - **Measured.** The transport suite (takes and timing for each case, waiting, Shift, a launch), the take-lanes suite (a loop recording ended by Record, with its passes cut as at Stop), the preferences suite and the UI suite.
+
+## Cut, Paste and Duplicate Time — 2026-10-22
+
+Engine, UI and QA areas.
+
+- **The reference's other time commands.** Cut Time, Paste Time and Duplicate Time act across every track, as Insert Silence and Delete Time do, each one undo step, from the Edit menu and Shift+Cmd/Ctrl+X, V and D.
+- **A fix.** Insert Silence inside an automation ramp stretched the ramp across the gap, changing how the lane played before the insertion point. It now holds the lane's value there across the gap.
+- **Measured.** The time-edit suite (layouts, refusals, undo, and a render in which a duplicate plays sample for sample as what it copies) and the UI suite. See [the contract](research/time-commands-contract.md).

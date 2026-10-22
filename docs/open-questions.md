@@ -214,7 +214,7 @@ The crossfader uses the dipless curve (a side stays at 0 dB until the fader cros
 
 ### Time edit defaults
 
-Insert Silence and Delete Time use the Arrangement time selection, or the loop range when nothing is selected. MIDI clips crossing an Insert Silence or Delete Time edit are extended or shortened in place, not split. A note crossing the inserted point keeps its length, and automation is not given boundary points at the cut, so a ramp across deleted time joins its neighbours. Tempo is constant, so tempo events are not moved. These are simplest-default choices pending reference measurement.
+Insert Silence and Delete Time use the Arrangement time selection, or the loop range when nothing is selected. MIDI clips crossing an Insert Silence or Delete Time edit are extended or shortened in place, not split. A note crossing the inserted point keeps its length, and Delete Time gives automation no boundary points at the cut, so a ramp across deleted time joins its neighbours; Insert Silence holds a crossing lane's value across the gap. Cut, Paste and Duplicate Time copy every track but the returns: locators inside copied time are not copied, and a return's automation moves but is not copied ([contract](research/time-commands-contract.md)). Tempo is constant, so tempo events are not moved. These are simplest-default choices pending reference measurement.
 
 ### Follow action chance defaults
 

@@ -885,6 +885,14 @@ public:
     juce::Result insertTime (double startSeconds, double lengthSeconds);
     // Delete Time: removes [start, start + length) everywhere and moves later material earlier.
     juce::Result deleteTime (double startSeconds, double lengthSeconds);
+    // The reference's other time commands, each across every track but the returns and one undo
+    // step. Cut Time copies the time to the range clipboard and deletes it, as Delete Time does.
+    // Paste Time inserts the clipboard's length at a time, as Insert Silence does, and pastes it
+    // there from a track onward. Duplicate Time inserts a copy of [start, end) just after it,
+    // leaving the clipboard as it was.
+    juce::Result cutTime (double startSeconds, double lengthSeconds);
+    juce::Result pasteTime (const juce::String& firstTrackId, double atSeconds);
+    juce::Result duplicateTime (double startSeconds, double endSeconds);
     juce::Result duplicateAudioClip (const juce::String& clipId, juce::String& duplicateId);
     // Preferences, after the reference's Record, Warp & Launch settings: whether arm and solo clicks
     // are exclusive (Cmd/Ctrl-click then adds), the warp mode clips get (Session clips always, and
