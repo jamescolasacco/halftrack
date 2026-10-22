@@ -698,3 +698,7 @@ The reference's curved automation segments are drawn and played with a shape tha
 ### Scroll follow
 
 With Follow Behavior Scroll, the view keeps the play head at its middle once the play head has reached the middle, and pages at the start of the song (it never scrolls before zero). Whether the reference's Scroll keeps it centered or at another fraction of the view is unmeasured.
+
+### Step recording
+
+The reference's step recording needs the MIDI editor's Preview switch on as well as the track armed. Halftrack's MIDI editor has no Preview switch yet, so arming is enough. Steps stop at the end of the clip's content, where the insert marker stops; whether the reference extends the clip when stepping past its end is unmeasured.

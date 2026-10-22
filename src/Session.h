@@ -1179,6 +1179,9 @@ public:
     struct HeldNote { int channel = 0, pitch = 0, velocity = 0; };
     struct MidiMonitorReading { std::vector<MidiMonitorMessage> messages; uint64_t total = 0; std::vector<HeldNote> held; juce::String chord; };
     std::optional<MidiMonitorReading> midiMonitor (const juce::String& pluginId) const;
+    // The notes held now on the MIDI inputs an armed or In-monitored MIDI track takes, in pitch
+    // order, as step recording uses them.
+    std::vector<HeldNote> heldInputNotes (const juce::String& trackId);
     // Device presets: a native device's or Utility's settings, or a plug-in's identity and state, in
     // a .halftrackpreset file. Racks and sample choices are not included. Saving refuses to replace
     // a file unless asked to.

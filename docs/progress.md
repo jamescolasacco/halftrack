@@ -1906,3 +1906,13 @@ Engine and UI areas.
 
 - **Selection and editing.** Session slots select together by Shift-click, Cmd/Ctrl-click and a rubber band from an empty slot, as in the reference. The group drags, copy-drags, deletes, copies, cuts, pastes in its shape and duplicates below itself, each one undo step (`Session::moveSlotClips`, `clearSlots`, `copySlotClips`).
 - **Measured.** `tests/SlotClipTests.cpp` and the UI suite.
+
+## MIDI step recording — 2026-10-22
+
+Engine and UI areas.
+
+- **Step recording.** With the clip's track armed and the transport stopped, Right Arrow in the piano roll adds the held keys at the insert marker, a grid step long, and moves the marker on. Held through another Right Arrow they lengthen; Left Arrow takes them out again, as the reference's step recording does. Each is one undo step.
+- **Held notes.** `Session::heldInputNotes` reports the notes held now on an armed or In-monitored MIDI track.
+- **Measured.** The Capture MIDI suite and the UI suite (computer keyboard notes, no microphone).
+
+See [the contract](research/capture-midi-contract.md#step-recording).

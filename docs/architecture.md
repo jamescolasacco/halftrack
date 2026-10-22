@@ -241,6 +241,8 @@ The Session keeps a range clipboard beside its single-clip ones: whole copies of
 
 `sessionRecord (sceneIndex)` records empty slots through `recordSlot` and adds `Impl::Overdub` entries for armed MIDI tracks whose slot holds a MIDI clip, launching it if it is not playing. The Capture MIDI tap's `captureNote` hands each note on an armed track to `overdubNote`, which places it from the launch handle's played range and the sync point and adds it at its note-off. `cancelLaunches` clears the overdubs. See the [Session recording contract](research/session-recording-contract.md#session-record-and-overdub).
 
+`heldInputNotes (trackId)` flushes the capture taps and returns that track's kept notes that have no note-off yet, in pitch order. The piano roll's `stepRecord` uses it for step recording: it adds, lengthens and removes notes through the ordinary note edits, so each step is one undo step, and remembers only the last step's note ids and pitches. See the [Capture MIDI contract](research/capture-midi-contract.md#step-recording).
+
 ## Audio engine switch
 
 `setAudioEngineEnabled (false)` calls `stop()`, which keeps takes and cancels launches, then `AudioDeviceManager::closeAudioDevice()`; `true` calls `restartLastAudioDevice()`. `Impl::engineOff` only selects the message the device checks give; `isAudioEngineEnabled()` is true whenever a device is open. See the [contract](research/audio-engine-contract.md).

@@ -5698,6 +5698,7 @@ private:
             const auto code = key.getKeyCode();
             if (code == juce::KeyPress::escapeKey) { clearSelection(); repaint(); return true; }
             if (clip != nullptr && code == '0' && !key.getModifiers().isAnyModifierKeyDown()) { toggleSelectedNotes(); return true; }
+            if ((code == juce::KeyPress::rightKey || code == juce::KeyPress::leftKey) && ! key.getModifiers().isAnyModifierKeyDown() && stepRecord (code == juce::KeyPress::rightKey)) return true;
             if (clip != nullptr && key.getModifiers().isCommandDown())
             {
                 if ((code == 'E' || code == 'e') && !key.getModifiers().isShiftDown()) { splitNotesAtMarker(); return true; }
@@ -6468,6 +6469,50 @@ private:
             {clearSelection();for(const auto& note:inserted)selectedNoteIds.insert(note);selectedNoteId=inserted[0];}
             owner.refresh();
         }
+        // MIDI step recording, as the reference's: with the clip's track armed and the transport
+        // stopped, Right Arrow adds the notes held on the track's inputs at the insert marker for a
+        // grid step and moves the marker on; held through another Right Arrow they lengthen by a step;
+        // Left Arrow, still holding them, takes them out again. Each is one undo step.
+        bool stepRecord (bool forward)
+        {
+            const auto* clip = owner.currentMidiClip(); const auto* track = owner.currentTrack();
+            if (clip == nullptr || track == nullptr || ! track->armed || owner.state.playing) return false;
+            const auto held = owner.session.heldInputNotes (track->id);
+            if (held.empty()) return false;
+            std::vector<int> pitches; for (const auto& note : held) pitches.push_back (note.pitch);
+            // Steps stop at the end of the clip's content, where the insert marker stops.
+            const auto clipId = clip->id; const auto end = contentEndBeat (*clip);
+            const auto step = juce::jmin (snapBeats(), end - insertionBeat);
+            // The notes the last step added, if they are the ones still held and end at the marker.
+            std::vector<Session::MidiNoteInfo> previous;
+            for (const auto& note : clip->notes) if (stepNoteIds.contains (note.id)) previous.push_back (note);
+            const bool continuing = stepClipId == clipId && pitches == stepPitches && ! previous.empty() && (int) previous.size() == stepNoteIds.size()
+                                 && std::all_of (previous.begin(), previous.end(), [&] (const auto& n) { return std::abs (n.startBeat + n.lengthBeats - insertionBeat) < 1e-6; });
+            if (! forward)
+            {
+                if (! continuing) return false;
+                owner.report (owner.session.removeMidiNotes (clipId, stepNoteIds));
+                insertionBeat = previous.front().startBeat;
+                stepNoteIds.clear(); stepPitches.clear(); owner.refresh(); repaint(); return true;
+            }
+            if (step < 1e-9) return false;
+            if (continuing)
+            {
+                for (auto& note : previous) note.lengthBeats += step;
+                owner.report (owner.session.updateMidiNotes (clipId, previous));
+            }
+            else
+            {
+                std::vector<Session::MidiNoteInfo> notes;
+                for (const auto& note : held) notes.push_back ({ {}, note.pitch, insertionBeat, step, juce::jlimit (1, 127, note.velocity) / 127.0f });
+                juce::StringArray added;
+                owner.report (owner.session.addMidiNotes (clipId, notes, added));
+                stepNoteIds = added; stepPitches = pitches; stepClipId = clipId;
+            }
+            insertionBeat += step;
+            owner.refresh(); repaint(); return true;
+        }
+        juce::StringArray stepNoteIds; std::vector<int> stepPitches; juce::String stepClipId;
         void toggleSelectedNotes()
         {
             const auto* clip = owner.currentMidiClip();
@@ -13088,6 +13133,54 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     const auto beforeCursorPaste = currentMidiClip()->notes;
     pianoRoll.keyPressed (pasteNotes);
     check (matchesCopiedGroup (addedSince (beforeCursorPaste), 5.25), "arrow key moves the insertion marker by one grid step when no notes are selected");
+    // Step recording: with the clip's track armed and the transport stopped, the arrows enter held keys.
+    {
+        int stepTrack = -1;
+        for (size_t i = 0; i < state.tracks.size(); ++i) if (state.tracks[i].id == currentTrack()->id) stepTrack = (int) i;
+        check (session.setComputerKeyboardEnabled (true).wasOk() && session.setTrackInput (stepTrack, Session::computerKeyboardName).wasOk()
+                   && session.setTrackArmed (stepTrack, true).wasOk(), "arm the clip's track, played from the computer keyboard");
+        pumpSyntheticTestDevice (session, 8); refresh();
+        const auto right = juce::KeyPress (juce::KeyPress::rightKey), left = juce::KeyPress (juce::KeyPress::leftKey);
+        const auto hold = [&] (int pitch, bool on) { check (session.computerKeyboardNote (pitch, on ? .8f : 0, on).wasOk(), on ? "hold a key" : "release a key"); pumpSyntheticTestDevice (session, 4); };
+        const auto byStart = [] (std::vector<Session::MidiNoteInfo> notes)
+        { std::sort (notes.begin(), notes.end(), [] (const auto& a, const auto& b) { return std::tie (a.startBeat, a.pitch) < std::tie (b.startBeat, b.pitch); }); return notes; };
+        markerClick (1);
+        const auto beforeSteps = currentMidiClip()->notes;
+        hold (60, true); hold (64, true);
+        pianoRoll.keyPressed (right);
+        auto stepped = byStart (addedSince (beforeSteps));
+        check (stepped.size() == 2 && stepped[0].pitch == 60 && stepped[1].pitch == 64 && stepped[0].startBeat == 1 && stepped[1].startBeat == 1
+                   && stepped[0].lengthBeats == .25 && stepped[1].lengthBeats == .25 && std::abs (stepped[0].velocity - 102.0f / 127) < .01f,
+               "Right Arrow with keys held adds them at the insert marker, a grid step long, at the velocity played");
+        pianoRoll.keyPressed (right);
+        stepped = byStart (addedSince (beforeSteps));
+        check (stepped.size() == 2 && stepped[0].lengthBeats == .5 && stepped[1].lengthBeats == .5, "held through another Right Arrow, they lengthen by a step");
+        pianoRoll.keyPressed (left);
+        check (addedSince (beforeSteps).empty(), "Left Arrow, still holding them, takes them out");
+        pianoRoll.keyPressed (right);
+        stepped = byStart (addedSince (beforeSteps));
+        check (stepped.size() == 2 && stepped[0].startBeat == 1 && stepped[0].lengthBeats == .25, "and the marker went back with them");
+        hold (64, false);
+        pianoRoll.keyPressed (right);
+        stepped = byStart (addedSince (beforeSteps));
+        check (stepped.size() == 3 && stepped[2].pitch == 60 && stepped[2].startBeat == 1.25 && stepped[2].lengthBeats == .25 && stepped[0].lengthBeats == .25,
+               "a different chord held is a new step from where the marker moved to");
+        hold (60, false);
+        const auto beforeRelease = currentMidiClip()->notes.size();
+        pianoRoll.keyPressed (right);
+        check (currentMidiClip()->notes.size() == beforeRelease, "with nothing held, Right Arrow only moves the marker");
+        pianoRoll.keyPressed (undo);
+        check (addedSince (beforeSteps).size() == 2, "each step is one undo step");
+        pianoRoll.keyPressed (undo);
+        check (addedSince (beforeSteps).empty(), "and undo takes the clip back to before the steps");
+        check (session.setTrackArmed (stepTrack, false).wasOk(), "disarm"); refresh();
+        hold (67, true);
+        const auto beforeUnarmed = currentMidiClip()->notes.size();
+        pianoRoll.keyPressed (right);
+        check (currentMidiClip()->notes.size() == beforeUnarmed, "an unarmed track does not step record");
+        hold (67, false);
+        check (session.setTrackInput (stepTrack, {}).wasOk() && session.setComputerKeyboardEnabled (false).wasOk(), "disconnect the computer keyboard"); refresh();
+    }
 
     if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
     {

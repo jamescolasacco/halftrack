@@ -4081,9 +4081,10 @@ struct Session::Impl
             auto* t = dynamic_cast<te::AudioTrack*> (te::findTrackForID (*edit, target));
             if (t == nullptr || ! static_cast<bool> (t->state.getProperty (midiTrackProperty))) continue;
             const bool monitored = static_cast<int> (t->state.getProperty (monitorProperty, 0)) == static_cast<int> (MonitorMode::on);
-            if (! in.isRecordingEnabled (target) && ! monitored) continue;
+            const bool keeping = in.isRecordingEnabled (target) || monitored;
             if (in.isRecordingEnabled (target))
                 for (auto& overdub : overdubs) if (overdub.trackId == target) overdubNote (overdub, m);
+            if (! keeping && (m.isNoteOn() || ! captured.contains (target))) continue; // Notes kept before still end.
             auto& notes = captured[target];
             if (m.isNoteOn())
             {
@@ -7638,6 +7639,18 @@ Result Session::setMidiControllerLane (const String& clipId, int controller, con
 Result Session::removeMidiNote (const String& clipId, const String& noteId)
 {
     return removeMidiNotes (clipId, { noteId });
+}
+std::vector<Session::HeldNote> Session::heldInputNotes (const String& trackId)
+{
+    for (auto& tap : impl->captureTaps) tap->flush(); // Notes played just before are included.
+    std::vector<HeldNote> held;
+    for (const auto& [target, notes] : impl->captured)
+        if (target.toString() == trackId)
+            for (const auto& note : notes)
+                if (note.offTime < 0) held.push_back ({ note.channel, note.pitch, juce::roundToInt (note.velocity * 127) });
+    std::sort (held.begin(), held.end(), [] (const auto& a, const auto& b) { return a.pitch < b.pitch; });
+    held.erase (std::unique (held.begin(), held.end(), [] (const auto& a, const auto& b) { return a.pitch == b.pitch; }), held.end());
+    return held;
 }
 Result Session::removeMidiNotes (const String& clipId, const juce::StringArray& noteIds)
 {

@@ -112,7 +112,31 @@ int runCaptureMidiTests (const juce::File&)
         check (slot.hasClip && slot.clip.notes.size() == 1 && slot.clip.notes[0].pitch == 72 && std::abs (slot.clip.lengthBeats - 4) < 1e-6 && clips().empty(),
                "an In-monitored track's notes go into its first empty slot");
         ok (s.setTrackMonitor (keys, Session::MonitorMode::off), "stop monitoring");
-        juce::ignoreUnused (keysId);
+
+        // The notes held now, as step recording takes them.
+        pumpSyntheticTestDevice (s, 8);
+        controller.now (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 90)); pumpSyntheticTestDevice (s, 4);
+        check (s.heldInputNotes (keysId).empty(), "an unarmed, unmonitored track has no held notes");
+        controller.now (juce::MidiMessage::noteOff (1, 64)); pumpSyntheticTestDevice (s, 4);
+        ok (s.setTrackArmed (keys, true), "arm again");
+        pumpSyntheticTestDevice (s, 8);
+        controller.now (juce::MidiMessage::noteOn (1, 67, (juce::uint8) 90));
+        controller.now (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100));
+        pumpSyntheticTestDevice (s, 4);
+        auto held = s.heldInputNotes (keysId);
+        check (held.size() == 2 && held[0].pitch == 60 && held[0].velocity == 100 && held[1].pitch == 67 && held[1].velocity == 90 && held[0].channel == 1,
+               "an armed track's held notes, in pitch order with their velocities");
+        controller.now (juce::MidiMessage::noteOff (1, 60)); pumpSyntheticTestDevice (s, 4);
+        held = s.heldInputNotes (keysId);
+        check (held.size() == 1 && held[0].pitch == 67, "a released note is no longer held");
+        controller.now (juce::MidiMessage::noteOff (1, 67)); pumpSyntheticTestDevice (s, 4);
+        check (s.heldInputNotes (keysId).empty() && s.heldInputNotes ("missing").empty(), "nothing is held once all are released, or on a missing track");
+        controller.now (juce::MidiMessage::noteOn (1, 62, (juce::uint8) 90)); pumpSyntheticTestDevice (s, 4);
+        ok (s.setTrackArmed (keys, false), "disarm while a key is held"); pumpSyntheticTestDevice (s, 8);
+        controller.now (juce::MidiMessage::noteOff (1, 62)); pumpSyntheticTestDevice (s, 4);
+        ok (s.setTrackArmed (keys, true), "arm again"); pumpSyntheticTestDevice (s, 8);
+        check (s.heldInputNotes (keysId).empty(), "a key released while the track was disarmed is not still held");
+        ok (s.setTrackArmed (keys, false), "disarm");
         std::cout << "Capture MIDI passed" << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL capture MIDI: " << e.what() << std::endl; return 1; }
