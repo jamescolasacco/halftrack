@@ -392,7 +392,7 @@ public:
         if (names != trackNames || ids != trackIds || trackChoice.getNumItems() == 0)
         {
             trackNames = names; trackIds = ids; trackChoice.clear (juce::dontSendNotification);
-            trackChoice.addItem ("Master", 1);
+            trackChoice.addItem ("Main", 1);
             trackChoice.addItemList (trackNames, 2);
         }
         if (! editingMaster && trackId.isEmpty() && ! trackIds.isEmpty()) trackId = trackIds[0];
@@ -871,7 +871,7 @@ int runAutomationEditorTests (const juce::File& root)
             masterCurve.mouseDown (masterEvent (point, point)); masterCurve.mouseUp (masterEvent (point, point));
         };
         auto masterLane = [&] { return session.snapshot().masterVolumeAutomation; };
-        check (master.editingMaster && master.trackChoice.getText() == "Master" && master.targetChoice.getNumItems() == 2
+        check (master.editingMaster && master.trackChoice.getText() == "Main" && master.targetChoice.getNumItems() == 2
             && master.targetChoice.getSelectedId() == 1 && master.target() == Session::AutomationTarget::volume && std::abs (master.manualValue() + 9) < .001f,
             "the master destination offers volume (selected, with its real manual baseline) and song tempo");
         check (masterEditor.createComponentSnapshot (masterEditor.getLocalBounds()).isValid(), "empty master lane paints without a track pointer");
@@ -939,7 +939,7 @@ int runAutomationEditorTests (const juce::File& root)
         session.undo(); master.synchronise();
         const auto beforeTrackRemoval = masterLane();
         check (session.moveTrack (session.snapshot().tracks[0].id, 1).wasOk(), "reorder a track while master editor is open"); master.synchronise();
-        check (master.available() && masterLane() == beforeTrackRemoval && master.trackChoice.getText() == "Master",
+        check (master.available() && masterLane() == beforeTrackRemoval && master.trackChoice.getText() == "Main",
             "track reordering never redirects the master destination");
         while (! session.snapshot().tracks.empty()) check (session.removeTrack (0).wasOk(), "remove an unrelated track while Master remains selected");
         master.synchronise();

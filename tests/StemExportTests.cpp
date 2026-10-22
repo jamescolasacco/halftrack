@@ -5,7 +5,7 @@
 
 // Stem export. Generated sines on two tracks, one inside a -6 dB group, and a
 // post-fader send at -6 dB to a return: each stem must hold only its own signal
-// (returns separate) and Master the complete mix, without changing the project.
+// (returns separate) and Main the complete mix, without changing the project.
 namespace halftrack
 {
 namespace
@@ -60,14 +60,14 @@ int runStemExportTests (const juce::File& artifacts)
         juce::StringArray files;
         ok (s.exportStems (folder, settings, files), "export stems");
         juce::StringArray names; for (const auto& f : files) names.add (juce::File (f).getFileName());
-        check (names == juce::StringArray { "Song Lead.wav", "Song Keys.wav", "Song Pad.wav", "Song Room.wav", "Song Master.wav" },
-               "one file per track, group, return and Master, in display order: " + names.joinIntoString (", "));
+        check (names == juce::StringArray { "Song Lead.wav", "Song Keys.wav", "Song Pad.wav", "Song Room.wav", "Song Main.wav" },
+               "one file per track, group, return and Main, in display order: " + names.joinIntoString (", "));
         const auto half = .5;
         check (error (read (folder.getChildFile ("Song Lead.wav")), [] (int n) { return (double) a (n); }) < 1e-5, "the Lead stem is the dry first track without its return");
         check (error (read (folder.getChildFile ("Song Pad.wav")), [&] (int n) { return half * b (n); }) < 1e-5, "the Pad stem is the second track through its group");
         check (error (read (folder.getChildFile ("Song Keys.wav")), [&] (int n) { return half * b (n); }) < 1e-5, "the Keys group stem holds its member at the group level");
         check (error (read (folder.getChildFile ("Song Room.wav")), [&] (int n) { return half * a (n); }) < 1e-5, "the Room return stem holds only the send it receives");
-        check (error (read (folder.getChildFile ("Song Master.wav")), [&] (int n) { return a (n) + half * a (n) + half * b (n); }) < 1e-5, "the Master stem is the complete mix");
+        check (error (read (folder.getChildFile ("Song Main.wav")), [&] (int n) { return a (n) + half * a (n) + half * b (n); }) < 1e-5, "the Master stem is the complete mix");
         const auto after = s.snapshot();
         bool same = ! after.dirty && ! s.canRedo() && after.tracks.size() == before.tracks.size();
         for (size_t i = 0; same && i < after.tracks.size(); ++i) same = after.tracks[i].solo == before.tracks[i].solo && after.tracks[i].mute == before.tracks[i].mute;
@@ -77,13 +77,13 @@ int runStemExportTests (const juce::File& artifacts)
         ok (s.exportStems (folder, settings, files, true), "replace the stems");
         check (read (folder.getChildFile ("Song Lead.wav")).getMagnitude (0, 2000, 44000) < 1e-6 && s.snapshot().tracks[0].mute, "a muted track exports a silent stem and stays muted");
         ok (s.setTrackMute (0, false), "unmute it");
-        // Selected Tracks Only, or one track: just those stems, without Master.
+        // Selected Tracks Only, or one track: just those stems, without Main.
         const auto chosen = root.getChildFile ("Chosen");
         settings.stemTracks = { s.snapshot().tracks[0].id, group };
         ok (s.exportStems (chosen, settings, files), "export the first track and the group");
         names.clear(); for (const auto& f : files) names.add (juce::File (f).getFileName());
-        check (names == juce::StringArray { "Song Lead.wav", "Song Keys.wav" } && ! chosen.getChildFile ("Song Master.wav").exists() && ! chosen.getChildFile ("Song Pad.wav").exists(),
-               "only the chosen track and group are rendered, without Master: " + names.joinIntoString (", "));
+        check (names == juce::StringArray { "Song Lead.wav", "Song Keys.wav" } && ! chosen.getChildFile ("Song Main.wav").exists() && ! chosen.getChildFile ("Song Pad.wav").exists(),
+               "only the chosen track and group are rendered, without Main: " + names.joinIntoString (", "));
         check (error (read (chosen.getChildFile ("Song Keys.wav")), [&] (int n) { return half * b (n); }) < 1e-5, "and they sound as the full export's do");
         settings.stemTracks = { "missing" };
         check (s.exportStems (root.getChildFile ("None"), settings, files).failed() && files.isEmpty(), "a choice with no track in the project is refused");

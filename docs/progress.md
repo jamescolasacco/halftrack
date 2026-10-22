@@ -2084,3 +2084,7 @@ Engine, UI and QA areas.
 - **Returns after the other tracks.** As in the reference, new audio and MIDI tracks go before the returns, moves cannot cross them (the track menus disable such moves), and a project holding returns among the other tracks opens with them last.
 - **Callers.** Importing audio or movies to a new track, MIDI file import and Slice to New MIDI Track no longer assume the new track is the last one.
 - **Measured.** The track-order suite (insertion, undo, refused moves, and a project file edited to put the return first) and the UI suite.
+
+## The Main track's name — 2026-10-22
+
+UI area. The reference's built-in default Set names its master track Main, as its Live 12 interface does. Halftrack's interface now says Main where it said Master: the Session grid's column, the mixer strip, Main Out, Audio To, the device chain, the automation editor, the export dialog, messages, and the stem of the whole mix (now "<project> Main.wav"). The Session API keeps its master names.

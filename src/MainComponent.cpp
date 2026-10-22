@@ -1775,11 +1775,11 @@ private:
             outputPorts.clear();
             output.setTooltip ("Audio To: where this track plays. With Sends Only, only its sends are heard.");
             juce::StringArray ids, labels;
-            if (track.isReturn) labels.add ("Master");
+            if (track.isReturn) labels.add ("Main");
             else if (track.groupId.isNotEmpty()) labels.add ("Group");
             else
             {
-                labels.addArray ({ "Master", "Sends Only" });
+                labels.addArray ({ "Main", "Sends Only" });
                 for (const auto& id : owner.session.outputDestinations (track.id))
                     for (const auto& other : owner.state.tracks) if (other.id == id) { ids.add (id); labels.add (other.name); }
             }
@@ -3478,7 +3478,7 @@ private:
             const int sceneX = masterX();
             const auto master = juce::Rectangle<int> (sceneX, 0, sceneWidth, headerHeight).reduced (1, 0).withTrimmedBottom (1);
             g.setColour (themes::colour (0xff4a4a4a)); g.fillRect (master);
-            g.setColour (ink); g.setFont (font (11.0f, true)); g.drawText ("Master", master.reduced (6, 0), juce::Justification::centredLeft);
+            g.setColour (ink); g.setFont (font (11.0f, true)); g.drawText ("Main", master.reduced (6, 0), juce::Justification::centredLeft);
             g.saveState(); g.reduceClipRegion (sceneX, gridTop, sceneWidth, grid.getHeight());
             for (int scene = 0; scene < (int) owner.state.scenes.size(); ++scene)
             {
@@ -3846,7 +3846,7 @@ private:
                 gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 16); gain.setRange (-100, 6, .1); gain.setSkewFactorFromMidPoint (-12);
                 gain.setDoubleClickReturnValue (true, 0);
                 gain.textFromValueFunction = [] (double v) { return v <= -100 ? juce::String ("-inf dB") : juce::String (v, 1) + " dB"; };
-                gain.onDragStart = [this] { owner.session.beginEditGesture ("Master volume"); };
+                gain.onDragStart = [this] { owner.session.beginEditGesture ("Main volume"); };
                 gain.onDragEnd = [this] { owner.session.endEditGesture(); };
                 gain.onValueChange = [this] { owner.report (owner.session.setMasterGain ((float) gain.getValue())); };
                 gain.updateText(); addAndMakeVisible (gain);
@@ -3857,8 +3857,8 @@ private:
                 crossfader.onDragEnd = [this] { owner.session.endEditGesture(); };
                 crossfader.onValueChange = [this] { owner.report (owner.session.setCrossfader ((float) crossfader.getValue())); };
                 addAndMakeVisible (crossfader);
-                // Master Out, as the reference's master track chooses the output it plays to.
-                output.setName ("Master Out"); output.setTooltip ("Master Out: the audio output the master plays to.");
+                // Main Out, as the reference's Main track chooses the output it plays to.
+                output.setName ("Main Out"); output.setTooltip ("Main Out: the audio output the Main track plays to.");
                 output.onChange = [this]
                 {
                     const auto names = owner.session.outputNames();
@@ -3901,7 +3901,7 @@ private:
                 soloCue.setToggleState (owner.state.cueMode, juce::dontSendNotification);
                 soloCue.setEnabled (owner.state.cueAvailable && ! owner.session.isExporting());
                 soloCue.setTooltip (owner.state.cueAvailable ? "Solo/Cue: the tracks' switches solo them, or cue them on Cue Out"
-                                                             : "Solo/Cue: choose a Cue Out apart from the Master Out to cue tracks");
+                                                             : "Solo/Cue: choose a Cue Out apart from the Main Out to cue tracks");
                 if (! cueVolume.isMouseButtonDown()) cueVolume.setValue (owner.state.cueVolumeDb, juce::dontSendNotification);
                 cueVolume.setTooltip ("Cue volume: " + cueVolume.getTextFromValue (cueVolume.getValue()) + ". The click, previews and cued tracks play at it. Double-click for -6 dB.");
                 cueVolume.setEnabled (! owner.session.isExporting());
@@ -3909,7 +3909,7 @@ private:
                 crossfader.setEnabled (! owner.session.isExporting());
                 if (! gain.isMouseButtonDown()) gain.setValue (owner.state.masterGainDb, juce::dontSendNotification);
                 gain.setEnabled (! owner.session.isExporting());
-                showAutomationState (gain, owner.state.masterVolumeAutomation, "Master output level. Double-click for 0 dB.", "Master volume");
+                showAutomationState (gain, owner.state.masterVolumeAutomation, "Main output level. Double-click for 0 dB.", "Main volume");
                 gain.getProperties().set ("midiMapTarget", "master");
                 if (names != outputNames) { outputNames = names; output.clear (juce::dontSendNotification); for (int i = 0; i < names.size(); ++i) output.addItem (names[i], i + 1); }
                 output.setSelectedId (names.indexOf (owner.session.masterOutput()) + 1, juce::dontSendNotification);
@@ -3927,7 +3927,7 @@ private:
             void paint (juce::Graphics& g) override
             {
                 g.fillAll (themes::colour (0xff383838));
-                g.setColour (muted); g.setFont (font (9.0f, true)); g.drawText ("MASTER", 6, 4, getWidth() - 12, 16, juce::Justification::centred);
+                g.setColour (muted); g.setFont (font (9.0f, true)); g.drawText ("MAIN", 6, 4, getWidth() - 12, 16, juce::Justification::centred);
                 g.drawText ("CUE", getWidth() - 39, 104, 32, 10, juce::Justification::centred);
                 g.drawText ("A", 4, getHeight() - 34, 12, 22, juce::Justification::centred); g.drawText ("B", getWidth() - 16, getHeight() - 34, 12, 22, juce::Justification::centred);
                 const juce::Rectangle<int> meter { 66, 110 + TrackRow::outputRow, 10, juce::jmax (10, getHeight() - 182 - TrackRow::outputRow) };
@@ -4482,7 +4482,7 @@ private:
         juce::String describe (const juce::String& target) const
         {
             const auto parts = juce::StringArray::fromTokens (target, ":", "");
-            if (target == "master") return "Master / Volume";
+            if (target == "master") return "Main / Volume";
             if (parts[0] == "transport")
             {
                 const juce::StringArray ids { "play", "stop", "record", "loop", "metronome", "stopClips" }, names { "Play", "Stop", "Record", "Loop", "Metronome", "Stop All Clips" };
@@ -7516,10 +7516,10 @@ private:
             automationButton.setName ("Track automation");
             automationButton.setTooltip ("Draw track volume, track pan, or master volume changes across the arrangement.");
             automationButton.onClick = [this] { owner.showAutomation(); };
-            addAndMakeVisible(masterGain);masterGain.setName("Master volume");
+            addAndMakeVisible(masterGain);masterGain.setName("Main volume");
             masterGain.setSliderStyle(juce::Slider::LinearVertical);masterGain.setRange(-100,6,.1);masterGain.setSkewFactorFromMidPoint(-12);
             masterGain.setTextBoxStyle(juce::Slider::TextBoxBelow,false,49,20);masterGain.setDoubleClickReturnValue(true,0);
-            masterGain.setTooltip("Master output level. Double-click for 0 dB. The bottom of the fader is silence.");
+            masterGain.setTooltip("Main output level. Double-click for 0 dB. The bottom of the fader is silence.");
             masterGain.textFromValueFunction=[](double value){return value<=-100?juce::String("-inf dB"):juce::String(value,1)+" dB";};
             masterGain.valueFromTextFunction=[this](juce::String text)
             {
@@ -7533,7 +7533,7 @@ private:
                 const auto current = owner.session.snapshot();
                 if (masterProjectGeneration != current.projectGeneration) { owner.refresh(); return; }
                 if (owner.session.isExporting()) return;
-                masterGestureGeneration = current.projectGeneration; owner.session.beginEditGesture ("Master volume");
+                masterGestureGeneration = current.projectGeneration; owner.session.beginEditGesture ("Main volume");
             };
             masterGain.onDragEnd = [this]
             {
@@ -7567,7 +7567,7 @@ private:
             masterProjectGeneration = owner.state.projectGeneration;
             if (projectChanged || ! masterGain.isMouseButtonDown()) masterGain.setValue (owner.state.masterGainDb, juce::dontSendNotification);
             masterGain.setEnabled (! owner.session.isExporting());
-            showAutomationState (masterGain, owner.state.masterVolumeAutomation, "Master output level. Double-click for 0 dB. The bottom of the fader is silence.", "Master volume");
+            showAutomationState (masterGain, owner.state.masterVolumeAutomation, "Main output level. Double-click for 0 dB. The bottom of the fader is silence.", "Master volume");
             masterGain.getProperties().set ("midiMapTarget", "master");
             automationButton.setEnabled (! owner.session.isExporting());
             addButton.setEnabled (track != nullptr);
@@ -7642,7 +7642,7 @@ private:
             auto box = getLocalBounds().removeFromRight (107).reduced (8, 8);
             g.setColour (background); g.fillRect (box);
             g.setColour (muted); g.setFont (font (9.5f, true));
-            g.drawText ("MASTER", box.removeFromTop (23), juce::Justification::centred);
+            g.drawText ("MAIN", box.removeFromTop (23), juce::Justification::centred);
             auto meterArea = box.withTrimmedLeft(60).reduced(0,12);
             auto meter = [&] (float peak, int x)
             {
@@ -8894,7 +8894,7 @@ private:
         if (extButton.isVisible() != (session.hasSyncInputs() || following)) resized();
         tempo.setEditable (false, state.tempoMap.size() <= 1 && ! following, false); tapButton.setEnabled (state.tempoMap.size() <= 1 && ! following);
         tempo.setTooltip (state.tempoMap.size() <= 1 ? "Tempo: 20–999 beats per minute. Double-click to edit."
-                                                    : "The tempo is automated; this is the tempo at the playhead. Edit it in Automation > Master > Song Tempo.");
+                                                    : "The tempo is automated; this is the tempo at the playhead. Edit it in Automation > Main > Song Tempo.");
         if (! meterLabel.isBeingEdited()) meterLabel.setText (juce::String (state.timeSignature.numerator) + " / " + juce::String (state.timeSignature.denominator), juce::dontSendNotification);
         const auto beatPosition = beatsAt (juce::jmax (0.0, state.position));
         positionLabel.setText (state.countInBeatsRemaining>0
@@ -9252,7 +9252,7 @@ private:
         }
         else if (index == 3)
         {
-            popup.addItem (45, "Session"); popup.addItem (43, "Arrangement"); popup.addItem (44, "Piano Roll"); popup.addItem (46, "Automation..."); popup.addItem (47, "Master Volume Automation..."); popup.addSeparator();
+            popup.addItem (45, "Session"); popup.addItem (43, "Arrangement"); popup.addItem (44, "Piano Roll"); popup.addItem (46, "Automation..."); popup.addItem (47, "Main Volume Automation..."); popup.addSeparator();
             popup.addItem (48, "Show Take Lanes", currentTrack() != nullptr && ! currentTrack()->isReturn && ! showSession, currentTrack() != nullptr && takeLanesShown.count (currentTrack()->id) > 0);
             popup.addItem (49, "Automation Mode", ! showSession, automationMode); popup.addItem (90, "Info", true, showInfo);
             // The reference keeps these in its Options menu.
@@ -9587,7 +9587,7 @@ private:
         {
             setLookAndFeel (&look);
             addComboBox ("range", { "Entire arrangement", "Loop range", "Custom range" }, {});
-            addComboBox ("rendered", { "Master", "All Individual Tracks" }, {});
+            addComboBox ("rendered", { "Main", "All Individual Tracks" }, {});
             addTextEditor ("range-start", juce::String (loop.getStart(), 6), {});
             addTextEditor ("range-end", juce::String (loop.getEnd(), 6), {});
             customStart = getTextEditorContents ("range-start"); customEnd = getTextEditorContents ("range-end");
@@ -9611,7 +9611,7 @@ private:
             error.setJustificationType (juce::Justification::centredLeft); addAndMakeVisible (error);
             const juce::StringArray order { "range", "rendered", "range-start", "range-end", "format", "channels", "sample-rate", "bit-depth", "normalization", "effect-tail", "video" };
             const juce::StringArray titles { "Export range", "Rendered track", "Start in seconds", "End in seconds", "File format", "Output channels", "Sample rate", "Bit depth", "Normalize exported peak", "Extra reverb and delay tail", "Video" };
-            getComboBoxComponent ("rendered")->setDescription ("Export the Master mix, or every track, group and return to its own file in a folder.");
+            getComboBoxComponent ("rendered")->setDescription ("Export the Main mix, or every track, group and return to its own file in a folder.");
             for (int i = 0; i < order.size(); ++i)
                 if (auto* control = controlNamed (order[i])) { control->setExplicitFocusOrder (i + 1); control->setTitle (titles[i]); }
             getComboBoxComponent ("range")->setDescription ("Export the entire arrangement, captured loop endpoints, or a custom time interval.");
@@ -11673,7 +11673,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto key = gain->getProperties()["midiMapTarget"].toString();
         const auto targets = mapOverlay.targets();
         check (key == "mixer:" + state.tracks[0].id + ":volume" && std::any_of (targets.begin(), targets.end(), [&] (const auto& t) { return t.key == key; })
-               && findNamed (deviceChain, "Master volume") != nullptr && findNamed (deviceChain, "Master volume")->getProperties()["midiMapTarget"].toString() == "master",
+               && findNamed (deviceChain, "Main volume") != nullptr && findNamed (deviceChain, "Main volume")->getProperties()["midiMapTarget"].toString() == "master",
                "the track's fader is a target in the overlay, and the master fader carries its target");
         const auto centre = mapOverlay.getLocalArea (gain, gain->getLocalBounds()).getCentre().toFloat();
         const auto now = juce::Time::getCurrentTime();
@@ -15074,7 +15074,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         tempo.setText(invalid,juce::sendNotificationSync);
         check(state.tempo==120&&tempo.getText()=="120.00"&&session.canRedo(),"invalid tempo text restores display without discarding redo");
     }
-    auto* master=dynamic_cast<juce::Slider*>(findNamed(*this,"Master volume"));
+    auto* master=dynamic_cast<juce::Slider*>(findNamed(*this,"Main volume"));
     check(master&&master->isVisible(),"master strip exposes a real output fader");
     master->setValue(-9,juce::sendNotificationSync);refresh();check(std::abs(state.masterGainDb+9)<1e-4,"master fader updates the native output level");
     master->onDragStart();master->setValue(-3,juce::sendNotificationSync);master->setValue(-6,juce::sendNotificationSync);master->onDragEnd();
@@ -15304,14 +15304,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         auto* output = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Track output"));
         const auto outs = session.outputNames();
         check (outs.size() == 2 && session.masterOutput() == outs[0], "the test device has a second output pair");
-        check (output != nullptr && output->isVisible() && output->getNumItems() == 4 && output->getText() == "Master"
+        check (output != nullptr && output->isVisible() && output->getNumItems() == 4 && output->getText() == "Main"
                && output->getItemText (2) == state.tracks[1].name && output->getItemText (3) == "Ext. Out " + outs[1],
                "a track strip's output offers Master, Sends Only, the other track and Ext. Out to the other outputs, as the reference's Audio To does");
         output->setSelectedId (4, juce::sendNotificationSync); refresh();
         check ((state.tracks[0].output == Session::TrackOutput { Session::OutputKind::external, {}, outs[1] }) && output->getText() == "Ext. Out " + outs[1], "choosing Ext. Out plays the track to those outputs");
         session.undo(); refresh();
         {
-            auto* masterOut = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Master Out"));
+            auto* masterOut = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Main Out"));
             check (masterOut != nullptr && masterOut->isVisible() && masterOut->getNumItems() == 2 && masterOut->getText() == outs[0] && masterOut->isEnabled(),
                    "the master strip shows its Master Out");
             masterOut->setSelectedId (2, juce::sendNotificationSync); refresh();
@@ -15350,7 +15350,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         output->setSelectedId (3, juce::sendNotificationSync); refresh();
         check ((state.tracks[0].output == Session::TrackOutput { Session::OutputKind::track, state.tracks[1].id }), "choosing a track routes into it");
         session.undo(); session.undo(); refresh();
-        check (state.tracks[0].output == Session::TrackOutput {} && output->getText() == "Master", "undo returns the strip to Master");
+        check (state.tracks[0].output == Session::TrackOutput {} && output->getText() == "Main", "undo returns the strip to Main");
         {
             // A MIDI track without an instrument: No Instrument in its device view, then MIDI To
             // from its strip, offering a channel of each port whose Track switch is on.
@@ -15400,7 +15400,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             }
             else std::cout << "SKIP UI MIDI To ports: this system cannot make a virtual MIDI port" << std::endl;
             chooser->setSelectedId (1, juce::sendNotificationSync); refresh();
-            check (state.tracks[(size_t) lane].hasInstrument && midiTo->getItemText (0) == "Master", "the built-in synth comes back, with Audio To");
+            check (state.tracks[(size_t) lane].hasInstrument && midiTo->getItemText (0) == "Main", "the built-in synth comes back, with Audio To");
             check (session.removeTrack (lane).wasOk(), "remove the MIDI To track"); refresh();
         }
         // Audio From another track, from the input chooser's Tracks section.
@@ -15653,19 +15653,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     auto* masterWindow = automationWindows.back().getComponent();
     auto* masterDestination = dynamic_cast<juce::ComboBox*> (findNamed (*masterWindow, "automation-track"));
     auto* masterTarget = dynamic_cast<juce::ComboBox*> (findNamed (*masterWindow, "automation-target"));
-    check (masterDestination && masterDestination->getText() == "Master" && masterTarget && masterTarget->getNumItems() == 2 && masterTarget->getText() == "Volume",
+    check (masterDestination && masterDestination->getText() == "Main" && masterTarget && masterTarget->getNumItems() == 2 && masterTarget->getText() == "Volume",
         "Master Volume Automation menu opens the master destination on its volume (song tempo is the other master target)");
     masterWindow->closeButtonPressed();
     while (! state.tracks.empty()) { check (session.removeTrack (0).wasOk(), "remove track for empty-project automation navigation"); refresh(); }
     check (automationButton->isEnabled(), "Automation button remains available with no tracks");
     automationButton->onClick();
     auto* emptyDestination = dynamic_cast<juce::ComboBox*> (findNamed (*automationWindows.back(), "automation-track"));
-    check (emptyDestination && emptyDestination->getText() == "Master" && emptyDestination->getNumItems() == 1,
+    check (emptyDestination && emptyDestination->getText() == "Main" && emptyDestination->getNumItems() == 1,
         "empty-project Automation button opens Master without a track selection");
     automationWindows.back()->closeButtonPressed();
     menuItemSelected (46, 3);
     emptyDestination = dynamic_cast<juce::ComboBox*> (findNamed (*automationWindows.back(), "automation-track"));
-    check (emptyDestination && emptyDestination->getText() == "Master", "empty-project View Automation opens Master");
+    check (emptyDestination && emptyDestination->getText() == "Main", "empty-project View Automation opens Main");
     automationWindows.back()->closeButtonPressed();
     master->onDragStart(); master->setValue (-3, juce::sendNotificationSync);
     check (session.newProject().wasOk(), "replace project during a master fader drag"); refresh();

@@ -24,7 +24,7 @@ Halftrack's outputs follow the reference's:
   - `setMasterOutput` moves the master, and every track playing to Master, to another output.
   - It is kept with the project and applied when the project opens, if that output is there.
   - It is refused for an output a track already plays to with Ext. Out.
-  - The master strip in the Session mixer has a Master Out chooser.
+  - The master strip in the Session mixer has a Main Out chooser (the UI uses the reference's name, Main, for the master track).
 
 ## Evidence
 

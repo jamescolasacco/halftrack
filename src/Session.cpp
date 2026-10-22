@@ -544,7 +544,7 @@ Result validateRouting (const juce::ValueTree& state)
         if (returned)
             for (const auto& device : track.getChildWithName (te::IDs::OUTPUTDEVICES))
                 if (device[te::IDs::name].toString().startsWithIgnoreCase ("track "))
-                    return Result::fail ("Return tracks play into Master.");
+                    return Result::fail ("Return tracks play into Main.");
         std::set<String> targets;
         bool pastSourceEffects = false;
         for (int index = 0; index < static_cast<int> (plugins.size()); ++index)
@@ -5479,7 +5479,7 @@ Result Session::loadProject (const File& file)
                     return Result::fail ("Mixer automation exceeds the supported beat or value range.");
     for (const auto target : { AutomationTarget::volume, AutomationTarget::pan })
         if (! validAutomationLane (target, automationLane (*candidate->getMasterVolumePlugin(), target)))
-            return Result::fail ("Master automation exceeds the supported beat or value range.");
+            return Result::fail ("Main automation exceeds the supported beat or value range.");
     // Plug-ins that cannot load stay as placeholders; the snapshot marks them missing.
     for (auto* t : te::getAudioTracks (*candidate))
         for (auto* c : allTrackClips (*t))
@@ -5896,7 +5896,7 @@ Result Session::setAudioOutputEnabled (const String& outputName, bool enabled)
     for (auto* device : devices.getWaveOutputDevices())
         if (device->getName() == outputName)
         {
-            if (! enabled && device->getDeviceID() == devices.getDefaultWaveOutDeviceID()) return Result::fail ("The Master Out cannot be switched off.");
+            if (! enabled && device->getDeviceID() == devices.getDefaultWaveOutDeviceID()) return Result::fail ("The Main Out cannot be switched off.");
             if (device->isEnabled() != enabled) { devices.setDeviceEnabled (*device, enabled); devices.dispatchPendingUpdates(); impl->edit->restartPlayback(); impl->changed(); }
             return Result::ok();
         }
@@ -5916,7 +5916,7 @@ String Session::masterOutput() const
 Result Session::setMasterOutput (const String& outputName)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (impl->anyRecording()) return Result::fail ("Stop recording before changing the Master Out.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before changing the Main Out.");
     if (! outputNames().contains (outputName)) return Result::fail ("Choose an output that is switched on in the Output Config.");
     if (outputName == masterOutput()) return Result::ok();
     for (const auto& track : snapshot().tracks)
@@ -6587,7 +6587,7 @@ Result Session::setTrackOutput (const String& trackId, const TrackOutput& output
     else if (t->getOutput().outputsToNone()) current = { OutputKind::sendsOnly, {} };
     else if (const auto external = impl->externalOutput (*t); external.isNotEmpty()) current = { OutputKind::external, {}, external };
     if (output.kind == OutputKind::master || output.kind == OutputKind::sendsOnly ? output.kind == current.kind : output == current) return Result::ok();
-    if (output.kind != OutputKind::master && isReturn (*t)) return Result::fail ("Return tracks play into Master.");
+    if (output.kind != OutputKind::master && isReturn (*t)) return Result::fail ("Return tracks play into Main.");
     if (output.kind != OutputKind::master && t->getParentFolderTrack() != nullptr) return Result::fail ("Tracks in a group play into the group.");
     te::AudioTrack* destination = nullptr;
     te::MidiOutputDevice* port = nullptr;
@@ -6610,7 +6610,7 @@ Result Session::setTrackOutput (const String& trackId, const TrackOutput& output
         if (static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) && Impl::instrument (*t) == nullptr)
             return Result::fail ("A MIDI track without an instrument plays no audio to send out.");
         if (! outputNames().contains (output.port) || output.port == masterOutput())
-            return Result::fail ("Choose an output that is switched on in the Output Config and is not the Master Out.");
+            return Result::fail ("Choose an output that is switched on in the Output Config and is not the Main Out.");
     }
     impl->transaction ("Set track output");
     auto* undo = &impl->edit->getUndoManager();
@@ -10478,7 +10478,7 @@ Result Session::setMasterGain(float value)
     if(! automated && master->getSliderPos()==te::decibelsToVolumeFaderPosition(value)) return Result::ok();
     if (! master->state.hasProperty (manualVolumeProperty))
         master->state.setProperty (manualVolumeProperty, master->volParam->getCurrentExplicitValue(), nullptr);
-    impl->transaction("Master volume"); impl->overrideLane ("master"); master->setVolumeDb(value);
+    impl->transaction("Main volume"); impl->overrideLane ("master"); master->setVolumeDb(value);
     master->state.setProperty (manualVolumeProperty, te::decibelsToVolumeFaderPosition (value), &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
@@ -10974,7 +10974,7 @@ Result Session::setSoloInPlace (bool on)
 Result Session::setCueMode (bool cue)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    if (cue && impl->separateCueDevice() == nullptr) return Result::fail ("Choose a Cue Out apart from the Master Out to cue.");
+    if (cue && impl->separateCueDevice() == nullptr) return Result::fail ("Choose a Cue Out apart from the Main Out to cue.");
     if (cue == static_cast<bool> (impl->edit->state.getProperty (cueModeProperty, false))) return Result::ok();
     impl->edit->state.setProperty (cueModeProperty, cue, nullptr);
     impl->edit->markAsChanged();
@@ -11738,7 +11738,7 @@ Result Session::exportStems (const File& folder, const AudioExportSettings& sett
         if (! track.isReturn) stems.push_back ({ track.name, track.id, std::nullopt });
     }
     for (const auto& track : snapshot.tracks) if (track.isReturn) stems.push_back ({ track.name, track.id, std::nullopt });
-    if (settings.stemTracks.isEmpty()) stems.push_back ({ "Master", std::nullopt, std::nullopt, true });
+    if (settings.stemTracks.isEmpty()) stems.push_back ({ "Main", std::nullopt, std::nullopt, true }); // The reference's Main track.
     else
     {
         std::erase_if (stems, [&] (const Stem& stem) { return ! settings.stemTracks.contains (stem.trackId.value_or (stem.groupId.value_or (String()))); });
