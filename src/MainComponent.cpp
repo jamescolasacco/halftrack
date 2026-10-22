@@ -3391,7 +3391,7 @@ private:
                     if (! bounds.intersects (grid)) continue;
                     const auto* slot = slotAt (t, scene);
                     const bool filled = slot != nullptr && slot->hasClip;
-                    const bool selected = selectedTrack && owner.state.scenes[(size_t) scene].id == owner.selectedSceneId;
+                    const bool selected = (selectedTrack && owner.state.scenes[(size_t) scene].id == owner.selectedSceneId) || owner.isSlotSelected (t, scene);
                     const bool queued = slot != nullptr && (slot->queued || slot->stopQueued);
                     const bool blink = owner.ticks % 16 < 8;
                     const auto cell = bounds.reduced (1, 0).withTrimmedBottom (1);
@@ -3578,14 +3578,20 @@ private:
             const auto cell = cellAt (event.getPosition());
             if (cell.first >= 0)
             {
+                const Session::SlotRef anchor { owner.selectedTrack, owner.selectedSceneIndex() };
+                toggleOnUp = collapseOnUp = false; rubberFrom = { -1, -1 };
+                const bool onButton = event.x - slotBounds (cell.first, cell.second).getX() < 25;
+                if (! event.mods.isPopupMenu() && ! onButton) chooseSlots ({ cell.first, cell.second }, anchor, event.mods);
+                else if (! owner.isSlotSelected (cell.first, cell.second)) owner.selectedSlots.clear();
                 owner.selectLauncherSlot (cell.first, cell.second);
                 if (event.mods.isPopupMenu()) { slotMenu (cell.first, cell.second); return; }
-                if (event.x - slotBounds (cell.first, cell.second).getX() < 25)
+                if (onButton)
                 {
                     // Gate and Repeat clips follow the button, so the release is sent on mouse up.
                     pressedCell = cell; owner.report (owner.session.pressSlot (cell.first, cell.second)); owner.refresh();
                 }
                 else if (const auto* slot = slotAt (cell.first, cell.second); slot != nullptr && slot->hasClip) dragFrom = cell;
+                else if (! event.mods.isAnyModifierKeyDown()) rubberFrom = cell; // A drag from an empty slot selects a rectangle.
                 repaint(); return;
             }
             if (stopAllBounds().contains (event.getPosition())) { owner.report (owner.session.stopAllLauncherClips()); owner.refresh(); return; }
@@ -3615,6 +3621,16 @@ private:
         }
         void mouseDrag (const juce::MouseEvent& event) override
         {
+            if (rubberFrom.first >= 0)
+            {
+                if (const auto cell = cellAt (event.getPosition()); cell.first >= 0)
+                {
+                    const auto cells = owner.slotRectangle ({ rubberFrom.first, rubberFrom.second }, { cell.first, cell.second });
+                    owner.selectedSlots = cells.size() > 1 ? cells : std::vector<Session::SlotRef>();
+                    repaint();
+                }
+                return;
+            }
             if (dragFrom.first < 0 || (! dragging && event.getDistanceFromDragStart() < 4)) return;
             dragging = true;
             dropCell = cellAt (event.getPosition());
@@ -3624,6 +3640,17 @@ private:
         void mouseUp (const juce::MouseEvent& event) override
         {
             releasePressed (pressedCell);
+            rubberFrom = { -1, -1 };
+            // A click without a drag on a slot of a group selects it alone, or with Cmd/Ctrl leaves it out.
+            if (! event.mouseWasDraggedSinceMouseDown())
+            {
+                const Session::SlotRef here { owner.selectedTrack, owner.selectedSceneIndex() };
+                if (toggleOnUp) std::erase (owner.selectedSlots, here);
+                else if (collapseOnUp) owner.selectedSlots.clear();
+                if (owner.selectedSlots.size() < 2) owner.selectedSlots.clear();
+                repaint();
+            }
+            toggleOnUp = collapseOnUp = false;
             const auto from = std::exchange (dragFrom, { -1, -1 });
             if (! std::exchange (dragging, false)) return;
             setMouseCursor (juce::MouseCursor::NormalCursor);
@@ -3642,11 +3669,45 @@ private:
         }
         void dropClip (std::pair<int, int> from, std::pair<int, int> to, bool copy)
         {
+            // A clip of a group carries the whole group's clips by the same tracks and scenes.
+            if (owner.selectedSlots.size() > 1 && owner.isSlotSelected (from.first, from.second))
+            {
+                const int tracks = to.first - from.first, scenes = to.second - from.second;
+                const auto result = owner.session.moveSlotClips (owner.selectedSlotClips(), tracks, scenes, copy);
+                owner.report (result); owner.refresh();
+                if (result.wasOk())
+                {
+                    for (auto& ref : owner.selectedSlots) { ref.track += tracks; ref.scene += scenes; }
+                    owner.selectLauncherSlot (to.first, to.second);
+                }
+                return;
+            }
             const auto result = owner.session.moveSlotClip (from.first, from.second, to.first, to.second, copy);
             owner.report (result);
             owner.refresh();
             if (result.wasOk()) owner.selectLauncherSlot (to.first, to.second);
         }
+        // A click on a slot: Cmd (Mac) or Ctrl adds it to the group, or on release leaves it out; Shift
+        // takes in the rectangle from the selected slot; a plain click on a slot of the group keeps the
+        // group for a drag; otherwise the slot is selected alone.
+        void chooseSlots (Session::SlotRef cell, Session::SlotRef anchor, juce::ModifierKeys mods)
+        {
+            auto group = owner.selectedSlots;
+            const bool anchored = anchor.track >= 0 && anchor.scene >= 0 && juce::isPositiveAndBelow (anchor.track, (int) owner.state.tracks.size()) && ! owner.state.tracks[(size_t) anchor.track].isReturn;
+            if (group.empty() && anchored) group.push_back (anchor);
+           #if JUCE_MAC
+            const bool adds = mods.isCommandDown();
+           #else
+            const bool adds = mods.isCtrlDown();
+           #endif
+            if (adds) { if (std::find (group.begin(), group.end(), cell) != group.end()) toggleOnUp = true; else group.push_back (cell); }
+            else if (mods.isShiftDown() && anchored) group = owner.slotRectangle (anchor, cell);
+            else if (group.size() > 1 && std::find (group.begin(), group.end(), cell) != group.end()) collapseOnUp = true;
+            else group.clear();
+            owner.selectedSlots = group.size() > 1 ? group : std::vector<Session::SlotRef>();
+        }
+        std::pair<int, int> rubberFrom { -1, -1 };
+        bool toggleOnUp = false, collapseOnUp = false;
         void mouseDoubleClick (const juce::MouseEvent& event) override
         {
             const auto cell = cellAt (event.getPosition());
@@ -7844,6 +7905,12 @@ private:
     {
         const auto scene = selectedSceneIndex();
         if (currentTrack() == nullptr || scene < 0 || currentTrack()->isReturn) return false;
+        if (selectedSlots.size() > 1 && command != 86)
+        {
+            if (command == 87) return duplicateSlotGroup();
+            report (session.copySlotClips (selectedSlotClips(), command == 84), command == 84 ? "Cut the clips." : "Copied the clips.");
+            refresh(); return true;
+        }
         if (command == 84 || command == 85) report (session.copySlotClip (selectedTrack, scene, command == 84), command == 84 ? "Cut the clip." : "Copied the clip.");
         if (command == 86) report (session.pasteSlotClip (selectedTrack, scene));
         if (command == 87)
@@ -7857,8 +7924,50 @@ private:
     }
     void clearSelectedSlot()
     {
+        if (selectedSlots.size() > 1) { report (session.clearSlots (selectedSlots)); selectedSlots.clear(); selectedLauncherClipId.clear(); refresh(); return; }
         const auto scene = selectedSceneIndex(); if (currentTrack() == nullptr || scene < 0 || currentTrack()->isReturn) return;
         report (session.clearSlot (selectedTrack, scene)); selectedLauncherClipId.clear(); refresh();
+    }
+    // Session slots selected together, as in the reference: Shift-click takes in the rectangle from
+    // the selected slot, Cmd-click (Ctrl elsewhere) adds or removes one, and a drag from an empty slot
+    // draws one. It holds the selected slot too while more than one is selected.
+    std::vector<Session::SlotRef> selectedSlots;
+    bool isSlotSelected (int track, int scene) const
+    { return std::find (selectedSlots.begin(), selectedSlots.end(), Session::SlotRef { track, scene }) != selectedSlots.end(); }
+    // The selected slots that hold clips.
+    std::vector<Session::SlotRef> selectedSlotClips() const
+    {
+        std::vector<Session::SlotRef> clips;
+        for (const auto& ref : selectedSlots)
+            if (juce::isPositiveAndBelow (ref.track, (int) state.tracks.size()) && juce::isPositiveAndBelow (ref.scene, (int) state.tracks[(size_t) ref.track].slots.size())
+                && state.tracks[(size_t) ref.track].slots[(size_t) ref.scene].hasClip) clips.push_back (ref);
+        return clips;
+    }
+    // Every ordinary track's slot between two corners of the grid.
+    std::vector<Session::SlotRef> slotRectangle (Session::SlotRef a, Session::SlotRef b) const
+    {
+        std::vector<Session::SlotRef> cells;
+        for (int t = std::min (a.track, b.track); t <= std::max (a.track, b.track); ++t)
+            if (juce::isPositiveAndBelow (t, (int) state.tracks.size()) && ! state.tracks[(size_t) t].isReturn)
+                for (int sc = std::min (a.scene, b.scene); sc <= std::max (a.scene, b.scene); ++sc)
+                    if (juce::isPositiveAndBelow (sc, (int) state.scenes.size())) cells.push_back ({ t, sc });
+        return cells;
+    }
+    // Several selected clips duplicate into the slots below their span, which must be empty.
+    bool duplicateSlotGroup()
+    {
+        const auto clips = selectedSlotClips();
+        if (clips.empty()) return false;
+        int top = clips[0].scene, bottom = clips[0].scene;
+        for (const auto& ref : clips) { top = std::min (top, ref.scene); bottom = std::max (bottom, ref.scene); }
+        const int height = bottom - top + 1;
+        for (const auto& ref : clips)
+            if (! juce::isPositiveAndBelow (ref.scene + height, (int) state.scenes.size()) || state.tracks[(size_t) ref.track].slots[(size_t) (ref.scene + height)].hasClip)
+            { report (juce::Result::fail ("There is no room below the clips for their copies.")); return true; }
+        const auto result = session.moveSlotClips (clips, 0, height, true);
+        report (result); refresh();
+        if (result.wasOk()) { for (auto& ref : selectedSlots) ref.scene += height; selectLauncherSlot (selectedTrack, selectedSceneIndex() + height); }
+        return true;
     }
     void createLauncherMidiClip()
     {
@@ -8492,6 +8601,9 @@ private:
         const auto previous = state;
         const auto selectedId = currentTrack() != nullptr ? currentTrack()->id : juce::String();
         state = session.snapshot(); editGrid = session.editGrid();
+        std::erase_if (selectedSlots, [this] (const Session::SlotRef& ref)
+        { return ! juce::isPositiveAndBelow (ref.track, (int) state.tracks.size()) || ! juce::isPositiveAndBelow (ref.scene, (int) state.scenes.size()); });
+        if (selectedSlots.size() < 2) selectedSlots.clear();
         if (! selectedClipIds.isEmpty())
         {
             juce::StringArray live;
@@ -13645,6 +13757,60 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             for (int step = 0; step < 9; ++step) session.undo();
             refresh();
             check ((int) state.tracks.size() == t, "nine undo steps remove the track");
+        }
+        {
+            // Several Session slots: Shift-click takes in a rectangle, Cmd/Ctrl-click leaves one out, a drag
+            // from an empty slot draws one; the group drags, deletes, copies and pastes together.
+            session.stop(); refresh();
+            const auto tracksBefore = state.tracks.size();
+            check (session.addMidiTrack ("Group A").wasOk() && session.addMidiTrack ("Group B").wasOk() && state.scenes.size() >= 8, "two tracks for slot groups"); refresh();
+            const auto indexOf = [&] (const juce::String& name) { for (int i = 0; i < (int) state.tracks.size(); ++i) if (state.tracks[(size_t) i].name == name) return i; return -1; };
+            const int ga = indexOf ("Group A"), gb = indexOf ("Group B");
+            for (const auto& [t, sc] : { std::pair { ga, 0 }, std::pair { ga, 1 }, std::pair { gb, 0 } }) check (session.addMidiClipToSlot (state.tracks[(size_t) t].id, sc, 4).wasOk(), "a clip");
+            refresh();
+            showSessionView(); selectLauncherSlot (ga, 0); launcher.scrollSelectionIntoView(); refresh();
+            const auto has = [&] (int t, int sc) { return state.tracks[(size_t) t].slots[(size_t) sc].hasClip; };
+            const auto now = juce::Time::getCurrentTime();
+            const auto at = [&] (int t, int sc) { return launcher.launchPoint (t, sc) + juce::Point<float> (40, 0); };
+            const auto slotEvent = [&] (juce::Point<float> p, juce::Point<float> down, int mods, bool dragged)
+            { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | mods), 1.0f, 0, 0, 0, 0, &launcher, &launcher, now, down, now, 1, dragged); };
+            const auto click = [&] (int t, int sc, int mods) { const auto p = at (t, sc); launcher.mouseDown (slotEvent (p, p, mods, false)); launcher.mouseUp (slotEvent (p, p, mods, false)); refresh(); };
+            const auto drag = [&] (int t, int sc, int toT, int toSc)
+            {
+                const auto from = at (t, sc), to = at (toT, toSc);
+                launcher.mouseDown (slotEvent (from, from, 0, false)); launcher.mouseDrag (slotEvent ((from + to) / 2, from, 0, true));
+                launcher.mouseDrag (slotEvent (to, from, 0, true)); launcher.mouseUp (slotEvent (to, from, 0, true)); refresh();
+            };
+           #if JUCE_MAC
+            const int adds = juce::ModifierKeys::commandModifier;
+           #else
+            const int adds = juce::ModifierKeys::ctrlModifier;
+           #endif
+            click (ga, 0, 0); click (gb, 1, juce::ModifierKeys::shiftModifier);
+            check (selectedSlots.size() == 4 && isSlotSelected (gb, 1) && isSlotSelected (ga, 0), "Shift-click selects the rectangle of slots");
+            click (gb, 1, adds);
+            check (selectedSlots.size() == 3 && ! isSlotSelected (gb, 1), "Cmd/Ctrl-click leaves a slot out");
+            drag (ga, 0, ga, 2);
+            check (! has (ga, 0) && ! has (ga, 1) && ! has (gb, 0) && has (ga, 2) && has (ga, 3) && has (gb, 2) && isSlotSelected (ga, 2),
+                   "dragging one of the group moves all its clips two scenes down, the selection with them");
+            check (handleKey (juce::KeyPress (juce::KeyPress::deleteKey)) && ! has (ga, 2) && ! has (ga, 3) && ! has (gb, 2), "Delete clears the group");
+            session.undo(); refresh();
+            check (has (ga, 2) && has (ga, 3) && has (gb, 2), "one undo brings them back");
+            click (ga, 2, 0); click (gb, 3, juce::ModifierKeys::shiftModifier);
+            check (launcher.keyPressed (commandKey ('C')) && session.hasSlotClipboard(), "Cmd/Ctrl+C copies the group");
+            click (ga, 5, 0);
+            check (selectedSlots.empty() && launcher.keyPressed (commandKey ('V')) && has (ga, 5) && has (ga, 6) && has (gb, 5) && ! has (gb, 6),
+                   "Cmd/Ctrl+V pastes it with its top-left clip at the selected slot");
+            {
+                // A rubber band from an empty slot.
+                const auto from = at (gb, 7), to = at (ga, 6);
+                launcher.mouseDown (slotEvent (from, from, 0, false)); launcher.mouseDrag (slotEvent (to, from, 0, true)); launcher.mouseUp (slotEvent (to, from, 0, true)); refresh();
+                check (selectedSlots.size() == 4 && isSlotSelected (ga, 6) && isSlotSelected (gb, 7), "dragging from an empty slot selects the rectangle it draws");
+            }
+            int steps = 0;
+            while (state.tracks.size() > tracksBefore && steps < 20) { session.undo(); refresh(); ++steps; }
+            check (state.tracks.size() == tracksBefore && steps == 7, "seven undo steps remove it all: the tracks, clips, group move and paste");
+            showArrangementView();
         }
         {
             // The editing grid: Cmd/Ctrl+1 to 5, the context menu's grid items and the View menu, at 80

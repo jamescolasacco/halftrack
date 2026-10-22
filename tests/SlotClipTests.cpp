@@ -57,6 +57,49 @@ juce::AudioBuffer<float> perform (const std::function<void (Session&, int track)
 }
 }
 
+// Several slots at once: a group moves without landing on itself, copies, refuses to leave the grid
+// or change kind, clears, and copies and pastes keeping its shape; each is one undo step.
+void groupTests()
+{
+    Session s (false);
+    while (s.snapshot().scenes.size() < 6) ok (s.addScene(), "a scene");
+    ok (s.addMidiTrack ("One"), "a MIDI track"); ok (s.addMidiTrack ("Two"), "another"); ok (s.addAudioTrack ("Three"), "an audio track");
+    const auto index = [&] (const juce::String& name) { const auto tracks = s.snapshot().tracks; for (int t = 0; t < (int) tracks.size(); ++t) if (tracks[(size_t) t].name == name) return t; return -1; };
+    const int one = index ("One"), two = index ("Two"), three = index ("Three");
+    juce::StringArray added;
+    const auto pitch = [&] (int track, int scene) { const auto slot = s.snapshot().tracks[(size_t) track].slots[(size_t) scene]; return slot.hasClip && ! slot.clip.notes.empty() ? slot.clip.notes[0].pitch : -1; };
+    for (const auto& [track, scene, note] : { std::tuple { one, 0, 60 }, std::tuple { one, 1, 61 }, std::tuple { two, 0, 62 } })
+    {
+        ok (s.addMidiClipToSlot (s.snapshot().tracks[(size_t) track].id, scene, 4), "a clip");
+        ok (s.addMidiNotes (s.snapshot().tracks[(size_t) track].slots[(size_t) scene].clip.id, { { "", note, 0, 1, .8f } }, added), "its note");
+    }
+    const std::vector<Session::SlotRef> group { { one, 0 }, { one, 1 }, { two, 0 } };
+    ok (s.moveSlotClips (group, 0, 1), "move the three clips down a scene");
+    check (pitch (one, 0) == -1 && pitch (one, 1) == 60 && pitch (one, 2) == 61 && pitch (two, 0) == -1 && pitch (two, 1) == 62,
+           "they move together, none landing on another before it moved");
+    s.undo();
+    check (pitch (one, 0) == 60 && pitch (one, 1) == 61 && pitch (two, 0) == 62 && pitch (one, 2) == -1, "one undo moves them all back");
+    ok (s.moveSlotClips (group, 0, 3, true), "copy them three scenes down");
+    check (pitch (one, 0) == 60 && pitch (one, 3) == 60 && pitch (one, 4) == 61 && pitch (two, 3) == 62, "the copies keep their shape and the originals stay");
+    s.undo();
+    check (s.moveSlotClips (group, 0, -1).failed() && s.moveSlotClips (group, 1, 0).failed() && pitch (one, 0) == 60,
+           "a move off the grid, or putting MIDI on the audio track, is refused and changes nothing");
+    ok (s.copySlotClips (group), "copy the group");
+    ok (s.pasteSlotClip (one, 4), "paste it with its top-left clip at the fifth scene");
+    check (pitch (one, 4) == 60 && pitch (one, 5) == 61 && pitch (two, 4) == 62, "the paste keeps the group's shape");
+    s.undo();
+    check (pitch (one, 4) == -1 && pitch (two, 4) == -1, "one undo removes the whole paste");
+    const int last = (int) s.snapshot().scenes.size() - 1;
+    check (s.pasteSlotClip (one, last).failed() && s.pasteSlotClip (two, 0).failed(), "a paste that would leave the grid, or land on the audio track, is refused");
+    ok (s.clearSlots (group), "clear the group");
+    check (pitch (one, 0) == -1 && pitch (one, 1) == -1 && pitch (two, 0) == -1, "all three are cleared");
+    s.undo();
+    check (pitch (one, 0) == 60 && pitch (one, 1) == 61 && pitch (two, 0) == 62, "and one undo brings them back");
+    ok (s.copySlotClips ({ { one, 0 }, { one, 1 } }, true), "cut two clips");
+    check (pitch (one, 0) == -1 && pitch (one, 1) == -1 && s.hasSlotClipboard(), "the cut empties both");
+    ok (s.pasteSlotClip (two, 2), "paste them on the other MIDI track");
+    check (pitch (two, 2) == 60 && pitch (two, 3) == 61 && three >= 0, "they paste there in order");
+}
 int runSlotClipTests (const juce::File& artifacts)
 {
     try
@@ -209,6 +252,7 @@ int runSlotClipTests (const juce::File& artifacts)
         const auto pasted = slots (audioTrack)[0].clip;
         check (slots (audioTrack)[0].hasClip && pasted.isAudio && pasted.file.existsAsFile() && pasted.file.isAChildOf (project.getParentDirectory()),
                "its audio is collected into the new project");
+        groupTests();
         root.deleteRecursively();
         std::cout << "Slot clips passed" << std::endl;
         return 0;

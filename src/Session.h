@@ -645,7 +645,17 @@ public:
     // slot, a MIDI clip keeping its beats. A time selection's copy clears it.
     juce::Result copySlotClip (int trackIndex, int sceneIndex, bool cut = false);
     bool hasSlotClipboard() const;
+    // Pastes the copied clip into a slot; a copy of several slots pastes with its top-left clip there
+    // and the rest at their places from it, all or none.
     juce::Result pasteSlotClip (int trackIndex, int sceneIndex);
+    // Several slots at once, as the reference's grid selection, each one undo step: their clips moved
+    // or copied by a number of tracks and scenes (refused if any would leave the grid or land on a
+    // track of the wrong kind; clips there are replaced), cleared, or copied (or cut) keeping their
+    // places from the top-left one.
+    struct SlotRef { int track = -1, scene = -1; auto operator<=> (const SlotRef&) const = default; };
+    juce::Result moveSlotClips (const std::vector<SlotRef>&, int trackDelta, int sceneDelta, bool copy = false);
+    juce::Result clearSlots (const std::vector<SlotRef>&);
+    juce::Result copySlotClips (const std::vector<SlotRef>&, bool cut = false);
     juce::Result launchSlot (int trackIndex, int sceneIndex);
     // A launch button press/release applying the slot clip's launch mode.
     juce::Result pressSlot (int trackIndex, int sceneIndex);

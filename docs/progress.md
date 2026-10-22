@@ -1899,3 +1899,10 @@ Engine and UI areas.
 - **Rendered Track.** Export Audio's Rendered Track offers Selected Tracks Only and each track or group by name, after Master and All Individual Tracks, as the reference's does. They render just those stems, without Master (`AudioExportSettings::stemTracks`).
 - **A wait fixed.** The follow-action dialog's UI check now waits long enough for the dialog's closing callback.
 - **Measured.** The stems suite and the export UI checks.
+
+## Several Session slots — 2026-10-22
+
+Engine and UI areas.
+
+- **Selection and editing.** Session slots select together by Shift-click, Cmd/Ctrl-click and a rubber band from an empty slot, as in the reference. The group drags, copy-drags, deletes, copies, cuts, pastes in its shape and duplicates below itself, each one undo step (`Session::moveSlotClips`, `clearSlots`, `copySlotClips`).
+- **Measured.** `tests/SlotClipTests.cpp` and the UI suite.

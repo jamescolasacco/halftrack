@@ -33,6 +33,24 @@ The reference's Session View moves clips around its grid by drag-and-drop and ha
 - With the grid focused, Cmd/Ctrl+X, C, V and D cut, copy, paste and duplicate the selected slot's clip. The Session menu offers the same as Cut Clip, Copy Clip, Paste Clip and Duplicate Clip.
 - A moved or duplicated clip's slot is selected.
 
+## Several slots (2026-10-22)
+
+The reference's manual:
+
+- Shift-click selects adjacent clips and Ctrl/Cmd-click nonadjacent ones.
+- One can click into an empty slot and rubber-band select from there.
+- Several clips selected move together when dragged.
+
+Halftrack:
+
+- **Selecting.** Shift-click takes in the rectangle of ordinary tracks' slots from the selected slot; Cmd-click (Ctrl elsewhere) adds a slot, or on release without a drag leaves one out. A drag from an empty slot draws a rectangle. A plain click on a slot of the group keeps the group for a drag and, released without one, selects that slot alone.
+- **Moving and copying.** Dragging one of the group's clips moves all its clips by the same tracks and scenes (`Session::moveSlotClips`), copying with the copy modifier. The moves run in an order that never lands a clip on a group member not yet moved, and the selection follows. A move that would leave the grid or put a clip on a track of the wrong kind is refused whole.
+- **Delete** clears the group (`clearSlots`).
+- **Cmd/Ctrl+C and X** copy or cut the group's clips keeping their places from the top-left one (`copySlotClips`). Cmd/Ctrl+V pastes them with the top-left clip at the selected slot, all or none.
+- **Cmd/Ctrl+D** copies the group into the slots below its span when those are empty.
+
+Each is one undo step.
+
 ## Evidence
 
 `tests/SlotClipTests.cpp` (`slot-clips-acceptance`) checks:
@@ -46,15 +64,26 @@ The reference's Session View moves clips around its grid by drag-and-drop and ha
 - **Clipboard.** Copy, cut and paste work, a paste replaces the clip it lands on, and MIDI is refused on an audio track. Undo reverses a paste and a cut.
 - **One clipboard.** An Arrangement copy and a Session copy replace each other on the clipboard.
 - **Another project.** An audio clip pasted into a newly saved project has its file collected there.
+- **Several slots (`groupTests`).**
+  - Three clips over two tracks move down a scene together, with none landing on another; copy three scenes down keeping their shape; and undo in one step.
+  - Moves off the grid or onto the audio track are refused, changing nothing.
+  - A group copy pastes with its shape, undone in one step; pastes that would leave the grid or land on the audio track are refused.
+  - The group clears and comes back with one undo, and a two-clip cut pastes in order on another track.
 - **Between the views.**
   - A three-beat Arrangement MIDI clip with a note on its second beat, pasted into a slot, keeps the note and its three beats, with a new identity.
   - A four-beat slot clip pasted into the Arrangement at beat 17 keeps its four beats and note.
   - A slot audio clip pasted into the Arrangement at one second has its audio collected.
 
+For several slots, the UI suite checks:
+
+- a Shift-click rectangle, and a Cmd/Ctrl-click leaving a slot out;
+- a group dragged two scenes with its selection, and Delete clearing it, undone;
+- Cmd/Ctrl+C and V pasting the group at the selected slot;
+- a rubber band drawn from an empty slot.
+
 The UI suite drags a clip to another slot and copy-drags one with the platform's modifier. It also checks Cmd/Ctrl+C, V, D and X on the grid, Session > Paste Clip, and Cmd/Ctrl+V in the Arrangement pasting the copied Session clip at the insert marker, with nine undo steps restoring the project.
 
 ## Not yet covered
 
-- Selecting and moving several clips at once (Shift/Cmd-click, rubber-band selection).
 - Dragging clips between the views, and pasting a time selection (several tracks' clips) into the Session, which the reference lays out top to bottom.
 - Dragging a clip onto a group column or a scene's launch button.
