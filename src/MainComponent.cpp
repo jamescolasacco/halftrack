@@ -3918,16 +3918,17 @@ private:
             }
             void resized() override
             {
-                cueOutput.setBounds (5, 22, getWidth() - 10, 19);
+                // In line with the tracks' monitor and Audio To rows, and their pan knobs.
+                cueOutput.setBounds (5, 25, getWidth() - 10, 19);
                 output.setBounds (5, 46, getWidth() - 10, 19);
-                soloCue.setBounds (5, 72, 44, 18); cueVolume.setBounds (getWidth() - 39, 66, 32, 32);
+                soloCue.setBounds (5, 78, 44, 18); cueVolume.setBounds (getWidth() - 39, 72, 32, 32);
                 gain.setBounds (6, 106 + TrackRow::outputRow, 54, getHeight() - 162 - TrackRow::outputRow); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22);
             }
             void paint (juce::Graphics& g) override
             {
                 g.fillAll (themes::colour (0xff383838));
                 g.setColour (muted); g.setFont (font (9.0f, true)); g.drawText ("MASTER", 6, 4, getWidth() - 12, 16, juce::Justification::centred);
-                g.drawText ("CUE", getWidth() - 39, 98, 32, 10, juce::Justification::centred);
+                g.drawText ("CUE", getWidth() - 39, 104, 32, 10, juce::Justification::centred);
                 g.drawText ("A", 4, getHeight() - 34, 12, 22, juce::Justification::centred); g.drawText ("B", getWidth() - 16, getHeight() - 34, 12, 22, juce::Justification::centred);
                 const juce::Rectangle<int> meter { 66, 110 + TrackRow::outputRow, 10, juce::jmax (10, getHeight() - 182 - TrackRow::outputRow) };
                 for (int channel = 0; channel < 2; ++channel)
