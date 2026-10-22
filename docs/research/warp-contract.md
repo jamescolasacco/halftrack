@@ -6,7 +6,7 @@ Warped audio clips follow the project tempo with their length fixed in beats, as
 
 Evidence (`tests/WarpTests.cpp`): a generated click track with one 1 kHz burst per 120 BPM beat renders with every onset within about 1 ms of the 60/80/90/100/180/240 BPM grid and a preserved 1 kHz pitch; tempo-estimate cases; unity-ratio, faster-source and efficient-mode grids; exact unwarped restoration; undo/redo; save/reopen of mode, tempo and beat length; beat-position preservation of a late clip; Session-slot rules; out-of-range tempo and source-time edit rejection. Measuring this exposed the engine priming/drift defects fixed by [the stretch alignment patch](../dependencies.md#tracktion-time-stretch-alignment-patch).
 
-Not implemented: graphical warp-marker and segment editing, transient-based Beats mode, Re-Pitch, Tones/Texture/Complex Pro variants, automatic warping of long samples on import, tempo detection from audio content, and any comparison with reference stretch output.
+Not implemented at first: graphical warp-marker and segment editing, transient-based Beats mode, Re-Pitch, Tones/Texture/Complex Pro variants, automatic warping of long samples on import, tempo detection from audio content, and any comparison with reference stretch output. The sections below cover what has been added since.
 
 ## Warp markers (2026-10-21)
 
@@ -38,3 +38,61 @@ The clip view draws a warped clip in its beats, each segment of the warp map ove
 The main UI suite checks adding, a drag onto the grid, its undo, and removal.
 
 Missing: automatic markers at transients, segment BPM display, quantizing markers, and multi-marker selection.
+
+## Tempo and transient analysis (2026-10-22)
+
+The reference reads an audio file's transients and tempo when it is first used. It shows the transients in the clip view's sample display, and Auto-Warp Long Samples warps a long sample at its tempo, from its first downbeat. Halftrack's analysis is its own. No reference analysis file (`.asd`) was read.
+
+**The estimate.** `tempo::estimate` (`src/TempoDetection.*`) works in five steps:
+
+1. **Onset curve.** It measures how much a 1024-point spectrum rises at each 10.7 ms step, on compressed magnitudes, less its mean over 0.2 s. A second curve does the same below 200 Hz.
+2. **Rough tempo.** The onset curve's autocorrelation is read as a comb at half a beat and at 1, 1.5, 2, 3 and 4 beats, for every tempo from 80 to 160 BPM in 0.05 BPM steps. A tempo outside that range shows as its double or half.
+   - The comb's peak over its median is the confidence.
+   - Below 1.3, the sound has no steady beat, and nothing is returned. So does a sound shorter than 7.5 beats at 80 BPM.
+3. **Beat grid.** Within 1.5% of the rough tempo, in 0.01 BPM steps, it finds the period and phase at which the onsets of the whole sound pile up most. The bass curve weighs as much as the full one, so kicks rather than hats mark the beat.
+4. **Exact tempo.** Twice over, a least-squares line runs through the transients within 20 ms of the grid's beats. These are the transients Beats warping finds. The tempo is rounded to 0.01 BPM.
+   - **Whole bars.** A sound that holds a whole number of 4/4 bars, up to 16, takes the tempo that fills them exactly. This applies when the bar count falls within six standard errors of the line's slope, at least 0.05% and at most 1.5%.
+5. **First beat.** The first grid beat whose onset reaches a quarter of the 90th-percentile beat, moved onto the transient within 30 ms.
+
+**On import.** With Auto-Warp Long Samples on, a sample longer than 30 s is analysed once, up to its first ten minutes.
+
+- **With a tempo found:**
+  - the clip's start is moved to the first beat;
+  - the clip is warped at the found tempo in the default warp mode;
+  - outside Re-Pitch, a warp marker pins that beat at the same tempo, so nothing moves until it is dragged.
+- **With no steady beat:** the clip takes the whole-bar length guess, as before.
+
+The import and its warping are one undo step. Shorter samples keep the length guess, as the reference takes short samples for whole-bar loops.
+
+**Transients.** `Session::audioClipTransients (clipId)` lists the transients in a clip's source, in source seconds. They are read once while the file is unchanged.
+
+- The clip view marks them along the top of a warped clip's waveform.
+- Double-clicking within 5 pixels of one pins a new warp marker exactly on it; elsewhere, a double-click adds a marker as before.
+
+**Evidence.** `tests/TempoAnalysisTests.cpp`:
+
+- **Generated drum loops.** Twelve loops at 84.5–152 BPM, at 44.1, 48 and 96 kHz, with lead-ins, swing and a held chord, are each cut to a length whose whole-bar guess is wrong. Each is found within 0.05 BPM (all exactly) with its first beat within 2 ms. Loops at 70 and 172 BPM give 140 and 86.
+- **A three-minute song** at 126.5 BPM with an eight-bar chord intro is found exactly, its first beat within 0.6 ms, in 0.16 s.
+- **No tempo.** Noise, a held tone and a four-second loop give none.
+- **File reads.** A file read a block at a time gives the same estimate.
+- **Import.** With Auto-Warp on, a 40-second loop at 97 BPM after 0.6 s of silence:
+  - is warped at 97.00 BPM, not its length's 96;
+  - has a marker and its start on the first beat;
+  - lists its transients on its beats;
+  - renders in Beats with its next 15 beats within 0.02 ms of the project's 120 BPM grid and its first at the start;
+  - is undone in one step.
+  Forty seconds of noise take the length guess with no marker.
+- **The UI suite** checks a click fixture's three transients and a double-click 3 pixels beside one pinning a marker on it.
+
+**Measured on reference material.** `--tempo-evaluate <folder> [report.json]` reads the reference's Core Library loops whose names give their tempo; there were 169. Results (macOS arm64, 2026-10-22; the report is kept in ignored `artifacts/reverse-engineering/tempo/`):
+
+- **The 69 loops of 6 s or more:**
+  - the estimate finds 54 (78%) within 0.5 BPM;
+  - 8 beatless pads give none;
+  - 5 give a related tempo (2/3, 3/4 or 4/3 of it, from triplet, shuffled or accented patterns);
+  - 2 give another.
+- **The length guess** finds 65 of the 69 (94%), as these loops are cut to whole power-of-two bars.
+- **Shorter loops** have too few beats to analyse.
+- **Speed:** 6.8 ms a loop.
+
+Missing: downbeat (bar) detection, tempo that varies through a recording, the reference's Warp From Here commands, keeping analyses with the file between sessions, and a side-by-side comparison with the reference's own auto-warp results.

@@ -633,3 +633,7 @@ The reference appends a device to the end of the chain when none is selected, an
 ### Audio input permission on real hardware
 
 The permission handling is tested with a stand-in for macOS's permission and prompt. Whether a device opened before a grant delivers sound without the reopen Halftrack does, and how Windows' microphone privacy setting shows up (a device open error), are unmeasured. Default: reopen the device after a grant; report Windows' refusal as the device's own error.
+
+### Where an auto-warped long sample starts
+
+The reference's Auto-Warp of a long sample places its first warp marker on the first downbeat. Halftrack also moves the clip's start onto the first beat it finds, so leading silence or a pickup is outside the clip and the beat lands where the clip was dropped. It finds beats, not bars, so the first beat may not be bar 1. Whether the reference moves the start marker in every case, and how it chooses the downbeat, were not measured. Simplest default: start on the first beat, with the audio before it outside the clip.

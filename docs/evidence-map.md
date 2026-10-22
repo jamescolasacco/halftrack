@@ -45,7 +45,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | SES-007 | launcher |  |
 | SES-008 | midi-controllers, ui |  |
 | WRP-001 | audio-clips |  |
-| WRP-002 | warp |  |
+| WRP-002 | preferences, tempo-analysis, ui, warp | Reference Core Library loops named with their tempo (--tempo-evaluate, macOS arm64) |
 | WRP-003 | ui, warp |  |
 | WRP-004 | ui, warp-modes |  |
 | WRP-005 | ui, warp-modes |  |

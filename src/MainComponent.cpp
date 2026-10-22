@@ -4085,6 +4085,9 @@ private:
             if (owner.showSession) launch.setClip (clip);
             if (clip.file != shownFile) { shownFile = clip.file; thumbnail.setSource (clip.file.existsAsFile() ? new juce::FileInputSource (clip.file) : nullptr); }
             const bool warped = clip.warp.mode != Session::WarpMode::off;
+            // A warped clip shows its source's transients, read once a file.
+            const auto transientsKey = warped ? clip.id + "|" + clip.file.getFullPathName() : juce::String();
+            if (transientsKey != transientsFor) { transientsFor = transientsKey; transients = warped ? owner.session.audioClipTransients (clip.id) : std::vector<double> {}; }
             warp.setToggleState (warped, juce::dontSendNotification); warp.setEnabled (clip.canWarp && ! owner.session.isExporting());
             mode.setSelectedId (modeId (clip.warp.mode), juce::dontSendNotification); mode.setEnabled (warped);
             using Mode = Session::WarpMode;
@@ -4225,6 +4228,13 @@ private:
                     const auto x = beatX (beat);
                     g.setColour (beat % 4 == 0 ? themes::colour (0x66ffffff) : themes::colour (0x22ffffff)); g.drawVerticalLine ((int) x, (float) wave.getY(), (float) wave.getBottom());
                 }
+                // Transients: short grey marks along the top, where a double-click pins a marker.
+                g.setColour (themes::colour (0xffa0a0a0));
+                for (const auto t : transients)
+                {
+                    const auto x = beatX (beatAtSource (t));
+                    if (x >= wave.getX() && x <= wave.getRight()) g.drawVerticalLine ((int) x, (float) wave.getY() + 1, (float) wave.getY() + 7);
+                }
                 // Warp markers: yellow handles above lines through the waveform.
                 for (size_t i = 0; i < clip.warpMarkers.size(); ++i)
                 {
@@ -4250,6 +4260,8 @@ private:
         juce::AudioThumbnail thumbnail;
         juce::File shownFile;
         Session::ClipInfo clip;
+        std::vector<double> transients;
+        juce::String transientsFor;
         juce::TextButton warp { "WARP" }, halve { ":2" }, twice { "*2" }, reverse { "Reverse" };
         juce::ComboBox mode, transientLoop;
         juce::Slider transientEnvelope, grainSize, flux, formants, transpose, detune;
@@ -4319,6 +4331,27 @@ private:
                 }
             return beat * 60 / clip.warp.bpm;
         }
+        // The beat a point of the source plays on: the inverse of sourceAt.
+        double beatAtSource (double seconds) const
+        {
+            const auto map = warpMap();
+            for (size_t i = 1; i < map.size(); ++i)
+                if (seconds <= map[i].sourceSeconds || i + 1 == map.size())
+                {
+                    const auto span = map[i].sourceSeconds - map[i - 1].sourceSeconds;
+                    return map[i - 1].beat + (span > 0 ? (seconds - map[i - 1].sourceSeconds) / span : 0) * (map[i].beat - map[i - 1].beat);
+                }
+            return seconds * clip.warp.bpm / 60;
+        }
+        // The transient within a few pixels of x, in source seconds.
+        std::optional<double> transientAt (float x) const
+        {
+            std::optional<double> found;
+            float nearest = 5;
+            for (const auto t : transients)
+                if (const auto distance = std::abs (beatX (beatAtSource (t)) - x); distance <= nearest) { nearest = distance; found = t; }
+            return found;
+        }
         // The movable marker within a few pixels of x, or -1.
         int markerAt (float x) const
         {
@@ -4326,7 +4359,8 @@ private:
                 if (! (i == 0 && clip.warpMarkers[i].beat == 0) && std::abs (beatX (clip.warpMarkers[i].beat) - x) <= 5) return (int) i;
             return -1;
         }
-        // Double-clicking the warped waveform adds a marker where it is, or removes the one there.
+        // Double-clicking the warped waveform adds a marker where it is, on the transient there if
+        // one is close, or removes the marker there.
         void mouseDoubleClick (const juce::MouseEvent& e) override
         {
             if (envelope.active() || ! markersEditable() || ! waveBounds().contains (e.getPosition())) return;
@@ -4334,9 +4368,10 @@ private:
             if (const auto hit = markerAt (e.position.x); hit >= 0) markers.erase (markers.begin() + hit);
             else
             {
-                const auto beat = xBeat (e.position.x);
+                const auto transient = transientAt (e.position.x);
+                const auto beat = transient ? beatAtSource (*transient) : xBeat (e.position.x);
                 if (beat <= 0) return;
-                Session::WarpMarker added { sourceAt (beat), beat };
+                Session::WarpMarker added { transient ? *transient : sourceAt (beat), beat };
                 if (added.sourceSeconds <= 0 || added.sourceSeconds >= clip.sourceLength) return;
                 markers.insert (std::lower_bound (markers.begin(), markers.end(), added, [] (const auto& a, const auto& b) { return a.beat < b.beat; }), added);
             }
@@ -12007,6 +12042,34 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (markers().empty(), "double-clicking a marker removes it");
             for (int step = 0; step < 3; ++step) session.undo();
             refresh(); audioClipView.sync();
+            // Transients: a warped clip shows its own, and a double-click beside one pins a marker on it.
+            juce::TemporaryFile clicksFile (".wav");
+            {
+                juce::AudioBuffer<float> clicks (1, 96000);
+                clicks.clear();
+                for (const double at : { 0.25, 0.75, 1.25 })
+                    for (int n = 0; n < 480; ++n) clicks.setSample (0, (int) (at * 48000) + n, 0.6f * std::exp (-n / 60.0f) * (n % 2 == 0 ? 1.0f : -1.0f));
+                juce::WavAudioFormat wav;
+                std::unique_ptr<juce::OutputStream> stream (clicksFile.getFile().createOutputStream());
+                auto writer = stream ? wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (1).withBitsPerSample (24)) : nullptr;
+                check (writer && writer->writeFromAudioSampleBuffer (clicks, 0, clicks.getNumSamples()), "write a fixture of three clicks");
+            }
+            check (session.addAudioTrack ("Clicks").wasOk(), "add a track for clicks");
+            const int clickTrack = (int) session.snapshot().tracks.size() - 1;
+            check (session.importAudio (clicksFile.getFile(), clickTrack, 0).wasOk(), "import the clicks"); refresh();
+            const auto clickClip = state.tracks[(size_t) clickTrack].clips[0].id;
+            check (session.setAudioClipWarp (clickClip, { Session::WarpMode::stretch, 120 }).wasOk(), "warp them");
+            selectTrack (clickTrack); selectedClip = 0; refresh(); audioClipView.sync();
+            const auto transients = session.audioClipTransients (clickClip);
+            check (transients.size() == 3 && std::abs (transients[1] - 0.75) < 1e-3, "the clip's transients are its three clicks");
+            const auto beside = audioClipView.beatX (audioClipView.beatAtSource (transients[1])) + 3;
+            audioClipView.mouseDoubleClick (view (beside, beside, false, 2));
+            const auto pinned = state.tracks[(size_t) clickTrack].clips[0].warpMarkers;
+            check (pinned.size() == 2 && pinned[1].sourceSeconds == transients[1] && std::abs (pinned[1].beat - transients[1] * 2) < 1e-9,
+                   "double-clicking beside a transient pins a warp marker on it");
+            for (int step = 0; step < 4; ++step) session.undo();
+            selectTrack (0); selectedClip = 0; refresh(); audioClipView.sync();
+            check ((int) state.tracks.size() == clickTrack, "four undo steps remove the clicks' track");
         }
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())

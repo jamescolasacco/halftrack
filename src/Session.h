@@ -280,7 +280,8 @@ public:
     // at the clip's own tempo. Between markers the audio stretches to fit; before the first it runs
     // from the source's start, and after the last it keeps the clip's tempo.
     struct WarpMarker { double sourceSeconds = 0, beat = 0; bool operator== (const WarpMarker&) const = default; };
-    // Tempo guess for a source: whole 4/4 bars, doubled or halved into 80-160 BPM.
+    // Tempo guess for a source from its length: whole 4/4 bars, doubled or halved into 80-160 BPM.
+    // Auto-Warp Long Samples instead finds a long sample's tempo in its content when it can.
     static double estimateClipTempo (double sourceSeconds);
     struct AudioClipSettings
     {
@@ -699,6 +700,10 @@ public:
     // and lie within the source; an empty list removes them. One undo step. Turning warp off keeps
     // them for when it is turned back on.
     juce::Result setAudioClipWarpMarkers (const juce::String& clipId, const std::vector<WarpMarker>&);
+    // The transients in an audio clip's source, in source seconds, as Beats warping finds them: where
+    // the clip view shows them and a double-click pins a warp marker. The first ten minutes are read
+    // once while the file is unchanged.
+    std::vector<double> audioClipTransients (const juce::String& clipId);
     juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
     juce::Result splitAudioClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
     // Splits an unlooped Arrangement MIDI clip; notes crossing the split become two notes and each

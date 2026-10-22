@@ -103,6 +103,8 @@ int runMidiPortTests (const juce::File&);
 int runThemeTests (const juce::File&);
 int runInputPermissionTests (const juce::File&);
 int runSimilarityTests (const juce::File&);
+int runTempoAnalysisTests (const juce::File&);
+int runTempoAnalysisEvaluation (const juce::File& library, const juce::File& report);
 int runPackTests (const juce::File&);
 int runMackieTests (const juce::File&);
 int runSimilarityEvaluation (const juce::File& library, int perCategory, const juce::File& report);
@@ -392,6 +394,14 @@ public:
             setApplicationReturnValue (runInputPermissionTests (juce::File (args[i + 1])));
             quit(); return;
         }
+        // Manual: --tempo-evaluate <library folder> [report.json]
+        if (args.contains ("--tempo-evaluate"))
+        {
+            const int i = args.indexOf ("--tempo-evaluate");
+            setApplicationReturnValue (runTempoAnalysisEvaluation (juce::File (args[i + 1]), i + 2 < args.size() ? juce::File (args[i + 2]) : juce::File()));
+            quit();
+            return;
+        }
         // Manual: --similarity-evaluate <library folder> [sounds per category] [report.json]
         if (args.contains ("--similarity-evaluate"))
         {
@@ -405,6 +415,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-similarity");
             setApplicationReturnValue (runSimilarityTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-tempo-analysis"))
+        {
+            const int i = args.indexOf ("--self-test-tempo-analysis");
+            setApplicationReturnValue (runTempoAnalysisTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-packs"))

@@ -13,6 +13,7 @@
 #include "InputPermission.h"
 #include "MackieControl.h"
 #include "PluginBinary.h"
+#include "TempoDetection.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 #include <array>
@@ -2992,6 +2993,23 @@ struct Session::Impl
     }
     // Preferences, read when the Session starts.
     Preferences prefs;
+    // Audio files' transients and tempo for warping, each read once while the file is unchanged.
+    struct SoundAnalysis { std::vector<double> transients; std::optional<tempo::Estimate> tempo; };
+    std::map<juce::String, std::shared_ptr<const SoundAnalysis>> analyses;
+    std::shared_ptr<const SoundAnalysis> analyse (const juce::File& file)
+    {
+        const auto key = file.getFullPathName() + "|" + juce::String (file.getSize()) + "|" + juce::String (file.getLastModificationTime().toMilliseconds());
+        if (const auto found = analyses.find (key); found != analyses.end()) return found->second;
+        auto result = std::make_shared<SoundAnalysis>();
+        if (std::unique_ptr<juce::AudioFormatReader> reader (engine.getAudioFileFormatManager().readFormatManager.createReaderFor (file)); reader != nullptr)
+        {
+            tempo::OnsetCurve curve (reader->sampleRate);
+            if (curve.add (*reader)) { result->transients = curve.transients(); result->tempo = tempo::estimate (curve); }
+        }
+        if (analyses.size() >= 256) analyses.clear();
+        analyses[key] = result;
+        return result;
+    }
     String prefsProblem;
     File prefsFile() const { return engine.getPropertyStorage().getAppPrefsFolder().getChildFile ("Halftrack Preferences.xml"); }
     static bool validPreferences (const Preferences& p)
@@ -7431,10 +7449,27 @@ Result Session::importAudio (const File& source, int index, double start)
     clip->getSourceFileReference().setToFile (file, te::SourceFileReference::PathStyle::alwaysAbsolute, false);
     clip->setAutoTempo (false); clip->setAutoPitch (false);
     clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
-    // Auto-Warp Long Samples: a long sample is taken for a song at its estimated tempo.
+    // Auto-Warp Long Samples: a long sample is taken for a song. Its tempo and first beat come from
+    // its content: the clip starts on the first beat, with a warp marker there. A sound with no
+    // steady beat to find takes the tempo of whole bars.
     if (impl->prefs.autoWarpLongSamples && audio.getLength() > 30)
-        if (auto warped = setAudioClipWarp (clip->itemID.toString(), { impl->prefs.defaultWarpMode, estimateClipTempo (audio.getLength()) }); warped.failed()) return warped;
+    {
+        const auto found = impl->analyse (file)->tempo;
+        const auto first = found && found->firstBeatSeconds < audio.getLength() - 1 ? found->firstBeatSeconds : 0.0;
+        if (first > 0)
+            clip->setPosition ({ { te::TimePosition::fromSeconds (start), te::TimePosition::fromSeconds (start + audio.getLength() - first) }, te::TimeDuration::fromSeconds (first) });
+        const auto bpm = found ? found->bpm : estimateClipTempo (audio.getLength());
+        if (auto warped = setAudioClipWarp (clip->itemID.toString(), { impl->prefs.defaultWarpMode, bpm }); warped.failed()) return warped;
+        if (first > 0 && impl->prefs.defaultWarpMode != WarpMode::repitch)
+            if (auto marked = setAudioClipWarpMarkers (clip->itemID.toString(), { { 0, 0 }, { first, first * bpm / 60 } }); marked.failed()) return marked;
+    }
     impl->changed(); return Result::ok();
+}
+std::vector<double> Session::audioClipTransients (const String& id)
+{
+    auto* clip = impl->audioClip (id);
+    if (clip == nullptr) return {};
+    return impl->analyse (clip->getSourceFileReference().getFile())->transients;
 }
 double Session::estimateClipTempo (double seconds)
 {

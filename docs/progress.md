@@ -1691,3 +1691,14 @@ QA area.
 - **Full speed.** Self-test suites now hold off App Nap. With no window and no real audio, macOS could throttle a suite's timers and message dispatch: the soak passed in about a minute on Linux and Windows but timed out after 600 s on macOS. Locally a 20-second soak went from 15.2 s to 12.4 s.
 - **Soak takes.** The soak suite expects one take a minute, so a shorter `HALFTRACK_SOAK_SECONDS` run passes.
 - **Lane click.** The UI check of a lane click during playback now waits until the play head moves, up to 400 more blocks. Its failure message says whether the transport was playing.
+
+## Tempo and transient analysis — 2026-10-22
+
+Engine and UI areas.
+
+- **Tempo from content.** A sound's tempo and first beat come from its onsets: an autocorrelation comb, a beat grid, then a line through its transients.
+- **Auto-Warp Long Samples.** It now warps a long sample at the tempo found, starting on the first beat with a warp marker there. It falls back to whole bars without a steady beat.
+- **Transients.** The clip view shows a warped clip's transients, and a double-click beside one pins a marker on it.
+- **Measured.** Generated loops cut to misleading lengths are found exactly. On 69 reference library loops of 6 s or more, 78% come within 0.5 BPM; the length guess does better on those, so short samples keep it.
+
+See [the contract](research/warp-contract.md#tempo-and-transient-analysis-2026-10-22).
