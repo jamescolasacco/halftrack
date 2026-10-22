@@ -12478,6 +12478,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (noteById (aId).startBeat == 1 && noteById (bId).startBeat == 4, "one undo reverses the entire multi-note arrow edit");
     pianoRoll.keyPressed (redo);
     check (noteById (aId).startBeat == 1.25 && noteById (bId).startBeat == 4.25, "redo preserves selected note identities and relative timing");
+    // 0 deactivates the selected notes and activates them again, as in the reference.
+    check (pianoRoll.keyPressed (juce::KeyPress ('0')) && ! noteById (aId).active && ! noteById (bId).active && noteById (cId).active, "0 deactivates exactly the selected notes");
+    check (pianoRoll.keyPressed (juce::KeyPress ('0')) && noteById (aId).active && noteById (bId).active, "and 0 again activates them");
+    pianoRoll.keyPressed (undo); pianoRoll.keyPressed (undo);
+    check (noteById (aId).active && noteById (bId).startBeat == 4.25, "two undo steps return to the moved, active notes");
     pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys (shiftModifier), 0));
     check (noteById (aId).pitch == 72 && noteById (bId).pitch == 76 && noteById (cId).pitch == 67,
            "Shift-arrow transposes every selected note by an octave");
