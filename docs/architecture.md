@@ -652,6 +652,10 @@ The existing playing/queued handles belong to the original clips and are not tra
 Generated native-driver tests check source sound before and after copying, copied audio/MIDI playback, retained muted clips, row ordering, fresh identities, independent note edits, one-step history, portable reopening, source deletion, empty rows and ceiling rejection. The test sources are registered before any operation that can prepare audio readers, so accelerated callbacks do not depend on asynchronous disk-cache timing.
 
 
+## Editing grid
+
+`Session::EditGrid` is stored as a `HALFTRACKGRID` child of the Edit without an undo manager, so changing it is neither an undo step nor an unsaved change. `editGrid()` validates on every read, and an invalid value reads as the default. The step computation (`gridLadder`, `gridValue`, `gridValueBeats`, `gridValueName`) is static and needs only the zoom, the view's width in beats and the meter. The UI caches the grid on refresh. It routes every Arrangement snap through `snaps (mods)`, `toGrid` and `snapSeconds`, and uses `bypassesGrid`: Cmd on the Mac, Alt elsewhere.
+
 ## Session clip moving and copying
 
 `moveSlotClip(fromTrack, fromScene, toTrack, toScene, copy)` moves or copies a slot's clip to a slot on a track of its kind, replacing any clip there, as one undo step.

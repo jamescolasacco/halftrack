@@ -664,3 +664,13 @@ Defaults:
 - A clip moved within its track keeps playing, its slot changing places with the destination's; moved to another track it stops.
 - Option (Mac) or Ctrl (Windows, Linux) copies, as in the reference's Arrangement.
 - Dropping or pasting onto a clip replaces it.
+
+### The editing grid's state, tuplets and rounding
+
+The grid follows a static reading of the reference's code ([contract](research/edit-grid-contract.md)). Defaults for the gaps:
+
+- **Adaptive step.** The reference keeps one per time-signature section and moves it with hysteresis. Halftrack chooses the step nearest the spacing afresh at each zoom. Unmeasured: 1 Bar against 1/2 in 3/4, where the two can differ.
+- **Rounding.** Every snapped edit goes to the nearest line. The reference also rounds down for some gestures, and which ones is not known.
+- **Tuplet commands.** Quintuplets and septuplets are named but have no command. A feature flag gates them in the reference, and whether it is on by default is unknown.
+- **Saving.** A grid change is not an unsaved change in Halftrack. Whether the reference marks the Set modified for it is unmeasured.
+- **Clip editors.** They keep their own snap menus until they get per-clip grids.

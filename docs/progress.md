@@ -1793,3 +1793,18 @@ Engine and UI areas.
 - **Measured.** A playing clip moved within its track renders with 0.0 difference from the unmoved performance, its held note sounding on (`tests/SlotClipTests.cpp`).
 
 See [the contract](research/session-clip-editing-contract.md).
+
+## The Arrangement's editing grid — 2026-10-22
+
+Engine and UI areas.
+
+- **The grid.** The Arrangement's grid replaces the old four-step zoom rule. It is the reference's adaptive or fixed grid on its ladder, from 512 bars to 1/16384.
+  - Adaptive widths scale with the view, and there are triplets and Snap to Grid.
+  - Cmd/Ctrl+1 to 5 run Narrow, Widen, Triplet, Snap and Fixed. The context menu and the View menu offer them too.
+  - The readout at the Arrangement's foot reads "1/16", "1/8T", "1/1" or "Off".
+  - The grid is saved with the project, outside undo.
+- **Bypass modifier.** Snapping is bypassed with Cmd on the Mac (Alt elsewhere), as in the reference. Option now only slides waveforms and copies.
+- **Sources.** The defaults come from the reference's Sets. The rules come from static reading of its code, which a delegated agent did; no measurement in the app.
+- **Measured.** `tests/EditGridTests.cpp` and the UI suite.
+
+See [the contract](research/edit-grid-contract.md).

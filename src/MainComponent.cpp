@@ -377,7 +377,7 @@ public:
                  &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &info, &ruler, &viewport,
-                 &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain })
+                 &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain })
             addAndMakeVisible (child);
 
         for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &punchInButton, &punchOutButton, &followButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
@@ -781,11 +781,13 @@ public:
         if (audioClip) audioClipView.sync();
         viewport.setVisible (! showSession);
         ruler.setVisible (! showSession);
-        horizontalScroll.setVisible (! showSession);
+        horizontalScroll.setVisible (! showSession); gridReadout.setVisible (! showSession);
         sessionTab.setToggleState (showSession, juce::dontSendNotification);
         arrangementTab.setToggleState (! showSession, juce::dontSendNotification);
         pianoTab.setToggleState (showPiano, juce::dontSendNotification);
-        horizontalScroll.setBounds (area.removeFromBottom (12).withTrimmedRight (trackWidth + 10));
+        const auto foot = area.removeFromBottom (12);
+        horizontalScroll.setBounds (foot.withTrimmedRight (trackWidth + 10));
+        gridReadout.setBounds (foot.withTrimmedLeft (horizontalScroll.getWidth() + 6).withWidth (60).expanded (0, 1));
         ruler.setBounds (area.removeFromTop (rulerHeight));
         viewport.setBounds (area);
         canvas.setSize (juce::jmax (1, viewport.getWidth() - 10), juce::jmax (area.getHeight(), lanesHeight));
@@ -819,6 +821,8 @@ public:
         if (cmd)
         {
             if (code == 'S') { saveProject (shift); return true; }
+            // The reference's grid commands, for the Arrangement.
+            if (! shift && ! showSession && ! showPiano && code >= '1' && code <= '5') { gridCommand (code - '0'); return true; }
             if (code == 'M' && ! shift) { setMidiMapMode (! midiMapMode); return true; }
             if (code == 'K' && ! shift) { setKeyMapMode (! keyMapMode); return true; }
             if (code == 'O') { openDialog(); return true; }
@@ -1108,7 +1112,23 @@ private:
     TimeSelection timeSelection;
     int trackIndex (const juce::String& id) const
     { for (int t = 0; t < (int) state.tracks.size(); ++t) if (state.tracks[(size_t) t].id == id) return t; return -1; }
-    double snapTime (double seconds, juce::ModifierKeys mods) const { return juce::jmax (0.0, mods.isAltDown() ? seconds : snapSeconds (seconds)); }
+    double snapTime (double seconds, juce::ModifierKeys mods) const { return juce::jmax (0.0, snaps (mods) ? toGrid (seconds) : seconds); }
+    // As in the reference, Cmd (Mac) or Alt (elsewhere) held during an edit bypasses snapping, or
+    // snaps when the grid's snapping is off.
+    static bool bypassesGrid (juce::ModifierKeys mods)
+    {
+       #if JUCE_MAC
+        return mods.isCommandDown();
+       #else
+        return mods.isAltDown();
+       #endif
+    }
+    bool snaps (juce::ModifierKeys mods) const { return editGrid.snap != bypassesGrid (mods); }
+   #if JUCE_MAC
+    static constexpr int bypassModifier = juce::ModifierKeys::commandModifier;
+   #else
+    static constexpr int bypassModifier = juce::ModifierKeys::altModifier;
+   #endif
     // Time edits use the selection, or the loop range when nothing is selected.
     std::pair<double, double> editRange() const
     { return timeSelection.active() ? std::pair { timeSelection.start, timeSelection.end } : std::pair { state.loopStart, state.loopEnd }; }
@@ -2184,7 +2204,9 @@ private:
                 }
                 g.setColour (line); g.drawHorizontalLine (lane.y + lane.height - 1, 0.0f, (float) tw);
             }
-            const auto grid = owner.gridBeats(), barBeats = owner.state.timeSignature.beatsPerBar();
+            // A fine fixed grid draws every other line until they are 4 pixels apart.
+            auto grid = owner.gridBeats(); const auto barBeats = owner.state.timeSignature.beatsPerBar();
+            while (grid * owner.gridPixelsPerBeat() < 4) grid *= 2;
             const auto end = owner.viewStart + tw / owner.pixelsPerSecond;
             for (double b = std::floor (owner.beatsAt (owner.viewStart) / grid) * grid; ; b += grid)
             {
@@ -2554,10 +2576,12 @@ private:
                     juce::PopupMenu popup;
                     const bool midi=target->isMidi;
                     popup.addItem (7, midi?"Paste MIDI here":"Paste audio here", midi?owner.session.hasMidiClipClipboard():owner.session.hasAudioClipClipboard());
+                    popup.addSeparator(); owner.addGridItems (popup);
                     auto safe = juce::Component::SafePointer<Impl> (&owner);
                     popup.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId, position, midi] (int choice)
                     {
-                        if (safe != nullptr && choice == 7) {if(midi)safe->pasteMidi(trackId,position);else safe->pasteAudio(trackId,position);}
+                        if (safe == nullptr || safe->gridItem (choice)) return;
+                        if (choice == 7) {if(midi)safe->pasteMidi(trackId,position);else safe->pasteAudio(trackId,position);}
                     });
                 }
         }
@@ -2624,7 +2648,7 @@ private:
                         const auto minimum = juce::jmax (.001, clip.audio.fadeInSeconds+clip.audio.fadeOutSeconds);
                         const auto delta = (e.x-dragStartX)/owner.pixelsPerSecond;
                         const auto snap = [&] (double value)
-                        { return e.mods.isAltDown() ? value : owner.snapSeconds (value); };
+                        { return owner.snaps (e.mods) ? owner.toGrid (value) : value; };
                         if (rangeDrag == 1)
                         {
                             const auto shift = juce::jlimit (-juce::jmin (start,offset), juce::jmax (0.0,length-minimum), snap (start+delta)-start);
@@ -2647,7 +2671,7 @@ private:
                         // past its source.
                         const auto& from = originalRange;
                         const auto edge = owner.secondsAt (rangeDrag == 1 ? from.startBeat : from.startBeat + from.lengthBeats) + (e.x - dragStartX) / owner.pixelsPerSecond;
-                        const auto beat = owner.beatsAt (e.mods.isAltDown() ? edge : owner.snapSeconds (std::max (0.0, edge)));
+                        const auto beat = owner.beatsAt (owner.snaps (e.mods) ? owner.toGrid (std::max (0.0, edge)) : edge);
                         constexpr double shortest = 1.0 / 64;
                         auto startBeat = from.startBeat, length = from.lengthBeats, content = from.contentStartBeat;
                         if (rangeDrag == 1)
@@ -2678,7 +2702,7 @@ private:
                     if (current.tracks[(size_t)t].clips[(size_t)c].id == dragClipId)
                     {
                         auto start = juce::jmax (0.0, originalStart + (e.x - dragStartX) / owner.pixelsPerSecond);
-                        if (! e.mods.isAltDown()) start = owner.snapSeconds (start);
+                        if (owner.snaps (e.mods)) start = owner.toGrid (start);
                         const auto& clip = current.tracks[(size_t)t].clips[(size_t)c];
                         const int destination = owner.trackAtY (e.y);
                         if (! juce::isPositiveAndBelow (destination,(int)current.tracks.size())
@@ -2802,13 +2826,14 @@ private:
                 popup.addItem(7,"Paste MIDI at insert marker",owner.session.hasMidiClipClipboard());
                 popup.addSeparator();popup.addItem(10,"Extract Groove");
             }
+            popup.addSeparator(); owner.addGridItems (popup);
             const bool midi=clip&&clip->isMidi;
             auto safe = juce::Component::SafePointer<Impl> (&owner);
             const auto trackId = track ? track->id : juce::String();
             const auto position = owner.state.insertMarker;
             popup.showMenuAsync (juce::PopupMenu::Options(), [safe, id, trackId, position, midi, activate] (int choice)
             {
-                if (safe == nullptr) return;
+                if (safe == nullptr || safe->gridItem (choice)) return;
                 if (choice == 1) safe->deleteClipById(id);
                 else if (choice == 8) safe->setClipActiveFromUI(id,activate);
                 else if (choice == 9) safe->renameClipDialog(id);
@@ -2967,7 +2992,7 @@ private:
             for (const auto& marker : owner.session.snapshot().locators) if (marker.id==dragId)
             {
                 auto time=original+(event.x-downX)/owner.pixelsPerSecond;
-                if (!event.mods.isAltDown())time=owner.snapSeconds (time);
+                if (owner.snaps (event.mods)) time = owner.toGrid (time);
                 time=juce::jlimit (0.0,172800.0-.001,time);
                 if (!locatorGesture){owner.session.beginEditGesture ("Move locator");locatorGesture=true;}
                 owner.report (owner.session.updateLocator (dragId,marker.name,time));owner.refresh();return;
@@ -4820,8 +4845,8 @@ private:
             if (braceDrag != 0)
             {
                 const auto delta = (e.position.x - braceDownX) * braceBeatsPerPixel;
-                const auto snap = [&] (double beat) { return e.mods.isAltDown() ? beat : std::round (beat / snapGrid()) * snapGrid(); };
-                const double shortest = e.mods.isAltDown() ? 1.0 / 64 : snapGrid(), audioEnd = sourceBeats (clip);
+                const auto snap = [&] (double beat) { return bypassesGrid (e.mods) ? beat : std::round (beat / snapGrid()) * snapGrid(); };
+                const double shortest = bypassesGrid (e.mods) ? 1.0 / 64 : snapGrid(), audioEnd = sourceBeats (clip);
                 auto loop = braceOrigin;
                 auto start = startOrigin;
                 if (braceDrag == 1)
@@ -4845,7 +4870,7 @@ private:
             if (draggedMarker < 0 || draggedMarker >= (int) clip.warpMarkers.size()) return;
             auto markers = clip.warpMarkers;
             auto beat = xBeat (e.position.x);
-            if (! e.mods.isAltDown()) { const auto grid = snapGrid(); beat = std::round (beat / grid) * grid; }
+            if (! bypassesGrid (e.mods)) { const auto grid = snapGrid(); beat = std::round (beat / grid) * grid; }
             const auto gap = std::min (1.0 / 64, snapGrid() / 4);
             const auto low = draggedMarker > 0 ? markers[(size_t) draggedMarker - 1].beat + gap : gap;
             const auto high = draggedMarker + 1 < (int) markers.size() ? markers[(size_t) draggedMarker + 1].beat - gap : 1e6;
@@ -5281,8 +5306,8 @@ private:
                 // Ends resize the loop, its middle moves it with the start, and the start marker moves
                 // alone; on the note grid unless Alt is held. The start stays in the loop.
                 const auto delta = (e.position.x - dragOrigin.x) / pixelsPerBeat;
-                const auto snap = [&] (double beat) { return e.mods.isAltDown() ? beat : std::round (beat / snapBeats()) * snapBeats(); };
-                const double shortest = e.mods.isAltDown() ? 1.0 / 64 : snapBeats();
+                const auto snap = [&] (double beat) { return bypassesGrid (e.mods) ? beat : std::round (beat / snapBeats()) * snapBeats(); };
+                const double shortest = bypassesGrid (e.mods) ? 1.0 / 64 : snapBeats();
                 auto loop = braceOrigin;
                 auto start = startOrigin;
                 if (braceDrag == 1)
@@ -5313,7 +5338,7 @@ private:
             if (resizeNote)
             {
                 auto length = drawing ? beatAt (e.x) - original.startBeat : original.lengthBeats + beatDelta;
-                if (! e.mods.isAltDown()) length = std::round (length / snapBeats()) * snapBeats();
+                if (! bypassesGrid (e.mods)) length = std::round (length / snapBeats()) * snapBeats();
                 // Preserve valid model notes shorter than the mouse resize floor.
                 // Every selected note must admit the same length delta.
                 double minimum = juce::jmin (0.03125, originalNotes.front().lengthBeats) - originalNotes.front().lengthBeats;
@@ -5331,7 +5356,7 @@ private:
             }
             else
             {
-                if (! e.mods.isAltDown()) beatDelta = std::round ((original.startBeat + beatDelta) / snapBeats()) * snapBeats() - original.startBeat;
+                if (! bypassesGrid (e.mods)) beatDelta = std::round ((original.startBeat + beatDelta) / snapBeats()) * snapBeats() - original.startBeat;
                 const auto pitchDelta = -(int) std::round ((e.y - dragOrigin.y) / rowHeight);
                 moveNotes (dragClipId, originalNotes, beatDelta, pitchDelta);
             }
@@ -5720,7 +5745,7 @@ private:
         {
             const auto* clip = roll.owner.currentMidiClip();
             const auto grid = roll.snapBeats();
-            return juce::jlimit (0.0, clip ? contentEndBeat (*clip) : 0.0, mods.isAltDown() ? beat : std::round (beat / grid) * grid);
+            return juce::jlimit (0.0, clip ? contentEndBeat (*clip) : 0.0, bypassesGrid (mods) ? beat : std::round (beat / grid) * grid);
         }
         std::vector<Session::MidiNoteInfo> notes() const
         {
@@ -7104,6 +7129,7 @@ private:
     Session& session;
     Theme theme;
     Session::Snapshot state;
+    Session::EditGrid editGrid;
     juce::MenuBarComponent menu;
     juce::AudioFormatManager formats;
     juce::AudioThumbnailCache thumbnailCache { 128 };
@@ -7320,6 +7346,28 @@ private:
     DeviceChain deviceChain;
     juce::Viewport viewport;
     juce::ScrollBar horizontalScroll { false };
+    // The grid's step, at the foot of the Arrangement beside its scroll bar, as the reference shows
+    // it there; Off while snapping is off. A click offers the grid's settings.
+    class GridReadout final : public juce::Component, public juce::SettableTooltipClient
+    {
+    public:
+        explicit GridReadout (Impl& o) : owner (o)
+        { setName ("Grid readout"); setTooltip ("Editing grid. Cmd/Ctrl+1 narrows it, 2 widens it, 3 toggles triplets, 4 snapping and 5 a fixed grid."); }
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (owner.editGrid.snap ? ink : muted); g.setFont (font (10.0f));
+            g.drawText (owner.gridName(), getLocalBounds(), juce::Justification::centredLeft, false);
+        }
+        void mouseDown (const juce::MouseEvent&) override
+        {
+            juce::PopupMenu menu; owner.addGridItems (menu);
+            auto safe = juce::Component::SafePointer<Impl> (&owner);
+            menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe] (int choice) { if (safe != nullptr) safe->gridItem (choice); });
+        }
+    private:
+        Impl& owner;
+    };
+    GridReadout gridReadout { *this };
     std::unique_ptr<juce::FileChooser> chooser;
     std::vector<juce::Component::SafePointer<juce::DialogWindow>> dialogs;
     std::vector<juce::Component::SafePointer<juce::DocumentWindow>> automationWindows;
@@ -7962,19 +8010,105 @@ private:
         if (result.wasOk()) { selectTrack ((int) state.tracks.size() - 1); if (showSession) createLauncherMidiClip(); else createMidiClip (state.insertMarker); }
         session.endEditGesture();
     }
-    // The Arrangement grid in beats, chosen from the beat width at the playhead's tempo.
-    double gridBeats() const
+    // The Arrangement grid: the project's editing grid at the zoom and view width, at the playhead's tempo.
+    double gridPixelsPerBeat() const { return 60.0 / state.tempo * pixelsPerSecond; }
+    double visibleBeats() const { return canvas.timelineWidth() / gridPixelsPerBeat(); }
+    Session::GridValue gridValue() const { return Session::gridValue (editGrid, gridPixelsPerBeat(), visibleBeats(), state.timeSignature); }
+    double gridBeats() const { return Session::gridValueBeats (gridValue(), editGrid.tuplet, state.timeSignature); }
+    // The readout's text: the step, or Off while snapping is off, as the reference shows it.
+    juce::String gridName() const { return editGrid.snap ? Session::gridValueName (gridValue(), editGrid.tuplet) : juce::String ("Off"); }
+    // The reference's grid commands, Cmd/Ctrl+1 to 5: Narrow and Widen Grid move an adaptive grid one
+    // step, halving or doubling its spacing (never to lines 8 pixels apart or a step half the view
+    // long), and walk a fixed grid along the ladder; 3 toggles triplets (not for bars), 4 snapping;
+    // 5 fixes the grid at its current step, or makes it adaptive at that step's width.
+    void gridCommand (int command)
     {
-        const auto beat = 60.0 / state.tempo;
-        if (beat * pixelsPerSecond >= 30) return .25;
-        if (beat * pixelsPerSecond >= 15) return 1;
-        if (beat * pixelsPerSecond >= 6) return 2;
-        return state.timeSignature.beatsPerBar();
+        auto g = editGrid;
+        const auto ladder = Session::gridLadder();
+        const auto value = gridValue();
+        const auto at = (int) (std::find (ladder.begin(), ladder.end(), value) - ladder.begin());
+        const auto ppb = gridPixelsPerBeat();
+        if (command == 1 || command == 2)
+        {
+            const int next = at + (command == 1 ? 1 : -1);
+            if (next < 0 || next >= (int) ladder.size()) return;
+            const auto& to = ladder[(size_t) next];
+            if (g.fixed) { g.numerator = to.numerator; g.denominator = to.denominator; }
+            else if (command == 1 && Session::gridValueBeats (to, 2, state.timeSignature) * ppb <= Session::narrowestGrid) return;
+            else if (command == 2 && Session::gridValueBeats (to, g.tuplet, state.timeSignature) >= visibleBeats() / 2) return;
+            else g.intervalPixels = command == 1 ? juce::jmax (1, g.intervalPixels / 2) : g.intervalPixels * 2;
+        }
+        if (command == 3) { if (value.bars()) return; g.tuplet = g.tuplet == 3 ? 2 : 3; }
+        if (command == 4) g.snap = ! g.snap;
+        if (command == 5)
+        {
+            if (! g.fixed) { g.numerator = value.numerator; g.denominator = value.denominator; }
+            else
+            {
+                const auto width = Session::gridValueBeats (value, g.tuplet, state.timeSignature) * ppb;
+                g.intervalPixels = width < Session::narrowestGrid ? Session::narrowestGrid : (int) juce::jmin (width, canvas.timelineWidth() / 2.0);
+            }
+            g.fixed = ! g.fixed;
+        }
+        setGrid (g);
+    }
+    void setGrid (const Session::EditGrid& g)
+    {
+        report (session.setEditGrid (g));
+        editGrid = session.editGrid(); canvas.repaint(); ruler.repaint(); gridReadout.repaint();
+        status = "Grid: " + gridName(); statusFrames = 24 * 4;
+    }
+    // The grid section of the Arrangement's context menus, as the reference's: adaptive widths, fixed
+    // values, triplets and snapping, from item 200.
+    void addGridItems (juce::PopupMenu& menu) const
+    {
+        juce::PopupMenu adaptive, fixed;
+        const juce::StringArray widths { "Widest", "Wide", "Medium", "Narrow", "Narrowest" };
+        for (int i = 0; i < widths.size(); ++i) adaptive.addItem (200 + i, widths[i], true, ! editGrid.fixed && gridWidth() == i);
+        const auto ladder = Session::gridLadder();
+        for (int i = 0; i < (int) std::size (fixedGridItems); ++i)
+            fixed.addItem (210 + i, fixedGridItems[i].bars() ? juce::String (fixedGridItems[i].numerator) + (fixedGridItems[i].numerator == 1 ? " Bar" : " Bars")
+                                                       : Session::gridValueName (fixedGridItems[i], 2), true, editGrid.fixed && fixedGridItems[i] == Session::GridValue { editGrid.numerator, editGrid.denominator });
+        menu.addSubMenu ("Adaptive Grid", adaptive, true, juce::Image(), ! editGrid.fixed);
+        menu.addSubMenu ("Fixed Grid", fixed, true, juce::Image(), editGrid.fixed);
+        menu.addItem (220, "Triplet Grid", ! gridValue().bars(), editGrid.tuplet == 3);
+        menu.addItem (221, "Snap to Grid", true, editGrid.snap);
+    }
+    static constexpr Session::GridValue fixedGridItems[] { { 8, 1 }, { 4, 1 }, { 2, 1 }, { 1, 1 }, { 1, 2 }, { 1, 4 }, { 1, 8 }, { 1, 16 }, { 1, 32 } };
+    // The five adaptive widths, from half the view's width down to 8 pixels, each the geometric mean
+    // of its neighbours as the reference computes them; the nearest is shown checked.
+    std::array<int, 5> gridWidths() const
+    {
+        const auto widest = juce::jmax (Session::narrowestGrid, canvas.timelineWidth() / 2);
+        const auto medium = (int) (std::sqrt ((float) widest * 0.125f) * 8.0f);
+        return { widest, (int) std::sqrt ((float) widest * (float) medium), medium, (int) std::sqrt (8.0f * (float) medium), Session::narrowestGrid };
+    }
+    int gridWidth() const
+    {
+        const auto widths = gridWidths();
+        int nearest = 0;
+        for (int i = 1; i < 5; ++i)
+            if (std::abs (std::log ((double) editGrid.intervalPixels / widths[(size_t) i])) < std::abs (std::log ((double) editGrid.intervalPixels / widths[(size_t) nearest]))) nearest = i;
+        return nearest;
+    }
+    // Choosing a width or a fixed value also turns snapping on.
+    bool gridItem (int item)
+    {
+        auto g = editGrid;
+        if (item >= 200 && item < 205) { g.fixed = false; g.intervalPixels = gridWidths()[(size_t) item - 200]; g.snap = true; }
+        else if (item >= 210 && item < 210 + (int) std::size (fixedGridItems))
+        { g.fixed = true; g.numerator = fixedGridItems[item - 210].numerator; g.denominator = fixedGridItems[item - 210].denominator; g.snap = true; }
+        else if (item == 220) g.tuplet = g.tuplet == 3 ? 2 : 3;
+        else if (item == 221) g.snap = ! g.snap;
+        else return false;
+        setGrid (g); return true;
     }
     // Times go through the tempo map, so the grid and bars follow tempo changes.
     double beatsAt (double seconds) const { return session.beatsAt (seconds); }
     double secondsAt (double beats) const { return session.secondsAt (beats); }
-    double snapSeconds (double seconds) const
+    // The nearest grid line, or with snapping off the time itself.
+    double snapSeconds (double seconds) const { return editGrid.snap ? toGrid (seconds) : juce::jmax (0.0, seconds); }
+    double toGrid (double seconds) const
     { const auto grid = gridBeats(); return juce::jmax (0.0, secondsAt (std::round (beatsAt (juce::jmax (0.0, seconds)) / grid) * grid)); }
     // Freeze toggles the track's freeze; Flatten replaces a frozen track with its render.
     void freezeTrackFromUI (const juce::String& trackId, bool flatten)
@@ -8068,7 +8202,7 @@ private:
     {
         const auto previous = state;
         const auto selectedId = currentTrack() != nullptr ? currentTrack()->id : juce::String();
-        state = session.snapshot();
+        state = session.snapshot(); editGrid = session.editGrid();
         buildLanes();
         if (selectedId.isNotEmpty())
         {
@@ -8317,6 +8451,7 @@ private:
         horizontalScroll.setRangeLimits (0.0, total, juce::dontSendNotification);
         horizontalScroll.setCurrentRange (viewStart, visible, juce::dontSendNotification);
         horizontalScroll.setSingleStepSize (60.0 / state.tempo);
+        gridReadout.repaint();
     }
     void scrollBarMoved (juce::ScrollBar*, double start) override
     { if (state.playing) setFollow (false); viewStart = start; canvas.repaint(); ruler.repaint(); }
@@ -8379,6 +8514,12 @@ private:
             popup.addItem (45, "Session"); popup.addItem (43, "Arrangement"); popup.addItem (44, "Piano Roll"); popup.addItem (46, "Automation..."); popup.addItem (47, "Master Volume Automation..."); popup.addSeparator();
             popup.addItem (48, "Show Take Lanes", currentTrack() != nullptr && ! currentTrack()->isReturn && ! showSession, currentTrack() != nullptr && takeLanesShown.count (currentTrack()->id) > 0);
             popup.addItem (49, "Automation Mode", ! showSession, automationMode); popup.addItem (90, "Info", true, showInfo);
+            // The reference keeps these in its Options menu.
+            popup.addSeparator();
+            const bool arrangement = ! showSession && ! showPiano;
+            popup.addItem (93, "Narrow Grid", arrangement); popup.addItem (94, "Widen Grid", arrangement);
+            popup.addItem (95, "Triplet Grid", arrangement, editGrid.tuplet == 3); popup.addItem (96, "Snap to Grid", arrangement, editGrid.snap);
+            popup.addItem (97, "Fixed Grid", arrangement, editGrid.fixed);
            #if JUCE_MAC
             popup.addItem (92, "Video Window", video::supported(), videoWindow != nullptr && videoWindow->isVisible());
            #endif
@@ -8479,6 +8620,7 @@ private:
             }
             case 57: case 58: moveSceneFromUI(selectedSceneId,id==57?-1:1); break;
             case 84: case 85: case 86: case 87: slotCommand (id); break;
+            case 93: case 94: case 95: case 96: case 97: gridCommand (id - 92); break;
             case 52: report (session.removeScene (selectedSceneIndex())); break;
             case 53: report (session.launchScene (selectedSceneIndex())); break;
             case 54: report (session.stopAllLauncherClips()); break;
@@ -11036,7 +11178,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const int t = selectedTrack; const auto trackId = currentTrack()->id;
         check (session.addMidiClip (trackId, 2, 2).wasOk(), "a one-second MIDI clip at 1 s"); refresh();
         const auto now = juce::Time::getCurrentTime();
-        const juce::ModifierKeys alt (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::altModifier);
+        const juce::ModifierKeys alt (juce::ModifierKeys::leftButtonModifier | bypassModifier);
         auto canvasEvent = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged)
         { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, alt, 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, down, now, 1, dragged); };
         const auto xAt = [&] (double seconds) { return (float) ((seconds - viewStart) * pixelsPerSecond); };
@@ -11117,7 +11259,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         while (header != nullptr && header->getParentComponent() != &canvas) header = header->getParentComponent();
         check (firstLane != nullptr && header != nullptr && header->getTitle() == "Take 1", "the lanes sit below the track with named headers");
         const auto now = juce::Time::getCurrentTime();
-        const juce::ModifierKeys alt (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::altModifier);
+        const juce::ModifierKeys alt (juce::ModifierKeys::leftButtonModifier | bypassModifier);
         const auto xAt = [&] (double seconds) { return (float) ((seconds - viewStart) * pixelsPerSecond); };
         const auto y = (float) (firstLane->y + firstLane->height / 2);
         const juce::Point<float> down { xAt (.25), y }, up { xAt (.5), y };
@@ -11232,7 +11374,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const int lane = (int) state.tracks.size() - 1;
         viewStart = 0; updateScroll(); refresh();
         const auto now = juce::Time::getCurrentTime();
-        const juce::ModifierKeys alt (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::altModifier);
+        const juce::ModifierKeys alt (juce::ModifierKeys::leftButtonModifier | bypassModifier);
         auto laneClick = [&] (double seconds)
         {
             const juce::Point<float> at { (float) ((seconds - viewStart) * pixelsPerSecond), (float) (laneY (lane) + laneHeight (lane) / 2) };
@@ -12888,7 +13030,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto edgeEvent = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged)
             {
                 const auto when = juce::Time::getCurrentTime();
-                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::altModifier),
+                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | bypassModifier),
                                          1.0f, 0, 0, 0, 0, &canvas, &canvas, when, down, when, 1, dragged);
             };
             const auto dragEdge = [&] (bool right, double beats)
@@ -12986,6 +13128,53 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             for (int step = 0; step < 8; ++step) session.undo();
             refresh();
             check ((int) state.tracks.size() == t, "eight undo steps remove the track");
+        }
+        {
+            // The editing grid: Cmd/Ctrl+1 to 5, the context menu's grid items and the View menu, at 80
+            // pixels a beat.
+            session.stop(); showArrangementView(); setGrid ({});
+            pixelsPerSecond = 80 * state.tempo / 60; updateScroll(); refresh();
+            const auto key = [&] (char digit) { return handleKey (juce::KeyPress (digit, juce::ModifierKeys::commandModifier, 0)); };
+            check (gridReadout.isVisible() && gridName() == "1/16" && std::abs (gridBeats() - .25) < 1e-9, "the Arrangement shows the adaptive grid's 1/16 step at its foot");
+            check (key ('1') && editGrid.intervalPixels == 10 && gridName() == "1/32", "Cmd/Ctrl+1 narrows the adaptive grid, halving its spacing");
+            check (key ('1') && editGrid.intervalPixels == 10 && gridName() == "1/32", "but not to lines 8 pixels apart or closer");
+            check (key ('2') && key ('2') && editGrid.intervalPixels == 40 && gridName() == "1/8", "Cmd/Ctrl+2 widens it, doubling the spacing");
+            check (key ('5') && editGrid.fixed && editGrid.denominator == 8 && gridName() == "1/8", "Cmd/Ctrl+5 fixes the grid at its current step");
+            check (key ('1') && gridName() == "1/16" && key ('2') && key ('2') && gridName() == "1/4", "fixed, Cmd/Ctrl+1 and 2 walk its values");
+            check (key ('3') && gridName() == "1/4T" && std::abs (gridBeats() - 2.0 / 3) < 1e-9 && key ('3') && gridName() == "1/4", "Cmd/Ctrl+3 toggles triplets");
+            check (key ('5') && ! editGrid.fixed && editGrid.intervalPixels == 80 && gridName() == "1/4", "made adaptive again its spacing is the step's width");
+            check (key ('4') && ! editGrid.snap && gridName() == "Off" && key ('4') && editGrid.snap, "Cmd/Ctrl+4 turns snapping off, the readout saying Off, and on");
+            check (gridItem (203) && ! editGrid.fixed && editGrid.intervalPixels == gridWidths()[3] && gridItem (217) && editGrid.fixed && gridName() == "1/16",
+                   "the context menu's Narrow and 1/16 items choose them");
+            const auto widths = gridWidths();
+            check (widths[0] == canvas.timelineWidth() / 2 && widths[4] == 8 && widths[0] > widths[1] && widths[1] > widths[2] && widths[2] > widths[3] && widths[3] > widths[4],
+                   "the adaptive widths run from half the view to 8 pixels");
+            // With snapping off a click lands where it is, unless the bypass modifier asks for the grid.
+            check (session.addAudioTrack ("Grid").wasOk(), "a track to click on"); refresh();
+            const int lane = (int) state.tracks.size() - 1;
+            viewStart = 0; updateScroll(); refresh();
+            const auto click = [&] (double seconds, int modifiers)
+            {
+                const juce::Point<float> at { (float) ((seconds - viewStart) * pixelsPerSecond), (float) (laneY (lane) + laneHeight (lane) / 2) };
+                const auto now = juce::Time::getCurrentTime();
+                const auto event = juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers),
+                                                     1.0f, 0, 0, 0, 0, &canvas, &canvas, now, at, now, 1, false);
+                canvas.mouseDown (event); canvas.mouseUp (event); refresh();
+            };
+            const auto sixteenth = secondsAt (.25), off = secondsAt (2.1);
+            click (off, 0);
+            check (std::abs (state.insertMarker - secondsAt (2)) < 1e-6, "with snapping on a click snaps to the 1/16 grid");
+            check (key ('4') && ! editGrid.snap, "Cmd/Ctrl+4 turns snapping off");
+            click (off, 0);
+            check (std::abs (state.insertMarker - off) < 1.5 / pixelsPerSecond && std::abs (state.insertMarker - secondsAt (2)) > sixteenth / 4, "then a click lands where it is");
+            click (off, bypassModifier);
+            check (std::abs (state.insertMarker - secondsAt (2)) < 1e-6, "and with the bypass modifier held it snaps");
+            menuItemSelected (96, 3);
+            check (editGrid.snap, "View > Snap to Grid turns snapping on again");
+            session.undo(); refresh();
+            check ((int) state.tracks.size() == lane, "one undo removes the track");
+            setGrid ({});
+            showSessionView(); check (! gridReadout.isVisible(), "the Session View does not show it"); showArrangementView();
         }
        #if JUCE_MAC
         {
@@ -13147,7 +13336,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             &&std::abs(clip.audio.fadeOutSeconds-rangeFades.fadeOutSeconds)<1e-12
             &&clip.audio.gainDb==rangeFades.gainDb&&clip.audio.fadeInCurve==rangeFades.fadeInCurve&&clip.audio.fadeOutCurve==rangeFades.fadeOutCurve;
     };
-    const int freeRange=juce::ModifierKeys::altModifier,slipRange=freeRange|juce::ModifierKeys::shiftModifier;
+    // Cmd (Mac) or Alt bypasses snapping; Shift+Option (Mac) or Shift+Alt slides the waveform.
+    const int freeRange=bypassModifier,slipRange=juce::ModifierKeys::altModifier|juce::ModifierKeys::shiftModifier;
     rangeDrag(rangePoint(false),40,freeRange);
     check(rangeIs(.03,.05,.02),"left trim moves start and source offset together, retaining end and fades");
     session.undo();refresh();check(rangeIs(.02,.06,.01),"one undo restores the whole multi-event left trim");
@@ -13166,8 +13356,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     // Set a grid small enough to expose snapping inside the bounded 100 ms source.
     session.setTempo(300);
     check(session.setAudioClipRange(rangeId,.02,.06,.01).wasOk(),"restore absolute range after tempo change");refresh();
+    // A fixed 1/16 grid: a quarter beat, 50 ms at 300 BPM.
+    Session::EditGrid sixteenths; sixteenths.fixed = true; setGrid (sixteenths);
     rangeDrag(rangePoint(false),40,0);
-    check(rangeIs(.05,.03,.04),"edge trim snaps to project grid unless Alt is held");session.undo();refresh();
+    check(rangeIs(.05,.03,.04),"edge trim snaps to project grid unless the bypass modifier is held");session.undo();refresh();
+    setGrid ({});
     session.setTempo(120);refresh();
     // Drag the same identity through multiple owners within one gesture.
     selectedClip=0;refresh();
@@ -13240,6 +13433,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     };
     auto locatorPoint=ruler.locatorBounds(markerById(firstLocator)).getCentre();
     check(ruler.hitLocator(locatorPoint)==firstLocator,"locator hit testing resolves stable identity");
+    { Session::EditGrid sixteenths; sixteenths.fixed = true; setGrid (sixteenths); } // 125 ms at 120 BPM.
     ruler.mouseDown(locatorEvent(locatorPoint,locatorPoint));
     ruler.mouseDrag(locatorEvent(locatorPoint+juce::Point<float>(20,0),locatorPoint,true));
     ruler.mouseDrag(locatorEvent(locatorPoint+juce::Point<float>(40,0),locatorPoint,true));
@@ -13249,7 +13443,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     ruler.mouseDown(locatorEvent(locatorPoint,locatorPoint,false,freeRange));
     ruler.mouseDrag(locatorEvent(locatorPoint+juce::Point<float>(37,0),locatorPoint,true,freeRange));
     ruler.mouseUp(locatorEvent(locatorPoint+juce::Point<float>(37,0),locatorPoint,true,freeRange));
-    check(std::abs(markerById(firstLocator).position-1.37)<1e-9,"Alt locator drag bypasses snapping");session.undo();refresh();
+    check(std::abs(markerById(firstLocator).position-1.37)<1e-9,"a locator dragged with the bypass modifier does not snap");session.undo();refresh();
+    setGrid ({});
     ruler.mouseDoubleClick(locatorEvent(locatorPoint,locatorPoint));
     check(!alerts.empty()&&alerts.back()!=nullptr,"locator double-click opens the production editor");
     auto* locatorDialog=alerts.back().getComponent();locatorDialog->getTextEditor("name")->setText("Bridge");

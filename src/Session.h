@@ -1031,6 +1031,40 @@ public:
     double secondsAt (double beats) const;
     // One project meter: numerator 1-99 over 1, 2, 4, 8 or 16. Tempo stays in quarter notes per minute.
     juce::Result setTimeSignature (int numerator, int denominator);
+    // The Arrangement's editing grid, after the reference's. Its steps form one ladder: 512 bars,
+    // 256, ... 1 bar, then the note values 1/2, 1/4, ... 1/16384. Fixed, the step is one of them;
+    // adaptive, it is the one closest to `intervalPixels` wide at the zoom on a log scale, never
+    // with lines closer than 8 pixels nor as long as half the view. A tuplet step is 2/n of a note
+    // value's length; bars take none. Saved with the project, outside the undo history, as the
+    // reference saves its grid with the Set.
+    struct EditGrid
+    {
+        bool fixed = false;
+        int numerator = 1, denominator = 16; // A note value 1/d, or with denominator 1 a number of bars.
+        int intervalPixels = 20;             // Adaptive line spacing.
+        int tuplet = 2;                      // 2 plain, 3 triplet, 5 quintuplet, 7 septuplet.
+        bool snap = true;
+        bool operator== (const EditGrid&) const = default;
+    };
+    struct GridValue
+    {
+        int numerator = 1, denominator = 16;
+        bool bars() const noexcept { return denominator == 1; }
+        bool operator== (const GridValue&) const = default;
+    };
+    static constexpr int narrowestGrid = 8; // Pixels between the closest lines an adaptive grid draws.
+    EditGrid editGrid() const;
+    juce::Result setEditGrid (const EditGrid&);
+    // The ladder, coarsest first, and a value's length in quarter-note beats under a meter.
+    static std::vector<GridValue> gridLadder();
+    static double gridValueBeats (GridValue, int tuplet, TimeSignature);
+    // The grid's value at a zoom, in pixels per quarter note, for a view so many beats wide.
+    static GridValue gridValue (const EditGrid&, double pixelsPerBeat, double visibleBeats, TimeSignature);
+    static double gridStepBeats (const EditGrid& g, double pixelsPerBeat, double visibleBeats, TimeSignature meter)
+    { return gridValueBeats (gridValue (g, pixelsPerBeat, visibleBeats, meter), g.tuplet, meter); }
+    // A value's name, as the Arrangement's readout shows it: "1/16", "1/8T", "5 : 1/8" for a 1/16
+    // quintuplet, and bars as "1/1", "2/1".
+    static juce::String gridValueName (GridValue, int tuplet);
     juce::Result tapTempo (double monotonicSeconds); // Message-thread tap time, not project time.
     juce::Result setMetronome (const MetronomeSettings&);
     juce::Result setRecordQuantisation (RecordQuantisation);

@@ -10340,6 +10340,76 @@ Result Session::setTempoMap (const std::vector<TempoPoint>& points)
     impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }
+// The editing grid: a HALFTRACKGRID child of the Edit, read back through validation so a damaged
+// or older project falls back to the default grid.
+const juce::Identifier gridType { "HALFTRACKGRID" };
+std::vector<Session::GridValue> Session::gridLadder()
+{
+    std::vector<GridValue> ladder;
+    for (int bars = 512; bars >= 1; bars /= 2) ladder.push_back ({ bars, 1 });
+    for (int denominator = 2; denominator <= 16384; denominator *= 2) ladder.push_back ({ 1, denominator });
+    return ladder;
+}
+static bool validGrid (const Session::EditGrid& g)
+{
+    const auto ladder = Session::gridLadder();
+    return std::find (ladder.begin(), ladder.end(), Session::GridValue { g.numerator, g.denominator }) != ladder.end()
+        && g.intervalPixels >= 1 && g.intervalPixels <= 1 << 20 && (g.tuplet == 2 || g.tuplet == 3 || g.tuplet == 5 || g.tuplet == 7);
+}
+Session::EditGrid Session::editGrid() const
+{
+    EditGrid g;
+    if (const auto v = impl->edit->state.getChildWithName (gridType); v.isValid())
+    {
+        EditGrid read { (bool) v.getProperty ("fixed", false), (int) v.getProperty ("numerator", 1), (int) v.getProperty ("denominator", 16),
+                        (int) v.getProperty ("intervalPixels", 20), (int) v.getProperty ("tuplet", 2), (bool) v.getProperty ("snap", true) };
+        if (validGrid (read)) g = read;
+    }
+    return g;
+}
+Result Session::setEditGrid (const EditGrid& g)
+{
+    if (! validGrid (g)) return Result::fail ("That is not a grid setting.");
+    if (g == editGrid()) return Result::ok();
+    auto v = impl->edit->state.getOrCreateChildWithName (gridType, nullptr);
+    v.setProperty ("fixed", g.fixed, nullptr); v.setProperty ("numerator", g.numerator, nullptr); v.setProperty ("denominator", g.denominator, nullptr);
+    v.setProperty ("intervalPixels", g.intervalPixels, nullptr); v.setProperty ("tuplet", g.tuplet, nullptr); v.setProperty ("snap", g.snap, nullptr);
+    sendChangeMessage(); return Result::ok();
+}
+double Session::gridValueBeats (GridValue value, int tuplet, TimeSignature meter)
+{
+    return value.bars() ? value.numerator * meter.beatsPerBar() : 4.0 / value.denominator * 2.0 / juce::jmax (2, tuplet);
+}
+Session::GridValue Session::gridValue (const EditGrid& g, double pixelsPerBeat, double visibleBeats, TimeSignature meter)
+{
+    if (g.fixed) return { g.numerator, g.denominator };
+    if (! (pixelsPerBeat > 0)) return { 1, 16 };
+    // The step nearest the spacing on a log scale, among those whose plain lines are more than 8
+    // pixels apart and that are shorter than half the view.
+    const auto target = g.intervalPixels / pixelsPerBeat;
+    std::optional<GridValue> best;
+    double distance = 0;
+    for (const auto& value : gridLadder())
+    {
+        const auto plain = gridValueBeats (value, 2, meter), length = gridValueBeats (value, g.tuplet, meter);
+        if (plain * pixelsPerBeat <= narrowestGrid || (std::isfinite (visibleBeats) && length >= visibleBeats / 2)) continue;
+        const auto d = std::abs (std::log (length / target));
+        if (! best || d < distance - 1e-12) { best = value; distance = d; }
+    }
+    if (best) return *best;
+    // A view too narrow for any: the coarsest step with lines more than 8 pixels apart, or 1/16.
+    for (const auto& value : gridLadder())
+        if (gridValueBeats (value, 2, meter) * pixelsPerBeat > narrowestGrid && gridValueBeats (value, g.tuplet, meter) < visibleBeats) return value;
+    return { 1, 16 };
+}
+String Session::gridValueName (GridValue value, int tuplet)
+{
+    if (value.bars()) return String (value.numerator) + "/1";
+    if (tuplet == 3) return "1/" + String (value.denominator) + "T";
+    // Five or seven in the time of two of the next longer value.
+    if (tuplet == 5 || tuplet == 7) return String (tuplet) + " : 1/" + String (value.denominator / 2);
+    return "1/" + String (value.denominator);
+}
 double Session::beatsAt (double seconds) const { return impl->edit->tempoSequence.toBeats (te::TimePosition::fromSeconds (seconds)).inBeats(); }
 double Session::secondsAt (double beats) const { return impl->edit->tempoSequence.toTime (te::BeatPosition::fromBeats (beats)).inSeconds(); }
 void Session::setTempo (double bpm)
