@@ -49,4 +49,19 @@ Evidence:
 
 The reference's curve shape is unmeasured: Halftrack's is the engine's quadratic Bézier.
 
-Missing: segment selection and dragging, multi-breakpoint selection, Edit Value, Draw Mode, saving the shown lanes, clip envelopes, and fine checks of the chooser's per-device "show automated only" filter.
+## Selections, segment drags and Simplify Envelope (2026-10-22)
+
+From the reference's manual:
+
+- **Moving a selection.** Dragging in an envelope's background makes a time selection, and dragging a breakpoint inside it moves every breakpoint in the selection. In Halftrack the breakpoints move by the same beats and the same 0-1 proportion, held between the breakpoints outside the selection. An automation lane's background now selects time on its track.
+- **Moving a segment.** Shift-dragging a segment moves it: both its ends move up or down with the pointer, and no breakpoint is added.
+- **Simplify Envelope.** The envelope's context menu offers it over the time selection; it keeps only the breakpoints the shape needs, as one undo step. The reference's algorithm is not described. Halftrack runs a Ramer-Douglas-Peucker pass over the lane's 0-1 proportions: a breakpoint is kept when it lies more than 0.005 from the straight line through the breakpoints kept around it. The selection's ends are always kept.
+
+Evidence, from the UI suite:
+
+- dragging one of two selected breakpoints moves both by the same proportion while the others stay;
+- Shift-dragging a segment lowers both its ends;
+- simplifying five breakpoints on one line and a sixth off it keeps three;
+- one undo restores them.
+
+Missing: segment selection without Shift (the reference also selects a segment by clicking near it), multi-breakpoint selection, Edit Value, Draw Mode, saving the shown lanes, clip envelopes, and fine checks of the chooser's per-device "show automated only" filter.

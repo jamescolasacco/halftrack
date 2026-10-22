@@ -1865,3 +1865,10 @@ Engine and UI areas.
 - **Measured.** A curved volume render matches the predicted level within 2% (`tests/AutomationTests.cpp`), and the UI suite checks the gestures.
 
 See [the contract](research/arrangement-automation-contract.md#curved-segments-2026-10-22).
+
+## Automation selections and Simplify Envelope — 2026-10-22
+
+UI area.
+
+- **Editing.** In Automation Mode, the breakpoints inside a time selection drag together, Shift-dragging a segment moves it, and the envelope's context menu offers Simplify Envelope over the selection, as in the reference. Automation lanes' backgrounds select time.
+- **Measured.** The UI suite.

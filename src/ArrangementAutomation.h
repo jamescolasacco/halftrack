@@ -8,7 +8,9 @@
 // draws one of them across a lane and edits its breakpoints as the reference does: clicking a
 // segment adds a breakpoint, double-clicking empty space adds one there, clicking a breakpoint
 // deletes it and dragging moves it. Option-dragging a segment (Alt elsewhere) curves it, and
-// Option-double-clicking it straightens it.
+// Option-double-clicking it straightens it. Shift-dragging a segment moves it. Dragging a
+// breakpoint inside the time selection moves every breakpoint in it, and Simplify Envelope
+// removes the selection's breakpoints the shape does not need.
 namespace halftrack::arrangementAutomation
 {
 struct Target
@@ -39,6 +41,8 @@ public:
     std::function<float (double)> xOfBeat;
     std::function<double (float)> beatOfX;
     std::function<double (double)> snapBeat;
+    // The time selection on a track, in beats, when it has one.
+    std::function<std::optional<std::pair<double, double>> (const juce::String& trackId)> selectedBeats;
 
     void paint (juce::Graphics&, juce::Rectangle<float> area, const Target&) const;
     // Each returns true when it handled the event.
@@ -47,6 +51,9 @@ public:
     bool mouseUp (Session&, const Target&);
     bool doubleClick (Session&, const Target&, juce::Rectangle<float> area, const juce::MouseEvent&);
     bool active() const noexcept { return gesture; }
+    // The lane with its breakpoints inside [from, to] thinned to those the shape needs: each kept
+    // point lies more than `tolerance` (in 0-1 proportions) from the line through its neighbours.
+    static Session::AutomationLane simplified (const Target&, double from, double to, float tolerance = .005f);
     static constexpr float hitRadius = 5;
 
 private:
@@ -61,6 +68,10 @@ private:
     int dragged = -1;           // The breakpoint being dragged.
     int curving = -1;           // The breakpoint whose segment an Option-drag is curving.
     float curveFrom = 0;
+    int segment = -1;           // The breakpoint whose segment a Shift-drag is moving.
+    // A drag's breakpoints as they were, and those moving with the one dragged.
+    std::vector<Session::AutomationPoint> original;
+    std::vector<size_t> group;
     bool moved = false, gesture = false, pressedPoint = false;
     juce::String gestureKey;
     juce::Point<float> downAt;

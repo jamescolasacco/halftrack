@@ -1,6 +1,7 @@
 #include "ArrangementAutomation.h"
 #include "NativeEffects.h"
 #include <algorithm>
+#include <functional>
 
 namespace halftrack::arrangementAutomation
 {
@@ -228,14 +229,28 @@ void Envelope::begin (Session& session, const Target& t)
 bool Envelope::mouseDown (Session& session, const Target& t, juce::Rectangle<float> area, const juce::MouseEvent& e)
 {
     if (! area.expanded (0, hitRadius).contains (e.position) || ! e.mods.isLeftButtonDown()) return false;
-    moved = false; downAt = e.position; dragged = hitPoint (t, area, e.position); pressedPoint = dragged >= 0; curving = -1;
-    if (pressedPoint) return true; // A click releases it; a drag moves it.
+    moved = false; downAt = e.position; dragged = hitPoint (t, area, e.position); pressedPoint = dragged >= 0; curving = segment = -1;
+    original = t.lane.points; group.clear();
+    if (pressedPoint)
+    {
+        // A breakpoint inside the time selection drags every breakpoint in it.
+        if (const auto range = selectedBeats ? selectedBeats (t.trackId) : std::nullopt;
+            range && t.lane.points[(size_t) dragged].beat >= range->first - 1e-9 && t.lane.points[(size_t) dragged].beat <= range->second + 1e-9)
+            for (size_t i = 0; i < t.lane.points.size(); ++i)
+                if (t.lane.points[i].beat >= range->first - 1e-9 && t.lane.points[i].beat <= range->second + 1e-9) group.push_back (i);
+        return true; // A click releases it; a drag moves it.
+    }
     if (const auto segment = hitSegment (t, area, e.position))
     {
-        // Option-dragging a segment between breakpoints curves it.
+        // Option-dragging a segment between breakpoints curves it; Shift-dragging moves it.
         if (curvesSegment (e.mods))
         {
             if (*segment > 0 && *segment < t.lane.points.size()) { curving = (int) *segment - 1; curveFrom = t.lane.points[(size_t) curving].curve; }
+            return true;
+        }
+        if (e.mods.isShiftDown())
+        {
+            if (*segment > 0 && *segment < t.lane.points.size()) this->segment = (int) *segment - 1;
             return true;
         }
         // Clicking a segment adds a breakpoint on it, under the pointer.
@@ -267,9 +282,40 @@ bool Envelope::mouseDrag (Session& session, const Target& t, juce::Rectangle<flo
         begin (session, t); write (session, t, lane);
         return true;
     }
+    if (segment >= 0 && (size_t) segment + 1 < original.size() && original.size() == t.lane.points.size())
+    {
+        // Both its ends move up or down with the pointer.
+        auto lane = t.lane;
+        const auto rise = (downAt.y - e.position.y) / std::max (1.0f, area.getHeight());
+        for (const auto i : { (size_t) segment, (size_t) segment + 1 })
+            lane.points[i].value = fromProportion (t, toProportion (t, original[i].value) + rise);
+        moved = true;
+        begin (session, t); write (session, t, lane);
+        return true;
+    }
     if (dragged < 0 || (size_t) dragged >= t.lane.points.size()) return dragged >= 0;
     if (! moved && e.position.getDistanceFrom (downAt) < 3) return true;
     moved = true;
+    if (group.size() > 1 && original.size() == t.lane.points.size())
+    {
+        // The selection's breakpoints move together, staying between the breakpoints around them.
+        auto lane = t.lane;
+        const auto& from = original[(size_t) dragged];
+        const auto to = pointAt (t, area, e.position, ! bypassesSnap (e.mods));
+        auto shift = to.beat - from.beat;
+        const auto first = group.front(), last = group.back();
+        const auto lowest = first == 0 ? -original[first].beat : original[first - 1].beat + 1e-6 - original[first].beat;
+        const auto highest = last + 1 == original.size() ? maximumBeat - original[last].beat : original[last + 1].beat - 1e-6 - original[last].beat;
+        shift = std::clamp (shift, lowest, std::max (lowest, highest));
+        const auto rise = toProportion (t, to.value) - toProportion (t, from.value);
+        for (const auto i : group)
+        {
+            lane.points[i].beat = original[i].beat + shift;
+            lane.points[i].value = fromProportion (t, toProportion (t, original[i].value) + rise);
+        }
+        begin (session, t); write (session, t, lane);
+        return true;
+    }
     auto lane = t.lane;
     const auto index = (size_t) dragged;
     auto point = pointAt (t, area, e.position, ! bypassesSnap (e.mods));
@@ -291,8 +337,8 @@ bool Envelope::mouseDrag (Session& session, const Target& t, juce::Rectangle<flo
 }
 bool Envelope::mouseUp (Session& session, const Target& t)
 {
-    const bool handled = dragged >= 0 || curving >= 0 || gesture;
-    curving = -1;
+    const bool handled = dragged >= 0 || curving >= 0 || segment >= 0 || gesture;
+    curving = segment = -1; group.clear();
     // Clicking a breakpoint without dragging it deletes it.
     if (pressedPoint && ! moved && dragged >= 0 && (size_t) dragged < t.lane.points.size())
     {
@@ -324,5 +370,41 @@ bool Envelope::doubleClick (Session& session, const Target& t, juce::Rectangle<f
     lane.points.insert (at, point);
     session.beginEditGesture ("Add " + t.control + " breakpoint"); write (session, t, lane); session.endEditGesture();
     return true;
+}
+Session::AutomationLane Envelope::simplified (const Target& t, double from, double to, float tolerance)
+{
+    auto lane = t.lane;
+    std::vector<size_t> inside;
+    for (size_t i = 0; i < lane.points.size(); ++i) if (lane.points[i].beat >= from - 1e-9 && lane.points[i].beat <= to + 1e-9) inside.push_back (i);
+    if (inside.size() < 3) return lane;
+    // Ramer-Douglas-Peucker over the lane's proportions, keeping the ends.
+    std::vector<bool> keep (inside.size(), false);
+    keep.front() = keep.back() = true;
+    std::function<void (size_t, size_t)> reduce = [&] (size_t a, size_t b)
+    {
+        if (b <= a + 1) return;
+        const auto& pa = lane.points[inside[a]]; const auto& pb = lane.points[inside[b]];
+        float worst = 0; size_t at = a;
+        for (size_t k = a + 1; k < b; ++k)
+        {
+            const auto& p = lane.points[inside[k]];
+            const auto along = (p.beat - pa.beat) / std::max (1e-12, pb.beat - pa.beat);
+            const auto line = toProportion (t, pa.value) + (float) along * (toProportion (t, pb.value) - toProportion (t, pa.value));
+            const auto distance = std::abs (toProportion (t, p.value) - line);
+            if (distance > worst) { worst = distance; at = k; }
+        }
+        if (worst > tolerance) { keep[at] = true; reduce (a, at); reduce (at, b); }
+    };
+    reduce (0, inside.size() - 1);
+    std::vector<Session::AutomationPoint> points;
+    size_t k = 0;
+    for (size_t i = 0; i < lane.points.size(); ++i)
+    {
+        const bool in = k < inside.size() && inside[k] == i;
+        if (! in || keep[k]) points.push_back (lane.points[i]);
+        if (in) ++k;
+    }
+    lane.points = std::move (points);
+    return lane;
 }
 }

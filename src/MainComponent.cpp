@@ -366,6 +366,11 @@ public:
         envelope.xOfBeat = [this] (double beat) { return (float) ((secondsAt (beat) - viewStart) * pixelsPerSecond); };
         envelope.beatOfX = [this] (float x) { return beatsAt (juce::jmax (0.0, viewStart + x / pixelsPerSecond)); };
         envelope.snapBeat = [this] (double beat) { return beatsAt (snapSeconds (secondsAt (beat))); };
+        envelope.selectedBeats = [this] (const juce::String& trackId) -> std::optional<std::pair<double, double>>
+        {
+            if (! timeSelection.active() || ! timeSelection.trackIds.contains (trackId)) return std::nullopt;
+            return std::pair { beatsAt (timeSelection.start), beatsAt (timeSelection.end) };
+        };
         addAndMakeVisible (menu);
        #if JUCE_MAC
         // About Halftrack sits in the application menu, as on other Mac applications.
@@ -1042,6 +1047,27 @@ private:
     std::optional<arrangementAutomation::Target> automationTarget (const juce::String& trackId, const juce::String& key)
     { for (const auto& t : state.tracks) if (t.id == trackId) return arrangementAutomation::find (session, t, key); return std::nullopt; }
     void setAutomationMode (bool on) { automationMode = on; refresh(); resized(); canvas.repaint(); }
+    // An envelope's context menu: Simplify Envelope over the time selection, as the reference's.
+    void envelopeMenu (const arrangementAutomation::Target& target)
+    {
+        const auto range = envelope.selectedBeats ? envelope.selectedBeats (target.trackId) : std::nullopt;
+        juce::PopupMenu menu;
+        menu.addItem (1, "Simplify Envelope", range.has_value() && target.lane.points.size() > 2);
+        auto safe = juce::Component::SafePointer<Impl> (this);
+        menu.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId = target.trackId, key = target.key, range] (int choice)
+        {
+            if (safe == nullptr || choice != 1 || ! range) return;
+            safe->simplifyEnvelope (trackId, key, *range);
+        });
+    }
+    void simplifyEnvelope (const juce::String& trackId, const juce::String& key, std::pair<double, double> range)
+    {
+        const auto target = automationTarget (trackId, key);
+        if (! target) return;
+        session.beginEditGesture ("Simplify envelope");
+        report (arrangementAutomation::write (session, *target, arrangementAutomation::Envelope::simplified (*target, range.first, range.second)));
+        session.endEditGesture(); refresh();
+    }
     void showAutomationKey (const juce::String& trackId, const juce::String& key) { shownAutomation[trackId] = key; refresh(); canvas.repaint(); }
     // The lane button moves the envelope into its own lane below the track.
     void addAutomationLane (const juce::String& trackId, const juce::String& key)
@@ -2505,10 +2531,12 @@ private:
                 grabKeyboardFocus();
                 juce::String trackId, key; juce::Rectangle<float> area;
                 if (envelopeAt (e.y, trackId, key, area))
+                {
+                    if (e.mods.isPopupMenu()) if (const auto target = owner.automationTarget (trackId, key)) { owner.envelopeMenu (*target); return; }
                     if (const auto target = owner.automationTarget (trackId, key); target && owner.envelope.mouseDown (owner.session, *target, area, e))
                     { owner.envelopeTrack = trackId; owner.envelopeKey = key; envelopeArea = area; owner.refresh(); return; }
-                // An automation lane holds only its envelope.
-                if (const auto* lane = owner.laneAt (e.y); lane != nullptr && lane->automation >= 0) return;
+                }
+                // An automation lane's background selects time, as the reference's does; it holds no clips.
             }
             grabKeyboardFocus(); fadeDrag = 0; rangeDrag = 0; dragClipId.clear();
             const auto previousTrack = owner.selectedTrack, previousClip = owner.selectedClip;
@@ -11619,6 +11647,51 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto onCurve = juce::Point<float> (xOf (3), inLane.getBottom() - Session::curveProportion (from, to, volume().points[0].curve, .5) * inLane.getHeight());
             canvas.mouseDoubleClick (curveEvent (onCurve, onCurve, false, 2)); refresh();
             check (volume().points.size() == 2 && volume().points[0].curve == 0, "Option-double-clicking the curved segment straightens it");
+        }
+        {
+            // The breakpoints inside a time selection drag together; Shift-dragging a segment moves it;
+            // Simplify Envelope keeps only the breakpoints the shape needs.
+            const auto proportion = [] (float db) { return Session::automationValueToProportion (Session::AutomationTarget::volume, db); };
+            const auto decibels = [] (float p) { return Session::automationProportionToValue (Session::AutomationTarget::volume, p); };
+            check (session.setTrackAutomation (trackId, Session::AutomationTarget::volume, { true, { { 1, -24 }, { 2, -12 }, { 3, -12 }, { 5, 0 } } }).wasOk(), "four breakpoints"); refresh();
+            const auto before = volume().points;
+            timeSelection = { secondsAt (1.9), secondsAt (3.1), { trackId } };
+            const auto second = juce::Point<float> (xOf (2), yOf (inLane, -12)), up = second.translated (0, -inLane.getHeight() * .1f);
+            canvas.mouseDown (event (second, second, false)); canvas.mouseDrag (event (up, second, true)); canvas.mouseUp (event (up, second, true)); refresh();
+            const auto moved = volume().points;
+            const auto rise = proportion (moved[1].value) - proportion (before[1].value);
+            check (moved.size() == 4 && rise > .05f && std::abs (proportion (moved[2].value) - proportion (before[2].value) - rise) < 1e-3f
+                       && std::abs (moved[0].value - before[0].value) < 1e-3f && std::abs (moved[3].value - before[3].value) < 1e-3f
+                       && std::abs (moved[1].beat - 2) < 1e-6 && std::abs (moved[2].beat - 3) < 1e-6,
+                   "dragging a breakpoint in the selection moves both selected breakpoints together, the others staying");
+            timeSelection = {};
+            const auto shiftEvent = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged)
+            {
+                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier),
+                                         1.0f, 0, 0, 0, 0, &canvas, &canvas, now, down, now, 1, dragged);
+            };
+            const auto onSegment = juce::Point<float> (xOf (4), inLane.getBottom() - (proportion (moved[2].value) + proportion (moved[3].value)) / 2 * inLane.getHeight());
+            const auto lowered = onSegment.translated (0, inLane.getHeight() * .1f);
+            canvas.mouseDown (shiftEvent (onSegment, onSegment, false)); canvas.mouseDrag (shiftEvent (lowered, onSegment, true)); canvas.mouseUp (shiftEvent (lowered, onSegment, true)); refresh();
+            const auto shifted = volume().points;
+            check (shifted.size() == 4 && proportion (shifted[2].value) < proportion (moved[2].value) - .05f
+                       && std::abs ((proportion (moved[2].value) - proportion (shifted[2].value)) - (proportion (moved[3].value) - proportion (shifted[3].value))) < 1e-3f
+                       && std::abs (shifted[1].value - moved[1].value) < 1e-3f,
+                   "Shift-dragging a segment lowers both its ends, adding no breakpoint");
+            // Five breakpoints on one straight line, and a sixth off it.
+            const auto p0 = proportion (-24), p1 = proportion (0);
+            Session::AutomationLane line { true, {} };
+            for (const double beat : { 1.0, 2.0, 3.0, 4.0, 5.0 }) line.points.push_back ({ beat, decibels (p0 + (p1 - p0) * (float) ((beat - 1) / 4)) });
+            line.points.push_back ({ 6, decibels (p0) });
+            check (session.setTrackAutomation (trackId, Session::AutomationTarget::volume, line).wasOk(), "a straight run of breakpoints and one after it"); refresh();
+            simplifyEnvelope (trackId, "mixer:" + trackId + ":volume", { 0.0, 7.0 });
+            check (volume().points.size() == 3 && std::abs (volume().points[0].beat - 1) < 1e-6 && std::abs (volume().points[1].beat - 5) < 1e-6 && std::abs (volume().points[2].beat - 6) < 1e-6,
+                   "Simplify Envelope keeps the ends of the straight run and the breakpoint off it");
+            session.undo(); refresh();
+            check (volume().points.size() == 6, "one undo restores them");
+            for (int step = 0; step < 4; ++step) session.undo();
+            refresh();
+            check (volume().points.size() == 2, "four more undo steps return the lane to its two breakpoints");
         }
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
