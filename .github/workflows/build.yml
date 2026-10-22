@@ -52,6 +52,10 @@ jobs:
         run: cmake --build build --config Release --parallel 3
       - name: Test shared behavior
         if: runner.os != 'Linux'
+        # The hosted macOS runner renders about six times slower than a desktop Mac, so its soak
+        # plays one minute rather than three to finish inside the suite's timeout.
+        env:
+          HALFTRACK_SOAK_SECONDS: ${{ runner.os == 'macOS' && '60' || '180' }}
         run: ctest --test-dir build -C Release --output-on-failure --output-junit test-artifacts/ctest.xml
       - name: Test shared behavior with virtual display
         if: runner.os == 'Linux'

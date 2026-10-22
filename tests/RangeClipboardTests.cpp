@@ -23,7 +23,8 @@ juce::String pattern (Session& s, int track, const juce::File& folder, int beats
     folder.deleteRecursively();
     juce::StringArray written;
     Session::AudioExportSettings settings;
-    ok (s.exportStems (folder, settings, written, true), "render the stems");
+    settings.stemTracks.add (s.snapshot().tracks[(size_t) track].id); // Only the track read.
+    ok (s.exportStems (folder, settings, written, true), "render the track's stem");
     const auto snapshot = s.snapshot();
     const auto file = folder.getChildFile (juce::File::createLegalFileName (snapshot.name + " " + snapshot.tracks[(size_t) track].name) + ".wav");
     juce::WavAudioFormat wav;

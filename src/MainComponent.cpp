@@ -12225,14 +12225,21 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         laneClick (2);
         check (std::abs (state.insertMarker - 2) < tolerance && std::abs (state.position - state.insertMarker) < 1e-6, "clicking a lane while stopped places the insert marker and play position");
         check (handleKey (juce::KeyPress (juce::KeyPress::spaceKey)) && state.playing && std::abs (state.position - state.insertMarker) < 1e-6, "Space plays from the insert marker");
-        // A loaded machine can take a moment to start the play head; the click must land while it moves.
+        // A loaded machine can take a moment to build the graph and start the play head; the click
+        // must land while it moves, so the wait is in wall-clock time as well as blocks.
         pumpSyntheticTestDevice (session, 100); refresh();
-        for (int wait = 0; wait < 8 && state.playing && state.position < state.insertMarker + .05; ++wait) { pumpSyntheticTestDevice (session, 50); refresh(); }
+        const bool playingAfterFirstBlocks = state.playing;
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + 10000.0;
+        while (state.playing && state.position < state.insertMarker + .05 && juce::Time::getMillisecondCounterHiRes() < deadline)
+        { pumpSyntheticTestDevice (session, 20); juce::MessageManager::getInstance()->runDispatchLoopUntil (10); refresh(); }
         const auto played = state.position;
+        const bool playingBeforeClick = state.playing;
         laneClick (1); pumpSyntheticTestDevice (session, 4); refresh();
         check (state.playing && state.position >= played && std::abs (state.insertMarker - 1) < tolerance,
                "clicking a lane while playing moves only the insert marker (played to " + juce::String (played, 4) + " s, now " + juce::String (state.position, 4)
-                   + " s, " + (state.playing ? "playing" : "stopped") + ")");
+                   + " s, " + (state.playing ? "playing" : "stopped") + "; playing after the first blocks " + (playingAfterFirstBlocks ? "yes" : "no")
+                   + ", before the click " + (playingBeforeClick ? "yes" : "no") + ", device "
+                   + (session.audioDeviceManager().getCurrentAudioDevice() != nullptr ? session.audioDeviceManager().getCurrentAudioDevice()->getName() : juce::String ("none")) + ")");
         stopButton.onClick();
         const auto stopped = state.position;
         check (! state.playing && stopped >= played && std::abs (state.insertMarker - 1) < tolerance, "Stop leaves the play position where playback stopped");

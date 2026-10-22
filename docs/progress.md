@@ -1950,3 +1950,11 @@ Engine, UI and root areas.
 
 See [the contract](research/plugin-sources-contract.md).
 
+## macOS CI timeouts — 2026-10-22
+
+QA and root areas.
+
+- **Range clipboard** renders only the stem it reads (79 s to 18 s locally), not every track's. It had overrun its 120 s timeout on the hosted macOS runner.
+- **Soak.** The macOS runner plays a one-minute soak (`HALFTRACK_SOAK_SECONDS=60`) instead of three. Its dispatch between synthetic blocks is several times slower than a desktop Mac's, so three minutes overran 600 s. Linux, Windows and local runs keep three.
+- **The lane click while playing** UI check now waits up to ten seconds of wall-clock time for the play head to move, not a count of blocks. If it fails, it says whether playback had started and which device is open; macOS CI has failed it since 4a45303, with playback found stopped.
+

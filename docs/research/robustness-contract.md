@@ -69,7 +69,7 @@ The note keeps sounding when a seek lands inside it, inside a loop, and across a
 
 ## Long sessions
 
-`tests/SoakTests.cpp` runs a three-minute scripted session through the synthetic device. Set `HALFTRACK_SOAK_SECONDS` for a longer one.
+`tests/SoakTests.cpp` runs a three-minute scripted session through the synthetic device. Set `HALFTRACK_SOAK_SECONDS` for a longer one. The hosted macOS CI runner plays one minute instead, because its message dispatch between synthetic blocks is several times slower than a desktop Mac's and three minutes overran the suite's 600 s timeout. Linux and Windows CI and local runs play three.
 
 - **The project.** Four audio tracks of a 20-second tone and two MIDI tracks of notes, looping over 16 s.
 - **The edits.** One every five seconds, in turn: a gain, a Saturator added and later removed, a MIDI track muted or unmuted, a note added, undo, redo, a pan.
