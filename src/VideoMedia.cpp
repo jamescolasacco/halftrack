@@ -14,4 +14,5 @@ juce::Result extractSound (const juce::File&, const juce::File&) { return unsupp
 juce::Result writeWithSound (const juce::File&, double, double, const juce::File&, const juce::File&) { return unsupported(); }
 juce::Result writeTestMovie (const juce::File&, int, double, int, int, double, double) { return unsupported(); }
 juce::Result testFrameAt (const juce::File&, double, int&) { return unsupported(); }
+juce::Image frameImage (const juce::File&, double, int) { return {}; }
 }

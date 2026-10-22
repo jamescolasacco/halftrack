@@ -239,6 +239,35 @@ juce::Result writeTestMovie (const juce::File& movie, int frames, double frameRa
     }
 }
 
+juce::Image frameImage (const juce::File& movie, double seconds, int height)
+{
+    @autoreleasepool
+    {
+        if (height <= 0) return {};
+        AVAssetImageGenerator* generator = [AVAssetImageGenerator assetImageGeneratorWithAsset: assetOf (movie)];
+        generator.appliesPreferredTrackTransform = YES;
+        generator.maximumSize = CGSizeMake (height * 8, height);
+        generator.requestedTimeToleranceBefore = CMTimeMakeWithSeconds (0.1, 600);
+        generator.requestedTimeToleranceAfter = CMTimeMakeWithSeconds (0.1, 600);
+        CGImageRef picture = [generator copyCGImageAtTime: CMTimeMakeWithSeconds (std::max (0.0, seconds), 60000) actualTime: nil error: nil];
+        if (picture == nullptr) return {};
+        const auto sourceWidth = (double) CGImageGetWidth (picture), sourceHeight = (double) CGImageGetHeight (picture);
+        const auto width = juce::jmax (1, (int) std::lround (height * sourceWidth / std::max (1.0, sourceHeight)));
+        juce::Image image (juce::Image::ARGB, width, height, true);
+        {
+            // JUCE's ARGB pixels are little-endian premultiplied BGRA, as this context writes them.
+            juce::Image::BitmapData pixels (image, juce::Image::BitmapData::writeOnly);
+            CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+            CGContextRef context = CGBitmapContextCreate (pixels.data, (size_t) width, (size_t) height, 8, (size_t) pixels.lineStride, space,
+                                                          (CGBitmapInfo) kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+            CGContextDrawImage (context, CGRectMake (0, 0, width, height), picture);
+            CGContextRelease (context); CGColorSpaceRelease (space);
+        }
+        CGImageRelease (picture);
+        return image;
+    }
+}
+
 juce::Result testFrameAt (const juce::File& movie, double seconds, int& frame)
 {
     @autoreleasepool

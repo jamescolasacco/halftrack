@@ -25,6 +25,7 @@
 #include <string_view>
 #include <atomic>
 #include <array>
+#include <deque>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
@@ -2252,6 +2253,28 @@ private:
                             g.fillPath (notch); g.drawVerticalLine ((int) x, bounds.getY() + 20, bounds.getBottom());
                         }
                     }
+                   #if JUCE_MAC
+                    // A video clip's pictures along its top half, each from the time playing under it.
+                    if (clip.videoFile != juce::File() && wave.getHeight() >= 16)
+                    {
+                        if (owner.videoThumbnails == nullptr)
+                            owner.videoThumbnails = std::make_unique<VideoThumbnails> ([safe = juce::Component::SafePointer<Canvas> (this)] { if (safe != nullptr) safe->repaint(); });
+                        const auto strip = wave.withHeight (std::floor (wave.getHeight() / 2));
+                        const int height = (int) strip.getHeight();
+                        const auto shape = owner.videoThumbnails->get (clip.videoFile, std::round (clip.sourceOffset * 4) / 4, height);
+                        const float width = shape.isValid() ? (float) shape.getWidth() : height * 16.0f / 9;
+                        g.saveState(); g.reduceClipRegion (strip.toNearestInt());
+                        const auto firstFrame = std::floor (std::max (0.0f, -strip.getX()) / width);
+                        for (auto x = strip.getX() + firstFrame * width; x < std::min (strip.getRight(), (float) tw); x += width)
+                        {
+                            const auto seconds = std::round ((clip.sourceOffset + (x - strip.getX()) / owner.pixelsPerSecond) * 4) / 4;
+                            if (const auto picture = owner.videoThumbnails->get (clip.videoFile, seconds, height); picture.isValid())
+                                g.drawImageAt (picture, (int) x, (int) strip.getY());
+                        }
+                        g.restoreState();
+                        wave = wave.withTrimmedTop (strip.getHeight());
+                    }
+                   #endif
                     auto* thumbnail = clip.isMidi ? nullptr : thumbnailFor (clip.file);
                     if (thumbnail != nullptr && thumbnail->getTotalLength() > 0 && clip.isAudio && clip.canLoop && ! clip.reversed)
                     {
@@ -7111,6 +7134,49 @@ private:
         juce::File shown;
     };
     std::unique_ptr<VideoWindow> videoWindow;
+    // Pictures for video clips in the Arrangement, made on a thread of their own and kept: a clip
+    // draws the pictures it has, and asks for those it lacks, which repaint the clips once made.
+    class VideoThumbnails final : private juce::Thread
+    {
+    public:
+        explicit VideoThumbnails (std::function<void()> made) : Thread ("Video pictures"), onMade (std::move (made)) {}
+        ~VideoThumbnails() override { stopThread (4000); }
+        juce::Image get (const juce::File& movie, double seconds, int height)
+        {
+            const auto key = movie.getFullPathName() + "|" + juce::String (seconds, 2) + "|" + juce::String (height);
+            {
+                const juce::ScopedLock lock (mutex);
+                if (const auto found = made.find (key); found != made.end()) return found->second;
+                if (std::none_of (wanted.begin(), wanted.end(), [&] (const auto& w) { return w.key == key; })) wanted.push_back ({ key, movie, seconds, height });
+            }
+            if (! isThreadRunning()) startThread();
+            notify();
+            return {};
+        }
+    private:
+        struct Request { juce::String key; juce::File movie; double seconds = 0; int height = 0; };
+        void run() override
+        {
+            while (! threadShouldExit())
+            {
+                std::optional<Request> next;
+                { const juce::ScopedLock lock (mutex); if (! wanted.empty()) { next = wanted.front(); wanted.pop_front(); } }
+                if (! next) { wait (500); continue; }
+                auto image = video::frameImage (next->movie, next->seconds, next->height);
+                {
+                    const juce::ScopedLock lock (mutex);
+                    if (made.size() >= 2048) made.clear();
+                    made[next->key] = image;
+                }
+                juce::MessageManager::callAsync (onMade);
+            }
+        }
+        std::function<void()> onMade;
+        juce::CriticalSection mutex;
+        std::map<juce::String, juce::Image> made;
+        std::deque<Request> wanted;
+    };
+    std::unique_ptr<VideoThumbnails> videoThumbnails;
    #endif
     void toggleVideoWindow()
     {
@@ -12801,10 +12867,24 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             importFiles ({ movieFile.getFile().getFullPathName() }, -1, 0); refresh();
             check ((int) state.tracks.size() == before + 1 && state.tracks.back().clips.size() == 1 && state.tracks.back().clips[0].videoFile.existsAsFile(),
                    "importing a movie makes a video clip on a track of its own");
+            {
+                // Painted, the clip asks for its pictures, which come from a thread of their own.
+                showArrangementView(); refresh(); canvas.createComponentSnapshot (canvas.getLocalBounds());
+                const auto movie = state.tracks.back().clips[0].videoFile;
+                const auto height = (int) std::floor ((canvas.clipBounds (state.tracks.back().clips[0], (int) state.tracks.size() - 1).withTrimmedTop (24).reduced (2, 4).getHeight()) / 2);
+                juce::Image picture;
+                for (int wait = 0; wait < 60 && ! picture.isValid(); ++wait)
+                {
+                    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+                    if (videoThumbnails != nullptr) picture = videoThumbnails->get (movie, 0, height);
+                }
+                check (picture.isValid() && picture.getHeight() == height, "the Arrangement draws the video clip's pictures along its top");
+            }
             menuItemSelected (92, 3);
             check (videoWindow != nullptr && videoWindow->isVisible(), "View > Video Window opens it");
             session.seek (0.6); refresh(); timerCallback();
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+            // The player seeks in its own time.
+            for (int wait = 0; wait < 40 && std::abs (videoWindow->position() - 0.6) >= 0.05; ++wait) juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
             check (videoWindow->shownMovie() == state.tracks.back().clips[0].videoFile && std::abs (videoWindow->position() - 0.6) < 0.05,
                    "it shows the movie at the play head (" + juce::String (videoWindow->position(), 3) + " s)");
             session.seek (5); refresh(); timerCallback();

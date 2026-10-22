@@ -22,6 +22,9 @@ juce::Result extractSound (const juce::File& movie, const juce::File& wav);
 // A QuickTime movie of the picture from `fromSeconds` for `seconds` (no longer than the movie has),
 // with `sound` (an audio file) as its sound. The picture is copied, not re-encoded.
 juce::Result writeWithSound (const juce::File& movie, double fromSeconds, double seconds, const juce::File& sound, const juce::File& output);
+// The frame shown at a time, scaled to a height (its shape kept), for pictures of a clip; a null
+// image if it cannot be read. Times may land on a neighbouring frame by up to a tenth of a second.
+juce::Image frameImage (const juce::File& movie, double seconds, int height);
 // For tests: a movie of up to 64 frames, each showing its number as six black or white stripes (the
 // lowest bit on the left), with a sine as its sound.
 juce::Result writeTestMovie (const juce::File& movie, int frames, double frameRate, int width, int height, double toneHz, double sampleRate);

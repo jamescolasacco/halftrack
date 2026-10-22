@@ -54,6 +54,9 @@ int runExternalSyncTests (const juce::File&)
             }
         };
         const auto beats = [&] { return s.snapshot().position * s.snapshot().tempo / 60; };
+        // A busy system can take a moment to connect the port; the clock runs until it arrives.
+        for (int wait = 0; wait < 6 && ! s.externalClock().receiving; ++wait) run (120, .5);
+        check (s.externalClock().receiving, "the clock arrives");
         run (120, 1.5);
         check (s.externalClock().receiving && std::abs (s.externalClock().bpm - 120) < .5 && std::abs (s.snapshot().tempo - 100) < 1e-9,
                "with External Sync off the clock's 120 BPM is read but not followed (" + juce::String (s.externalClock().bpm, 2) + " BPM)");

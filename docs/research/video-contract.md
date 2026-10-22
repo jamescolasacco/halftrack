@@ -22,6 +22,8 @@ It is one undo step. Auto-Warp Long Samples is not applied, and a file with no p
 
 **The picture.** `Session::videoAt (seconds)` names the movie and its time at a moment: from the first active video clip there, track by track, the clip's source offset plus the time into the clip.
 
+**Pictures in the Arrangement.** A video clip shows pictures along the top half of its body, one after another, each from the time playing under it (to the nearest quarter second). They are made from the movie on a thread of their own, kept once made, and drawn as they arrive.
+
 **The Video window.** View > Video Window opens a native window with JUCE's video player, silent because the clip plays the sound. Twenty-four times a second:
 
 - **Stopped**, it shows the frame under the play head.
@@ -50,17 +52,17 @@ It is one undo step. Auto-Warp Long Samples is not applied, and a file with no p
   - a one-second movie of frames 10 to 30 whose sound equals the exported mix sample for sample;
   - an existing movie kept unless replacing is chosen;
   - an export start with no video clip refused;
-- a file with no picture refused.
+- a file with no picture refused;
+- a frame's picture at 24 pixels high: 32 wide, showing frame 20.
 
 Where movies are unsupported, the suite checks that importing one is refused with the reason.
 
-The UI suite imports a movie through the normal import path and opens View > Video Window. It checks the window shows the movie at 0.6 s when the play head is there and nothing past the clip, closes it, and sees Create Video offered in Export Audio.
+The UI suite imports a movie through the normal import path, paints the Arrangement and sees the clip's first picture made at the clip's height, then opens View > Video Window. It checks the window shows the movie at 0.6 s when the play head is there and nothing past the clip, closes it, and sees Create Video offered in Export Audio.
 
 ## Not yet covered
 
 - Windows and Linux.
 - Warping video clips, with the picture following the warp.
 - Timecode display and frame-rate snapping.
-- Picture thumbnails in the Arrangement clip.
 - Re-encoding the picture (codec and size choices) and exporting picture beyond one clip.
 - Measured synchronisation of the window's picture during playback.

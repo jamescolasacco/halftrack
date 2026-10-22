@@ -57,6 +57,16 @@ int runVideoTests (const juce::File& artifacts)
         bool frames = true;
         for (const int f : { 0, 7, 9, 31, 49 }) frames = frames && frameAt (movie, (f + .5) / frameRate) == f;
         check (frames, "each frame shows where it was written");
+        {
+            // A clip's pictures: frame 20 scaled to 24 pixels high, its shape kept, its stripes readable;
+            // pictures may come from a frame a tenth of a second either side.
+            const auto image = video::frameImage (movie, 20.5 / frameRate, 24);
+            int shown = 0;
+            for (int bit = 0; bit < 6 && image.isValid(); ++bit)
+                if (image.getPixelAt ((int) ((bit + .5) * image.getWidth() / 6), 12).getBrightness() > .5f) shown |= 1 << bit;
+            check (image.isValid() && image.getHeight() == 24 && image.getWidth() == 32 && std::abs (shown - 20) <= 2,
+                   "a frame's picture is 32 by 24 and shows frame 20 (" + juce::String (shown) + ")");
+        }
         const auto sound = root.getChildFile ("sound.wav");
         ok (video::extractSound (movie, sound), "take its sound");
         {
