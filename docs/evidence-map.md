@@ -120,6 +120,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | UX-004 | ui |  |
 | UX-005 | themes, ui |  |
 | UX-006 | key-map, ui |  |
+| UX-008 | mackie, ui |  |
 | UX-009 | ui |  |
 | UX-010 | preferences, ui |  |
 | UX-011 | python | scripts/verify_package.py installs, identifies and removes each CI package |

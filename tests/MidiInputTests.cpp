@@ -68,8 +68,9 @@ struct VirtualController
         midi->mergeRecordings = true; midi->replaceExistingClips = false;
         midi->setEnabled(false); devices.rescanMidiDeviceListSynchronously();
         const auto inputs=devices.getMidiInDevices();
+        // Only ports a test made itself (named "Halftrack ..."), never the machine's own.
         check(std::none_of(inputs.begin(),inputs.end(),[](const auto& device)
-            {return device->getDeviceType()==te::InputDevice::physicalMidiDevice;}),"test engine never enumerates physical MIDI inputs");
+            {return device->getDeviceType()==te::InputDevice::physicalMidiDevice && ! device->getName().startsWith ("Halftrack ");}),"test engine never enumerates the machine's physical MIDI inputs");
     }
     ~VirtualController()
     {

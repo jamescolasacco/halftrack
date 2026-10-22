@@ -8371,7 +8371,26 @@ private:
         explicit AudioSetupPanel (Impl& o) : owner (o), devices (o.session.audioDeviceManager(), 0, 128, 0, 128, true, false, true, false)
         {
             addAndMakeVisible (devices);
-            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth, &mpe, &inputConfig, &midiPorts }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth, &mpe, &inputConfig, &midiPorts, &surface }) addAndMakeVisible (c);
+            // Control Surface, after the reference's: a Mackie Control surface's input and output ports.
+            surface.setName ("Control surface"); surface.setTooltip ("Control Surface: the MIDI ports of a Mackie Control surface (or one in Mackie mode)");
+            surface.onClick = [this]
+            {
+                juce::PopupMenu menu, inputs, outputs;
+                const auto current = owner.session.controlSurface();
+                const auto inNames = owner.session.midiInputPorts();
+                juce::StringArray outNames;
+                for (const auto& port : owner.session.midiOutputPorts()) outNames.add (port.name);
+                menu.addItem (1, "No Control Surface", true, current.input.isEmpty());
+                for (int i = 0; i < inNames.size(); ++i) inputs.addItem (100 + i, inNames[i], true, current.input == inNames[i]);
+                outputs.addItem (200 - 1, "No Output", current.input.isNotEmpty(), current.input.isNotEmpty() && current.output.isEmpty());
+                for (int i = 0; i < outNames.size(); ++i) outputs.addItem (200 + i, outNames[i], current.input.isNotEmpty(), current.output == outNames[i]);
+                if (inNames.isEmpty()) inputs.addItem (-1, "No MIDI inputs", false);
+                menu.addSubMenu ("Mackie Control Input", inputs); menu.addSubMenu ("Mackie Control Output", outputs, current.input.isNotEmpty());
+                auto safe = juce::Component::SafePointer<AudioSetupPanel> (this);
+                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&surface), [safe, inNames, outNames] (int chosen)
+                { if (safe != nullptr) safe->chooseSurface (inNames, outNames, chosen); });
+            };
             // MIDI Ports, after the reference's: Track offers an output to MIDI tracks' MIDI To, and
             // Sync sends it MIDI Clock while the transport plays.
             midiPorts.setName ("MIDI ports"); midiPorts.setTooltip ("MIDI Ports: Track lets MIDI tracks play to an output; Sync sends it MIDI Clock");
@@ -8445,6 +8464,17 @@ private:
             };
             sync();
         }
+        // Item 1 removes the surface, 100 + i chooses input i, 199 no output and 200 + i output i.
+        void chooseSurface (const juce::StringArray& inputs, const juce::StringArray& outputs, int chosen)
+        {
+            auto next = owner.session.controlSurface();
+            if (chosen == 1) next = {};
+            else if (juce::isPositiveAndBelow (chosen - 100, inputs.size())) next.input = inputs[chosen - 100];
+            else if (chosen == 199) next.output = {};
+            else if (juce::isPositiveAndBelow (chosen - 200, outputs.size())) next.output = outputs[chosen - 200];
+            else return;
+            owner.report (owner.session.setControlSurface (next), next.input.isEmpty() ? "No control surface." : "Mackie Control on " + next.input + ".");
+        }
         // Item 1 + 2i is port i's Track switch and 2 + 2i its Sync switch.
         void toggleMidiPort (const std::vector<Session::MidiOutputPortInfo>& ports, int chosen)
         {
@@ -8466,7 +8496,8 @@ private:
             auto row = area.removeFromBottom (40).reduced (16, 8);
             inputConfig.setBounds (row.removeFromLeft (130)); row.removeFromLeft (8);
             mpe.setBounds (row.removeFromLeft (130)); row.removeFromLeft (8);
-            midiPorts.setBounds (row.removeFromLeft (130));
+            midiPorts.setBounds (row.removeFromLeft (130)); row.removeFromLeft (8);
+            surface.setBounds (row.removeFromLeft (130));
             row = area.removeFromBottom (36).reduced (16, 4);
             typeLabel.setBounds (row.removeFromLeft (120)); type.setBounds (row.removeFromLeft (90)); row.removeFromLeft (24);
             depthLabel.setBounds (row.removeFromLeft (80)); depth.setBounds (row.removeFromLeft (70));
@@ -8477,7 +8508,7 @@ private:
         juce::AudioDeviceSelectorComponent devices;
         juce::Label typeLabel, depthLabel;
         juce::ComboBox type, depth;
-        juce::TextButton mpe { "MPE Inputs..." }, inputConfig { "Input Config..." }, midiPorts { "MIDI Ports..." };
+        juce::TextButton mpe { "MPE Inputs..." }, inputConfig { "Input Config..." }, midiPorts { "MIDI Ports..." }, surface { "Control Surface..." };
     };
     // The Info View, after the reference's: what the control under the pointer is and does, from its
     // name and tooltip, and when it cannot be used now.
@@ -12618,6 +12649,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (state.tracks[(size_t) lane].output.kind == Session::OutputKind::master && midiTo->getText() == "No Output", "undo returns it to No Output");
                 setup.toggleMidiPort (session.midiOutputPorts(), 1); refresh();
                 check (! session.midiOutputPorts()[0].track, "and MIDI Ports switches Track off again");
+                // Control Surface chooses a Mackie Control input and output, and None removes it.
+                juce::StringArray inputs;
+                for (int i = 0; i < 50 && (inputs = session.midiInputPorts()).isEmpty(); ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                juce::StringArray outputs; for (const auto& p : session.midiOutputPorts()) outputs.add (p.name);
+                check (inputs.size() == 1 && inputs[0].endsWith ("Surface"), "Control Surface offers the suite's surface port");
+                setup.chooseSurface (inputs, outputs, 100); setup.chooseSurface (inputs, outputs, 200);
+                check ((session.controlSurface() == Session::ControlSurface { inputs[0], outputs[0] }), "choosing its input and output sets the surface");
+                setup.chooseSurface (inputs, outputs, 1);
+                check (session.controlSurface() == Session::ControlSurface {}, "No Control Surface removes it");
             }
             else std::cout << "SKIP UI MIDI To ports: this system cannot make a virtual MIDI port" << std::endl;
             chooser->setSelectedId (1, juce::sendNotificationSync); refresh();
@@ -13292,6 +13332,7 @@ int MainComponent::runInteractionTests()
         struct Ignore final : juce::MidiInputCallback { void handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage&) override {} } ignore;
         const auto portPrefix = "Halftrack UI Port " + juce::Uuid().toString().substring (0, 8);
         auto port = juce::MidiInput::createNewDevice (portPrefix + " Out", &ignore);
+        auto surfacePort = juce::MidiOutput::createNewDevice (portPrefix + " Surface"); // A control surface's input.
         Session session (false, makeSyntheticTestDeviceType(), port != nullptr ? portPrefix : juce::String());
         MainComponent component (session);
         component.impl->captureTestErrors = true;

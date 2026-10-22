@@ -1673,3 +1673,13 @@ QA change in `tests/RealtimeDevice.h` (new) and the separation test in `src/Main
 - **Checks.** Callback deadlines and the take's every sample are checked, and the timings are printed.
 
 See [the contract](research/separation-stress-contract.md).
+
+## Mackie Control surfaces — 2026-10-21
+
+Engine change in `src/MackieControl.*` (new; the protocol), `src/Session.*` and `tests/MackieTests.cpp` (new). The UI change is in `src/MainComponent.cpp` (Control Surface in Audio & MIDI Setup); the root change in `CMakeLists.txt` and `src/Main.cpp`. `tests/MidiInputTests.cpp` now allows test-made ports in its no-physical-inputs check. Documentation updated.
+
+- **Strips.** A Mackie Control surface on chosen ports drives eight bankable strips: volume, pan, Rec, Solo and Mute.
+- **Master and transport.** It also drives the master fader, the transport, Cycle and Click, all through the Session's own edits.
+- **Feedback.** Moving faders, lights, rings and names follow.
+
+See [the contract](research/control-surfaces-contract.md).

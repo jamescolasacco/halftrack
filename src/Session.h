@@ -640,6 +640,20 @@ public:
     struct MidiOutputPortInfo { juce::String name; bool track = false, sync = false; bool operator== (const MidiOutputPortInfo&) const = default; };
     std::vector<MidiOutputPortInfo> midiOutputPorts() const;
     juce::Result setMidiOutputPort (const juce::String& name, bool track, bool sync);
+    // A Mackie Control surface (or one in its Mackie mode), as the reference's Control Surface
+    // preferences set one. Its eight strips show eight tracks from the bank's first: moving faders
+    // for volume, V-Pots for pan, Rec, Solo and Mute, names on the scribble strips. The master
+    // fader, the transport, Cycle and Click work too, and every change goes through the same edits
+    // (and undo) as the interface's. Halftrack opens the surface's ports itself and keeps the
+    // engine's input for that port closed, so the surface plays into no track. An empty input is
+    // no surface. Kept with the engine's settings.
+    struct ControlSurface { juce::String input, output; bool operator== (const ControlSurface&) const = default; };
+    juce::StringArray midiInputPorts() const;
+    juce::Result setControlSurface (const ControlSurface&);
+    ControlSurface controlSurface() const;
+    int controlSurfaceBank() const; // The track the surface's first strip shows.
+    // Sends the surface what it should show now; the Session also does this twenty times a second.
+    void updateControlSurface();
     juce::Result showInstrumentEditor (int trackIndex);
     // Loads an audio file into the track's Sampler, switching the instrument to a Sampler first if needed (one undo step).
     juce::Result setInstrumentSample (const juce::String& trackId, const juce::File& sample);

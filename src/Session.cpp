@@ -11,6 +11,7 @@
 #include "MidiMonitor.h"
 #include "WarpStretchers.h"
 #include "InputPermission.h"
+#include "MackieControl.h"
 #include "PluginBinary.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
@@ -2202,7 +2203,7 @@ struct Session::Impl
 {
     explicit Impl (Session& s, bool devices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType, const juce::String& midiPortPrefix)
         : owner (s), engine (settingsStorage (devices), std::make_unique<UIBehaviour> (s, devices),
-                            std::make_unique<Behaviour> (devices, midiPortPrefix)), useDevices (devices)
+                            std::make_unique<Behaviour> (devices, midiPortPrefix)), useDevices (devices), portPrefix (midiPortPrefix)
     {
         // A Session with audio devices asks the system about input permission; one without needs none.
         if (devices)
@@ -2253,6 +2254,7 @@ struct Session::Impl
         meters.clear();
         grooveWatcher.watch ({});
         remoteRest.stopTimer(); remoteWatch.stopTimer(); remote.detach(); captureTaps.clear(); captured.clear();
+        surfaceTimer.stopTimer(); closeSurface();
         preview.reset();
         edit.reset();
         // Unsaved sessions are deliberately retained in the temp directory for recovery.
@@ -3918,6 +3920,209 @@ struct Session::Impl
         void timerCallback() override { tick(); }
     } remoteRest;
     bool remoteGesture = false;
+    // A control surface's ports, opened by Halftrack itself. Its MIDI thread hands each message to
+    // the message thread through a fixed ring.
+    struct SurfacePort final : juce::MidiInputCallback, private juce::AsyncUpdater
+    {
+        std::function<void (const juce::MidiMessage&)> handle;
+        ~SurfacePort() override { cancelPendingUpdate(); }
+        void handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& m) override
+        {
+            if (m.isSysEx()) return;
+            { const juce::SpinLock::ScopedLockType lock (mutex); if (count < ring.size()) ring[(head + count++) % ring.size()] = m; }
+            triggerAsyncUpdate();
+        }
+        void handleAsyncUpdate() override
+        {
+            std::array<juce::MidiMessage, 256> batch; size_t n = 0;
+            { const juce::SpinLock::ScopedLockType lock (mutex); for (; n < count; ++n) batch[n] = ring[(head + n) % ring.size()]; head = (head + n) % ring.size(); count = 0; }
+            for (size_t i = 0; i < n; ++i) if (handle) handle (batch[i]);
+        }
+        std::array<juce::MidiMessage, 256> ring;
+        size_t head = 0, count = 0;
+        juce::SpinLock mutex;
+    } surfacePort;
+    std::unique_ptr<juce::MidiInput> surfaceIn;   // Destroyed before the port it calls.
+    std::unique_ptr<juce::MidiOutput> surfaceOut;
+    Session::ControlSurface surface;
+    int surfaceBank = 0;
+    bool surfaceTouched = false;
+    // What the surface was last sent, so only changes go again.
+    struct SurfaceShown { std::array<int, 9> fader; std::array<int, 8> ring; std::map<int, bool> lights; juce::String top, bottom; void clear() { fader.fill (-1); ring.fill (-1); lights.clear(); top = bottom = {}; } } shownOnSurface;
+    juce::String portPrefix;
+    bool portAllowed (const juce::String& name) const { return useDevices ? portPrefix.isEmpty() || name.startsWith (portPrefix) : portPrefix.isNotEmpty() && name.startsWith (portPrefix); }
+    // A controller's or surface's moves form one gesture until it rests, unless a fader is touched.
+    void remoteMove()
+    {
+        if (surfaceTouched) return;
+        if (! remoteGesture && ! gesture) { owner.beginEditGesture ("MIDI control"); remoteGesture = true; }
+        lastRemote = juce::Time::getMillisecondCounter();
+        if (! remoteRest.isTimerRunning())
+        {
+            remoteRest.tick = [this]
+            {
+                if (! remoteGesture) { remoteRest.stopTimer(); return; }
+                if (juce::Time::getMillisecondCounter() - lastRemote < 500) return;
+                remoteGesture = false; remoteRest.stopTimer(); owner.endEditGesture();
+            };
+            remoteRest.startTimer (100);
+        }
+    }
+    RemoteRest surfaceTimer;
+    void closeSurface()
+    {
+        if (surfaceIn != nullptr) surfaceIn->stop();
+        surfaceIn.reset(); surfaceOut.reset();
+    }
+    // The surface's strips show tracks from the bank's first; the ninth is the master.
+    te::AudioTrack* surfaceTrack (int strip) const
+    {
+        const auto tracks = te::getAudioTracks (*edit);
+        return juce::isPositiveAndBelow (surfaceBank + strip, tracks.size()) && strip < 8 ? tracks[surfaceBank + strip] : nullptr;
+    }
+    juce::String surfaceVolumeTarget (int strip) const
+    {
+        if (strip == 8) return "master";
+        auto* t = surfaceTrack (strip);
+        return t != nullptr ? "mixer:" + t->itemID.toString() + ":volume" : juce::String();
+    }
+    void handleSurface (const juce::MidiMessage& message)
+    {
+        const auto action = mackie::parse (message);
+        if (! action) return;
+        using mackie::Action; using mackie::Button;
+        const auto index = [this] (te::AudioTrack* t) { return t != nullptr ? trackIndexOf (t->itemID.toString()) : -1; };
+        const juce::ScopedValueSetter<bool> applying (applyingRemote, true);
+        if (action->kind == Action::Kind::fader)
+        {
+            const auto target = surfaceVolumeTarget (action->strip);
+            if (const auto lane = target.isNotEmpty() ? laneFor (target) : std::nullopt)
+            { remoteMove(); applyValue (target, lane->value (action->position)); shownOnSurface.fader[(size_t) action->strip] = juce::roundToInt (action->position * 16383.0f); }
+        }
+        else if (action->kind == Action::Kind::vpot)
+        {
+            if (auto* t = surfaceTrack (action->strip); t != nullptr && t->getVolumePlugin() != nullptr)
+            { remoteMove(); owner.setTrackPan (index (t), juce::jlimit (-1.0f, 1.0f, t->getVolumePlugin()->getPan() + action->ticks * 0.02f)); }
+        }
+        else if (action->kind == Action::Kind::jog)
+        {
+            const double beat = 60.0 / edit->tempoSequence.getTempoAt (edit->getTransport().getPosition()).getBpm();
+            owner.seek (std::max (0.0, edit->getTransport().getPosition().inSeconds() + action->ticks * beat / 4));
+        }
+        else if (action->button == Button::faderTouch)
+        {
+            // A touched fader's moves are one undo step, ending when it is let go.
+            if (action->pressed && ! surfaceTouched) { if (remoteGesture) { remoteGesture = false; owner.endEditGesture(); } owner.beginEditGesture ("Control surface fader"); surfaceTouched = true; }
+            else if (! action->pressed && surfaceTouched) { surfaceTouched = false; owner.endEditGesture(); }
+        }
+        else if (action->pressed)
+        {
+            auto* t = surfaceTrack (action->strip);
+            const auto now = owner.snapshot();
+            const auto info = [&] () -> const Session::TrackInfo* { const int i = index (t); return i >= 0 && i < (int) now.tracks.size() ? &now.tracks[(size_t) i] : nullptr; }();
+            const auto tracks = te::getAudioTracks (*edit).size();
+            switch (action->button)
+            {
+                case Button::recArm: if (info) owner.setTrackArmed (index (t), ! info->armed); break;
+                case Button::solo: if (info) owner.setTrackSolo (index (t), ! info->solo); break;
+                case Button::mute: if (info) owner.setTrackMute (index (t), ! info->mute); break;
+                case Button::vpotPush: if (info) owner.setTrackPan (index (t), 0); break;
+                case Button::bankLeft: surfaceBank = std::max (0, surfaceBank - 8); break;
+                case Button::bankRight: if (surfaceBank + 8 < tracks) surfaceBank += 8; break;
+                case Button::channelLeft: surfaceBank = std::max (0, surfaceBank - 1); break;
+                case Button::channelRight: if (surfaceBank + 1 < tracks) ++surfaceBank; break;
+                case Button::play: owner.play(); break;
+                case Button::stop: if (now.playing) owner.stop(); else owner.seek (0); break;
+                case Button::record: if (now.recording) owner.stop(); else owner.record(); break;
+                case Button::cycle: owner.setLoop (! now.looping, now.loopStart, now.loopEnd); break;
+                case Button::click: { auto m = now.metronome; m.enabled = ! m.enabled; owner.setMetronome (m); break; }
+                case Button::rewind: case Button::fastForward:
+                {
+                    const double bar = 4 * 60.0 / now.tempo;
+                    owner.seek (std::max (0.0, now.position + (action->button == Button::rewind ? -bar : bar)));
+                    break;
+                }
+                case Button::select: case Button::faderTouch: case Button::other: break;
+            }
+        }
+        sendSurfaceState();
+    }
+    // Sends the surface what has changed since it was last sent: faders, rings, lights and names.
+    void sendSurfaceState()
+    {
+        if (surfaceOut == nullptr) return;
+        const auto now = owner.snapshot();
+        juce::String top, bottom;
+        for (int strip = 0; strip < 9; ++strip)
+        {
+            auto* t = surfaceTrack (strip);
+            const int i = t != nullptr ? trackIndexOf (t->itemID.toString()) : -1;
+            const auto* info = i >= 0 && i < (int) now.tracks.size() ? &now.tracks[(size_t) i] : nullptr;
+            // The fader, unless the hand on it is moving it.
+            if (! surfaceTouched)
+            {
+                const auto target = surfaceVolumeTarget (strip);
+                const auto lane = target.isNotEmpty() ? laneFor (target) : std::nullopt;
+                const auto value = target.isNotEmpty() ? targetValue (target) : std::nullopt;
+                const int position = lane && value ? juce::roundToInt (lane->proportion (*value) * 16383.0f) : 0;
+                if (shownOnSurface.fader[(size_t) strip] != position) { surfaceOut->sendMessageNow (mackie::faderPosition (strip, position / 16383.0f)); shownOnSurface.fader[(size_t) strip] = position; }
+            }
+            if (strip == 8) break;
+            const int ring = info != nullptr ? juce::roundToInt (info->pan * 100) : -1000;
+            if (shownOnSurface.ring[(size_t) strip] != ring) { surfaceOut->sendMessageNow (mackie::vpotRing (strip, info != nullptr ? info->pan : 0)); shownOnSurface.ring[(size_t) strip] = ring; }
+            const auto light = [&] (mackie::Button button, bool on)
+            {
+                const int note = mackie::noteFor (button, strip);
+                if (auto known = shownOnSurface.lights.find (note); known != shownOnSurface.lights.end() && known->second == on) return;
+                surfaceOut->sendMessageNow (mackie::buttonLight (button, strip, on)); shownOnSurface.lights[note] = on;
+            };
+            light (mackie::Button::recArm, info != nullptr && info->armed);
+            light (mackie::Button::solo, info != nullptr && info->solo);
+            light (mackie::Button::mute, info != nullptr && info->mute);
+            top << mackie::stripText (info != nullptr ? info->name : juce::String());
+            bottom << mackie::stripText (info != nullptr ? (info->gainDb <= -99.9f ? juce::String ("-inf") : juce::String (info->gainDb, 1)) : juce::String());
+        }
+        const auto light = [&] (mackie::Button button, bool on)
+        {
+            const int note = mackie::noteFor (button);
+            if (auto known = shownOnSurface.lights.find (note); known != shownOnSurface.lights.end() && known->second == on) return;
+            surfaceOut->sendMessageNow (mackie::buttonLight (button, 0, on)); shownOnSurface.lights[note] = on;
+        };
+        light (mackie::Button::play, now.playing); light (mackie::Button::stop, ! now.playing); light (mackie::Button::record, now.recording);
+        light (mackie::Button::cycle, now.looping); light (mackie::Button::click, now.metronome.enabled);
+        if (top != shownOnSurface.top) { surfaceOut->sendMessageNow (mackie::display (0, 0, top)); shownOnSurface.top = top; }
+        if (bottom != shownOnSurface.bottom) { surfaceOut->sendMessageNow (mackie::display (1, 0, bottom)); shownOnSurface.bottom = bottom; }
+    }
+    Result openSurface (const Session::ControlSurface& wanted)
+    {
+        surfaceTimer.stopTimer(); closeSurface();
+        if (surfaceTouched) { surfaceTouched = false; owner.endEditGesture(); }
+        surface = {}; surfaceBank = 0; shownOnSurface.clear();
+        if (wanted.input.isEmpty()) return Result::ok();
+        if (! portAllowed (wanted.input) || (wanted.output.isNotEmpty() && ! portAllowed (wanted.output))) return Result::fail ("That MIDI port is not available.");
+        juce::MidiDeviceInfo inputInfo, outputInfo;
+        for (const auto& info : juce::MidiInput::getAvailableDevices()) if (info.name == wanted.input) inputInfo = info;
+        for (const auto& info : juce::MidiOutput::getAvailableDevices()) if (info.name == wanted.output) outputInfo = info;
+        if (inputInfo.identifier.isEmpty()) return Result::fail ("The MIDI input \"" + wanted.input + "\" is not available.");
+        if (wanted.output.isNotEmpty() && outputInfo.identifier.isEmpty()) return Result::fail ("The MIDI output \"" + wanted.output + "\" is not available.");
+        // The engine's own input for the port stays closed, so the surface plays into no track.
+        for (auto device : engine.getDeviceManager().getMidiInDevices())
+            if (device->getName() == wanted.input && device->isEnabled()) device->setEnabled (false);
+        surfacePort.handle = [this] (const juce::MidiMessage& m) { handleSurface (m); };
+        surfaceIn = juce::MidiInput::openDevice (inputInfo.identifier, &surfacePort);
+        if (surfaceIn == nullptr) return Result::fail ("The MIDI input \"" + wanted.input + "\" could not be opened.");
+        if (wanted.output.isNotEmpty())
+        {
+            surfaceOut = juce::MidiOutput::openDevice (outputInfo.identifier);
+            if (surfaceOut == nullptr) { closeSurface(); return Result::fail ("The MIDI output \"" + wanted.output + "\" could not be opened."); }
+        }
+        surfaceIn->start();
+        surface = wanted;
+        sendSurfaceState();
+        surfaceTimer.tick = [this] { sendSurfaceState(); };
+        surfaceTimer.startTimerHz (20);
+        return Result::ok();
+    }
     // Input permission (see Session::inputPermission): its source, and whether a prompt is open.
     std::function<InputPermission()> permissionStatus = [] { return InputPermission::granted; };
     std::function<void (std::function<void (bool)>)> permissionRequest = [] (std::function<void (bool)> done) { done (true); };
@@ -4191,6 +4396,13 @@ Session::Session (bool enableAudioDevices, std::unique_ptr<juce::AudioIODeviceTy
     if (enableAudioDevices) impl->ensureComputerKeyboard();
     else if (midiPortPrefix.isNotEmpty()) impl->engine.getDeviceManager().rescanMidiDeviceListSynchronously();
     newProject();
+    // The control surface chosen before, if its ports are still there.
+    if (enableAudioDevices)
+    {
+        auto& storage = impl->engine.getPropertyStorage();
+        const ControlSurface saved { storage.getPropertyItem (te::SettingID::midiin, "halftrackSurfaceInput", {}).toString(), storage.getPropertyItem (te::SettingID::midiin, "halftrackSurfaceOutput", {}).toString() };
+        if (saved.input.isNotEmpty()) impl->openSurface (saved);
+    }
 }
 Session::~Session() { closePluginEditors(); }
 
@@ -6812,6 +7024,24 @@ Result Session::removeTrackInstrument (const String& trackId)
     current->deleteFromParent();
     impl->changed(); return Result::ok();
 }
+juce::StringArray Session::midiInputPorts() const
+{
+    juce::StringArray names;
+    for (const auto& info : juce::MidiInput::getAvailableDevices()) if (impl->portAllowed (info.name)) names.add (info.name);
+    return names;
+}
+Result Session::setControlSurface (const ControlSurface& wanted)
+{
+    if (wanted == impl->surface) return Result::ok();
+    auto result = impl->openSurface (wanted);
+    auto& storage = impl->engine.getPropertyStorage();
+    storage.setPropertyItem (te::SettingID::midiin, "halftrackSurfaceInput", impl->surface.input);
+    storage.setPropertyItem (te::SettingID::midiin, "halftrackSurfaceOutput", impl->surface.output);
+    sendChangeMessage(); return result;
+}
+Session::ControlSurface Session::controlSurface() const { return impl->surface; }
+int Session::controlSurfaceBank() const { return impl->surfaceBank; }
+void Session::updateControlSurface() { impl->sendSurfaceState(); }
 std::vector<Session::MidiOutputPortInfo> Session::midiOutputPorts() const
 {
     std::vector<MidiOutputPortInfo> ports;

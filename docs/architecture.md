@@ -235,6 +235,8 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `buildinfo` (in `src/BuildInfo.*`) reports the CMake project version and the source commit that `cmake/WriteBuildInfo.cmake` writes to a generated header at each build. `--version` and About Halftrack show them. See the [packaging contract](research/packaging-contract.md).
 
+`mackie` (in `src/MackieControl.*`, independent of the engine) reads and writes the Mackie Control protocol. Session opens a surface's MIDI ports itself, outside the engine's MIDI devices, and hands its messages to the message thread through a fixed ring. It acts on them through its own public edits and sends feedback from a 20 Hz timer, only what changed. See the [contract](research/control-surfaces-contract.md).
+
 `packs` (in `src/Packs.*`, independent of the engine) reads, verifies, installs and uninstalls Halftrack content packs in a folder the UI chooses: the User Library's Packs folder. See the [contract](research/packs-contract.md).
 
 `similarity` (in `src/SoundSimilarity.*`, independent of the engine) measures sounds and ranks them by distance on a library's own scale. Its `FolderIndex` measures a folder on a detached worker that owns its shared state, as `BrowserIndex` does, and the browser's Show Similar Files reads it from the window timer. See the [contract](research/similarity-contract.md).
