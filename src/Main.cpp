@@ -105,6 +105,7 @@ int runInputPermissionTests (const juce::File&);
 int runSimilarityTests (const juce::File&);
 int runTempoAnalysisTests (const juce::File&);
 int runClipLoopTests (const juce::File&);
+int runRangeClipboardTests (const juce::File&);
 int runTempoAnalysisEvaluation (const juce::File& library, const juce::File& report);
 int runPackTests (const juce::File&);
 int runMackieTests (const juce::File&);
@@ -416,6 +417,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-similarity");
             setApplicationReturnValue (runSimilarityTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-range-clipboard"))
+        {
+            const int i = args.indexOf ("--self-test-range-clipboard");
+            setApplicationReturnValue (runRangeClipboardTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-clip-loops"))

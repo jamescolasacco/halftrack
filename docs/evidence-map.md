@@ -28,7 +28,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | ARR-002 | groups, track-duplicate, track-order, ui |  |
 | ARR-003 | audio-clips, clip-loops, ui |  |
 | ARR-004 | range-edit, ui |  |
-| ARR-005 | midi-files, ui |  |
+| ARR-005 | midi-files, range-clipboard, ui |  |
 | ARR-006 | audio-clips, range-edit |  |
 | ARR-007 | time-edit |  |
 | ARR-008 | crossfade |  |

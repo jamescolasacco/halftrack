@@ -734,6 +734,17 @@ public:
     juce::Result splitRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
     juce::Result deleteRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
     juce::Result duplicateRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
+    // A time selection's clipboard, after the reference's Copy and Paste of selected time. Copying
+    // keeps what the selected tracks hold in the range, their audio kept apart from the project;
+    // cutting also deletes it, as Delete Selection does. Pasting places it from a track onward at a
+    // time, one track of the same kind (audio or MIDI) for each copied track in order, replacing
+    // what was there, as one undo step. Clips crossing the range must split there, as for Split.
+    // A clip copy clears it, and it clears a clip copy.
+    juce::Result copyRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds, bool cut = false);
+    bool hasRangeClipboard() const;
+    double rangeClipboardLength() const;
+    int rangeClipboardTracks() const;
+    juce::Result pasteRange (const juce::String& firstTrackId, double startSeconds);
     // Consolidate replaces each track's material in the selection with one clip spanning it: MIDI
     // clips join into one MIDI clip, and audio clips render (without devices) into a new file in
     // the project's Assets. Tracks without clips in the selection are left alone.

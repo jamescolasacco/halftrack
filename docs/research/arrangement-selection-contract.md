@@ -54,9 +54,42 @@ The Arrangement has a time selection, after the reference's selection editing ([
 
 The UI suite drags a selection, duplicates it with Cmd/Ctrl+D, deletes it, undoes both, and captures a snapshot.
 
+## Cut, Copy and Paste of a time range (2026-10-22)
+
+`Session::copyRange (trackIds, start, end, cut)` keeps what the selected tracks (and their linked tracks) hold in the range. Copying changes nothing in the project and adds no undo step.
+
+- **What is kept.** The clipboard holds each track's clips that overlap the range whole, in the order the tracks are shown. Each audio file is copied once to a temporary file, so the clipboard outlives its project.
+- **What can be copied.** Clips crossing an edge must split there, as for Split. Comped audio takes are refused.
+- **Cutting** also deletes the range, as Delete Selection does.
+- **Exclusive.** A range copy clears the single-clip clipboards, and a clip copy clears the range.
+- **Automation.** Each automated control's shape over the range comes too, with its values at the edges. A control is known on another track by its device's type and name, its place among such devices (through racks), and its parameter. That is the track mixer's volume and pan on any track, and the same device in the same place.
+
+`Session::pasteRange (firstTrackId, start)` places the copy from that track onward, one undo step.
+
+- **Tracks.** Each copied track goes, in order, to the next track that is not a return. Kinds must match, audio onto audio and MIDI onto MIDI, and there must be enough tracks.
+- **What is replaced.** The pasted span on each destination is cleared first, splitting clips at its edges. The copied clips are inserted at the shifted time and cut back to the span, so only the range is pasted.
+- **Media.** The copied audio is collected into the project's assets.
+- **Automation.** Each copied shape replaces the span on the same control there: held up to it, the copied points inside it, and the control's own value again after it. Controls without a match are left alone.
+
+**Interface.** With a time selection, Cmd/Ctrl+C and Cmd/Ctrl+X copy and cut it. Cmd/Ctrl+V pastes a copied range at the insert marker from the selected track, and selects the pasted time on the tracks it landed on. The Edit menu offers Cut Selection, Copy Selection and Paste Selection.
+
+**Evidence.** `tests/RangeClipboardTests.cpp` renders each track's stem as a pattern of loud, quiet and silent beats. The tracks are an audio track of alternating loud and quiet clicks over a MIDI track of the same pattern. It checks:
+
+- copying two beats from both tracks changes nothing, and pasting them four beats on plays them there on each track;
+- the pasted audio clip holds just the range, with its audio collected into the project;
+- undo and redo of the paste;
+- a paste over existing beats replaces just its range;
+- refusals: too few tracks, audio onto MIDI, a missing track and an empty range;
+- a cut, which removes just the range, and its paste back;
+- a paste into a new project, from audio collected into it;
+- clip and range copies clearing each other;
+- a volume dip copied with the range and pasted five beats on, the original kept, the volume returning after it, and undone with the clips.
+
+The UI suite copies a beat with Cmd/Ctrl+C, pastes it at the insert marker with Cmd/Ctrl+V (selecting it), and cuts it with Cmd/Ctrl+X.
+
 ## Not implemented
 
 - Selecting time on the ruler or across group lanes.
-- Cut, Copy and Paste of a time range.
+- Pasting automation onto controls the destination lacks: such shapes are skipped.
 - Crop.
 - Any comparison with reference output.

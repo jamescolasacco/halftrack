@@ -205,6 +205,10 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `ClipInfo` reports a MIDI or warped audio clip's content start and loop in content beats. `setClipLoop` and `setClipBeats` translate them into the engine's loop range and offset: while a clip loops, the engine counts its offset from the loop's start. The interface shares a few content helpers (`contentEndBeat`, `contentSpans`, `sourceSecondsAt`) so the Arrangement, note editor and waveform draw and edit the same content. See the [contract](research/clip-loops-contract.md).
 
+## Time selection clipboard
+
+The Session keeps a range clipboard beside its single-clip ones: whole copies of the clips overlapping the range, by track, with temporary copies of their audio. Pasting inserts the copies and cuts them back to the range inside one transaction, using the same split rules as Split, so copying never edits the project or its undo history. See the [contract](research/arrangement-selection-contract.md#cut-copy-and-paste-of-a-time-range-2026-10-22).
+
 ## Tempo and transient analysis
 
 `tempo` (in `src/TempoDetection.*`, independent of the engine but for the transient detector it shares with Beats warping) finds a sound's tempo and first beat. It works from an onset curve built a block at a time, so a file is never held whole. Session's `analyse` reads a file once while it is unchanged and keeps its transients and estimate in memory, for at most 256 files. Auto-Warp Long Samples reads the estimate on import; `audioClipTransients` gives the clip view the transients. The analysis runs on the message thread at import or when a warped clip is first shown, about 0.2 s for a three-minute file. See the [contract](research/warp-contract.md#tempo-and-transient-analysis-2026-10-22).

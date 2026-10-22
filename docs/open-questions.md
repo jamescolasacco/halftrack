@@ -641,3 +641,7 @@ The reference's Auto-Warp of a long sample places its first warp marker on the f
 ### Clip starts before a loop, and unlooping a long clip
 
 The reference lets a clip's Start marker sit before its loop, so the content before the loop plays once. The engine counts a looped clip's offset from its loop's start, so Halftrack requires the start to lie in the loop. Turning a long looped MIDI clip's loop off keeps its length, playing silence after the content; a warped audio clip is shortened to end with its audio. The reference's handling of a long clip's unlooping was not measured. Simplest default: as described, with the start inside the loop.
+
+### A take's gap under heavy load
+
+Under heavy machine load (load average about 16, with four suites at once), the separation stress suite once found a gap in a take: the first wrong sample at 236544 of 375040, with 1465 callbacks in 8 s instead of 1500. Run alone it passes. The test device never skips input, and the engine's recording queue grows rather than dropping blocks, so the samples are lost elsewhere, perhaps where late callbacks' blocks are placed. Not yet found; a separate task investigates. Meanwhile, recording under such load may lose a few milliseconds.

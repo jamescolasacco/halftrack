@@ -817,7 +817,10 @@ public:
             if (code == 'L' && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (79); return true; }
             if (code == 'J' && ! shift && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (80); return true; }
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
-            if (! shift && ! showSession && ! showPiano && timeSelection.active() && (code == 'E' || code == 'D')) { selectionCommand (code == 'E' ? 76 : 77); return true; }
+            if (! shift && ! showSession && ! showPiano && timeSelection.active() && (code == 'E' || code == 'D' || code == 'C' || code == 'X'))
+            { selectionCommand (code == 'E' ? 76 : code == 'D' ? 77 : code == 'C' ? 81 : 82); return true; }
+            // A copied time selection pastes at the insert marker from the selected track.
+            if (! shift && ! showSession && ! showPiano && code == 'V' && session.hasRangeClipboard()) { selectionCommand (83); return true; }
             if (code == 'I' && ! showSession) { menuItemSelected (74, 1); return true; }
             if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && shift && ! showSession) { menuItemSelected (75, 1); return true; }
             if (code == 'G') { if (shift) ungroupSelectedTrack(); else groupSelectedTracks(); return true; }
@@ -1097,6 +1100,23 @@ private:
     { return timeSelection.active() ? std::pair { timeSelection.start, timeSelection.end } : std::pair { state.loopStart, state.loopEnd }; }
     void selectionCommand (int item)
     {
+        if (item == 83)
+        {
+            // As in the reference, the pasted time is selected on the tracks it landed on.
+            const auto* track = currentTrack();
+            if (track == nullptr) return;
+            const auto at = state.insertMarker;
+            const auto result = session.pasteRange (track->id, at);
+            report (result); refresh();
+            if (result.wasOk())
+            {
+                timeSelection = { at, at + session.rangeClipboardLength(), {} };
+                for (int t = selectedTrack; t < (int) state.tracks.size() && timeSelection.trackIds.size() < session.rangeClipboardTracks(); ++t)
+                    if (! state.tracks[(size_t) t].isReturn) timeSelection.trackIds.add (state.tracks[(size_t) t].id);
+                canvas.repaint();
+            }
+            return;
+        }
         if (! timeSelection.active()) return;
         const auto [start, end] = editRange();
         if (item == 76) report (session.splitRange (timeSelection.trackIds, start, end));
@@ -1110,6 +1130,7 @@ private:
         else if (item == 78) report (session.deleteRange (timeSelection.trackIds, start, end));
         else if (item == 79) session.setLoop (true, start, end);
         else if (item == 80) { juce::StringArray created; report (session.consolidateRange (timeSelection.trackIds, start, end, created)); }
+        else if (item == 81 || item == 82) report (session.copyRange (timeSelection.trackIds, start, end, item == 82));
         refresh();
     }
     const Session::GroupInfo* groupInfo (const juce::String& id) const
@@ -8013,6 +8034,8 @@ private:
             popup.addItem (76, "Split", selection); popup.addItem (77, "Duplicate Selection", selection);
             popup.addItem (78, "Delete Selection", selection); popup.addItem (79, "Loop Selection", selection);
             popup.addItem (80, "Consolidate", selection);
+            popup.addItem (82, "Cut Selection", selection); popup.addItem (81, "Copy Selection", selection);
+            popup.addItem (83, "Paste Selection", session.hasRangeClipboard() && ! showSession && ! state.recording && currentTrack() != nullptr);
             popup.addSeparator();
             const bool range = (selection || state.loopEnd > state.loopStart) && ! state.recording;
             const juce::String source = selection ? "" : " (Loop Range)";
@@ -8095,7 +8118,7 @@ private:
             case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); break;
             case 74: { const auto [a, b] = editRange(); report (session.insertTime (a, b - a)); refresh(); break; }
             case 75: { const auto [a, b] = editRange(); report (session.deleteTime (a, b - a)); timeSelection = {}; refresh(); break; }
-            case 76: case 77: case 78: case 79: case 80: selectionCommand (id); break;
+            case 76: case 77: case 78: case 79: case 80: case 81: case 82: case 83: selectionCommand (id); break;
             case 30: showPiano = false; addTrack(); resized(); break;
             case 33: addMidiTrack(); break;
             case 35: addReturnTrack(); break;
@@ -12426,6 +12449,31 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             for (int step = 0; step < 6; ++step) session.undo();
             selectTrack (0); selectedClip = 0; refresh();
             check ((int) state.tracks.size() == loopTrack, "six undo steps remove the loops' track");
+        }
+        {
+            // A time selection's clipboard: Cmd+C copies it, Cmd+V pastes it at the insert marker
+            // from the selected track and selects what was pasted, Cmd+X cuts it.
+            showArrangementView(); refresh();
+            check (session.addMidiTrack ("Range").wasOk(), "add a MIDI track for the range clipboard");
+            const int rangeTrack = (int) session.snapshot().tracks.size() - 1;
+            const auto rangeTrackId = session.snapshot().tracks.back().id;
+            check (session.addMidiClip (rangeTrackId, 0, 4).wasOk(), "a one-bar clip"); refresh();
+            juce::StringArray added;
+            check (session.addMidiNotes (state.tracks[(size_t) rangeTrack].clips[0].id, { { "", 64, 0, 1, .8f } }, added).wasOk(), "a note on its first beat"); refresh();
+            selectTrack (rangeTrack); selectedClip = -1;
+            timeSelection = { 0, 60 / state.tempo, { rangeTrackId } };
+            check (handleKey (commandKey ('C')) && session.hasRangeClipboard() && state.tracks[(size_t) rangeTrack].clips.size() == 1, "Cmd/Ctrl+C copies the selected beat");
+            timeSelection = {};
+            session.setInsertMarker (8 * 60 / state.tempo); refresh();
+            check (handleKey (commandKey ('V')) && state.tracks[(size_t) rangeTrack].clips.size() == 2, "Cmd/Ctrl+V pastes it at the insert marker");
+            const auto pasted = state.tracks[(size_t) rangeTrack].clips.back();
+            check (std::abs (pasted.startBeat - 8) < 1e-6 && std::abs (pasted.lengthBeats - 1) < 1e-6 && pasted.notes.size() == 1
+                       && std::abs (timeSelection.start - pasted.start) < 1e-9 && timeSelection.trackIds == juce::StringArray { rangeTrackId },
+                   "the pasted beat holds the note and is selected");
+            check (handleKey (commandKey ('X')) && state.tracks[(size_t) rangeTrack].clips.size() == 1, "Cmd/Ctrl+X cuts the selected beat");
+            for (int step = 0; step < 5; ++step) session.undo();
+            timeSelection = {}; selectTrack (0); selectedClip = 0; refresh();
+            check ((int) state.tracks.size() == rangeTrack, "five undo steps remove the range track");
         }
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())

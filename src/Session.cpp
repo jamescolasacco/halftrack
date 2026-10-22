@@ -4391,6 +4391,19 @@ struct Session::Impl
     File scratch, projectFile;
     juce::ValueTree audioClipboard, midiClipboard;
     double midiClipboardBeats = 0, midiClipboardOffsetBeats = 0;
+    // A time selection's clipboard: each copied track's clips overlapping the range, whole, in
+    // track order, with each audio file kept in a temporary copy.
+    struct RangeClipboard
+    {
+        double start = 0, length = 0;
+        // An automated control's shape over the range, from its start, and its values at the edges.
+        struct Point { double seconds; float value, shape; };
+        struct Curve { juce::String key; std::vector<Point> points; float startValue = 0, endValue = 0; };
+        struct Track { bool midi = false; std::vector<juce::ValueTree> clips; std::vector<Curve> curves; };
+        std::vector<Track> tracks;
+        std::map<juce::String, std::unique_ptr<juce::TemporaryFile>> media; // By the audio's own path.
+    };
+    std::unique_ptr<RangeClipboard> rangeClipboard;
     std::unique_ptr<juce::TemporaryFile> audioClipboardMedia;
     std::unique_ptr<te::Edit> edit;
     GrooveWatcher grooveWatcher { edit };
@@ -7892,6 +7905,32 @@ std::vector<te::AutomationCurve*> trackCurves (te::AudioTrack& track)
     for (auto* plugin : track.pluginList.getPlugins()) add (*plugin);
     return curves;
 }
+// A track's automatable parameters by a key naming the same control on another track: each device's
+// type and name and its place among such devices, through racks, then the parameter.
+std::vector<std::pair<juce::String, te::AutomatableParameter*>> keyedParameters (te::AudioTrack& track)
+{
+    std::vector<std::pair<juce::String, te::AutomatableParameter*>> result;
+    const std::function<void (const std::vector<te::Plugin*>&, const juce::String&)> walk = [&result, &walk] (const std::vector<te::Plugin*>& plugins, const juce::String& prefix)
+    {
+        std::map<juce::String, int> seen;
+        for (auto* plugin : plugins)
+        {
+            const auto kind = plugin->getPluginType() + ":" + plugin->getName();
+            const auto key = prefix + kind + "#" + juce::String (seen[kind]++) + "/";
+            for (auto* parameter : plugin->getAutomatableParameters()) result.push_back ({ key + parameter->paramID, parameter });
+            if (auto* native = dynamic_cast<NativeEffectPlugin*> (plugin); native != nullptr && native->rackEngine() != nullptr)
+            {
+                std::vector<te::Plugin*> inner;
+                for (auto* device : native->rackEngine()->devices()) inner.push_back (device);
+                walk (inner, key);
+            }
+        }
+    };
+    std::vector<te::Plugin*> plugins;
+    for (auto* plugin : track.pluginList.getPlugins()) plugins.push_back (plugin);
+    walk (plugins, {});
+    return result;
+}
 struct CurvePoint { te::TimePosition time; float value, shape; };
 std::vector<CurvePoint> curvePoints (const te::AutomationCurve& curve)
 {
@@ -8150,6 +8189,164 @@ Result Session::duplicateRange (const juce::StringArray& trackIds, double start,
             state.setProperty (te::IDs::start, (p.getStart() + delta).inSeconds(), nullptr);
             renewMidiNoteIDs (state);
             te::insertClipCopy (*t, copy);
+        }
+    }
+    impl->refreshParameterValues();
+    impl->changed(); return Result::ok();
+}
+Result Session::copyRange (const juce::StringArray& trackIds, double start, double end, bool cut)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (cut && impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before cutting clips.");
+    juce::Array<te::AudioTrack*> tracks;
+    if (auto r = rangeTracks (*impl->edit, impl->withLinkedTracks (trackIds), start, end, tracks); r.failed()) return r;
+    // In the order the tracks are shown, as they paste.
+    const auto order = te::getAudioTracks (*impl->edit);
+    std::sort (tracks.begin(), tracks.end(), [&] (auto* a, auto* b) { return order.indexOf (a) < order.indexOf (b); });
+    const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (end);
+    for (auto* t : tracks) for (const auto at : { from, to }) if (auto r = splittableAt (*t, at); r.failed()) return r;
+    auto clipboard = std::make_unique<Impl::RangeClipboard>();
+    clipboard->start = start; clipboard->length = end - start;
+    for (auto* t : tracks)
+    {
+        Impl::RangeClipboard::Track copied;
+        copied.midi = static_cast<bool> (t->state.getProperty (midiTrackProperty));
+        for (auto* c : t->getClips())
+        {
+            if (! (c->getPosition().getStart() < to && c->getPosition().getEnd() > from)) continue;
+            auto state = c->state.createCopy();
+            if (auto* wave = dynamic_cast<te::WaveAudioClip*> (c))
+            {
+                if (wave->getNumTakes (true) > 1 || wave->isCurrentTakeComp()) return Result::fail ("\"" + c->getName() + "\" has comped takes; consolidate it before copying.");
+                const auto source = wave->getSourceFileReference().getFile();
+                if (! source.existsAsFile()) return Result::fail ("The audio of \"" + c->getName() + "\" is missing.");
+                auto& kept = clipboard->media[source.getFullPathName()];
+                if (kept == nullptr)
+                {
+                    kept = std::make_unique<juce::TemporaryFile> (source.getFileExtension());
+                    if (! source.copyFileTo (kept->getFile())) return Result::fail ("Could not keep the selection's audio for the clipboard.");
+                }
+                state.removeChild (state.getChildWithName (te::IDs::TAKES), nullptr);
+                state.setProperty (te::IDs::source, kept->getFile().getFullPathName(), nullptr);
+            }
+            copied.clips.push_back (state);
+        }
+        for (const auto& [key, parameter] : keyedParameters (*t))
+        {
+            const auto& curve = parameter->getCurve();
+            if (curve.getNumPoints() == 0) continue;
+            Impl::RangeClipboard::Curve shape { key, {}, curve.getValueAt (from, 0.0f), curve.getValueAt (to - edgeGap, 0.0f) };
+            for (const auto& p : curvePoints (curve)) if (p.time > from && p.time < to - edgeGap) shape.points.push_back ({ (p.time - from).inSeconds(), p.value, p.shape });
+            copied.curves.push_back (std::move (shape));
+        }
+        clipboard->tracks.push_back (std::move (copied));
+    }
+    if (cut) if (auto r = deleteRange (trackIds, start, end); r.failed()) return r;
+    impl->midiClipboard = {}; impl->midiClipboardBeats = 0; impl->audioClipboard = {}; impl->audioClipboardMedia.reset();
+    impl->rangeClipboard = std::move (clipboard);
+    impl->changed(); return Result::ok();
+}
+bool Session::hasRangeClipboard() const { return impl->rangeClipboard != nullptr; }
+double Session::rangeClipboardLength() const { return impl->rangeClipboard != nullptr ? impl->rangeClipboard->length : 0; }
+int Session::rangeClipboardTracks() const { return impl->rangeClipboard != nullptr ? (int) impl->rangeClipboard->tracks.size() : 0; }
+Result Session::pasteRange (const String& firstTrackId, double start)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before pasting clips.");
+    if (impl->rangeClipboard == nullptr) return Result::fail ("Copy a time selection before pasting it.");
+    const auto& clipboard = *impl->rangeClipboard;
+    if (! std::isfinite (start) || start < 0 || start + clipboard.length > te::Edit::maximumLength) return Result::fail ("Paste position is outside the supported timeline.");
+    // One destination for each copied track: the first track onward, skipping returns.
+    std::vector<te::AudioTrack*> destinations;
+    bool found = false;
+    for (auto* t : te::getAudioTracks (*impl->edit))
+    {
+        found = found || t->itemID.toString() == firstTrackId;
+        if (found && ! isReturn (*t) && destinations.size() < clipboard.tracks.size()) destinations.push_back (t);
+    }
+    if (! found) return Result::fail ("Select a track to paste onto.");
+    if (destinations.size() < clipboard.tracks.size()) return Result::fail ("The selection was copied from " + String ((int) clipboard.tracks.size()) + " tracks; there are not enough tracks from here to paste it.");
+    for (size_t i = 0; i < destinations.size(); ++i)
+        if (static_cast<bool> (destinations[i]->state.getProperty (midiTrackProperty)) != clipboard.tracks[i].midi)
+            return Result::fail ("Paste onto tracks of the same kinds as were copied, in order: audio onto audio and MIDI onto MIDI.");
+    const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (start + clipboard.length);
+    for (auto* t : destinations)
+    {
+        if (auto r = impl->unfrozen (t); r.failed()) return r;
+        for (const auto at : { from, to }) if (auto r = splittableAt (*t, at); r.failed()) return r;
+    }
+    // The copied audio joins the project's own media.
+    const auto assets = impl->assets();
+    if (! clipboard.media.empty()) if (auto r = assets.createDirectory(); r.failed()) return r;
+    std::map<juce::String, juce::File> collected;
+    for (const auto& [original, kept] : clipboard.media)
+    {
+        const auto target = assets.getNonexistentChildFile (juce::File (original).getFileNameWithoutExtension(), kept->getFile().getFileExtension(), true);
+        if (! kept->getFile().copyFileTo (target)) { for (auto& [k, f] : collected) f.deleteFile(); return Result::fail ("Could not collect the clipboard's audio into this project."); }
+        collected[kept->getFile().getFullPathName()] = target;
+    }
+    endEditGesture(); closePluginEditors();
+    impl->transaction ("Paste selection");
+    auto* undo = &impl->edit->getUndoManager();
+    const auto shift = te::TimeDuration::fromSeconds (start - clipboard.start), epsilon = te::TimeDuration::fromSeconds (1e-6);
+    // Splits a clip there, keeping the part on the chosen side; a clip wholly on the other side goes.
+    const auto keep = [&] (te::AudioTrack& track, te::Clip* clip, te::TimePosition at, bool right) -> te::Clip*
+    {
+        const auto p = clip->getPosition();
+        if (p.getStart() >= at - epsilon || p.getEnd() <= at + epsilon)
+        {
+            if (right ? p.getEnd() > at + epsilon : p.getStart() < at - epsilon) return clip;
+            clip->removeFromParent(); return nullptr;
+        }
+        te::Clip* after = nullptr;
+        if (auto* midi = dynamic_cast<te::MidiClip*> (clip)) after = splitMidiClipAt (*midi, at, undo);
+        else after = track.splitClip (*clip, at);
+        if (after == nullptr) return clip;
+        if (right) { clip->removeFromParent(); return after; }
+        after->removeFromParent(); return clip;
+    };
+    for (size_t i = 0; i < destinations.size(); ++i)
+    {
+        auto& t = *destinations[i];
+        // Each copied control's shape replaces the span on the same control here, held up to it and
+        // resuming after it.
+        if (! clipboard.tracks[i].curves.empty())
+        {
+            const auto parameters = keyedParameters (t);
+            for (const auto& shape : clipboard.tracks[i].curves)
+            {
+                const auto found = std::find_if (parameters.begin(), parameters.end(), [&] (const auto& p) { return p.first == shape.key; });
+                if (found == parameters.end()) continue;
+                auto* parameter = found->second;
+                auto& curve = parameter->getCurve();
+                const auto valueAt = [&] (te::TimePosition at) { return curve.getNumPoints() > 0 ? curve.getValueAt (at, 0.0f) : parameter->getCurrentValue(); };
+                const auto before = valueAt (from - edgeGap), resume = valueAt (to);
+                std::vector<CurvePoint> points;
+                for (const auto& p : curvePoints (curve)) if (p.time < from - edgeGap || p.time > to) points.push_back (p);
+                if (from.inSeconds() >= edgeGap.inSeconds()) points.push_back ({ from - edgeGap, before, 0 });
+                points.push_back ({ from, shape.startValue, 0 });
+                for (const auto& p : shape.points) points.push_back ({ from + te::TimeDuration::fromSeconds (p.seconds), p.value, p.shape });
+                points.push_back ({ to - edgeGap, shape.endValue, 0 }); points.push_back ({ to, resume, 0 });
+                rebuildCurve (curve, *impl->edit, points, undo);
+            }
+        }
+        for (const auto at : { from, to }) splitTrackAt (t, at, undo);
+        const auto existing = t.getClips();
+        for (auto* c : existing)
+            if (c->getPosition().getStart() >= from - epsilon && c->getPosition().getEnd() <= to + epsilon) c->removeFromParent();
+        for (const auto& state : clipboard.tracks[i].clips)
+        {
+            auto copy = te::ClipCopy::fromClipboardState (state, false).withNewItemID (*impl->edit);
+            auto pasted = copy.getState();
+            pasted.setProperty (te::IDs::start, (te::TimePosition::fromSeconds (static_cast<double> (state[te::IDs::start])) + shift).inSeconds(), nullptr);
+            if (const auto media = collected.find (state[te::IDs::source].toString()); media != collected.end())
+                pasted.setProperty (te::IDs::source, media->second.getFullPathName(), nullptr);
+            renewMidiNoteIDs (pasted);
+            auto* clip = te::insertClipCopy (t, copy);
+            if (clip == nullptr) continue;
+            if (auto* wave = dynamic_cast<te::WaveAudioClip*> (clip)) wave->getSourceFileReference().setToFile (juce::File (pasted[te::IDs::source].toString()), te::SourceFileReference::PathStyle::alwaysAbsolute, false);
+            // Only what lies in the range is pasted.
+            if (clip = keep (t, clip, from, true); clip != nullptr) keep (t, clip, to, false);
         }
     }
     impl->refreshParameterValues();
@@ -8434,6 +8631,7 @@ Result Session::copyMidiClip (const String& id, bool cut)
     auto copied=clip->state.createCopy();
     if(cut){impl->transaction("Cut MIDI clip");clip->removeFromParent();impl->changed();}
     impl->midiClipboard=std::move(copied);impl->midiClipboardBeats=beats;impl->midiClipboardOffsetBeats=clip->getOffsetInBeats().inBeats();
+    impl->rangeClipboard.reset();
     impl->audioClipboard={};impl->audioClipboardMedia.reset();return Result::ok();
 }
 bool Session::hasMidiClipClipboard() const {return impl->midiClipboard.isValid();}
@@ -8503,7 +8701,7 @@ Result Session::copyAudioClip (const String& id, bool cut)
         clip->removeFromParent();
         impl->changed();
     }
-    impl->midiClipboard = {}; impl->midiClipboardBeats = 0;
+    impl->midiClipboard = {}; impl->midiClipboardBeats = 0; impl->rangeClipboard.reset();
     impl->audioClipboard = std::move (copied);
     impl->audioClipboardMedia = std::move (media);
     return Result::ok();

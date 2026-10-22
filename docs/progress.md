@@ -1714,3 +1714,13 @@ Engine and UI areas.
 - **Measured.** Each case is rendered and its beats compared (`tests/ClipLoopTests.cpp`), and the UI suite drives the box and the edges.
 
 See [the contract](research/clip-loops-contract.md).
+
+## Time selection clipboard — 2026-10-22
+
+Engine and UI areas.
+
+- **Copy and cut.** Cmd/Ctrl+C and Cmd/Ctrl+X copy and cut a time selection across its tracks.
+- **Paste.** Cmd/Ctrl+V pastes it at the insert marker from the selected track, replacing what was there and selecting what was pasted. The audio and the range's automation travel with the copy, into other projects too.
+- **Measured.** Rendered stems show each track playing just the copied beats where pasted (`tests/RangeClipboardTests.cpp`), and the UI suite drives the keys.
+
+See [the contract](research/arrangement-selection-contract.md#cut-copy-and-paste-of-a-time-range-2026-10-22).
