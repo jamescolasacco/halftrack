@@ -127,7 +127,7 @@ endif()
 include(CTest)
 target_compile_definitions(Halftrack PRIVATE HALFTRACK_TESTS_ENABLED=$<BOOL:${BUILD_TESTING}>)
 if(BUILD_TESTING)
-    target_sources(Halftrack PRIVATE tests/RealtimeTests.cpp tests/PluginScanTests.cpp tests/PluginEditorTests.cpp tests/SendReturnTests.cpp tests/UtilityTests.cpp tests/NativeEffectsTests.cpp tests/ExtendedEffectsTests.cpp tests/MidiEffectsTests.cpp tests/InstrumentsTests.cpp tests/WarpTests.cpp tests/GroupTests.cpp tests/LaunchModeTests.cpp tests/SamplerTests.cpp tests/DeviceAutomationTests.cpp tests/FreezeTests.cpp tests/StemExportTests.cpp tests/CrossfadeTests.cpp tests/TimeEditTests.cpp tests/RackTests.cpp tests/TrackDelayTests.cpp tests/MidiControllerTests.cpp tests/RangeEditTests.cpp tests/TimeSignatureTests.cpp tests/MidiToolTests.cpp tests/RecoveryTests.cpp tests/PresetTests.cpp tests/TempoMapTests.cpp tests/GrooveTests.cpp tests/TunerTests.cpp tests/AutomationCaptureTests.cpp tests/PunchTests.cpp tests/SpectrumTests.cpp tests/PreviewTests.cpp tests/MidiMonitorTests.cpp tests/TransportTests.cpp tests/MissingMediaTests.cpp tests/PluginAutomationTests.cpp tests/CaptureMidiTests.cpp tests/TakeLanesTests.cpp tests/RoutingTests.cpp tests/SceneTempoTests.cpp tests/AudioFromTests.cpp tests/AudioEngineTests.cpp tests/MultitrackRecordingTests.cpp tests/SessionRecordTests.cpp tests/NoteChanceTests.cpp tests/RepitchTests.cpp tests/SharedMediaTests.cpp tests/WavDecoderTests.cpp tests/RenderAgreementTests.cpp tests/RecordingFormatTests.cpp tests/DeviceSettingsTests.cpp tests/CollectionsTests.cpp tests/PluginPresetTests.cpp tests/ClipEnvelopeTests.cpp tests/WarpModeTests.cpp tests/SliceTests.cpp tests/MpeTests.cpp tests/InputConfigTests.cpp tests/FuzzTests.cpp tests/GraphEditTests.cpp tests/StuckNoteTests.cpp tests/LargeSessionTests.cpp tests/PreferencesTests.cpp tests/LinkedTrackTests.cpp tests/BrowserIndexTests.cpp tests/ParameterIdentityTests.cpp tests/ComputerKeyboardTests.cpp tests/KeyMapTests.cpp tests/AutoArmTests.cpp tests/HardwareCheck.cpp tests/DeviceLossTests.cpp tests/SoakTests.cpp tests/MidiMappingTests.cpp tests/NoteToolsTests.cpp tests/AudioClipTests.cpp tests/LocatorTests.cpp tests/MidiFileTests.cpp tests/TrackOrderTests.cpp tests/TrackDuplicateTests.cpp tests/TempoTests.cpp tests/MidiInputTests.cpp tests/MetronomeTests.cpp tests/MasterVolumeTests.cpp tests/ClipActivationTests.cpp tests/AudioExportTests.cpp tests/FollowActionTests.cpp tests/AutomationTests.cpp)
+    target_sources(Halftrack PRIVATE tests/RealtimeTests.cpp tests/PluginScanTests.cpp tests/PluginEditorTests.cpp tests/SendReturnTests.cpp tests/UtilityTests.cpp tests/NativeEffectsTests.cpp tests/ExtendedEffectsTests.cpp tests/MidiEffectsTests.cpp tests/InstrumentsTests.cpp tests/WarpTests.cpp tests/GroupTests.cpp tests/LaunchModeTests.cpp tests/SamplerTests.cpp tests/DeviceAutomationTests.cpp tests/FreezeTests.cpp tests/StemExportTests.cpp tests/CrossfadeTests.cpp tests/TimeEditTests.cpp tests/RackTests.cpp tests/TrackDelayTests.cpp tests/MidiControllerTests.cpp tests/RangeEditTests.cpp tests/TimeSignatureTests.cpp tests/MidiToolTests.cpp tests/RecoveryTests.cpp tests/PresetTests.cpp tests/TempoMapTests.cpp tests/GrooveTests.cpp tests/TunerTests.cpp tests/AutomationCaptureTests.cpp tests/PunchTests.cpp tests/SpectrumTests.cpp tests/PreviewTests.cpp tests/MidiMonitorTests.cpp tests/TransportTests.cpp tests/MissingMediaTests.cpp tests/PluginAutomationTests.cpp tests/CaptureMidiTests.cpp tests/TakeLanesTests.cpp tests/RoutingTests.cpp tests/SceneTempoTests.cpp tests/AudioFromTests.cpp tests/AudioEngineTests.cpp tests/MultitrackRecordingTests.cpp tests/SessionRecordTests.cpp tests/NoteChanceTests.cpp tests/RepitchTests.cpp tests/SharedMediaTests.cpp tests/WavDecoderTests.cpp tests/RenderAgreementTests.cpp tests/RecordingFormatTests.cpp tests/DeviceSettingsTests.cpp tests/CollectionsTests.cpp tests/PluginPresetTests.cpp tests/ClipEnvelopeTests.cpp tests/WarpModeTests.cpp tests/SliceTests.cpp tests/MpeTests.cpp tests/InputConfigTests.cpp tests/FuzzTests.cpp tests/GraphEditTests.cpp tests/StuckNoteTests.cpp tests/LargeSessionTests.cpp tests/PreferencesTests.cpp tests/LinkedTrackTests.cpp tests/BrowserIndexTests.cpp tests/ParameterIdentityTests.cpp tests/ComputerKeyboardTests.cpp tests/KeyMapTests.cpp tests/AutoArmTests.cpp tests/HardwareCheck.cpp tests/DeviceLossTests.cpp tests/SoakTests.cpp tests/PluginTimingTests.cpp tests/MidiMappingTests.cpp tests/NoteToolsTests.cpp tests/AudioClipTests.cpp tests/LocatorTests.cpp tests/MidiFileTests.cpp tests/TrackOrderTests.cpp tests/TrackDuplicateTests.cpp tests/TempoTests.cpp tests/MidiInputTests.cpp tests/MetronomeTests.cpp tests/MasterVolumeTests.cpp tests/ClipActivationTests.cpp tests/AudioExportTests.cpp tests/FollowActionTests.cpp tests/AutomationTests.cpp)
     set(HALFTRACK_GAIN_TEST_FORMATS VST3)
     if(APPLE)
         list(APPEND HALFTRACK_GAIN_TEST_FORMATS AU)
@@ -159,7 +159,20 @@ if(BUILD_TESTING)
     target_sources(HalftrackTestLatency PRIVATE tests/TestLatencyPlugin.cpp)
     target_compile_definitions(HalftrackTestLatency PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
     target_link_libraries(HalftrackTestLatency PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
-    add_dependencies(Halftrack HalftrackTestGain_VST3 HalftrackTestLatency_VST3)
+    # An instrument that writes what its host tells it (note timing, beats, offline rendering) into its audio.
+    juce_add_plugin(HalftrackTestProbe
+        BUNDLE_ID "org.halftrack.testprobe"
+        COMPANY_NAME "Halftrack Contributors"
+        PLUGIN_MANUFACTURER_CODE Htrk
+        PLUGIN_CODE Htpb
+        FORMATS VST3
+        PRODUCT_NAME "Halftrack Test Probe"
+        IS_SYNTH TRUE NEEDS_MIDI_INPUT TRUE NEEDS_MIDI_OUTPUT FALSE
+        COPY_PLUGIN_AFTER_BUILD FALSE)
+    target_sources(HalftrackTestProbe PRIVATE tests/TestProbePlugin.cpp)
+    target_compile_definitions(HalftrackTestProbe PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+    target_link_libraries(HalftrackTestProbe PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
+    add_dependencies(Halftrack HalftrackTestGain_VST3 HalftrackTestLatency_VST3 HalftrackTestProbe_VST3)
     if(APPLE)
         add_dependencies(Halftrack HalftrackTestGain_AU)
         add_test(NAME au-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-au ${CMAKE_BINARY_DIR}/test-artifacts)
@@ -269,6 +282,9 @@ if(BUILD_TESTING)
     set_tests_properties(linked-tracks-acceptance PROPERTIES TIMEOUT 180)
     add_test(NAME browser-index-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-browser-index ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(browser-index-acceptance PROPERTIES TIMEOUT 180)
+    add_test(NAME plugin-timing-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-plugin-timing ${CMAKE_BINARY_DIR}/test-artifacts)
+    set_tests_properties(plugin-timing-acceptance PROPERTIES TIMEOUT 180
+        ENVIRONMENT "HALFTRACK_TEST_PROBE_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestProbe_VST3>/../..")
     add_test(NAME soak-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-soak ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(soak-acceptance PROPERTIES TIMEOUT 600)
     add_test(NAME device-loss-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-device-loss ${CMAKE_BINARY_DIR}/test-artifacts)

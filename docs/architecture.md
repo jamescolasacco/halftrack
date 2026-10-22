@@ -229,6 +229,10 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `BrowserIndex` (in `src/BrowserIndex.*`, independent of the engine) indexes a folder tree on a detached worker that owns only standard-library data and a shared `Scan` record, so a blocked filesystem call can outlive the browser. A global count limits outstanding scans to four. The UI starts it with each folder listing, polls its status from the window timer, and searches it on the message thread under the scan's mutex. See the [contract](research/browser-index-contract.md).
 
+## Hosted instruments
+
+`Session::addPlugin` puts an instrument plug-in where `Impl::instrument` finds the track's instrument, and marks its state with `halftrackInstrument`. `Impl::hostedInstrument` then finds it, so native instrument replacement and effect insertion treat it as the instrument. The snapshot reports it as a plug-in with `isInstrument`, and the UI hides the built-in synth panel. See the [contract](research/plugin-timing-contract.md).
+
 ## Audio device loss
 
 `Session::Impl::DeviceWatch` listens to the device manager. It keeps the chosen device and its setup. When that device leaves the device type's list, it stops the transport and leaves a notice. The `DeviceStopWatch` restart resume skips a device that is not the chosen one, so the fallback never resumes playback. When the chosen device is listed again, it is reopened with `setAudioDeviceSetup`. The UI shows notices from `takeDeviceNotice` in its status line. See the [contract](research/audio-hardware-contract.md).

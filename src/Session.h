@@ -349,6 +349,7 @@ public:
         juce::String loadError;
         UtilitySettings utility;
         bool isNativeEffect = false;
+        bool isInstrument = false; // A hosted plug-in playing as its MIDI track's instrument.
         EffectSettings effect;
         juce::File sample; // A Sampler instrument's loaded sample, if any.
         std::vector<juce::File> padSamples; // A Drum Sampler's sample per pad (empty files for empty pads).
@@ -987,6 +988,8 @@ public:
     juce::Result addUtility (int trackIndex);
     juce::Result setUtilitySettings (const juce::String& pluginId, const UtilitySettings&);
     juce::Result movePlugin (int trackIndex, int pluginIndex, int destinationIndex);
+    // Inserts a hosted plug-in after the track's instrument. An instrument plug-in instead becomes a
+    // MIDI track's instrument, replacing the one it had (one undo step), and is refused elsewhere.
     juce::Result addPlugin (int trackIndex, const juce::PluginDescription&);
     juce::Result setPluginEnabled (int trackIndex, int pluginIndex, bool);
     juce::Result removePlugin (int trackIndex, int pluginIndex);

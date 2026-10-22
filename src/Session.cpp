@@ -62,6 +62,7 @@ const juce::Identifier midiNoteIDProperty { "halftrackNoteId" };
 const juce::Identifier noteChanceProperty { "halftrackChance" }, noteVelocityRangeProperty { "halftrackVelocityRange" };
 const juce::Identifier returnProperty { "halftrackReturn" };
 const juce::Identifier linkProperty { "halftrackLink" }; // Linked-track editing: tracks with the same value edit together.
+const juce::Identifier hostedInstrumentProperty { "halftrackInstrument" }; // A hosted plug-in that is its track's instrument.
 const juce::Identifier returnBusProperty { "halftrackReturnBus" };
 const juce::Identifier returnModeProperty { "halftrackReturnSendMode" };
 const juce::Identifier sendReturnProperty { "halftrackSendReturnID" };
@@ -966,6 +967,20 @@ Result validateTrackDelays (const juce::ValueTree& state)
     return Result::ok();
 }
 // A link is a short identifier without spaces, on an audio or MIDI track.
+// A hosted instrument is a hosted plug-in, one at most on a MIDI track.
+Result validateHostedInstruments (const juce::ValueTree& state)
+{
+    if (state.hasType (te::IDs::TRACK))
+    {
+        int hosted = 0;
+        for (const auto& plugin : state)
+            if (plugin.hasType (te::IDs::PLUGIN) && plugin.hasProperty (hostedInstrumentProperty))
+                if (++hosted > 1 || plugin[te::IDs::type].toString() != te::ExternalPlugin::xmlTypeName || ! static_cast<bool> (state.getProperty (midiTrackProperty, false)))
+                    return Result::fail ("The project contains an invalid plug-in instrument.");
+    }
+    for (const auto& child : state) if (auto result = validateHostedInstruments (child); result.failed()) return result;
+    return Result::ok();
+}
 Result validateTrackLinks (const juce::ValueTree& state)
 {
     if (state.hasProperty (linkProperty))
@@ -2533,9 +2548,16 @@ struct Session::Impl
         return nullptr;
     }
     // The MIDI track's sound source: the built-in synth or a native instrument.
+    static te::ExternalPlugin* hostedInstrument (te::AudioTrack& track)
+    {
+        for (auto* plugin : track.pluginList.getPlugins())
+            if (auto* external = dynamic_cast<te::ExternalPlugin*> (plugin); external && static_cast<bool> (external->state.getProperty (hostedInstrumentProperty, false))) return external;
+        return nullptr;
+    }
     static te::Plugin* instrument (te::AudioTrack& track)
     {
         if (auto* s = synth (track)) return s;
+        if (auto* hosted = hostedInstrument (track)) return hosted;
         return nativeInstrument (track);
     }
     Result validateNote (te::MidiClip& clip, int pitch, double start, double length, float velocity) const
@@ -4119,6 +4141,7 @@ Session::Snapshot Session::snapshot() const
             if (auto* effect = dynamic_cast<NativeEffectPlugin*> (p)) device = describeDevice (*effect);
             if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
             {
+                device.isInstrument = static_cast<bool> (external->state.getProperty (hostedInstrumentProperty, false));
                 device.automation = externalAutomation (*external);
                 const auto parameters = externalParameters (*external);
                 for (const auto& configured : external->state.getChildWithName (configureType))
@@ -4249,6 +4272,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateLocators (state); result.failed()) return result;
     if (auto result = validateTrackDelays (state); result.failed()) return result;
     if (auto result = validateTrackLinks (state); result.failed()) return result;
+    if (auto result = validateHostedInstruments (state); result.failed()) return result;
     if (auto result = validateClipScales (state); result.failed()) return result;
     if (auto result = validateGroovePool (state); result.failed()) return result;
     if (auto result = validateMidiMappings (state); result.failed()) return result;
@@ -9950,6 +9974,19 @@ Result Session::addPlugin (int index, const juce::PluginDescription& description
     auto* external = dynamic_cast<te::ExternalPlugin*> (plugin.get());
     if (! external || (! external->getAudioPluginInstance() && ! external->isInitialisingAsync()))
         return Result::fail (external ? external->getLoadError() : "The plug-in could not be instantiated.");
+    if (description.isInstrument)
+    {
+        // As in the reference, an instrument takes the place of the MIDI track's instrument.
+        if (! static_cast<bool> (t->state.getProperty (midiTrackProperty, false))) return Result::fail ("Instrument plug-ins go on MIDI tracks.");
+        auto* current = Impl::instrument (*t);
+        int index = 0;
+        if (current) index = t->pluginList.indexOf (current);
+        else for (auto* p : t->pluginList.getPlugins()) if (auto* native = dynamic_cast<NativeEffectPlugin*> (p); native && effectIsMidi (native->getKind())) ++index;
+        external->state.setProperty (hostedInstrumentProperty, true, nullptr);
+        if (current) { current->windowState->closeWindowExplicitly(); current->deleteFromParent(); }
+        t->pluginList.insertPlugin (plugin, index, nullptr);
+        impl->changed(); return Result::ok();
+    }
     auto insertIndex = isReturn (*t) ? 1 : 0;
     if (auto* source = Impl::instrument (*t)) insertIndex = t->pluginList.indexOf (source) + 1;
     t->pluginList.insertPlugin (plugin, insertIndex, nullptr);

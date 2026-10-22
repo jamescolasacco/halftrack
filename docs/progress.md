@@ -1527,3 +1527,12 @@ Test change in `tests/SoakTests.cpp` (new), `src/Main.cpp` and `CMakeLists.txt`,
 - **What it holds.** The play head keeps time, memory stays flat and open descriptors stay constant. An unlooped first version showed memory growing as playback mapped in more of the media, not from a leak.
 
 See [the robustness contract](research/robustness-contract.md#long-sessions).
+
+## Hosted instruments and plug-in timing — 2026-10-21
+
+Engine and UI change in `src/Session.*`, `src/MainComponent.cpp`, `src/Main.cpp`, `CMakeLists.txt`, `tests/TestProbePlugin.cpp` (new) and `tests/PluginTimingTests.cpp` (new), with documentation.
+
+- **Instruments.** Instrument plug-ins now replace a MIDI track's instrument instead of playing beside the built-in synth.
+- **Timing.** A VST3 probe instrument shows the host delivering notes and beats at exact samples, both offline and live at two block sizes.
+
+See [the contract](research/plugin-timing-contract.md).

@@ -6381,7 +6381,8 @@ private:
             size_t i = 0;
             if (track != nullptr) for (; i < panels.size() && i < track->plugins.size() && track->plugins[i].isNativeEffect && effectIsMidi (track->plugins[i].effect.kind); ++i)
                 place (*panels[i], panels[i]->preferredWidth());
-            synthPanel.setVisible (track != nullptr && track->isMidi);
+            // A hosted instrument plays instead of the built-in synth, and shows as its own device.
+            synthPanel.setVisible (track != nullptr && track->isMidi && std::none_of (track->plugins.begin(), track->plugins.end(), [] (const auto& p) { return p.isInstrument; }));
             if (synthPanel.isVisible()) place (synthPanel, synthPanel.preferredWidth());
             for (; i < panels.size(); ++i) place (*panels[i], panels[i]->preferredWidth());
             chain.setSize (juce::jmax (x, chainView.getWidth()), height + 2);
@@ -8797,7 +8798,14 @@ private:
             if (item.pluginId.isNotEmpty() && item.preset == juce::File())
             {
                 for (const auto& type : session.knownPlugins().getTypes())
-                    if (type.createIdentifierString() == item.pluginId) { if (selectedTrack < 0) addTrack(); report (session.addPlugin (selectedTrack, type)); refresh(); }
+                    if (type.createIdentifierString() == item.pluginId)
+                    {
+                        // An instrument needs a MIDI track: the selected one, or a new one.
+                        const auto* track = currentTrack();
+                        if (type.isInstrument && (track == nullptr || ! track->isMidi)) { addMidiTrack(); refresh(); }
+                        else if (selectedTrack < 0) addTrack();
+                        report (session.addPlugin (selectedTrack, type)); refresh();
+                    }
                 return;
             }
             if (item.groove >= 0) { useGrooveFromUI (Session::grooveLibrary()[(size_t) item.groove], true); return; }
