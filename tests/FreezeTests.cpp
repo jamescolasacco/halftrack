@@ -7,9 +7,14 @@
 // Freeze and Flatten. A Sampler plays a generated stereo source from a MIDI clip;
 // frozen and flattened renders are compared with the live render, and device and
 // clip edits must be locked while the track is frozen. Renders use the 44.1 kHz
-// rate the test engine freezes at, so no comparison includes resampling.
+// rate the test engine freezes at, so no comparison includes resampling. A Sends Only
+// audio track freezes and plays its freeze only through its send or to a track taking its
+// audio, through the synthetic device, since exports render frozen tracks from their clips.
 namespace halftrack
 {
+std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
+float pumpSyntheticTestDevice (Session&, int blocks);
+juce::AudioBuffer<float> captureSyntheticTestDevice (Session&, int blocks);
 namespace
 {
 constexpr double rate = 44100;
@@ -30,6 +35,61 @@ double difference (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<fl
     return worst;
 }
 Session::TrackInfo track (Session& s) { const auto snapshot = s.snapshot(); return snapshot.tracks.back(); }
+bool near (float a, float b) { return std::abs (a - b) < 1e-3f; }
+
+// A constant 0.5 signal on audio track A, played Sends Only with a 0 dB send to a return.
+void sendsOnlyTests (const juce::File& root)
+{
+    const auto source = root.getChildFile ("half.wav");
+    {
+        juce::AudioBuffer<float> x (2, 4 * 48000);
+        for (int c = 0; c < 2; ++c) for (int n = 0; n < x.getNumSamples(); ++n) x.setSample (c, n, .5f);
+        juce::WavAudioFormat format; std::unique_ptr<juce::OutputStream> stream (source.createOutputStream());
+        auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (2).withBitsPerSample (32));
+        check (writer && writer->writeFromAudioSampleBuffer (x, 0, x.getNumSamples()), "write a constant 0.5 signal");
+    }
+    Session s (false, makeSyntheticTestDeviceType());
+    ok (s.importAudio (source, 0, 0), "put it on audio track A");
+    const auto a = s.snapshot().tracks[0].id;
+    ok (s.setTrackOutput (a, { Session::OutputKind::sendsOnly, {} }), "play A Sends Only");
+    ok (s.addReturnTrack ("Return"), "add a return");
+    const auto ret = s.snapshot().tracks.back().id;
+    ok (s.setTrackSendGain (0, ret, 0), "send A to it at 0 dB");
+    // The output level at the end of a run of blocks from the start of playback.
+    const auto heard = [&] (int blocks = 40)
+    {
+        pumpSyntheticTestDevice (s, 8);
+        s.seek (.25); ok (s.play(), "play");
+        const auto out = captureSyntheticTestDevice (s, blocks);
+        s.stop();
+        return out.getSample (0, out.getNumSamples() - 1);
+    };
+    const auto frozen = [&] { const auto t = s.snapshot().tracks[0]; return t.frozen && t.output.kind == Session::OutputKind::sendsOnly; };
+    const auto unfrozen = [&] { const auto t = s.snapshot().tracks[0]; return ! t.frozen && t.output.kind == Session::OutputKind::sendsOnly; };
+    check (near (heard(), .5f), "A is heard through its send");
+    ok (s.setTrackFrozen (a, true), "freeze the Sends Only track");
+    check (frozen(), "A is frozen and still plays Sends Only");
+    check (near (heard (1), .5f), "the frozen track is heard through its send from the first block");
+    check (near (heard(), .5f), "and goes on being heard");
+    ok (s.setTrackSendGain (0, ret, -100), "turn the send off");
+    check (std::abs (heard()) < 1e-6f, "with its send off, the frozen track is not heard");
+    s.undo(); s.undo(); check (unfrozen(), "undoing the send and the freeze unfreezes A, still Sends Only");
+    s.redo(); check (frozen(), "redo freezes the Sends Only track again");
+    check (near (heard (1), .5f), "the refrozen track is heard through its send from the first block");
+    ok (s.flattenTrack (a), "flatten the frozen Sends Only track");
+    const auto flat = s.snapshot().tracks[0];
+    check (flat.clips.size() == 1 && flat.output.kind == Session::OutputKind::sendsOnly, "the flattened track still plays Sends Only");
+    const auto audio = read (flat.clips[0].file);
+    check (near (audio.getSample (0, audio.getNumSamples() / 2), .5f), "the freeze holds A's own audio");
+    check (near (heard(), .5f), "the flattened track is heard through its send");
+    s.undo(); ok (s.setTrackFrozen (a, true), "undo Flatten and freeze A again");
+    ok (s.setTrackSendGain (0, ret, -100), "turn the send off");
+    const auto b = s.snapshot().tracks[1].id;
+    // The engine's frozen-track graph does not feed the Post Mixer tap, so B takes A Post FX.
+    ok (s.setTrackInputTrack (b, a, Session::InputTap::postFX), "track B takes A's audio Post FX");
+    ok (s.setTrackMonitor (1, Session::MonitorMode::on), "monitor B In");
+    check (near (heard(), .5f), "B hears the frozen Sends Only track");
+}
 }
 
 int runFreezeTests (const juce::File& artifacts)
@@ -91,6 +151,7 @@ int runFreezeTests (const juce::File& artifacts)
         ok (s.setNativeEffectSettings (track (s).instrument.id, changed), "devices are editable again after unfreezing");
         ok (s.addReturnTrack ("Room"), "add a return");
         check (s.setTrackFrozen (s.snapshot().tracks.back().id, true).failed(), "returns cannot be frozen");
+        sendsOnlyTests (root);
         std::cout << "Freeze passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL freeze: " << e.what() << std::endl; return 1; }

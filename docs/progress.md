@@ -1572,3 +1572,13 @@ Root change in `CMakeLists.txt`, `cmake/WriteBuildInfo.cmake` (new), `src/BuildI
 - **Package check.** CI installs each package into a fresh folder, checks its licenses, source and versions against the commit, runs the installed `--version`, then removes it.
 
 See [the contract](research/packaging-contract.md).
+
+## Freezing Sends Only tracks — 2026-10-21
+
+Engine change in `src/Session.cpp` and `tests/FreezeTests.cpp`, with documentation. No engine patch: the render-graph file is being patched for sidechain taps at the same time.
+
+- **Sends Only.** A Sends Only track now freezes. Its freeze render had been silent, because renders leave a Sends Only track's own output out of the mix, so the engine unfroze it. While a freeze renders, Session points the track at Master outside history, then back. Frozen, it still plays Sends Only.
+- **Silent start.** A newly frozen track, whatever its output, was silent for its first seconds of playback: the engine's file cache had failed to open the freeze file before the render wrote it, and retried 4–7 s later. Session now has the file validated after each freeze render.
+- **Found, not fixed.** Undoing an Unfreeze leaves any track unfrozen. A track taking a frozen track's audio Post Mixer (the default tap) hears nothing; Pre FX and Post FX work. Exports render frozen tracks from their clips, so the earlier export comparisons never played a freeze; the contract's evidence now says so.
+
+See [the contract](research/freeze-contract.md#corrections).

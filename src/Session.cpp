@@ -343,6 +343,40 @@ te::AuxSendPlugin* findSend (te::AudioTrack& source, const String& destination)
     return nullptr;
 }
 
+// The undo step that freezes a track. Redoing it renders the freeze again.
+const String freezeStep { "Freeze track" };
+
+// Spans an edit that may freeze the given tracks, as the engine renders each freeze then.
+// - Renders leave a Sends Only track's own output out of the mix, so such a track would freeze to
+//   silence and be unfrozen. During the render it plays into Master outside history.
+// - The engine's file cache can fail to open a freeze file before the render writes it, and then
+//   retries only seconds later, so the frozen track would start silent. It reopens the file now.
+class FreezeRender
+{
+public:
+    explicit FreezeRender (const juce::Array<te::AudioTrack*>& mayFreeze) : tracks (mayFreeze)
+    {
+        for (auto* track : tracks)
+            if (track->getOutput().outputsToNone())
+            {
+                auto device = track->state.getChildWithName (te::IDs::OUTPUTDEVICES).getChildWithName (te::IDs::DEVICE);
+                outputs.push_back ({ device, device[te::IDs::name] });
+                device.setProperty (te::IDs::name, te::DeviceManager::getDefaultAudioOutDeviceName (false), nullptr);
+            }
+    }
+    ~FreezeRender()
+    {
+        for (auto& [device, name] : outputs) device.setProperty (te::IDs::name, name, nullptr);
+        for (auto* track : tracks)
+            if (track->isFrozen (te::Track::individualFreeze))
+                track->edit.engine.getAudioFileManager().validateFile (te::AudioFile (track->edit.engine, te::TemporaryFileManager::getFreezeFileForTrack (*track)), true);
+    }
+private:
+    juce::Array<te::AudioTrack*> tracks;
+    std::vector<std::pair<juce::ValueTree, juce::var>> outputs;
+    JUCE_DECLARE_NON_COPYABLE (FreezeRender)
+};
+
 // Validate routing before constructing native objects, so invalid projects cannot
 // replace the active edit, load hidden media, or change its undo history.
 Result validateRouting (const juce::ValueTree& state)
@@ -6817,12 +6851,13 @@ Result Session::setTrackFrozen (const String& trackId, bool frozen)
     if (track->isFrozen (te::Track::individualFreeze) == frozen) return Result::ok();
     if (frozen && track->getClips().isEmpty()) return Result::fail ("This track has no Arrangement clips to freeze.");
     closePluginEditors();
-    impl->transaction (frozen ? "Freeze track" : "Unfreeze track");
+    impl->transaction (frozen ? freezeStep : "Unfreeze track");
     {
         // The engine renders the freeze, or removes it, as this undoable property changes. Its
         // render pumps events, so hold off the engine's idle timer, which would otherwise split
         // the engine's own edits after a long render into a separate undo step.
         const te::Edit::UndoTransactionInhibitor inhibitor (*impl->edit);
+        const FreezeRender render (frozen ? juce::Array<te::AudioTrack*> { track } : juce::Array<te::AudioTrack*>());
         track->state.setProperty (te::IDs::frozenIndividually, frozen, &impl->edit->getUndoManager());
         impl->edit->dispatchPendingUpdatesSynchronously();
     }
@@ -9082,7 +9117,17 @@ void Session::redo()
     impl->endAudition();
     const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
     impl->resetTapTempo();
-    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().redo(); impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
+    endEditGesture(); closePluginEditors();
+    {
+        auto& history = impl->edit->getUndoManager();
+        juce::Array<te::AudioTrack*> mayFreeze;
+        if (history.getRedoDescription() == freezeStep)
+            for (auto* track : te::getAudioTracks (*impl->edit))
+                if (! track->isFrozen (te::Track::individualFreeze)) mayFreeze.add (track);
+        const FreezeRender render (mayFreeze);
+        history.redo();
+    }
+    impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
     impl->finishInputChange(monitored);sendChangeMessage();
 }
 bool Session::canUndo() const { return ! impl->exporting && ! impl->anyRecording() && impl->edit->getUndoManager().canUndo(); }
