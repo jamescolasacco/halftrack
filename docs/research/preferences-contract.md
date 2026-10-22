@@ -11,6 +11,7 @@ Halftrack's preferences follow part of the reference's Record, Warp & Launch pre
 | Auto-Warp Long Samples | off | Arrangement imports longer than 30 seconds are warped at their estimated tempo. |
 | Default Launch Mode, Default Launch Quantization | Trigger, Global | What new Session clips (imported, created or recorded) launch with. |
 | Create Fades on Clip Edges | on | New audio clips, and the edges a split makes, get 4 ms default fades, and touching default edges crossfade ([clip fades contract](clip-fades-contract.md)). |
+| Start Playback with Record | on | Record pressed while stopped starts playback too; off, it waits for Play or a Session launch, and Shift reverses it ([transport contract](transport-contract.md)). |
 | Start Recording on Scene Launch | off | Launching a scene also records into its empty slots on armed tracks, as Session Record does ([Session recording contract](session-recording-contract.md#start-recording-on-scene-launch)). |
 | Plug-In Sources | Audio Units and the VST3 system folders on, the custom VST3 folder off | What Rescan scans, set in Plug-Ins Settings ([plug-in sources contract](plugin-sources-contract.md)). |
 | Count-In | None | Bars recording waits for: None, 1, 2 or 4 ([metronome contract](metronome-contract.md#count-in)). |
@@ -38,11 +39,11 @@ An import that the preferences warp is still one undo step.
 - **Reset** persists.
 - **Other files:**
   - an older file keeps its one setting and gains the defaults;
-  - Follow Behavior Scroll and Start Recording on Scene Launch are read back;
+  - Follow Behavior Scroll, Start Recording on Scene Launch and Start Playback with Record off are read back;
   - a newer file's unknown setting is ignored;
   - an out-of-range value, and a file of junk, are set aside with the defaults kept and the reason given.
 
-The UI suite switches Exclusive Solo off in the Preferences panel and sees a plain click add a second soloed track. It also finds Start Recording on Scene Launch off and switches it on, keeping the other settings, and then resets.
+The UI suite switches Exclusive Solo off in the Preferences panel and sees a plain click add a second soloed track. It also finds Start Recording on Scene Launch off and switches it on, and Start Playback with Record on and switches it off, each keeping the other settings, and then resets.
 
 ## Not yet covered
 

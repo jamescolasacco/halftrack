@@ -3359,9 +3359,11 @@ struct Session::Impl
             read.vst3CustomFolder = xml->getStringAttribute ("vst3CustomFolder");
             const int edgeFades = number ("createFadesOnClipEdges", 1, 2), sound = number ("metronomeSound", 0, Session::metronomeSoundCount), countIn = number ("countInBars", 0, 5);
             read.countInBars = countIn;
+            const int startPlayback = number ("startPlaybackWithRecord", 1, 2);
+            read.startPlaybackWithRecord = startPlayback == 1;
             read.createFadesOnClipEdges = edgeFades == 1;
             read.metronomeSound = static_cast<Session::MetronomeSound> (juce::jmax (0, sound));
-            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && validPreferences (read);
+            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && validPreferences (read);
         }
         if (valid) { prefs = read; fadesOnClipEdges = prefs.createFadesOnClipEdges; return; }
         // Set an unreadable file aside rather than lose it, and keep the defaults.
@@ -3386,6 +3388,7 @@ struct Session::Impl
         xml.setAttribute ("createFadesOnClipEdges", next.createFadesOnClipEdges ? 1 : 0);
         xml.setAttribute ("metronomeSound", (int) next.metronomeSound);
         xml.setAttribute ("countInBars", next.countInBars);
+        xml.setAttribute ("startPlaybackWithRecord", next.startPlaybackWithRecord ? 1 : 0);
         const auto file = prefsFile();
         if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
         juce::TemporaryFile temporary (file);
@@ -3822,6 +3825,7 @@ struct Session::Impl
     }
     // The loop being recorded over, while it is.
     std::optional<te::TimeRange> loopRecording;
+    bool recordWaiting = false; // Record waits for Play, with Start Playback with Record off.
     // A loop recording's continuous take, from where it began in the loop, split into its passes: the
     // first to the loop's end, then each pass round the loop, the last perhaps partial. Each is a
     // clip of the same media at the loop, its content starting where that pass began; a MIDI pass
@@ -4769,7 +4773,7 @@ struct Session::Impl
         {
             if (parts[1] == "play") return snapshot.playing ? Result::ok() : owner.play();
             if (parts[1] == "stop") { owner.stop(); return Result::ok(); }
-            if (parts[1] == "record") { if (snapshot.recording) { owner.stop(); return Result::ok(); } return owner.record(); }
+            if (parts[1] == "record") return owner.recordButton();
             if (parts[1] == "loop") { owner.setLoop (! snapshot.looping, snapshot.loopStart, snapshot.loopEnd); return Result::ok(); }
             if (parts[1] == "metronome") { auto metronome = snapshot.metronome; metronome.enabled = ! metronome.enabled; return owner.setMetronome (metronome); }
             if (parts[1] == "stopClips") return owner.stopAllLauncherClips();
@@ -5025,7 +5029,7 @@ Session::Snapshot Session::snapshot() const
     s.name = s.projectFile == File() ? "Untitled" : s.projectFile.getFileNameWithoutExtension();
     s.dirty = impl->explicitChanges || (! impl->pristineNewDocument && e.hasChangedSinceSaved());
     s.crossfader = static_cast<float> (e.state.getProperty (crossfaderProperty, 0.0f));
-    s.playing = transport.isPlaying(); s.recording = transport.isRecording();
+    s.playing = transport.isPlaying(); s.recording = transport.isRecording(); s.recordWaiting = impl->recordWaiting;
     s.sessionRecording = ! impl->slotRecordings.empty() || ! impl->overdubs.empty();
     s.looping = transport.looping;
     s.position = transport.getPosition().inSeconds();
@@ -7418,6 +7422,7 @@ Result Session::launchSlot (int trackIndex, int sceneIndex)
     impl->edit->getTransport().ensureContextAllocated();
     impl->queueTrack (*impl->track (trackIndex), slot->getClip(), impl->clipBoundary (slot->getClip()));
     if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().play (false);
+    recordIfWaiting(); // Launching starts a waiting Record, as the reference's does.
     sendChangeMessage(); return Result::ok();
 }
 Result Session::launchScene (int sceneIndex)
@@ -7451,6 +7456,7 @@ Result Session::launchScene (int sceneIndex)
         for (auto i : recording) if (auto r = recordSlot (i, sceneIndex); r.failed()) return r;
     }
     if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().play (false);
+    recordIfWaiting(); // Launching starts a waiting Record, as the reference's does.
     sendChangeMessage(); return Result::ok();
 }
 Result Session::stopLauncherTrack (int trackIndex)
@@ -7475,6 +7481,7 @@ Result Session::launchGroupSlot (const String& groupId, int sceneIndex)
     for (auto* track : te::getAudioTracks (*impl->edit))
         if (track->getParentFolderTrack() == folder) impl->queueTrack (*track, track->getClipSlotList().getClipSlots()[sceneIndex]->getClip(), boundary);
     if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().play (false);
+    recordIfWaiting(); // Launching starts a waiting Record, as the reference's does.
     sendChangeMessage(); return Result::ok();
 }
 Result Session::stopGroup (const String& groupId)
@@ -10956,6 +10963,8 @@ Result Session::play()
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
     auto& transport = impl->edit->getTransport();
+    // A waiting Record starts with playback, from the insert marker.
+    if (impl->recordWaiting && ! transport.isPlaying()) { impl->recordWaiting = false; return beginRecording (false); }
     if (! transport.isPlaying()) transport.setPosition (transport.startPosition);
     transport.play (false); sendChangeMessage(); return Result::ok();
 }
@@ -10963,33 +10972,81 @@ Result Session::continuePlayback()
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
-    impl->edit->getTransport().play (false); sendChangeMessage(); return Result::ok();
+    impl->edit->getTransport().play (false);
+    recordIfWaiting();
+    sendChangeMessage(); return Result::ok();
 }
 void Session::stop()
 {
     if (impl->exporting) return;
     impl->deviceRestart.stopTimer(); // A stop after a device restart is the user's, not the engine's.
-    const bool recording = impl->edit->getTransport().isRecording();
+    impl->recordWaiting = false;
     // Session recordings end where the transport stops and keep their takes.
     while (! impl->slotRecordings.empty())
     {
         endEditGesture();
         impl->finishSlotRecording (impl->slotRecordings.front(), false, true);
     }
+    finishRecording (true);
+    sendChangeMessage();
+}
+Result Session::stopRecording()
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! impl->edit->getTransport().isRecording()) return Result::ok();
+    finishRecording (false);
+    sendChangeMessage(); return Result::ok();
+}
+Result Session::recordButton (bool shift)
+{
+    if (impl->edit->getTransport().isRecording()) return stopRecording();
+    if (impl->recordWaiting) { impl->recordWaiting = false; sendChangeMessage(); return Result::ok(); }
+    return beginRecording (impl->prefs.startPlaybackWithRecord == shift && ! impl->edit->getTransport().isPlaying());
+}
+void Session::recordIfWaiting()
+{
+    if (! impl->recordWaiting || ! impl->edit->getTransport().isPlaying()) return;
+    impl->recordWaiting = false;
+    if (auto r = beginRecording (false); r.failed()) sendChangeMessage(); // Playback goes on unrecorded.
+}
+// Ends the Arrangement recording and keeps its takes: with the transport, for Stop, or alone while
+// playback carries on, for the Record button.
+void Session::finishRecording (bool stopTransport)
+{
+    auto& transport = impl->edit->getTransport();
+    const bool recording = transport.isRecording();
     const auto performanceEnd = impl->playedTime();
     if (recording) { impl->finishCaptures (false); endEditGesture(); impl->transaction ("Record take"); }
     // The performance joins the take's undo step.
     if (recording) impl->finishPerformance (performanceEnd);
-    else impl->performanceStart.reset();
+    else if (stopTransport) impl->performanceStart.reset();
     te::Edit::UndoTransactionInhibitor stopping (*impl->edit);
-    impl->cancelLaunches();
-    // A loop recording ends as one continuous take, split into its passes below: switching the loop
-    // off ends the engine's recording unlooped.
+    if (stopTransport) impl->cancelLaunches();
+    // A loop recording ends as one continuous take, split into its passes below. For Stop, switching
+    // the loop off ends the engine's recording unlooped. Playing on, that would stop the transport,
+    // so the inputs are stopped unlooped here first.
     const auto loopRecording = recording ? impl->loopRecording : std::nullopt;
     impl->loopRecording.reset();
-    if (loopRecording) impl->edit->getTransport().looping.setValue (false, nullptr);
-    impl->edit->getTransport().stop (false, false);
-    if (loopRecording) impl->edit->getTransport().looping.setValue (true, nullptr);
+    if (stopTransport)
+    {
+        if (loopRecording) transport.looping.setValue (false, nullptr);
+        transport.stop (false, false);
+        if (loopRecording) transport.looping.setValue (true, nullptr);
+    }
+    else
+    {
+        if (auto* context = transport.getCurrentPlaybackContext(); context != nullptr && loopRecording)
+        {
+            te::InputDeviceInstance::StopRecordingParameters params;
+            params.unloopedTimeToEndRecording = context->getUnloopedPosition();
+            params.isLooping = false;
+            params.markedRange = transport.getLoopRange();
+            const auto inputs = context->getAllInputs();
+            for (auto* in : inputs) in->prepareToStopRecording (params.targetsToStop);
+            for (auto* in : inputs) [[maybe_unused]] auto clips = in->stopRecording (params);
+        }
+        transport.stopRecording (false);
+    }
     if (recording)
     {
         const auto grid=recordGrid(snapshot().recordQuantisation);
@@ -11036,9 +11093,9 @@ void Session::stop()
             }
         impl->changed();
     }
-    sendChangeMessage();
 }
-Result Session::record()
+Result Session::record() { return beginRecording (! impl->prefs.startPlaybackWithRecord && ! impl->edit->getTransport().isPlaying()); }
+Result Session::beginRecording (bool waitForPlay)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     impl->endAudition();
@@ -11057,6 +11114,8 @@ Result Session::record()
     const bool performing = impl->launcherActive();
     if (! armed && ! impl->automationArmed() && ! performing)
         return Result::fail ("Assign an input and arm at least one track, turn on Automation Arm, or launch Session clips before recording.");
+    if (waitForPlay) { impl->recordWaiting = true; sendChangeMessage(); return Result::ok(); }
+    impl->recordWaiting = false;
     impl->captures.clear(); impl->captureTransaction = false;
     impl->clipsBeforeRecording.clear();
     for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* c : t->getClips()) impl->clipsBeforeRecording.insert (c->itemID.toString());

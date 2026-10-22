@@ -552,6 +552,7 @@ public:
         uint64_t projectGeneration = 0; // Transient identity; changes only on successful New/Load.
         bool dirty = false, playing = false, recording = false, looping = false;
         bool sessionRecording = false; // Session takes are recording or a clip is overdubbing.
+        bool recordWaiting = false; // Record was pressed with Start Playback with Record off, and waits for Play.
         double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
         double insertMarker = 0; // Seconds: where Play starts.
         TimeSignature timeSignature;
@@ -922,6 +923,9 @@ public:
         // The count-in, in bars (0, 1, 2 or 4), an application setting as the reference's is; it is
         // also shown, and set, in MetronomeSettings.
         int countInBars = 0;
+        // Start Playback with Record, after the reference's (on): Record pressed while stopped starts
+        // playback too. Off, it waits, lit, until Play or a Session launch starts the transport.
+        bool startPlaybackWithRecord = true;
         juce::String vst3CustomFolder;
         bool operator== (const Preferences&) const = default;
     };
@@ -1133,7 +1137,15 @@ public:
     juce::Result play();
     juce::Result continuePlayback();
     void stop();
+    // Record from a stop starts playback too, unless Start Playback with Record is off: then it
+    // waits until Play or a Session launch starts the transport (Continue records from where it is).
     juce::Result record();
+    // The Arrangement Record button, as the reference's: pressed while recording, the recording ends
+    // and playback carries on; pressed while waiting, it stops waiting; otherwise it records, Shift
+    // reversing Start Playback with Record.
+    juce::Result recordButton (bool shift = false);
+    // Ends the Arrangement recording, keeping its takes as Stop does, while playback carries on.
+    juce::Result stopRecording();
     void seek (double seconds);
     void setInsertMarker (double seconds);
     void returnToStart();
@@ -1328,6 +1340,9 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;
+    juce::Result beginRecording (bool waitForPlay);
+    void finishRecording (bool stopTransport);
+    void recordIfWaiting(); // A launch or Continue started the transport: a waiting Record starts.
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Session)
 };
 

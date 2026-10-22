@@ -2040,3 +2040,12 @@ Engine and QA areas.
 
 - **The click with Punch-In.** As the reference's manual says, the metronome is heard only from the punch-in point while recording with Punch-In; an ordinary Play clicks from the start again.
 - **Measured.** The metronome suite compares the click sample by sample, before and after the punch-in point. It failed without the change.
+
+## The Record button and Start Playback with Record — 2026-10-22
+
+Engine, UI and QA areas.
+
+- **Record toggles.** As the reference's Arrangement Record button does, pressing Record (or F9) while recording ends the recording where it was pressed, keeping its takes, and playback carries on; pressed while playing, it records from there. Stop used to be the only way to end a take.
+- **Start Playback with Record.** A new preference, on by default. Off, Record pressed while stopped lights and waits until Play or a Session launch starts the transport; Shift reverses it, as the manual says.
+- **Engine use.** Ending a loop recording while playing stops the inputs unlooped first: the engine's way, switching the loop off, would stop the transport.
+- **Measured.** The transport suite (takes and timing for each case, waiting, Shift, a launch), the take-lanes suite (a loop recording ended by Record, with its passes cut as at Stop), the preferences suite and the UI suite.

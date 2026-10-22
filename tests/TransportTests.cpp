@@ -1,5 +1,6 @@
 #include "Session.h"
 #include <cmath>
+#include <set>
 #include <iostream>
 #include <stdexcept>
 
@@ -89,6 +90,73 @@ int runTransportTests (const juce::File& artifacts)
             stayedStopped = stayedStopped && ! s.snapshot().playing && ! s.snapshot().recording;
         }
         check (stayedStopped, "a recording stopped before its first block does not start playback afterwards");
+
+        // The Record button, as the reference's: pressed while recording it ends the take and playback
+        // carries on; pressed while playing it records from there.
+        std::set<juce::String> seen;
+        const auto newTakes = [&]
+        {
+            std::vector<Session::ClipInfo> taken;
+            const auto now = s.snapshot();
+            for (const auto& c : now.tracks[0].clips) if (seen.insert (c.id).second) taken.push_back (c);
+            return taken;
+        };
+        newTakes(); // Those so far.
+        s.seek (0); ok (s.record(), "Record from the start");
+        pumpSyntheticTestDevice (s, blocksPerSecond / 2);
+        ok (s.recordButton(), "press Record while recording");
+        auto taken = newTakes();
+        check (s.snapshot().playing && ! s.snapshot().recording && taken.size() == 1 && taken[0].start < .05 && taken[0].length > .4 && taken[0].length < .65,
+               "the take ends where Record was pressed, and playback carries on (" + juce::String (s.snapshot().playing ? "playing" : "stopped") + ", "
+                   + juce::String ((int) taken.size()) + " takes" + (taken.empty() ? juce::String() : ", " + juce::String (taken[0].start, 3) + " s for " + juce::String (taken[0].length, 3)) + ")");
+        pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+        const auto punchedAt = s.snapshot().position;
+        check (s.snapshot().playing && punchedAt > .6, "playback goes on");
+        ok (s.recordButton(), "press Record while playing");
+        check (s.snapshot().recording, "it records from there");
+        pumpSyntheticTestDevice (s, blocksPerSecond / 2);
+        s.stop();
+        taken = newTakes();
+        check (taken.size() == 1 && taken[0].start > punchedAt - .05 && taken[0].start < punchedAt + .1 && taken[0].length > .4 && taken[0].length < .65,
+               "the take starts where Record was pressed during playback (" + juce::String (taken.empty() ? -1.0 : taken[0].start, 3) + " s, pressed at " + juce::String (punchedAt, 3) + ")");
+
+        // Start Playback with Record, on by default as the reference's. Off, Record waits, lit, for Play
+        // or a Session launch; pressed again, or Stop, it stops waiting; Shift reverses the preference.
+        auto prefs = s.preferences();
+        check (prefs.startPlaybackWithRecord, "Start Playback with Record is on by default");
+        prefs.startPlaybackWithRecord = false; ok (s.setPreferences (prefs), "switch Start Playback with Record off");
+        s.setInsertMarker (2); // Clear of the takes so far, which a take over them would split.
+        ok (s.record(), "Record while stopped");
+        pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+        check (s.snapshot().recordWaiting && ! s.snapshot().playing && ! s.snapshot().recording, "Record waits without starting playback");
+        ok (s.recordButton(), "press Record again"); check (! s.snapshot().recordWaiting && ! s.snapshot().playing, "pressing it again stops waiting");
+        ok (s.recordButton(), "and once more"); s.stop(); check (! s.snapshot().recordWaiting, "Stop stops it waiting too");
+        ok (s.recordButton(), "Record to wait again");
+        ok (s.play(), "Play");
+        check (s.snapshot().playing && s.snapshot().recording && ! s.snapshot().recordWaiting, "Play starts the waiting recording");
+        pumpSyntheticTestDevice (s, blocksPerSecond / 2);
+        s.stop();
+        taken = newTakes();
+        check (taken.size() == 1 && std::abs (taken[0].start - 2) < .01, "it records from the insert marker");
+        ok (s.recordButton (true), "Shift-press Record");
+        check (s.snapshot().playing && s.snapshot().recording, "Shift reverses the preference: recording and playback start at once");
+        pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+        s.stop(); newTakes();
+        prefs.startPlaybackWithRecord = true; ok (s.setPreferences (prefs), "switch it on again");
+        ok (s.recordButton (true), "Shift-press Record");
+        check (s.snapshot().recordWaiting && ! s.snapshot().playing, "with the preference on, Shift makes Record wait");
+        s.stop();
+        prefs.startPlaybackWithRecord = false; ok (s.setPreferences (prefs), "and off");
+        ok (s.addMidiTrack ("Launcher"), "a track to launch from");
+        const int launcher = (int) s.snapshot().tracks.size() - 1;
+        ok (s.addMidiClipToSlot (s.snapshot().tracks[(size_t) launcher].id, 0), "a Session clip");
+        ok (s.record(), "Record to wait");
+        ok (s.launchSlot (launcher, 0), "launch the clip");
+        check (s.snapshot().playing && s.snapshot().recording && ! s.snapshot().recordWaiting, "launching a Session clip starts the waiting recording");
+        pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+        s.stop(); newTakes();
+        ok (s.resetPreferences(), "reset the preferences");
+        s.setInsertMarker (3);
         ok (s.setTrackArmed (0, false), "disarm the track");
 
         // The marker keeps its beat when the tempo changes: beat 6 is 3 s at 120 BPM and 6 s at 60 BPM.

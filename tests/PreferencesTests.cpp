@@ -35,8 +35,9 @@ int runPreferencesTests (const juce::File& artifacts)
         Session::Preferences chosen;
         chosen.exclusiveArm = false; chosen.defaultWarpMode = Session::WarpMode::beats; chosen.autoWarpLongSamples = true;
         chosen.defaultLaunchMode = Session::LaunchMode::gate; chosen.defaultLaunchQuantisation = Session::ClipQuantisation::bar;
-        chosen.startRecordingOnSceneLaunch = true;
+        chosen.startRecordingOnSceneLaunch = true; chosen.startPlaybackWithRecord = false;
         check (! Session::Preferences {}.startRecordingOnSceneLaunch, "Start Recording on Scene Launch is off by default, as in the reference");
+        check (Session::Preferences {}.startPlaybackWithRecord, "Start Playback with Record is on by default");
         {
             Session s (false);
             file = s.preferencesFile();
@@ -97,6 +98,9 @@ int runPreferencesTests (const juce::File& artifacts)
         auto [sceneRecording, sceneRecordingProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" startRecordingOnSceneLaunch=\"1\"/>");
         expected = {}; expected.startRecordingOnSceneLaunch = true;
         check (sceneRecording == expected && sceneRecordingProblem.isEmpty(), "Start Recording on Scene Launch is read back");
+        auto [waiting, waitingProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" startPlaybackWithRecord=\"0\"/>");
+        expected = {}; expected.startPlaybackWithRecord = false;
+        check (waiting == expected && waitingProblem.isEmpty(), "Start Playback with Record off is read back");
         auto [newer, newerProblem] = reopen ("<HALFTRACKPREFERENCES version=\"7\" exclusiveArm=\"0\" futureSetting=\"42\"/>");
         expected = {}; expected.exclusiveArm = false;
         check (newer == expected && newerProblem.isEmpty(), "a newer file's unknown settings are ignored");

@@ -478,7 +478,7 @@ public:
         recordButton.setTooltip ("Record into armed audio or MIDI tracks  |  F9");
         playButton.onClick = [this] { togglePlay(); };
         stopButton.onClick = [this] { if (state.playing || state.recording) session.stop(); else session.returnToStart(); refresh(); };
-        recordButton.onClick = [this] { if (state.recording) session.stop(); else report (session.record()); refresh(); };
+        recordButton.onClick = [this] { report (session.recordButton (juce::ModifierKeys::getCurrentModifiers().isShiftDown())); refresh(); };
         automationArmButton.setTooltip ("Automation Arm: while recording, moving a fader or device control records its automation");
         automationArmButton.onClick = [this] { report (session.setAutomationArm (! state.automationArm)); refresh(); };
         sessionRecordButton.setTooltip ("Session Record: record new clips into the selected scene on armed tracks, and overdub their MIDI clips; press again to play them");
@@ -948,7 +948,7 @@ public:
         if (code == juce::KeyPress::spaceKey) { togglePlay(); return true; }
         if (code == juce::KeyPress::homeKey) { session.returnToStart(); refresh(); return true; }
         if (code == juce::KeyPress::escapeKey) { session.stop(); session.returnToStart(); refresh(); return true; }
-        if (code == juce::KeyPress::F9Key) { if (state.recording) session.stop(); else report (session.record()); refresh(); return true; }
+        if (code == juce::KeyPress::F9Key) { report (session.recordButton (shift)); refresh(); return true; }
         if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)
         {
             if (! showPiano && ! showSession && selectedFadeClip.isNotEmpty()) { deleteSelectedFade(); return true; }
@@ -8803,7 +8803,7 @@ private:
         if (selectedTrack < 0 && ! state.tracks.empty()) selectedTrack = 0;
         if (const auto* track = currentTrack(); track == nullptr || selectedClip >= (int) track->clips.size()) selectedClip = -1;
         playButton.setToggleState (state.playing, juce::dontSendNotification);
-        recordButton.setToggleState (state.recording, juce::dontSendNotification);
+        recordButton.setToggleState (state.recording || state.recordWaiting, juce::dontSendNotification);
         sessionRecordButton.setToggleState (state.sessionRecording, juce::dontSendNotification); sessionRecordButton.setEnabled (! state.recording);
         automationArmButton.setToggleState (state.automationArm, juce::dontSendNotification);
         reEnableButton.setToggleState (state.automationOverridden, juce::dontSendNotification); reEnableButton.setEnabled (state.automationOverridden);
@@ -10206,7 +10206,7 @@ private:
     public:
         explicit PreferencesPanel (Impl& o) : owner (o)
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord, &warpLabel, &warp, &modeLabel, &mode, &gridLabel, &grid, &themeLabel, &theme, &zoomLabel, &zoom, &followLabel, &follow, &reset })
+            for (auto* c : std::initializer_list<juce::Component*> { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord, &startPlayback, &warpLabel, &warp, &modeLabel, &mode, &gridLabel, &grid, &themeLabel, &theme, &zoomLabel, &zoom, &followLabel, &follow, &reset })
                 addAndMakeVisible (c);
             // Look: the interface theme and the display zoom.
             themeLabel.setText ("Theme", juce::dontSendNotification); zoomLabel.setText ("Zoom Display", juce::dontSendNotification);
@@ -10217,6 +10217,8 @@ private:
             for (int percent = 50; percent <= 200; percent += 25) zoom.addItem (juce::String (percent) + "%", percent);
             exclusiveArm.setName ("Exclusive arm"); exclusiveSolo.setName ("Exclusive solo"); autoWarp.setName ("Auto-warp long samples");
             sceneRecord.setName ("Start recording on scene launch");
+            startPlayback.setName ("Start playback with record");
+            startPlayback.setTooltip ("Start Playback with Record: Record starts playback too. Off, it waits for Play or a Session launch; Shift-click reverses it");
             edgeFades.setName ("Create fades on clip edges");
             edgeFades.setTooltip ("Create Fades on Clip Edges: new audio clips, and the edges a split makes, fade over 4 ms, and touching clips crossfade");
             sceneRecord.setTooltip ("Start Recording on Scene Launch: launching a scene also records into its empty slots on armed tracks");
@@ -10229,7 +10231,7 @@ private:
             for (const auto* name : { "Trigger", "Gate", "Toggle", "Repeat" }) mode.addItem (name, id++);
             id = 1;
             for (const auto* name : { "Global", "None", "8 Bars", "4 Bars", "2 Bars", "1 Bar", "1/2", "1/4", "1/8", "1/16", "1/32" }) grid.addItem (name, id++);
-            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord }) b->onClick = [this] { apply(); };
+            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord, &startPlayback }) b->onClick = [this] { apply(); };
             warp.onChange = mode.onChange = grid.onChange = theme.onChange = zoom.onChange = follow.onChange = [this] { apply(); };
             reset.onClick = [this] { owner.report (owner.session.resetPreferences(), "Preferences reset to their defaults."); sync(); };
             sync();
@@ -10240,6 +10242,7 @@ private:
             exclusiveArm.setToggleState (p.exclusiveArm, juce::dontSendNotification); exclusiveSolo.setToggleState (p.exclusiveSolo, juce::dontSendNotification);
             autoWarp.setToggleState (p.autoWarpLongSamples, juce::dontSendNotification);
             sceneRecord.setToggleState (p.startRecordingOnSceneLaunch, juce::dontSendNotification);
+            startPlayback.setToggleState (p.startPlaybackWithRecord, juce::dontSendNotification);
             edgeFades.setToggleState (p.createFadesOnClipEdges, juce::dontSendNotification);
             for (int i = 0; i < (int) std::size (warpModes); ++i) if (warpModes[i] == p.defaultWarpMode) warp.setSelectedId (i + 1, juce::dontSendNotification);
             mode.setSelectedId ((int) p.defaultLaunchMode + 1, juce::dontSendNotification); grid.setSelectedId ((int) p.defaultLaunchQuantisation + 1, juce::dontSendNotification);
@@ -10252,6 +10255,7 @@ private:
             auto p = owner.session.preferences();
             p.exclusiveArm = exclusiveArm.getToggleState(); p.exclusiveSolo = exclusiveSolo.getToggleState(); p.autoWarpLongSamples = autoWarp.getToggleState();
             p.startRecordingOnSceneLaunch = sceneRecord.getToggleState();
+            p.startPlaybackWithRecord = startPlayback.getToggleState();
             p.createFadesOnClipEdges = edgeFades.getToggleState();
             p.defaultWarpMode = warpModes[(size_t) juce::jlimit (0, (int) std::size (warpModes) - 1, warp.getSelectedId() - 1)];
             p.defaultLaunchMode = (Session::LaunchMode) juce::jlimit (0, 3, mode.getSelectedId() - 1);
@@ -10264,7 +10268,7 @@ private:
         void resized() override
         {
             auto area = getLocalBounds().reduced (16);
-            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord }) { b->setBounds (area.removeFromTop (26)); area.removeFromTop (4); }
+            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord, &startPlayback }) { b->setBounds (area.removeFromTop (26)); area.removeFromTop (4); }
             for (auto [label, box] : { std::pair<juce::Label*, juce::ComboBox*> { &warpLabel, &warp }, { &modeLabel, &mode }, { &gridLabel, &grid }, { &themeLabel, &theme }, { &zoomLabel, &zoom }, { &followLabel, &follow } })
             { auto row = area.removeFromTop (26); label->setBounds (row.removeFromLeft (190)); box->setBounds (row.removeFromLeft (180)); area.removeFromTop (6); }
             area.removeFromTop (10); reset.setBounds (area.removeFromTop (26).removeFromLeft (160));
@@ -10274,12 +10278,12 @@ private:
         static constexpr Session::WarpMode warpModes[] { Session::WarpMode::beats, Session::WarpMode::tones, Session::WarpMode::texture, Session::WarpMode::repitch,
                                                          Session::WarpMode::stretch, Session::WarpMode::complexPro, Session::WarpMode::efficient };
         juce::ToggleButton exclusiveArm { "Exclusive Arm" }, exclusiveSolo { "Exclusive Solo" }, autoWarp { "Auto-Warp Long Samples" },
-                           edgeFades { "Create Fades on Clip Edges" }, sceneRecord { "Start Recording on Scene Launch" };
+                           edgeFades { "Create Fades on Clip Edges" }, sceneRecord { "Start Recording on Scene Launch" }, startPlayback { "Start Playback with Record" };
         juce::Label warpLabel, modeLabel, gridLabel, themeLabel, zoomLabel, followLabel;
         juce::ComboBox warp, mode, grid, theme, zoom, follow;
         juce::TextButton reset { "Reset to Defaults" };
     };
-    void showPreferences() { showDialog ("Halftrack - Preferences", std::make_unique<PreferencesPanel> (*this), 440, 456); }
+    void showPreferences() { showDialog ("Halftrack - Preferences", std::make_unique<PreferencesPanel> (*this), 440, 486); }
     // What this copy of Halftrack is: its version, source commit and platform (selectable, to paste
     // into a report), its license, and where it keeps settings and the User Library.
     class AboutPanel final : public juce::Component
@@ -13658,7 +13662,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     }
     {
         // Preferences: the panel's switches edit them, and solo clicks follow Exclusive Solo.
-        PreferencesPanel panel (*this); panel.setSize (440, 456);
+        PreferencesPanel panel (*this); panel.setSize (440, 486);
         auto* exclusive = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Exclusive solo"));
         check (exclusive != nullptr && exclusive->getToggleState() == session.preferences().exclusiveSolo, "the Preferences panel shows Exclusive Solo");
         exclusive->setToggleState (false, juce::dontSendNotification); exclusive->onClick();
@@ -13681,7 +13685,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     {
         // Themes: choosing one in Preferences recolours the look-and-feel, the colours components
         // set on themselves and the painting; switching back restores Dark exactly.
-        PreferencesPanel panel (*this); panel.setSize (440, 456);
+        PreferencesPanel panel (*this); panel.setSize (440, 486);
         auto* themeChooser = dynamic_cast<juce::ComboBox*> (findNamed (panel, "Interface theme"));
         auto* zoomChooser = dynamic_cast<juce::ComboBox*> (findNamed (panel, "Display zoom"));
         check (themeChooser != nullptr && themeChooser->getNumItems() == themes::kindCount && themeChooser->getText() == "Dark" && zoomChooser != nullptr && zoomChooser->getText() == "100%",
@@ -13733,6 +13737,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                        && ! session.preferences().startRecordingOnSceneLaunch, "the panel offers Start Recording on Scene Launch, off by default");
             sceneRecordToggle->setToggleState (true, juce::sendNotificationSync); refresh();
             check (session.preferences().startRecordingOnSceneLaunch && session.preferences().scrollFollow, "switching it on sets it, keeping the others");
+            auto* startPlaybackToggle = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Start playback with record"));
+            check (startPlaybackToggle != nullptr && startPlaybackToggle->getButtonText() == "Start Playback with Record" && startPlaybackToggle->getToggleState(),
+                   "the panel offers Start Playback with Record, on by default");
+            startPlaybackToggle->setToggleState (false, juce::sendNotificationSync); refresh();
+            check (! session.preferences().startPlaybackWithRecord && session.preferences().startRecordingOnSceneLaunch, "switching it off sets it, keeping the others");
         }
         check (session.resetPreferences().wasOk(), "reset the preferences");
         useHardClipEdges (session);
@@ -15469,6 +15478,24 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (state.punchIn && state.punchOut && punchInButton.getToggleState() && punchOutButton.getToggleState(), "the punch buttons switch punching on");
     punchInButton.onClick(); punchOutButton.onClick(); refresh();
     check (! state.punchIn && ! state.punchOut, "and off again");
+    {
+        // The Record button, as the reference's: with Start Playback with Record off it lights and
+        // waits, and pressed again stops waiting; pressed while recording, it ends the recording and
+        // playback carries on. Automation Arm lets it record with no track armed.
+        automationArmButton.onClick();
+        auto waiting = session.preferences(); waiting.startPlaybackWithRecord = false;
+        check (session.setPreferences (waiting).wasOk(), "Start Playback with Record off");
+        recordButton.onClick(); refresh();
+        check (state.recordWaiting && ! state.playing && recordButton.getToggleState(), "Record lights and waits, not playing");
+        recordButton.onClick(); refresh();
+        check (! state.recordWaiting && ! recordButton.getToggleState(), "pressed again, it stops waiting");
+        waiting.startPlaybackWithRecord = true; check (session.setPreferences (waiting).wasOk(), "Start Playback with Record on again");
+        recordButton.onClick(); refresh();
+        check (state.recording && state.playing && recordButton.getToggleState(), "Record records and plays");
+        recordButton.onClick(); refresh();
+        check (! state.recording && state.playing && ! recordButton.getToggleState(), "pressed while recording, it ends the recording and playback carries on");
+        session.stop(); automationArmButton.onClick(); refresh();
+    }
     check (session.setTrackAutomation (automationTrackId, Session::AutomationTarget::volume, {}).wasOk(),
         "clear automation from the selected mixer"); refresh();
     check (automatedGain->isEnabled() && automatedGain->findColour (juce::Slider::thumbColourId) == orange, "clearing the lane restores the plain fader");

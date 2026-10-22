@@ -158,6 +158,26 @@ int runTakeLanesTests (const juce::File& artifacts)
             s.undo();
             check (track().takeLanes.size() == lanesBefore && track().takeLanes[0].clips.size() == 2, "one undo removes every pass");
             s.redo();
+
+            // Ended with the Record button instead of Stop, as the reference's ends it, the passes are
+            // the same and playback carries on round the loop.
+            s.seek (8); ok (s.record(), "record round the loop again");
+            pumpSyntheticTestDevice (s, (int) std::lround (2.5 * blocksPerSecond));
+            ok (s.recordButton(), "press Record to end it");
+            check (s.snapshot().playing && s.snapshot().looping && ! s.snapshot().recording, "playback carries on round the loop");
+            pumpSyntheticTestDevice (s, blocksPerSecond);
+            const auto at = s.snapshot().position;
+            s.stop();
+            check (at >= 8 && at < 9, "still looping a second later (" + juce::String (at, 3) + " s)");
+            std::vector<Session::ClipInfo> again;
+            for (const auto& lane : track().takeLanes)
+                for (const auto& c : lane.clips) if (c.start >= 8 - 1e-6 && c.file != passes[0].file) again.push_back (c);
+            std::sort (again.begin(), again.end(), [] (const auto& a, const auto& b) { return a.sourceOffset < b.sourceOffset; });
+            bool split = again.size() == 3;
+            for (size_t k = 0; split && k < 3; ++k)
+                split = near (again[k].start, 8) && near (again[k].sourceOffset - again[0].sourceOffset, (double) k) && again[k].file == again[0].file
+                     && (k < 2 ? near (again[k].length, 1) : again[k].length > .4 && again[k].length < .6);
+            check (split, "its 2.5 passes are cut into three lanes, one second each and the last a half (" + juce::String ((int) again.size()) + " passes)");
             ok (s.setTrackArmed (0, false), "disarm the audio track");
         }
         // MIDI loop recording through the computer keyboard: a note in each pass.
