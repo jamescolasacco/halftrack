@@ -625,3 +625,7 @@ The reference's plug-in sidechain has Gain, Mix and Mute controls that Halftrack
 ### MIDI ports on Windows and clock after rebuilds
 
 Windows cannot make virtual MIDI ports, so the MIDI ports suite skips there and Windows MIDI output is checked only by building; Linux runs it only where the ALSA sequencer is available. The engine's clock restarts when the playback graph is rebuilt (after a settings change) and names its position again at the next beat, so a slave device can miss up to a beat of clocks; the reference's behaviour in that case is unmeasured.
+
+### Device insertion
+
+The reference appends a device to the end of the chain when none is selected, and places it after the selected device otherwise. Halftrack does not yet insert beside a selected device: every new device, built-in or plug-in, joins the end of the chain (MIDI effects ahead of the instrument), whatever is selected. Default: append.

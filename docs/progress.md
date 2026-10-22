@@ -1614,3 +1614,12 @@ UI change in `src/Theme.*` (new) and the interface sources: `src/MainComponent.c
 - **Zoom.** A Zoom Display preference scales the interface.
 
 See [the contract](research/themes-contract.md).
+
+## Effect plug-ins at the end of the chain — 2026-10-21
+
+Engine change in `src/Session.cpp`, `tests/SessionTests.cpp` and `tests/TrackDuplicateTests.cpp`, with documentation.
+
+- **Insertion.** An audio effect plug-in now joins the end of the track's chain, after the devices already there and before the track delay, sends and mixer, as built-in devices do and as the reference does when no device is selected. It used to go first: after the instrument on a MIDI track, after the input on a return. MIDI effect plug-ins still go ahead of the instrument, and instrument plug-ins still replace it. Saved projects keep their order.
+- **Tests.** The session suite checks the order on an audio track, a MIDI track and a return. The duplicate suite addresses its Utility and VST3 in their new order.
+
+See [the contract](research/plugin-timing-contract.md#where-an-effect-plug-in-goes).

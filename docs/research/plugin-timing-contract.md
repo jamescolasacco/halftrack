@@ -10,6 +10,15 @@ As in the reference, an instrument plug-in dropped on a MIDI track becomes its i
 - **The device chain.** It shows the plug-in as a device, and hides the built-in synth's panel, which no longer plays.
 - **Load validation.** On load, a track may hold one plug-in instrument, on a MIDI track; otherwise the project is refused.
 
+## Where an effect plug-in goes
+
+As in the reference when no device is selected, a new device joins the end of the track's chain. An effect plug-in follows the same rule as a native effect or the Utility:
+
+- **Audio effect:** after the devices already there, before the track delay, sends and mixer. On a MIDI track that is after the instrument and its audio effects; on a return, after the return input and its effects.
+- **MIDI effect:** after the earlier MIDI effects, immediately ahead of the instrument.
+
+`tests/SessionTests.cpp` adds the VST3 gain fixture after an EQ Three on an audio track, after an Arpeggiator and an EQ Three on a MIDI track, and after an EQ Three on a return, and checks that it comes last each time. `tests/TrackDuplicateTests.cpp` checks that it follows a Utility. Inserting after a selected device is not implemented yet; see [open questions](../open-questions.md#device-insertion).
+
 ## Classification
 
 `Session::pluginRole` classifies a scanned plug-in from its description, not its file:
@@ -20,7 +29,7 @@ As in the reference, an instrument plug-in dropped on a MIDI track becomes its i
 
 `pluginSummary` adds the format, and the main channel counts when the scan knew them.
 
-The browser lists plug-ins under their makers ("Unknown Maker" when none is given), by name. Each row shows its role, format and channels. A MIDI effect plug-in goes on a MIDI track ahead of its instrument and is refused on audio tracks. The UI suite checks the grouping, the summaries for an instrument, a MIDI effect, an audio effect with channels and one without, and the audio-track refusal, using stand-in descriptions.
+The browser lists plug-ins under their makers ("Unknown Maker" when none is given), by name. Each row shows its role, format and channels. A MIDI effect plug-in goes on a MIDI track ahead of its instrument and is refused on audio tracks; an audio effect plug-in joins the end of the chain. The UI suite checks the grouping, the summaries for an instrument, a MIDI effect, an audio effect with channels and one without, and the audio-track refusal, using stand-in descriptions.
 
 ## Architectures
 

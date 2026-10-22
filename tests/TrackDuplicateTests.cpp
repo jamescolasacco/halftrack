@@ -90,7 +90,8 @@ void audioTests (const juce::File& root)
     juce::OwnedArray<juce::PluginDescription> descriptions;
     for(auto* format:session.pluginFormats().getFormats())if(format->getName()=="VST3")format->findAllTypesForFile(descriptions,juce::File(path).getFullPathName());
     check(descriptions.size()==1,"identify generated external fixture only");ok(session.addPlugin(0,*descriptions[0]),"host generated VST3 on source");
-    ok(session.setPluginParameter(0,0,0,.25f),"set nondefault external state");ok(session.setTrackGain(0,db(.5f)),"set source mixer");
+    check(session.snapshot().tracks[0].plugins.size()==2&&session.snapshot().tracks[0].plugins[0].isUtility&&!session.snapshot().tracks[0].plugins[1].isUtility,"the VST3 joins the end of the chain, after the utility");
+    ok(session.setPluginParameter(0,1,0,.25f),"set nondefault external state");ok(session.setTrackGain(0,db(.5f)),"set source mixer");
     ok(session.setTrackGain(2,db(.5f)),"set return mixer");ok(session.setTrackSendGain(0,returnId,db(.5f)),"set copied send destination");
     ok(session.saveProject(project),"save original chain");ok(session.loadProject(project),"reopen clean original chain");
     ok(session.exportWav(output),"render original utility/VST/mixer/send chain");compare(read(output),signal,.078125);
@@ -103,12 +104,12 @@ void audioTests (const juce::File& root)
     juce::String untouched="keep";check(session.duplicateTrack("missing",untouched).failed()&&session.duplicateTrack(returnId,untouched).failed()
         &&untouched=="keep"&&session.canRedo(),"invalid source and return duplication preserve redo/output ID");
     session.redo();check(session.snapshot().tracks[1].id==copyId,"redo retains duplicate identity");
-    utility.gainDb=0;ok(session.setUtilitySettings(session.snapshot().tracks[1].plugins[1].id,utility),"edit copied utility independently");
-    ok(session.setPluginParameter(1,0,0,.75f),"edit copied VST3 independently");
+    utility.gainDb=0;ok(session.setUtilitySettings(session.snapshot().tracks[1].plugins[0].id,utility),"edit copied utility independently");
+    ok(session.setPluginParameter(1,1,0,.75f),"edit copied VST3 independently");
     ok(session.exportWav(output),"render edited duplicate beside unchanged source");compare(read(output),signal,.546875);
     const auto portable=root.getChildFile("portable").getChildFile("copied.halftrack");ok(session.saveProject(portable),"collect duplicate media in portable project");
     ok(session.loadProject(portable),"reopen duplicated native and external devices");
-    check(session.snapshot().tracks[1].id==copyId&&session.snapshot().tracks[0].plugins[1].utility.gainDb!=session.snapshot().tracks[1].plugins[1].utility.gainDb,
+    check(session.snapshot().tracks[1].id==copyId&&session.snapshot().tracks[0].plugins[0].utility.gainDb!=session.snapshot().tracks[1].plugins[0].utility.gainDb,
         "independent device settings persist after reopen");
     ok(session.removeTrack(0),"delete original without deleting copied content");ok(session.exportWav(output),"render surviving duplicate");compare(read(output),signal,.46875);
     session.undo();ok(session.exportWav(output),"render restored original plus independent copy");compare(read(output),signal,.546875);
