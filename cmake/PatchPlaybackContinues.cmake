@@ -14,18 +14,15 @@ function(halftrack_patch_playback_continues source_dir)
     bool playHeadWasRunning = false; // Halftrack: the play head ran when the nodes were last cleared.]=])
     set(source1 "${source_dir}/modules/tracktion_engine/playback/tracktion_EditPlaybackContext.cpp")
     set(original1 "1742b29b2e581de7583892454d08e988dab60598254d5669164acbd9918bb019")
-    set(patched1 "be2f59c78d86e26d9ffff84f01f41302b1a7df4f363554fb122e65dc8bdc879f")
+    set(patched1 "dc3f41c9031fcc94ff32196c1a99be684a09c53d4d50da09247f856b0ec406d2")
     set(count1 3)
-    set(before1_0 [=[    if (nodePlaybackContext)
-    {
-        nodePlaybackContext->playHead.stop();
-        nodePlaybackContext->clearNode();]=])
-    set(after1_0 [=[    if (nodePlaybackContext)
-    {
-        // Halftrack: remembered, so a rebuild while the transport plays resumes it.
-        playHeadWasRunning = playHeadWasRunning || nodePlaybackContext->playHead.isPlaying();
-        nodePlaybackContext->playHead.stop();
-        nodePlaybackContext->clearNode();]=])
+    set(before1_0 [=[    const juce::ScopedValueSetter<bool> alocateSetter (isAllocated, isAllocated);
+    clearNodes();]=])
+    set(after1_0 [=[    const juce::ScopedValueSetter<bool> alocateSetter (isAllocated, isAllocated);
+    // Halftrack: remembered, so that rebuilding the device list while the transport plays resumes
+    // the play head. Only here: the transport clears nodes itself and restarts its play head then.
+    playHeadWasRunning = playHeadWasRunning || (nodePlaybackContext != nullptr && nodePlaybackContext->playHead.isPlaying());
+    clearNodes();]=])
     set(before1_1 [=[void EditPlaybackContext::createPlayAudioNodes (TimePosition startTime)
 {
     createNode();
