@@ -4673,8 +4673,34 @@ private:
             }
             owner.report (owner.session.setAudioClipWarpMarkers (clip.id, markers)); owner.refresh(); sync();
         }
+        // The warp commands, after the reference's sample display menu: Warp From Here (Straight) at
+        // the clicked point, and Warp as a loop of the bars its length suggests.
+        int loopBarsGuess() const
+        {
+            const auto seconds = clip.sourceLength > 0 ? std::min (clip.sourceLength, clip.lengthBeats * 60 / std::max (1.0, clip.warp.bpm)) : 0.0;
+            const auto beats = Session::estimateClipTempo (seconds) * seconds / 60;
+            return juce::jmax (1, juce::roundToInt (beats / std::max (1.0, owner.state.timeSignature.beatsPerBar())));
+        }
+        void warpCommand (int item, double sourceSeconds)
+        {
+            if (item == 1) owner.report (owner.session.warpFromHere (clip.id, sourceSeconds), "Warped from here.");
+            else if (item == 2) owner.report (owner.session.warpAsLoop (clip.id, loopBarsGuess()));
+            owner.refresh(); sync();
+        }
+        void showWarpMenu (float x)
+        {
+            const auto at = sourceAt (xBeat (x));
+            juce::PopupMenu menu;
+            menu.addItem (1, "Warp From Here (Straight)", markersEditable());
+            const int bars = loopBarsGuess();
+            menu.addItem (2, "Warp as " + juce::String (bars) + "-Bar Loop");
+            auto safe = juce::Component::SafePointer<AudioClipView> (this);
+            menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition(),
+                                [safe, at] (int chosen) { if (safe != nullptr && chosen > 0) safe->warpCommand (chosen, at); });
+        }
         void mouseDown (const juce::MouseEvent& e) override
         {
+            if (e.mods.isPopupMenu() && clip.warp.mode != Session::WarpMode::off && waveBounds().contains (e.getPosition())) { showWarpMenu (e.position.x); return; }
             // With an envelope shown, the waveform edits it instead of the warp markers.
             if (envelope.active() && waveBounds().contains (e.getPosition()))
             {
@@ -12621,6 +12647,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto pinned = state.tracks[(size_t) clickTrack].clips[0].warpMarkers;
             check (pinned.size() == 2 && pinned[1].sourceSeconds == transients[1] && std::abs (pinned[1].beat - transients[1] * 2) < 1e-9,
                    "double-clicking beside a transient pins a warp marker on it");
+            // The waveform's menu runs the warp commands: two seconds of clicks suggest a one-bar loop,
+            // and are too short for Warp From Here to find a tempo, which it says.
+            check (audioClipView.loopBarsGuess() == 1, "Warp as Loop suggests one bar for two seconds at 120 BPM");
+            audioClipView.warpCommand (1, .75);
+            check (status.contains ("No steady beat") && state.tracks[(size_t) clickTrack].clips[0].warp.bpm == 120, "Warp From Here says when it finds no steady beat, changing nothing");
             for (int step = 0; step < 4; ++step) session.undo();
             selectTrack (0); selectedClip = 0; refresh(); audioClipView.sync();
             check ((int) state.tracks.size() == clickTrack, "four undo steps remove the clicks' track");

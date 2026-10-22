@@ -223,6 +223,67 @@ int runTempoAnalysisTests (const juce::File& artifacts)
                    "with no beat to find, it takes the tempo of whole bars, with no marker");
             ok (s.resetPreferences(), "reset the preferences");
         }
+        {
+            // Warp as 4-Bar Loop: a loop cut to four bars at 105 BPM.
+            Session s (false, makeSyntheticTestDeviceType());
+            ok (s.saveProject (root.getChildFile ("Commands").getChildFile ("Commands.halftrack")), "save a project for the warp commands");
+            const Loop bars4 { 105, 16 * 60.0 / 105, 0 };
+            const auto loopFile = root.getChildFile ("four bars.wav");
+            write (loopFile, drumLoop (bars4), bars4.rate);
+            ok (s.addAudioTrack ("Loop"), "a track for the loop");
+            const int loopTrack = (int) s.snapshot().tracks.size() - 1;
+            ok (s.importAudio (loopFile, loopTrack, 0), "import it");
+            const auto loopId = s.snapshot().tracks[(size_t) loopTrack].clips[0].id;
+            check (s.warpAsLoop (loopId, 4).failed(), "an unwarped clip is not warped as a loop");
+            ok (s.setAudioClipWarp (loopId, { Session::WarpMode::beats, 120 }), "warp it at 120 BPM");
+            ok (s.warpAsLoop (loopId, 4), "Warp as 4-Bar Loop");
+            const auto looped = s.snapshot().tracks[(size_t) loopTrack].clips[0];
+            // The file holds a whole number of samples, so the tempo is 105 to within that.
+            check (std::abs (looped.warp.bpm - 105) < 1e-3 && std::abs (looped.lengthBeats - 16) < 1e-3 && looped.warpMarkers.empty(),
+                   "it plays at 105 BPM over four bars (" + juce::String (looped.warp.bpm, 4) + " BPM, " + juce::String (looped.lengthBeats, 4) + " beats)");
+            check (s.warpAsLoop (loopId, 0).failed() && s.warpAsLoop (loopId, 300).failed(), "0 or 300 bars are refused");
+            s.undo();
+            check (s.snapshot().tracks[(size_t) loopTrack].clips[0].warp.bpm == 120, "one undo returns 120 BPM");
+
+            // Warp From Here (Straight): 3.2 s of noise, then a loop at 97 BPM.
+            const Loop late { 97, 40, 3.2 };
+            auto audio = drumLoop (late);
+            juce::Random random (11);
+            for (int n = 0; n < (int) (3.2 * late.rate) - 480; ++n)
+            { const float v = 0.15f * (random.nextFloat() * 2 - 1); audio.setSample (0, n, v); audio.setSample (1, n, v); }
+            const auto lateFile = root.getChildFile ("late loop.wav");
+            write (lateFile, audio, late.rate);
+            ok (s.addAudioTrack ("Late"), "a track for the late loop");
+            const int lateTrack = (int) s.snapshot().tracks.size() - 1;
+            ok (s.importAudio (lateFile, lateTrack, 0), "import it");
+            const auto lateId = s.snapshot().tracks[(size_t) lateTrack].clips[0].id;
+            ok (s.setAudioClipWarp (lateId, { Session::WarpMode::beats, 120 }), "warp it at 120 BPM in Beats");
+            check (s.warpFromHere (lateId, 39.5).failed() && s.warpFromHere (lateId, -1).failed(), "a point in the audio's last second, or before it, is refused");
+            ok (s.warpFromHere (lateId, 3.21), "Warp From Here (Straight) just after the loop begins");
+            const auto warped = s.snapshot().tracks[(size_t) lateTrack].clips[0];
+            check (std::abs (warped.warp.bpm - 97) <= .05 && warped.warpMarkers.size() == 2 && std::abs (warped.warpMarkers[1].sourceSeconds - 3.2) < .002
+                       && std::abs (warped.warpMarkers[1].beat - 3.2 * 2) < .01,
+                   "it takes the loop's 97 BPM and pins its first hit where it played, at beat " + juce::String (warped.warp.bpm > 0 && ! warped.warpMarkers.empty() ? warped.warpMarkers.back().beat : 0, 3));
+            ok (s.setTrackMute (loopTrack, true), "mute the four-bar loop");
+            const auto rendered = root.getChildFile ("from here.wav");
+            ok (s.exportWav (rendered), "render it");
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatReader> reader (wav.createReaderFor (rendered.createInputStream().release(), true));
+            juce::AudioBuffer<float> heard (2, (int) std::min<juce::int64> (reader->lengthInSamples, 48000 * 14));
+            reader->read (&heard, 0, heard.getNumSamples(), 0, true, true);
+            const auto hits = warp::findTransients (heard, reader->sampleRate);
+            double worst = 0;
+            for (int b = 1; b < 12; ++b)
+            {
+                const double expected = (6.4 + b) * 0.5;
+                double nearest = 1;
+                for (const auto h : hits) nearest = std::min (nearest, std::abs (h / reader->sampleRate - expected));
+                worst = std::max (worst, nearest);
+            }
+            check (worst < .003, "after it each hit plays a beat apart at the project tempo, at worst " + juce::String (worst * 1000, 2) + " ms off");
+            s.undo(); s.undo(); // The mute, then Warp From Here.
+            check (s.snapshot().tracks[(size_t) lateTrack].clips[0].warp.bpm == 120 && s.snapshot().tracks[(size_t) lateTrack].clips[0].warpMarkers.empty(), "Warp From Here is one undo step");
+        }
         root.deleteRecursively();
         std::cout << "Tempo analysis passed" << std::endl;
         return 0;

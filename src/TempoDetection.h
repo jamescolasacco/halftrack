@@ -30,8 +30,9 @@ public:
     explicit OnsetCurve (double sampleRate);
     ~OnsetCurve();
     void add (const float* const* channels, int numChannels, int numSamples);
-    // Adds at most the first maximumSeconds of a file, a block at a time; false if it could not be read.
-    bool add (juce::AudioFormatReader&, double maximumSeconds = 600);
+    // Adds at most maximumSeconds of a file from fromSeconds, a block at a time; false if it could not
+    // be read. Times in the curve count from fromSeconds.
+    bool add (juce::AudioFormatReader&, double maximumSeconds = 600, double fromSeconds = 0);
     // One value a step, the first centred on the sound's start.
     const std::vector<float>& values() const noexcept { return curve; }
     // The same below 200 Hz.

@@ -1756,3 +1756,13 @@ Engine, UI and root areas.
 - **Measured.** A generated movie whose frames show their numbers reads back frame for frame, and the exported movie's sound equals the mix (`tests/VideoTests.cpp`).
 
 See [the contract](research/video-contract.md).
+
+## Warp commands — 2026-10-22
+
+Engine and UI areas.
+
+- **Warp From Here (Straight).** Right-clicking a warped clip's waveform offers it: the audio from that point plays at the tempo found in it, pinned where the point already plays.
+- **Warp as N-Bar Loop.** The same menu fits the clip's audio to the bars its length suggests.
+- **Measured.** A 97 BPM loop after 3.2 s of noise is found and rendered with each hit a beat apart within 0.65 ms; a four-bar loop at 105 BPM fits exactly.
+
+See [the contract](research/warp-contract.md#warp-commands-2026-10-22).

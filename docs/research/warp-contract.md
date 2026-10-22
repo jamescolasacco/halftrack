@@ -95,4 +95,28 @@ The import and its warping are one undo step. Shorter samples keep the length gu
 - **Shorter loops** have too few beats to analyse.
 - **Speed:** 6.8 ms a loop.
 
-Missing: downbeat (bar) detection, tempo that varies through a recording, the reference's Warp From Here commands, keeping analyses with the file between sessions, and a side-by-side comparison with the reference's own auto-warp results.
+Missing: downbeat (bar) detection, tempo that varies through a recording, keeping analyses with the file between sessions, and a side-by-side comparison with the reference's own auto-warp results.
+
+## Warp commands (2026-10-22)
+
+Right-clicking a warped clip's waveform offers two of the reference's warp commands.
+
+**Warp From Here (Straight).** `Session::warpFromHere (clipId, sourceSeconds)` takes the audio from that point of the source as one steady tempo. It finds the tempo from the content after the point, with the same estimate as Auto-Warp.
+
+- **Markers.** The clip keeps its markers before the point and takes one at the point, on the transient within 30 ms if there is one. The point keeps the beat where it already plays, so nothing before it moves. Markers after the point go.
+- **Tempo.** From the point the clip plays at the found tempo. It keeps its place and length, ending with its audio if that now comes sooner.
+- **Refusals.** It needs a stretching warp mode, a point at least a second before the audio ends and after the earlier markers, and a steady beat from there. It is one undo step.
+
+**Warp as N-Bar Loop.** `Session::warpAsLoop (clipId, bars)` takes the audio the clip plays, from its start for its length, as that many bars of the project meter, and removes its markers. The menu offers the bar count the length suggests: the whole-bar guess, in 80–160 BPM. It takes 1 to 256 bars, refuses a tempo outside 20–999 BPM, and is one undo step.
+
+Evidence (`tests/TempoAnalysisTests.cpp`):
+
+- A loop cut to four bars at 105 BPM, warped at 120 and then Warp as 4-Bar Loop, plays at 105 BPM over 16 beats.
+- 3.2 s of noise and then a loop at 97 BPM, warped at 120 in Beats, then Warp From Here (Straight) just after the loop begins:
+  - it finds 97 BPM and pins the loop's first hit at 3.2 s on beat 6.4, where it played;
+  - rendered, each later hit sounds a beat apart within 0.65 ms.
+- Unwarped clips, 0 or 300 bars, and points in the last second or before the audio are refused, and each command undoes in one step.
+
+The UI suite checks the menu's one-bar suggestion for two seconds at 120 BPM. It also checks that Warp From Here reports finding no steady beat in two seconds of clicks, changing nothing.
+
+Missing: the reference's Warp From Here (with tempo changes), Warp From Here (Start at the project tempo), Warp N Bars From Here, and Set 1.1.1 Here.

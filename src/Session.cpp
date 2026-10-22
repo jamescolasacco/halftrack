@@ -7687,6 +7687,87 @@ std::optional<Session::VideoFrame> Session::videoAt (double seconds) const
             }
     return std::nullopt;
 }
+namespace
+{
+// The beat a point of a source plays on, through warp markers and then the clip's tempo.
+double beatOfSource (const std::vector<Session::WarpMarker>& markers, double bpm, double seconds)
+{
+    auto map = markers;
+    if (map.empty() || map.front().sourceSeconds > 0 || map.front().beat > 0) map.insert (map.begin(), { 0, 0 });
+    for (size_t i = 1; i < map.size(); ++i)
+        if (seconds <= map[i].sourceSeconds)
+        {
+            const auto span = map[i].sourceSeconds - map[i - 1].sourceSeconds;
+            return map[i - 1].beat + (span > 0 ? (seconds - map[i - 1].sourceSeconds) / span : 0) * (map[i].beat - map[i - 1].beat);
+        }
+    return map.back().beat + (seconds - map.back().sourceSeconds) * bpm / 60;
+}
+}
+Result Session::warpFromHere (const String& id, double seconds)
+{
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before warping clips.");
+    auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
+    const auto before = describeClip (*clip);
+    if (before.warp.mode == WarpMode::off || before.warp.mode == WarpMode::repitch) return Result::fail ("Warp From Here needs a clip warped in a stretching mode.");
+    if (! std::isfinite (seconds) || seconds < 0 || seconds >= before.sourceLength - 1) return Result::fail ("Warp From Here needs a point at least a second before the audio ends.");
+    // The tempo from the point on, and the point moved onto the transient there.
+    std::unique_ptr<juce::AudioFormatReader> reader (impl->engine.getAudioFileFormatManager().readFormatManager.createReaderFor (before.file));
+    if (reader == nullptr) return Result::fail ("The clip's audio could not be read.");
+    tempo::OnsetCurve curve (reader->sampleRate);
+    if (! curve.add (*reader, 600, seconds)) return Result::fail ("The clip's audio could not be read.");
+    const auto found = tempo::estimate (curve);
+    if (! found) return Result::fail ("No steady beat was found from there.");
+    auto point = seconds;
+    double nearest = 0.03;
+    for (const auto t : impl->analyse (before.file)->transients)
+        if (std::abs (t - seconds) < nearest) { nearest = std::abs (t - seconds); point = t; }
+    // Markers before the point stay, and the point keeps the beat it plays on now.
+    std::vector<WarpMarker> markers;
+    for (const auto& m : before.warpMarkers) if (m.sourceSeconds < point - 1e-3) markers.push_back (m);
+    if (markers.empty() || markers.front().sourceSeconds > 0 || markers.front().beat > 0) markers.insert (markers.begin(), { 0, 0 });
+    const WarpMarker pinned { point, beatOfSource (before.warpMarkers, before.warp.bpm, point) };
+    if (pinned.beat <= markers.back().beat + 1e-6) return Result::fail ("Warp From Here needs the point after the clip's earlier markers.");
+    markers.push_back (pinned);
+    const OneUndoStep step (*this, true, impl->gesture != nullptr, "Warp From Here");
+    auto settings = before.warp; settings.bpm = found->bpm;
+    if (auto r = setAudioClipWarp (id, settings); r.failed()) return r;
+    if (auto r = setAudioClipWarpMarkers (id, markers); r.failed()) return r;
+    // The clip keeps its place and length, ending with its audio if that now comes sooner.
+    const auto now = describeClip (*clip);
+    const auto audioEnd = beatOfSource (now.warpMarkers, now.warp.bpm, now.sourceLength);
+    const auto length = std::min (before.lengthBeats, audioEnd - before.contentStartBeat);
+    if (! before.loop.on && length > 0)
+        if (auto* wave = impl->audioClip (id))
+        {
+            const auto& tempoMap = impl->edit->tempoSequence;
+            const auto start = tempoMap.toTime (te::BeatPosition::fromBeats (before.startBeat)), end = tempoMap.toTime (te::BeatPosition::fromBeats (before.startBeat + length));
+            wave->setPosition ({ { start, end }, te::TimeDuration::fromSeconds (before.contentStartBeat / tempoMap.getBeatsPerSecondAt (start)) });
+        }
+    impl->changed(); return Result::ok();
+}
+Result Session::warpAsLoop (const String& id, int bars)
+{
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
+    const auto before = describeClip (*clip);
+    if (before.warp.mode == WarpMode::off) return Result::fail ("Warp as Loop needs a warped clip.");
+    if (bars < 1 || bars > 256) return Result::fail ("Choose 1 to 256 bars.");
+    // The source the clip plays, from its start for its length, in seconds of the source.
+    const auto from = before.warpMarkers.empty() ? before.contentStartBeat * 60 / before.warp.bpm : 0.0;
+    const auto to = before.warpMarkers.empty() ? (before.contentStartBeat + before.lengthBeats) * 60 / before.warp.bpm : before.sourceLength;
+    const auto seconds = std::min (before.sourceLength, to) - from;
+    if (! (seconds > 0)) return Result::fail ("The clip plays no audio.");
+    const auto bpm = bars * snapshot().timeSignature.beatsPerBar() * 60 / seconds;
+    if (bpm < 20 || bpm > 999) return Result::fail ("As " + String (bars) + " bars the clip would play at " + String (bpm, 2) + " BPM, outside 20-999.");
+    const OneUndoStep step (*this, true, impl->gesture != nullptr, "Warp as loop");
+    if (! before.warpMarkers.empty()) if (auto r = setAudioClipWarpMarkers (id, {}); r.failed()) return r;
+    auto settings = before.warp; settings.bpm = bpm;
+    if (auto r = setAudioClipWarp (id, settings); r.failed()) return r;
+    impl->changed(); return Result::ok();
+}
 std::vector<double> Session::audioClipTransients (const String& id)
 {
     auto* clip = impl->audioClip (id);

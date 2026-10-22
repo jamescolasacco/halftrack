@@ -258,13 +258,14 @@ std::optional<Estimate> estimate (const juce::AudioBuffer<float>& audio, double 
     return estimate (curve, minimumBpm, maximumBpm);
 }
 
-bool OnsetCurve::add (juce::AudioFormatReader& reader, double maximumSeconds)
+bool OnsetCurve::add (juce::AudioFormatReader& reader, double maximumSeconds, double fromSeconds)
 {
     if (reader.sampleRate <= 0 || reader.lengthInSamples <= 0 || reader.numChannels == 0) return false;
     const int channels = juce::jlimit (1, 2, (int) reader.numChannels);
     juce::AudioBuffer<float> block (channels, 65536);
-    const auto total = std::min<juce::int64> (reader.lengthInSamples, (juce::int64) (juce::jmax (0.0, maximumSeconds) * reader.sampleRate));
-    for (juce::int64 at = 0; at < total; at += block.getNumSamples())
+    const auto first = juce::jlimit<juce::int64> (0, reader.lengthInSamples, (juce::int64) std::llround (juce::jmax (0.0, fromSeconds) * reader.sampleRate));
+    const auto total = std::min<juce::int64> (reader.lengthInSamples, first + (juce::int64) (juce::jmax (0.0, maximumSeconds) * reader.sampleRate));
+    for (juce::int64 at = first; at < total; at += block.getNumSamples())
     {
         const int n = (int) std::min<juce::int64> (block.getNumSamples(), total - at);
         if (! reader.read (&block, 0, n, at, true, channels > 1)) return false;
