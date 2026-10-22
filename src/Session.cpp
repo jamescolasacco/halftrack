@@ -2471,7 +2471,15 @@ struct Session::Impl
         {
             auto& dm = engine.getDeviceManager();
             dm.deviceManager.addAudioDeviceType (std::move (customDeviceType));
-            dm.initialise (2, 4); // A test device with four outputs opens them all.
+            dm.initialise (2, 2);
+            // A test device with more outputs, for output routing, opens them all.
+            if (auto* device = dm.deviceManager.getCurrentAudioDevice(); device != nullptr && device->getOutputChannelNames().size() > 2)
+            {
+                auto setup = dm.deviceManager.getAudioDeviceSetup();
+                setup.useDefaultOutputChannels = false;
+                setup.outputChannels.clear(); setup.outputChannels.setRange (0, device->getOutputChannelNames().size(), true);
+                dm.deviceManager.setAudioDeviceSetup (setup, true);
+            }
             useDevices = true;
         }
         scratch = File::getSpecialLocation (File::tempDirectory).getChildFile ("Halftrack-" + juce::Uuid().toString());
