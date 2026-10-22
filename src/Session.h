@@ -447,12 +447,14 @@ public:
     // A track's output ("Audio To"): Master, Sends Only, or another audio track, whose devices and
     // mixer then play it as if it were that track's input.
     // A MIDI track without an instrument plays its MIDI to a MIDI port instead ("MIDI To"), on one channel.
-    enum class OutputKind { master, sendsOnly, track, midiPort };
+    // external plays to one of the audio device's outputs (the reference's Audio To Ext. Out),
+    // bypassing the master.
+    enum class OutputKind { master, sendsOnly, track, midiPort, external };
     struct TrackOutput
     {
         OutputKind kind = OutputKind::master;
         juce::String trackId;
-        juce::String port;   // midiPort: the MIDI output port's name.
+        juce::String port;   // midiPort: the MIDI output port's name; external: the audio output's name.
         int midiChannel = 1; // midiPort: 1-16.
         bool operator== (const TrackOutput&) const = default;
     };
@@ -1079,6 +1081,18 @@ public:
     std::vector<AudioInputGroup> audioInputGroups() const;
     juce::Result setAudioInputPairStereo (int firstChannel, bool stereo);
     juce::Result setAudioInputEnabled (const juce::String& inputName, bool);
+    // Output configuration, after the reference's Output Config: each pair of the audio device's
+    // output channels is one stereo output or two mono ones, and each can be switched off. Kept with
+    // the device settings. Tracks play to an output with Audio To Ext. Out (OutputKind::external).
+    struct AudioOutputGroup { juce::String name; int firstChannel = 0, channels = 2; bool enabled = true; bool operator== (const AudioOutputGroup&) const = default; };
+    std::vector<AudioOutputGroup> audioOutputGroups() const;
+    juce::Result setAudioOutputPairStereo (int firstChannel, bool stereo);
+    juce::Result setAudioOutputEnabled (const juce::String& outputName, bool);
+    juce::StringArray outputNames() const; // The outputs switched on.
+    // Master Out, kept with the project: the output the master, and so every track playing to
+    // Master, goes to. Tracks cannot play to it with Ext. Out, since that is the master's.
+    juce::String masterOutput() const;
+    juce::Result setMasterOutput (const juce::String& outputName);
     // An MPE controller's input, after the reference's per-input MPE switch: its notes record with
     // their own pitch bend, slide and pressure, a lower zone of 15 member channels. Kept with the
     // device settings.

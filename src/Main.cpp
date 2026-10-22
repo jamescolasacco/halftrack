@@ -116,6 +116,7 @@ int runEditGridTests (const juce::File&);
 int runNotePreviewTests (const juce::File&);
 int runPluginSourcesTests (const juce::File&);
 int runClipFadeTests (const juce::File&);
+int runOutputRoutingTests (const juce::File&);
 int runTempoAnalysisEvaluation (const juce::File& library, const juce::File& report);
 int runPackTests (const juce::File&);
 int runMackieTests (const juce::File&);
@@ -454,6 +455,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-edit-grid");
             setApplicationReturnValue (runEditGridTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-output-routing"))
+        {
+            const int i = args.indexOf ("--self-test-output-routing");
+            setApplicationReturnValue (runOutputRoutingTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-clip-fades"))

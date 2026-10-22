@@ -2011,3 +2011,15 @@ Engine area.
 - **Scope.** The count-in is now an application setting, as the reference's is (static reading): kept with the preferences, not each project, and not an undo step. Projects that hold one from earlier versions still validate it, and it is ignored.
 - **Measured.** The metronome suite (undo, a new project and the next launch keep it) and the MIDI input, preferences and UI suites.
 
+## Output routing — 2026-10-22
+
+Engine, UI and QA areas.
+
+- **Output Config.** Audio & MIDI Setup gains Output Config, as the reference's has: each output pair is stereo or two mono outputs, each switchable off, kept with the device settings.
+- **Ext. Out.** Tracks play straight to an output with Audio To Ext. Out, bypassing the master.
+- **Master Out.** The master strip's Master Out moves the whole mix to another output, kept with the project.
+- **Tests.** The synthetic test device can offer four outputs (`makeFourOutputSyntheticTestDeviceType`), and the UI suite now uses it.
+- **Measured.** The new output-routing suite, which measures each output channel, and the UI suite.
+
+See [the contract](research/output-routing-contract.md).
+

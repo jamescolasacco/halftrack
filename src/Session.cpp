@@ -47,6 +47,7 @@ const juce::Identifier recordQuantisationProperty { "halftrackRecordQuantisation
 const juce::Identifier countInProperty { "halftrackCountInBars" };
 // The metronome rhythm, read by the engine's click generator when it is prepared (PatchMetronomeRhythm).
 const juce::Identifier metronomeTickProperty { "halftrackMetronomeTick" };
+const juce::Identifier masterOutputProperty { "halftrackMasterOutput" };
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
 te::Edit::CountIn countInMode (int bars)
 {
@@ -2470,7 +2471,7 @@ struct Session::Impl
         {
             auto& dm = engine.getDeviceManager();
             dm.deviceManager.addAudioDeviceType (std::move (customDeviceType));
-            dm.initialise (2, 2);
+            dm.initialise (2, 4); // A test device with four outputs opens them all.
             useDevices = true;
         }
         scratch = File::getSpecialLocation (File::tempDirectory).getChildFile ("Halftrack-" + juce::Uuid().toString());
@@ -3428,6 +3429,24 @@ struct Session::Impl
         flushStructuralUpdates();
         if (! gesture) edit->getUndoManager().beginNewTransaction (name);
     }
+    // The audio output a track plays to directly, other than the master's, if any.
+    String externalOutput (const te::AudioTrack& t) const
+    {
+        if (t.getOutput().usesDefaultAudioOut() || t.getOutput().outputsToNone() || t.getOutput().getDestinationTrack() != nullptr) return {};
+        auto* device = dynamic_cast<te::WaveOutputDevice*> (t.getOutput().getOutputDevice (false));
+        if (device == nullptr || device->getDeviceID() == engine.getDeviceManager().getDefaultWaveOutDeviceID()) return {};
+        return device->getName();
+    }
+    // The project's Master Out, when its output is there: the engine's default output follows it.
+    void applyMasterOutput()
+    {
+        const auto name = edit->state[masterOutputProperty].toString();
+        if (name.isEmpty()) return;
+        auto& devices = engine.getDeviceManager();
+        for (auto* device : devices.getWaveOutputDevices())
+            if (device->getName() == name && device->isEnabled() && device->getDeviceID() != devices.getDefaultWaveOutDeviceID())
+            { devices.setDefaultWaveOutDevice (device->getDeviceID()); edit->restartPlayback(); }
+    }
     void refreshRouting()
     {
         // Derived gates are published through native graph updates on the message
@@ -4071,6 +4090,7 @@ struct Session::Impl
                 device->getInputDevice().setMonitorMode (static_cast<te::InputDevice::MonitorMode> (
                     juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (monitorProperty, 0)))));
         edit->setCountInMode (countInMode (prefs.countInBars)); // The application's count-in.
+        applyMasterOutput();
         refreshRouting();
         refreshCrossfade();
         edit->dispatchPendingUpdatesSynchronously();
@@ -4090,6 +4110,7 @@ struct Session::Impl
         edit->getAutomationRecordManager().setReadingAutomation (true);
         edit->getAutomationRecordManager().setWritingAutomation (false);
         edit->setCountInMode (countInMode (prefs.countInBars)); // The application's count-in.
+        applyMasterOutput();
         refreshRouting();
         if (useDevices) edit->getTransport().ensureContextAllocated();
         edit->dispatchPendingUpdatesSynchronously();
@@ -5111,6 +5132,7 @@ Session::Snapshot Session::snapshot() const
         if (const int channel = static_cast<int> (t->state.getProperty (midiOutChannelProperty, 0)); channel > 0) info.output = { OutputKind::midiPort, {}, t->getOutput().getOutputName(), channel };
         else if (auto* destination = t->getOutput().getDestinationTrack()) info.output = { OutputKind::track, destination->itemID.toString() };
         else if (t->getOutput().outputsToNone()) info.output = { OutputKind::sendsOnly, {} };
+        else if (const auto external = impl->externalOutput (*t); external.isNotEmpty()) info.output = { OutputKind::external, {}, external };
         info.hasInstrument = info.isMidi && Impl::instrument (*t) != nullptr;
         info.frozen = t->isFrozen (te::Track::individualFreeze);
         info.crossfade = static_cast<CrossfadeAssign> (juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (crossfadeProperty, 0))));
@@ -5699,6 +5721,71 @@ Result Session::setAudioInputPairStereo (int firstChannel, bool stereo)
         return Result::ok();
     }
     return Result::fail ("There is no input at that channel.");
+}
+std::vector<Session::AudioOutputGroup> Session::audioOutputGroups() const
+{
+    std::vector<AudioOutputGroup> result;
+    for (auto* device : impl->engine.getDeviceManager().getWaveOutputDevices())
+        result.push_back ({ device->getName(), (int) device->deviceDescription.getDeviceChannelRange().first, (int) device->deviceDescription.getNumChannels(), device->isEnabled() });
+    std::stable_sort (result.begin(), result.end(), [] (const auto& a, const auto& b) { return a.firstChannel < b.firstChannel; });
+    return result;
+}
+Result Session::setAudioOutputPairStereo (int firstChannel, bool stereo)
+{
+    if (impl->anyRecording()) return Result::fail ("Stop recording before changing the output configuration.");
+    if (firstChannel < 0 || firstChannel % 2 != 0) return Result::fail ("Choose the first channel of an output pair.");
+    auto& devices = impl->engine.getDeviceManager();
+    for (auto* device : devices.getWaveOutputDevices())
+    {
+        if ((int) device->deviceDescription.getDeviceChannelRange().first != firstChannel) continue;
+        const auto channels = device->deviceDescription.getNumChannels();
+        auto* audio = devices.deviceManager.getCurrentAudioDevice();
+        if (stereo && channels == 1 && (audio == nullptr || firstChannel + 1 >= audio->getOutputChannelNames().size()))
+            return Result::fail ("That output has no second channel to pair with.");
+        if ((stereo ? 2u : 1u) == channels) return Result::ok();
+        devices.setDeviceNumChannels (*device, stereo ? 2 : 1);
+        devices.dispatchPendingUpdates();
+        impl->edit->restartPlayback(); impl->refreshRouting(); impl->changed();
+        return Result::ok();
+    }
+    return Result::fail ("There is no output at that channel.");
+}
+Result Session::setAudioOutputEnabled (const String& outputName, bool enabled)
+{
+    if (impl->anyRecording()) return Result::fail ("Stop recording before changing the output configuration.");
+    auto& devices = impl->engine.getDeviceManager();
+    for (auto* device : devices.getWaveOutputDevices())
+        if (device->getName() == outputName)
+        {
+            if (! enabled && device->getDeviceID() == devices.getDefaultWaveOutDeviceID()) return Result::fail ("The Master Out cannot be switched off.");
+            if (device->isEnabled() != enabled) { devices.setDeviceEnabled (*device, enabled); devices.dispatchPendingUpdates(); impl->edit->restartPlayback(); impl->changed(); }
+            return Result::ok();
+        }
+    return Result::fail ("That output is not available.");
+}
+juce::StringArray Session::outputNames() const
+{
+    juce::StringArray names;
+    for (const auto& group : audioOutputGroups()) if (group.enabled) names.add (group.name);
+    return names;
+}
+String Session::masterOutput() const
+{
+    auto* device = impl->engine.getDeviceManager().getDefaultWaveOutDevice();
+    return device != nullptr ? device->getName() : String();
+}
+Result Session::setMasterOutput (const String& outputName)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before changing the Master Out.");
+    if (! outputNames().contains (outputName)) return Result::fail ("Choose an output that is switched on in the Output Config.");
+    if (outputName == masterOutput()) return Result::ok();
+    for (const auto& track : snapshot().tracks)
+        if (track.output.kind == OutputKind::external && track.output.port == outputName)
+            return Result::fail ("\"" + track.name + "\" plays to that output; route it elsewhere first.");
+    impl->edit->state.setProperty (masterOutputProperty, outputName, nullptr);
+    impl->edit->markAsChanged();
+    impl->applyMasterOutput(); impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::setAudioInputEnabled (const String& inputName, bool enabled)
 {
@@ -6358,6 +6445,7 @@ Result Session::setTrackOutput (const String& trackId, const TrackOutput& output
     if (const int channel = static_cast<int> (t->state.getProperty (midiOutChannelProperty, 0)); channel > 0) current = { OutputKind::midiPort, {}, t->getOutput().getOutputName(), channel };
     else if (auto* destination = t->getOutput().getDestinationTrack()) current = { OutputKind::track, destination->itemID.toString() };
     else if (t->getOutput().outputsToNone()) current = { OutputKind::sendsOnly, {} };
+    else if (const auto external = impl->externalOutput (*t); external.isNotEmpty()) current = { OutputKind::external, {}, external };
     if (output.kind == OutputKind::master || output.kind == OutputKind::sendsOnly ? output.kind == current.kind : output == current) return Result::ok();
     if (output.kind != OutputKind::master && isReturn (*t)) return Result::fail ("Return tracks play into Master.");
     if (output.kind != OutputKind::master && t->getParentFolderTrack() != nullptr) return Result::fail ("Tracks in a group play into the group.");
@@ -6377,6 +6465,13 @@ Result Session::setTrackOutput (const String& trackId, const TrackOutput& output
         port = impl->midiOutput (output.port);
         if (port == nullptr || ! impl->midiPortTrack (*port)) return Result::fail ("Choose a MIDI port whose Track switch is on in the MIDI Ports settings.");
     }
+    if (output.kind == OutputKind::external)
+    {
+        if (static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) && Impl::instrument (*t) == nullptr)
+            return Result::fail ("A MIDI track without an instrument plays no audio to send out.");
+        if (! outputNames().contains (output.port) || output.port == masterOutput())
+            return Result::fail ("Choose an output that is switched on in the Output Config and is not the Master Out.");
+    }
     impl->transaction ("Set track output");
     auto* undo = &impl->edit->getUndoManager();
     switch (output.kind)
@@ -6386,6 +6481,7 @@ Result Session::setTrackOutput (const String& trackId, const TrackOutput& output
         case OutputKind::track: t->getOutput().setOutputToTrack (destination); break;
         // By name, which the engine also resolves, so a project names the port on any machine.
         case OutputKind::midiPort: t->getOutput().setOutputToDeviceID (port->getName()); break;
+        case OutputKind::external: t->getOutput().setOutputToDeviceID (output.port); break;
     }
     if (output.kind == OutputKind::midiPort) t->state.setProperty (midiOutChannelProperty, output.midiChannel, undo);
     else t->state.removeProperty (midiOutChannelProperty, undo);

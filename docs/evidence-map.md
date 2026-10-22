@@ -5,7 +5,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | Row | Suites | Manual |
 | --- | --- | --- |
 | AUD-001 | audio-engine, device-loss, device-settings | MOTU M4 hardware check (--hardware-check, macOS arm64) |
-| AUD-005 | input-config, ui |  |
+| AUD-005 | input-config, ui, output-routing, ui |  |
 | AUD-006 | audio-engine, device-settings |  |
 | AUD-007 | device-loss | MOTU M4 unplug and replug by hand |
 | AUD-008 | input-permission |  |

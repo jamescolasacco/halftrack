@@ -27,5 +27,5 @@ The UI suite checks the panel lays out its Input Config and MPE Inputs buttons.
 ## Not yet covered
 
 - The reference can offer a pair as a stereo input and two mono inputs at once. Here a pair is one or the other.
-- Output configuration and renaming inputs are missing.
+- Renaming inputs is missing. Outputs have their own Output Config ([output routing contract](output-routing-contract.md)).
 - Real interfaces with more than two channels are untested.

@@ -732,3 +732,12 @@ Halftrack's default fades follow a static reading of the reference's code ([cont
 - **Count-in start.** The reference starts a count-in from mid-bar at the nearest bar line, roundNearest((t − bars·B − section start) / B)·B (static reading), so it is not always whole bars long. Halftrack counts in whole bars before the position.
 - **Rhythm timing.** The reference snaps ticks to its tick grid from the time-signature section start, and while stopped times them in whole samples. Halftrack places them on the beat grid from the start; it has one meter per project.
 
+### Output routing
+
+Defaults where the reference does not map onto the engine ([contract](research/output-routing-contract.md)):
+
+- **Ext. Out to the master's output.** The reference lets a track play with Ext. Out to the same output as the master, bypassing the master's devices and volume. In the engine everything on the default output is the master, so that is refused.
+- **Names.** Outputs are named as the engine names them ("Left + Right", "3 + 4"), not the reference's "1/2" and "3/4".
+- **Undo.** Changing the Master Out is kept with the project and marks it changed, but is not an undo step.
+- **Cue.** Cue Out, the Solo/Cue switch and the cue level are not implemented.
+

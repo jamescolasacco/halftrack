@@ -47,6 +47,7 @@ namespace halftrack
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
 float pumpSyntheticTestDevice (Session&, int blocks);
 void useHardClipEdges (Session&);
+std::unique_ptr<juce::AudioIODeviceType> makeFourOutputSyntheticTestDeviceType();
 void withGeneratedMidiController (Session&, const std::function<void(const juce::String&)>&);
 #endif
 namespace
@@ -1546,6 +1547,7 @@ private:
                     else if (midiTo) chosen.kind = Session::OutputKind::master; // No Output.
                     else if (item == 2) chosen.kind = Session::OutputKind::sendsOnly;
                     else if (juce::isPositiveAndBelow (item - 3, outputIds.size())) chosen = { Session::OutputKind::track, outputIds[item - 3] };
+                    else if (juce::isPositiveAndBelow (item - 3 - outputIds.size(), externalOutputs.size())) chosen = { Session::OutputKind::external, {}, externalOutputs[item - 3 - outputIds.size()] };
                     owner.report (owner.session.setTrackOutput (trackId, chosen)); owner.refresh();
                 };
                 gain.setSliderStyle (juce::Slider::LinearVertical); gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 16);
@@ -1766,15 +1768,21 @@ private:
                 for (const auto& id : owner.session.outputDestinations (track.id))
                     for (const auto& other : owner.state.tracks) if (other.id == id) { ids.add (id); labels.add (other.name); }
             }
+            // Ext. Out: the audio device's other outputs, as the reference's Audio To offers them.
+            juce::StringArray externals;
+            if (! track.isReturn && track.groupId.isEmpty())
+                for (const auto& name : owner.session.outputNames())
+                    if (name != owner.session.masterOutput()) { externals.add (name); labels.add ("Ext. Out " + name); }
             if (labels != outputLabels)
             {
                 outputLabels = labels; output.clear (juce::dontSendNotification);
                 for (int i = 0; i < labels.size(); ++i) output.addItem (labels[i], i + 1);
             }
-            outputIds = ids;
+            outputIds = ids; externalOutputs = externals;
             int chosen = 1;
             if (track.output.kind == Session::OutputKind::sendsOnly) chosen = 2;
             else if (track.output.kind == Session::OutputKind::track && ids.contains (track.output.trackId)) chosen = ids.indexOf (track.output.trackId) + 3;
+            else if (track.output.kind == Session::OutputKind::external && externals.contains (track.output.port)) chosen = ids.size() + externals.indexOf (track.output.port) + 3;
             output.setSelectedId (chosen, juce::dontSendNotification);
             output.setEnabled (labels.size() > 1 && ! owner.session.isExporting());
         }
@@ -1944,6 +1952,7 @@ private:
         juce::StringArray outputPorts; // MIDI To: the ports offered, by item.
         bool midiTo = false;
         static constexpr int firstPortItem = 1000;
+        juce::StringArray externalOutputs; // The Ext. Out choices after the track destinations.
         static constexpr int firstSourceItem = 1000;
         std::vector<std::unique_ptr<juce::Slider>> sends;
         std::unique_ptr<juce::TextButton> sideA, sideB;
@@ -3832,6 +3841,15 @@ private:
                 crossfader.onDragEnd = [this] { owner.session.endEditGesture(); };
                 crossfader.onValueChange = [this] { owner.report (owner.session.setCrossfader ((float) crossfader.getValue())); };
                 addAndMakeVisible (crossfader);
+                // Master Out, as the reference's master track chooses the output it plays to.
+                output.setName ("Master Out"); output.setTooltip ("Master Out: the audio output the master plays to.");
+                output.onChange = [this]
+                {
+                    const auto names = owner.session.outputNames();
+                    if (juce::isPositiveAndBelow (output.getSelectedId() - 1, names.size())) owner.report (owner.session.setMasterOutput (names[output.getSelectedId() - 1]));
+                    owner.refresh();
+                };
+                addAndMakeVisible (output);
             }
             void sync()
             {
@@ -3841,9 +3859,17 @@ private:
                 gain.setEnabled (! owner.session.isExporting());
                 showAutomationState (gain, owner.state.masterVolumeAutomation, "Master output level. Double-click for 0 dB.", "Master volume");
                 gain.getProperties().set ("midiMapTarget", "master");
+                const auto names = owner.session.outputNames();
+                if (names != outputNames) { outputNames = names; output.clear (juce::dontSendNotification); for (int i = 0; i < names.size(); ++i) output.addItem (names[i], i + 1); }
+                output.setSelectedId (names.indexOf (owner.session.masterOutput()) + 1, juce::dontSendNotification);
+                output.setEnabled (names.size() > 1 && ! owner.session.isExporting());
                 peakL = owner.state.masterPeakL; peakR = owner.state.masterPeakR; repaint();
             }
-            void resized() override { gain.setBounds (6, 106 + TrackRow::outputRow, 54, getHeight() - 162 - TrackRow::outputRow); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22); }
+            void resized() override
+            {
+                output.setBounds (5, 46, getWidth() - 10, 19);
+                gain.setBounds (6, 106 + TrackRow::outputRow, 54, getHeight() - 162 - TrackRow::outputRow); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22);
+            }
             void paint (juce::Graphics& g) override
             {
                 g.fillAll (themes::colour (0xff383838));
@@ -3863,6 +3889,7 @@ private:
         private:
             Impl& owner;
             juce::Slider gain, crossfader;
+            juce::ComboBox output; juce::StringArray outputNames;
             float peakL = 0, peakR = 0;
         } masterStrip { owner };
         juce::ScrollBar horizontal { false }, vertical { true };
@@ -9918,7 +9945,7 @@ private:
         explicit AudioSetupPanel (Impl& o) : owner (o), devices (o.session.audioDeviceManager(), 0, 128, 0, 128, true, false, true, false)
         {
             addAndMakeVisible (devices);
-            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth, &mpe, &inputConfig, &midiPorts, &surface, &compensationLabel, &compensation, &latency })
+            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth, &mpe, &inputConfig, &outputConfig, &midiPorts, &surface, &compensationLabel, &compensation, &latency })
                 addAndMakeVisible (c);
             // Driver Error Compensation, after the reference's: moves recordings earlier, for a driver that
             // reports its latency wrongly; the device's latency as it reports it beside.
@@ -10009,6 +10036,35 @@ private:
                     safe->owner.refresh();
                 });
             };
+            // Output Config, as the reference's: each pair of output channels as one stereo output or
+            // two mono ones, and which are on. Tracks reach them with Audio To Ext. Out.
+            outputConfig.setName ("Output config"); outputConfig.setTooltip ("Output Config: use each pair of output channels as one stereo output or two mono outputs, and choose which outputs are on");
+            outputConfig.onClick = [this]
+            {
+                juce::PopupMenu menu;
+                const auto groups = owner.session.audioOutputGroups();
+                auto* device = owner.session.audioDeviceManager().getCurrentAudioDevice();
+                const int channels = device != nullptr ? device->getOutputChannelNames().size() : 0;
+                for (int first = 0; first + 1 < channels; first += 2)
+                {
+                    const auto stereo = std::any_of (groups.begin(), groups.end(), [first] (const auto& g) { return g.firstChannel == first && g.channels == 2; });
+                    menu.addSectionHeader ("Outputs " + juce::String (first + 1) + "/" + juce::String (first + 2));
+                    menu.addItem (1000 + first, "Stereo", true, stereo); menu.addItem (2000 + first, "Two Mono", true, ! stereo);
+                }
+                menu.addSectionHeader ("On");
+                for (int i = 0; i < (int) groups.size(); ++i) menu.addItem (i + 1, groups[(size_t) i].name, true, groups[(size_t) i].enabled);
+                auto safe = juce::Component::SafePointer<AudioSetupPanel> (this);
+                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&outputConfig), [safe, groups] (int chosen)
+                {
+                    if (safe == nullptr || chosen <= 0) return;
+                    auto& session = safe->owner.session;
+                    if (chosen >= 2000) safe->owner.report (session.setAudioOutputPairStereo (chosen - 2000, false));
+                    else if (chosen >= 1000) safe->owner.report (session.setAudioOutputPairStereo (chosen - 1000, true));
+                    else if (juce::isPositiveAndBelow (chosen - 1, (int) groups.size()))
+                        safe->owner.report (session.setAudioOutputEnabled (groups[(size_t) chosen - 1].name, ! groups[(size_t) chosen - 1].enabled));
+                    safe->owner.refresh();
+                });
+            };
             // MPE controllers record their notes' own pitch bend, slide and pressure.
             mpe.setName ("MPE inputs"); mpe.setTooltip ("MPE: choose the MIDI inputs that are MPE controllers");
             mpe.onClick = [this]
@@ -10077,10 +10133,8 @@ private:
         {
             auto area = getLocalBounds();
             auto row = area.removeFromBottom (40).reduced (16, 8);
-            inputConfig.setBounds (row.removeFromLeft (130)); row.removeFromLeft (8);
-            mpe.setBounds (row.removeFromLeft (130)); row.removeFromLeft (8);
-            midiPorts.setBounds (row.removeFromLeft (130)); row.removeFromLeft (8);
-            surface.setBounds (row.removeFromLeft (130));
+            for (auto* b : { &inputConfig, &outputConfig, &mpe, &midiPorts }) { b->setBounds (row.removeFromLeft (112)); row.removeFromLeft (8); }
+            surface.setBounds (row.removeFromLeft (112));
             row = area.removeFromBottom (36).reduced (16, 4);
             typeLabel.setBounds (row.removeFromLeft (120)); type.setBounds (row.removeFromLeft (90)); row.removeFromLeft (24);
             depthLabel.setBounds (row.removeFromLeft (80)); depth.setBounds (row.removeFromLeft (70));
@@ -10095,7 +10149,7 @@ private:
         juce::AudioDeviceSelectorComponent devices;
         juce::Label typeLabel, depthLabel, compensationLabel, compensation, latency;
         juce::ComboBox type, depth;
-        juce::TextButton mpe { "MPE Inputs..." }, inputConfig { "Input Config..." }, midiPorts { "MIDI Ports..." }, surface { "Control Surface..." };
+        juce::TextButton mpe { "MPE Inputs..." }, inputConfig { "Input Config..." }, outputConfig { "Output Config..." }, midiPorts { "MIDI Ports..." }, surface { "Control Surface..." };
     };
     // The Info View, after the reference's: what the control under the pointer is and does, from its
     // name and tooltip, and when it cannot be used now.
@@ -13763,9 +13817,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         // Audio & MIDI Setup lays out its recording and input settings inside the dialog.
         AudioSetupPanel panel (*this); panel.setSize (660, 680);
         auto* inputs = findNamed (panel, "Input config"); auto* mpeInputs = findNamed (panel, "MPE inputs"); auto* fileType = findNamed (panel, "Record file type");
-        check (inputs && mpeInputs && fileType && panel.getLocalBounds().contains (inputs->getBounds()) && panel.getLocalBounds().contains (mpeInputs->getBounds())
-                   && panel.getLocalBounds().contains (fileType->getBounds()) && ! inputs->getBounds().intersects (mpeInputs->getBounds()),
-               "Audio & MIDI Setup shows Input Config and MPE Inputs beside the recording format");
+        auto* outputs = findNamed (panel, "Output config"); auto* surfaceButton = findNamed (panel, "Control surface");
+        check (inputs && mpeInputs && fileType && outputs && panel.getLocalBounds().contains (inputs->getBounds()) && panel.getLocalBounds().contains (mpeInputs->getBounds())
+                   && panel.getLocalBounds().contains (fileType->getBounds()) && panel.getLocalBounds().contains (outputs->getBounds()) && ! inputs->getBounds().intersects (mpeInputs->getBounds())
+                   && ! outputs->getBounds().intersects (inputs->getBounds()) && (surfaceButton == nullptr || panel.getLocalBounds().contains (surfaceButton->getBounds())),
+               "Audio & MIDI Setup shows Input Config, Output Config and MPE Inputs beside the recording format");
     }
     check (session.newProject().wasOk() && session.importAudio(audioFixture,0).wasOk(), "prepare arrangement audio command fixture"); refresh();
     {
@@ -15146,8 +15202,23 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         session.stop(); check (session.newProject().wasOk(), "reset after the group checks"); refresh();
         // Audio To, edited from the strip.
         auto* output = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Track output"));
-        check (output != nullptr && output->isVisible() && output->getNumItems() == 3 && output->getText() == "Master"
-               && output->getItemText (2) == state.tracks[1].name, "a track strip's output offers Master, Sends Only and the other track");
+        const auto outs = session.outputNames();
+        check (outs.size() == 2 && session.masterOutput() == outs[0], "the test device has a second output pair");
+        check (output != nullptr && output->isVisible() && output->getNumItems() == 4 && output->getText() == "Master"
+               && output->getItemText (2) == state.tracks[1].name && output->getItemText (3) == "Ext. Out " + outs[1],
+               "a track strip's output offers Master, Sends Only, the other track and Ext. Out to the other outputs, as the reference's Audio To does");
+        output->setSelectedId (4, juce::sendNotificationSync); refresh();
+        check ((state.tracks[0].output == Session::TrackOutput { Session::OutputKind::external, {}, outs[1] }) && output->getText() == "Ext. Out " + outs[1], "choosing Ext. Out plays the track to those outputs");
+        session.undo(); refresh();
+        {
+            auto* masterOut = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Master Out"));
+            check (masterOut != nullptr && masterOut->isVisible() && masterOut->getNumItems() == 2 && masterOut->getText() == outs[0] && masterOut->isEnabled(),
+                   "the master strip shows its Master Out");
+            masterOut->setSelectedId (2, juce::sendNotificationSync); refresh();
+            check (session.masterOutput() == outs[1] && masterOut->getText() == outs[1], "choosing another output moves the Master Out");
+            masterOut->setSelectedId (1, juce::sendNotificationSync); refresh();
+            check (session.masterOutput() == outs[0], "and back");
+        }
         output->setSelectedId (2, juce::sendNotificationSync); refresh();
         check (state.tracks[0].output.kind == Session::OutputKind::sendsOnly && output->getText() == "Sends Only", "choosing Sends Only routes the track");
         output->setSelectedId (3, juce::sendNotificationSync); refresh();
@@ -15890,7 +15961,7 @@ int MainComponent::runInteractionTests()
         const auto portPrefix = "Halftrack UI Port " + juce::Uuid().toString().substring (0, 8);
         auto port = juce::MidiInput::createNewDevice (portPrefix + " Out", &ignore);
         auto surfacePort = juce::MidiOutput::createNewDevice (portPrefix + " Surface"); // A control surface's input.
-        Session session (false, makeSyntheticTestDeviceType(), port != nullptr ? portPrefix : juce::String());
+        Session session (false, makeFourOutputSyntheticTestDeviceType(), port != nullptr ? portPrefix : juce::String());
         MainComponent component (session);
         component.impl->captureTestErrors = true;
         component.impl->runInteractionChecks (audioFixture.getFile());
