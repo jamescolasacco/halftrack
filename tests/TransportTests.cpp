@@ -159,6 +159,31 @@ int runTransportTests (const juce::File& artifacts)
         s.setInsertMarker (3);
         ok (s.setTrackArmed (0, false), "disarm the track");
 
+        // With the loop on, playback starts from the insert marker, as the reference's does (static
+        // reading of its code): from before the loop it rolls into it, from past its end it plays on.
+        {
+            s.setLoop (true, 6, 7);
+            const auto at = [&] (double seconds) { pumpSyntheticTestDevice (s, (int) std::lround (seconds * blocksPerSecond)); return s.snapshot().position; };
+            s.setInsertMarker (5);
+            ok (s.play(), "play from before the loop");
+            const auto rolling = at (.5);
+            check (rolling > 5.4 && rolling < 5.5 + slack, "it plays from the insert marker, not the loop's start (" + juce::String (rolling, 3) + " s)");
+            const auto looped = at (2);
+            check (looped >= 6 && looped < 7 && std::abs (looped - 6.5) < slack, "and loops once inside the loop (" + juce::String (looped, 3) + " s)");
+            s.stop();
+            s.setInsertMarker (8);
+            ok (s.play(), "play from past the loop's end");
+            const auto past = at (1.5);
+            check (past > 9.4 && past < 9.5 + slack, "it plays on without looping (" + juce::String (past, 3) + " s)");
+            s.seek (5.5);
+            const auto back = at (1);
+            check (back >= 6 && back < 7 && std::abs (back - 6.5) < slack, "a jump before the loop rolls into it again (" + juce::String (back, 3) + " s)");
+            s.seek (7.5);
+            const auto beyond = at (.5);
+            check (beyond > 7.9 && beyond < 8 + slack, "and a jump past it plays on (" + juce::String (beyond, 3) + " s)");
+            s.stop(); s.setLoop (false, 6, 7); s.setInsertMarker (3);
+        }
+
         // The marker keeps its beat when the tempo changes: beat 6 is 3 s at 120 BPM and 6 s at 60 BPM.
         s.setTempo (60);
         check (near (s.snapshot().insertMarker, 6, 1e-3), "the insert marker keeps its beat through a tempo change");

@@ -40,9 +40,10 @@ function(halftrack_patch_count_in_start source_dir)
                         // Halftrack: the count-in clicks from its start up to the recording's.
                         edit.setClickTrackRange ({ prerollStart, transportState->startTime.get() });
                     }]=])
+    set(downstream0 "9da5f4cbc09c1dc1c7b09eaae63655a4d78534fe5b7d01f4486063e13a39aea4") # The later loop playback patch.
     foreach(index RANGE 0 0)
         file(SHA256 "${source${index}}" hash)
-        if(hash STREQUAL "${patched${index}}")
+        if(hash STREQUAL "${patched${index}}" OR (DEFINED downstream${index} AND hash IN_LIST downstream${index}))
             set(write${index} FALSE)
             continue()
         endif()

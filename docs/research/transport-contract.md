@@ -13,6 +13,7 @@ Halftrack's Play, Stop, Continue and locate follow the reference's [Arrangement 
   - Pressed while stopped, it records and plays from the insert marker. With **Start Playback with Record** off, it instead lights and waits: "recording will not start until the Play button is pressed or Session clips are launched". Play then records from the insert marker; Continue and a Session launch record from where the transport starts. Pressed again, or Stop, it stops waiting.
   - Shift reverses the preference, as the manual says ("holding Shift while pressing Arrangement Record will engage the opposite behavior").
   - `Session::recordButton (shift)` does all this; `Session::record` presses it without Shift; `Snapshot::recordWaiting` reports the wait.
+- **With the loop on** (static reading of the reference's code), Play and Record still start from the insert marker. From before the loop the play head rolls into it and loops once inside; from at or past its end it plays on and never loops. A jump while playing goes where it is asked and behaves the same way. Before, the engine jumped to the loop's start, and clamped jumps into the loop ([dependencies](../dependencies.md#tracktion-loop-playback-patch)).
 - **Stop** leaves the play position where playback stopped. **Shift+Space** continues from there.
 - **A second Stop** (the Stop button pressed while stopped) or **Home** returns the insert marker and play position to the start. Escape also stops and returns to the start.
 - **Locating** (the ruler, the position fields, locators, `Session::seek`) moves the play position and the insert marker together, jumping playback if it is running. It relocates the play head even when the engine's cached position already reads the target. That cache follows the play head on a timer, and offline it does not move at all.
@@ -35,6 +36,7 @@ Halftrack's Play, Stop, Continue and locate follow the reference's [Arrangement 
 - that a recording started and stopped before the device's next block leaves the transport stopped;
 - that Record pressed while recording ends a take of the length recorded, with playback running on, and pressed while playing records from there;
 - that with Start Playback with Record off, Record waits without playing; pressed again or Stop ends the wait; Play records from the insert marker; Shift reverses the preference either way; and launching a Session clip starts the waiting recording;
+- that with the loop on, playback from before the loop plays from the insert marker and then loops; from past its end it plays on; and jumps before and past it do the same;
 - that the marker keeps its beat when the tempo halves.
 
 `tests/TakeLanesTests.cpp` ends a loop recording with the Record button: playback carries on round the loop, and its 2.5 passes are cut into lanes as at Stop.

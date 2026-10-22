@@ -178,6 +178,21 @@ int runTakeLanesTests (const juce::File& artifacts)
                 split = near (again[k].start, 8) && near (again[k].sourceOffset - again[0].sourceOffset, (double) k) && again[k].file == again[0].file
                      && (k < 2 ? near (again[k].length, 1) : again[k].length > .4 && again[k].length < .6);
             check (split, "its 2.5 passes are cut into three lanes, one second each and the last a half (" + juce::String ((int) again.size()) + " passes)");
+
+            // From before the loop, as the reference's does, recording starts where the transport is:
+            // the first pass runs from there to the loop's end, then a pass each time round.
+            std::set<juce::String> earlier;
+            for (const auto& lane : track().takeLanes) for (const auto& c : lane.clips) earlier.insert (c.id);
+            s.seek (7); ok (s.record(), "record from a second before the loop");
+            pumpSyntheticTestDevice (s, (int) std::lround (2.5 * blocksPerSecond));
+            s.stop();
+            std::vector<Session::ClipInfo> rolled;
+            for (const auto& lane : track().takeLanes)
+                for (const auto& c : lane.clips) if (! earlier.count (c.id)) rolled.push_back (c);
+            std::sort (rolled.begin(), rolled.end(), [] (const auto& a, const auto& b) { return a.sourceOffset < b.sourceOffset; });
+            check (rolled.size() == 2 && near (rolled[0].start, 7) && near (rolled[0].length, 2) && near (rolled[1].start, 8)
+                       && near (rolled[1].sourceOffset - rolled[0].sourceOffset, 2) && rolled[1].length > .4 && rolled[1].length < .6,
+                   "the first pass runs from 7 s to the loop's end, and the second round the loop (" + [&] { juce::String d; for (const auto& c : rolled) d << juce::String (c.start, 3) << "+" << juce::String (c.length, 3) << "@" << juce::String (c.sourceOffset, 3) << " "; return d.trim(); }() + ")");
             ok (s.setTrackArmed (0, false), "disarm the audio track");
         }
         // MIDI loop recording through the computer keyboard: a note in each pass.

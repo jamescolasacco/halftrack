@@ -3923,15 +3923,17 @@ struct Session::Impl
     // The loop being recorded over, while it is.
     std::optional<te::TimeRange> loopRecording;
     bool recordWaiting = false; // Record waits for Play, with Start Playback with Record off.
-    // A loop recording's continuous take, from where it began in the loop, split into its passes: the
-    // first to the loop's end, then each pass round the loop, the last perhaps partial. Each is a
+    // A loop recording's continuous take, from where it began, split into its passes: the first to
+    // the loop's end (from before the loop, if it began there), then each pass round the loop, the
+    // last perhaps partial. Each is a
     // clip of the same media at the loop, its content starting where that pass began; a MIDI pass
     // keeps just its own notes and controller events. The recorded clip becomes the first.
     std::vector<te::Clip*> splitLoopPasses (te::AudioTrack& t, te::Clip& recorded, te::TimeRange loop)
     {
         const auto start = recorded.getPosition().getStart(), loopStart = loop.getStart();
         const auto total = recorded.getPosition().getLength(), length = loop.getLength();
-        if (length <= te::TimeDuration::fromSeconds (.001) || start < loopStart - te::TimeDuration::fromSeconds (1e-6) || start >= loop.getEnd()) return { &recorded };
+        // A take from past the loop's end never looped.
+        if (length <= te::TimeDuration::fromSeconds (.001) || start >= loop.getEnd()) return { &recorded };
         const auto first = std::min (total, loop.getEnd() - start);
         auto* undo = &edit->getUndoManager();
         auto& tempo = edit->tempoSequence;
@@ -11308,9 +11310,20 @@ void Session::finishRecording (bool stopTransport)
                         note->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), undo);
                     }
             }
-        impl->applyPunch();
         // Each pass recorded on an armed track is kept in a take lane too, and replaces the main lane's
-        // earlier material under it.
+        // earlier material under it. A loop recording is cut into its passes first, then each pass
+        // is punched as a take is.
+        std::map<te::AudioTrack*, std::vector<juce::String>> passOrder;
+        if (loopRecording)
+            for (auto* track : te::getAudioTracks (*impl->edit))
+                if (auto* input = impl->input (*track); input != nullptr && input->isRecordingEnabled (track->itemID))
+                {
+                    std::vector<te::Clip*> recorded;
+                    for (auto* clip : track->getClips())
+                        if (! impl->clipsBeforeRecording.count (clip->itemID.toString()) && clip->getClipSlot() == nullptr) recorded.push_back (clip);
+                    for (auto* clip : recorded) for (auto* pass : impl->splitLoopPasses (*track, *clip, *loopRecording)) passOrder[track].push_back (pass->itemID.toString());
+                }
+        impl->applyPunch();
         for (auto* track : te::getAudioTracks (*impl->edit))
             if (auto* input = impl->input (*track); input != nullptr && input->isRecordingEnabled (track->itemID))
             {
@@ -11319,9 +11332,14 @@ void Session::finishRecording (bool stopTransport)
                     if (! impl->clipsBeforeRecording.count (clip->itemID.toString()) && clip->getClipSlot() == nullptr) recorded.push_back (clip);
                 if (loopRecording)
                 {
-                    std::vector<te::Clip*> passes;
-                    for (auto* clip : recorded) for (auto* pass : impl->splitLoopPasses (*track, *clip, *loopRecording)) passes.push_back (pass);
-                    recorded = passes;
+                    // In pass order, which punching keeps: a punched MIDI pass is a clip of its own.
+                    const auto& order = passOrder[track];
+                    const auto rank = [&] (te::Clip* c)
+                    {
+                        const auto found = std::find (order.begin(), order.end(), c->itemID.toString());
+                        return found != order.end() ? (int) (found - order.begin()) : (int) order.size();
+                    };
+                    std::stable_sort (recorded.begin(), recorded.end(), [&] (te::Clip* a, te::Clip* b) { return rank (a) < rank (b); });
                 }
                 for (auto* clip : recorded) giveDefaultFades (*clip, &impl->edit->getUndoManager()); // As new clips are.
                 for (auto* clip : recorded) impl->keepTake (*track, *clip);
@@ -11391,10 +11409,11 @@ Result Session::beginRecording (bool waitForPlay)
     const bool alreadyPlaying = transport.isPlaying();
     if (! alreadyPlaying) transport.setPosition (transport.startPosition);
     // Loop recording, as the reference's: each pass becomes a take of its own at Stop, which ends the
-    // engine's recording as one continuous take and splits it. Started from a stop, the engine
-    // begins at the loop's start.
+    // engine's recording as one continuous take and splits it. Recording starts where the transport
+    // is: from before the loop the first pass runs from there to the loop's end, and punching then
+    // trims each pass to the brace.
     impl->loopRecording.reset();
-    if (transport.looping && armed && ! impl->punchIn() && ! impl->punchOut()) impl->loopRecording = transport.getLoopRange();
+    if (transport.looping && armed) impl->loopRecording = transport.getLoopRange();
     // With Automation Arm on, or Session clips playing, recording runs with no track armed.
     transport.record (false, ! armed);
     if (! transport.isRecording()) impl->loopRecording.reset();

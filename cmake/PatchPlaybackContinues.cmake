@@ -114,7 +114,7 @@ void EditPlaybackContext::cancelPendingPlay()
         if (auto ph = getNodePlayHead())
             ph->stop();
     }]=])
-    set(downstream2 "cfd436495804e855c4c99db7aeb0080ea35b328ac339d926ce30804e40d431be") # The later count-in start patch.
+    set(downstream2 "cfd436495804e855c4c99db7aeb0080ea35b328ac339d926ce30804e40d431be" "9da5f4cbc09c1dc1c7b09eaae63655a4d78534fe5b7d01f4486063e13a39aea4") # The later count-in start and loop playback patches.
     foreach(index RANGE 0 2)
         file(SHA256 "${source${index}}" hash)
         if(hash STREQUAL "${patched${index}}" OR (DEFINED downstream${index} AND hash IN_LIST downstream${index}))

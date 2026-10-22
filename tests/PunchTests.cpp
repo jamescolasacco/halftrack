@@ -168,6 +168,29 @@ int runPunchTests (const juce::File& artifacts)
             ok (s.setTrackArmed (keys, false), "disarm the MIDI track");
         }
 
+        // Recording round the loop with Punch-In and Punch-Out, as the reference's does: the pre-roll
+        // plays unrecorded, and each pass round the brace is a take of its own.
+        {
+            ok (s.setTrackArmed (0, true), "arm the audio track again");
+            ok (s.setPunchIn (true), "Punch-In"); ok (s.setPunchOut (true), "and Punch-Out");
+            s.setLoop (true, 1, 2);
+            const auto lanesBefore = s.snapshot().tracks[0].takeLanes.size();
+            take (s, 3.5);
+            const auto t = s.snapshot().tracks[0];
+            std::vector<Session::ClipInfo> passes;
+            for (size_t l = lanesBefore; l < t.takeLanes.size(); ++l) for (const auto& c : t.takeLanes[l].clips) passes.push_back (c);
+            for (size_t l = 0; l < lanesBefore; ++l) for (const auto& c : t.takeLanes[l].clips) if (known.count ("file:" + c.file.getFullPathName()) == 0) passes.push_back (c);
+            std::sort (passes.begin(), passes.end(), [] (const auto& a, const auto& b) { return a.sourceOffset < b.sourceOffset; });
+            bool laidOut = passes.size() == 3;
+            for (size_t k = 0; laidOut && k < 3; ++k)
+                laidOut = std::abs (passes[k].start - 1) < 1e-3 && std::abs (passes[k].sourceOffset - passes[0].sourceOffset - (double) k) < 1e-3
+                       && (k < 2 ? std::abs (passes[k].length - 1) < 1e-3 : passes[k].length > .4 && passes[k].length < .6);
+            check (laidOut, "three passes in take lanes, each inside the brace, the pre-roll left out (" + juce::String ((int) passes.size()) + " passes)");
+            s.undo();
+            s.setLoop (false, 1, 2);
+            ok (s.setTrackArmed (0, false), "disarm the audio track");
+        }
+
         // Captured automation: moves before the brace are ignored and a pass ends at its end.
         ok (s.setAutomationArm (true), "Automation Arm");
         s.seek (0); ok (s.record(), "record automation only");

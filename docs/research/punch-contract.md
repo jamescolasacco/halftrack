@@ -29,13 +29,13 @@ In the control bar, In sits before the loop start field and Out after the loop l
 - **Undo and locking.** One undo removes a punched take, and the switches are locked while recording.
 - **MIDI.** A virtual controller's notes at 0.5, 1.5 and 2.5 s leave one clip covering the brace, holding the middle note at beat 1.
 - **Automation.** Captured automation at 0.5, 1.5 and 2.5 s records only the middle move and ends at the loop end.
+- **Round the loop.** With the loop on and both switches, a 3.5 s recording from 0 s plays the pre-roll unrecorded. It makes three passes in take lanes, each starting at 1 s: one second, one second and a half, a second apart through one file.
 
 The UI suite checks the buttons' placement and toggling.
 
 ## Not implemented
 
-- Pre-roll and count-in tied to the punch point (recording starts where playback starts).
-- The "only while recording" metronome sounding only after the punch-in point.
 - Session View punching.
-- Splitting a loop recording into passes while a punch switch is on (without punching, loop recordings make a take lane per pass; see REC-010).
 - Measured comparison with the reference.
+
+Since this contract was written, the pre-roll and the click before the punch point follow the reference ([metronome contract](metronome-contract.md#punch-in)): a count-in only inside the punch window, and with Enable Only While Recording no click before the punch-in point. Loop recordings with a punch switch on split into passes ([take lanes](take-lanes-contract.md)).

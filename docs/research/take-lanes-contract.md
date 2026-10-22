@@ -49,7 +49,7 @@ As the reference's Comping chapter has it, recording round the Arrangement's loo
 How Stop produces the passes:
 
 - **One take.** Stop switches the loop off as the engine's recording ends, so the engine keeps the take as one continuous recording.
-- **The split.** `Impl::splitLoopPasses` cuts it into passes: the first runs from where recording began to the loop's end, then one per time round the loop, the last perhaps partial.
+- **The split.** `Impl::splitLoopPasses` cuts it into passes: the first runs from where recording began, before the loop if it began there, to the loop's end, then one per time round the loop, the last perhaps partial. With Punch-In or Punch-Out, each pass is then trimmed to the brace, as a take is, so a pre-roll is left out.
 - **Audio passes.** Each is a clip of the same file at the loop, its source offset where the pass began. Latency offsets carry through, and no audio is lost between passes.
 - **MIDI passes.** Each keeps only its own notes and controller events, moved to its start.
 - **The main lane.** The passes are kept in lanes in order, and each replaces what is under it in the main lane. The main lane ends with the last pass and, after a partial last pass, the rest of the one before.
@@ -59,6 +59,7 @@ The engine itself cut its loop recordings into per-pass files but, outside its o
 
 Evidence, from `tests/TakeLanesTests.cpp` with the synthetic input and the computer keyboard:
 
+- **From before the loop.** Recording from a second before a one-second loop for 2.5 s makes a two-second first pass from that second, and a half-second second pass, through one file.
 - **Audio.** 3.5 passes round a one-second loop fill four lanes, reusing the two free after the loop's start. The passes run one second each and then a half, at offsets 0, 1, 2 and 3 s through one file. The main lane plays the last pass and the third after it, and one undo removes every pass.
 - **MIDI.** Three passes round a two-second loop, each with a note, make three lanes each holding its own note half a beat in. The main lane plays only the last pass's note.
 

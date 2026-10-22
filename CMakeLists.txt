@@ -109,6 +109,8 @@ include(cmake/PatchCue.cmake)
 halftrack_patch_cue("${tracktion_SOURCE_DIR}")
 include(cmake/PatchCountInStart.cmake)
 halftrack_patch_count_in_start("${tracktion_SOURCE_DIR}")
+include(cmake/PatchLoopPlayback.cmake)
+halftrack_patch_loop_playback("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"

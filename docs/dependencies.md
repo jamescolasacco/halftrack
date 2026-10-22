@@ -317,7 +317,7 @@ The wave input start patch dropped a take's first block while the transport's qu
 
 ## Tracktion loop recording length patch
 
-`cmake/PatchLoopRecordLength.cmake` patches the pinned `tracktion_TransportControl.cpp` (input SHA-256 `07f46651b67377e32bd962204c27e3f1fe57e819f21cde4e65e1f884d35eb6c0`, patched `5e43a391154ab64092d83eeeb8dddfc57718a11be23e753e4a1fdb0ec83c931d`). The later playback continuation and count-in start patches build on its result, which this patch then accepts as already applied.
+`cmake/PatchLoopRecordLength.cmake` patches the pinned `tracktion_TransportControl.cpp` (input SHA-256 `07f46651b67377e32bd962204c27e3f1fe57e819f21cde4e65e1f884d35eb6c0`, patched `5e43a391154ab64092d83eeeb8dddfc57718a11be23e753e4a1fdb0ec83c931d`). The later playback continuation, count-in start and loop playback patches build on its result, which this patch then accepts as already applied.
 
 - **Before.** The engine refused to start recording round a loop shorter than two seconds, presumably for its own cutting of loop recordings into takes: a one-bar loop at 140 BPM could not be recorded.
 - **After.** Halftrack ends a loop recording unlooped and splits it into passes itself, so the minimum is lowered to 10 ms, refusing only a degenerate loop.
@@ -378,7 +378,7 @@ The wave input start patch dropped a take's first block while the transport's qu
 
 - `tracktion_EditPlaybackContext.h`, which no other patch touches: input `d172d8de5ee35392557d3e0e363893283de2d9d0392d7e58114b3c8c3ee09b4b`, patched `5b4993f48aa8700aaa3f7c4e27790c41042536951e20d4d650951b73095ae327`;
 - `tracktion_EditPlaybackContext.cpp`, which no other patch touches: input `1742b29b2e581de7583892454d08e988dab60598254d5669164acbd9918bb019`, patched `7d28b4424f5c1bb4140631529a219e9c4f60e58ee1c293a2faf9eb10a890ad70`;
-- `tracktion_TransportControl.cpp`, after the loop recording length patch: input `5e43a391154ab64092d83eeeb8dddfc57718a11be23e753e4a1fdb0ec83c931d`, patched `d85899d168abaf3ca1e47eb586a2018ca54b642b20ab92c15de1e970edd9724f`. The earlier patch accepts this result, and this one accepts the later count-in start patch's.
+- `tracktion_TransportControl.cpp`, after the loop recording length patch: input `5e43a391154ab64092d83eeeb8dddfc57718a11be23e753e4a1fdb0ec83c931d`, patched `d85899d168abaf3ca1e47eb586a2018ca54b642b20ab92c15de1e970edd9724f`. The earlier patch accepts this result, and this one accepts the later count-in start and loop playback patches'.
 
 It makes two changes.
 
@@ -417,11 +417,30 @@ Every earlier patch on those files accepts these results as already applied.
 
 ## Tracktion count-in start patch
 
-`cmake/PatchCountInStart.cmake` patches the pinned `tracktion_TransportControl.cpp` after the loop recording length and playback continuation patches: input `d85899d168abaf3ca1e47eb586a2018ca54b642b20ab92c15de1e970edd9724f`, patched `cfd436495804e855c4c99db7aeb0080ea35b328ac339d926ce30804e40d431be`. Both earlier patches accept this result.
+`cmake/PatchCountInStart.cmake` patches the pinned `tracktion_TransportControl.cpp` after the loop recording length and playback continuation patches: input `d85899d168abaf3ca1e47eb586a2018ca54b642b20ab92c15de1e970edd9724f`, patched `cfd436495804e855c4c99db7aeb0080ea35b328ac339d926ce30804e40d431be`. Both earlier patches accept this result, and this one accepts the later loop playback patch's.
 
 - **Before.** A count-in began its bars before the recording's start, plus half a beat of silence before its first click, wherever the start fell.
 - **After.** As the reference's count-in does (static reading of its code), it starts on the bar line nearest to its bars before the start, rounding a half away from zero, after first rounding to 1/3843840 beat as the reference does. Its first click is at its start, and it clicks until the recording's start.
 - **Evidence.** `metronome-acceptance` compares count-in clicks sample by sample from their start, checks the count-in's length from bar lines and from mid-bar, and checks a take's placement and samples after it. `midi-input-acceptance` trims a note crossing the count-in's end.
+
+## Tracktion loop playback patch
+
+`cmake/PatchLoopPlayback.cmake` patches three pinned files:
+
+- `tracktion_PlayHead.h`, which no other patch touches: input `e592ff87c34b02bc3934fb39d470a9e12bf168601c4d7e3d9bf950b2050e04d5`, patched `29b0133c12b035f159b8464765e6751f57e0a7ac75c8b75a5bfce4403cbe06ee`;
+- `tracktion_TransportControl.cpp`, after the count-in start patch: input `cfd436495804e855c4c99db7aeb0080ea35b328ac339d926ce30804e40d431be`, patched `9da5f4cbc09c1dc1c7b09eaae63655a4d78534fe5b7d01f4486063e13a39aea4`. The loop recording length, playback continuation and count-in start patches accept this result.
+- `tracktion_EditUtilities.cpp`, which no other patch touches: input `cbc08effa9de1b1143f3e39931ae5c7fe6a2e07a27b23037d9cfc2378dfc3918`, patched `8214ed9e16d54647e3d6a6e5085234915286e7ee3b1b806a509e2fc864885aad`.
+
+- **Before.** With the Arrangement loop on, Play and Record from outside the loop jumped to its start. A jump while playing was clamped into the loop, and a loop recording started at the loop's start whatever the play position.
+- **After.** As the reference's transport does (static reading of its code), playback and recording start where the transport is:
+  - from before the loop, the play head rolls into it and loops once inside;
+  - from at or past its end, it plays on and never loops;
+  - a jump goes where it is asked, rolling in or playing on in the same way;
+  - a loop recording starts at the play position, so its first pass includes the roll-in.
+- **Evidence.**
+  - `transport-acceptance` plays from before the loop, past its end and after jumps both ways, measuring the position.
+  - `take-lanes-acceptance` records from a second before a loop and finds a two-second first pass, then one round the loop.
+  - `punch-acceptance` records round the loop with Punch-In and Punch-Out from before it, and finds three passes in take lanes inside the brace, without the pre-roll.
 
 <!-- dependency-index:start -->
 
@@ -491,6 +510,7 @@ Generated by `scripts/dependency_index.py` from the build; `tests/test_dependenc
 | `cmake/PatchCountIn.cmake` | patched1 | `385e1d6ad1551a3b38c7d8860c50cd9b364c46f40aecd3693f441b7fa7ebb57a` |
 | `cmake/PatchCountInStart.cmake` | original0 | `d85899d168abaf3ca1e47eb586a2018ca54b642b20ab92c15de1e970edd9724f` |
 | `cmake/PatchCountInStart.cmake` | patched0 | `cfd436495804e855c4c99db7aeb0080ea35b328ac339d926ce30804e40d431be` |
+| `cmake/PatchCountInStart.cmake` | downstream0 | `9da5f4cbc09c1dc1c7b09eaae63655a4d78534fe5b7d01f4486063e13a39aea4` |
 | `cmake/PatchCue.cmake` | original0 | `d7306d85635ac5cc07de62145c249a8a5ebbea87ef43002918493ba223d25e95` |
 | `cmake/PatchCue.cmake` | patched0 | `296e079a8c70e5d13fd8aec6c640daa56c325f1cf33e836e69d2b3037c14ecc6` |
 | `cmake/PatchCue.cmake` | original1 | `9e1afcb494391df977c7f7950ce8030410576a2fab891e757d30a0249f87d60c` |
@@ -512,10 +532,17 @@ Generated by `scripts/dependency_index.py` from the build; `tests/test_dependenc
 | `cmake/PatchInputTakeRescan.cmake` | downstream | `e653f519cdc6ae62cd56be45919cdfd5030e041a35e84ee77c18fadc4b008c91` |
 | `cmake/PatchLaunchRepeat.cmake` | original0 | `060884330b8e511f0d207d7b0dc2e8f506ef846b1eff19ca795422f0cf805a24` |
 | `cmake/PatchLaunchRepeat.cmake` | patched0 | `1cd20c6ace77ed96f2cc99ef41754bfc066d2745c9e91e4f36d14c2ca7009693` |
+| `cmake/PatchLoopPlayback.cmake` | original0 | `e592ff87c34b02bc3934fb39d470a9e12bf168601c4d7e3d9bf950b2050e04d5` |
+| `cmake/PatchLoopPlayback.cmake` | patched0 | `29b0133c12b035f159b8464765e6751f57e0a7ac75c8b75a5bfce4403cbe06ee` |
+| `cmake/PatchLoopPlayback.cmake` | original1 | `cfd436495804e855c4c99db7aeb0080ea35b328ac339d926ce30804e40d431be` |
+| `cmake/PatchLoopPlayback.cmake` | patched1 | `9da5f4cbc09c1dc1c7b09eaae63655a4d78534fe5b7d01f4486063e13a39aea4` |
+| `cmake/PatchLoopPlayback.cmake` | original2 | `cbc08effa9de1b1143f3e39931ae5c7fe6a2e07a27b23037d9cfc2378dfc3918` |
+| `cmake/PatchLoopPlayback.cmake` | patched2 | `8214ed9e16d54647e3d6a6e5085234915286e7ee3b1b806a509e2fc864885aad` |
 | `cmake/PatchLoopRecordLength.cmake` | original | `07f46651b67377e32bd962204c27e3f1fe57e819f21cde4e65e1f884d35eb6c0` |
 | `cmake/PatchLoopRecordLength.cmake` | patched | `5e43a391154ab64092d83eeeb8dddfc57718a11be23e753e4a1fdb0ec83c931d` |
 | `cmake/PatchLoopRecordLength.cmake` | downstream | `d85899d168abaf3ca1e47eb586a2018ca54b642b20ab92c15de1e970edd9724f` |
 | `cmake/PatchLoopRecordLength.cmake` | downstream | `cfd436495804e855c4c99db7aeb0080ea35b328ac339d926ce30804e40d431be` |
+| `cmake/PatchLoopRecordLength.cmake` | downstream | `9da5f4cbc09c1dc1c7b09eaae63655a4d78534fe5b7d01f4486063e13a39aea4` |
 | `cmake/PatchMetronomeRhythm.cmake` | original0 | `cfca43d540e922c63be15bddb94fc1f9db1cc5c9f199bd3bc96dde86ae030613` |
 | `cmake/PatchMetronomeRhythm.cmake` | patched0 | `dd21794c667566ec8d0c8f04c16858770f882e9156f410d91889b3361240814a` |
 | `cmake/PatchMetronomeRhythm.cmake` | original1 | `487e4ef7c67ab8ee3dd5d6dcd27266087306bd4c5adf735b74cceab3e08a7921` |
@@ -582,6 +609,7 @@ Generated by `scripts/dependency_index.py` from the build; `tests/test_dependenc
 | `cmake/PatchPlaybackContinues.cmake` | original2 | `5e43a391154ab64092d83eeeb8dddfc57718a11be23e753e4a1fdb0ec83c931d` |
 | `cmake/PatchPlaybackContinues.cmake` | patched2 | `d85899d168abaf3ca1e47eb586a2018ca54b642b20ab92c15de1e970edd9724f` |
 | `cmake/PatchPlaybackContinues.cmake` | downstream2 | `cfd436495804e855c4c99db7aeb0080ea35b328ac339d926ce30804e40d431be` |
+| `cmake/PatchPlaybackContinues.cmake` | downstream2 | `9da5f4cbc09c1dc1c7b09eaae63655a4d78534fe5b7d01f4486063e13a39aea4` |
 | `cmake/PatchPluginScanner.cmake` | original_0 | `94eb54614af016e38e67af2e27f870e0ad14aa6bf83b42638d7b36c8291f8d8c` |
 | `cmake/PatchPluginScanner.cmake` | previous_0 | `521a1479001bb633c73f5a4780fe85418128728e1dab2f3c0abe43d84c4b0895` |
 | `cmake/PatchPluginScanner.cmake` | previous_current_0 | `a4498068deaeec17081d992825d1df2faf49a1e6c289b91d0fc9a8a54aa7071c` |

@@ -5,7 +5,7 @@ function(halftrack_patch_loop_record_length source_dir)
     set(source "${source_dir}/modules/tracktion_engine/playback/tracktion_TransportControl.cpp")
     set(original "07f46651b67377e32bd962204c27e3f1fe57e819f21cde4e65e1f884d35eb6c0")
     set(patched "5e43a391154ab64092d83eeeb8dddfc57718a11be23e753e4a1fdb0ec83c931d")
-    set(downstream "d85899d168abaf3ca1e47eb586a2018ca54b642b20ab92c15de1e970edd9724f" "cfd436495804e855c4c99db7aeb0080ea35b328ac339d926ce30804e40d431be") # The later playback continuation and count-in start patches.
+    set(downstream "d85899d168abaf3ca1e47eb586a2018ca54b642b20ab92c15de1e970edd9724f" "cfd436495804e855c4c99db7aeb0080ea35b328ac339d926ce30804e40d431be" "9da5f4cbc09c1dc1c7b09eaae63655a4d78534fe5b7d01f4486063e13a39aea4") # The later playback continuation, count-in start and loop playback patches.
     set(before [=[                    if (loopRange.getLength() < 2s)
                     {
                         engine.getUIBehaviour().showWarningMessage (TRANS("To record in loop mode, the length of loop must be greater than 2 seconds."));

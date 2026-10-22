@@ -2097,3 +2097,12 @@ Engine and QA areas. From a static reading of the reference's transport code (fi
 - **The punch window.** A count-in comes only when recording starts inside the punch window; from before Punch-In's point the pre-roll plays at once.
 - **The punch click.** The pre-roll is silent only with Enable Only While Recording, which is what the reference's manual describes.
 - **Measured.** The metronome and MIDI input suites.
+
+## Arrangement loop playback from the insert marker — 2026-10-22
+
+Engine and QA areas. From a static reading of the reference's transport code.
+
+- **Play with the loop on** starts from the insert marker, as the reference's does. From before the loop it rolls into it; from at or past its end it plays on without looping; jumps behave the same, no longer clamped into the loop. Before, the engine jumped to the loop's start.
+- **Recording round the loop** starts where the transport is. A first pass from before the loop runs to its end. With Punch-In or Punch-Out each pass is trimmed to the brace, so the pre-roll is left out and every pass gets its take lane.
+- **Engine.** A new patch, `cmake/PatchLoopPlayback.cmake`, on the play head, the transport and the recording parameters.
+- **Measured.** The transport, take-lanes and punch suites, with the full gate.
