@@ -7534,11 +7534,7 @@ Result Session::setClipLoop (const String& id, const ClipLoop& loop, double star
         if (startBeat < loop.start - 1e-9 || startBeat >= loop.start + loop.length - 1e-9) return Result::fail ("The clip's start must lie in its loop.");
         if (loop.start + loop.length > sourceBeats + 1e-6) return Result::fail ("A warped clip's loop must end within its audio.");
     }
-    else
-    {
-        if (clip->getClipSlot() != nullptr) return Result::fail ("Session clips always loop.");
-        if (startBeat >= sourceBeats - 1e-6) return Result::fail ("The start must lie within the clip's audio.");
-    }
+    else if (startBeat >= sourceBeats - 1e-6) return Result::fail ("The start must lie within the clip's audio.");
     if (before.loop.on == loop.on && (! loop.on || before.loop == loop) && std::abs (before.contentStartBeat - startBeat) < 1e-9) return Result::ok();
     impl->transaction ("Set clip loop");
     const auto bps = impl->edit->tempoSequence.getBeatsPerSecondAt (clip->getPosition().getStart());
@@ -7546,6 +7542,9 @@ Result Session::setClipLoop (const String& id, const ClipLoop& loop, double star
     else Impl::endLoop (*clip);
     auto position = clip->getPosition();
     position.offset = te::TimeDuration::fromSeconds ((loop.on ? startBeat - loop.start : startBeat) / bps);
+    // A Session clip unlooped plays once, from its start to where its loop ended.
+    if (! loop.on && before.loop.on && clip->getClipSlot() != nullptr && before.loop.start + before.loop.length > startBeat + 1e-9)
+        position.time = position.time.withLength (te::TimeDuration::fromSeconds ((before.loop.start + before.loop.length - startBeat) / bps));
     // Unlooped, warped audio ends with its source.
     if (! loop.on && wave != nullptr)
     {
@@ -7564,7 +7563,8 @@ Result Session::setClipBeats (const String& id, double startBeat, double lengthB
     auto* clip = impl->anyClip (id); if (! clip) return Result::fail ("Clip not found.");
     const auto before = describeClip (*clip);
     if (! before.canLoop) return Result::fail ("Use the audio clip's own range for unwarped audio.");
-    if (clip->getClipSlot() != nullptr) return Result::fail ("Session clips have no place in the Arrangement.");
+    // A Session clip sits at its slot's start; only its length and content start change.
+    if (clip->getClipSlot() != nullptr && std::abs (startBeat) > 1e-9) return Result::fail ("A Session clip starts at its slot; set its length and start only.");
     if (clip->isGrouped()) return Result::fail ("Ungroup this clip before trimming it.");
     auto* wave = dynamic_cast<te::WaveAudioClip*> (clip);
     const double sourceBeats = wave != nullptr ? wave->getLoopInfo().getNumBeats() : 1000000;

@@ -3628,9 +3628,8 @@ private:
             length.setText (barsBeats (clip.loop.length, meter, false), juce::dontSendNotification);
             loop.setToggleState (clip.loop.on, juce::dontSendNotification);
             const bool enabled = ! owner.session.isExporting();
-            const bool slot = owner.state.tracks.empty() ? false : isSlotClip();
-            start.setEnabled (enabled); loop.setEnabled (enabled && ! slot);
-            end.setEnabled (enabled && ! clip.loop.on && ! slot);
+            start.setEnabled (enabled); loop.setEnabled (enabled);
+            end.setEnabled (enabled && ! clip.loop.on);
             position.setEnabled (enabled && clip.loop.on); length.setEnabled (enabled && clip.loop.on);
             repaint();
         }
@@ -3661,11 +3660,6 @@ private:
         Session::ClipInfo clip;
         juce::Label start, end, position, length;
         juce::TextButton loop { "Loop" };
-        bool isSlotClip() const
-        {
-            for (const auto& t : owner.state.tracks) for (const auto& c : t.clips) if (c.id == clip.id) return false;
-            return true;
-        }
         void edit (juce::Label& field)
         {
             const auto& meter = owner.state.timeSignature;

@@ -20,9 +20,9 @@ Looping, the clip plays from its start into the loop and round it for as long as
   - the start must lie in the loop. The reference also allows a start before the loop, which the engine's offset, counted from the loop's start, cannot hold.
   - a warped clip's loop must end within its audio.
 - **Unlooped:** the start must lie within a warped clip's audio, and a warped clip is shortened to end with its audio.
-- **Session clips** always loop, so their loop can be moved but not turned off.
+- **Session clips** loop over their content when made. Unlooped, a Session clip plays once from its start, as the reference's one-shot clips do, and stops. It ends where its loop ended, and End sets its length.
 
-`Session::setClipBeats (clipId, startBeat, lengthBeats, contentStartBeat)` places an Arrangement clip's edges in project beats. Moving the start edge and the content start together trims the clip without moving its content.
+`Session::setClipBeats (clipId, startBeat, lengthBeats, contentStartBeat)` places an Arrangement clip's edges in project beats. A Session clip stays at its slot's start (beat 0), so only its length and content start change. Moving the start edge and the content start together trims the clip without moving its content.
 
 - A looped clip lasts as long as it is made.
 - An unlooped warped clip cannot run past its audio, and an unlooped clip cannot start before its content.
@@ -68,7 +68,11 @@ Clicking the note editor's ruler seeks to where that beat first plays.
 It also checks:
 
 - undo of each edit;
-- refusals: an empty loop, a start outside it, negative beats and Session clips' loops turned off;
+- refusals: an empty loop, a start outside it, negative beats, and a Session clip moved off its slot's start;
+- **a Session clip**, launched through the engine:
+  - its two-beat loop repeats;
+  - unlooped, it plays its two beats once and stops;
+  - set to one beat from its second, it plays that beat alone;
 - **warped audio** of alternating loud and quiet clicks:
   - a loop inside the audio;
   - a clip longer than its audio, still looping;

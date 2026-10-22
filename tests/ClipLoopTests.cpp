@@ -1,4 +1,6 @@
 #include "Session.h"
+#include <tracktion_engine/tracktion_engine.h>
+#include <tracktion_engine/testing/tracktion_EnginePlayer.h>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -11,6 +13,7 @@
 // undo step, invalid ones are refused, and loops reopen with the project.
 namespace halftrack
 {
+namespace te = tracktion::engine;
 namespace
 {
 void check (bool v, const juce::String& text)
@@ -120,12 +123,44 @@ int runClipLoopTests (const juce::File& artifacts)
         check (pattern (beatLevels (s, render, 24), loud) == "qLqLqL----------qLqLqL--", "the pasted clip plays the same loop from the same start");
         s.undo();
 
-        // A Session clip always loops; unwarped audio does not loop here.
-        ok (s.addMidiClipToSlot (track.id, 0, 4), "a Session clip");
-        const auto slotClip = s.snapshot().tracks.back().slots[0].clip;
-        check (slotClip.canLoop && slotClip.loop == Session::ClipLoop { true, 0, 4 }, "a Session clip loops over its content");
-        ok (s.setClipLoop (slotClip.id, { true, 1, 2 }, 1), "its loop can be moved");
-        check (s.setClipLoop (slotClip.id, { false, 0, 0 }, 0).failed() && s.setClipBeats (slotClip.id, 0, 4, 1).failed(), "but not turned off, nor placed in the Arrangement");
+        // A Session clip loops over its content; unlooped, it plays once.
+        {
+            auto& engine = dynamic_cast<te::DeviceManager::TracktionEngineAudioDeviceManager&> (s.audioDeviceManager()).engine;
+            te::HostedAudioDeviceInterface::Parameters p; p.sampleRate = 48000; p.blockSize = 128; p.inputChannels = 0; p.outputChannels = 2; p.useMidiDevices = false;
+            te::test_utilities::EnginePlayer player (engine, p);
+            const auto dispatch = [&] { for (auto* edit : engine.getActiveEdits().getEdits()) edit->dispatchPendingUpdatesSynchronously(); };
+            ok (s.setLaunchQuantisation (Session::LaunchQuantisation::none), "launch at once");
+            ok (s.addMidiClipToSlot (track.id, 0, 4), "a Session clip");
+            const auto slotClip = [&] { return s.snapshot().tracks.back().slots[0].clip; };
+            check (slotClip().canLoop && slotClip().loop == Session::ClipLoop { true, 0, 4 }, "a Session clip loops over its content");
+            ok (s.addMidiNotes (slotClip().id, { { "", 60, 0, .25, 1.0f }, { "", 60, 1, .25, .25f } }, added), "the same two notes in it");
+            // Each beat's level from a fresh launch, the Arrangement's clip moved out of the way.
+            const auto launched = [&] (int beats)
+            {
+                s.stop(); dispatch(); player.process (4096);
+                ok (s.launchScene (0), "launch it"); dispatch();
+                std::vector<float> levels;
+                for (int b = 0; b < beats; ++b) { const auto out = player.process (beatSamples); levels.push_back (out.getMagnitude (0, 0, beatSamples / 8)); }
+                const bool still = s.snapshot().tracks.back().slots[0].playing;
+                s.stop(); dispatch();
+                return std::pair { levels, still };
+            };
+            ok (s.setClipBeats (id, 100, 6, 1), "move the Arrangement clip far away");
+            ok (s.setClipLoop (slotClip().id, { true, 0, 2 }, 0), "loop the Session clip's first two beats");
+            auto [looped, loopedPlaying] = launched (8);
+            const auto slotLoud = *std::max_element (looped.begin(), looped.end());
+            check (pattern (looped, slotLoud) == "LqLqLqLq" && loopedPlaying, "launched, it loops: " + pattern (looped, slotLoud));
+            ok (s.setClipLoop (slotClip().id, { false, 0, 0 }, 0), "turn its loop off");
+            check (! slotClip().loop.on && std::abs (slotClip().lengthBeats - 2) < 1e-6, "unlooped, it ends where its loop did");
+            auto [once, oncePlaying] = launched (8);
+            check (pattern (once, slotLoud) == "Lq------" && ! oncePlaying, "launched, it plays once and stops: " + pattern (once, slotLoud));
+            check (s.setClipBeats (slotClip().id, 1, 4, 0).failed(), "a Session clip cannot leave its slot's start");
+            ok (s.setClipBeats (slotClip().id, 0, 1, 1), "make it one beat long from its second beat");
+            auto [short1, shortPlaying] = launched (4);
+            check (pattern (short1, slotLoud) == "q---" && ! shortPlaying, "it plays just that beat: " + pattern (short1, slotLoud));
+            ok (s.setClipLoop (slotClip().id, { true, 0, 2 }, 1), "loop it again");
+            check (slotClip().loop.on, "and it loops again");
+        }
 
         // Warped audio: four seconds of clicks on the beat at 120 BPM, loud on even beats.
         const auto clicks = root.getChildFile ("clicks.wav");

@@ -1711,6 +1711,7 @@ Engine and UI areas.
 - **Edges.** In the Arrangement, a looped clip's right edge repeats its loop and its left edge trims it round the loop. Unlooped clips trim in beats, keeping their content in place.
 - **Editors.** The note editor and waveform dim what the clip does not play, show the loop brace and start, and follow the play head round the loop. The Arrangement draws each pass with a notch.
 - **Copies.** Duplicates and pastes keep the loop and start.
+- **One-shots.** A Session clip with Loop off plays once and stops.
 - **Measured.** Each case is rendered and its beats compared (`tests/ClipLoopTests.cpp`), and the UI suite drives the box and the edges.
 
 See [the contract](research/clip-loops-contract.md).

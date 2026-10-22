@@ -716,10 +716,12 @@ public:
     // Where a MIDI or warped audio clip's content starts and its loop, in content beats. Looping,
     // the content plays from the start into the loop and round it for as long as the clip lasts;
     // the start must lie in the loop (the reference also allows one before it). Unlooped, it plays
-    // from the start for the clip's length, and a warped audio clip ends with its source. Session
-    // clips always loop. The clip keeps its place. One undo step.
+    // from the start for the clip's length, and a warped audio clip ends with its source. A Session
+    // clip unlooped plays once, from its start to where its loop ended. The clip keeps its place.
+    // One undo step.
     juce::Result setClipLoop (const juce::String& clipId, const ClipLoop&, double contentStartBeat);
-    // Places an Arrangement MIDI or warped audio clip's edges in project beats, with the content beat
+    // Places an Arrangement MIDI or warped audio clip's edges in project beats (a Session clip's at 0,
+    // setting its length), with the content beat
     // heard at its start: moving the start edge and that beat together trims the clip without
     // moving its content. A looped clip lasts as long as it is made, repeating its loop; an unlooped
     // warped audio clip ends with its source. One undo step.
