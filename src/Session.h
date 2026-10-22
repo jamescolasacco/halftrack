@@ -583,7 +583,8 @@ public:
     juce::Result removeScene (int sceneIndex);
     juce::Result duplicateScene (const juce::String& sceneId, juce::String& duplicatedSceneId);
     // Capture and Insert Scene, after the reference: a new scene after the given one (or at the end)
-    // holding copies of the clips now playing, one per track. Refused when none plays. One undo step.
+    // holding the clips now playing, one per track, which play on in it without interruption; copies
+    // of them stay in their old scenes. Refused when none plays. One undo step.
     juce::Result captureAndInsertScene (int afterSceneIndex, juce::String& sceneId);
     juce::Result moveScene (const juce::String& sceneId, int destinationIndex);
     juce::Result renameScene (int sceneIndex, const juce::String& name);

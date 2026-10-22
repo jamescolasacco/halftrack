@@ -1780,7 +1780,7 @@ See [the contract](research/midi-ports-contract.md#external-sync-2026-10-22).
 
 Engine and UI areas.
 
-- **Capture.** Session menu > Capture and Insert Scene (Cmd/Ctrl+Shift+I) inserts a scene after the selected one with copies of the clips now playing, one undo step.
-- **Measured.** Clips playing from two scenes are captured exactly and play when the new scene launches (`tests/SceneCaptureTests.cpp`).
+- **Capture.** Session menu > Capture and Insert Scene (Cmd/Ctrl+Shift+I) inserts a scene after the selected one holding the clips now playing. It plays on at once, the old scenes keep copies, and it is one undo step.
+- **Measured.** MIDI clips with held notes from two scenes and an audio loop are captured. Their render matches the uninterrupted render exactly (`tests/SceneCaptureTests.cpp`).
 
 See [the contract](research/scene-capture-contract.md).

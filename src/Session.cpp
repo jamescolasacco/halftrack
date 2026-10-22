@@ -6278,7 +6278,7 @@ Result Session::captureAndInsertScene (int after, String& capturedId)
     if (list.getNumScenes() >= 256) return Result::fail ("This project has reached the scene limit.");
     const int index = juce::isPositiveAndBelow (after, list.getNumScenes()) ? after + 1 : list.getNumScenes();
     // What plays now: each ordinary track's playing slot clip.
-    struct Copy { te::AudioTrack* track; te::ClipCopy clip; };
+    struct Copy { te::AudioTrack* track; te::ClipSlot* playing; te::ClipCopy clip; };
     std::vector<Copy> clips;
     if (impl->edit->getTransport().isPlaying())
         for (auto* track : te::getAudioTracks (*impl->edit))
@@ -6290,7 +6290,7 @@ Result Session::captureAndInsertScene (int after, String& capturedId)
                     {
                         auto copy = te::ClipCopy::fromClip (*clip).withNewItemID (*impl->edit);
                         renewMidiNoteIDs (copy.getState());
-                        clips.push_back ({ track, std::move (copy) });
+                        clips.push_back ({ track, slot, std::move (copy) });
                         break;
                     }
         }
@@ -6308,6 +6308,17 @@ Result Session::captureAndInsertScene (int after, String& capturedId)
             impl->changed();
             return Result::fail ("A playing clip could not be captured.");
         }
+    // The new scene plays at once with no interruption: each playing clip's slot changes places
+    // with its copy's, so the clip carries on in the new scene and the copy stays where it was.
+    // The engine keeps a slot's playback across graph rebuilds, and its held notes sound on.
+    for (auto& copy : clips)
+    {
+        auto& slots = copy.track->getClipSlotList().state;
+        auto* captured = copy.track->getClipSlotList().getClipSlots()[index];
+        const int from = slots.indexOf (copy.playing->state), to = slots.indexOf (captured->state);
+        slots.moveChild (from, to, &impl->edit->getUndoManager());
+        slots.moveChild (from < to ? to - 1 : to + 1, from, &impl->edit->getUndoManager());
+    }
     impl->changed(); return Result::ok();
 }
 Result Session::moveScene (const String& id, int destination)
