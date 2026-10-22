@@ -48,10 +48,10 @@ struct Fixture
     }
     ~Fixture(){session.stop();setClickFile(true,oldBig);setClickFile(false,oldLittle);}
 };
-void compareClicks(const juce::AudioBuffer<float>& audio,double tempo,float gain,bool accent,double loopSeconds=0,int countInBeats=-1,double leadSeconds=0,int beatsPerBar=4)
+void compareClicks(const juce::AudioBuffer<float>& audio,double tempo,float gain,bool accent,double loopSeconds=0,int countInBeats=-1,double leadSeconds=0,int beatsPerBar=4,double tickBeats=1)
 {
     juce::AudioBuffer<float> expected(2,audio.getNumSamples());expected.clear();
-    const double step=48000*60/tempo;
+    const double step=48000*60/tempo*tickBeats; // beatsPerBar and loops count ticks.
     for(int beat=0;beat*step+leadSeconds*48000<audio.getNumSamples();++beat)
     {
         if(countInBeats>=0 && beat>=countInBeats)break;
@@ -94,6 +94,42 @@ void playback(const juce::File& root)
     compareClicks(captureSyntheticTestDevice(session,400),120,1,true,1);session.stop();session.setLoop(false,0,1);
     settings.recordingOnly=true;ok(session.setMetronome(settings),"select recording-only click");session.seek(0);ok(session.play(),"play with record-only setting");
     check(captureSyntheticTestDevice(session,200).getMagnitude(0,51200)==0,"record-only click is silent during ordinary playback");session.stop();
+    // Rhythm, as the reference's: a division ticks at its length, Auto at the meter's denominator,
+    // a bar once a bar, accenting each bar's first tick; a division that does not divide the bar
+    // plays as Auto.
+    settings.recordingOnly=false;settings.gain=1;settings.accent=true;
+    const auto play=[&](float rhythm,int numerator,int denominator,double tick,int ticksPerBar,const juce::String& what)
+    {
+        ok(session.setTimeSignature(numerator,denominator),"choose "+juce::String(numerator)+"/"+juce::String(denominator));
+        settings.rhythm=rhythm;ok(session.setMetronome(settings),"choose a rhythm");
+        session.seek(0);ok(session.play(),"play "+what);
+        compareClicks(captureSyntheticTestDevice(session,800),120,1,true,0,-1,0,ticksPerBar,tick);session.stop();
+    };
+    play(.5f,4,4,.5,8,"eighths in 4/4");
+    play(1.0f/3,4,4,1.0/3,12,"eighth triplets in 4/4");
+    play(-1,4,4,4,1,"one tick a bar in 4/4");
+    play(0,6,8,.5,6,"Auto in 6/8, ticking eighths");
+    play(1,6,8,1,3,"crotchets in 6/8");
+    play(1,7,8,.5,7,"crotchets in 7/8, which do not divide its bar and play as Auto");
+    ok(session.setTimeSignature(4,4),"back to 4/4");
+    settings.rhythm=.3f;check(session.setMetronome(settings).failed(),"a value off the reference's list is refused");
+    settings.rhythm=0;ok(session.setMetronome(settings),"back to Auto");
+    settings.rhythm=.25f;ok(session.setMetronome(settings),"sixteenths");session.undo();
+    check(session.snapshot().metronome.rhythm==0,"choosing a rhythm is one undo step");
+}
+// The Rhythm list and how it resolves, from the reference's code.
+void rhythms()
+{
+    const auto list=Session::metronomeRhythms();
+    juce::StringArray names;for(const auto& r:list)names.add(r.name);
+    check(names.joinIntoString(",")=="Auto,1 Bar,1/2,1/2T,1/4,1/4T,1/8,1/8T,1/16,1/16T" && list[0].value==0 && list[1].value==-1 && list[3].value==4.0f/3,
+          "the Rhythm menu lists Auto, 1 Bar and the divisions to sixteenth triplets, in crotchets");
+    const auto fitting=[&](int n,int d){juce::StringArray f;for(const auto& r:list)if(r.value>0&&Session::metronomeRhythmFits(r.value,{n,d}))f.add(r.name);return f.joinIntoString(",");};
+    check(fitting(6,8)=="1/4,1/8,1/8T,1/16,1/16T" && fitting(7,8)=="1/8,1/16,1/16T" && fitting(3,2)=="1/2,1/4,1/4T,1/8,1/8T,1/16,1/16T" && fitting(4,4)=="1/2,1/2T,1/4,1/4T,1/8,1/8T,1/16,1/16T",
+          "only divisions that divide the bar fit: in 6/8, 7/8, 3/2 and 4/4 as the reference allows");
+    check(Session::metronomeTickBeats(0,{6,8})==.5 && Session::metronomeTickBeats(0,{3,2})==2 && Session::metronomeTickBeats(-1,{6,8})==3 && Session::metronomeTickBeats(.5f,{7,8})==.5
+              && Session::metronomeTickBeats(2,{6,8})==.5,
+          "Auto ticks on the denominator, a bar on the bar, and a division that does not fit as Auto");
 }
 void exportExcludesClick(const juce::File& root)
 {
@@ -246,7 +282,7 @@ int runMetronomeTests(const juce::File& artifacts)
         const auto root=artifacts.getChildFile("metronome-"+juce::Uuid().toString());ok(root.createDirectory(),"create isolated metronome fixtures");
         for(double seconds:{-2.25,-1.0,-.25,0.0,.25,1.0,2.25})
             check(tracktion::graph::timeToSample(seconds,48000)==std::llround(seconds*48000),"graph sample conversion rounds signed time symmetrically");
-        playback(root);persistence(root);countIn(root);exportExcludesClick(root);sounds(root);
+        playback(root);persistence(root);countIn(root);exportExcludesClick(root);sounds(root);rhythms();
         std::cout<<"Metronome tests passed: "<<root.getFullPathName()<<std::endl;return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL metronome: "<<e.what()<<std::endl;return 1;}

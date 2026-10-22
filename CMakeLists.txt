@@ -101,6 +101,8 @@ include(cmake/PatchClipFades.cmake)
 halftrack_patch_clip_fades("${tracktion_SOURCE_DIR}")
 include(cmake/PatchCountIn.cmake)
 halftrack_patch_count_in("${tracktion_SOURCE_DIR}")
+include(cmake/PatchMetronomeRhythm.cmake)
+halftrack_patch_metronome_rhythm("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"

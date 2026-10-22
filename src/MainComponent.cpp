@@ -7972,6 +7972,7 @@ private:
         else if(item>=10 && item<=12) settings.countInBars=item-10;
         else if(item==14) settings.countInBars=4;
         else if(item>=21 && item<=25) settings.gain=(item-20)*.2f;
+        else if(item>=40 && item<50) settings.rhythm=Session::metronomeRhythms()[(size_t)(item-40)].value;
         else if(item>=31 && item<31+Session::metronomeSoundCount)
         {
             auto preferences=session.preferences();preferences.metronomeSound=static_cast<Session::MetronomeSound>(item-31);
@@ -7994,6 +7995,11 @@ private:
         const auto sound=session.preferences().metronomeSound;
         for(int i=0;i<Session::metronomeSoundCount;++i)
             menu.addItem(31+i,Session::metronomeSoundName(static_cast<Session::MetronomeSound>(i)),true,(int)sound==i);
+        // Divisions that do not divide the project's bar are disabled, as the reference's are.
+        menu.addSectionHeader("Rhythm");
+        const auto rhythms=Session::metronomeRhythms();
+        for(size_t i=0;i<rhythms.size();++i)
+            menu.addItem(40+(int)i,rhythms[i].name,Session::metronomeRhythmFits(rhythms[i].value,state.timeSignature),settings.rhythm==rhythms[i].value);
         menu.addSeparator();
         menu.addItem(2,"Enable Only While Recording",true,settings.recordingOnly);
         menu.addItem(1,"Accent First Beat",true,settings.accent);
@@ -14927,6 +14933,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     metronome->setToggleState(true,juce::dontSendNotification);metronome->onClick();refresh();
     check(state.metronome.enabled,"metronome button enables the native click");
     applyMetronomeMenu(14);check(state.metronome.countInBars==4,"the count-in menu offers four bars, as the reference's does");session.undo();refresh();
+    applyMetronomeMenu(46);check(state.metronome.rhythm==.5f,"the menu's Rhythm section chooses 1/8");session.undo();refresh();
+    check(state.metronome.rhythm==0,"and undo returns to Auto");
     applyMetronomeMenu(33);check(session.preferences().metronomeSound==Session::MetronomeSound::wood,"the menu's Sound section chooses Wood");
     applyMetronomeMenu(31);check(session.preferences().metronomeSound==Session::MetronomeSound::classic,"and Classic again");
     applyMetronomeMenu(11);check(state.metronome.countInBars==1,"native count-in menu chooses one bar");

@@ -507,11 +507,21 @@ public:
     enum class MetronomeSound { classic, click, wood };
     static constexpr int metronomeSoundCount = 3;
     static juce::String metronomeSoundName (MetronomeSound);
+    // The metronome's Rhythm choices, in the reference's order, and how one plays in a meter: the
+    // tick in crotchets, and whether a division divides the bar (Auto and a bar always do).
+    struct MetronomeRhythm { const char* name; float value; };
+    static std::array<MetronomeRhythm, 10> metronomeRhythms();
+    static bool metronomeRhythmFits (float rhythm, TimeSignature);
+    static double metronomeTickBeats (float rhythm, TimeSignature);
     struct MetronomeSettings
     {
         bool enabled = false, accent = true, recordingOnly = false;
         float gain = .6f;
         int countInBars = 0; // 0, 1, 2 or 4 bars of the project meter, as the reference offers.
+        // Rhythm, as the reference's: 0 Auto (the meter's denominator), -1 one tick a bar, or a
+        // division in crotchets from metronomeRhythms. A division that does not divide the bar
+        // plays as Auto. Kept with the project.
+        float rhythm = 0;
         bool operator== (const MetronomeSettings&) const = default;
     };
     // A MIDI mapping (see setMidiLearnTarget): a controller on a channel and the target it drives

@@ -729,6 +729,6 @@ Halftrack's default fades follow a static reading of the reference's code ([cont
 ### Metronome
 
 - **The sounds.** The reference's Classic, Click and Wood are its own samples, so Halftrack synthesises its own ticks to their character; they are not the same sounds.
-- **Count-in storage.** The count-in is kept with the project. The reference keeps it in its Metronome device, apparently outside the Set; whether it is global there is being researched.
-- **Rhythm.** Rhythm divisions are not implemented yet, so Halftrack ticks every crotchet, where the reference's Auto ticks on the meter's denominator.
+- **Count-in storage.** The reference keeps the count-in as an application setting, changed without an undo step (static reading). Halftrack keeps it with the project, as one undo step, until that is moved.
+- **Rhythm timing.** The reference snaps ticks to its tick grid from the time-signature section start, and while stopped times them in whole samples. Halftrack places them on the beat grid from the start; it has one meter per project.
 

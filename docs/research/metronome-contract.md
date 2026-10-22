@@ -22,12 +22,27 @@ The metronome follows the reference's Metronome Settings menu. The reference's m
 - **How they play.** `metronome::tick` (`src/MetronomeSounds.cpp`) synthesises each tick offline, deterministically. The Session writes the chosen sound's two ticks beside the preferences and points the engine's click track at them, at startup and whenever the choice changes.
 - **Storage.** The choice is kept with the preferences (`Preferences::metronomeSound`), as the reference keeps its metronome's preset outside the Set.
 
+## Rhythm
+
+This follows a static reading of the reference's code (raw material in the ignored `artifacts/reverse-engineering/metronome/`).
+
+- **The choices.** Auto, 1 Bar, 1/2, 1/2T, 1/4, 1/4T, 1/8, 1/8T, 1/16 and 1/16T, stored as the reference stores them: 0 for Auto, −1 for a bar, otherwise the division in crotchets, with triplets as single floats.
+- **Storage.** The rhythm is kept with the project; choosing one is an undo step, as in the reference.
+- **How it plays.**
+  - Auto ticks on the meter's denominator: eighths in 6/8 and 7/8, halves in 3/2.
+  - A bar ticks once a bar.
+  - A division ticks at its length if the bar is a whole number of them. Otherwise it plays as Auto, and returns when the meter fits it again.
+  - Ticks fall on a grid of their length from the start, and the first of each bar is accented.
+- **The menu.** Divisions that do not fit the project's meter are disabled; Auto and 1 Bar always fit.
+- **The engine.** A patch (`cmake/PatchMetronomeRhythm.cmake`) lets the click generator read the project's rhythm when it is prepared, resolve it as above, and place its ticks. Bars are numerator × 4 / denominator crotchets. The engine's own bar count treats a bar of 6/8 as six crotchets.
+
 ## The menu
 
 The metronome's menu has sections, as the reference's does:
 
 - Count-In: None, 1 Bar, 2 Bars, 4 Bars;
 - Sound: Classic, Click, Wood;
+- Rhythm: Auto to 1/16T;
 - Enable Only While Recording;
 - Halftrack's own Accent First Beat and Click Level.
 
@@ -42,10 +57,16 @@ The metronome's menu has sections, as the reference's does:
 - that the click track plays Classic at first;
 - that choosing Wood points it at files holding exactly the Wood ticks, and that the choice is kept.
 
-The UI suite chooses four bars and Wood from the menu.
+The same suite checks Rhythm by comparing playback clicks sample by sample:
+
+- eighths, eighth triplets and one tick a bar in 4/4;
+- Auto ticking eighths in 6/8, and crotchets in 6/8;
+- crotchets in 7/8, which play as Auto;
+- the menu's list, the divisions that fit 6/8, 7/8, 3/2 and 4/4, a refused value, and undo.
+
+The UI suite chooses four bars, Wood and 1/8 from the menu.
 
 ## Not yet
 
-- Rhythm (the tick division), and Auto following the meter's denominator. Halftrack ticks every crotchet.
 - The reference's levels and routing: its metronome plays at the Preview volume on the cue output.
-- Whether the count-in belongs to the project or the application, which is being researched (see [open questions](../open-questions.md#metronome)).
+- Where the count-in is kept. The reference keeps it as an application setting, outside the Set, while Halftrack keeps it with the project (see [open questions](../open-questions.md#metronome)).

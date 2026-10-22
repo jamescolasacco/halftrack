@@ -45,6 +45,8 @@ const juce::Identifier implicitWarpEndProperty { "halftrackWarpEnd" }, warpMarke
 const juce::Identifier videoProperty { "halftrackVideo" }; // A video clip's movie, absolute or relative to the project.
 const juce::Identifier recordQuantisationProperty { "halftrackRecordQuantisation" };
 const juce::Identifier countInProperty { "halftrackCountInBars" };
+// The metronome rhythm, read by the engine's click generator when it is prepared (PatchMetronomeRhythm).
+const juce::Identifier metronomeTickProperty { "halftrackMetronomeTick" };
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
 te::Edit::CountIn countInMode (int bars)
 {
@@ -934,6 +936,12 @@ Result validateMetronome (const juce::ValueTree& state)
             && number>=lo && number<=hi && (!integral || std::floor(number)==number);
     };
     if(!read(state.getProperty(countInProperty,0),0,4,true) || static_cast<int>(state.getProperty(countInProperty,0))==3) return Result::fail("Invalid project count-in.");
+    if(state.hasProperty(metronomeTickProperty))
+    {
+        const auto rhythms=Session::metronomeRhythms(); const auto value=static_cast<float>(static_cast<double>(state.getProperty(metronomeTickProperty)));
+        if(!read(state.getProperty(metronomeTickProperty),-1,2,false) || std::none_of(rhythms.begin(),rhythms.end(),[&](const auto& r){return r.value==value;}))
+            return Result::fail("Invalid project metronome rhythm.");
+    }
     int count=0;
     for(const auto& node:state) if(node.hasType(te::IDs::CLICKTRACK))
     {
@@ -2335,7 +2343,7 @@ private:
     }
     void restart() { if (edit != nullptr && edit->state == state) edit->restartPlayback(); }
     void valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& id) override
-    { if (id == clipGrooveProperty || id == sidechainTapProperty || id == sidechainOffProperty || inPool (v)) restart(); }
+    { if (id == clipGrooveProperty || id == sidechainTapProperty || id == sidechainOffProperty || id == metronomeTickProperty || inPool (v)) restart(); }
     void valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child) override { if (inPool (parent) || child.hasType (groovePoolType)) restart(); }
     void valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int) override { if (inPool (parent) || child.hasType (groovePoolType)) restart(); }
 };
@@ -5000,6 +5008,7 @@ Session::Snapshot Session::snapshot() const
     s.masterVolumeAutomation = automationLane (*e.getMasterVolumePlugin(), AutomationTarget::volume);
     s.metronome = {e.clickTrackEnabled.get(),e.clickTrackEmphasiseBars.get(),e.clickTrackRecordingOnly.get(),
         e.getClickTrackVolume(),static_cast<int>(e.state.getProperty(countInProperty,0))};
+    s.metronome.rhythm=static_cast<float>(static_cast<double>(e.state.getProperty(metronomeTickProperty,0.0)));
     s.recordQuantisation=static_cast<RecordQuantisation>(static_cast<int>(e.state.getProperty(recordQuantisationProperty,0)));
     const auto clickRange=e.getClickTrackRange();
     if(s.recording && s.metronome.countInBars>0 && !clickRange.isEmpty())
@@ -5725,6 +5734,23 @@ Result Session::setPreferences (const Preferences& next)
     impl->changed(); return Result::ok();
 }
 Result Session::resetPreferences() { return setPreferences ({}); }
+std::array<Session::MetronomeRhythm, 10> Session::metronomeRhythms()
+{
+    // The reference's Rhythm menu, its values in crotchets (its triplets as single floats).
+    return { { { "Auto", 0 }, { "1 Bar", -1 }, { "1/2", 2 }, { "1/2T", 4.0f / 3 }, { "1/4", 1 }, { "1/4T", 2.0f / 3 },
+               { "1/8", .5f }, { "1/8T", 1.0f / 3 }, { "1/16", .25f }, { "1/16T", 1.0f / 6 } } };
+}
+bool Session::metronomeRhythmFits (float rhythm, TimeSignature meter)
+{
+    if (rhythm <= 0) return true; // Auto and a bar always fit.
+    const double times = meter.numerator * 4.0 / meter.denominator / rhythm;
+    return std::round (times) >= 1 && std::abs (times - std::round (times)) < 5e-5;
+}
+double Session::metronomeTickBeats (float rhythm, TimeSignature meter)
+{
+    if (rhythm == -1) return meter.numerator * 4.0 / meter.denominator;
+    return rhythm > 0 && metronomeRhythmFits (rhythm, meter) ? rhythm : 4.0 / meter.denominator;
+}
 juce::String Session::metronomeSoundName (MetronomeSound sound)
 {
     return sound == MetronomeSound::click ? "Click" : sound == MetronomeSound::wood ? "Wood" : "Classic";
@@ -11137,7 +11163,10 @@ Result Session::setMetronome (const MetronomeSettings& settings)
 {
     if(impl->exporting) return Result::fail("Finish or cancel the current export first.");
     if(!std::isfinite(settings.gain) || settings.gain<.2f || settings.gain>1 || settings.countInBars<0 || settings.countInBars>4 || settings.countInBars==3)
-        return Result::fail("Metronome level must be 20–100% and count-in zero, one or two bars.");
+        return Result::fail("Metronome level must be 20–100% and count-in none, one, two or four bars.");
+    const auto rhythms=metronomeRhythms();
+    if(std::none_of(rhythms.begin(),rhythms.end(),[&](const auto& r){return r.value==settings.rhythm;}))
+        return Result::fail("Choose one of the metronome's rhythms.");
     const auto previous=snapshot().metronome;
     if(previous==settings) return Result::ok();
     if(impl->edit->getTransport().isRecording() && previous.countInBars!=settings.countInBars)
@@ -11149,6 +11178,8 @@ Result Session::setMetronome (const MetronomeSettings& settings)
     edit.clickTrackGain.setValue(settings.gain,undo);
     edit.state.setProperty(countInProperty,settings.countInBars,undo);
     edit.setCountInMode(countInMode(settings.countInBars));
+    // Auto is the default and is not written, as the reference's default set holds 0.
+    if(settings.rhythm==0) edit.state.removeProperty(metronomeTickProperty,undo); else edit.state.setProperty(metronomeTickProperty,settings.rhythm,undo);
     impl->changed(); return Result::ok();
 }
 Result Session::setRecordQuantisation(RecordQuantisation value)

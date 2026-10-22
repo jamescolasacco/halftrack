@@ -1991,3 +1991,16 @@ Engine and UI areas.
 
 See [the contract](research/metronome-contract.md).
 
+## Metronome rhythm — 2026-10-22
+
+Engine, UI and root areas.
+
+- **Rhythm.** The metronome's menu offers Auto, 1 Bar and divisions from 1/2 to 1/16T, as the reference's does. Divisions that do not divide the bar are disabled, and play as Auto if the meter changes. These follow a static reading of the reference's code.
+  - Auto ticks on the meter's denominator, so 6/8 now ticks eighths.
+  - The first tick of each bar is accented.
+- **Storage.** The rhythm is kept with the project, as one undo step.
+- **Engine patch.** `cmake/PatchMetronomeRhythm.cmake` lets the click generator follow the rhythm.
+- **Measured.** The metronome suite (clicks sample by sample at several rhythms and meters) and the UI suite.
+
+See [the contract](research/metronome-contract.md#rhythm).
+
