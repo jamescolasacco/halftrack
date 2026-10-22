@@ -147,7 +147,8 @@ int runCaptureMidiTests (const juce::File&)
             Controller another (s);
             pumpSyntheticTestDevice (s, blocksPerSecond / 2);
             check (s.snapshot().playing && s.snapshot().position > before + .3,
-                   "a MIDI device appearing while playing leaves playback running (" + juce::String (before, 3) + " s to " + juce::String (s.snapshot().position, 3) + " s)");
+                   "a MIDI device appearing while playing leaves playback running (" + juce::String (before, 3) + " s to " + juce::String (s.snapshot().position, 3) + " s, "
+                       + (s.snapshot().playing ? "playing" : "stopped") + ")");
         }
         std::cout << "Capture MIDI passed" << std::endl; return 0;
     }

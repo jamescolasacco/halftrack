@@ -1,7 +1,8 @@
 # Halftrack playback through device rebuilds for pinned Tracktion Engine. Rebuilding a playback
 # context's devices, as the engine does when a MIDI device appears or goes, clears its nodes and
 # stops its play head; the new nodes left the play head stopped, so the transport stopped itself a
-# moment later. Now a rebuild while the transport plays resumes the play head where it stopped.
+# moment later. Now a rebuild while the transport plays resumes the play head where it stopped, as soon as the
+# device list is rebuilt, before the transport's timer can stop it.
 # Retains all upstream source notices. Validates every file before writing any.
 function(halftrack_patch_playback_continues source_dir)
     set(source0 "${source_dir}/modules/tracktion_engine/playback/tracktion_EditPlaybackContext.h")
@@ -13,8 +14,8 @@ function(halftrack_patch_playback_continues source_dir)
     bool playHeadWasRunning = false; // Halftrack: the play head ran when the nodes were last cleared.]=])
     set(source1 "${source_dir}/modules/tracktion_engine/playback/tracktion_EditPlaybackContext.cpp")
     set(original1 "1742b29b2e581de7583892454d08e988dab60598254d5669164acbd9918bb019")
-    set(patched1 "44a3d2630389c1d85b535bd71ea78dcf186cf86e78bec8f860dbbbe18d932ae8")
-    set(count1 2)
+    set(patched1 "be2f59c78d86e26d9ffff84f01f41302b1a7df4f363554fb122e65dc8bdc879f")
+    set(count1 3)
     set(before1_0 [=[    if (nodePlaybackContext)
     {
         nodePlaybackContext->playHead.stop();
@@ -38,6 +39,22 @@ function(halftrack_patch_playback_continues source_dir)
     // Halftrack: a rebuild of the devices or graph while the transport plays, such as a MIDI
     // device appearing, carries on from where the play head stopped, rather than leaving it
     // stopped for the transport to stop too.
+    if (std::exchange (playHeadWasRunning, false) && transport.isPlaying()
+         && nodePlaybackContext != nullptr && ! nodePlaybackContext->playHead.isPlaying())
+        nodePlaybackContext->playHead.play();
+}]=])
+    set(before1_2 [=[    midiDispatcher.setMidiDeviceList (midiOutputs);
+
+    if (isAllocated)
+        reallocate();
+}]=])
+    set(after1_2 [=[    midiDispatcher.setMidiDeviceList (midiOutputs);
+
+    if (isAllocated)
+        reallocate();
+
+    // Halftrack: resume now rather than when the graph is rebuilt, which may come later, so the
+    // transport's timer never finds its play head standing still and stops it meanwhile.
     if (std::exchange (playHeadWasRunning, false) && transport.isPlaying()
          && nodePlaybackContext != nullptr && ! nodePlaybackContext->playHead.isPlaying())
         nodePlaybackContext->playHead.play();
