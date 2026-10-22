@@ -32,7 +32,10 @@ public:
         if (next == nullptr) return;
         next->audioDeviceAboutToStart (this);
         callback = next;
-        startRealtimeThread (juce::Thread::RealtimeOptions{}.withPeriodMs (1000.0 * blockSize / rate));
+        // Where the system refuses real-time scheduling (Linux without the permission), the device
+        // runs at the highest ordinary priority instead, as a driver's thread would.
+        if (! startRealtimeThread (juce::Thread::RealtimeOptions{}.withPeriodMs (1000.0 * blockSize / rate)))
+            startThread (juce::Thread::Priority::highest);
     }
     void stop() override
     {

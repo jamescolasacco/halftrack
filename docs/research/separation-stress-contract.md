@@ -6,7 +6,7 @@ The audio thread must keep its deadlines whatever the interface is doing: search
 
 ## The test
 
-`tests/RealtimeDevice.h` is a test audio device that calls its callback from a real-time thread of its own (JUCE's real-time thread, with the block period as its period). It runs one 256-sample block every 5.33 ms at 48 kHz, as a driver does, and leaves the message thread to the test. Its input is a 440 Hz sine on the left and 660 Hz on the right, continuous from the first block. Each callback's start lateness and duration go into storage allocated before it starts. It opens no hardware.
+`tests/RealtimeDevice.h` is a test audio device that calls its callback from a real-time thread of its own (JUCE's real-time thread, with the block period as its period, or the highest ordinary priority where the system refuses real-time scheduling, as Linux does without the permission). It runs one 256-sample block every 5.33 ms at 48 kHz, as a driver does, and leaves the message thread to the test. Its input is a 440 Hz sine on the left and 660 Hz on the right, continuous from the first block. Each callback's start lateness and duration go into storage allocated before it starts. It opens no hardware.
 
 `MainComponent::runSeparationStressTests` (`separation-acceptance`) builds a project with work for the audio thread:
 
