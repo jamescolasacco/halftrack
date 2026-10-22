@@ -1819,3 +1819,15 @@ UI and engine areas.
 - **Measured.** The range clipboard suite and the UI suite.
 
 See [the contract](research/arrangement-selection-contract.md#selecting-several-clips-2026-10-22).
+
+## Each clip's editing grid — 2026-10-22
+
+Engine and UI areas.
+
+- **Per-clip grids.** Every clip has its own editing grid, as in the reference, saved with the clip and carried by copies.
+- **Note editor.** Its Grid button replaces the 1/4–1/32 snap menu.
+- **Snapping.** The note editor and audio clip view snap to the clip's grid at their own zoom.
+- **Commands.** Cmd/Ctrl+1 to 5 and the View menu act on the focused editor's grid.
+- **Measured.** The grid suite and the UI suite. The note-editing checks now fix the 1/16 grid they were written for.
+
+See [the contract](research/edit-grid-contract.md).

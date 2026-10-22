@@ -85,6 +85,29 @@ int runEditGridTests (const juce::File& artifacts)
             ok (reopened.loadProject (s.snapshot().projectFile), "reopen");
             check (reopened.editGrid() == chosen, "the grid is saved with the project");
         }
+        // A clip's own grid, for its editor.
+        ok (s.addMidiTrack ("Keys"), "a MIDI track");
+        juce::String keysId;
+        for (const auto& t : s.snapshot().tracks) if (t.name == "Keys") keysId = t.id;
+        ok (s.addMidiClip (keysId, 0, 4), "a clip");
+        const auto clipId = [&] { for (const auto& t : s.snapshot().tracks) if (t.id == keysId && ! t.clips.empty()) return t.clips[0].id; return juce::String(); }();
+        check (s.clipGrid (clipId) == defaults, "a clip's grid starts as the default");
+        const auto undoable = s.canUndo();
+        auto clipGrid = fixedGrid (1, 32); clipGrid.tuplet = 3;
+        ok (s.setClipGrid (clipId, clipGrid), "give the clip a fixed 1/32 triplet grid");
+        const auto clipInfo = [&] (const juce::String& id) { for (const auto& t : s.snapshot().tracks) for (const auto& c : t.clips) if (c.id == id) return c; return Session::ClipInfo {}; };
+        check (s.clipGrid (clipId) == clipGrid && clipInfo (clipId).grid == clipGrid && s.editGrid() == chosen && s.canUndo() == undoable,
+               "the clip has it, shown in its details, the Arrangement's grid unchanged, and it is not an undo step");
+        check (s.setClipGrid (clipId, bad).failed() && s.setClipGrid ("missing", clipGrid).failed(), "a bad grid or a missing clip is refused");
+        juce::String duplicate;
+        ok (s.duplicateMidiClip (clipId, duplicate), "duplicate the clip");
+        check (s.clipGrid (duplicate) == clipGrid, "the duplicate carries the grid");
+        ok (s.saveProject (s.snapshot().projectFile), "save");
+        {
+            Session reopened (false);
+            ok (reopened.loadProject (s.snapshot().projectFile), "reopen");
+            check (reopened.clipGrid (clipId) == clipGrid, "the clip's grid is saved with it");
+        }
         ok (s.newProject(), "a new project");
         check (s.editGrid() == defaults, "and a new project starts from the default again");
         // A damaged setting reads as the default.

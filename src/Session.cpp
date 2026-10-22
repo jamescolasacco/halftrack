@@ -51,6 +51,29 @@ const juce::Identifier groupFoldedProperty { "halftrackGroupFolded" };
 const juce::Identifier launchModeProperty { "halftrackLaunchMode" };
 const juce::Identifier launchQuantisationProperty { "halftrackLaunchQuantisation" };
 const juce::Identifier launchLegatoProperty { "halftrackLaunchLegato" };
+// An editing grid: a HALFTRACKGRID child of the Edit for the Arrangement's, or of a clip for its
+// editor's. It is read back through validation, so a damaged or older one reads as the default, and
+// written without an undo manager, so it is neither an undo step nor an unsaved change.
+const juce::Identifier gridType { "HALFTRACKGRID" };
+bool validGrid (const Session::EditGrid& g)
+{
+    const auto ladder = Session::gridLadder();
+    return std::find (ladder.begin(), ladder.end(), Session::GridValue { g.numerator, g.denominator }) != ladder.end()
+        && g.intervalPixels >= 1 && g.intervalPixels <= 1 << 20 && (g.tuplet == 2 || g.tuplet == 3 || g.tuplet == 5 || g.tuplet == 7);
+}
+Session::EditGrid readGrid (const juce::ValueTree& v)
+{
+    if (! v.isValid()) return {};
+    const Session::EditGrid read { (bool) v.getProperty ("fixed", false), (int) v.getProperty ("numerator", 1), (int) v.getProperty ("denominator", 16),
+                                   (int) v.getProperty ("intervalPixels", 20), (int) v.getProperty ("tuplet", 2), (bool) v.getProperty ("snap", true) };
+    return validGrid (read) ? read : Session::EditGrid {};
+}
+void writeGrid (juce::ValueTree owner, const Session::EditGrid& g)
+{
+    auto v = owner.getOrCreateChildWithName (gridType, nullptr);
+    v.setProperty ("fixed", g.fixed, nullptr); v.setProperty ("numerator", g.numerator, nullptr); v.setProperty ("denominator", g.denominator, nullptr);
+    v.setProperty ("intervalPixels", g.intervalPixels, nullptr); v.setProperty ("tuplet", g.tuplet, nullptr); v.setProperty ("snap", g.snap, nullptr);
+}
 // Engine grid for each ClipQuantisation; Global is resolved from the project setting.
 constexpr std::array<te::LaunchQType, 11> clipLaunchGrids { te::LaunchQType::none, te::LaunchQType::none, te::LaunchQType::eightBars, te::LaunchQType::fourBars,
     te::LaunchQType::twoBars, te::LaunchQType::bar, te::LaunchQType::half, te::LaunchQType::quarter, te::LaunchQType::eighth, te::LaunchQType::sixteenth,
@@ -1481,6 +1504,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
     Session::ClipInfo result;
     const auto position = clip.getPosition();
     result.id = clip.itemID.toString(); result.name = clip.getName(); result.active = !clip.isMuted();
+    result.grid = readGrid (clip.state.getChildWithName (gridType));
     result.start = position.time.getStart().inSeconds(); result.length = position.time.getLength().inSeconds();
     result.sourceOffset = position.offset.inSeconds();
     const auto beats = clip.edit.tempoSequence.toBeats (position.time);
@@ -10390,9 +10414,6 @@ Result Session::setTempoMap (const std::vector<TempoPoint>& points)
     impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }
-// The editing grid: a HALFTRACKGRID child of the Edit, read back through validation so a damaged
-// or older project falls back to the default grid.
-const juce::Identifier gridType { "HALFTRACKGRID" };
 std::vector<Session::GridValue> Session::gridLadder()
 {
     std::vector<GridValue> ladder;
@@ -10400,30 +10421,26 @@ std::vector<Session::GridValue> Session::gridLadder()
     for (int denominator = 2; denominator <= 16384; denominator *= 2) ladder.push_back ({ 1, denominator });
     return ladder;
 }
-static bool validGrid (const Session::EditGrid& g)
-{
-    const auto ladder = Session::gridLadder();
-    return std::find (ladder.begin(), ladder.end(), Session::GridValue { g.numerator, g.denominator }) != ladder.end()
-        && g.intervalPixels >= 1 && g.intervalPixels <= 1 << 20 && (g.tuplet == 2 || g.tuplet == 3 || g.tuplet == 5 || g.tuplet == 7);
-}
-Session::EditGrid Session::editGrid() const
-{
-    EditGrid g;
-    if (const auto v = impl->edit->state.getChildWithName (gridType); v.isValid())
-    {
-        EditGrid read { (bool) v.getProperty ("fixed", false), (int) v.getProperty ("numerator", 1), (int) v.getProperty ("denominator", 16),
-                        (int) v.getProperty ("intervalPixels", 20), (int) v.getProperty ("tuplet", 2), (bool) v.getProperty ("snap", true) };
-        if (validGrid (read)) g = read;
-    }
-    return g;
-}
+Session::EditGrid Session::editGrid() const { return readGrid (impl->edit->state.getChildWithName (gridType)); }
 Result Session::setEditGrid (const EditGrid& g)
 {
     if (! validGrid (g)) return Result::fail ("That is not a grid setting.");
     if (g == editGrid()) return Result::ok();
-    auto v = impl->edit->state.getOrCreateChildWithName (gridType, nullptr);
-    v.setProperty ("fixed", g.fixed, nullptr); v.setProperty ("numerator", g.numerator, nullptr); v.setProperty ("denominator", g.denominator, nullptr);
-    v.setProperty ("intervalPixels", g.intervalPixels, nullptr); v.setProperty ("tuplet", g.tuplet, nullptr); v.setProperty ("snap", g.snap, nullptr);
+    writeGrid (impl->edit->state, g);
+    sendChangeMessage(); return Result::ok();
+}
+Session::EditGrid Session::clipGrid (const String& clipId) const
+{
+    auto* clip = impl->anyClip (clipId);
+    return clip != nullptr ? readGrid (clip->state.getChildWithName (gridType)) : EditGrid {};
+}
+Result Session::setClipGrid (const String& clipId, const EditGrid& g)
+{
+    if (! validGrid (g)) return Result::fail ("That is not a grid setting.");
+    auto* clip = impl->anyClip (clipId);
+    if (clip == nullptr) return Result::fail ("Clip not found.");
+    if (g == clipGrid (clipId)) return Result::ok();
+    writeGrid (clip->state, g);
     sendChangeMessage(); return Result::ok();
 }
 double Session::gridValueBeats (GridValue value, int tuplet, TimeSignature meter)

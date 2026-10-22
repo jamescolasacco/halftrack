@@ -47,6 +47,10 @@ The rest comes from static reading of the reference's code (Live 12.2.1, arm64).
 - **The readout** at the foot of the Arrangement shows the step: "1/16", "1/8T", "5 : 1/8" for a 1/16 quintuplet, and bars as "1/1" or "2/1". It shows "Off" while snapping is off; a click opens the grid's menu.
 - **Snapping.** Edits go to the nearest line. Holding Cmd (Mac) or Alt (Windows, Linux) bypasses snapping, or snaps while it is off. The clip editors use the same bypass modifier.
 - **Saving.** The grid is saved with the project as a `HALFTRACKGRID` child of the Edit. A value off the ladder reads as the default. Changing it is neither an undo step nor an unsaved change.
+- **Each clip's grid.** As in the reference, every clip has a grid of its own for its editor: `Session::clipGrid`, `setClipGrid` and `ClipInfo::grid`. It is a `HALFTRACKGRID` child of the clip, carried by its copies and saved with it. Its default is the same adaptive grid; 3835 of 3925 clips in the reference's Sets are adaptive.
+  - The note editor's Grid button names the grid and opens its menu; this replaces the old 1/4–1/32 snap menu.
+  - Cmd/Ctrl+1 to 5 act on the focused editor's grid, otherwise the Arrangement's. The View menu does the same.
+  - The note editor and the audio clip view snap to the clip's grid at their own zoom and width, and drop snapping when it is off. The audio clip view's old rule was the coarsest step at least 12 pixels wide.
 
 ## Evidence
 
@@ -76,9 +80,26 @@ The UI suite checks, at 80 pixels a beat:
 
 The existing trim and locator checks pin a fixed 1/16 grid and drag with the platform's bypass modifier.
 
+For clip grids, the grid suite checks:
+
+- the default;
+- a fixed triplet grid shown in the clip's details, leaving the Arrangement's alone and outside undo;
+- refusals;
+- a duplicate carrying it;
+- saving and reopening.
+
+The UI suite checks:
+
+- the note editor's Grid button naming the clip's adaptive grid;
+- Fixed and Narrow Grid on the editor's grid changing the clip's and not the Arrangement's, with the button following;
+- the button's 1/16 item, which the editor snaps to;
+- Snap to Grid, with the button reading Off.
+
+The keys themselves need the editor focused, which only an active app gives, so that check prints a skip in a background run. The note-editing checks fix each clip's grid at the 1/16 they were written for: at their zooms the adaptive grid gives 1/8.
+
 ## Differences and gaps
 
 - **Per-meter state.** The reference keeps an adaptive step per time-signature section and moves it with hysteresis. Halftrack chooses afresh at each zoom with no state, which agrees on the power-of-two ladder. They can differ around 1 Bar and 1/2 in meters whose bar is not a power of two.
 - **Tuplet commands.** Quintuplets and septuplets are kept and named, but no command chooses them. Bigger/Smaller Tuplet and the "no grid" step past 1/16384 are not offered.
 - **Which gestures round down.** The reference rounds some gestures down and others to the nearest line. Which ones round down is unknown, so Halftrack rounds all of them to the nearest line.
-- **Clip editors.** The MIDI and audio clip editors keep their own 1/4–1/32 snap menus. The reference gives each clip a grid of its own like this one.
+- **Expression lanes.** The reference also keeps a separate expression grid per clip, which Halftrack does not have.

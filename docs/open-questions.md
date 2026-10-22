@@ -673,7 +673,7 @@ The grid follows a static reading of the reference's code ([contract](research/e
 - **Rounding.** Every snapped edit goes to the nearest line. The reference also rounds down for some gestures, and which ones is not known.
 - **Tuplet commands.** Quintuplets and septuplets are named but have no command. A feature flag gates them in the reference, and whether it is on by default is unknown.
 - **Saving.** A grid change is not an unsaved change in Halftrack. Whether the reference marks the Set modified for it is unmeasured.
-- **Clip editors.** They keep their own snap menus until they get per-clip grids.
+- **Clip grid defaults.** A new clip's grid is the reference's adaptive default, not the Arrangement's current grid. Whether the reference copies the Arrangement grid into new clips is unmeasured.
 
 ### Selecting several Arrangement clips
 
