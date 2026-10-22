@@ -1883,3 +1883,11 @@ Engine and UI areas.
 - **Measured.** The track order suite and the UI suite.
 
 See [the contract](research/track-heights-contract.md).
+
+## Follow Behavior — 2026-10-22
+
+UI area.
+
+- **Scroll follow.** Preferences > Follow Behavior offers Page (as before) or Scroll, as the reference's does; Scroll keeps the play head in the middle of the Arrangement and piano roll once it reaches it. It is saved with the preferences.
+- **A fix.** Changing any setting in the Preferences panel no longer resets Driver Error Compensation, which the panel does not show.
+- **Measured.** The preferences suite and the UI suite.

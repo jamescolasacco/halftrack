@@ -3134,7 +3134,9 @@ struct Session::Impl
             valid = arm >= 0 && solo >= 0 && warp >= 0 && autoWarp >= 0 && mode >= 0 && grid >= 0 && look >= 0 && zoom >= 0;
             read = { arm == 1, solo == 1, (WarpMode) warp, autoWarp == 1, (LaunchMode) mode, (ClipQuantisation) grid, look, zoom };
             read.driverErrorCompensationMs = xml->getDoubleAttribute ("driverErrorCompensationMs", 0);
-            valid = valid && validPreferences (read);
+            const int follow = number ("followBehaviour", 0, 2);
+            read.scrollFollow = follow == 1;
+            valid = valid && follow >= 0 && validPreferences (read);
         }
         if (valid) { prefs = read; return; }
         // Set an unreadable file aside rather than lose it, and keep the defaults.
@@ -3152,6 +3154,7 @@ struct Session::Impl
         xml.setAttribute ("defaultLaunchMode", (int) next.defaultLaunchMode); xml.setAttribute ("defaultLaunchQuantisation", (int) next.defaultLaunchQuantisation);
         xml.setAttribute ("theme", next.theme); xml.setAttribute ("zoomPercent", next.zoomPercent);
         xml.setAttribute ("driverErrorCompensationMs", next.driverErrorCompensationMs);
+        xml.setAttribute ("followBehaviour", next.scrollFollow ? 1 : 0);
         const auto file = prefsFile();
         if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
         juce::TemporaryFile temporary (file);

@@ -86,6 +86,9 @@ int runPreferencesTests (const juce::File& artifacts)
         auto [older, olderProblem] = reopen ("<HALFTRACKPREFERENCES version=\"0\" exclusiveSolo=\"0\"/>");
         Session::Preferences expected; expected.exclusiveSolo = false;
         check (older == expected && olderProblem.isEmpty(), "an older file keeps its setting and gains the defaults");
+        auto [scrolling, scrollingProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" followBehaviour=\"1\"/>");
+        expected = {}; expected.scrollFollow = true;
+        check (scrolling == expected && scrollingProblem.isEmpty(), "Follow Behavior Scroll is read back");
         auto [newer, newerProblem] = reopen ("<HALFTRACKPREFERENCES version=\"7\" exclusiveArm=\"0\" futureSetting=\"42\"/>");
         expected = {}; expected.exclusiveArm = false;
         check (newer == expected && newerProblem.isEmpty(), "a newer file's unknown settings are ignored");

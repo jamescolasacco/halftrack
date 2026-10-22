@@ -694,3 +694,7 @@ The manual says the command makes one new clip per track from the selection in a
 ### Automation curve shape
 
 The reference's curved automation segments are drawn and played with a shape that is unmeasured. Halftrack uses the engine's quadratic Bézier, with a curve from -1 to 1. Halftrack draws the form the engine plays: `AutomationIterator`'s Bézier of the stored curve, not `AutomationCurve::getValueAt`'s, which doubles it.
+
+### Scroll follow
+
+With Follow Behavior Scroll, the view keeps the play head at its middle once the play head has reached the middle, and pages at the start of the song (it never scrolls before zero). Whether the reference's Scroll keeps it centered or at another fraction of the view is unmeasured.

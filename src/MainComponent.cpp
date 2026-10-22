@@ -6279,7 +6279,8 @@ private:
             if (owner.selectedLauncherClipId.isNotEmpty() && launched == nullptr) return;
             const auto beat = launched != nullptr ? launched->playPositionBeats : owner.beatsAt (owner.state.position) - clip->startBeat;
             if (beat < 0 || beat > contentEndBeat (*clip)) return;
-            const auto next = followedViewStart (beat, viewBeat, gridBounds().getWidth() / pixelsPerBeat);
+            const auto visible = gridBounds().getWidth() / pixelsPerBeat;
+            const auto next = owner.session.preferences().scrollFollow ? scrolledViewStart (beat, visible) : followedViewStart (beat, viewBeat, visible);
             if (next != viewBeat) { viewBeat = next; updateScroll(); repaint(); }
         }
         double visibleStartBeat() const noexcept { return viewBeat; }
@@ -8757,6 +8758,8 @@ private:
     // Follow pages the view: once the playhead leaves the visible time, the view starts at the playhead.
     static double followedViewStart (double position, double viewStart, double visible)
     { return position >= viewStart && position < viewStart + visible ? viewStart : juce::jmax (0.0, position); }
+    // Scroll follow keeps the play head in the middle of the view, once it has reached it.
+    static double scrolledViewStart (double position, double visible) { return juce::jmax (0.0, position - visible / 2); }
     bool followPlayhead = true;
     void setFollow (bool on) { followPlayhead = on; followButton.setToggleState (on, juce::dontSendNotification); }
     void followView()
@@ -8764,7 +8767,8 @@ private:
         if (! followPlayhead || ! state.playing) return;
         if (showPiano) { pianoRoll.followPlayhead(); return; }
         if (showSession) return;
-        const auto next = followedViewStart (state.position, viewStart, canvas.timelineWidth() / pixelsPerSecond);
+        const auto visible = canvas.timelineWidth() / pixelsPerSecond;
+        const auto next = session.preferences().scrollFollow ? scrolledViewStart (state.position, visible) : followedViewStart (state.position, viewStart, visible);
         if (next != viewStart) { viewStart = next; updateScroll(); canvas.repaint(); ruler.repaint(); }
     }
     // Z zooms to the time selection (or the selected clip); X returns to the view before it.
@@ -9844,10 +9848,12 @@ private:
     public:
         explicit PreferencesPanel (Impl& o) : owner (o)
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &exclusiveArm, &exclusiveSolo, &autoWarp, &warpLabel, &warp, &modeLabel, &mode, &gridLabel, &grid, &themeLabel, &theme, &zoomLabel, &zoom, &reset })
+            for (auto* c : std::initializer_list<juce::Component*> { &exclusiveArm, &exclusiveSolo, &autoWarp, &warpLabel, &warp, &modeLabel, &mode, &gridLabel, &grid, &themeLabel, &theme, &zoomLabel, &zoom, &followLabel, &follow, &reset })
                 addAndMakeVisible (c);
             // Look: the interface theme and the display zoom.
             themeLabel.setText ("Theme", juce::dontSendNotification); zoomLabel.setText ("Zoom Display", juce::dontSendNotification);
+            followLabel.setText ("Follow Behavior", juce::dontSendNotification); follow.setName ("Follow behavior");
+            follow.addItem ("Page", 1); follow.addItem ("Scroll", 2);
             theme.setName ("Interface theme"); zoom.setName ("Display zoom");
             for (int kind = 0; kind < themes::kindCount; ++kind) theme.addItem (themes::name ((themes::Kind) kind), kind + 1);
             for (int percent = 50; percent <= 200; percent += 25) zoom.addItem (juce::String (percent) + "%", percent);
@@ -9862,7 +9868,7 @@ private:
             id = 1;
             for (const auto* name : { "Global", "None", "8 Bars", "4 Bars", "2 Bars", "1 Bar", "1/2", "1/4", "1/8", "1/16", "1/32" }) grid.addItem (name, id++);
             for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp }) b->onClick = [this] { apply(); };
-            warp.onChange = mode.onChange = grid.onChange = theme.onChange = zoom.onChange = [this] { apply(); };
+            warp.onChange = mode.onChange = grid.onChange = theme.onChange = zoom.onChange = follow.onChange = [this] { apply(); };
             reset.onClick = [this] { owner.report (owner.session.resetPreferences(), "Preferences reset to their defaults."); sync(); };
             sync();
         }
@@ -9874,23 +9880,26 @@ private:
             for (int i = 0; i < (int) std::size (warpModes); ++i) if (warpModes[i] == p.defaultWarpMode) warp.setSelectedId (i + 1, juce::dontSendNotification);
             mode.setSelectedId ((int) p.defaultLaunchMode + 1, juce::dontSendNotification); grid.setSelectedId ((int) p.defaultLaunchQuantisation + 1, juce::dontSendNotification);
             theme.setSelectedId (p.theme + 1, juce::dontSendNotification); zoom.setSelectedId (p.zoomPercent, juce::dontSendNotification);
+            follow.setSelectedId (p.scrollFollow ? 2 : 1, juce::dontSendNotification);
         }
         void apply()
         {
-            Session::Preferences p;
+            // Settings shown elsewhere, such as Driver Error Compensation, are kept.
+            auto p = owner.session.preferences();
             p.exclusiveArm = exclusiveArm.getToggleState(); p.exclusiveSolo = exclusiveSolo.getToggleState(); p.autoWarpLongSamples = autoWarp.getToggleState();
             p.defaultWarpMode = warpModes[(size_t) juce::jlimit (0, (int) std::size (warpModes) - 1, warp.getSelectedId() - 1)];
             p.defaultLaunchMode = (Session::LaunchMode) juce::jlimit (0, 3, mode.getSelectedId() - 1);
             p.defaultLaunchQuantisation = (Session::ClipQuantisation) juce::jlimit (0, 10, grid.getSelectedId() - 1);
             p.theme = juce::jlimit (0, Session::Preferences::themeCount - 1, theme.getSelectedId() - 1);
             p.zoomPercent = zoom.getSelectedId() > 0 ? zoom.getSelectedId() : 100;
+            p.scrollFollow = follow.getSelectedId() == 2;
             owner.report (owner.session.setPreferences (p)); owner.applyInterfaceLook(); sync();
         }
         void resized() override
         {
             auto area = getLocalBounds().reduced (16);
             for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp }) { b->setBounds (area.removeFromTop (26)); area.removeFromTop (4); }
-            for (auto [label, box] : { std::pair<juce::Label*, juce::ComboBox*> { &warpLabel, &warp }, { &modeLabel, &mode }, { &gridLabel, &grid }, { &themeLabel, &theme }, { &zoomLabel, &zoom } })
+            for (auto [label, box] : { std::pair<juce::Label*, juce::ComboBox*> { &warpLabel, &warp }, { &modeLabel, &mode }, { &gridLabel, &grid }, { &themeLabel, &theme }, { &zoomLabel, &zoom }, { &followLabel, &follow } })
             { auto row = area.removeFromTop (26); label->setBounds (row.removeFromLeft (190)); box->setBounds (row.removeFromLeft (180)); area.removeFromTop (6); }
             area.removeFromTop (10); reset.setBounds (area.removeFromTop (26).removeFromLeft (160));
         }
@@ -9899,11 +9908,11 @@ private:
         static constexpr Session::WarpMode warpModes[] { Session::WarpMode::beats, Session::WarpMode::tones, Session::WarpMode::texture, Session::WarpMode::repitch,
                                                          Session::WarpMode::stretch, Session::WarpMode::complexPro, Session::WarpMode::efficient };
         juce::ToggleButton exclusiveArm { "Exclusive Arm" }, exclusiveSolo { "Exclusive Solo" }, autoWarp { "Auto-Warp Long Samples" };
-        juce::Label warpLabel, modeLabel, gridLabel, themeLabel, zoomLabel;
-        juce::ComboBox warp, mode, grid, theme, zoom;
+        juce::Label warpLabel, modeLabel, gridLabel, themeLabel, zoomLabel, followLabel;
+        juce::ComboBox warp, mode, grid, theme, zoom, follow;
         juce::TextButton reset { "Reset to Defaults" };
     };
-    void showPreferences() { showDialog ("Halftrack - Preferences", std::make_unique<PreferencesPanel> (*this), 440, 364); }
+    void showPreferences() { showDialog ("Halftrack - Preferences", std::make_unique<PreferencesPanel> (*this), 440, 396); }
     // What this copy of Halftrack is: its version, source commit and platform (selectable, to paste
     // into a report), its license, and where it keeps settings and the User Library.
     class AboutPanel final : public juce::Component
@@ -13111,6 +13120,16 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (session.preferences().zoomPercent == 150 && std::abs (juce::Desktop::getInstance().getGlobalScaleFactor() - 1.5f) < 1e-6f, "the display zoom scales the interface");
         zoomChooser->setSelectedId (100, juce::sendNotificationSync); refresh();
         check (std::abs (juce::Desktop::getInstance().getGlobalScaleFactor() - 1.0f) < 1e-6f, "and 100% restores it");
+        {
+            // Follow Behavior: Scroll keeps the play head in the view's middle; the panel keeps settings it does not show.
+            auto compensated = session.preferences(); compensated.driverErrorCompensationMs = 1.5;
+            check (session.setPreferences (compensated).wasOk(), "a Driver Error Compensation set in Audio Settings");
+            auto* followChooser = dynamic_cast<juce::ComboBox*> (findNamed (panel, "Follow behavior"));
+            check (followChooser != nullptr && followChooser->getText() == "Page", "the panel offers Follow Behavior, Page by default");
+            followChooser->setSelectedId (2, juce::sendNotificationSync); refresh();
+            check (session.preferences().scrollFollow && session.preferences().driverErrorCompensationMs == 1.5, "choosing Scroll sets it, keeping the compensation");
+            check (scrolledViewStart (12, 10) == 7 && scrolledViewStart (3, 10) == 0, "scrolling keeps the play head in the middle once it reaches it");
+        }
         check (session.resetPreferences().wasOk(), "reset the preferences");
     }
     {

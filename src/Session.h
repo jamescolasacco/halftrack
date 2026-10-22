@@ -868,6 +868,9 @@ public:
         // Driver Error Compensation, after the reference's: recordings move this much earlier, -200 to
         // 200 ms, for a driver that reports its latency wrongly.
         double driverErrorCompensationMs = 0;
+        // Follow Behavior, after the reference's: Page turns the view a page as the play head leaves
+        // it; Scroll keeps the play head in the view's middle and scrolls continuously.
+        bool scrollFollow = false;
         bool operator== (const Preferences&) const = default;
     };
     // The audio device's latency as it reports it, with Driver Error Compensation. Recordings are placed
