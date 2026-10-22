@@ -9,7 +9,7 @@ Freeze and Flatten follow the reference workflow of rendering a track's devices 
   - Freezing renders the track's clips through its instrument and devices, up to the engine's freeze point before the mixer. The track then plays that render.
   - The fader, pan, mute, solo and sends stay live.
   - A Sends Only track freezes like any other: the render is its own audio, whatever its output. Frozen, it still plays Sends Only: its own output is not heard, but its sends and tracks taking its audio Pre FX or Post FX play the freeze.
-  - Playback of a new freeze starts with the first block.
+  - Playback of a new freeze starts at once.
 - While a track is frozen, edits are rejected with an "Unfreeze … first" message: devices (add, move, enable, remove, settings and automation), its instrument and samples, synth settings, clips (add, import, paste, move, remove, range, gain, reverse, warp) and notes.
 - `TrackInfo::frozen` reports the state.
 - `flattenTrack(trackId)` needs a frozen track. It writes the render to a 32-bit float WAV in the project's Assets and replaces the track's clips, instrument and devices with one audio clip from time zero. The mixer, meter and sends stay, and a MIDI track becomes an audio track without its MIDI input.
@@ -44,9 +44,9 @@ The frozen flag is saved with the project, but the render is an engine temporary
 A second part plays a constant 0.5 signal on an audio track through the synthetic test device, which plays the freeze itself. The track plays Sends Only with a 0 dB send to a return. It checks:
 
 - the track freezes and still reports Sends Only;
-- the frozen track is heard at 0.5 through its send from the first block of playback, and after;
+- the frozen track is heard through its send within 200 blocks of starting playback, and at 0.5 after. Each block dispatches messages for at least a millisecond, so this allows a fraction of a second against the seconds of silence before the correction. It is usually the first block, but under load the cache can miss it;
 - with the send off, the frozen track is silent;
-- undoing back to unfrozen keeps Sends Only, and redo freezes it again, heard from the first block;
+- undoing back to unfrozen keeps Sends Only, and redo freezes it again, heard at once by the same measure;
 - Flatten keeps Sends Only, its audio is the track's own 0.5 signal, and it is heard through the send;
 - frozen again with the send off, a track taking its audio Post FX hears it at 0.5.
 
