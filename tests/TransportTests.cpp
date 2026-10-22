@@ -38,7 +38,7 @@ int runTransportTests (const juce::File& artifacts)
         ok (s.play(), "Play");
         pumpSyntheticTestDevice (s, blocksPerSecond);
         const auto played = s.snapshot().position;
-        check (s.snapshot().playing && played > 2.5 && played < 3 + slack, "playback starts from the insert marker");
+        check (s.snapshot().playing && played > 2.5 && played < 3 + slack, "playback starts from the insert marker (" + juce::String (played, 3) + " s after a second)");
 
         s.setInsertMarker (1);
         pumpSyntheticTestDevice (s, blocksPerSecond / 4);

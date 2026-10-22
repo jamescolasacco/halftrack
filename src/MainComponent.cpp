@@ -8604,11 +8604,17 @@ private:
                 if (std::none_of (previousIds.begin(), previousIds.end(), [&] (const auto& old) { return old.id == updated->clips[(size_t) i].id; })) { selectedClip = i; break; }
         openPianoRoll(); pianoRoll.fit();
     }
+    // A new audio or MIDI track goes before the returns, so it is the last of the other tracks.
+    int lastOrdinaryTrack() const
+    {
+        for (int i = (int) state.tracks.size(); --i >= 0;) if (! state.tracks[(size_t) i].isReturn) return i;
+        return -1;
+    }
     void addMidiTrack()
     {
         session.beginEditGesture ("Create MIDI track");
         const auto result = session.addMidiTrack(); report (result); refresh();
-        if (result.wasOk()) { selectTrack ((int) state.tracks.size() - 1); if (showSession) createLauncherMidiClip(); else createMidiClip (state.insertMarker); }
+        if (result.wasOk()) { selectTrack (lastOrdinaryTrack()); if (showSession) createLauncherMidiClip(); else createMidiClip (state.insertMarker); }
         session.endEditGesture();
     }
     GridPlace arrangementGrid() const { return { {}, gridPixelsPerBeat(), visibleBeats(), canvas.timelineWidth() }; }
@@ -8770,12 +8776,18 @@ private:
             if (current.tracks[(size_t)i].id == trackId)
             { report (session.moveTrack (trackId, i+direction)); refresh(); return; }
     }
+    // A track can move to a neighbour's place unless that crosses the returns, which stay last.
+    bool canMoveTrack (int index, int direction) const
+    {
+        const auto to = index + direction;
+        return index >= 0 && juce::isPositiveAndBelow (to, (int) state.tracks.size()) && state.tracks[(size_t) index].isReturn == state.tracks[(size_t) to].isReturn;
+    }
     void showTrackOrderMenu (const juce::String& id, bool horizontal)
     {
         const auto indices = launcherIndices (id, {});
         juce::PopupMenu menu;
-        menu.addItem (1, horizontal ? "Move track left" : "Move track up", indices.first > 0);
-        menu.addItem (2, horizontal ? "Move track right" : "Move track down", indices.first >= 0 && indices.first+1 < (int)state.tracks.size());
+        menu.addItem (1, horizontal ? "Move track left" : "Move track up", canMoveTrack (indices.first, -1));
+        menu.addItem (2, horizontal ? "Move track right" : "Move track down", canMoveTrack (indices.first, 1));
         const auto* info = indices.first >= 0 ? &state.tracks[(size_t) indices.first] : nullptr;
         menu.addSeparator(); menu.addItem (3, "Duplicate track", info != nullptr && ! info->isReturn && ! info->frozen);
         menu.addSeparator();
@@ -9023,7 +9035,7 @@ private:
     void addTrack()
     {
         showPiano = false;
-        report (session.addAudioTrack()); refresh(); selectTrack ((int) state.tracks.size() - 1);
+        report (session.addAudioTrack()); refresh(); selectTrack (lastOrdinaryTrack());
         viewport.setViewPosition (0, juce::jmax (0, laneY (selectedTrack) - viewport.getHeight() + trackHeight));
     }
     void addReturnTrack()
@@ -9229,8 +9241,8 @@ private:
             popup.addSeparator();
             popup.addItem (38, "Duplicate Selected Track", currentTrack() != nullptr && !currentTrack()->isReturn);
             popup.addItem (39, "Insert Take Lane", currentTrack() != nullptr && ! currentTrack()->isReturn && ! showSession);
-            popup.addItem (36, "Move Selected Track Earlier", selectedTrack > 0);
-            popup.addItem (37, "Move Selected Track Later", selectedTrack >= 0 && selectedTrack+1 < (int)state.tracks.size());
+            popup.addItem (36, "Move Selected Track Earlier", canMoveTrack (selectedTrack, -1));
+            popup.addItem (37, "Move Selected Track Later", canMoveTrack (selectedTrack, 1));
             popup.addSeparator();
             popup.addItem (72, "Group Tracks", currentTrack() != nullptr && ! currentTrack()->isReturn && currentTrack()->groupId.isEmpty());
             popup.addItem (73, "Ungroup Tracks", currentTrack() != nullptr && currentTrack()->groupId.isNotEmpty());
@@ -12120,7 +12132,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         showArrangementView(); refresh();
         const int previousTrack = selectedTrack;
         check (session.addMidiTrack ("Selection").wasOk(), "add an empty MIDI track"); refresh();
-        selectTrack ((int) state.tracks.size() - 1); refresh();
+        selectTrack (lastOrdinaryTrack()); refresh();
         const int t = selectedTrack; const auto trackId = currentTrack()->id;
         check (session.addMidiClip (trackId, 2, 2).wasOk(), "a one-second MIDI clip at 1 s"); refresh();
         const auto now = juce::Time::getCurrentTime();
@@ -12437,7 +12449,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         // The piano roll follows its clip's playhead too.
         const int previousTrack = selectedTrack;
         check (session.addMidiTrack ("Follow").wasOk(), "add a MIDI track to follow"); refresh();
-        selectTrack ((int) state.tracks.size() - 1); refresh();
+        selectTrack (lastOrdinaryTrack()); refresh();
         check (session.addMidiClip (currentTrack()->id, 0, 64).wasOk(), "a 64-beat clip"); refresh();
         selectedClip = 0; openPianoRoll(); refresh(); pianoRoll.zoom (4);
         check (session.play().wasOk(), "play"); session.seek (24 * 60 / state.tempo); refresh();
@@ -15027,8 +15039,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     showSessionView();selectLauncherSlot(1,0);const auto orderedSlot=selectedSlot()->id;
     menuItemSelected(37,2);check(selectedTrack==2&&currentTrack()->id==orderMidiId&&selectedSlot()->id==orderedSlot,"Session ordering preserves selected slot identity");
     const auto orderSelected=currentTrack()->id;reorderTrack(orderReturnId,-1);
-    check(currentTrack()->id==orderSelected&&state.tracks[2].id==orderReturnId,"captured header command reorders its original track after selection changes");
-    const auto beforeStale=state.tracks;check(session.removeTrack(2).wasOk(),"remove context-menu target before completion");refresh();
+    check(currentTrack()->id==orderSelected&&state.tracks[3].id==orderReturnId,"the return stays after the other tracks, as in the reference");
+    const auto orderAudioId=state.tracks[0].id;reorderTrack(orderAudioId,1);
+    check(currentTrack()->id==orderSelected&&state.tracks[1].id==orderAudioId,"captured header command reorders its original track after selection changes");
+    const auto beforeStale=state.tracks;check(state.tracks[3].id==orderReturnId&&session.removeTrack(3).wasOk(),"remove context-menu target before completion");refresh();
     reorderTrack(orderReturnId,-1);check(state.tracks.size()==beforeStale.size()-1&&currentTrack()->id==orderSelected,"stale header command cannot reorder replacement index");
 
     const auto trackCountBeforeCopy=state.tracks.size();const auto selectedBeforeCopy=currentTrack()->id;
@@ -15733,7 +15747,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         setBrowserCategory (BrowserCategory::audioEffects);
         int row = -1; for (int i = 0; i < (int) deviceItems.size(); ++i) if (deviceItems[(size_t) i].preset == preset) row = i;
         check (row > 0 && deviceItems[(size_t) row - 1].label == "Saturator" && deviceItems[(size_t) row].label == "Crunch", "the browser lists Crunch under the Saturator");
-        check (session.addAudioTrack ("Presets").wasOk(), "add a track for the preset"); refresh(); selectTrack ((int) state.tracks.size() - 1); refresh();
+        check (session.addAudioTrack ("Presets").wasOk(), "add a track for the preset"); refresh(); selectTrack (lastOrdinaryTrack()); refresh();
         activateBrowserRow (row); refresh();
         check (! currentTrack()->plugins.empty() && currentTrack()->plugins.back().effect.values == drive.values, "choosing the preset loads a Saturator with its settings");
         {

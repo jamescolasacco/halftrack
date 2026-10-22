@@ -121,6 +121,13 @@ int runTrackOrderTests (const juce::File& artifacts)
         for (int from = 0; from < 4; ++from) for (int to = 0; to < 4; ++to)
         {
             if (from == to) continue;
+            // The return, last, stays after the other tracks, as in the reference.
+            if (from == 3 || to == 3)
+            {
+                check (session.moveTrack (original[(size_t) from], to).failed() && order (session.snapshot()) == original,
+                       "a move across the return is refused, keeping the order");
+                continue;
+            }
             auto expected = original; const auto id = expected[(size_t)from]; expected.erase (expected.begin()+from); expected.insert (expected.begin()+to, id);
             ok (session.moveTrack (id, to), "move between arbitrary top-level positions");
             check (order (session.snapshot()) == expected, "native track order matches requested final index"); retained (baseline, session.snapshot());
@@ -130,8 +137,8 @@ int runTrackOrderTests (const juce::File& artifacts)
             session.redo(); check (order (session.snapshot()) == expected, "redo restores reordered identities"); session.undo();
         }
         session.beginEditGesture ("Reorder multiple tracks");
-        ok (session.moveTrack (ret, 0), "return may precede its send sources"); ok (session.moveTrack (original[0], 3), "move audio source to end");
-        ok (session.moveTrack (midi, 1), "move MIDI between return and audio"); session.endEditGesture();
+        ok (session.moveTrack (original[0], 2), "move the first audio source last before the return");
+        ok (session.moveTrack (midi, 0), "move MIDI first"); session.endEditGesture();
         const auto finalOrder = order (session.snapshot()); retained (baseline, session.snapshot()); render (session, output, first, second);
         session.undo(); check (order (session.snapshot()) == original, "grouped reorder is one undo"); session.redo();
         check (order (session.snapshot()) == finalOrder, "grouped reorder redo retains order");
@@ -157,6 +164,34 @@ int runTrackOrderTests (const juce::File& artifacts)
             ok (session.saveProject (project), "save the fold"); ok (session.loadProject (project), "reopen");
             check (session.snapshot().tracks[0].folded && session.setTrackFolded ("missing", true).failed(), "the fold is saved; a missing track is refused");
             ok (session.setTrackFolded (id, false), "unfold it");
+        }
+        {
+            // Return tracks stay after every other track, as in the reference: new tracks go before them,
+            // and a project holding a return among the other tracks opens with it last.
+            Session s (false);
+            ok (s.addReturnTrack ("Return"), "a return"); ok (s.addMidiTrack ("Later MIDI"), "then a MIDI track"); ok (s.addAudioTrack ("Later audio"), "and an audio track");
+            auto tracks = s.snapshot().tracks;
+            check (tracks.size() == 5 && tracks[2].name == "Later MIDI" && tracks[3].name == "Later audio" && tracks[4].isReturn,
+                   "new tracks go before the return");
+            s.undo(); s.undo();
+            check (s.snapshot().tracks.size() == 3 && s.snapshot().tracks.back().isReturn, "and each undoes in one step");
+            const auto mixed = root.getChildFile ("Mixed").getChildFile ("Mixed.halftrack");
+            ok (s.saveProject (mixed), "save a project with the return last");
+            auto xml = juce::XmlDocument::parse (mixed);
+            juce::XmlElement* edit = xml != nullptr ? xml->getChildByName ("EDIT") : nullptr;
+            juce::XmlElement *firstTrack = nullptr, *returnTrack = nullptr;
+            if (edit != nullptr)
+                for (auto* child : edit->getChildIterator())
+                    if (child->hasTagName ("TRACK")) { if (firstTrack == nullptr) firstTrack = child; if (child->getBoolAttribute ("halftrackReturn")) returnTrack = child; }
+            check (firstTrack != nullptr && returnTrack != nullptr && firstTrack != returnTrack, "find the saved tracks");
+            auto moved = std::make_unique<juce::XmlElement> (*returnTrack);
+            edit->removeChildElement (returnTrack, true);
+            int at = 0; for (auto* child : edit->getChildIterator()) { if (child == firstTrack) break; ++at; }
+            edit->insertChildElement (moved.release(), at);
+            check (xml->writeTo (mixed), "write the return first, as an earlier version could have");
+            ok (s.loadProject (mixed), "open it");
+            tracks = s.snapshot().tracks;
+            check (tracks.size() == 3 && ! tracks[0].isReturn && ! tracks[1].isReturn && tracks[2].isReturn && ! s.canUndo(), "the return opens last, outside the undo history");
         }
         std::cout << "Track order tests passed: " << root.getFullPathName() << std::endl; return 0;
     }

@@ -2076,3 +2076,11 @@ Engine, UI and QA areas.
 - **Solo in Place.** The reference's switch, kept with the project and not an undo step, in the View menu with Halftrack's other Options items. Off, soloed tracks are heard without the returns.
 - **A fix.** Soloing a return beside a source now mutes the other returns, as the reference's does; they used to stay open.
 - **Measured.** Sample-exact renders in the send/return suite, and the UI suite.
+
+## Return tracks stay last — 2026-10-22
+
+Engine, UI and QA areas.
+
+- **Returns after the other tracks.** As in the reference, new audio and MIDI tracks go before the returns, moves cannot cross them (the track menus disable such moves), and a project holding returns among the other tracks opens with them last.
+- **Callers.** Importing audio or movies to a new track, MIDI file import and Slice to New MIDI Track no longer assume the new track is the last one.
+- **Measured.** The track-order suite (insertion, undo, refused moves, and a project file edited to put the return first) and the UI suite.

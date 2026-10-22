@@ -3474,6 +3474,27 @@ struct Session::Impl
             if (device->getName() == name && device->isEnabled() && device->getDeviceID() != devices.getDefaultWaveOutDeviceID())
             { devices.setDefaultWaveOutDevice (device->getDeviceID()); edit->restartPlayback(); }
     }
+    // As in the reference, return tracks stay after every other track: a new track goes before them,
+    // and a project that holds returns among the others has them moved after it.
+    te::AudioTrack* lastCreated = nullptr; // The track addAudioTrack or addMidiTrack made last.
+    void placeBeforeReturns (te::AudioTrack& t)
+    {
+        for (auto* other : te::getAudioTracks (*edit))
+            if (other != &t && other->getParentTrack() == nullptr && isReturn (*other))
+            { edit->moveTrack (te::Track::Ptr (&t), te::TrackInsertPoint (*other, true)); return; }
+    }
+    void keepReturnsLast()
+    {
+        std::vector<te::AudioTrack*> late;
+        bool returnSeen = false;
+        for (auto* t : te::getAudioTracks (*edit))
+        {
+            if (t->getParentTrack() != nullptr) continue;
+            if (isReturn (*t)) returnSeen = true;
+            else if (returnSeen) late.push_back (t);
+        }
+        for (auto* t : late) placeBeforeReturns (*t);
+    }
     // The cue, after the reference's (static reading of its code). Its output carries the cue apart
     // from the master when it is a Cue Out switched on and sharing no channel with the Master Out;
     // otherwise the cue plays with the master, as the click and previews then do.
@@ -4198,6 +4219,7 @@ struct Session::Impl
         edit->getAutomationRecordManager().setReadingAutomation (true);
         edit->getAutomationRecordManager().setWritingAutomation (false);
         edit->setCountInMode (countInMode (prefs.countInBars)); // The application's count-in.
+        keepReturnsLast();
         applyMasterOutput();
         refreshRouting();
         if (useDevices) edit->getTransport().ensureContextAllocated();
@@ -5770,9 +5792,9 @@ Result Session::sliceToNewMidiTrack (const String& clipId, SliceBy by, String& t
     const auto created = result.wasOk();
     if (created)
     {
-        trackId = snapshot().tracks.back().id;
+        trackId = impl->lastCreated->itemID.toString();
         const auto destination = sourceIndex + 1;
-        if (destination < (int) snapshot().tracks.size() - 1) result = moveTrack (trackId, destination);
+        result = moveTrack (trackId, destination); // Already there when its source is the last track before the returns.
     }
     if (result.wasOk()) result = setTrackInstrument (trackId, EffectKind::drumRack);
     const auto rackId = [&] { for (const auto& t : snapshot().tracks) if (t.id == trackId) return t.instrument.id; return String(); }();
@@ -6236,6 +6258,7 @@ Result Session::addAudioTrack (String name)
     if (auto result = useTrackMixer (*t); result.failed()) return result;
     t->getVolumePlugin()->setVolumeDb (0);
     t->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
+    impl->placeBeforeReturns (*t); impl->lastCreated = t;
     impl->changed();
     return Result::ok();
 }
@@ -6256,6 +6279,7 @@ Result Session::addMidiTrack (String name)
     if (! synth) return Result::fail ("Could not create the built-in synthesizer.");
     track->pluginList.insertPlugin (synth, 0, nullptr);
     track->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
+    impl->placeBeforeReturns (*track); impl->lastCreated = track;
     impl->changed(); return Result::ok();
 }
 Result Session::addReturnTrack (String name)
@@ -6415,10 +6439,9 @@ Result Session::importMidiFile (const File& file, double startBeat, std::vector<
     beginEditGesture ("Import MIDI file"); std::vector<String> created;
     for (const auto& part : parts)
     {
-        const auto count = te::getAudioTracks(*impl->edit).size();
         auto result = addMidiTrack(part.name);
         if (result.failed()) { endEditGesture(); undo(); return result; }
-        auto* track = impl->track(count);
+        auto* track = impl->lastCreated;
         result = addMidiClip(track->itemID.toString(),startBeat,part.length);
         if (result.failed()) { endEditGesture(); undo(); return result; }
         auto* clip = dynamic_cast<te::MidiClip*>(track->getClips().getLast());
@@ -8559,6 +8582,7 @@ Result Session::moveTrack (const String& id, int destinationIndex)
         return Result::fail ("Track ordering currently supports top-level tracks.");
     const int sourceIndex = tracks.indexOf (source);
     if (sourceIndex == destinationIndex) return Result::ok();
+    if (isReturn (*source) != isReturn (*target)) return Result::fail ("Return tracks stay after the other tracks.");
     impl->transaction ("Reorder track");
     impl->edit->moveTrack (te::Track::Ptr (source), te::TrackInsertPoint (*target, destinationIndex < sourceIndex));
     impl->changed(); return Result::ok();
@@ -8663,7 +8687,7 @@ Result Session::importAudio (const File& source, int index, double start)
     te::AudioFile audio (impl->engine, source);
     if (! audio.isValid() || audio.getLength() <= 0) return Result::fail ("This audio file could not be read.");
     if (! std::isfinite (start) || start < 0) return Result::fail ("Clip start must be zero or greater.");
-    if (index < 0) { auto r = addAudioTrack (source.getFileNameWithoutExtension()); if (r.failed()) return r; index = te::getAudioTracks (*impl->edit).size() - 1; }
+    if (index < 0) { auto r = addAudioTrack (source.getFileNameWithoutExtension()); if (r.failed()) return r; index = te::getAudioTracks (*impl->edit).indexOf (impl->lastCreated); }
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (isReturn (*t) || static_cast<bool> (t->state.getProperty (midiTrackProperty))) return Result::fail ("Import audio onto an audio track.");
     auto assets = impl->assets(); auto r = assets.createDirectory(); if (r.failed()) return r;
@@ -8781,7 +8805,7 @@ Result Session::importVideo (const File& movie, int index, double start)
     if (index < 0)
     {
         if (auto r = addAudioTrack (movie.getFileNameWithoutExtension()); r.failed()) { discard(); return r; }
-        index = te::getAudioTracks (*impl->edit).size() - 1;
+        index = te::getAudioTracks (*impl->edit).indexOf (impl->lastCreated);
     }
     impl->importingVideo = true;
     const auto imported = importAudio (sound, index, start);

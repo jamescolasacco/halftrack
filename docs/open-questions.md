@@ -733,6 +733,10 @@ Halftrack's default fades follow a static reading of the reference's code ([cont
 - **Rhythm timing.** The reference snaps ticks to its tick grid from the time-signature section start, and while stopped times them in whole samples. Halftrack places them on the beat grid from the start; it has one meter per project.
 - **Punch-In with a count-in.** With Punch-In on, the click is silent before the punch-in point, as the reference's manual says. With a count-in as well, Halftrack keeps the count-in's clicks and lets the click run on through the pre-roll; how the reference combines the two is unmeasured.
 
+### Track order
+
+Return tracks stay after every other track, as the reference keeps them. A new audio or MIDI track goes after the other tracks and before the returns. Where the reference inserts a new track after the selected one, Halftrack still adds it at the end of the other tracks. Moves cannot cross the returns. A project from an earlier version that holds a return among the other tracks opens with its returns moved last, outside the undo history.
+
 ### Cue
 
 Defaults where the reference's cue is not followed exactly ([contract](research/cue-contract.md)):

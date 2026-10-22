@@ -47,8 +47,9 @@ int runPreviewTests (const juce::File& artifacts)
         // A loaded machine can take a moment to start the preview; its level is measured once it sounds.
         for (int wait = 0; wait < 40 && peak (s, 1) < .1f; ++wait) {}
         // Previews play at the cue volume, -6 dB at first as in the reference's default Set.
-        check (during.previewing == tone && during.previewVolumeDb == -6 && during.cueVolumeDb == -6 && std::abs (peak (s, 40) - .5f * std::pow (10.0f, -6 / 20.0f)) < .01f,
-               "the preview sounds at the cue volume, -6 dB at first");
+        const auto first = peak (s, 40);
+        check (during.previewing == tone && during.previewVolumeDb == -6 && during.cueVolumeDb == -6 && std::abs (first - .5f * std::pow (10.0f, -6 / 20.0f)) < .01f,
+               "the preview sounds at the cue volume, -6 dB at first (peak " + juce::String (first, 4) + ")");
         check (during.tracks.size() == 2 && during.tracks[0].clips.empty() && ! during.dirty && ! s.canUndo(), "the project is untouched");
         ok (s.setPreviewVolume (0), "the preview volume, which is the cue volume, at 0 dB");
         captureSyntheticTestDevice (s, 10); // The volume glides to its new level.
