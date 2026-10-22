@@ -357,21 +357,28 @@ int runPluginScanTests (const juce::File& destination)
         finish();
         // The scan is kept for the next launch: the engine writes its list into its settings file,
         // which saves two seconds after a change, and which the next launch's engine reads.
-        juce::MessageManager::getInstance()->runDispatchLoopUntil (2600);
+        // A slow machine can take longer than the save delay, so the file is read until it holds the list.
         {
-            juce::PropertiesFile::Options options; options.storageFormat = juce::PropertiesFile::storeAsXML;
-            juce::PropertiesFile saved (root.getChildFile ("Settings.xml"), options);
            #if JUCE_64BIT
             const auto setting = te::SettingID::knownPluginList64;
            #else
             const auto setting = te::SettingID::knownPluginList;
            #endif
-            std::unique_ptr<juce::XmlElement> xml (saved.getXmlValue (te::PropertyStorage::settingToString (setting)));
+            std::unique_ptr<juce::XmlElement> xml;
+            for (int wait = 0; wait < 50 && xml == nullptr; ++wait)
+            {
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
+                juce::PropertiesFile::Options options; options.storageFormat = juce::PropertiesFile::storeAsXML;
+                juce::PropertiesFile saved (root.getChildFile ("Settings.xml"), options);
+                xml = saved.getXmlValue (te::PropertyStorage::settingToString (setting));
+            }
+            check (xml != nullptr, "the engine's settings file holds the plug-in list within ten seconds");
             juce::KnownPluginList relaunched;
-            if (xml != nullptr) relaunched.recreateFromXml (*xml);
-            check (xml != nullptr && relaunched.getTypes().size() == 1 && relaunched.getTypes()[0].fileOrIdentifier == plugin.getFullPathName()
-                       && relaunched.getTypes()[0].name == manager.knownPluginList.getTypes()[0].name,
-                   "the scanned plug-in is saved for the next launch, which reads it back");
+            relaunched.recreateFromXml (*xml);
+            const auto scanned = manager.knownPluginList.getTypes();
+            check (relaunched.getTypes().size() == 1 && scanned.size() == 1 && relaunched.getTypes()[0].isDuplicateOf (scanned[0]) && relaunched.getTypes()[0].name == scanned[0].name,
+                   "the scanned plug-in is saved for the next launch, which reads it back (" + juce::String (relaunched.getTypes().size()) + " read: "
+                       + (relaunched.getTypes().isEmpty() ? juce::String() : relaunched.getTypes()[0].fileOrIdentifier) + ")");
         }
         std::cout << "Scanner acceptance passed. Artifacts: " << root.getFullPathName() << std::endl;
         return 0;
