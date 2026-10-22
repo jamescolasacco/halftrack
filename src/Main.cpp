@@ -150,6 +150,10 @@ public:
             return;
         }
         #if HALFTRACK_TESTS_ENABLED
+        // A suite runs without a window or real audio, so macOS would nap the process and stretch
+        // every timer and dispatch; it runs at full speed instead, as when the interface plays.
+        std::unique_ptr<juce::ScopedLowPowerModeDisabler> fullSpeed;
+        for (const auto& arg : args) if (arg.startsWith ("--self-test")) { fullSpeed = std::make_unique<juce::ScopedLowPowerModeDisabler>(); break; }
         #if JUCE_MAC
         if (args.contains ("--self-test-au"))
         {

@@ -172,7 +172,7 @@ int runSoakTests (const juce::File& artifacts)
         const auto memory = residentMegabytes();
         const int handles = openHandles();
         check (worstDrift < .02, "over " + juce::String (seconds) + " s the play head kept time with the blocks: worst " + juce::String (worstDrift * 1000, 2) + " ms in a " + juce::String (step) + " s stretch");
-        check (takes == 3, juce::String (takes) + " takes recorded and deleted");
+        check (takes == seconds / 60, juce::String (takes) + " takes recorded and deleted, one a minute");
         if (memoryAfterFirstMinute > 0)
             check (memory - memoryAfterFirstMinute < 64, "resident memory grew " + juce::String (memory - memoryAfterFirstMinute, 1) + " MB after the first minute (" + juce::String (memory, 0) + " MB)");
         if (handlesAfterFirstMinute >= 0)

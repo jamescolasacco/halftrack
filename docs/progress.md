@@ -1683,3 +1683,11 @@ Engine change in `src/MackieControl.*` (new; the protocol), `src/Session.*` and 
 - **Feedback.** Moving faders, lights, rings and names follow.
 
 See [the contract](research/control-surfaces-contract.md).
+
+## macOS CI timing — 2026-10-22
+
+QA area.
+
+- **Full speed.** Self-test suites now hold off App Nap. With no window and no real audio, macOS could throttle a suite's timers and message dispatch: the soak passed in about a minute on Linux and Windows but timed out after 600 s on macOS. Locally a 20-second soak went from 15.2 s to 12.4 s.
+- **Soak takes.** The soak suite expects one take a minute, so a shorter `HALFTRACK_SOAK_SECONDS` run passes.
+- **Lane click.** The UI check of a lane click during playback now waits until the play head moves, up to 400 more blocks. Its failure message says whether the transport was playing.
