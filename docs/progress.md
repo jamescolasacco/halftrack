@@ -1735,3 +1735,13 @@ Engine, UI and root areas.
 - **Not yet measured.** Physical loopback, which needs a cable from an output to an input.
 
 See [the contract](research/recording-latency-contract.md).
+
+## Takes through CPU overloads — 2026-10-22
+
+Engine change in `src/Session.cpp` and `tests/RecordingStallTests.cpp` (new); the root change in `CMakeLists.txt` and `src/Main.cpp`. Documentation updated.
+
+- **Cause.** Under heavy machine load the separation suite once lost a block from a take. The engine's device manager silenced any callback once its load meter passed 0.98, and a silenced callback also skipped its input and its block of time.
+- **Fix.** Sessions keep rendering at any load, so every input block the driver delivers reaches the take and the transport keeps time. No dependency patch is involved.
+- **Measured.** `recording-stalls-acceptance` injects a 40 ms stall, six 8 ms callbacks in a row and a 100 ms stall into a 450-block take. Each drives the meter past 0.98. Before the fix, 6 callbacks fell silent and the take lost 6 blocks, its first wrong sample in the block after the first stall. After it, every sample is in order and the output never falls silent. The separation suite passed 3 of 3 runs at a load average of 6 to 8. It was not rerun at the original load of about 16.
+
+See [open questions](open-questions.md#cpu-overloads-during-takes).

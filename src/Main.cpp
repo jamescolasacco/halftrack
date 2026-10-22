@@ -75,6 +75,7 @@ int runSharedMediaTests (const juce::File&);
 int runWavDecoderTests (const juce::File&);
 int runRenderAgreementTests (const juce::File&);
 int runRecordingFormatTests (const juce::File&);
+int runRecordingStallTests (const juce::File&);
 int runDeviceSettingsTests (const juce::File&);
 int runCollectionsTests (const juce::File&);
 int runPluginPresetTests (const juce::File&);
@@ -532,6 +533,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-recording-format");
             setApplicationReturnValue (runRecordingFormatTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-recording-stalls"))
+        {
+            const int i = args.indexOf ("--self-test-recording-stalls");
+            setApplicationReturnValue (runRecordingStallTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-shared-media"))

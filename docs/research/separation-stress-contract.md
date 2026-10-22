@@ -39,6 +39,10 @@ On Apple silicon (macOS 15), one run did about 840 searches, 840 full paints and
 
 The numbers are printed on each run.
 
+## A gap under heavy load
+
+At a load average of about 16, with four suites at once, one run found a take with its first wrong sample at 236544 of 375040, on a block boundary. The engine silenced callbacks once its load meter passed 0.98, and a silenced callback dropped its input. Sessions now keep rendering at any load. `recording-stalls-acceptance` (`tests/RecordingStallTests.cpp`) checks this deterministically: a test-only callback on the device manager spins inside chosen callbacks, which the meter counts as the engine's time. See [open questions](../open-questions.md#cpu-overloads-during-takes).
+
 ## Not yet covered
 
 - Native file dialogs, which are modal and cannot run in an automated test.
