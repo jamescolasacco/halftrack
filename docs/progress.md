@@ -2032,3 +2032,4 @@ Engine and QA areas.
 - **External sync** now keeps its blocks in step with the wall clock however slowly messages are dispatched (a new `pumpSyntheticTestDeviceWithoutDispatch`), so its real-time tempo checks hold on the slower macOS runner.
 - **Measured.** The Capture MIDI suite (a device added while playing), the UI suite and the external sync suite, each also with slowed dispatch.
 
+- **A second fix.** Recording and stopping before the device's next block started playback a moment later: the engine's stop left a posted play in place, the play head started on that block and the transport followed it. The same patch now withdraws the posted play at a stop. Found through the punch suite failing under parallel load, where the first fix had kept that stray playback going through a MIDI rescan; the transport suite now records and stops at once and finds the transport stopped.

@@ -76,6 +76,19 @@ int runTransportTests (const juce::File& artifacts)
         s.stop();
         const auto clips = s.snapshot().tracks[0].clips;
         check (clips.size() == 1 && std::abs (clips[0].start - 3) < .01, "the take starts at the insert marker");
+
+        // Stopped before the device's next block, a recording leaves the transport stopped: the engine
+        // started its play head on that block regardless, and its transport then played along.
+        ok (s.record(), "Record and stop at once");
+        s.stop();
+        bool stayedStopped = true;
+        for (int i = 0; i < 20; ++i)
+        {
+            pumpSyntheticTestDevice (s, blocksPerSecond / 20);
+            juce::Thread::sleep (10); // The transport's timer, which started playback, runs by the clock.
+            stayedStopped = stayedStopped && ! s.snapshot().playing && ! s.snapshot().recording;
+        }
+        check (stayedStopped, "a recording stopped before its first block does not start playback afterwards");
         ok (s.setTrackArmed (0, false), "disarm the track");
 
         // The marker keeps its beat when the tempo changes: beat 6 is 3 s at 120 BPM and 6 s at 60 BPM.

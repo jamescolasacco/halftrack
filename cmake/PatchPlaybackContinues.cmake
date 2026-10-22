@@ -1,21 +1,29 @@
-# Halftrack playback through device rebuilds for pinned Tracktion Engine. Rebuilding a playback
-# context's devices, as the engine does when a MIDI device appears or goes, clears its nodes and
-# stops its play head; the new nodes left the play head stopped, so the transport stopped itself a
-# moment later. Now a rebuild while the transport plays resumes the play head where it stopped, as soon as the
-# device list is rebuilt, before the transport's timer can stop it.
+# Halftrack playback continuity for pinned Tracktion Engine.
+# - Rebuilding a playback context's devices, as the engine does when a MIDI device appears or goes,
+#   clears its nodes and stops its play head; the new nodes left the play head stopped, so the
+#   transport stopped itself a moment later. Now a device-list rebuild while the transport plays
+#   resumes the play head where it stopped, before the transport's timer can stop it.
+# - A stop withdraws a play posted for the next block, so a recording started and stopped before
+#   that block no longer starts playback a moment later.
 # Retains all upstream source notices. Validates every file before writing any.
 function(halftrack_patch_playback_continues source_dir)
     set(source0 "${source_dir}/modules/tracktion_engine/playback/tracktion_EditPlaybackContext.h")
     set(original0 "d172d8de5ee35392557d3e0e363893283de2d9d0392d7e58114b3c8c3ee09b4b")
-    set(patched0 "3d4804a3b406a4eafe30c7db36b9f8b18d511e9b2586fd6705144025ac3b9d93")
-    set(count0 1)
+    set(patched0 "5b4993f48aa8700aaa3f7c4e27790c41042536951e20d4d650951b73095ae327")
+    set(count0 2)
     set(before0_0 [=[    bool isAllocated = false;]=])
     set(after0_0 [=[    bool isAllocated = false;
     bool playHeadWasRunning = false; // Halftrack: the play head ran when the nodes were last cleared.]=])
+    set(before0_1 [=[    /** Returns true if a play message has been posted but not dispatched. */
+    bool isPlayPending() const;]=])
+    set(after0_1 [=[    /** Returns true if a play message has been posted but not dispatched. */
+    bool isPlayPending() const;
+    /** Halftrack: withdraws a posted play, for a stop that comes before the next block. */
+    void cancelPendingPlay();]=])
     set(source1 "${source_dir}/modules/tracktion_engine/playback/tracktion_EditPlaybackContext.cpp")
     set(original1 "1742b29b2e581de7583892454d08e988dab60598254d5669164acbd9918bb019")
-    set(patched1 "dc3f41c9031fcc94ff32196c1a99be684a09c53d4d50da09247f856b0ec406d2")
-    set(count1 3)
+    set(patched1 "7d28b4424f5c1bb4140631529a219e9c4f60e58ee1c293a2faf9eb10a890ad70")
+    set(count1 5)
     set(before1_0 [=[    const juce::ScopedValueSetter<bool> alocateSetter (isAllocated, isAllocated);
     clearNodes();]=])
     set(after1_0 [=[    const juce::ScopedValueSetter<bool> alocateSetter (isAllocated, isAllocated);
@@ -56,7 +64,57 @@ function(halftrack_patch_playback_continues source_dir)
          && nodePlaybackContext != nullptr && ! nodePlaybackContext->playHead.isPlaying())
         nodePlaybackContext->playHead.play();
 }]=])
-    foreach(index RANGE 0 1)
+    set(before1_3 [=[    void postPlay()
+    {
+        playPending.store (true, std::memory_order_release);
+    }]=])
+    set(after1_3 [=[    void postPlay()
+    {
+        playPending.store (true, std::memory_order_release);
+    }
+
+    // Halftrack: a stop before the next block withdraws the play posted for it.
+    void cancelPendingPlay()
+    {
+        playPending.store (false, std::memory_order_release);
+    }]=])
+    set(before1_4 [=[void EditPlaybackContext::postPlay()
+{
+    if (nodePlaybackContext)
+        nodePlaybackContext->postPlay();
+}]=])
+    set(after1_4 [=[void EditPlaybackContext::postPlay()
+{
+    if (nodePlaybackContext)
+        nodePlaybackContext->postPlay();
+}
+
+void EditPlaybackContext::cancelPendingPlay()
+{
+    if (nodePlaybackContext)
+        nodePlaybackContext->cancelPendingPlay();
+}]=])
+    set(source2 "${source_dir}/modules/tracktion_engine/playback/tracktion_TransportControl.cpp")
+    set(original2 "5e43a391154ab64092d83eeeb8dddfc57718a11be23e753e4a1fdb0ec83c931d")
+    set(patched2 "d85899d168abaf3ca1e47eb586a2018ca54b642b20ab92c15de1e970edd9724f")
+    set(count2 1)
+    set(before2_0 [=[    void stop()
+    {
+        if (auto ph = getNodePlayHead())
+            ph->stop();
+    }]=])
+    set(after2_0 [=[    void stop()
+    {
+        // Halftrack: a play posted for the next block is withdrawn first. Otherwise a stop that
+        // comes before that block, as when recording is started and stopped at once, leaves the
+        // play head to start then, and the transport's timer starts playback to follow it.
+        if (transport.playbackContext != nullptr)
+            transport.playbackContext->cancelPendingPlay();
+
+        if (auto ph = getNodePlayHead())
+            ph->stop();
+    }]=])
+    foreach(index RANGE 0 2)
         file(SHA256 "${source${index}}" hash)
         if(hash STREQUAL "${patched${index}}")
             set(write${index} FALSE)
@@ -81,7 +139,7 @@ function(halftrack_patch_playback_continues source_dir)
         endif()
         set(write${index} TRUE)
     endforeach()
-    foreach(index RANGE 0 1)
+    foreach(index RANGE 0 2)
         if(write${index})
             string(REGEX REPLACE "\n$" "" configure_content "${content${index}}")
             file(CONFIGURE OUTPUT "${source${index}}" CONTENT "@configure_content@" @ONLY NEWLINE_STYLE LF)

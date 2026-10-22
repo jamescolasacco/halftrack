@@ -317,7 +317,7 @@ The wave input start patch dropped a take's first block while the transport's qu
 
 ## Tracktion loop recording length patch
 
-`cmake/PatchLoopRecordLength.cmake` patches the pinned `tracktion_TransportControl.cpp`, which no other patch touches (input SHA-256 `07f46651b67377e32bd962204c27e3f1fe57e819f21cde4e65e1f884d35eb6c0`, patched `5e43a391154ab64092d83eeeb8dddfc57718a11be23e753e4a1fdb0ec83c931d`).
+`cmake/PatchLoopRecordLength.cmake` patches the pinned `tracktion_TransportControl.cpp` (input SHA-256 `07f46651b67377e32bd962204c27e3f1fe57e819f21cde4e65e1f884d35eb6c0`, patched `5e43a391154ab64092d83eeeb8dddfc57718a11be23e753e4a1fdb0ec83c931d`). The later playback continuation patch builds on its result, which this patch then accepts as already applied.
 
 - **Before.** The engine refused to start recording round a loop shorter than two seconds, presumably for its own cutting of loop recordings into takes: a one-bar loop at 140 BPM could not be recorded.
 - **After.** Halftrack ends a loop recording unlooped and splits it into passes itself, so the minimum is lowered to 10 ms, refusing only a degenerate loop.
@@ -374,14 +374,30 @@ The wave input start patch dropped a take's first block while the transport's qu
 
 ## Tracktion playback continuation patch
 
-`cmake/PatchPlaybackContinues.cmake` patches two pinned files no other patch touches:
+`cmake/PatchPlaybackContinues.cmake` patches three pinned files:
 
-- `tracktion_EditPlaybackContext.h`: input `d172d8de5ee35392557d3e0e363893283de2d9d0392d7e58114b3c8c3ee09b4b`, patched `3d4804a3b406a4eafe30c7db36b9f8b18d511e9b2586fd6705144025ac3b9d93`;
-- `tracktion_EditPlaybackContext.cpp`: input `1742b29b2e581de7583892454d08e988dab60598254d5669164acbd9918bb019`, patched `dc3f41c9031fcc94ff32196c1a99be684a09c53d4d50da09247f856b0ec406d2`.
+- `tracktion_EditPlaybackContext.h`, which no other patch touches: input `d172d8de5ee35392557d3e0e363893283de2d9d0392d7e58114b3c8c3ee09b4b`, patched `5b4993f48aa8700aaa3f7c4e27790c41042536951e20d4d650951b73095ae327`;
+- `tracktion_EditPlaybackContext.cpp`, which no other patch touches: input `1742b29b2e581de7583892454d08e988dab60598254d5669164acbd9918bb019`, patched `7d28b4424f5c1bb4140631529a219e9c4f60e58ee1c293a2faf9eb10a890ad70`;
+- `tracktion_TransportControl.cpp`, after the loop recording length patch: input `5e43a391154ab64092d83eeeb8dddfc57718a11be23e753e4a1fdb0ec83c931d`, patched `d85899d168abaf3ca1e47eb586a2018ca54b642b20ab92c15de1e970edd9724f`. The earlier patch accepts this result.
+
+It makes two changes.
+
+**Playing through device rebuilds**
 
 - **Before.** Rebuilding a playback context's devices, as the engine does whenever a MIDI device appears or goes, cleared its nodes and stopped its play head. The new nodes left it stopped, so the transport stopped itself a moment later. Plugging in a controller stopped playback. On a slow CI machine, the engine's periodic MIDI rescan finding the tests' own ports did the same.
-- **After.** When the context releases its device list, it remembers whether the play head ran. When the list is rebuilt while the transport still plays, it resumes the play head where it stopped at once, before the transport's timer can find it standing still; the graph may be rebuilt only later. Only device-list rebuilds do this: when the transport clears the nodes itself, as it does when punching in, it restarts the play head in its own time, and resuming it early started punched MIDI takes late. Recordings are otherwise unaffected: the earlier input take rescan patch already defers MIDI discovery while anything records.
-- **Evidence.** `capture-midi-acceptance` adds a MIDI device while playing and finds playback still running and advancing. The UI suite's lane-click check passes with message dispatch slowed to 15 ms a block, where it failed before. `punch-acceptance` still places punched MIDI takes at the brace.
+- **After.** When the context releases its device list, it remembers whether the play head ran. When the list is rebuilt while the transport still plays, it resumes the play head where it stopped at once, before the transport's timer can find it standing still; the graph may be rebuilt only later. Only device-list rebuilds do this; the transport's own clearing of nodes is left as it was. Recordings are unaffected: the earlier input take rescan patch already defers MIDI discovery while anything records.
+
+**Stop withdraws a pending start**
+
+- **Before.** Recording from a stopped transport posts a play for the play head's next block. A stop that came before that block stopped the play head but left the posted play. The play head then started on that block, and the transport's timer, finding it playing, started playback to follow. Recording and stopping at once started playback a moment later, from where the transport last was. The resume above then kept that stray playback going through a MIDI rescan, where before it had ended it, and the punch suite's MIDI pass, recorded while it played, started late.
+- **After.** Stopping the play head withdraws a posted play first.
+
+**Evidence**
+
+- `capture-midi-acceptance` adds a MIDI device while playing and finds playback still running and advancing.
+- The UI suite's lane-click check passes with message dispatch slowed to 15 ms a block, where it failed before.
+- `transport-acceptance` records and stops at once, then pumps the device for a while with the clock running, and finds the transport stopped throughout. It failed three times in three without the second change.
+- `punch-acceptance` passes eight of eight runs in parallel, where it failed six of eight before the second change.
 
 <!-- dependency-index:start -->
 
@@ -465,6 +481,7 @@ Generated by `scripts/dependency_index.py` from the build; `tests/test_dependenc
 | `cmake/PatchLaunchRepeat.cmake` | patched0 | `1cd20c6ace77ed96f2cc99ef41754bfc066d2745c9e91e4f36d14c2ca7009693` |
 | `cmake/PatchLoopRecordLength.cmake` | original | `07f46651b67377e32bd962204c27e3f1fe57e819f21cde4e65e1f884d35eb6c0` |
 | `cmake/PatchLoopRecordLength.cmake` | patched | `5e43a391154ab64092d83eeeb8dddfc57718a11be23e753e4a1fdb0ec83c931d` |
+| `cmake/PatchLoopRecordLength.cmake` | downstream | `d85899d168abaf3ca1e47eb586a2018ca54b642b20ab92c15de1e970edd9724f` |
 | `cmake/PatchMetronomeRhythm.cmake` | original0 | `cfca43d540e922c63be15bddb94fc1f9db1cc5c9f199bd3bc96dde86ae030613` |
 | `cmake/PatchMetronomeRhythm.cmake` | patched0 | `dd21794c667566ec8d0c8f04c16858770f882e9156f410d91889b3361240814a` |
 | `cmake/PatchMetronomeRhythm.cmake` | original1 | `487e4ef7c67ab8ee3dd5d6dcd27266087306bd4c5adf735b74cceab3e08a7921` |
@@ -520,9 +537,11 @@ Generated by `scripts/dependency_index.py` from the build; `tests/test_dependenc
 | `cmake/PatchNegativeTime.cmake` | original | `7a646528d5b260e2d681205f2b6220e2632798578b72c3d6c6d393618c71e237` |
 | `cmake/PatchNegativeTime.cmake` | patched | `e711c54e67db07b1f4347986e3c4f062a6851453d0aa0a371448a393abd9482f` |
 | `cmake/PatchPlaybackContinues.cmake` | original0 | `d172d8de5ee35392557d3e0e363893283de2d9d0392d7e58114b3c8c3ee09b4b` |
-| `cmake/PatchPlaybackContinues.cmake` | patched0 | `3d4804a3b406a4eafe30c7db36b9f8b18d511e9b2586fd6705144025ac3b9d93` |
+| `cmake/PatchPlaybackContinues.cmake` | patched0 | `5b4993f48aa8700aaa3f7c4e27790c41042536951e20d4d650951b73095ae327` |
 | `cmake/PatchPlaybackContinues.cmake` | original1 | `1742b29b2e581de7583892454d08e988dab60598254d5669164acbd9918bb019` |
-| `cmake/PatchPlaybackContinues.cmake` | patched1 | `dc3f41c9031fcc94ff32196c1a99be684a09c53d4d50da09247f856b0ec406d2` |
+| `cmake/PatchPlaybackContinues.cmake` | patched1 | `7d28b4424f5c1bb4140631529a219e9c4f60e58ee1c293a2faf9eb10a890ad70` |
+| `cmake/PatchPlaybackContinues.cmake` | original2 | `5e43a391154ab64092d83eeeb8dddfc57718a11be23e753e4a1fdb0ec83c931d` |
+| `cmake/PatchPlaybackContinues.cmake` | patched2 | `d85899d168abaf3ca1e47eb586a2018ca54b642b20ab92c15de1e970edd9724f` |
 | `cmake/PatchPluginScanner.cmake` | original_0 | `94eb54614af016e38e67af2e27f870e0ad14aa6bf83b42638d7b36c8291f8d8c` |
 | `cmake/PatchPluginScanner.cmake` | previous_0 | `521a1479001bb633c73f5a4780fe85418128728e1dab2f3c0abe43d84c4b0895` |
 | `cmake/PatchPluginScanner.cmake` | previous_current_0 | `a4498068deaeec17081d992825d1df2faf49a1e6c289b91d0fc9a8a54aa7071c` |
