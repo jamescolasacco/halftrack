@@ -1,4 +1,5 @@
 #include "AutomationEditor.h"
+#include "Theme.h"
 #include "NativeEffects.h"
 #include "Session.h"
 #include <algorithm>
@@ -17,7 +18,7 @@ namespace halftrack
 namespace
 {
 constexpr double maximumBeat = 1000000.0;
-const juce::Colour background (0xff222222), panel (0xff2d2d2d), ink (0xffe4e4e4), accent (0xffffa65a);
+const themes::Colour background { 0xff222222 }, panel { 0xff2d2d2d }, ink { 0xffe4e4e4 }, accent { 0xffffa65a };
 }
 
 class AutomationEditor::Impl final : public juce::Component, private juce::ChangeListener,
@@ -58,7 +59,7 @@ public:
             for (const auto tick : ticks)
             {
                 const auto y = position ({ owner.viewStart, tick }).y;
-                g.setColour (tick == 0 && owner.device() == nullptr ? juce::Colour (0xff676767) : juce::Colour (0xff3e3e3e));
+                g.setColour (tick == 0 && owner.device() == nullptr ? themes::colour (0xff676767) : themes::colour (0xff3e3e3e));
                 g.drawHorizontalLine (juce::roundToInt (y), bounds.getX(), bounds.getRight());
                 g.setColour (ink.withAlpha (.65f));
                 g.drawText (owner.formatValue (tick), 0, juce::roundToInt (y) - 8, 56, 16, juce::Justification::centredRight);
@@ -70,7 +71,7 @@ public:
                  beat <= std::min (maximumBeat, owner.viewStart + owner.viewBeats); beat += spacing)
             {
                 const auto x = position ({ beat, 0 }).x;
-                g.setColour (juce::Colour (0xff3e3e3e)); g.drawVerticalLine (juce::roundToInt (x), bounds.getY(), bounds.getBottom());
+                g.setColour (themes::colour (0xff3e3e3e)); g.drawVerticalLine (juce::roundToInt (x), bounds.getY(), bounds.getBottom());
                 g.setColour (ink.withAlpha (.65f));
                 g.drawText (juce::String (beat, spacing < 1 ? 2 : 0), juce::roundToInt (x) - 24,
                             juce::roundToInt (bounds.getBottom()) + 9, 48, 18, juce::Justification::centred);
@@ -175,18 +176,24 @@ public:
         Impl& owner;
     };
 
-    Impl (Session& s, juce::String id, bool master, juce::String pluginId = {}, int parameter = -1)
-        : session (s), trackId (std::move (id)), editingMaster (master), curve (*this), wantedPlugin (std::move (pluginId)), wantedParameter (parameter)
+    // The editor's own look follows the interface theme, as the look-and-feel change on a theme switch says.
+    void applyLook()
     {
-        generation = session.snapshot().projectGeneration;
         look.setColour (juce::ComboBox::backgroundColourId, panel);
         look.setColour (juce::ComboBox::textColourId, ink);
-        look.setColour (juce::ComboBox::outlineColourId, juce::Colour (0xff585858));
+        look.setColour (juce::ComboBox::outlineColourId, themes::colour (0xff585858));
         look.setColour (juce::TextButton::buttonColourId, panel);
         look.setColour (juce::TextButton::textColourOffId, ink);
         look.setColour (juce::ToggleButton::textColourId, ink);
         look.setColour (juce::ToggleButton::tickColourId, accent);
         look.setColour (juce::ScrollBar::thumbColourId, accent.withAlpha (.6f));
+    }
+    void lookAndFeelChanged() override { applyLook(); }
+    Impl (Session& s, juce::String id, bool master, juce::String pluginId = {}, int parameter = -1)
+        : session (s), trackId (std::move (id)), editingMaster (master), curve (*this), wantedPlugin (std::move (pluginId)), wantedParameter (parameter)
+    {
+        generation = session.snapshot().projectGeneration;
+        applyLook();
         setLookAndFeel (&look); setWantsKeyboardFocus (true);
         trackChoice.setName ("automation-track"); trackChoice.setTitle ("Automation destination");
         targetChoice.setName ("automation-target"); snapChoice.setName ("automation-snap");
@@ -218,7 +225,7 @@ public:
         {
             input->setColour (juce::TextEditor::backgroundColourId, panel);
             input->setColour (juce::TextEditor::textColourId, ink);
-            input->setColour (juce::TextEditor::outlineColourId, juce::Colour (0xff585858));
+            input->setColour (juce::TextEditor::outlineColourId, themes::colour (0xff585858));
             input->setSelectAllWhenFocused (true); input->onReturnKey = [this] { commitSelected(); };
             input->onTextChange = [this] { numericDirty = true; };
         }

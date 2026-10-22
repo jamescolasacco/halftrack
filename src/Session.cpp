@@ -2970,7 +2970,8 @@ struct Session::Impl
     static bool validPreferences (const Preferences& p)
     {
         return juce::isPositiveAndBelow ((int) p.defaultWarpMode, 8) && p.defaultWarpMode != WarpMode::off
-            && juce::isPositiveAndBelow ((int) p.defaultLaunchMode, 4) && juce::isPositiveAndBelow ((int) p.defaultLaunchQuantisation, 11);
+            && juce::isPositiveAndBelow ((int) p.defaultLaunchMode, 4) && juce::isPositiveAndBelow ((int) p.defaultLaunchQuantisation, 11)
+            && juce::isPositiveAndBelow (p.theme, Preferences::themeCount) && p.zoomPercent >= 50 && p.zoomPercent <= 200 && p.zoomPercent % 25 == 0;
     }
     void loadPreferences()
     {
@@ -2990,8 +2991,9 @@ struct Session::Impl
             // Settings an older file lacks keep their defaults; a newer file's unknown ones are ignored.
             const int arm = number ("exclusiveArm", 1, 2), solo = number ("exclusiveSolo", 1, 2), warp = number ("defaultWarpMode", (int) read.defaultWarpMode, 8);
             const int autoWarp = number ("autoWarpLongSamples", 0, 2), mode = number ("defaultLaunchMode", 0, 4), grid = number ("defaultLaunchQuantisation", 0, 11);
-            valid = arm >= 0 && solo >= 0 && warp >= 0 && autoWarp >= 0 && mode >= 0 && grid >= 0;
-            read = { arm == 1, solo == 1, (WarpMode) warp, autoWarp == 1, (LaunchMode) mode, (ClipQuantisation) grid };
+            const int look = number ("theme", 0, Preferences::themeCount), zoom = number ("zoomPercent", 100, 201);
+            valid = arm >= 0 && solo >= 0 && warp >= 0 && autoWarp >= 0 && mode >= 0 && grid >= 0 && look >= 0 && zoom >= 0;
+            read = { arm == 1, solo == 1, (WarpMode) warp, autoWarp == 1, (LaunchMode) mode, (ClipQuantisation) grid, look, zoom };
             valid = valid && validPreferences (read);
         }
         if (valid) { prefs = read; return; }
@@ -3008,6 +3010,7 @@ struct Session::Impl
         xml.setAttribute ("exclusiveArm", next.exclusiveArm ? 1 : 0); xml.setAttribute ("exclusiveSolo", next.exclusiveSolo ? 1 : 0);
         xml.setAttribute ("defaultWarpMode", (int) next.defaultWarpMode); xml.setAttribute ("autoWarpLongSamples", next.autoWarpLongSamples ? 1 : 0);
         xml.setAttribute ("defaultLaunchMode", (int) next.defaultLaunchMode); xml.setAttribute ("defaultLaunchQuantisation", (int) next.defaultLaunchQuantisation);
+        xml.setAttribute ("theme", next.theme); xml.setAttribute ("zoomPercent", next.zoomPercent);
         const auto file = prefsFile();
         if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
         juce::TemporaryFile temporary (file);

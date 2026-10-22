@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "Theme.h"
 #include "AudioClipEditor.h"
 #include "AutomationEditor.h"
 #include "BrowserIndex.h"
@@ -42,8 +43,8 @@ void withGeneratedMidiController (Session&, const std::function<void(const juce:
 namespace
 {
 // Neutral studio grays with one warm selection accent.
-const juce::Colour background { 0xff1d1d1d }, panel { 0xff2d2d2d }, raised { 0xff3e3e3e },
-                   line { 0xff141414 }, ink { 0xffdadada }, muted { 0xff8e8e8e },
+const themes::Colour background { 0xff1d1d1d }, panel { 0xff2d2d2d }, raised { 0xff3e3e3e },
+                   line { 0xff141414 }, ink { 0xffdadada }, muted { 0xff969696 },
                    orange { 0xffffab3d }, red { 0xffed5249 }, green { 0xff48d17e }, insertBlue { 0xff7fb4ff };
 
 juce::Font font (float size = 12.0f, bool bold = false)
@@ -54,7 +55,9 @@ juce::Font font (float size = 12.0f, bool bold = false)
 class Theme final : public juce::LookAndFeel_V4
 {
 public:
-    Theme()
+    Theme() { applyColours(); }
+    // The look-and-feel colours, as the current interface theme shows them.
+    void applyColours()
     {
         setColour (juce::ResizableWindow::backgroundColourId, panel);
         setColour (juce::Label::textColourId, ink);
@@ -76,7 +79,7 @@ public:
         setColour (juce::TextEditor::focusedOutlineColourId, orange);
         setColour (juce::ListBox::backgroundColourId, panel);
         setColour (juce::ListBox::outlineColourId, line);
-        setColour (juce::ScrollBar::thumbColourId, juce::Colour (0xff6e6e6e));
+        setColour (juce::ScrollBar::thumbColourId, themes::colour (0xff6e6e6e));
         setColour (juce::Slider::thumbColourId, ink);
         setColour (juce::Slider::trackColourId, orange);
         setColour (juce::Slider::backgroundColourId, background);
@@ -122,10 +125,10 @@ public:
         const bool bipolar = slider.getMinimum() < 0 && slider.getMaximum() > 0;
         const auto origin = bipolar ? startAngle + (float) ((0 - slider.getMinimum()) / (slider.getMaximum() - slider.getMinimum())) * (endAngle - startAngle) : startAngle;
         juce::Path ring; ring.addCentredArc (centre.x, centre.y, radius - 2, radius - 2, 0, startAngle, endAngle, true);
-        g.setColour (juce::Colour (0xff141414)); g.strokePath (ring, juce::PathStrokeType (3.0f));
+        g.setColour (themes::colour (0xff141414)); g.strokePath (ring, juce::PathStrokeType (3.0f));
         juce::Path value; value.addCentredArc (centre.x, centre.y, radius - 2, radius - 2, 0, juce::jmin (origin, angle), juce::jmax (origin, angle), true);
         g.setColour (slider.isEnabled() ? orange : muted); g.strokePath (value, juce::PathStrokeType (3.0f));
-        g.setColour (juce::Colour (0xff3a3a3a)); g.fillEllipse (bounds.withSizeKeepingCentre ((radius - 5) * 2, (radius - 5) * 2));
+        g.setColour (themes::colour (0xff3a3a3a)); g.fillEllipse (bounds.withSizeKeepingCentre ((radius - 5) * 2, (radius - 5) * 2));
         g.setColour (ink); g.drawLine (centre.x, centre.y, centre.x + (radius - 5) * std::sin (angle), centre.y - (radius - 5) * std::cos (angle), 2.0f);
     }
     // Faders: thin dark slot, lighter fill below the cap, flat rectangular cap.
@@ -137,13 +140,13 @@ public:
         const bool vertical = style == juce::Slider::LinearVertical;
         const auto area = juce::Rectangle<float> ((float) x, (float) y, (float) width, (float) height);
         const auto track = vertical ? area.withSizeKeepingCentre (4.0f, area.getHeight()) : area.withSizeKeepingCentre (area.getWidth(), 4.0f);
-        g.setColour (juce::Colour (0xff141414)); g.fillRect (track);
+        g.setColour (themes::colour (0xff141414)); g.fillRect (track);
         const auto filled = vertical ? track.withTop (sliderPos) : track.withRight (sliderPos);
         g.setColour (slider.isEnabled() ? orange : muted); g.fillRect (filled);
         const auto cap = vertical ? juce::Rectangle<float> (area.getCentreX() - 9.0f, sliderPos - 4.0f, 18.0f, 8.0f)
                                   : juce::Rectangle<float> (sliderPos - 4.0f, area.getCentreY() - 8.0f, 8.0f, 16.0f);
-        g.setColour (slider.isEnabled() ? juce::Colour (0xffcfcfcf) : muted); g.fillRect (cap);
-        g.setColour (juce::Colour (0xff141414)); g.drawRect (cap, 1.0f);
+        g.setColour (slider.isEnabled() ? themes::colour (0xffcfcfcf) : muted); g.fillRect (cap);
+        g.setColour (themes::colour (0xff141414)); g.drawRect (cap, 1.0f);
     }
     void drawComboBox (juce::Graphics& g, int width, int height, bool,
                        int, int, int, int, juce::ComboBox& box) override
@@ -177,7 +180,7 @@ public:
         const auto side = juce::jmin (getWidth(), getHeight()) * .42f;
         auto r = getLocalBounds().toFloat().withSizeKeepingCentre (side, side);
         const bool recordKind = kind == record || kind == sessionRecord;
-        auto c = recordKind ? red : ink;
+        juce::Colour c = recordKind ? red : ink;
         if (getToggleState()) c = recordKind ? red.brighter (0.3f) : green;
         g.setColour (c);
         if (kind == sessionRecord)
@@ -380,7 +383,7 @@ public:
         addAndMakeVisible (midiMapButton); addChildComponent (mapOverlay); addChildComponent (mappingList);
         addAndMakeVisible (keyMapButton); keyMapButton.setName ("Key Map Mode"); keyMapButton.setClickingTogglesState (true);
         keyMapButton.setTooltip ("Key Map Mode: click an orange control, then press a computer key to map it  |  Cmd/Ctrl+K");
-        keyMapButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffff8f3d)); keyMapButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+        keyMapButton.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffff8f3d)); keyMapButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
         keyMapButton.setWantsKeyboardFocus (false); keyMapButton.setMouseClickGrabsKeyboardFocus (false);
         keyMapButton.onClick = [this] { setKeyMapMode (keyMapButton.getToggleState()); };
         // The transport's buttons can be mapped.
@@ -389,12 +392,12 @@ public:
         clickButton.getProperties().set ("midiMapTarget", "transport:metronome");
         addAndMakeVisible (keysButton); keysButton.setName ("Computer MIDI Keyboard"); keysButton.setClickingTogglesState (true);
         keysButton.setTooltip ("Computer MIDI Keyboard: play notes from A to ' (black keys W to P), Z and X for the octave, C and V for the velocity  |  M");
-        keysButton.setColour (juce::TextButton::buttonOnColourId, orange); keysButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+        keysButton.setColour (juce::TextButton::buttonOnColourId, orange); keysButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
         keysButton.setWantsKeyboardFocus (false); keysButton.setMouseClickGrabsKeyboardFocus (false);
         keysButton.onClick = [this] { setComputerKeyboard (keysButton.getToggleState()); };
         midiMapButton.setName ("MIDI Map Mode"); midiMapButton.setClickingTogglesState (true);
         midiMapButton.setTooltip ("MIDI Map Mode: click a blue control, then move a controller to map it  |  Cmd/Ctrl+M");
-        midiMapButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3d8bff)); midiMapButton.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+        midiMapButton.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff3d8bff)); midiMapButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xffffffff));
         midiMapButton.setWantsKeyboardFocus (false); midiMapButton.setMouseClickGrabsKeyboardFocus (false);
         midiMapButton.onClick = [this] { setMidiMapMode (midiMapButton.getToggleState()); };
         reEnableButton.setTooltip ("Re-Enable Automation: overridden controls follow their automation again");
@@ -410,7 +413,7 @@ public:
         punchInButton.setTooltip ("Punch-In: Arrangement recording keeps only what arrives from the loop start");
         punchOutButton.setTooltip ("Punch-Out: Arrangement recording keeps only what arrives before the loop end");
         for (auto* punch : { &punchInButton, &punchOutButton })
-        { punch->setColour (juce::TextButton::buttonOnColourId, orange); punch->setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a)); }
+        { punch->setColour (juce::TextButton::buttonOnColourId, orange); punch->setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a)); }
         punchInButton.onClick = [this] { report (session.setPunchIn (! state.punchIn)); refresh(); };
         punchOutButton.onClick = [this] { report (session.setPunchOut (! state.punchOut)); refresh(); };
         clickButton.setName("Metronome"); clickSettingsButton.setName("Metronome settings");
@@ -441,12 +444,12 @@ public:
         addAndMakeVisible (previewButton); addAndMakeVisible (previewVolume);
         previewButton.setName ("Preview"); previewButton.setClickingTogglesState (true);
         previewButton.setTooltip ("Preview: play samples as you select them, at the preview volume");
-        previewButton.setColour (juce::TextButton::buttonOnColourId, orange); previewButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+        previewButton.setColour (juce::TextButton::buttonOnColourId, orange); previewButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
         previewButton.setWantsKeyboardFocus (false); previewButton.setMouseClickGrabsKeyboardFocus (false);
         previewButton.onClick = [this] { if (! previewButton.getToggleState()) session.stopPreview(); else previewSelectedSample(); };
         previewVolume.setName ("Preview volume"); previewVolume.setSliderStyle (juce::Slider::LinearBar);
         previewVolume.setRange (-70, 6, .1); previewVolume.setValue (0, juce::dontSendNotification); previewVolume.setDoubleClickReturnValue (true, 0);
-        previewVolume.setColour (juce::Slider::trackColourId, juce::Colour (0xff4a4a4a)); previewVolume.setColour (juce::Slider::textBoxTextColourId, ink);
+        previewVolume.setColour (juce::Slider::trackColourId, themes::colour (0xff4a4a4a)); previewVolume.setColour (juce::Slider::textBoxTextColourId, ink);
         previewVolume.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " dB"; };
         previewVolume.valueFromTextFunction = [] (const juce::String& t) { return t.retainCharacters ("-.0123456789").getDoubleValue(); };
         previewVolume.updateText(); previewVolume.setWantsKeyboardFocus (false);
@@ -513,7 +516,7 @@ public:
         g.setColour (line);
         g.drawHorizontalLine (toolbarBounds.getBottom(), 0.0f, (float) getWidth());
         g.drawVerticalLine (browserBounds.getRight(), (float) browserBounds.getY(), (float) browserBounds.getBottom());
-        g.setColour (juce::Colour (0xff121212)); g.fillRect (dividerBounds);
+        g.setColour (themes::colour (0xff121212)); g.fillRect (dividerBounds);
         // Control bar: tempo/meter on the left, transport and loop in the centre, status on the right.
         g.setFont (font (11.0f));
         g.setColour (muted); g.setFont (font (10.0f));
@@ -1120,7 +1123,7 @@ private:
         explicit BrowserCategories (Impl& o) : owner (o) { setName ("Browser categories"); }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff272727));
+            g.fillAll (themes::colour (0xff272727));
             g.setColour (muted); g.setFont (font (9.5f, true));
             g.drawText ("COLLECTIONS", 6, 0, getWidth() - 8, headerHeight, juce::Justification::centredLeft);
             g.drawText ("CATEGORIES", 6, categoriesTop() - headerHeight, getWidth() - 8, headerHeight, juce::Justification::centredLeft);
@@ -1175,7 +1178,7 @@ private:
             // Two chain links side by side.
             const auto r = getLocalBounds().toFloat().reduced (2.0f, 5.0f);
             const auto w = r.getWidth() * .62f, h = r.getHeight();
-            g.setColour (isMouseOver() ? juce::Colours::white : juce::Colour (0xff141414));
+            g.setColour (isMouseOver() ? themes::colour (0xffffffff) : themes::colour (0xff141414));
             g.drawRoundedRectangle ({ r.getX(), r.getY(), w, h }, h / 2, 1.6f);
             g.drawRoundedRectangle ({ r.getRight() - w, r.getY(), w, h }, h / 2, 1.6f);
         }
@@ -1191,7 +1194,7 @@ private:
             for (auto* c : std::initializer_list<juce::Component*> { &name, &mute, &solo, &arm, &gain, &pan, &input, &monitor, &sendMode }) addAndMakeVisible (c);
             name.setName ("Track name");
             name.setFont (font (11.5f, true));
-            if (! columnLayout) name.setColour (juce::Label::textColourId, juce::Colour (0xff141414));
+            if (! columnLayout) name.setColour (juce::Label::textColourId, themes::colour (0xff141414));
             name.setEditable (false, true, false);
             name.onTextChange = [this] { owner.report (owner.session.renameTrack (index, name.getText())); };
             name.setTooltip ("Double-click to rename this track");
@@ -1214,8 +1217,8 @@ private:
             solo.onClick = [this] { owner.selectTrack (index); owner.soloFromUI (index, {}, solo.getToggleState(), juce::ModifierKeys::getCurrentModifiers().isCommandDown()); };
             arm.onClick = [this] { owner.selectTrack (index); owner.armFromUI (index, arm.getToggleState(), juce::ModifierKeys::getCurrentModifiers().isCommandDown()); };
             mute.setTooltip ("Track activator: click to mute or unmute"); solo.setTooltip ("Solo track"); arm.setTooltip ("Arm track for audio recording");
-            mute.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); mute.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
-            solo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff57a7ff)); solo.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            mute.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); mute.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
+            solo.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff57a7ff)); solo.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             arm.setName ("Record arm"); input.setName ("Track audio input"); monitor.setName ("Track monitoring");
             sendMode.setName ("Return send position");
             sendMode.addItem ("Pre-fader", 1); sendMode.addItem ("Post-fader", 2);
@@ -1261,7 +1264,7 @@ private:
                 addAndMakeVisible (delay); delay.setName ("Track delay");
                 delay.setSliderStyle (juce::Slider::LinearBar); delay.setRange (-Session::maximumTrackDelayMs, Session::maximumTrackDelayMs, .1);
                 delay.setDoubleClickReturnValue (true, 0); delay.setWantsKeyboardFocus (false);
-                delay.setColour (juce::Slider::trackColourId, juce::Colour (0xff4a4a4a)); delay.setColour (juce::Slider::textBoxTextColourId, ink);
+                delay.setColour (juce::Slider::trackColourId, themes::colour (0xff4a4a4a)); delay.setColour (juce::Slider::textBoxTextColourId, ink);
                 delay.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " ms"; };
                 delay.valueFromTextFunction = [] (const juce::String& text) { return text.retainCharacters ("-.0123456789").getDoubleValue(); };
                 delay.setTooltip ("Track delay: positive values play this track later, negative values earlier. Double-click for 0 ms.");
@@ -1408,7 +1411,7 @@ private:
                         *side = std::make_unique<juce::TextButton> (side == &sideA ? "A" : "B");
                         (*side)->setName (side == &sideA ? "Crossfade A" : "Crossfade B");
                         (*side)->setClickingTogglesState (true); (*side)->setWantsKeyboardFocus (false);
-                        (*side)->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); (*side)->setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+                        (*side)->setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); (*side)->setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
                         addAndMakeVisible (**side);
                     }
                     sideA->setTooltip ("Assign this track to the crossfader's A side"); sideB->setTooltip ("Assign this track to the crossfader's B side");
@@ -1551,7 +1554,7 @@ private:
         int sendOffset() const noexcept { return sends.empty() ? 0 : (int) ((sends.size() + 2) / 3) * 40; }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (owner.selectedTrack == index ? juce::Colour (0xff454545) : juce::Colour (0xff383838));
+            g.fillAll (owner.selectedTrack == index ? themes::colour (0xff454545) : themes::colour (0xff383838));
             g.setColour (colour); g.fillRect (0, 0, 4, getHeight() - 1);
             g.setColour (line); g.drawRect (getLocalBounds());
             g.setColour (muted); g.setFont (font (9.5f, true));
@@ -1564,7 +1567,7 @@ private:
                     const auto bar = meter.withWidth (4).translated (channel * 6, 0);
                     const auto level = channel == 0 ? peakL : peakR;
                     const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (level, -60.0f) + 60.0f) / 60.0f);
-                    g.setColour (juce::Colour (0xff181818)); g.fillRect (bar);
+                    g.setColour (themes::colour (0xff181818)); g.fillRect (bar);
                     const auto lit = bar.withTop (bar.getBottom() - juce::roundToInt (bar.getHeight() * fraction));
                     g.setColour (level >= 1.0f ? red : green); g.fillRect (lit);
                 }
@@ -1589,7 +1592,7 @@ private:
                 const auto level = channel == 0 ? peakL : peakR;
                 const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (level, -60.0f) + 60.0f) / 60.0f);
                 const auto bar = juce::Rectangle<int> (getWidth() - 7 + channel * 3, 1, 2, getHeight() - 2);
-                g.setColour (juce::Colour (0xff181818)); g.fillRect (bar);
+                g.setColour (themes::colour (0xff181818)); g.fillRect (bar);
                 g.setColour (level >= 1.0f ? red : green); g.fillRect (bar.withTop (bar.getBottom() - juce::roundToInt (bar.getHeight() * fraction)));
             }
         }
@@ -1719,12 +1722,12 @@ private:
             fold.setName ("Group fold"); fold.setTooltip ("Fold or unfold the group's tracks");
             fold.onClick = [this] { if (const auto* g = info()) owner.report (owner.session.setGroupFolded (groupId, ! g->folded)); owner.refresh(); };
             name.setName ("Group name"); name.setFont (font (11.5f, true)); name.setEditable (false, true, false);
-            name.setColour (juce::Label::textColourId, juce::Colour (0xff141414));
+            name.setColour (juce::Label::textColourId, themes::colour (0xff141414));
             name.onTextChange = [this] { owner.report (owner.session.renameGroup (groupId, name.getText())); owner.refresh(); };
             for (auto* b : { &activator, &solo }) { b->setClickingTogglesState (true); b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); }
             activator.setName ("Group activator"); activator.setTooltip ("Group activator: click to mute or unmute the whole group");
-            activator.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); activator.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
-            solo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff57a7ff)); solo.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            activator.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); activator.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
+            solo.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff57a7ff)); solo.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             activator.onClick = [this] { owner.report (owner.session.setGroupMute (groupId, ! activator.getToggleState())); owner.refresh(); };
             solo.onClick = [this] { owner.soloFromUI (-1, groupId, solo.getToggleState(), juce::ModifierKeys::getCurrentModifiers().isCommandDown()); };
             gain.setName ("Group volume"); gain.setSliderStyle (juce::Slider::LinearHorizontal); gain.setRange (-100, 6, .1); gain.setSkewFactorFromMidPoint (-12);
@@ -1780,7 +1783,7 @@ private:
         {
             if (columnLayout)
             {
-                g.fillAll (juce::Colour (0xff383838));
+                g.fillAll (themes::colour (0xff383838));
                 g.setColour (colour); g.fillRect (0, 0, 4, getHeight() - 1);
                 g.setColour (muted); g.setFont (font (9.0f, true)); g.drawText ("GROUP", 6, 8, getWidth() - 12, 16, juce::Justification::centred);
                 const juce::Rectangle<int> meter { 66, 110 + TrackRow::outputRow, 10, juce::jmax (10, getHeight() - 160 - TrackRow::outputRow) };
@@ -1789,19 +1792,19 @@ private:
                     const auto bar = meter.withWidth (4).translated (channel * 6, 0);
                     const auto level = channel == 0 ? peakL : peakR;
                     const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (level, -60.0f) + 60.0f) / 60.0f);
-                    g.setColour (juce::Colour (0xff181818)); g.fillRect (bar);
+                    g.setColour (themes::colour (0xff181818)); g.fillRect (bar);
                     g.setColour (level >= 1.0f ? red : green); g.fillRect (bar.withTop (bar.getBottom() - juce::roundToInt (bar.getHeight() * fraction)));
                 }
                 g.setColour (line); g.drawRect (getLocalBounds()); return;
             }
-            g.fillAll (juce::Colour (0xff2a2a2a));
+            g.fillAll (themes::colour (0xff2a2a2a));
             g.setColour (colour); g.fillRect (0, 0, getWidth() - 8, 21);
             for (int channel = 0; channel < 2; ++channel)
             {
                 const auto level = channel == 0 ? peakL : peakR;
                 const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (level, -60.0f) + 60.0f) / 60.0f);
                 const auto bar = juce::Rectangle<int> (getWidth() - 7 + channel * 3, 1, 2, getHeight() - 2);
-                g.setColour (juce::Colour (0xff181818)); g.fillRect (bar);
+                g.setColour (themes::colour (0xff181818)); g.fillRect (bar);
                 g.setColour (level >= 1.0f ? red : green); g.fillRect (bar.withTop (bar.getBottom() - juce::roundToInt (bar.getHeight() * fraction)));
             }
             g.setColour (line); g.drawRect (getLocalBounds());
@@ -1833,7 +1836,7 @@ private:
         { if (track != trackId || lane != index || text != label || c != colour) { trackId = track; index = lane; label = text; colour = c; setTitle (text); repaint(); } }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff323232)); g.setColour (colour); g.fillRect (0, 0, 4, getHeight());
+            g.fillAll (themes::colour (0xff323232)); g.setColour (colour); g.fillRect (0, 0, 4, getHeight());
             g.setColour (ink); g.setFont (font (10.5f));
             g.drawFittedText (label, 10, 4, getWidth() - 46, getHeight() - 8, juce::Justification::centredLeft, 2);
             g.setColour (line); g.drawRect (getLocalBounds());
@@ -1888,7 +1891,7 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff2e2e2e)); g.setColour (colour.withAlpha (.6f)); g.fillRect (0, 0, 4, getHeight());
+            g.fillAll (themes::colour (0xff2e2e2e)); g.setColour (colour.withAlpha (.6f)); g.fillRect (0, 0, 4, getHeight());
             g.setColour (line); g.drawRect (getLocalBounds());
         }
         void resized() override { name.setBounds (10, 4, getWidth() - 78, 18); audition.setBounds (getWidth() - 62, 4, 22, 18); remove.setBounds (getWidth() - 34, 4, 24, 18); }
@@ -2030,7 +2033,7 @@ private:
                 if (lane.group)
                 {
                     const auto& group = owner.state.groups[(size_t) lane.index];
-                    g.setColour (juce::Colour (0xff262626)); g.fillRect (0, lane.y, tw, lane.height);
+                    g.setColour (themes::colour (0xff262626)); g.fillRect (0, lane.y, tw, lane.height);
                     // Member clips summarized as thin bars, as on a folded group lane.
                     for (int t = 0; t < (int) owner.state.tracks.size(); ++t)
                         if (owner.state.tracks[(size_t) t].groupId == group.id)
@@ -2044,7 +2047,7 @@ private:
                 else
                 {
                     const int i = lane.index;
-                    g.setColour (i == owner.selectedTrack ? juce::Colour (0xff353535) : (i % 2 == 0 ? juce::Colour (0xff2c2c2c) : juce::Colour (0xff303030)));
+                    g.setColour (i == owner.selectedTrack ? themes::colour (0xff353535) : (i % 2 == 0 ? themes::colour (0xff2c2c2c) : themes::colour (0xff303030)));
                     g.fillRect (0, lane.y, tw, lane.height);
                 }
                 g.setColour (line); g.drawHorizontalLine (lane.y + lane.height - 1, 0.0f, (float) tw);
@@ -2056,7 +2059,7 @@ private:
                 const auto t = owner.secondsAt (b);
                 if (t > end) break;
                 const bool bar = std::abs (b / barBeats - std::round (b / barBeats)) < 0.001;
-                g.setColour (bar ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff3a3a3a));
+                g.setColour (bar ? themes::colour (0xff4a4a4a) : themes::colour (0xff3a3a3a));
                 g.drawVerticalLine ((int) std::round ((t - owner.viewStart) * owner.pixelsPerSecond), 0.0f, (float) getHeight());
             }
             if (owner.state.looping)
@@ -2082,15 +2085,15 @@ private:
                     if (bounds.getRight() < 0 || bounds.getX() > tw) continue;
                     const bool selected = (t == owner.selectedTrack && c == owner.selectedClip) || owner.isExtraMidiClip (clip.id) || owner.linkedToSelectedClip (t, clip);
                     auto colour = track.colour;
-                    if (colour.isTransparent()) colour = juce::Colour (0xff76b5bf);
+                    if (colour.isTransparent()) colour = themes::colour (0xff76b5bf);
                     if (!clip.active) colour=muted;
                     g.setColour (colour.withAlpha (track.mute || !clip.active ? 0.24f : 0.72f)); g.fillRect (bounds);
                     g.setColour (selected ? orange : colour.brighter (0.1f));
                     g.fillRect (bounds.withHeight (20));
-                    g.setColour (juce::Colour (0xff182025)); g.setFont (font (11.0f, true));
+                    g.setColour (themes::colour (0xff182025)); g.setFont (font (11.0f, true));
                     g.drawText ((clip.active?juce::String():juce::String("OFF  /  "))+clip.name, bounds.withHeight (20).reduced (6, 0), juce::Justification::centredLeft, true);
                     auto wave = bounds.withTrimmedTop (24).reduced (2, 4);
-                    g.setColour (juce::Colour (0xff14252b).withAlpha (track.mute ? 0.4f : 0.9f));
+                    g.setColour (themes::colour (0xff14252b).withAlpha (track.mute ? 0.4f : 0.9f));
                     if (clip.isMidi && clip.lengthBeats > 0)
                     {
                         int low = 60, high = 71;
@@ -2098,7 +2101,7 @@ private:
                         const auto noteHeight = wave.getHeight() / (float) (high - low + 1);
                         for (const auto& note : clip.notes)
                         {
-                            g.setColour (juce::Colour (0xff14252b).withAlpha (note.active ? (track.mute ? 0.4f : 0.9f) : 0.25f));
+                            g.setColour (themes::colour (0xff14252b).withAlpha (note.active ? (track.mute ? 0.4f : 0.9f) : 0.25f));
                             g.fillRect (wave.getX() + (float) (note.startBeat / clip.lengthBeats) * wave.getWidth(),
                                         wave.getY() + (high - note.pitch) * noteHeight,
                                         juce::jmax (2.0f, (float) (note.lengthBeats / clip.lengthBeats) * wave.getWidth()),
@@ -2125,7 +2128,7 @@ private:
                     if (clip.mediaMissing)
                     {
                         // A clip whose file is missing plays silence until it is located.
-                        g.setColour (juce::Colours::black.withAlpha (.35f)); g.fillRect (bounds);
+                        g.setColour (themes::colour (0xff000000).withAlpha (.35f)); g.fillRect (bounds);
                         g.setColour (red); g.setFont (font (10.5f, true));
                         g.drawText ("Missing: " + clip.file.getFileName(), bounds.reduced (6, 2).withTrimmedTop (16), juce::Justification::topLeft, true);
                     }
@@ -2133,7 +2136,7 @@ private:
                     {
                         // Frozen clips play their render: an icy hatch marks them as locked.
                         juce::Graphics::ScopedSaveState frost (g); g.reduceClipRegion (bounds.toNearestInt());
-                        g.setColour (juce::Colour (0x6094c8ff));
+                        g.setColour (themes::colour (0x6094c8ff));
                         for (auto x = bounds.getX() - bounds.getHeight(); x < bounds.getRight(); x += 9.0f)
                             g.drawLine (x, bounds.getBottom(), x + bounds.getHeight(), bounds.getY(), 1.4f);
                     }
@@ -2200,7 +2203,7 @@ private:
                 const auto& track = owner.state.tracks[(size_t) lane.index];
                 if (! juce::isPositiveAndBelow (lane.take, (int) track.takeLanes.size())) continue;
                 const auto& take = track.takeLanes[(size_t) lane.take];
-                g.setColour (juce::Colour (0xff272727)); g.fillRect (0, lane.y, tw, lane.height);
+                g.setColour (themes::colour (0xff272727)); g.fillRect (0, lane.y, tw, lane.height);
                 g.setColour (line); g.drawHorizontalLine (lane.y, 0.0f, (float) tw);
                 for (const auto& clip : take.clips)
                 {
@@ -2224,7 +2227,7 @@ private:
                 if (owner.takeSelection.laneId == take.id && owner.takeSelection.end > owner.takeSelection.start)
                 {
                     const auto x0 = (float) ((owner.takeSelection.start - owner.viewStart) * owner.pixelsPerSecond), x1 = (float) ((owner.takeSelection.end - owner.viewStart) * owner.pixelsPerSecond);
-                    g.setColour (juce::Colour (0xffb9d3ff).withAlpha (.3f)); g.fillRect (x0, (float) lane.y, x1 - x0, (float) lane.height);
+                    g.setColour (themes::colour (0xffb9d3ff).withAlpha (.3f)); g.fillRect (x0, (float) lane.y, x1 - x0, (float) lane.height);
                 }
             }
             // Automation Mode: an envelope over each track's clips, and one in each of its lanes.
@@ -2234,10 +2237,10 @@ private:
                     if (lane.group || lane.height == 0) continue;
                     if (lane.automation >= 0)
                     {
-                        g.setColour (juce::Colour (0xff262626)); g.fillRect (0, lane.y, tw, lane.height);
+                        g.setColour (themes::colour (0xff262626)); g.fillRect (0, lane.y, tw, lane.height);
                         g.setColour (line); g.drawHorizontalLine (lane.y, 0.0f, (float) tw);
                     }
-                    else { g.setColour (juce::Colours::black.withAlpha (.22f)); g.fillRect (0, lane.y, tw, lane.height); }
+                    else { g.setColour (themes::colour (0xff000000).withAlpha (.22f)); g.fillRect (0, lane.y, tw, lane.height); }
                     juce::String trackId, key; juce::Rectangle<float> area;
                     if (envelopeAt (lane.y + 1, trackId, key, area))
                         if (const auto target = owner.automationTarget (trackId, key)) owner.envelope.paint (g, area, *target);
@@ -2251,8 +2254,8 @@ private:
                     if (owner.timeSelection.trackIds.contains (owner.state.tracks[(size_t) t].id) && owner.laneHeight (t) > 0)
                     {
                         const juce::Rectangle<float> area (x0, (float) owner.laneY (t), x1 - x0, (float) owner.laneHeight (t));
-                        g.setColour (juce::Colour (0xffb9d3ff).withAlpha (.3f)); g.fillRect (area);
-                        g.setColour (juce::Colour (0xffb9d3ff).withAlpha (.7f)); g.drawVerticalLine ((int) x0, area.getY(), area.getBottom()); g.drawVerticalLine ((int) x1, area.getY(), area.getBottom());
+                        g.setColour (themes::colour (0xffb9d3ff).withAlpha (.3f)); g.fillRect (area);
+                        g.setColour (themes::colour (0xffb9d3ff).withAlpha (.7f)); g.drawVerticalLine ((int) x0, area.getY(), area.getBottom()); g.drawVerticalLine ((int) x1, area.getY(), area.getBottom());
                     }
             }
             // The insert marker, where Play starts, flashes; the play position shows while playing
@@ -2266,7 +2269,7 @@ private:
             if (owner.state.playing || owner.state.recording || ! atMarker)
             {
                 auto x = (float) ((owner.state.position - owner.viewStart) * owner.pixelsPerSecond);
-                g.setColour (owner.state.recording ? red : juce::Colour (0xffeeeeee));
+                g.setColour (owner.state.recording ? red : themes::colour (0xffeeeeee));
                 g.drawLine (x, 0, x, (float) getHeight(), 1.3f);
             }
             if (dragHover)
@@ -2616,7 +2619,7 @@ private:
             add.setName ("Add locator at playhead"); previous.setName ("Previous locator"); next.setName ("Next locator");
             automationMode.setName ("Automation Mode"); automationMode.setClickingTogglesState (true);
             automationMode.setTooltip ("Automation Mode: show and edit envelopes in the tracks  |  A");
-            automationMode.setColour (juce::TextButton::buttonOnColourId, orange); automationMode.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            automationMode.setColour (juce::TextButton::buttonOnColourId, orange); automationMode.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             automationMode.onClick = [this] { owner.setAutomationMode (automationMode.getToggleState()); };
             add.setTooltip ("Name a song section at the playhead. Double-click a locator to edit it.");
             previous.setTooltip ("Jump to previous locator"); next.setTooltip ("Jump to next locator");
@@ -2676,7 +2679,7 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff393939));
+            g.fillAll (themes::colour (0xff393939));
             const auto width=owner.canvas.timelineWidth();
             g.saveState();g.reduceClipRegion (0,0,width,getHeight());
             const auto x1=(float)((owner.state.loopStart-owner.viewStart)*owner.pixelsPerSecond);
@@ -2694,14 +2697,14 @@ private:
                 if (time>end) break;
                 const int x=(int)std::round ((time-owner.viewStart)*owner.pixelsPerSecond);
                 g.setColour (muted);g.drawText (juce::String ((int)std::round (bar)+1),x+5,15,55,19,juce::Justification::centredLeft);
-                g.setColour (juce::Colour (0xff5d5d5d));g.drawVerticalLine (x,14.0f,34.0f);
+                g.setColour (themes::colour (0xff5d5d5d));g.drawVerticalLine (x,14.0f,34.0f);
             }
             g.setColour (background);g.fillRect (0,35,width,getHeight()-35);
             for (const auto& marker : owner.state.locators)
             {
                 const auto bounds=locatorBounds (marker);
                 if (bounds.getRight()<0 || bounds.getX()>=width) continue;
-                g.setColour (marker.id==selected?orange:juce::Colour (0xffb2b2b2));
+                g.setColour (marker.id==selected?orange:themes::colour (0xffb2b2b2));
                 juce::Path flag;flag.addTriangle (bounds.getX(),37,bounds.getX()+8,37,bounds.getX(),45);g.fillPath (flag);
                 g.drawVerticalLine ((int)bounds.getX(),37,56);
                 g.setFont (font (10.0f,marker.id==selected));
@@ -2894,7 +2897,7 @@ private:
             // Cells sit on a dark ground with one-pixel gutters, like a console grid.
             g.fillAll (gutter);
             const auto grid = gridArea();
-            const auto dark = juce::Colour (0xff141414);
+            const auto dark = themes::colour (0xff141414);
             g.saveState(); g.reduceClipRegion (0, 0, tracksWidth(), getHeight());
             for (int c = 0; c < (int) columns.size(); ++c)
             {
@@ -2926,9 +2929,9 @@ private:
                     const auto cell = bounds.reduced (1, 0).withTrimmedBottom (1);
                     if (filled)
                     {
-                        const auto clipColour = slot->clip.active ? track.colour : juce::Colour (0xff6a6a6a);
+                        const auto clipColour = slot->clip.active ? track.colour : themes::colour (0xff6a6a6a);
                         g.setColour (queued && blink ? clipColour.brighter (0.35f) : clipColour); g.fillRect (cell);
-                        g.setColour (slot->playing ? green.brighter (0.2f) : queued ? juce::Colours::white : dark);
+                        g.setColour (slot->playing ? green.brighter (0.2f) : queued ? themes::colour (0xffffffff) : dark);
                         if (slot->stopQueued) g.fillRect (cell.getX() + 6, cell.getCentreY() - 4, 8, 8);
                         else if (slot->overdubbing) { g.setColour (red); g.fillEllipse ((float) cell.getX() + 6, (float) cell.getCentreY() - 4, 8, 8); }
                         else drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
@@ -2957,11 +2960,11 @@ private:
                         if (track.armed && ! queued)
                         {
                             // On an armed track an empty slot's button records into it.
-                            g.setColour (juce::Colour (0xff9a4a46)); g.drawEllipse ((float) cell.getX() + 6, (float) cell.getCentreY() - 4, 8, 8, 1.5f);
+                            g.setColour (themes::colour (0xff9a4a46)); g.drawEllipse ((float) cell.getX() + 6, (float) cell.getCentreY() - 4, 8, 8, 1.5f);
                         }
                         else
                         {
-                            g.setColour (queued ? orange.withAlpha (blink ? 1.0f : 0.45f) : juce::Colour (0xff4d4d4d));
+                            g.setColour (queued ? orange.withAlpha (blink ? 1.0f : 0.45f) : themes::colour (0xff4d4d4d));
                             g.fillRect (cell.getX() + 7, cell.getCentreY() - 3, 6, 6);
                         }
                     }
@@ -2976,14 +2979,14 @@ private:
             // Master column: scene launchers, with Stop All Clips under them.
             const int sceneX = masterX();
             const auto master = juce::Rectangle<int> (sceneX, 0, sceneWidth, headerHeight).reduced (1, 0).withTrimmedBottom (1);
-            g.setColour (juce::Colour (0xff4a4a4a)); g.fillRect (master);
+            g.setColour (themes::colour (0xff4a4a4a)); g.fillRect (master);
             g.setColour (ink); g.setFont (font (11.0f, true)); g.drawText ("Master", master.reduced (6, 0), juce::Justification::centredLeft);
             g.saveState(); g.reduceClipRegion (sceneX, gridTop, sceneWidth, grid.getHeight());
             for (int scene = 0; scene < (int) owner.state.scenes.size(); ++scene)
             {
                 const auto cell = juce::Rectangle<int> (sceneX, sceneY (scene), sceneWidth, rowHeight).reduced (1, 0).withTrimmedBottom (1);
                 const bool selected = owner.state.scenes[(size_t) scene].id == owner.selectedSceneId;
-                g.setColour (selected ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff383838)); g.fillRect (cell);
+                g.setColour (selected ? themes::colour (0xff4a4a4a) : themes::colour (0xff383838)); g.fillRect (cell);
                 // A scene that changes the tempo or meter shows them and lights its launch button.
                 const auto& info = owner.state.scenes[(size_t) scene];
                 const auto settings = sceneSettingsText (info);
@@ -2999,7 +3002,7 @@ private:
             }
             g.restoreState();
             const auto stopAll = stopAllBounds();
-            g.setColour (juce::Colour (0xff383838)); g.fillRect (stopAll);
+            g.setColour (themes::colour (0xff383838)); g.fillRect (stopAll);
             g.setColour (ink.withAlpha (0.85f)); g.fillRect (stopAll.getX() + 7, stopAll.getCentreY() - 4, 8, 8);
             g.setFont (font (10.0f)); g.drawText ("Stop All Clips", stopAll.withTrimmedLeft (22), juce::Justification::centredLeft, true);
             if (owner.state.scenes.empty()) { g.setColour (muted); g.setFont (font (13.0f)); g.drawText ("Insert a scene to begin launching clips.", grid.reduced (20), juce::Justification::centred); }
@@ -3009,7 +3012,7 @@ private:
         {
             const auto& group = owner.state.groups[(size_t) index];
             const auto grid = gridArea();
-            const auto dark = juce::Colour (0xff141414);
+            const auto dark = themes::colour (0xff141414);
             const auto header = juce::Rectangle<int> (x, 0, columnWidth, headerHeight).reduced (1, 0).withTrimmedBottom (1);
             g.setColour (group.colour); g.fillRect (header);
             juce::Path fold; const auto fx = (float) header.getX() + 7, fy = (float) header.getCentreY();
@@ -3033,12 +3036,12 @@ private:
                 {
                     const auto fill = group.colour.withMultipliedSaturation (0.6f).darker (0.2f);
                     g.setColour (queued && blink ? fill.brighter (0.35f) : fill); g.fillRect (cell);
-                    g.setColour (playing ? green.brighter (0.2f) : queued ? juce::Colours::white : dark); drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
+                    g.setColour (playing ? green.brighter (0.2f) : queued ? themes::colour (0xffffffff) : dark); drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
                 }
                 else
                 {
                     g.setColour (slotColour.darker (0.1f)); g.fillRect (cell);
-                    g.setColour (juce::Colour (0xff4d4d4d)); g.fillRect (cell.getX() + 7, cell.getCentreY() - 3, 6, 6);
+                    g.setColour (themes::colour (0xff4d4d4d)); g.fillRect (cell.getX() + 7, cell.getCentreY() - 3, 6, 6);
                 }
                 if (owner.state.scenes[(size_t) scene].id == owner.selectedSceneId) { g.setColour (orange.withAlpha (0.5f)); g.drawRect (cell, 1); }
             }
@@ -3263,7 +3266,7 @@ private:
             void resized() override { gain.setBounds (6, 106 + TrackRow::outputRow, 54, getHeight() - 162 - TrackRow::outputRow); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22); }
             void paint (juce::Graphics& g) override
             {
-                g.fillAll (juce::Colour (0xff383838));
+                g.fillAll (themes::colour (0xff383838));
                 g.setColour (muted); g.setFont (font (9.0f, true)); g.drawText ("MASTER", 6, 8, getWidth() - 12, 16, juce::Justification::centred);
                 g.drawText ("A", 4, getHeight() - 34, 12, 22, juce::Justification::centred); g.drawText ("B", getWidth() - 16, getHeight() - 34, 12, 22, juce::Justification::centred);
                 const juce::Rectangle<int> meter { 66, 110 + TrackRow::outputRow, 10, juce::jmax (10, getHeight() - 182 - TrackRow::outputRow) };
@@ -3272,7 +3275,7 @@ private:
                     const auto bar = meter.withWidth (4).translated (channel * 6, 0);
                     const auto level = channel == 0 ? peakL : peakR;
                     const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (level, -60.0f) + 60.0f) / 60.0f);
-                    g.setColour (juce::Colour (0xff181818)); g.fillRect (bar);
+                    g.setColour (themes::colour (0xff181818)); g.fillRect (bar);
                     g.setColour (level >= 1.0f ? red : green); g.fillRect (bar.withTop (bar.getBottom() - juce::roundToInt (bar.getHeight() * fraction)));
                 }
                 g.setColour (line); g.drawRect (getLocalBounds());
@@ -3367,7 +3370,7 @@ private:
             grid.setTooltip ("Launch quantization for this clip; Global follows the control bar");
             legato.setName ("Launch legato"); legato.setClickingTogglesState (true);
             legato.setWantsKeyboardFocus (false); legato.setMouseClickGrabsKeyboardFocus (false);
-            legato.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); legato.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            legato.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); legato.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             legato.setTooltip ("Legato: start in phase with the clip already playing on this track");
             mode.onChange = [this] { apply(); }; grid.onChange = [this] { apply(); }; legato.onClick = [this] { apply(); };
         }
@@ -3388,8 +3391,8 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.setColour (juce::Colour (0xff303030)); g.fillRect (getLocalBounds());
-            g.setColour (juce::Colour (0xff4a4a4a)); g.fillRect (getLocalBounds().withHeight (22));
+            g.setColour (themes::colour (0xff303030)); g.fillRect (getLocalBounds());
+            g.setColour (themes::colour (0xff4a4a4a)); g.fillRect (getLocalBounds().withHeight (22));
             g.setColour (line); g.drawRect (getLocalBounds());
             g.setColour (ink); g.setFont (font (11.0f, true));
             g.drawText ("Launch", getLocalBounds().withHeight (22).reduced (6, 0), juce::Justification::centredLeft);
@@ -3458,8 +3461,8 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.setColour (juce::Colour (0xff303030)); g.fillRect (getLocalBounds());
-            g.setColour (juce::Colour (0xff4a4a4a)); g.fillRect (getLocalBounds().withHeight (22));
+            g.setColour (themes::colour (0xff303030)); g.fillRect (getLocalBounds());
+            g.setColour (themes::colour (0xff4a4a4a)); g.fillRect (getLocalBounds().withHeight (22));
             g.setColour (line); g.drawRect (getLocalBounds());
             g.setColour (ink); g.setFont (font (11.0f, true));
             g.drawText ("Groove", getLocalBounds().withHeight (22).reduced (6, 0), juce::Justification::centredLeft);
@@ -3536,7 +3539,7 @@ private:
         { return { { "GROOVE", 190 }, { "BASE", 70 }, { "QUANTIZE", 90 }, { "TIMING", 90 }, { "RANDOM", 90 }, { "VELOCITY", 90 }, { "", 30 } }; }
         static void styleBar (juce::Slider& s)
         {
-            s.setWantsKeyboardFocus (false); s.setColour (juce::Slider::trackColourId, juce::Colour (0xff4a4a4a));
+            s.setWantsKeyboardFocus (false); s.setColour (juce::Slider::trackColourId, themes::colour (0xff4a4a4a));
             s.setColour (juce::Slider::textBoxTextColourId, ink);
         }
         class Row final : public juce::Component
@@ -3640,14 +3643,14 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colours::black.withAlpha (0.12f));
+            g.fillAll (themes::colour (0xff000000).withAlpha (0.12f));
             const bool keys = owner.keyMapMode;
             for (const auto& t : targets())
             {
                 const auto r = getLocalArea (t.component, t.area).toFloat();
                 if (! getLocalBounds().toFloat().intersects (r)) continue;
-                g.setColour ((keys ? juce::Colour (0xffff8f3d) : juce::Colour (0xff3d8bff)).withAlpha (0.42f)); g.fillRect (r);
-                g.setColour (juce::Colours::white); g.setFont (font (9.0f, true));
+                g.setColour ((keys ? themes::colour (0xffff8f3d) : themes::colour (0xff3d8bff)).withAlpha (0.42f)); g.fillRect (r);
+                g.setColour (themes::colour (0xffffffff)); g.setFont (font (9.0f, true));
                 if (keys)
                 {
                     for (const auto& m : owner.state.keyMappings)
@@ -3656,7 +3659,7 @@ private:
                 else
                     for (const auto& m : owner.state.midiMappings)
                         if (m.target == t.key) g.drawFittedText (juce::String (m.channel) + "/" + juce::String (m.controller), r.toNearestInt(), juce::Justification::centred, 1);
-                if ((keys ? owner.state.keyLearnTarget : owner.state.midiLearnTarget) == t.key) { g.setColour (keys ? juce::Colours::white : orange); g.drawRect (r.expanded (1), 2.0f); }
+                if ((keys ? owner.state.keyLearnTarget : owner.state.midiLearnTarget) == t.key) { g.setColour (keys ? themes::colour (0xffffffff) : orange); g.drawRect (r.expanded (1), 2.0f); }
             }
         }
         void mouseDown (const juce::MouseEvent& e) override
@@ -3757,7 +3760,7 @@ private:
                 for (auto* s : { &minimum, &maximum })
                 {
                     s->setSliderStyle (juce::Slider::LinearBar); s->setWantsKeyboardFocus (false);
-                    s->setColour (juce::Slider::trackColourId, juce::Colour (0xff3d8bff).withAlpha (0.5f)); s->setColour (juce::Slider::textBoxTextColourId, ink);
+                    s->setColour (juce::Slider::trackColourId, themes::colour (0xff3d8bff).withAlpha (0.5f)); s->setColour (juce::Slider::textBoxTextColourId, ink);
                     s->setNumDecimalPlacesToDisplay (2);
                     s->onValueChange = [this] { list.owner.report (list.owner.session.setMidiMappingRange (target, (float) minimum.getValue(), (float) maximum.getValue())); list.owner.refresh(); };
                 }
@@ -3893,16 +3896,16 @@ private:
             if (! choice) return;
             const auto y = [&] (float v) { return area.getBottom() - proportion (v) * area.getHeight(); };
             const auto list = points (clip);
-            g.setColour (juce::Colour (0x40ffffff)); g.drawHorizontalLine ((int) y (neutral()), area.getX(), area.getRight());
+            g.setColour (themes::colour (0x40ffffff)); g.drawHorizontalLine ((int) y (neutral()), area.getX(), area.getRight());
             if (list.empty()) return;
             juce::Path path;
             path.startNewSubPath (x (0), y (list.front().value));
             for (const auto& point : list) path.lineTo (x (point.beat), y (point.value));
             path.lineTo (x (endBeat), y (list.back().value));
-            g.setColour (juce::Colour (0xffff5e5e)); g.strokePath (path, juce::PathStrokeType (1.5f));
+            g.setColour (themes::colour (0xffff5e5e)); g.strokePath (path, juce::PathStrokeType (1.5f));
             for (size_t i = 0; i < list.size(); ++i)
             {
-                g.setColour ((int) i == dragged ? juce::Colours::white : juce::Colour (0xffff5e5e));
+                g.setColour ((int) i == dragged ? themes::colour (0xffffffff) : themes::colour (0xffff5e5e));
                 g.fillEllipse (x (list[i].beat) - 3.5f, y (list[i].value) - 3.5f, 7, 7);
             }
         }
@@ -3976,7 +3979,7 @@ private:
             addChildComponent (launch);
             for (auto* b : { &warp, &halve, &twice, &reverse }) { b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); }
             warp.setName ("Clip warp"); warp.setClickingTogglesState (true); warp.setTooltip ("Warp: follow the project tempo (length fixed in beats)");
-            warp.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); warp.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            warp.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); warp.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             warp.onClick = [this] { auto next = clip.warp; next.mode = warp.getToggleState() ? selectedMode() : Session::WarpMode::off; apply (next); };
             mode.setName ("Warp mode");
             mode.addItem ("Beats", 1); mode.addItem ("Tones", 2); mode.addItem ("Texture", 3); mode.addItem ("Re-Pitch", 4);
@@ -4162,11 +4165,11 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff262626));
+            g.fillAll (themes::colour (0xff262626));
             for (auto box : { clipBox(), sampleBox() })
             {
-                g.setColour (juce::Colour (0xff303030)); g.fillRect (box);
-                g.setColour (juce::Colour (0xff4a4a4a)); g.fillRect (box.withHeight (22));
+                g.setColour (themes::colour (0xff303030)); g.fillRect (box);
+                g.setColour (themes::colour (0xff4a4a4a)); g.fillRect (box.withHeight (22));
                 g.setColour (line); g.drawRect (box);
             }
             g.setColour (ink); g.setFont (font (11.0f, true));
@@ -4175,7 +4178,7 @@ private:
             auto details = clipBox().withTrimmedTop (28).reduced (8, 0);
             g.setFont (font (11.0f));
             g.setColour (owner.selectedTrackColour()); g.fillRect (details.removeFromTop (20));
-            g.setColour (juce::Colour (0xff141414)); g.drawText (clip.name, details.translated (0, -20).withHeight (20).reduced (5, 0), juce::Justification::centredLeft, true);
+            g.setColour (themes::colour (0xff141414)); g.drawText (clip.name, details.translated (0, -20).withHeight (20).reduced (5, 0), juce::Justification::centredLeft, true);
             g.setColour (muted);
             const auto line1 = "Start  " + juce::String (clip.start, 3) + " s", line2 = "Length  " + juce::String (clip.length, 3) + " s";
             g.drawText (line1, details.removeFromTop (20).withTrimmedTop (4), juce::Justification::centredLeft);
@@ -4187,7 +4190,7 @@ private:
             // Waveform of the visible source span, with beat lines when warped. A warped clip is drawn
             // in its beats, each warp segment over its own beats.
             const auto wave = waveBounds();
-            g.setColour (juce::Colour (0xff1c1c1c)); g.fillRect (wave);
+            g.setColour (themes::colour (0xff1c1c1c)); g.fillRect (wave);
             const auto [firstBeat, beats] = visibleBeats();
             if (thumbnail.getTotalLength() > 0 && beats > 0)
             {
@@ -4213,7 +4216,7 @@ private:
                 for (int beat = (int) std::ceil (firstBeat); beat <= (int) (firstBeat + beats); ++beat)
                 {
                     const auto x = beatX (beat);
-                    g.setColour (beat % 4 == 0 ? juce::Colour (0x66ffffff) : juce::Colour (0x22ffffff)); g.drawVerticalLine ((int) x, (float) wave.getY(), (float) wave.getBottom());
+                    g.setColour (beat % 4 == 0 ? themes::colour (0x66ffffff) : themes::colour (0x22ffffff)); g.drawVerticalLine ((int) x, (float) wave.getY(), (float) wave.getBottom());
                 }
                 // Warp markers: yellow handles above lines through the waveform.
                 for (size_t i = 0; i < clip.warpMarkers.size(); ++i)
@@ -4418,7 +4421,7 @@ private:
             setWantsKeyboardFocus (true);
             for (auto* c : std::initializer_list<juce::Component*> { &snap, &noteLength, &velocity, &noteTools, &laneChoice, &laneView, &scaleButton, &scaleRoot, &scaleMode, &horizontal, &vertical }) addAndMakeVisible (c);
             scaleButton.setName ("Scale"); scaleButton.setClickingTogglesState (true); scaleButton.setTooltip ("Scale: highlight this clip's scale in the note editor");
-            scaleButton.setColour (juce::TextButton::buttonOnColourId, orange); scaleButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            scaleButton.setColour (juce::TextButton::buttonOnColourId, orange); scaleButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             scaleButton.setWantsKeyboardFocus (false); scaleButton.setMouseClickGrabsKeyboardFocus (false);
             scaleRoot.setName ("Scale root"); scaleMode.setName ("Scale mode");
             for (int r = 0; r < 12; ++r) scaleRoot.addItem (pitchName (r).dropLastCharacters (2), r + 1);
@@ -4587,15 +4590,15 @@ private:
                 // A clip scale lights its rows (the root most) and dims the rest.
                 const bool scaled = clip->scale.enabled;
                 const bool member = Session::inScale (clip->scale, pitch);
-                g.setColour (scaled ? (member ? (semitone == clip->scale.root ? juce::Colour (0xff474038) : juce::Colour (0xff3c3c3c)) : juce::Colour (0xff272727))
-                                    : black ? juce::Colour (0xff2a2a2a) : juce::Colour (0xff353535));
+                g.setColour (scaled ? (member ? (semitone == clip->scale.root ? themes::colour (0xff474038) : themes::colour (0xff3c3c3c)) : themes::colour (0xff272727))
+                                    : black ? themes::colour (0xff2a2a2a) : themes::colour (0xff353535));
                 g.fillRect (keysWidth, y, grid.getWidth(), rowHeight);
-                g.setColour (black ? juce::Colour (0xff232323) : juce::Colour (0xffc6c6c6));
+                g.setColour (black ? themes::colour (0xff232323) : themes::colour (0xffc6c6c6));
                 g.fillRect (0, y, black ? keysWidth - 14 : keysWidth, rowHeight);
                 g.setColour (line); g.drawHorizontalLine (y + rowHeight - 1, 0.0f, (float) getWidth());
                 if (semitone == 0)
                 {
-                    g.setColour (juce::Colour (0xff344149)); g.setFont (font (9.5f, true));
+                    g.setColour (themes::colour (0xff344149)); g.setFont (font (9.5f, true));
                     g.drawText ("C" + juce::String (pitch / 12 - 1), 7, y, 32, rowHeight, juce::Justification::centredLeft);
                 }
             }
@@ -4604,7 +4607,7 @@ private:
                 const auto x = (int) std::round (keysWidth + (beat - viewBeat) * pixelsPerBeat);
                 const auto barBeats = owner.state.timeSignature.beatsPerBar();
                 const bool bar = std::abs (beat / barBeats - std::round (beat / barBeats)) < 0.001;
-                g.setColour (bar ? juce::Colour (0xff6e6e6e) : juce::Colour (0xff434343));
+                g.setColour (bar ? themes::colour (0xff6e6e6e) : themes::colour (0xff434343));
                 g.drawVerticalLine (x, (float) gridTop, (float) grid.getBottom());
             }
             const auto clipEnd = (float) (keysWidth + (clip->lengthBeats - viewBeat) * pixelsPerBeat);
@@ -4614,25 +4617,25 @@ private:
             for (const auto* other : owner.extraMidiClips())
             {
                 const auto from = (float) (keysWidth + (other->startBeat - clip->startBeat - viewBeat) * pixelsPerBeat);
-                g.setColour (juce::Colours::white.withAlpha (0.035f)); g.fillRect (from, (float) gridTop, (float) (other->lengthBeats * pixelsPerBeat), (float) grid.getHeight());
+                g.setColour (themes::colour (0xffffffff).withAlpha (0.035f)); g.fillRect (from, (float) gridTop, (float) (other->lengthBeats * pixelsPerBeat), (float) grid.getHeight());
                 for (const auto& note : other->notes)
                 {
                     const auto r = ghostBounds (*other, note);
-                    g.setColour (juce::Colour (0xff5d6e6a).withAlpha (note.active ? 0.75f : 0.35f)); g.fillRect (r);
-                    g.setColour (juce::Colour (0xff2a3633)); g.drawRect (r, 1.0f);
+                    g.setColour (themes::colour (0xff5d6e6a).withAlpha (note.active ? 0.75f : 0.35f)); g.fillRect (r);
+                    g.setColour (themes::colour (0xff2a3633)); g.drawRect (r, 1.0f);
                 }
             }
             for (const auto& note : clip->notes)
             {
                 auto r = noteBounds (note);
                 const bool selected = selectedNoteIds.contains (note.id);
-                const auto noteColour = note.active ? (selected ? orange : juce::Colour (0xff8cc4b5)).withAlpha (0.48f + note.velocity * 0.52f)
-                                                    : juce::Colour (0xff5c5c5c);
+                const auto noteColour = note.active ? (selected ? orange : themes::colour (0xff8cc4b5)).withAlpha (0.48f + note.velocity * 0.52f)
+                                                    : themes::colour (0xff5c5c5c);
                 g.setColour (noteColour); g.fillRect (r);
-                g.setColour (selected ? (note.active ? ink : orange) : juce::Colour (0xff203d36)); g.drawRect (r, 1.0f);
+                g.setColour (selected ? (note.active ? ink : orange) : themes::colour (0xff203d36)); g.drawRect (r, 1.0f);
                 if (r.getWidth() > 22)
                 {
-                    g.setColour (note.active ? juce::Colour (0xff21342f) : ink); g.setFont (font (9.0f));
+                    g.setColour (note.active ? themes::colour (0xff21342f) : ink); g.setFont (font (9.0f));
                     g.drawText ((note.active ? juce::String() : juce::String("OFF / ")) + pitchName (note.pitch), r.reduced (4, 0), juce::Justification::centredLeft, true);
                 }
                 if (selected) { g.setColour (ink); g.fillRect (r.getRight() - 4, r.getY() + 3, 2.0f, r.getHeight() - 6); }
@@ -4645,7 +4648,7 @@ private:
                     bend.startNewSubPath (at (0), centre - note.pitchBend.front().value * rowHeight);
                     for (const auto& point : note.pitchBend) bend.lineTo (at (point.beat), centre - point.value * rowHeight);
                     bend.lineTo (at (note.lengthBeats), centre - note.pitchBend.back().value * rowHeight);
-                    g.setColour (juce::Colours::white.withAlpha (0.8f)); g.strokePath (bend, juce::PathStrokeType (1.5f));
+                    g.setColour (themes::colour (0xffffffff).withAlpha (0.8f)); g.strokePath (bend, juce::PathStrokeType (1.5f));
                 }
             }
             if (marquee)
@@ -4904,7 +4907,7 @@ private:
         static constexpr int chanceLane = -2;
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff262626));
+            g.fillAll (themes::colour (0xff262626));
             g.setColour (line); g.drawHorizontalLine (0, 0.0f, (float) getWidth());
             g.setColour (raised); g.fillRect (0, 1, keysWidth, getHeight() - 1);
             g.setColour (muted); g.setFont (font (9.5f, true));
@@ -4916,12 +4919,12 @@ private:
             g.saveState(); g.reduceClipRegion (area.withTrimmedTop (-4));
             for (double beat = std::floor (roll.viewBeat); beat <= roll.viewBeat + area.getWidth() / roll.pixelsPerBeat; beat += 1)
             {
-                g.setColour (std::fmod (beat, 4.0) == 0 ? juce::Colour (0xff4e4e4e) : juce::Colour (0xff353535));
+                g.setColour (std::fmod (beat, 4.0) == 0 ? themes::colour (0xff4e4e4e) : themes::colour (0xff353535));
                 g.drawVerticalLine ((int) x (beat), (float) area.getY(), (float) area.getBottom());
             }
             if (expression) paintExpression (g, area.toFloat());
             else if (envelope.active()) envelope.paint (g, area.toFloat(), *clip, [this] (double b) { return x (b); }, clip->lengthBeats);
-            else if (lane == Session::pitchBendLane) { g.setColour (juce::Colour (0xff3d3d3d)); g.drawHorizontalLine ((int) y (0), (float) area.getX(), (float) area.getRight()); }
+            else if (lane == Session::pitchBendLane) { g.setColour (themes::colour (0xff3d3d3d)); g.drawHorizontalLine ((int) y (0), (float) area.getX(), (float) area.getRight()); }
             if (envelope.active() || expression) {}
             else if (lane < 0)
             {
@@ -4929,7 +4932,7 @@ private:
                 {
                     const bool selected = roll.selectedNoteIds.contains (note.id);
                     const auto top = y (noteValue (note)), at = x (note.startBeat);
-                    const auto colour = (selected ? orange : juce::Colour (0xff8cc4b5)).withAlpha (note.active ? 1.0f : .35f);
+                    const auto colour = (selected ? orange : themes::colour (0xff8cc4b5)).withAlpha (note.active ? 1.0f : .35f);
                     // A velocity range shows as a lighter bar beside the velocity, reaching the range's end.
                     if (lane == -1 && note.velocityRange != 0)
                     {
@@ -5088,9 +5091,9 @@ private:
             g.setColour (muted); g.setFont (font (10.0f));
             if (note == nullptr) { g.drawText ("Select a note to edit its expression", area, juce::Justification::centred); return; }
             const auto from = x (note->startBeat), to = x (note->startBeat + note->lengthBeats);
-            g.setColour (juce::Colours::white.withAlpha (0.05f)); g.fillRect (juce::Rectangle<float> (from, area.getY(), to - from, area.getHeight()));
+            g.setColour (themes::colour (0xffffffff).withAlpha (0.05f)); g.fillRect (juce::Rectangle<float> (from, area.getY(), to - from, area.getHeight()));
             const auto neutral = *expression == Session::NoteExpression::slide ? .5f : 0.0f;
-            g.setColour (juce::Colour (0x40ffffff)); g.drawHorizontalLine ((int) expressionY (neutral), from, to);
+            g.setColour (themes::colour (0x40ffffff)); g.drawHorizontalLine ((int) expressionY (neutral), from, to);
             const auto points = expressionPoints (*note);
             if (points.empty()) return;
             juce::Path curve;
@@ -5481,7 +5484,7 @@ private:
                         auto& slider = sliders[i]; slider.setName (f.label); slider.setSliderStyle (juce::Slider::LinearBar);
                         slider.setRange (f.minimum, f.maximum, f.integer ? 1.0 : 0.0); slider.setValue (settings.values[i], juce::dontSendNotification);
                         slider.setTextValueSuffix (f.unit); slider.setNumDecimalPlacesToDisplay (f.integer ? 0 : 3); slider.updateText();
-                        slider.setColour (juce::Slider::trackColourId, juce::Colour (0xff59606a)); slider.setColour (juce::Slider::textBoxTextColourId, ink);
+                        slider.setColour (juce::Slider::trackColourId, themes::colour (0xff59606a)); slider.setColour (juce::Slider::textBoxTextColourId, ink);
                         slider.onValueChange = [this, i] { settings.values[i] = sliders[i].getValue(); };
                         addAndMakeVisible (slider);
                     }
@@ -5649,7 +5652,7 @@ private:
         void resized() override { load.setBounds (getWidth() - 62, 3, 58, 18); }
         void paint (juce::Graphics& g) override
         {
-            g.setColour (juce::Colour (0xff1c1c1c)); g.fillRect (getLocalBounds());
+            g.setColour (themes::colour (0xff1c1c1c)); g.fillRect (getLocalBounds());
             g.setColour (ink); g.setFont (font (10.5f, true));
             g.drawText (shown == juce::File() ? juce::String ("No sample") : shown.getFileName(), 6, 3, getWidth() - 74, 18, juce::Justification::centredLeft, true);
             const auto wave = waveBounds();
@@ -5665,14 +5668,14 @@ private:
             const auto x = [&] (float fraction) { return wave.getX() + (int) std::lround (fraction * wave.getWidth()); };
             const auto start = std::min (v[instruments::sampler::start], v[instruments::sampler::end]), end = std::max (v[instruments::sampler::start], v[instruments::sampler::end]);
             // Outside the played region is dimmed, as are the markers' handles.
-            g.setColour (juce::Colour (0x99000000));
+            g.setColour (themes::colour (0x99000000));
             g.fillRect (wave.withRight (x (start))); g.fillRect (wave.withLeft (x (end)));
-            g.setColour (juce::Colour (0xffffab3d));
+            g.setColour (themes::colour (0xffffab3d));
             for (const auto f : { start, end }) { g.drawVerticalLine (x (f), (float) wave.getY(), (float) wave.getBottom()); g.fillRect (x (f) - (f == start ? 0 : 6), wave.getY(), 6, 6); }
             if (v[instruments::sampler::mode] == 0 && v[instruments::sampler::loop] == 1)
             {
                 const auto loopX = x (start + v[instruments::sampler::loopStart] * (end - start));
-                g.setColour (juce::Colour (0xff48d17e)); g.drawVerticalLine (loopX, (float) wave.getY(), (float) wave.getBottom());
+                g.setColour (themes::colour (0xff48d17e)); g.drawVerticalLine (loopX, (float) wave.getY(), (float) wave.getBottom());
                 g.drawText ("L", loopX + 2, wave.getBottom() - 14, 12, 12, juce::Justification::centredLeft);
             }
             g.setColour (line); g.drawRect (wave);
@@ -5784,15 +5787,15 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.setColour (juce::Colour (0xff1c1c1c)); g.fillRect (getLocalBounds().withWidth (gridWidth + 8));
+            g.setColour (themes::colour (0xff1c1c1c)); g.fillRect (getLocalBounds().withWidth (gridWidth + 8));
             static const char* names[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
             for (int pad = 0; pad < Session::drumPadCount; ++pad)
             {
                 const auto b = padBounds (pad); const auto file = padFile (pad);
                 const auto note = instruments::drumSampler::firstNote + pad;
-                g.setColour (file != juce::File() ? owner.selectedTrackColour().withMultipliedSaturation (.7f) : juce::Colour (0xff3a3a3a)); g.fillRect (b);
+                g.setColour (file != juce::File() ? owner.selectedTrackColour().withMultipliedSaturation (.7f) : themes::colour (0xff3a3a3a)); g.fillRect (b);
                 if (pad == selected) { g.setColour (orange); g.drawRect (b, 2); }
-                g.setColour (file != juce::File() ? juce::Colour (0xff141414) : muted); g.setFont (font (9.5f, true));
+                g.setColour (file != juce::File() ? themes::colour (0xff141414) : muted); g.setFont (font (9.5f, true));
                 g.drawText (juce::String (names[note % 12]) + juce::String (note / 12 - 2), b.reduced (4, 2).removeFromTop (12), juce::Justification::topLeft);
                 g.setFont (font (9.0f));
                 g.drawFittedText (file != juce::File() ? file.getFileNameWithoutExtension() : juce::String ("Drop"), b.reduced (4, 2).withTrimmedTop (12), juce::Justification::centredLeft, 2);
@@ -5936,8 +5939,8 @@ private:
         int sampleWidth() const { return sampler() ? 250 : 0; }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff303030));
-            g.setColour (juce::Colour (0xff4a4a4a)); g.fillRect (0, 0, getWidth(), 26);
+            g.fillAll (themes::colour (0xff303030));
+            g.setColour (themes::colour (0xff4a4a4a)); g.fillRect (0, 0, getWidth(), 26);
             g.setColour (ink); g.setFont (font (11.0f, true));
             g.drawText (empty ? juce::String ("No Instrument") : native ? juce::String (effectName (nativeSettings.kind)) : juce::String ("Halftrack Synth"), 9, 0,
                         native ? juce::jmin (185, getWidth() - 305) : 185, 26, juce::Justification::centredLeft, true);
@@ -6172,13 +6175,13 @@ private:
                     control->parameter = parameter;
                     auto& slider = control->slider;
                     slider.setSliderStyle (juce::Slider::LinearBar); slider.setRange (0.0, 1.0, 0.0); slider.setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
-                    slider.setColour (juce::Slider::trackColourId, juce::Colour (0xff5a6f78)); slider.setWantsKeyboardFocus (false);
+                    slider.setColour (juce::Slider::trackColourId, themes::colour (0xff5a6f78)); slider.setWantsKeyboardFocus (false);
                     slider.setName (juce::isPositiveAndBelow (parameter, (int) parameters.size()) ? parameters[(size_t) parameter].name : juce::String ("Parameter"));
                     slider.getProperties().set ("midiMapTarget", "device:" + pluginId + ":" + juce::String (parameter));
                     slider.onDragStart = [this] { owner.session.beginEditGesture ("Plug-in parameter"); };
                     slider.onDragEnd = [this] { owner.session.endEditGesture(); };
                     slider.onValueChange = [this, parameter, &slider] { owner.report (owner.session.setPluginParameterValue (pluginId, parameter, (float) slider.getValue())); };
-                    control->label.setFont (font (10.0f)); control->label.setColour (juce::Label::textColourId, juce::Colour (0xffb8b8b8));
+                    control->label.setFont (font (10.0f)); control->label.setColour (juce::Label::textColourId, themes::colour (0xffb8b8b8));
                     control->label.setInterceptsMouseClicks (false, false);
                     addAndMakeVisible (slider); addAndMakeVisible (control->label);
                     controls.push_back (std::move (control));
@@ -6265,7 +6268,7 @@ private:
             { addAndMakeVisible (*button); button->setWantsKeyboardFocus (false); button->setMouseClickGrabsKeyboardFocus (false); }
             power.setClickingTogglesState (true); power.setName ("Device on");
             power.setTooltip ("Turn this device on or off (bypass)");
-            power.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); power.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1a1a));
+            power.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); power.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             open.setTooltip ("Open this device in its own window"); remove.setTooltip ("Remove this device");
             power.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.setPluginEnabled (owner.selectedTrack, p, power.getToggleState())); owner.refresh(); };
             open.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.showPluginEditor (owner.selectedTrack, p)); };
@@ -6307,8 +6310,8 @@ private:
         void paint (juce::Graphics& g) override
         {
             const bool selected = owner.selectedDevices.contains (pluginId);
-            g.fillAll (juce::Colour (0xff303030));
-            g.setColour (selected ? juce::Colour (0xff5e5e5e) : enabled ? juce::Colour (0xff4a4a4a) : juce::Colour (0xff383838)); g.fillRect (0, 0, getWidth(), titleHeight);
+            g.fillAll (themes::colour (0xff303030));
+            g.setColour (selected ? themes::colour (0xff5e5e5e) : enabled ? themes::colour (0xff4a4a4a) : themes::colour (0xff383838)); g.fillRect (0, 0, getWidth(), titleHeight);
             g.setColour (enabled ? ink : muted); g.setFont (font (11.0f, true));
             g.drawText (name, 24, 0, getWidth() - 70, titleHeight, juce::Justification::centredLeft, true);
             if (! native && missing)
@@ -6325,7 +6328,7 @@ private:
                 g.drawFittedText (enabled ? juce::String (midi ? "Processing MIDI." : "Processing audio.") + "\nOpen its window for every control." : "Bypassed.",
                                   getLocalBounds().withTrimmedTop (titleHeight).reduced (10), juce::Justification::centred, 3);
             }
-            if (! enabled) { g.setColour (juce::Colours::black.withAlpha (0.25f)); g.fillRect (getLocalBounds().withTrimmedTop (titleHeight)); }
+            if (! enabled) { g.setColour (themes::colour (0xff000000).withAlpha (0.25f)); g.fillRect (getLocalBounds().withTrimmedTop (titleHeight)); }
             g.setColour (selected ? orange : line); g.drawRect (getLocalBounds());
         }
         bool keyPressed (const juce::KeyPress& key) override { return owner.deviceKey (key); }
@@ -6476,7 +6479,7 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff262626));
+            g.fillAll (themes::colour (0xff262626));
             g.setColour (line); g.drawHorizontalLine (0, 0.0f, (float) getWidth());
             g.setColour (muted); g.setFont (font (10.0f, true));
             const auto* track = owner.currentTrack();
@@ -6485,7 +6488,7 @@ private:
             if (track == nullptr || (! track->isMidi && track->plugins.empty()))
             {
                 const auto hint = chainView.getBounds().reduced (6, 8);
-                g.setColour (juce::Colour (0xff3a3a3a)); g.drawRect (hint);
+                g.setColour (themes::colour (0xff3a3a3a)); g.drawRect (hint);
                 g.setColour (muted); g.setFont (font (12.0f));
                 g.drawText (track == nullptr ? "Select a track to view its devices." : "Drop Audio Effects Here", hint.withTrimmedBottom (24), juce::Justification::centred);
                 g.setFont (font (10.5f));
@@ -7439,6 +7442,30 @@ private:
         updateScroll();
         followView();
         titleControls (*this);
+        applyInterfaceLook();
+    }
+    // The theme and zoom the preferences name. A theme switch recolours the look-and-feel, every
+    // colour a component set on itself (in dialogs too) and the window, and tells components so
+    // that editors with looks of their own follow; painting reads the theme as it draws.
+    void applyInterfaceLook()
+    {
+        const auto preferences = session.preferences();
+        const auto kind = (themes::Kind) juce::jlimit (0, themes::kindCount - 1, preferences.theme);
+        if (kind != themes::current())
+        {
+            const auto from = themes::current();
+            themes::apply (kind);
+            auto* top = getTopLevelComponent();
+            if (! top->isOnDesktop()) themes::recolour (*top, from, kind);
+            theme.applyColours();
+            auto& desktop = juce::Desktop::getInstance();
+            for (int i = 0; i < desktop.getNumComponents(); ++i) if (auto* window = desktop.getComponent (i)) window->sendLookAndFeelChange();
+            if (! top->isOnDesktop()) top->sendLookAndFeelChange();
+        }
+        if (auto* window = findParentComponentOfClass<juce::DocumentWindow>(); window != nullptr && window->getBackgroundColour() != panel.get())
+            window->setBackgroundColour (panel);
+        const float zoom = (float) preferences.zoomPercent / 100.0f;
+        if (! juce::approximatelyEqual (juce::Desktop::getInstance().getGlobalScaleFactor(), zoom)) juce::Desktop::getInstance().setGlobalScaleFactor (zoom);
     }
     // Screen readers speak a control by its title. Controls named for people ("Track volume") take
     // that name; ones whose names are identifiers have titles set where they are made.
@@ -8447,7 +8474,7 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.setColour (juce::Colour (0xff1e1e1e)); g.fillRect (getLocalBounds());
+            g.setColour (themes::colour (0xff1e1e1e)); g.fillRect (getLocalBounds());
             g.setColour (line); g.drawRect (getLocalBounds());
             auto area = getLocalBounds().reduced (8, 6);
             g.setColour (ink); g.setFont (font (11.0f, true));
@@ -8472,8 +8499,13 @@ private:
     public:
         explicit PreferencesPanel (Impl& o) : owner (o)
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &exclusiveArm, &exclusiveSolo, &autoWarp, &warpLabel, &warp, &modeLabel, &mode, &gridLabel, &grid, &reset })
+            for (auto* c : std::initializer_list<juce::Component*> { &exclusiveArm, &exclusiveSolo, &autoWarp, &warpLabel, &warp, &modeLabel, &mode, &gridLabel, &grid, &themeLabel, &theme, &zoomLabel, &zoom, &reset })
                 addAndMakeVisible (c);
+            // Look: the interface theme and the display zoom.
+            themeLabel.setText ("Theme", juce::dontSendNotification); zoomLabel.setText ("Zoom Display", juce::dontSendNotification);
+            theme.setName ("Interface theme"); zoom.setName ("Display zoom");
+            for (int kind = 0; kind < themes::kindCount; ++kind) theme.addItem (themes::name ((themes::Kind) kind), kind + 1);
+            for (int percent = 50; percent <= 200; percent += 25) zoom.addItem (juce::String (percent) + "%", percent);
             exclusiveArm.setName ("Exclusive arm"); exclusiveSolo.setName ("Exclusive solo"); autoWarp.setName ("Auto-warp long samples");
             warp.setName ("Default warp mode"); mode.setName ("Default launch mode"); grid.setName ("Default launch quantization"); reset.setName ("Reset preferences");
             warpLabel.setText ("Default Warp Mode", juce::dontSendNotification); modeLabel.setText ("Default Launch Mode", juce::dontSendNotification);
@@ -8485,7 +8517,7 @@ private:
             id = 1;
             for (const auto* name : { "Global", "None", "8 Bars", "4 Bars", "2 Bars", "1 Bar", "1/2", "1/4", "1/8", "1/16", "1/32" }) grid.addItem (name, id++);
             for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp }) b->onClick = [this] { apply(); };
-            warp.onChange = mode.onChange = grid.onChange = [this] { apply(); };
+            warp.onChange = mode.onChange = grid.onChange = theme.onChange = zoom.onChange = [this] { apply(); };
             reset.onClick = [this] { owner.report (owner.session.resetPreferences(), "Preferences reset to their defaults."); sync(); };
             sync();
         }
@@ -8496,6 +8528,7 @@ private:
             autoWarp.setToggleState (p.autoWarpLongSamples, juce::dontSendNotification);
             for (int i = 0; i < (int) std::size (warpModes); ++i) if (warpModes[i] == p.defaultWarpMode) warp.setSelectedId (i + 1, juce::dontSendNotification);
             mode.setSelectedId ((int) p.defaultLaunchMode + 1, juce::dontSendNotification); grid.setSelectedId ((int) p.defaultLaunchQuantisation + 1, juce::dontSendNotification);
+            theme.setSelectedId (p.theme + 1, juce::dontSendNotification); zoom.setSelectedId (p.zoomPercent, juce::dontSendNotification);
         }
         void apply()
         {
@@ -8504,13 +8537,15 @@ private:
             p.defaultWarpMode = warpModes[(size_t) juce::jlimit (0, (int) std::size (warpModes) - 1, warp.getSelectedId() - 1)];
             p.defaultLaunchMode = (Session::LaunchMode) juce::jlimit (0, 3, mode.getSelectedId() - 1);
             p.defaultLaunchQuantisation = (Session::ClipQuantisation) juce::jlimit (0, 10, grid.getSelectedId() - 1);
-            owner.report (owner.session.setPreferences (p)); sync();
+            p.theme = juce::jlimit (0, Session::Preferences::themeCount - 1, theme.getSelectedId() - 1);
+            p.zoomPercent = zoom.getSelectedId() > 0 ? zoom.getSelectedId() : 100;
+            owner.report (owner.session.setPreferences (p)); owner.applyInterfaceLook(); sync();
         }
         void resized() override
         {
             auto area = getLocalBounds().reduced (16);
             for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp }) { b->setBounds (area.removeFromTop (26)); area.removeFromTop (4); }
-            for (auto [label, box] : { std::pair<juce::Label*, juce::ComboBox*> { &warpLabel, &warp }, { &modeLabel, &mode }, { &gridLabel, &grid } })
+            for (auto [label, box] : { std::pair<juce::Label*, juce::ComboBox*> { &warpLabel, &warp }, { &modeLabel, &mode }, { &gridLabel, &grid }, { &themeLabel, &theme }, { &zoomLabel, &zoom } })
             { auto row = area.removeFromTop (26); label->setBounds (row.removeFromLeft (190)); box->setBounds (row.removeFromLeft (180)); area.removeFromTop (6); }
             area.removeFromTop (10); reset.setBounds (area.removeFromTop (26).removeFromLeft (160));
         }
@@ -8519,11 +8554,11 @@ private:
         static constexpr Session::WarpMode warpModes[] { Session::WarpMode::beats, Session::WarpMode::tones, Session::WarpMode::texture, Session::WarpMode::repitch,
                                                          Session::WarpMode::stretch, Session::WarpMode::complexPro, Session::WarpMode::efficient };
         juce::ToggleButton exclusiveArm { "Exclusive Arm" }, exclusiveSolo { "Exclusive Solo" }, autoWarp { "Auto-Warp Long Samples" };
-        juce::Label warpLabel, modeLabel, gridLabel;
-        juce::ComboBox warp, mode, grid;
+        juce::Label warpLabel, modeLabel, gridLabel, themeLabel, zoomLabel;
+        juce::ComboBox warp, mode, grid, theme, zoom;
         juce::TextButton reset { "Reset to Defaults" };
     };
-    void showPreferences() { showDialog ("Halftrack - Preferences", std::make_unique<PreferencesPanel> (*this), 440, 300); }
+    void showPreferences() { showDialog ("Halftrack - Preferences", std::make_unique<PreferencesPanel> (*this), 440, 364); }
     // What this copy of Halftrack is: its version, source commit and platform (selectable, to paste
     // into a report), its license, and where it keeps settings and the User Library.
     class AboutPanel final : public juce::Component
@@ -8940,7 +8975,7 @@ private:
                 // Presets sit under their device, marked with a small dot.
                 const int indent = (browserCategory == BrowserCategory::audioEffects ? 14 : 4) + 16;
                 g.setColour (selected ? orange : muted); g.fillEllipse ((float) indent + 5, (float) height / 2 - 2, 4, 4);
-                g.setColour (selected ? ink : juce::Colour (0xffa8a8a8)); g.setFont (font (11.0f));
+                g.setColour (selected ? ink : themes::colour (0xffa8a8a8)); g.setFont (font (11.0f));
                 g.drawText (item.label, indent + 15, 0, width - indent - 18, height, juce::Justification::centredLeft, true);
                 return;
             }
@@ -8960,7 +8995,7 @@ private:
                 for (int i = 0; i < 4; ++i) g.fillRect (indent + 3 + i * 3 + (i % 2) * 1, height / 2 - (i % 2 == 0 ? 5 : 3), 1, i % 2 == 0 ? 10 : 6);
             }
             else { g.drawRect (indent + 3, height / 2 - 5, 10, 10); g.fillRect (indent + 5, height / 2 - 3, 6, 2); }
-            g.setColour (selected ? ink : juce::Colour (0xffc6c6c6)); g.setFont (font (11.5f));
+            g.setColour (selected ? ink : themes::colour (0xffc6c6c6)); g.setFont (font (11.5f));
             if (item.detail.isNotEmpty())
             {
                 // A plug-in's role, format and channels follow its name.
@@ -8985,7 +9020,7 @@ private:
         {
             for (int i = 0; i < 5; ++i) { const int h = i % 2 == 0 ? 6 : 12; g.drawVerticalLine (6 + i * 2, (float) (height - h) / 2, (float) (height + h) / 2); }
         }
-        g.setColour (selected ? ink : juce::Colour (0xffc6c6c6));
+        g.setColour (selected ? ink : themes::colour (0xffc6c6c6));
         const auto& item = browserItems[(size_t) row];
         if (item.found)
         {
@@ -10250,7 +10285,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         pumpSyntheticTestDevice (session, 100); refresh();
         const auto played = state.position;
         laneClick (1); pumpSyntheticTestDevice (session, 4); refresh();
-        check (state.playing && state.position >= played && std::abs (state.insertMarker - 1) < tolerance, "clicking a lane while playing moves only the insert marker");
+        check (state.playing && state.position >= played && std::abs (state.insertMarker - 1) < tolerance,
+               "clicking a lane while playing moves only the insert marker (played to " + juce::String (played, 4) + " s, now " + juce::String (state.position, 4) + " s)");
         stopButton.onClick();
         const auto stopped = state.position;
         check (! state.playing && stopped >= played && std::abs (state.insertMarker - 1) < tolerance, "Stop leaves the play position where playback stopped");
@@ -11457,7 +11493,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     }
     {
         // Preferences: the panel's switches edit them, and solo clicks follow Exclusive Solo.
-        PreferencesPanel panel (*this); panel.setSize (440, 300);
+        PreferencesPanel panel (*this); panel.setSize (440, 364);
         auto* exclusive = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Exclusive solo"));
         check (exclusive != nullptr && exclusive->getToggleState() == session.preferences().exclusiveSolo, "the Preferences panel shows Exclusive Solo");
         exclusive->setToggleState (false, juce::dontSendNotification); exclusive->onClick();
@@ -11469,6 +11505,51 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         auto* reset = dynamic_cast<juce::Button*> (findNamed (panel, "Reset preferences"));
         check (reset != nullptr, "the panel offers a reset"); reset->onClick();
         check (session.preferences() == Session::Preferences {} && exclusive->getToggleState(), "reset restores the defaults");
+        auto* resetButton = findNamed (panel, "Reset preferences");
+        check (resetButton != nullptr && panel.getLocalBounds().contains (resetButton->getBounds()), "every preference fits in the panel");
+    }
+    {
+        // Themes: choosing one in Preferences recolours the look-and-feel, the colours components
+        // set on themselves and the painting; switching back restores Dark exactly.
+        PreferencesPanel panel (*this); panel.setSize (440, 364);
+        auto* themeChooser = dynamic_cast<juce::ComboBox*> (findNamed (panel, "Interface theme"));
+        auto* zoomChooser = dynamic_cast<juce::ComboBox*> (findNamed (panel, "Display zoom"));
+        check (themeChooser != nullptr && themeChooser->getNumItems() == themes::kindCount && themeChooser->getText() == "Dark" && zoomChooser != nullptr && zoomChooser->getText() == "100%",
+               "Preferences offer Dark, Light and High Contrast, and the display zoom, at Dark and 100%");
+        const auto mapButton = midiMapButton.findColour (juce::TextButton::buttonOnColourId);
+        const auto snapshot = [&] (const juce::String& file)
+        {
+            if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+                if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+                {
+                    juce::PNGImageFormat png; const auto output = directory.getChildFile (file);
+                    if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                        && png.writeImageToStream (createComponentSnapshot (getLocalBounds(), true, 1.0f), *stream))
+                        std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                }
+        };
+        for (const auto kind : { themes::Kind::light, themes::Kind::highContrast })
+        {
+            themeChooser->setSelectedId ((int) kind + 1, juce::sendNotificationSync); refresh();
+            check (session.preferences().theme == (int) kind && themes::current() == kind, juce::String ("choosing ") + themes::name (kind) + " saves and applies it");
+            check (theme.findColour (juce::ResizableWindow::backgroundColourId) == themes::colour (0xff2d2d2d, kind)
+                       && theme.findColour (juce::Label::textColourId) == themes::colour (0xffdadada, kind), "the look-and-feel follows");
+            check (midiMapButton.findColour (juce::TextButton::buttonOnColourId) == themes::colour (0xff3d8bff, kind), "a colour a control set on itself follows");
+            const auto image = createComponentSnapshot (getLocalBounds(), true, 1.0f);
+            const auto corner = image.getPixelAt (getWidth() - 4, getHeight() - 4);
+            check (std::abs (corner.getPerceivedBrightness() - themes::colour (0xff1d1d1d, kind).getPerceivedBrightness()) < 0.2f
+                       || std::abs (corner.getPerceivedBrightness() - themes::colour (0xff2d2d2d, kind).getPerceivedBrightness()) < 0.2f,
+                   "the window paints in it (" + corner.toDisplayString (false) + ")");
+            snapshot (juce::String ("theme-") + (kind == themes::Kind::light ? "light" : "high-contrast") + ".png");
+        }
+        themeChooser->setSelectedId (1, juce::sendNotificationSync); refresh();
+        check (themes::current() == themes::Kind::dark && midiMapButton.findColour (juce::TextButton::buttonOnColourId) == mapButton
+                   && theme.findColour (juce::ResizableWindow::backgroundColourId) == juce::Colour (0xff2d2d2d), "back to Dark, every colour is as authored");
+        zoomChooser->setSelectedId (150, juce::sendNotificationSync); refresh();
+        check (session.preferences().zoomPercent == 150 && std::abs (juce::Desktop::getInstance().getGlobalScaleFactor() - 1.5f) < 1e-6f, "the display zoom scales the interface");
+        zoomChooser->setSelectedId (100, juce::sendNotificationSync); refresh();
+        check (std::abs (juce::Desktop::getInstance().getGlobalScaleFactor() - 1.0f) < 1e-6f, "and 100% restores it");
+        check (session.resetPreferences().wasOk(), "reset the preferences");
     }
     {
         // About Halftrack: in the application menu on a Mac and the Help menu elsewhere, it names
@@ -12930,7 +13011,16 @@ int MainComponent::runInteractionTests()
 }
 #endif
 
-MainComponent::MainComponent (Session& session) : impl (std::make_unique<Impl> (session))
+namespace
+{
+// The interface is built in the theme the preferences name, so every colour starts right.
+Session& withPreferredTheme (Session& session)
+{
+    themes::set ((themes::Kind) juce::jlimit (0, themes::kindCount - 1, session.preferences().theme));
+    return session;
+}
+}
+MainComponent::MainComponent (Session& session) : impl (std::make_unique<Impl> (withPreferredTheme (session)))
 {
     addAndMakeVisible (*impl);
     setWantsKeyboardFocus (true);

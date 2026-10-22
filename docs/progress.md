@@ -1604,3 +1604,13 @@ Engine change in `src/Session.*`, `cmake/PatchMidiPorts.cmake` (new), the earlie
 - **Tests.** Measured through a virtual port in real time. Test Sessions see only the ports they make.
 
 See [the contract](research/midi-ports-contract.md).
+
+## Interface themes — 2026-10-21
+
+UI change in `src/Theme.*` (new) and the interface sources: `src/MainComponent.cpp`, `src/NativeEffectEditor.cpp`, `src/AudioClipEditor.cpp`, `src/UtilityEditor.cpp`, `src/RackEditor.cpp` and `src/AutomationEditor.cpp`. Engine change to Session's preferences (`src/Session.*`), with `tests/ThemeTests.cpp` (new), `CMakeLists.txt` and `src/Main.cpp`. Documentation updated.
+
+- **Themes.** Dark, Light and High Contrast, chosen in Preferences and applied at once. Every interface colour is authored for Dark and mapped into the others.
+- **Contrast.** Light keeps every gray contrast ratio, and each theme's text, selection, meter and disabled contrast is measured.
+- **Zoom.** A Zoom Display preference scales the interface.
+
+See [the contract](research/themes-contract.md).

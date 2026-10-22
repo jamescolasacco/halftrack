@@ -719,6 +719,10 @@ public:
         bool autoWarpLongSamples = false;
         LaunchMode defaultLaunchMode = LaunchMode::trigger;
         ClipQuantisation defaultLaunchQuantisation = ClipQuantisation::global;
+        // The interface's look: the theme (0 Dark, 1 Light, 2 High Contrast) and the display zoom.
+        int theme = 0;
+        static constexpr int themeCount = 3;
+        int zoomPercent = 100; // 50-200, in steps of 25.
         bool operator== (const Preferences&) const = default;
     };
     static constexpr int preferencesVersion = 1;

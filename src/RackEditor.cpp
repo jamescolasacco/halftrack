@@ -1,4 +1,5 @@
 #include "RackEditor.h"
+#include "Theme.h"
 #include "NativeEffects.h"
 #include "Racks.h"
 #include <algorithm>
@@ -10,8 +11,8 @@ namespace halftrack
 namespace
 {
 using Kind = Session::EffectKind;
-const juce::Colour background { 0xff1d1d1d }, panel { 0xff2d2d2d }, raised { 0xff3e3e3e }, line { 0xff141414 },
-                   ink { 0xffdadada }, muted { 0xff8e8e8e }, orange { 0xffffab3d }, green { 0xff48d17e }, blue { 0xff6fa8dc };
+const themes::Colour background { 0xff1d1d1d }, panel { 0xff2d2d2d }, raised { 0xff3e3e3e }, line { 0xff141414 },
+                   ink { 0xffdadada }, muted { 0xff969696 }, orange { 0xffffab3d }, green { 0xff48d17e }, blue { 0xff6fa8dc };
 juce::Font font (float size = 11.0f, bool bold = false) { return juce::Font (juce::FontOptions (size, bold ? juce::Font::bold : juce::Font::plain)); }
 juce::String noteName (int note)
 {
@@ -32,16 +33,16 @@ public:
     ChainRow (RackEditor& o, juce::String chain) : owner (o), chainId (std::move (chain))
     {
         active.setName ("Chain active"); active.setTooltip ("Chain activator: switch this chain on or off");
-        active.setClickingTogglesState (true); active.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a));
+        active.setClickingTogglesState (true); active.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a));
         solo.setName ("Chain solo"); solo.setTooltip ("Solo this chain. Cmd/Ctrl-click to solo several.");
         solo.setClickingTogglesState (true); solo.setColour (juce::TextButton::buttonOnColourId, blue);
         name.setName ("Chain name"); name.setEditable (false, true, false); name.setFont (font (10.5f)); name.setColour (juce::Label::textColourId, ink);
         name.setTooltip ("Double-click to rename");
         volume.setName ("Chain volume"); volume.setSliderStyle (juce::Slider::LinearBar); volume.setRange (-100, 6, .1); volume.setSkewFactorFromMidPoint (-12);
         volume.setDoubleClickReturnValue (true, 0); volume.textFromValueFunction = volumeText;
-        volume.setColour (juce::Slider::trackColourId, juce::Colour (0xff4f6d57));
+        volume.setColour (juce::Slider::trackColourId, themes::colour (0xff4f6d57));
         pan.setName ("Chain pan"); pan.setSliderStyle (juce::Slider::LinearBar); pan.setRange (-1, 1, .01); pan.setDoubleClickReturnValue (true, 0);
-        pan.textFromValueFunction = panText; pan.setColour (juce::Slider::trackColourId, juce::Colour (0xff4a4a4a));
+        pan.textFromValueFunction = panText; pan.setColour (juce::Slider::trackColourId, themes::colour (0xff4a4a4a));
         for (auto* c : std::initializer_list<juce::Component*> { &active, &solo, &name, &volume, &pan }) { quiet (*c); addAndMakeVisible (*c); }
         active.onClick = [this] { change ([this] (auto& s) { s.active = active.getToggleState(); }); };
         solo.onClick = [this] { soloClicked(); };
@@ -326,7 +327,7 @@ public:
         deviceView.setViewedComponent (&deviceContent, false); deviceView.setScrollBarsShown (true, true); deviceView.setScrollBarThickness (6);
         deviceContent.setName ("Chain devices"); addAndMakeVisible (deviceView);
         addChildComponent (zones); addChildComponent (pads); addChildComponent (padControls); addChildComponent (mappings);
-        error.setName ("Rack error"); error.setColour (juce::Label::textColourId, juce::Colour (0xfff4ab84)); error.setFont (font (9.5f)); addAndMakeVisible (error);
+        error.setName ("Rack error"); error.setColour (juce::Label::textColourId, themes::colour (0xfff4ab84)); error.setFont (font (9.5f)); addAndMakeVisible (error);
         session.addChangeListener (this);
         sync(); startTimerHz (15);
     }
@@ -735,7 +736,7 @@ void PadGrid::paint (juce::Graphics& g)
         const bool filled = ! chains.empty();
         bool silenced = filled, soloed = false;
         for (const auto* c : chains) { silenced = silenced && ! c->settings.active; soloed = soloed || c->settings.solo; }
-        g.setColour (filled ? (silenced ? raised.darker (.2f) : juce::Colour (0xff6b6152)) : raised); g.fillRect (b);
+        g.setColour (filled ? (silenced ? raised.darker (.2f) : themes::colour (0xff6b6152)) : raised); g.fillRect (b);
         if (note == owner.selectedPad) { g.setColour (orange); g.drawRect (b, 2); }
         if (soloed) { g.setColour (blue); g.fillRect (b.getRight() - 6, b.getY() + 2, 4, 4); }
         g.setColour (filled && ! silenced ? ink : muted); g.setFont (font (8.5f, true));
@@ -785,7 +786,7 @@ PadControls::PadControls (RackEditor& o) : owner (o)
     choke.onChange = [this] { const int group = choke.getSelectedId() - 1; change ([group] (auto& s) { s.chokeGroup = group; }); };
     mute.setName ("Pad mute"); solo.setName ("Pad solo"); addReturn.setName ("Add return");
     mute.setClickingTogglesState (true); solo.setClickingTogglesState (true);
-    mute.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a)); solo.setColour (juce::TextButton::buttonOnColourId, blue);
+    mute.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); solo.setColour (juce::TextButton::buttonOnColourId, blue);
     mute.onClick = [this] { const bool off = mute.getToggleState(); change ([off] (auto& s) { s.active = ! off; }); };
     solo.onClick = [this] { const bool on = solo.getToggleState(); change ([on] (auto& s) { s.solo = on; }); };
     addReturn.setTooltip ("Add a return chain (up to six) that pads can send to");
@@ -993,7 +994,7 @@ ChainDevice::ChainDevice (RackEditor& o, const Session::PluginInfo& info) : devi
 {
     setName ("Chain device " + info.name);
     power.setName ("Chain device on"); power.setClickingTogglesState (true); power.setTooltip ("Turn this device on or off");
-    power.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffcf4a));
+    power.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a));
     remove.setName ("Remove chain device"); remove.setTooltip ("Remove this device from the chain");
     power.onClick = [this] { owner.report (owner.session.setRackDeviceEnabled (deviceId, power.getToggleState())); };
     remove.onClick = [this] { owner.later ([id = deviceId] (RackEditor& editor) { editor.report (editor.session.removeRackDevice (id)); }); };

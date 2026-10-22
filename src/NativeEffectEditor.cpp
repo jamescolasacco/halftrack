@@ -1,4 +1,5 @@
 #include "NativeEffects.h"
+#include "Theme.h"
 #include "Racks.h"
 #include "Tuner.h"
 #include "Spectrum.h"
@@ -23,21 +24,21 @@ public:
     {
         static constexpr bool black[] { false, true, false, true, false, false, true, false, true, false, true, false };
         const auto lit = [this] (int note, juce::Colour base)
-        { return velocities[(size_t) note] > 0 ? base.interpolatedWith (juce::Colour (0xffe49a58), .35f + .65f * velocities[(size_t) note] / 127.0f) : base; };
+        { return velocities[(size_t) note] > 0 ? base.interpolatedWith (themes::colour (0xffe49a58), .35f + .65f * velocities[(size_t) note] / 127.0f) : base; };
         int whites = 0; for (int n = 0; n < 128; ++n) whites += black[n % 12] ? 0 : 1;
         const auto width = getWidth() / (float) whites, height = (float) getHeight();
         float x = 0;
         for (int n = 0; n < 128; ++n)
             if (! black[n % 12])
             {
-                g.setColour (lit (n, juce::Colour (0xffd8d8d8))); g.fillRect (x, 0.0f, width - .5f, height);
-                if (n % 12 == 0 && n / 12 == 5) { g.setColour (juce::Colour (0xff8e8e8e)); g.fillRect (x + 1, height - 3, width - 2.5f, 2.0f); } // C3
+                g.setColour (lit (n, themes::colour (0xffd8d8d8))); g.fillRect (x, 0.0f, width - .5f, height);
+                if (n % 12 == 0 && n / 12 == 5) { g.setColour (themes::colour (0xff8e8e8e)); g.fillRect (x + 1, height - 3, width - 2.5f, 2.0f); } // C3
                 x += width;
             }
         x = 0;
         for (int n = 0; n < 128; ++n)
         {
-            if (black[n % 12]) { g.setColour (lit (n, juce::Colour (0xff1e1e1e))); g.fillRect (x - width * .32f, 0.0f, width * .64f, height * .6f); }
+            if (black[n % 12]) { g.setColour (lit (n, themes::colour (0xff1e1e1e))); g.fillRect (x - width * .32f, 0.0f, width * .64f, height * .6f); }
             else x += width;
         }
     }
@@ -53,11 +54,11 @@ public:
         const auto initial = settings();
         kind = initial ? initial->kind : Session::EffectKind::equalizer;
         setName (juce::String (effectName (kind)) + " editor");
-        look.setColour (juce::Slider::thumbColourId, juce::Colour (0xffe49a58));
-        look.setColour (juce::Slider::trackColourId, juce::Colour (0xffe49a58));
-        look.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe9e9e9));
-        look.setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xff515151));
-        look.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff3a3a3a));
+        look.setColour (juce::Slider::thumbColourId, themes::colour (0xffe49a58));
+        look.setColour (juce::Slider::trackColourId, themes::colour (0xffe49a58));
+        look.setColour (juce::Slider::textBoxTextColourId, themes::colour (0xffe9e9e9));
+        look.setColour (juce::Slider::textBoxOutlineColourId, themes::colour (0xff515151));
+        look.setColour (juce::ComboBox::backgroundColourId, themes::colour (0xff3a3a3a));
         if (! compact) setLookAndFeel (&look); // Inline editors inherit the host theme.
         const auto specs = effectParameters (kind);
         for (size_t i = 0; i < specs.size(); ++i)
@@ -66,7 +67,7 @@ public:
             sliders[i].getProperties().set ("midiMapTarget", "device:" + pluginId + ":" + juce::String ((int) i));
             choices[i].getProperties().set ("midiMapTarget", "device:" + pluginId + ":" + juce::String ((int) i));
             const auto& spec = specs[i]; labels[i].setText (spec.label, juce::dontSendNotification);
-            labels[i].setColour (juce::Label::textColourId, juce::Colour (0xffbbbbbb)); addAndMakeVisible (labels[i]);
+            labels[i].setColour (juce::Label::textColourId, themes::colour (0xffbbbbbb)); addAndMakeVisible (labels[i]);
             if (compact) { labels[i].setFont (juce::FontOptions (9.5f)); labels[i].setJustificationType (juce::Justification::centred); labels[i].setMinimumHorizontalScale (.75f); }
             if (spec.choices)
             {
@@ -107,7 +108,7 @@ public:
                 addAndMakeVisible (control);
             }
         }
-        error.setColour (juce::Label::textColourId, juce::Colour (0xfff4ab84)); addAndMakeVisible (error);
+        error.setColour (juce::Label::textColourId, themes::colour (0xfff4ab84)); addAndMakeVisible (error);
         if (kind == Session::EffectKind::tuner)
         {
             tunerNote.setName ("Tuner note"); tunerDetail.setName ("Tuner detail");
@@ -119,15 +120,15 @@ public:
         {
             monitorChord.setName ("MIDI Monitor chord"); monitorNotes.setName ("MIDI Monitor notes"); monitorFlow.setName ("MIDI Monitor flow");
             monitorFreeze.setName ("MIDI Monitor freeze"); monitorClear.setName ("MIDI Monitor clear"); monitorKeys.setName ("MIDI Monitor keys");
-            monitorChord.setFont (juce::FontOptions (15.0f, juce::Font::bold)); monitorChord.setColour (juce::Label::textColourId, juce::Colour (0xffe9e9e9));
-            monitorNotes.setFont (juce::FontOptions (10.0f)); monitorNotes.setColour (juce::Label::textColourId, juce::Colour (0xffbbbbbb));
+            monitorChord.setFont (juce::FontOptions (15.0f, juce::Font::bold)); monitorChord.setColour (juce::Label::textColourId, themes::colour (0xffe9e9e9));
+            monitorNotes.setFont (juce::FontOptions (10.0f)); monitorNotes.setColour (juce::Label::textColourId, themes::colour (0xffbbbbbb));
             monitorNotes.setMinimumHorizontalScale (.7f);
             monitorFlow.setMultiLine (true); monitorFlow.setReadOnly (true); monitorFlow.setCaretVisible (false); monitorFlow.setScrollbarsShown (true);
             monitorFlow.setFont (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::plain));
-            monitorFlow.setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff242424)); monitorFlow.setColour (juce::TextEditor::textColourId, juce::Colour (0xffd0d0d0));
-            monitorFlow.setColour (juce::TextEditor::outlineColourId, juce::Colour (0xff3a3a3a));
+            monitorFlow.setColour (juce::TextEditor::backgroundColourId, themes::colour (0xff242424)); monitorFlow.setColour (juce::TextEditor::textColourId, themes::colour (0xffd0d0d0));
+            monitorFlow.setColour (juce::TextEditor::outlineColourId, themes::colour (0xff3a3a3a));
             monitorFreeze.setClickingTogglesState (true); monitorFreeze.setTooltip ("Hold the flow of messages");
-            monitorFreeze.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffe49a58)); monitorFreeze.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1e1e1e));
+            monitorFreeze.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffe49a58)); monitorFreeze.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1e1e1e));
             monitorFreeze.onClick = [this] { synchronise(); };
             monitorClear.setTooltip ("Clear the flow of messages");
             monitorClear.onClick = [this] { if (const auto reading = session.midiMonitor (pluginId)) monitorCleared = reading->total; monitorFlow.clear(); synchronise(); };
@@ -136,7 +137,7 @@ public:
         if (kind == Session::EffectKind::spectrum)
         {
             spectrumPeak.setName ("Spectrum peak"); spectrumPeak.setFont (juce::FontOptions (10.0f));
-            spectrumPeak.setColour (juce::Label::textColourId, juce::Colour (0xffbbbbbb));
+            spectrumPeak.setColour (juce::Label::textColourId, themes::colour (0xffbbbbbb));
             spectrumPeak.setJustificationType (juce::Justification::topRight); spectrumPeak.setInterceptsMouseClicks (false, false);
             addAndMakeVisible (spectrumPeak);
         }
@@ -151,20 +152,20 @@ public:
     { stopTimer(); session.removeChangeListener (this); finishGesture(); setLookAndFeel (nullptr); }
     void paint (juce::Graphics& g) override
     {
-        if (compact) g.fillAll (juce::Colour (0xff303030));
+        if (compact) g.fillAll (themes::colour (0xff303030));
         if (kind == Session::EffectKind::tuner) paintTuner (g);
         if (kind == Session::EffectKind::spectrum) paintSpectrum (g);
         if (kind == Session::EffectKind::midiMonitor && compact) paintMonitor (g);
         if (compact) return;
-        g.fillAll (juce::Colour (0xff2b2b2b));
-        g.setColour (juce::Colour (0xffe49a58)); g.fillRect (24, 22, 5, 18);
-        g.setColour (juce::Colour (0xffe9e9e9)); g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+        g.fillAll (themes::colour (0xff2b2b2b));
+        g.setColour (themes::colour (0xffe49a58)); g.fillRect (24, 22, 5, 18);
+        g.setColour (themes::colour (0xffe9e9e9)); g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
         g.drawText (juce::String (effectName (kind)).toUpperCase(), 42, 12, getWidth()-66, 38, juce::Justification::centredLeft);
         if (kind == Session::EffectKind::equalizer)
         {
             const juce::Rectangle<float> plot (24, 62, 952, 132);
-            g.setColour (juce::Colour (0xff242424)); g.fillRect (plot);
-            g.setColour (juce::Colour (0xff515151));
+            g.setColour (themes::colour (0xff242424)); g.fillRect (plot);
+            g.setColour (themes::colour (0xff515151));
             for (int db : { -24, -12, 0, 12, 24 }) { const auto y = plot.getCentreY()-db*plot.getHeight()/48; g.drawHorizontalLine ((int)y, plot.getX(), plot.getRight()); }
             for (double hz : { 20, 100, 1000, 10000, 20000 })
             { const auto x = plot.getX()+std::log10(hz/20)*plot.getWidth()/3; g.drawVerticalLine ((int)x, plot.getY(), plot.getBottom()); }
@@ -190,9 +191,9 @@ public:
                     const auto y = plot.getCentreY()-std::clamp (db,-24.0,24.0)*plot.getHeight()/48;
                     if (x == 0) path.startNewSubPath (plot.getX(), (float)y); else path.lineTo (plot.getX()+x,(float)y);
                 }
-                g.setColour (juce::Colour (0xffe49a58)); g.strokePath (path, juce::PathStrokeType (1.8f));
+                g.setColour (themes::colour (0xffe49a58)); g.strokePath (path, juce::PathStrokeType (1.8f));
             }
-            g.setFont (juce::FontOptions (11.0f)); g.setColour (juce::Colour (0xffbbbbbb));
+            g.setFont (juce::FontOptions (11.0f)); g.setColour (themes::colour (0xffbbbbbb));
             for (double hz : { 20, 100, 1000, 10000, 20000 })
             {
                 const auto x = 24 + std::log10 (hz/20) * 952/3;
@@ -304,8 +305,8 @@ public:
             tunerNote.setText (reading ? tuner::noteName (reading->note) : juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x94")), juce::dontSendNotification);
             tunerDetail.setText (! reading ? juce::String ("No pitch") : hertz ? juce::String (reading->frequency, 2) + " Hz"
                                  : (reading->cents >= 0 ? "+" : "") + juce::String (reading->cents, 1) + " ct", juce::dontSendNotification);
-            tunerNote.setColour (juce::Label::textColourId, ! reading ? juce::Colour (0xff8e8e8e) : inTune() ? juce::Colour (0xff48d17e) : juce::Colour (0xffed5249));
-            tunerDetail.setColour (juce::Label::textColourId, juce::Colour (0xffbbbbbb));
+            tunerNote.setColour (juce::Label::textColourId, ! reading ? themes::colour (0xff8e8e8e) : inTune() ? themes::colour (0xff48d17e) : themes::colour (0xffed5249));
+            tunerDetail.setColour (juce::Label::textColourId, themes::colour (0xffbbbbbb));
         }
         if (value && kind == Session::EffectKind::spectrum) updateSpectrum (*value);
         if (value && kind == Session::EffectKind::midiMonitor) updateMonitor();
@@ -381,17 +382,17 @@ private:
     void paintTuner (juce::Graphics& g) const
     {
         const auto area = displayArea().toFloat();
-        g.setColour (juce::Colour (0xff242424)); g.fillRoundedRectangle (area, 4);
+        g.setColour (themes::colour (0xff242424)); g.fillRoundedRectangle (area, 4);
         const auto meter = area.withTrimmedTop (area.getHeight() * 2 / 5).withTrimmedBottom (area.getHeight() / 5).reduced (14, 4);
         const auto x = [&] (double cents) { return meter.getX() + (float) ((std::clamp (cents, -50.0, 50.0) + 50) / 100) * meter.getWidth(); };
-        g.setColour (juce::Colour (0xff515151));
+        g.setColour (themes::colour (0xff515151));
         g.drawHorizontalLine ((int) meter.getCentreY(), meter.getX(), meter.getRight());
         for (int cents : { -50, -25, 0, 25, 50 }) g.drawVerticalLine ((int) x (cents), meter.getCentreY() - (cents == 0 ? 9.0f : 5.0f), meter.getCentreY() + (cents == 0 ? 9.0f : 5.0f));
         const auto radius = std::min (9.0f, meter.getHeight() / 2);
-        g.setColour (juce::Colour (0xff8e8e8e)); g.drawEllipse (x (0) - radius, meter.getCentreY() - radius, radius * 2, radius * 2, 1.5f);
+        g.setColour (themes::colour (0xff8e8e8e)); g.drawEllipse (x (0) - radius, meter.getCentreY() - radius, radius * 2, radius * 2, 1.5f);
         if (reading)
         {
-            g.setColour (inTune() ? juce::Colour (0xff48d17e) : juce::Colour (0xffed5249));
+            g.setColour (inTune() ? themes::colour (0xff48d17e) : themes::colour (0xffed5249));
             g.fillEllipse ((float) x (reading->cents) - radius + 2, meter.getCentreY() - radius + 2, radius * 2 - 4, radius * 2 - 4);
         }
     }
@@ -419,7 +420,7 @@ private:
         if (const auto text = lines.joinIntoString ("\n"); text != monitorFlow.getText()) { monitorFlow.setText (text, false); monitorFlow.moveCaretToEnd(); }
     }
     void paintMonitor (juce::Graphics& g) const
-    { g.setColour (juce::Colour (0xff242424)); g.fillRoundedRectangle (displayArea().toFloat(), 4); }
+    { g.setColour (themes::colour (0xff242424)); g.fillRoundedRectangle (displayArea().toFloat(), 4); }
     // Spectrum: the latest blocks averaged in power, the accumulated maximum, and the axis scales.
     static constexpr int spectrumWidth = 340;
     std::deque<std::vector<float>> spectrumHistory;
@@ -464,7 +465,7 @@ private:
     void paintSpectrum (juce::Graphics& g) const
     {
         const auto area = displayArea().toFloat();
-        g.setColour (juce::Colour (0xff242424)); g.fillRoundedRectangle (area, 4);
+        g.setColour (themes::colour (0xff242424)); g.fillRoundedRectangle (area, 4);
         const auto value = settings(); if (! value) return;
         const auto& v = value->values;
         const auto plot = area.reduced (6, 18);
@@ -485,15 +486,15 @@ private:
         }
         if (top <= bottom) top = bottom + 1;
         const auto yOf = [&] (double db) { return plot.getBottom() - (float) std::clamp ((db - bottom) / (top - bottom), 0.0, 1.0) * plot.getHeight(); };
-        g.setColour (juce::Colour (0xff3a3a3a)); g.setFont (juce::FontOptions (9.0f));
+        g.setColour (themes::colour (0xff3a3a3a)); g.setFont (juce::FontOptions (9.0f));
         for (const double hz : { 100.0, 1000.0, 10000.0 })
             if (hz < nyquist)
             {
                 g.drawVerticalLine ((int) xOf (hz), plot.getY(), plot.getBottom());
-                g.setColour (juce::Colour (0xff8e8e8e));
+                g.setColour (themes::colour (0xff8e8e8e));
                 g.drawText (scale == 2 ? tuner::noteName ((int) std::lround (12 * std::log2 (hz / 440) + 69)) : hz >= 1000 ? juce::String (hz / 1000, 0) + "k" : juce::String (hz, 0),
                             (int) xOf (hz) - 20, (int) plot.getBottom() + 2, 40, 12, juce::Justification::centred);
-                g.setColour (juce::Colour (0xff3a3a3a));
+                g.setColour (themes::colour (0xff3a3a3a));
             }
         for (double db = std::ceil (bottom / 24) * 24; db <= top; db += 24) g.drawHorizontalLine ((int) yOf (db), plot.getX(), plot.getRight());
         if (spectrumAverage.size() < 3) return;
@@ -521,8 +522,8 @@ private:
             }
             g.strokePath (path, juce::PathStrokeType (1.2f));
         };
-        if (v[5] != 0 && spectrumMaximum.size() == spectrumAverage.size()) curve (spectrumMaximum, juce::Colour (0xff6b6b6b), false);
-        curve (spectrumAverage, juce::Colour (0xffe49a58), false);
+        if (v[5] != 0 && spectrumMaximum.size() == spectrumAverage.size()) curve (spectrumMaximum, themes::colour (0xff6b6b6b), false);
+        curve (spectrumAverage, themes::colour (0xffe49a58), false);
     }
     // Instruments and other large devices use a compact eight-column grid.
     bool dense() const noexcept { return effectParameters (kind).size() > 16; }

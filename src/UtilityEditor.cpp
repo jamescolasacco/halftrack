@@ -1,4 +1,5 @@
 #include "UtilityEditor.h"
+#include "Theme.h"
 #include "Racks.h"
 #include <array>
 #include <optional>
@@ -17,13 +18,13 @@ public:
     UtilityEditor (Session& s, juce::String id) : session (s), pluginId (std::move (id))
     {
         setName ("Channel utility editor");
-        look.setColour (juce::Slider::thumbColourId, juce::Colour (0xffe49a58));
-        look.setColour (juce::Slider::trackColourId, juce::Colour (0xffe49a58));
-        look.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe5e5e5));
-        look.setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xff515151));
-        look.setColour (juce::ToggleButton::textColourId, juce::Colour (0xffe5e5e5));
-        look.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff3a3a3a));
-        look.setColour (juce::ComboBox::textColourId, juce::Colour (0xffe5e5e5));
+        look.setColour (juce::Slider::thumbColourId, themes::colour (0xffe49a58));
+        look.setColour (juce::Slider::trackColourId, themes::colour (0xffe49a58));
+        look.setColour (juce::Slider::textBoxTextColourId, themes::colour (0xffe5e5e5));
+        look.setColour (juce::Slider::textBoxOutlineColourId, themes::colour (0xff515151));
+        look.setColour (juce::ToggleButton::textColourId, themes::colour (0xffe5e5e5));
+        look.setColour (juce::ComboBox::backgroundColourId, themes::colour (0xff3a3a3a));
+        look.setColour (juce::ComboBox::textColourId, themes::colour (0xffe5e5e5));
         setLookAndFeel (&look);
         channels.setName ("Channel mode"); channels.addItemList ({ "Stereo", "Left", "Right", "Swap" }, 1);
         stereoMode.setName ("Stereo control mode"); stereoMode.addItemList ({ "Width", "Mid / Side" }, 1);
@@ -71,7 +72,7 @@ public:
                     case 3: v.bassMono = value; break; case 4: v.bassAudition = value; break; case 5: v.mute = value; break; case 6: v.dcFilter = value; break; }
             }); };
         }
-        error.setColour (juce::Label::textColourId, juce::Colour (0xffecae80)); addAndMakeVisible (error);
+        error.setColour (juce::Label::textColourId, themes::colour (0xffecae80)); addAndMakeVisible (error);
         sliders[2].setTooltip ("100% preserves stereo width. 0% sums to mono.");
         sliders[3].setTooltip ("M isolates the center; S isolates the difference between channels.");
         toggles[3].setTooltip ("Reduce stereo difference below the selected bass frequency.");
@@ -82,18 +83,18 @@ public:
     { stopTimer(); session.removeChangeListener (this); finishGesture(); setLookAndFeel (nullptr); }
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (juce::Colour (0xff2b2b2b));
-        g.setColour (juce::Colour (0xffe49a58)); g.fillRect (24, 22, 5, 17);
-        g.setColour (juce::Colour (0xffe5e5e5)); g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+        g.fillAll (themes::colour (0xff2b2b2b));
+        g.setColour (themes::colour (0xffe49a58)); g.fillRect (24, 22, 5, 17);
+        g.setColour (themes::colour (0xffe5e5e5)); g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
         g.drawText ("CHANNEL UTILITY", 40, 15, 350, 32, juce::Justification::centredLeft);
-        g.setFont (juce::FontOptions (10.0f)); g.setColour (juce::Colour (0xffaeaeae));
+        g.setFont (juce::FontOptions (10.0f)); g.setColour (themes::colour (0xffaeaeae));
         g.drawText ("INPUT", 24, 58, 160, 20, juce::Justification::centredLeft);
         g.drawText ("STEREO", 236, 58, 160, 20, juce::Justification::centredLeft);
         g.drawText ("OUTPUT", 450, 58, 160, 20, juce::Justification::centredLeft);
         g.drawText ("Gain", 450, 109, 82, 20, juce::Justification::centred);
         g.drawText ("Balance", 548, 109, 82, 20, juce::Justification::centred);
         g.drawText ("BASS FREQUENCY", 24, 278, 330, 20, juce::Justification::centredLeft);
-        g.setColour (juce::Colour (0xff4b4b4b)); g.drawHorizontalLine (228, 24, 616);
+        g.setColour (themes::colour (0xff4b4b4b)); g.drawHorizontalLine (228, 24, 616);
         g.drawVerticalLine (218, 60, 214); g.drawVerticalLine (432, 60, 214);
     }
     void resized() override
