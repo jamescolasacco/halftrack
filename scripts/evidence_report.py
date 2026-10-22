@@ -143,9 +143,9 @@ def main():
     parser.add_argument('--out', type=Path)
     parser.add_argument('--markdown', type=Path)
     args = parser.parse_args()
-    ledger = (ROOT / 'docs' / 'feature-parity.md').read_text()
-    cmake = (ROOT / 'CMakeLists.txt').read_text()
-    mapping = MAP.read_text()
+    ledger = (ROOT / 'docs' / 'feature-parity.md').read_text(encoding='utf-8')
+    cmake = (ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')
+    mapping = MAP.read_text(encoding='utf-8')
     if args.check:
         problems = check(ledger, mapping, cmake)
         for problem in problems:
@@ -156,14 +156,14 @@ def main():
         return
     if not args.junit or not args.out:
         parser.error('give --check, or --junit and --out')
-    results = junit_results(args.junit.read_text())
+    results = junit_results(args.junit.read_text(encoding='utf-8'))
     if args.python_result:
         results['python-tooling'] = (args.python_result, 0.0, 0)
     data = report(ledger, mapping, cmake, results, args.command)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(data, indent=2) + '\n')
+    args.out.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
     if args.markdown:
-        args.markdown.write_text(markdown(data))
+        args.markdown.write_text(markdown(data), encoding='utf-8')
     failed = [r['row'] for r in data['rows'] if r['evidence'] and not r['verified']]
     print(f"{sum(r['verified'] for r in data['rows'])} of {len(data['rows'])} rows verified; {len(failed)} with a failing or missing suite: {' '.join(failed)}")
 

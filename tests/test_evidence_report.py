@@ -66,8 +66,8 @@ class EvidenceReport(unittest.TestCase):
         self.assertIn("| ARR-008 | Fades | crossfade (passed, 2 checks), session (failed) |  |", evidence.markdown(data))
 
     def test_the_repository_map_is_current(self):
-        problems = evidence.check((ROOT / "docs" / "feature-parity.md").read_text(), (ROOT / "docs" / "evidence-map.md").read_text(),
-                                  (ROOT / "CMakeLists.txt").read_text())
+        problems = evidence.check((ROOT / "docs" / "feature-parity.md").read_text(encoding="utf-8"), (ROOT / "docs" / "evidence-map.md").read_text(encoding="utf-8"),
+                                  (ROOT / "CMakeLists.txt").read_text(encoding="utf-8"))
         self.assertEqual(problems, [], "update docs/evidence-map.md")
 
 
