@@ -629,3 +629,7 @@ Windows cannot make virtual MIDI ports, so the MIDI ports suite skips there and 
 ### Device insertion
 
 The reference appends a device to the end of the chain when none is selected, and places it after the selected device otherwise. Halftrack does not yet insert beside a selected device: every new device, built-in or plug-in, joins the end of the chain (MIDI effects ahead of the instrument), whatever is selected. Default: append.
+
+### Audio input permission on real hardware
+
+The permission handling is tested with a stand-in for macOS's permission and prompt. Whether a device opened before a grant delivers sound without the reopen Halftrack does, and how Windows' microphone privacy setting shows up (a device open error), are unmeasured. Default: reopen the device after a grant; report Windows' refusal as the device's own error.

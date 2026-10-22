@@ -101,6 +101,7 @@ int runPluginBinaryTests (const juce::File&);
 int runSidechainTests (const juce::File&);
 int runMidiPortTests (const juce::File&);
 int runThemeTests (const juce::File&);
+int runInputPermissionTests (const juce::File&);
 int runHardwareCheck (const juce::File&, const juce::String& deviceName, const juce::String& mode);
 int runMidiMappingTests (const juce::File&);
 int runGroupTests (const juce::File&);
@@ -375,6 +376,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-themes");
             setApplicationReturnValue (runThemeTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-input-permission"))
+        {
+            const int i = args.indexOf ("--self-test-input-permission");
+            setApplicationReturnValue (runInputPermissionTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-large-session"))

@@ -881,6 +881,14 @@ public:
     juce::Result computerKeyboardNote (int note, float velocity, bool on);
     juce::Result setTrackInput (int trackIndex, const juce::String& inputName);
     juce::Result setTrackArmed (int trackIndex, bool);
+    // Audio inputs need the system's permission: macOS asks once and keeps the answer in System
+    // Settings. Without it a hardware input records silence, so arming, monitoring or recording
+    // one is refused with what to do, and an undetermined permission is asked for then, without
+    // waiting. Sessions without audio devices are always granted it.
+    enum class InputPermission { granted, undetermined, denied };
+    InputPermission inputPermission() const;
+    // Stands in for the system's permission and its prompt (whose answer arrives later), for tests.
+    void setInputPermissionSource (std::function<InputPermission()> status, std::function<void (std::function<void (bool)>)> request);
     // Auto-Arm, after the reference: with Exclusive Arm on and no track armed by hand, the selected
     // MIDI track is armed, and given All MIDI Ins with Auto monitoring when it has no input and no
     // other track has All MIDI Ins. Selecting another track (an empty id for none) releases it,

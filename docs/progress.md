@@ -1624,3 +1624,13 @@ Engine change in `src/Session.cpp`, `tests/SessionTests.cpp` and `tests/TrackDup
 - **Tests.** The session suite checks the order on an audio track, a MIDI track and a return. The duplicate suite addresses its Utility and VST3 in their new order.
 
 See [the contract](research/plugin-timing-contract.md#where-an-effect-plug-in-goes).
+
+## Audio input permission — 2026-10-21
+
+Engine change in `src/Session.*`, `src/InputPermission*` (new; AVFoundation on macOS) and `tests/InputPermissionTests.cpp` (new). The root change is in `CMakeLists.txt` and `src/Main.cpp`, with documentation.
+
+- **Refused permission.** Arming, monitoring and recording a hardware audio input are refused with what to do in System Settings, instead of recording silence.
+- **Undetermined permission.** The system's prompt is asked for once, without waiting.
+- **Withdrawn permission.** Permission withdrawn after arming refuses the recording.
+
+See [the contract](research/input-permission-contract.md).

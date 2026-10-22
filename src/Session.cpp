@@ -10,6 +10,7 @@
 #include "Spectrum.h"
 #include "MidiMonitor.h"
 #include "WarpStretchers.h"
+#include "InputPermission.h"
 #include "PluginBinary.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
@@ -2203,6 +2204,21 @@ struct Session::Impl
         : owner (s), engine (settingsStorage (devices), std::make_unique<UIBehaviour> (s, devices),
                             std::make_unique<Behaviour> (devices, midiPortPrefix)), useDevices (devices)
     {
+        // A Session with audio devices asks the system about input permission; one without needs none.
+        if (devices)
+        {
+            permissionStatus = []
+            {
+                switch (inputpermission::status())
+                {
+                    case inputpermission::Status::granted: return InputPermission::granted;
+                    case inputpermission::Status::undetermined: return InputPermission::undetermined;
+                    case inputpermission::Status::denied: break;
+                }
+                return InputPermission::denied;
+            };
+            permissionRequest = [] (std::function<void (bool)> done) { inputpermission::request (std::move (done)); };
+        }
         engine.getPluginManager().createBuiltInType<TrackMixer>();
         engine.getPluginManager().createBuiltInType<TrackDelayPlugin>();
         engine.getPluginManager().createBuiltInType<SubtractiveSynthPlugin>();
@@ -3902,6 +3918,41 @@ struct Session::Impl
         void timerCallback() override { tick(); }
     } remoteRest;
     bool remoteGesture = false;
+    // Input permission (see Session::inputPermission): its source, and whether a prompt is open.
+    std::function<InputPermission()> permissionStatus = [] { return InputPermission::granted; };
+    std::function<void (std::function<void (bool)>)> permissionRequest = [] (std::function<void (bool)> done) { done (true); };
+    bool permissionAsked = false;
+    std::shared_ptr<int> lifetime = std::make_shared<int> (0);
+    // Why a hardware audio input cannot be used now. An undetermined permission is asked for once
+    // at a time; when it is granted, the audio device reopens so its inputs deliver sound.
+    Result hardwareInputAllowed (te::InputDeviceInstance& input)
+    {
+        if (input.getInputDevice().getDeviceType() != te::InputDevice::waveDevice) return Result::ok();
+        switch (permissionStatus())
+        {
+            case InputPermission::granted: return Result::ok();
+            case InputPermission::undetermined:
+                if (! permissionAsked)
+                {
+                    permissionAsked = true;
+                    permissionRequest ([this, alive = std::weak_ptr<int> (lifetime)] (bool granted)
+                    {
+                        if (alive.expired()) return;
+                        permissionAsked = false;
+                        if (granted && useDevices)
+                        {
+                            auto& devices = engine.getDeviceManager().deviceManager;
+                            devices.closeAudioDevice(); devices.restartLastAudioDevice();
+                        }
+                        owner.sendChangeMessage();
+                    });
+                }
+                return Result::fail ("Halftrack is asking for permission to use audio inputs. Allow it, then try again.");
+            case InputPermission::denied: break;
+        }
+        return Result::fail ("Halftrack has no permission to use audio inputs, so this input would record silence. Allow Halftrack under "
+                            "System Settings > Privacy & Security > Microphone, then try again.");
+    }
     bool applyingRemote = false; // While a mapped controller's value is applied.
     // Auto-Arm: the track it armed, and whether it also gave that track its input.
     String autoArmed;
@@ -5959,6 +6010,7 @@ Result Session::recordSlot (int trackIndex, int sceneIndex)
     if (slot->getClip()) return Result::fail ("Session recording needs an empty slot.");
     auto* input = impl->input (*track);
     if (input == nullptr || ! input->isRecordingEnabled (track->itemID)) return Result::fail ("Arm the track to record into a Session slot.");
+    if (auto allowed = impl->hardwareInputAllowed (*input); allowed.failed()) return allowed;
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
     if (auto r = input->getInputDevice().isMidi() ? impl->assets().createDirectory() : impl->takeFolderReady(); r.failed()) return r;
     auto& transport = impl->edit->getTransport();
@@ -6008,6 +6060,10 @@ Result Session::sessionRecord (int sceneIndex)
     const bool wasPlaying = transport.isPlaying();
     std::vector<std::pair<te::AudioTrack*, te::MidiClip*>> overdubbed;
     bool recorded = false;
+    // Every armed input must be usable before any slot starts recording.
+    for (auto* t : te::getAudioTracks (*impl->edit))
+        if (auto* input = impl->input (*t); input != nullptr && ! isReturn (*t) && input->isRecordingEnabled (t->itemID))
+            if (auto allowed = impl->hardwareInputAllowed (*input); allowed.failed()) return allowed;
     for (int i = 0; i < (int) te::getAudioTracks (*impl->edit).size(); ++i)
     {
         auto* t = impl->track (i);
@@ -8939,6 +8995,7 @@ Result Session::setTrackArmed (int index, bool value)
         if (impl->trackRecording (track->itemID.toString()))
         { if (track == t) return Result::fail ("End this track's Session recording before disarming it."); continue; }
         if (! te::getDestination (*input, *track, 0)) { if (track == t) return Result::fail ("Input destination is unavailable."); continue; }
+        if (value) if (auto allowed = impl->hardwareInputAllowed (*input); allowed.failed()) return allowed;
         changing.push_back (track);
     }
     if (changing.empty()) return Result::ok();
@@ -8988,6 +9045,11 @@ Result Session::autoArmTrack (const String& id)
     return finish();
 }
 juce::String Session::autoArmedTrack() const { return impl->autoArmed; }
+Session::InputPermission Session::inputPermission() const { return impl->permissionStatus(); }
+void Session::setInputPermissionSource (std::function<InputPermission()> status, std::function<void (std::function<void (bool)>)> request)
+{
+    impl->permissionStatus = std::move (status); impl->permissionRequest = std::move (request); impl->permissionAsked = false;
+}
 Result Session::setTrackMonitor (int index, MonitorMode mode)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -8996,6 +9058,7 @@ Result Session::setTrackMonitor (int index, MonitorMode mode)
     auto* input = impl->input (*t); if (! input) return Result::fail ("Select an input before enabling monitoring.");
     if (input->getInputDevice().getMonitorMode() == static_cast<te::InputDevice::MonitorMode> (mode)) return Result::ok();
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing monitoring.");
+    if (mode != MonitorMode::off) if (auto allowed = impl->hardwareInputAllowed (*input); allowed.failed()) return allowed;
     const auto monitored=impl->monitoredMidiTracks();
     impl->transaction ("Input monitoring");
     input->getInputDevice().setMonitorMode (static_cast<te::InputDevice::MonitorMode> (mode));
@@ -9081,7 +9144,13 @@ Result Session::record()
     if (impl->edit->getTransport().isRecording()) return Result::ok();
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
     bool armed = false;
-    for (auto* t : te::getAudioTracks (*impl->edit)) if (auto* d = impl->input (*t)) armed |= d->isRecordingEnabled (t->itemID);
+    for (auto* t : te::getAudioTracks (*impl->edit))
+        if (auto* d = impl->input (*t); d != nullptr && d->isRecordingEnabled (t->itemID))
+        {
+            // Permission can be withdrawn after a track is armed; a take would hold silence.
+            if (auto allowed = impl->hardwareInputAllowed (*d); allowed.failed()) return allowed;
+            armed = true;
+        }
     // Recording with Session clips playing captures the performance into the Arrangement.
     const bool performing = impl->launcherActive();
     if (! armed && ! impl->automationArmed() && ! performing)
