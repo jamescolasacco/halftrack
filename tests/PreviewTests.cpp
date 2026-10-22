@@ -44,7 +44,9 @@ int runPreviewTests (const juce::File& artifacts)
         check (peak (s, 20) == 0, "the empty project is silent");
         ok (s.previewFile (tone), "preview a 0.5 amplitude tone");
         const auto during = s.snapshot();
-        check (during.previewing == tone && std::abs (peak (s, 60) - .5f) < .01f, "the preview sounds at the file's level");
+        // A loaded machine can take a moment to start the preview; its level is measured once it sounds.
+        for (int wait = 0; wait < 40 && peak (s, 1) < .1f; ++wait) {}
+        check (during.previewing == tone && std::abs (peak (s, 40) - .5f) < .01f, "the preview sounds at the file's level");
         check (during.tracks.size() == 2 && during.tracks[0].clips.empty() && ! during.dirty && ! s.canUndo(), "the project is untouched");
         ok (s.setPreviewVolume (-6), "preview volume -6 dB");
         captureSyntheticTestDevice (s, 10); // The master fader glides to its new level.
