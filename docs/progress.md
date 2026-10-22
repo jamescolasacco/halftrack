@@ -2107,3 +2107,7 @@ Engine and QA areas. From a static reading of the reference's transport code.
 - **Engine.** A new patch, `cmake/PatchLoopPlayback.cmake`, on the play head, the transport and the recording parameters.
 - **Measured.** The transport, take-lanes and punch suites, with the full gate.
 - **Set Song Start Time Here.** The loop brace's menu item: while it is on, Play starts at the loop's start, the loop on or off. Kept with the project, one undo step.
+
+## Mixer sections — 2026-10-22
+
+UI area. View > Mixer Controls shows and hides the Session mixer's In/Out, Sends, Mixer, Track Delay and Crossfader sections, as the reference's View menu does. The defaults are those of its built-in default Set, so Track Delay and the crossfader are now hidden at first. The strips lay out and size themselves from the sections shown, and the choice is kept with the project. See [the contract](research/mixer-sections-contract.md).

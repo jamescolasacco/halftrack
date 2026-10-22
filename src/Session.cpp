@@ -56,6 +56,9 @@ const juce::Identifier cueOutputProperty { "halftrackCueOutput" }, cueVolumeProp
 const juce::Identifier soloInPlaceProperty { "halftrackSoloInPlace" };
 // The loop brace's Set Song Start Time Here, as the reference's: Play starts at the loop's start.
 const juce::Identifier loopIsSongStartProperty { "halftrackLoopIsSongStart" };
+// The Session mixer's sections shown, as view state.
+const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsProperty { "halftrackMixerSends" }, mixerVolumeProperty { "halftrackMixerVolume" },
+                       mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" };
 constexpr float defaultCueVolumeDb = -6.0f; // As the reference's default Set has it.
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
 te::Edit::CountIn countInMode (int bars)
@@ -5208,6 +5211,7 @@ Session::Snapshot Session::snapshot() const
     s.cueMode = s.cueModeChosen && s.cueAvailable;
     s.soloInPlace = soloInPlace();
     s.loopIsSongStart = loopIsSongStart();
+    s.mixerSections = mixerSections();
     for (const auto& m : e.state.getChildWithName (midiMapType))
         if (auto mapping = readMidiMapping (m); isMappableTarget (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
     s.midiLearnTarget = impl->midiLearnTarget;
@@ -10851,7 +10855,9 @@ Result Session::handleMidiControl (int channel, int controller, int value)
     // The controller moves the fader or knob position between the mapping's ends.
     const auto from = lane->proportion (mapping->minimum), to = lane->proportion (mapping->maximum);
     const auto target = lane->value (from + (to - from) * (float) value / 127.0f);
-    // A controller's moves form one gesture until it rests.
+    // A controller's moves form one gesture until it rests. A move after half a second's rest
+    // starts a new one even if the rest timer has not run yet, as on a loaded machine.
+    if (impl->remoteGesture && juce::Time::getMillisecondCounter() - impl->lastRemote >= 500) { impl->remoteGesture = false; endEditGesture(); }
     if (! impl->remoteGesture && ! impl->gesture) { beginEditGesture ("MIDI control"); impl->remoteGesture = true; }
     impl->lastRemote = juce::Time::getMillisecondCounter();
     if (! impl->remoteRest.isTimerRunning())
@@ -10973,6 +10979,23 @@ Result Session::setCueVolume (float decibels)
     impl->transaction ("Cue volume");
     impl->edit->state.setProperty (cueVolumeProperty, decibels, &impl->edit->getUndoManager());
     impl->applyCue(); impl->changed(); return Result::ok();
+}
+Session::MixerSections Session::mixerSections() const
+{
+    const auto& s = impl->edit->state;
+    const MixerSections fallback;
+    return { s.getProperty (mixerInOutProperty, fallback.inOut), s.getProperty (mixerSendsProperty, fallback.sends), s.getProperty (mixerVolumeProperty, fallback.mixer),
+             s.getProperty (mixerTrackDelayProperty, fallback.trackDelay), s.getProperty (mixerCrossfaderProperty, fallback.crossfader) };
+}
+void Session::setMixerSections (const MixerSections& sections)
+{
+    if (sections == mixerSections()) return;
+    auto s = impl->edit->state;
+    s.setProperty (mixerInOutProperty, sections.inOut, nullptr); s.setProperty (mixerSendsProperty, sections.sends, nullptr);
+    s.setProperty (mixerVolumeProperty, sections.mixer, nullptr); s.setProperty (mixerTrackDelayProperty, sections.trackDelay, nullptr);
+    s.setProperty (mixerCrossfaderProperty, sections.crossfader, nullptr);
+    impl->edit->markAsChanged(); // View state, kept with the project outside the undo history.
+    sendChangeMessage();
 }
 bool Session::loopIsSongStart() const { return impl->edit->state.getProperty (loopIsSongStartProperty, false); }
 Result Session::setLoopIsSongStart (bool on)

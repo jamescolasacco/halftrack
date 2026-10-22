@@ -192,6 +192,14 @@ int runTrackOrderTests (const juce::File& artifacts)
             ok (s.loadProject (mixed), "open it");
             tracks = s.snapshot().tracks;
             check (tracks.size() == 3 && ! tracks[0].isReturn && ! tracks[1].isReturn && tracks[2].isReturn && ! s.canUndo(), "the return opens last, outside the undo history");
+            // The Session mixer's sections are kept with the project as view state.
+            check (s.mixerSections() == Session::MixerSections {}, "the mixer's sections start as the reference's default Set has them");
+            Session::MixerSections shown; shown.inOut = false; shown.crossfader = true;
+            s.setMixerSections (shown);
+            check (s.snapshot().mixerSections == shown && ! s.canUndo() && s.snapshot().dirty, "choosing them marks the project changed, outside the undo history");
+            ok (s.saveProject (mixed), "save them"); ok (s.newProject(), "a new project");
+            check (s.mixerSections() == Session::MixerSections {}, "which has the defaults");
+            ok (s.loadProject (mixed), "reopen"); check (s.mixerSections() == shown, "and the saved sections come back");
         }
         std::cout << "Track order tests passed: " << root.getFullPathName() << std::endl; return 0;
     }

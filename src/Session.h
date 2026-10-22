@@ -545,6 +545,14 @@ public:
         float minimum = 0, maximum = 1;
         bool operator== (const KeyMapping&) const = default;
     };
+    // The Session mixer's sections, as the reference's View menu shows and hides them; its default
+    // Set shows In/Out, Sends and the Mixer and hides Track Delay and the Crossfader. Kept with the
+    // project as view state, not as undo steps.
+    struct MixerSections
+    {
+        bool inOut = true, sends = true, mixer = true, trackDelay = false, crossfader = false;
+        bool operator== (const MixerSections&) const = default;
+    };
     struct Snapshot
     {
         juce::String name;
@@ -580,6 +588,7 @@ public:
         bool cueModeChosen = false, cueAvailable = false, cueMode = false;
         bool soloInPlace = true;
         bool loopIsSongStart = false; // The loop brace's Set Song Start Time Here.
+        MixerSections mixerSections;
         bool automationOverridden = false; // Some lane with points is switched off.
         float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
@@ -646,6 +655,9 @@ public:
     // leaving the insert marker where it is. Kept with the project; one undo step.
     bool loopIsSongStart() const;
     juce::Result setLoopIsSongStart (bool);
+    // The Session mixer's sections, as the reference's View menu shows and hides them (see MixerSections).
+    MixerSections mixerSections() const;
+    void setMixerSections (const MixerSections&);
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
     // Take lanes. Arrangement recording puts each pass on an armed track in a take lane (reusing a lane
     // with nothing at or after the pass's start) as well as the main lane. Comping copies a lane's
