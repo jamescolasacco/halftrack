@@ -30,7 +30,7 @@ No physical surface has been measured.
 - **V-Pot:** pan, 0.02 a tick; pressing it centres.
 - **Rec, Solo and Mute:** switch arm, solo and mute.
 - **Master fader:** the master volume.
-- **Play, Stop and Record:** Stop while stopped returns to the start.
+- **Play, Stop and Record:** Stop while stopped returns to the start. Record acts as the Record button does: pressed while recording, the recording ends and playback carries on ([transport contract](transport-contract.md)).
 - **Cycle and Click:** switch the loop and the metronome.
 - **Rewind and Fast Forward:** move a bar.
 - **The jog wheel:** moves a sixteenth a tick.

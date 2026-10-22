@@ -4586,7 +4586,7 @@ struct Session::Impl
                 case Button::channelRight: if (surfaceBank + 1 < tracks) ++surfaceBank; break;
                 case Button::play: owner.play(); break;
                 case Button::stop: if (now.playing) owner.stop(); else owner.seek (0); break;
-                case Button::record: if (now.recording) owner.stop(); else owner.record(); break;
+                case Button::record: owner.recordButton(); break; // As the Record button: pressed while recording, playback carries on.
                 case Button::cycle: owner.setLoop (! now.looping, now.loopStart, now.loopEnd); break;
                 case Button::click: { auto m = now.metronome; m.enabled = ! m.enabled; owner.setMetronome (m); break; }
                 case Button::rewind: case Button::fastForward:

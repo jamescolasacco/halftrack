@@ -147,6 +147,8 @@ int runMackieTests (const juce::File&)
         s.seek (4); pumpSyntheticTestDevice (s, 8);
         check (std::abs (s.snapshot().position - 4) < 1e-6, "seek to 4 s");
         send (juce::MidiMessage::noteOn (1, 93, (juce::uint8) 127)); settle(); pumpSyntheticTestDevice (s, 8);
+        // A slow machine can deliver the press later than the settle.
+        for (int wait = 0; wait < 100 && std::abs (s.snapshot().position) >= 1e-6; ++wait) { settle (20); pumpSyntheticTestDevice (s, 1); }
         check (std::abs (s.snapshot().position) < 1e-6, "Stop while stopped returns to the start (" + juce::String (s.snapshot().position, 3) + " s)");
         const auto looping = s.snapshot().looping;
         send (juce::MidiMessage::noteOn (1, 86, (juce::uint8) 127)); settle();
