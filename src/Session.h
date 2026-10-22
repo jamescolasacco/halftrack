@@ -551,6 +551,7 @@ public:
     struct MixerSections
     {
         bool inOut = true, sends = true, returns = true, mixer = true, trackDelay = false, crossfader = false;
+        bool shown = true; // The whole mixer in the Session View, as the reference's View > Mixer.
         bool operator== (const MixerSections&) const = default;
     };
     struct Snapshot

@@ -58,7 +58,7 @@ const juce::Identifier soloInPlaceProperty { "halftrackSoloInPlace" };
 const juce::Identifier loopIsSongStartProperty { "halftrackLoopIsSongStart" };
 // The Session mixer's sections shown, as view state.
 const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsProperty { "halftrackMixerSends" }, mixerReturnsProperty { "halftrackMixerReturns" }, mixerVolumeProperty { "halftrackMixerVolume" },
-                       mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" };
+                       mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" }, mixerShownProperty { "halftrackMixerInSession" };
 constexpr float defaultCueVolumeDb = -6.0f; // As the reference's default Set has it.
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
 te::Edit::CountIn countInMode (int bars)
@@ -10985,7 +10985,7 @@ Session::MixerSections Session::mixerSections() const
     const auto& s = impl->edit->state;
     const MixerSections fallback;
     return { s.getProperty (mixerInOutProperty, fallback.inOut), s.getProperty (mixerSendsProperty, fallback.sends), s.getProperty (mixerReturnsProperty, fallback.returns), s.getProperty (mixerVolumeProperty, fallback.mixer),
-             s.getProperty (mixerTrackDelayProperty, fallback.trackDelay), s.getProperty (mixerCrossfaderProperty, fallback.crossfader) };
+             s.getProperty (mixerTrackDelayProperty, fallback.trackDelay), s.getProperty (mixerCrossfaderProperty, fallback.crossfader), s.getProperty (mixerShownProperty, fallback.shown) };
 }
 void Session::setMixerSections (const MixerSections& sections)
 {
@@ -10993,7 +10993,7 @@ void Session::setMixerSections (const MixerSections& sections)
     auto s = impl->edit->state;
     s.setProperty (mixerInOutProperty, sections.inOut, nullptr); s.setProperty (mixerSendsProperty, sections.sends, nullptr); s.setProperty (mixerReturnsProperty, sections.returns, nullptr);
     s.setProperty (mixerVolumeProperty, sections.mixer, nullptr); s.setProperty (mixerTrackDelayProperty, sections.trackDelay, nullptr);
-    s.setProperty (mixerCrossfaderProperty, sections.crossfader, nullptr);
+    s.setProperty (mixerCrossfaderProperty, sections.crossfader, nullptr); s.setProperty (mixerShownProperty, sections.shown, nullptr);
     impl->edit->markAsChanged(); // View state, kept with the project outside the undo history.
     sendChangeMessage();
 }

@@ -830,6 +830,8 @@ public:
             if (code == 'S') { saveProject (shift); return true; }
             // The reference's grid commands, for the Arrangement.
             if (! shift && code >= '1' && code <= '5') if (const auto place = focusedGrid()) { gridCommand (code - '0', *place); return true; }
+            // View > Mixer, as in the reference, before MIDI Map Mode's Cmd/Ctrl+M.
+            if ((code == 'M' || code == 'm') && key.getModifiers().isAltDown() && showSession) { menuItemSelected (109, 3); return true; }
             if (code == 'M' && ! shift) { setMidiMapMode (! midiMapMode); return true; }
             if (code == 'K' && ! shift) { setKeyMapMode (! keyMapMode); return true; }
             if (code == 'O') { openDialog(); return true; }
@@ -3415,6 +3417,7 @@ private:
             horizontal.setBounds (0, getHeight() - scrollSize, tracksWidth(), scrollSize);
             vertical.setBounds (getWidth() - scrollSize, gridTop, scrollSize, grid.getHeight());
             masterStrip.setBounds (masterX(), grid.getBottom() + stopHeight, sceneWidth, mixerHeight());
+            mixers.setVisible (owner.state.mixerSections.shown); masterStrip.setVisible (owner.state.mixerSections.shown);
             const auto totalWidth = juce::jmax ((double) tracksWidth(), (double) columns.size() * columnWidth);
             offsetX = juce::jlimit (0.0, juce::jmax (0.0, totalWidth - tracksWidth()), offsetX);
             horizontal.setRangeLimits (0, totalWidth, juce::dontSendNotification); horizontal.setCurrentRange (offsetX, tracksWidth(), juce::dontSendNotification); horizontal.setSingleStepSize (columnWidth);
@@ -3867,6 +3870,7 @@ private:
         int mixerHeight() const
         {
             const auto& shown = owner.state.mixerSections;
+            if (! shown.shown) return 0; // View > Mixer hides it, the grid taking its place.
             int returns = 0; for (const auto& track : owner.state.tracks) returns += track.isReturn;
             return (shown.inOut ? 48 + TrackRow::outputRow : 4) + (shown.sends ? (returns + 2) / 3 * 40 : 0)
                  + (shown.mixer ? 158 : 4) + (shown.trackDelay ? 22 : 0) + (shown.crossfader ? 24 : 0);
@@ -9320,6 +9324,7 @@ private:
             // The Session mixer's sections, as the reference's View menu shows and hides them.
             juce::PopupMenu sections;
             const auto& shown = state.mixerSections;
+            popup.addItem (109, "Mixer", showSession, shown.shown);
             sections.addItem (103, "In/Out", true, shown.inOut); sections.addItem (104, "Sends", true, shown.sends); sections.addItem (108, "Returns", true, shown.returns);
             sections.addItem (105, "Mixer", true, shown.mixer);
             sections.addItem (106, "Track Delay", true, shown.trackDelay); sections.addItem (107, "Crossfader", true, shown.crossfader);
@@ -9397,6 +9402,7 @@ private:
             case 89: { const auto [a, b] = editRange(); report (session.cutTime (a, b - a)); timeSelection = {}; refresh(); break; }
             case 101: report (session.pasteTime (pasteTimeTrack(), state.insertMarker)); refresh(); break;
             case 98: report (session.setSoloInPlace (! state.soloInPlace)); refresh(); break;
+            case 109: { auto shown = state.mixerSections; shown.shown = ! shown.shown; session.setMixerSections (shown); refresh(); launcher.resized(); launcher.repaint(); break; }
             case 103: case 104: case 105: case 106: case 107: case 108:
             {
                 auto shown = state.mixerSections;
@@ -15378,6 +15384,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (! state.mixerSections.returns && launcher.columnCount() == columnsWithReturns - 1, "hiding the Returns hides the return's column");
             menuItemSelected (108, 3); refresh();
             check (state.mixerSections.returns && launcher.columnCount() == columnsWithReturns, "and showing them brings it back");
+            check (handleKey (juce::KeyPress ('M', juce::ModifierKeys::commandModifier | juce::ModifierKeys::altModifier, 0)) && ! state.mixerSections.shown
+                       && launcher.mixerHeight() == 0 && ! input->isShowing(), "Cmd/Ctrl+Option+M hides the Session mixer, as View > Mixer does");
+            check (handleKey (juce::KeyPress ('M', juce::ModifierKeys::commandModifier | juce::ModifierKeys::altModifier, 0)) && state.mixerSections.shown
+                       && launcher.mixerHeight() > 0 && ! midiMapMode, "and shows it again, leaving MIDI Map Mode alone");
         }
         auto* sideA = dynamic_cast<juce::Button*> (findNamed (launcher, "Crossfade A"));
         auto* fader = dynamic_cast<juce::Slider*> (findNamed (launcher, "Crossfader"));
