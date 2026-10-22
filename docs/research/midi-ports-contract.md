@@ -89,16 +89,16 @@ On systems that cannot make virtual MIDI ports (Windows, or Linux without the AL
 - **Undo and editing.** The tempo it sets is not an undo step. The tempo field and TAP step aside meanwhile, and setting the tempo otherwise is ignored.
 - **One tempo.** External Sync needs a single tempo, not a tempo map.
 
-**Evidence.** `tests/ExternalSyncTests.cpp` makes a virtual MIDI port and sends it clock in real time, pumping the synthetic device in step. The test's own ticks jitter by a few milliseconds, so tempos are checked to half a BPM. It checks:
+**Evidence.** `tests/ExternalSyncTests.cpp` makes a virtual MIDI port and sends it clock in real time, pumping the synthetic device in step. The test's own ticks jitter by a few milliseconds, so the clock's readings are checked to half a BPM. While playing, the tempo follows the clock's within 2%, since the phase correction moves it by a percent for each hundredth of a beat the loaded machine's blocks lag. It checks:
 
 - the port is offered as an input;
 - with External Sync off, the clock's 120 BPM is read but not followed;
 - with it on, the tempo follows (about 120.1);
 - Start then two seconds gives four beats (within 0.15);
-- three seconds at 90 BPM bring the tempo to about 89.7 and the transport to the clock's 8.5 beats (within 0.2);
+- three seconds at 90 BPM: the clock reads 90, the tempo follows it (about 89.7 when unloaded) and the transport keeps the clock's 8.5 beats (within 0.2);
 - Stop, Song Position to beat 8 (exact), and Continue on to beat 9.5;
 - none of it is an undo step;
-- off again, a 140 BPM clock leaves the tempo, and the tempo can be set;
+- off again, a 140 BPM clock leaves the tempo exactly where it was, and the tempo can be set;
 - with the port's Sync off its clock is no longer read, and a missing port is refused.
 
 Systems that cannot make virtual ports skip it. The UI suite switches an input's Sync on in MIDI Ports, sees EXT appear before TAP, and checks that EXT turns External Sync on with the tempo field and TAP disabled. Turning both off hides EXT.

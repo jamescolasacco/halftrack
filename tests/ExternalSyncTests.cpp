@@ -75,8 +75,11 @@ int runExternalSyncTests (const juce::File&)
         run (120, 2);
         check (s.snapshot().playing && std::abs (beats() - 4) < .15, "Start plays from the beginning, two seconds giving four beats (" + juce::String (beats(), 3) + ")");
         run (90, 3);
-        check (std::abs (s.snapshot().tempo - 90) < .5 && std::abs (beats() - 8.5) < .2,
-               "at 90 BPM the tempo follows (" + juce::String (s.snapshot().tempo, 2) + ") and the transport keeps the clock's 8.5 beats (" + juce::String (beats(), 3) + ")");
+        // While playing, the tempo is nudged from the clock's to catch its position: on a loaded
+        // machine the blocks lag a little, and a few hundredths of a beat move the tempo by as many percent.
+        check (std::abs (s.externalClock().bpm - 90) < .5 && std::abs (s.snapshot().tempo - 90) < 90 * .02 && std::abs (beats() - 8.5) < .2,
+               "at 90 BPM the tempo follows (" + juce::String (s.snapshot().tempo, 2) + ", the clock read as " + juce::String (s.externalClock().bpm, 2)
+                   + ") and the transport keeps the clock's 8.5 beats (" + juce::String (beats(), 3) + ")");
         clock->sendMessageNow (juce::MidiMessage::midiStop());
         run (90, .3);
         check (! s.snapshot().playing, "Stop stops it");
@@ -91,8 +94,10 @@ int runExternalSyncTests (const juce::File&)
         check (s.canUndo() == couldUndo, "none of it is an undo step");
 
         ok (s.setExternalSync (false), "turn External Sync off");
+        const auto leftAt = s.snapshot().tempo;
         run (140, 1.5);
-        check (std::abs (s.snapshot().tempo - 90) < .5 && std::abs (s.externalClock().bpm - 140) < .5, "off again, a 140 BPM clock leaves the tempo where it was");
+        check (std::abs (leftAt - 90) < 90 * .02 && s.snapshot().tempo == leftAt && std::abs (s.externalClock().bpm - 140) < .5,
+               "off again, a 140 BPM clock leaves the tempo where it was (" + juce::String (s.snapshot().tempo, 3) + " BPM, the clock read as " + juce::String (s.externalClock().bpm, 3) + ")");
         s.setTempo (110);
         check (std::abs (s.snapshot().tempo - 110) < 1e-9, "and the tempo can be set again");
         ok (s.setMidiInputSync (port, false), "switch the port's Sync off");
