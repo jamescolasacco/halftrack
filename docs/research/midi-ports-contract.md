@@ -79,10 +79,33 @@ The UI suite makes its own port, chooses No Instrument and MIDI To channel 5 fro
 
 On systems that cannot make virtual MIDI ports (Windows, or Linux without the ALSA sequencer), the suite and the UI port checks report SKIP.
 
+## External Sync (2026-10-22)
+
+**Following a clock.** An input port's Sync switch (Audio & MIDI Setup > MIDI Ports, kept with the engine's settings) lets it send MIDI Clock. Halftrack opens such ports itself, beside the engine's own input, so their notes still play into tracks. Their clock and transport messages reach the message thread through a fixed ring. Once an input's Sync is on, the control bar shows EXT before TAP. With External Sync on:
+
+- **Tempo.** It comes from a least-squares line through the last beat's 24 clock ticks, so one late tick barely moves it.
+- **Phase.** While playing, the tempo is raised while the transport is behind the clock's position and lowered while it is ahead, by the distance in beats beyond 0.02 (the fixed latency of reading either), 10% at most.
+- **Transport messages.** Start plays from the beginning; Continue plays on from where the transport, or a Song Position, put it; Stop stops; Song Position moves the play head while stopped and keeps it on that beat as the tempo follows.
+- **Undo and editing.** The tempo it sets is not an undo step. The tempo field and TAP step aside meanwhile, and setting the tempo otherwise is ignored.
+- **One tempo.** External Sync needs a single tempo, not a tempo map.
+
+**Evidence.** `tests/ExternalSyncTests.cpp` makes a virtual MIDI port and sends it clock in real time, pumping the synthetic device in step. The test's own ticks jitter by a few milliseconds, so tempos are checked to half a BPM. It checks:
+
+- the port is offered as an input;
+- with External Sync off, the clock's 120 BPM is read but not followed;
+- with it on, the tempo follows (about 120.1);
+- Start then two seconds gives four beats (within 0.15);
+- three seconds at 90 BPM bring the tempo to about 89.7 and the transport to the clock's 8.5 beats (within 0.2);
+- Stop, Song Position to beat 8 (exact), and Continue on to beat 9.5;
+- none of it is an undo step;
+- off again, a 140 BPM clock leaves the tempo, and the tempo can be set;
+- with the port's Sync off its clock is no longer read, and a missing port is refused.
+
+Systems that cannot make virtual ports skip it. The UI suite switches an input's Sync on in MIDI Ports, sees EXT appear before TAP, and checks that EXT turns External Sync on with the tempo field and TAP disabled. Turning both off hides EXT.
+
 ## Not yet covered
 
-- MIDI Clock input and tempo following.
-- Sync delay.
+- Sync delay, and clock loss while playing (the transport plays on at the last tempo).
 - MTC.
 - Ableton Link.
 - MIDI To another track's instrument, and per-port Remote switches.

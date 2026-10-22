@@ -24,7 +24,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | REC-009 | capture-midi, ui |  |
 | REC-010 | take-lanes, ui |  |
 | REC-011 | linked-tracks, ui |  |
-| REC-012 | midi-ports, ui |  |
+| REC-012 | external-sync, midi-ports, ui |  |
 | ARR-001 | ui |  |
 | ARR-002 | groups, track-duplicate, track-order, ui |  |
 | ARR-003 | audio-clips, clip-loops, ui |  |

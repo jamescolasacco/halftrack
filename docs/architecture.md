@@ -201,6 +201,10 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `WarpSettings` carries the mode and each mode's settings; `setAudioClipWarp` maps Beats, Tones, Texture and Complex Pro to the engine stretcher modes that `cmake/PatchWarpModes.cmake` adds, and their settings to the stretch options' four Halftrack values. `src/WarpStretchers.*` holds the stretchers, registered with the engine when a Session starts. They allocate when created and not while processing. Transposition is part of `AudioClipSettings`, kept in clip properties and applied as the clip's pitch change. See the [contract](research/warp-modes-contract.md).
 
+## External Sync
+
+Session opens inputs whose Sync switch is on with JUCE's MIDI input, beside the engine's own, and passes their clock and transport messages to the message thread through a fixed ring, as the Mackie surface does. There it reads the clock's tempo, keeps the clock's position, and sets the tempo through the same tempo change that keeps rack automation on its beats, without an undo manager. See the [contract](research/midi-ports-contract.md#external-sync-2026-10-22).
+
 ## Video
 
 `video` (in `src/VideoMedia.*`) reads, writes and muxes movies through AVFoundation on macOS. On other systems it reports that movies are unsupported. A video clip is an audio clip with a `halftrackVideo` property naming its movie, resolved through the edit's file path resolver. Session collects the movie on save as it collects audio sources. The interface's Video window uses JUCE's `VideoComponent` and follows `Session::videoAt` from the window timer. See the [contract](research/video-contract.md).

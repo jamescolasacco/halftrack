@@ -1766,3 +1766,12 @@ Engine and UI areas.
 - **Measured.** A 97 BPM loop after 3.2 s of noise is found and rendered with each hit a beat apart within 0.65 ms; a four-bar loop at 105 BPM fits exactly.
 
 See [the contract](research/warp-contract.md#warp-commands-2026-10-22).
+
+## External Sync — 2026-10-22
+
+Engine and UI areas.
+
+- **Following a clock.** An input's Sync switch in MIDI Ports shows EXT in the control bar. With it on, the transport follows that input's MIDI Clock: its tempo, its position while playing, and Start, Continue, Stop and Song Position. No undo steps are added.
+- **Measured.** Through a virtual port in real time, the tempo follows 120 and then 90 BPM and the transport stays within 0.2 beats of the clock (`tests/ExternalSyncTests.cpp`).
+
+See [the contract](research/midi-ports-contract.md#external-sync-2026-10-22).

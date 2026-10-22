@@ -373,7 +373,7 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
+                 &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &info, &ruler, &viewport,
                  &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain })
@@ -408,6 +408,11 @@ public:
             refresh();
         };
         tapButton.setName("Tap tempo");tapButton.setTooltip("Tap a steady beat to set tempo. A pause over three seconds starts a new estimate.");
+        // EXT, after the reference: shown once an input's Sync is on, it follows that input's MIDI Clock.
+        extButton.setName ("External sync"); extButton.setClickingTogglesState (true);
+        extButton.setTooltip ("External Sync: follow the MIDI Clock of the inputs whose Sync is on in Audio & MIDI Setup > MIDI Ports");
+        extButton.setColour (juce::TextButton::buttonOnColourId, orange); extButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
+        extButton.onClick = [this] { report (session.setExternalSync (extButton.getToggleState())); refresh(); };
         tapButton.onClick=[this]{report(session.tapTempo(juce::Time::getMillisecondCounterHiRes()*.001));refresh();};
         tempo.onTextChange = [this]
         {
@@ -668,6 +673,8 @@ public:
        #endif
         toolbarBounds = area.removeFromTop (38);
         auto bar = toolbarBounds.reduced (8, 7);
+        extButton.setVisible (session.hasSyncInputs() || session.isExternalSync());
+        if (extButton.isVisible()) { extButton.setBounds (bar.removeFromLeft (36)); bar.removeFromLeft (3); }
         tapButton.setBounds (bar.removeFromLeft (36)); bar.removeFromLeft (3);
         tempo.setBounds (bar.removeFromLeft (58)); bar.removeFromLeft (3);
         meterBounds = bar.removeFromLeft (40); bar.removeFromLeft (8); meterLabel.setBounds (meterBounds);
@@ -7034,6 +7041,7 @@ private:
     AutomationButton automationArmButton { AutomationButton::arm }, reEnableButton { AutomationButton::reEnable };
     juce::TextButton captureButton { "Capture" };
     juce::TextButton punchInButton { "In" }, punchOutButton { "Out" };
+    juce::TextButton extButton { "EXT" };
     juce::TextButton followButton { "Follow" }, tapButton { "TAP" }, loopButton { "Loop" }, clickButton { "Metro" }, clickSettingsButton { "..." }, audioButton { "Audio" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
                      sessionTab { "Session" }, arrangementTab { "Arrange" }, pianoTab { "Clip" }, importButton { "Import Audio" },
                      filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" }, previewButton { "Preview" },
@@ -7958,7 +7966,11 @@ private:
         }
         if (! tempo.isBeingEdited()) tempo.setText (juce::String (state.tempo, 2), juce::dontSendNotification);
         // An automated tempo shows the playhead's tempo and is edited in the Song Tempo lane.
-        tempo.setEditable (false, state.tempoMap.size() <= 1, false); tapButton.setEnabled (state.tempoMap.size() <= 1);
+        // External Sync sets the tempo from the clock meanwhile.
+        const bool following = session.isExternalSync();
+        extButton.setToggleState (following, juce::dontSendNotification);
+        if (extButton.isVisible() != (session.hasSyncInputs() || following)) resized();
+        tempo.setEditable (false, state.tempoMap.size() <= 1 && ! following, false); tapButton.setEnabled (state.tempoMap.size() <= 1 && ! following);
         tempo.setTooltip (state.tempoMap.size() <= 1 ? "Tempo: 20–999 beats per minute. Double-click to edit."
                                                     : "The tempo is automated; this is the tempo at the playhead. Edit it in Automation > Master > Song Tempo.");
         if (! meterLabel.isBeingEdited()) meterLabel.setText (juce::String (state.timeSignature.numerator) + " / " + juce::String (state.timeSignature.denominator), juce::dontSendNotification);
@@ -8977,13 +8989,15 @@ private:
                 menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&surface), [safe, inNames, outNames] (int chosen)
                 { if (safe != nullptr) safe->chooseSurface (inNames, outNames, chosen); });
             };
-            // MIDI Ports, after the reference's: Track offers an output to MIDI tracks' MIDI To, and
-            // Sync sends it MIDI Clock while the transport plays.
-            midiPorts.setName ("MIDI ports"); midiPorts.setTooltip ("MIDI Ports: Track lets MIDI tracks play to an output; Sync sends it MIDI Clock");
+            // MIDI Ports, after the reference's: an output's Track offers it to MIDI tracks' MIDI To and
+            // its Sync sends it MIDI Clock while the transport plays; an input's Sync lets External Sync
+            // follow its clock.
+            midiPorts.setName ("MIDI ports"); midiPorts.setTooltip ("MIDI Ports: Track lets MIDI tracks play to an output; Sync sends it MIDI Clock, or follows an input's");
             midiPorts.onClick = [this]
             {
                 juce::PopupMenu menu;
                 const auto ports = owner.session.midiOutputPorts();
+                menu.addSectionHeader ("Outputs");
                 for (int i = 0; i < (int) ports.size(); ++i)
                 {
                     menu.addSectionHeader (ports[(size_t) i].name);
@@ -8991,8 +9005,17 @@ private:
                     menu.addItem (2 + i * 2, "Sync", true, ports[(size_t) i].sync);
                 }
                 if (ports.empty()) menu.addItem (-1, "No MIDI outputs", false);
+                const auto inputs = owner.session.midiInputPorts();
+                menu.addSeparator(); menu.addSectionHeader ("Inputs");
+                for (int i = 0; i < inputs.size(); ++i) menu.addItem (inputSyncItem + i, inputs[i] + ": Sync", true, owner.session.isMidiInputSync (inputs[i]));
+                if (inputs.isEmpty()) menu.addItem (-2, "No MIDI inputs", false);
                 auto safe = juce::Component::SafePointer<AudioSetupPanel> (this);
-                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&midiPorts), [safe, ports] (int chosen) { if (safe != nullptr) safe->toggleMidiPort (ports, chosen); });
+                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&midiPorts), [safe, ports, inputs] (int chosen)
+                {
+                    if (safe == nullptr) return;
+                    if (juce::isPositiveAndBelow (chosen - inputSyncItem, inputs.size())) safe->toggleInputSync (inputs[chosen - inputSyncItem]);
+                    else safe->toggleMidiPort (ports, chosen);
+                });
             };
             // Input Config: each pair of input channels as one stereo input or two mono ones, and which are on.
             inputConfig.setName ("Input config"); inputConfig.setTooltip ("Input Config: use each pair of input channels as one stereo input or two mono inputs, and choose which inputs are on");
@@ -9062,6 +9085,11 @@ private:
             owner.report (owner.session.setControlSurface (next), next.input.isEmpty() ? "No control surface." : "Mackie Control on " + next.input + ".");
         }
         // Item 1 + 2i is port i's Track switch and 2 + 2i its Sync switch.
+        static constexpr int inputSyncItem = 1000; // Input i's Sync switch.
+        void toggleInputSync (const juce::String& input)
+        {
+            owner.report (owner.session.setMidiInputSync (input, ! owner.session.isMidiInputSync (input))); owner.refresh(); owner.resized();
+        }
         void toggleMidiPort (const std::vector<Session::MidiOutputPortInfo>& ports, int chosen)
         {
             const int index = (chosen - 1) / 2;
@@ -13447,6 +13475,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check ((session.controlSurface() == Session::ControlSurface { inputs[0], outputs[0] }), "choosing its input and output sets the surface");
                 setup.chooseSurface (inputs, outputs, 1);
                 check (session.controlSurface() == Session::ControlSurface {}, "No Control Surface removes it");
+                // An input's Sync shows EXT beside TAP, which follows its clock and keeps the tempo from edits.
+                check (! extButton.isVisible(), "EXT is hidden while no input sends clock");
+                setup.toggleInputSync (inputs[0]); refresh();
+                check (session.isMidiInputSync (inputs[0]) && extButton.isVisible() && extButton.getX() < tapButton.getX(), "switching on an input's Sync in MIDI Ports shows EXT before TAP");
+                extButton.setToggleState (true, juce::dontSendNotification); extButton.onClick(); refresh();
+                check (session.isExternalSync() && ! tempo.isEditable() && ! tapButton.isEnabled(), "EXT turns on External Sync and the tempo steps aside");
+                extButton.setToggleState (false, juce::dontSendNotification); extButton.onClick(); refresh();
+                setup.toggleInputSync (inputs[0]); refresh();
+                check (! session.isExternalSync() && tempo.isEditable() && ! extButton.isVisible(), "turning both off hides EXT and frees the tempo");
             }
             else std::cout << "SKIP UI MIDI To ports: this system cannot make a virtual MIDI port" << std::endl;
             chooser->setSelectedId (1, juce::sendNotificationSync); refresh();

@@ -662,6 +662,18 @@ public:
     // (and undo) as the interface's. Halftrack opens the surface's ports itself and keeps the
     // engine's input for that port closed, so the surface plays into no track. An empty input is
     // no surface. Kept with the engine's settings.
+    // External Sync, after the reference: an input port's Sync switch (kept with the engine's
+    // settings) lets it send MIDI Clock. With External Sync on (the control bar's EXT), the transport
+    // follows it: the tempo from the clock, drawn toward its position while playing; Start from the
+    // beginning, Continue, Stop, and Song Position while stopped. The tempo it sets is not an undo
+    // step, and the tempo cannot be set otherwise meanwhile. It needs a single tempo, not a map.
+    juce::Result setMidiInputSync (const juce::String& port, bool sync);
+    bool isMidiInputSync (const juce::String& port) const;
+    juce::Result setExternalSync (bool);
+    bool isExternalSync() const;
+    struct ExternalClock { bool receiving = false; double bpm = 0; };
+    ExternalClock externalClock() const; // Whether clock has arrived in the last half second, and its tempo.
+    bool hasSyncInputs() const;           // Whether any available input has its Sync switch on.
     struct ControlSurface { juce::String input, output; bool operator== (const ControlSurface&) const = default; };
     juce::StringArray midiInputPorts() const;
     juce::Result setControlSurface (const ControlSurface&);

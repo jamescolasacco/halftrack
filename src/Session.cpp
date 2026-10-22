@@ -2288,7 +2288,7 @@ struct Session::Impl
         meters.clear();
         grooveWatcher.watch ({});
         remoteRest.stopTimer(); remoteWatch.stopTimer(); remote.detach(); captureTaps.clear(); captured.clear();
-        surfaceTimer.stopTimer(); closeSurface();
+        surfaceTimer.stopTimer(); closeSurface(); closeClockInputs();
         preview.reset();
         edit.reset();
         // Unsaved sessions are deliberately retained in the temp directory for recovery.
@@ -2485,7 +2485,7 @@ struct Session::Impl
                               && (meter->numerator.get() != change.meter->numerator || meter->denominator.get() != change.meter->denominator);
         if (! newTempo && ! newMeter) return;
         transaction ("Launch scene");
-        if (newTempo) { resetTapTempo(); changeTempo (*tempo, *change.bpm); }
+        if (newTempo) { resetTapTempo(); changeTempo (*tempo, *change.bpm, &edit->getUndoManager()); }
         if (newMeter) { meter->numerator = change.meter->numerator; meter->denominator = change.meter->denominator; }
         changed();
     }
@@ -3014,7 +3014,9 @@ struct Session::Impl
     }
     // Keeps automation of devices inside racks on its beats across a tempo change; the engine
     // remaps only the devices it lists itself.
-    void changeTempo (te::TempoSetting& tempo, double bpm)
+    // A tempo change keeps rack devices' automation on its beats. Without an undo manager (as external
+    // sync follows a clock) neither the tempo nor the moved points are undo steps.
+    void changeTempo (te::TempoSetting& tempo, double bpm, juce::UndoManager* undo)
     {
         struct Curve { te::AutomationCurve* curve; std::vector<te::BeatPosition> beats; };
         std::vector<Curve> curves;
@@ -3033,11 +3035,11 @@ struct Session::Impl
                             curves.push_back (std::move (entry));
                         }
                     });
-        tempo.setBpm (bpm);
+        if (undo != nullptr) tempo.setBpm (bpm); else tempo.state.setProperty (te::IDs::bpm, bpm, nullptr);
         edit->tempoSequence.updateTempoData();
         for (auto& entry : curves)
             for (int point = (int) entry.beats.size(); --point >= 0;)
-                entry.curve->setPointPosition (point, edit->tempoSequence.toTime (entry.beats[(size_t) point]), &edit->getUndoManager());
+                entry.curve->setPointPosition (point, edit->tempoSequence.toTime (entry.beats[(size_t) point]), undo);
         if (! curves.empty()) visitDevices ([] (te::AudioTrack&, NativeEffectPlugin& d) { d.refreshAutomation(); });
     }
     // Preferences, read when the Session starts.
@@ -4170,6 +4172,112 @@ struct Session::Impl
         if (top != shownOnSurface.top) { surfaceOut->sendMessageNow (mackie::display (0, 0, top)); shownOnSurface.top = top; }
         if (bottom != shownOnSurface.bottom) { surfaceOut->sendMessageNow (mackie::display (1, 0, bottom)); shownOnSurface.bottom = bottom; }
     }
+    // External Sync, after the reference: MIDI Clock and transport messages from the inputs whose
+    // Sync switch is on reach the message thread through a fixed ring. While External Sync is on, the
+    // transport follows them: the tempo from the clock's ticks, drawn toward the clock's position
+    // while playing, Start from the beginning, Continue, Stop, and Song Position while stopped.
+    struct ClockPort final : juce::MidiInputCallback, private juce::AsyncUpdater
+    {
+        std::function<void (const juce::MidiMessage&)> handle;
+        ~ClockPort() override { cancelPendingUpdate(); }
+        void handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& m) override
+        {
+            if (! (m.isMidiClock() || m.isMidiStart() || m.isMidiContinue() || m.isMidiStop() || m.isSongPositionPointer())) return;
+            { const juce::SpinLock::ScopedLockType lock (mutex); if (count < ring.size()) ring[(head + count++) % ring.size()] = m; }
+            triggerAsyncUpdate();
+        }
+        void handleAsyncUpdate() override
+        {
+            std::array<juce::MidiMessage, 512> batch; size_t n = 0;
+            { const juce::SpinLock::ScopedLockType lock (mutex); for (; n < count; ++n) batch[n] = ring[(head + n) % ring.size()]; head = (head + n) % ring.size(); count = 0; }
+            for (size_t i = 0; i < n; ++i) if (handle) handle (batch[i]);
+        }
+        std::array<juce::MidiMessage, 512> ring;
+        size_t head = 0, count = 0;
+        juce::SpinLock mutex;
+    } clockPort;
+    std::vector<std::unique_ptr<juce::MidiInput>> clockInputs; // Destroyed before the port they call.
+    bool externalSync = false, clockRunning = false;
+    bool positionedByClock = false; // Stopped at a Song Position, which the play head keeps through tempo changes.
+    std::deque<double> clockTimes; // The last ticks' times, in seconds.
+    double clockBpm = 0, clockBeats = 0;
+    int ticksSinceFollow = 0;
+    static juce::String syncItem (const juce::String& port) { return "halftrackSync " + port; }
+    bool syncOn (const juce::String& port) const { return static_cast<bool> (engine.getPropertyStorage().getPropertyItem (te::SettingID::midiin, syncItem (port), false)); }
+    void closeClockInputs()
+    {
+        for (auto& in : clockInputs) in->stop();
+        clockInputs.clear();
+    }
+    void openClockInputs()
+    {
+        closeClockInputs();
+        clockPort.handle = [this] (const juce::MidiMessage& m) { handleClock (m); };
+        for (const auto& info : juce::MidiInput::getAvailableDevices())
+            if (portAllowed (info.name) && syncOn (info.name))
+                if (auto in = juce::MidiInput::openDevice (info.identifier, &clockPort)) { in->start(); clockInputs.push_back (std::move (in)); }
+    }
+    bool clockReceiving() const { return ! clockTimes.empty() && juce::Time::getMillisecondCounterHiRes() * 0.001 - clockTimes.back() < 0.5; }
+    void handleClock (const juce::MidiMessage& m)
+    {
+        auto& transport = edit->getTransport();
+        if (m.isMidiClock())
+        {
+            const auto at = m.getTimeStamp();
+            // A gap of half a second is the clock stopping; its ticks start again afresh.
+            if (! clockTimes.empty() && at - clockTimes.back() > 0.5) clockTimes.clear();
+            clockTimes.push_back (at);
+            while (clockTimes.size() > 25) clockTimes.pop_front();
+            if (clockRunning) clockBeats += 1.0 / 24;
+            // A tick's length from a line through the last beat's ticks, so one late tick barely moves it.
+            if (clockTimes.size() >= 13)
+            {
+                const auto n = (double) clockTimes.size();
+                double meanI = (n - 1) / 2, meanT = 0, spread = 0, covariance = 0;
+                for (const auto t : clockTimes) meanT += t / n;
+                for (size_t i = 0; i < clockTimes.size(); ++i) { spread += ((double) i - meanI) * ((double) i - meanI); covariance += ((double) i - meanI) * (clockTimes[i] - meanT); }
+                if (const auto tick = covariance / spread; tick > 0) clockBpm = 60 / (tick * 24);
+            }
+            if (externalSync && clockBpm > 0 && ++ticksSinceFollow >= 6) { ticksSinceFollow = 0; followClock(); }
+            return;
+        }
+        if (! externalSync) return;
+        if (m.isMidiStart()) { clockBeats = 0; clockRunning = true; positionedByClock = false; owner.seek (0); owner.play(); }
+        else if (m.isMidiContinue())
+        {
+            if (! positionedByClock) clockBeats = edit->tempoSequence.toBeats (transport.getPosition()).inBeats();
+            clockRunning = true; positionedByClock = false; owner.continuePlayback();
+        }
+        else if (m.isMidiStop()) { clockRunning = false; owner.stop(); }
+        else if (m.isSongPositionPointer() && ! transport.isPlaying())
+        {
+            clockBeats = m.getSongPositionPointerMidiBeat() / 4.0;
+            positionedByClock = true;
+            owner.seek (edit->tempoSequence.toTime (te::BeatPosition::fromBeats (clockBeats)).inSeconds());
+        }
+    }
+    // The clock's tempo, faster while the transport is behind the clock's position and slower while
+    // ahead: by its distance in beats beyond 0.02 (the fixed latency of reading either), 10% at most.
+    // It is set without undo steps.
+    void followClock()
+    {
+        if (edit->tempoSequence.getNumTempos() > 1) return;
+        auto& transport = edit->getTransport();
+        auto bpm = clockBpm;
+        if (clockRunning && transport.isPlaying())
+        {
+            const auto heard = transport.getCurrentPlaybackContext() != nullptr ? transport.getCurrentPlaybackContext()->getUnloopedPosition() : transport.getPosition();
+            const auto behind = clockBeats - edit->tempoSequence.toBeats (heard).inBeats();
+            const auto beyond = std::abs (behind) <= 0.02 ? 0.0 : behind - std::copysign (0.02, behind);
+            bpm *= 1 + juce::jlimit (-0.1, 0.1, beyond);
+        }
+        bpm = juce::jlimit (te::TempoSetting::minBPM, te::TempoSetting::maxBPM, bpm);
+        auto* tempo = edit->tempoSequence.getTempo (0);
+        if (std::abs (tempo->getBpm() - bpm) < 0.005) return;
+        changeTempo (*tempo, bpm, nullptr);
+        if (positionedByClock && ! transport.isPlaying()) owner.seek (edit->tempoSequence.toTime (te::BeatPosition::fromBeats (clockBeats)).inSeconds());
+        owner.sendChangeMessage();
+    }
     Result openSurface (const Session::ControlSurface& wanted)
     {
         surfaceTimer.stopTimer(); closeSurface();
@@ -4493,6 +4601,8 @@ Session::Session (bool enableAudioDevices, std::unique_ptr<juce::AudioIODeviceTy
         const ControlSurface saved { storage.getPropertyItem (te::SettingID::midiin, "halftrackSurfaceInput", {}).toString(), storage.getPropertyItem (te::SettingID::midiin, "halftrackSurfaceOutput", {}).toString() };
         if (saved.input.isNotEmpty()) impl->openSurface (saved);
     }
+    // MIDI Clock from the inputs whose Sync switch is on.
+    impl->openClockInputs();
 }
 Session::~Session() { closePluginEditors(); }
 
@@ -7155,6 +7265,25 @@ juce::StringArray Session::midiInputPorts() const
     for (const auto& info : juce::MidiInput::getAvailableDevices()) if (impl->portAllowed (info.name)) names.add (info.name);
     return names;
 }
+Result Session::setMidiInputSync (const String& port, bool on)
+{
+    if (! midiInputPorts().contains (port)) return Result::fail ("The MIDI input \"" + port + "\" is not available.");
+    if (impl->syncOn (port) == on) return Result::ok();
+    impl->engine.getPropertyStorage().setPropertyItem (te::SettingID::midiin, Impl::syncItem (port), on);
+    impl->openClockInputs();
+    sendChangeMessage(); return Result::ok();
+}
+bool Session::isMidiInputSync (const String& port) const { return impl->syncOn (port); }
+Result Session::setExternalSync (bool on)
+{
+    if (on == impl->externalSync) return Result::ok();
+    if (on && impl->edit->tempoSequence.getNumTempos() > 1) return Result::fail ("External Sync sets one tempo; remove the tempo map's changes first.");
+    impl->externalSync = on; impl->clockRunning = false; impl->ticksSinceFollow = 0;
+    sendChangeMessage(); return Result::ok();
+}
+bool Session::isExternalSync() const { return impl->externalSync; }
+bool Session::hasSyncInputs() const { return ! impl->clockInputs.empty(); }
+Session::ExternalClock Session::externalClock() const { return { impl->clockReceiving(), impl->clockReceiving() ? impl->clockBpm : 0.0 }; }
 Result Session::setControlSurface (const ControlSurface& wanted)
 {
     if (wanted == impl->surface) return Result::ok();
@@ -10023,13 +10152,14 @@ double Session::secondsAt (double beats) const { return impl->edit->tempoSequenc
 void Session::setTempo (double bpm)
 {
     if (impl->exporting) return;
+    if (impl->externalSync) return; // The clock sets the tempo.
     if (impl->edit->tempoSequence.getNumTempos() > 1) return;
     if (! std::isfinite (bpm)) return;
     impl->resetTapTempo();
     const auto value = juce::jlimit (te::TempoSetting::minBPM, te::TempoSetting::maxBPM, bpm);
     auto* tempo = impl->edit->tempoSequence.getTempo (0);
     if (tempo->getBpm() == value) return;
-    impl->transaction ("Tempo"); impl->changeTempo (*tempo, value); impl->changed();
+    impl->transaction ("Tempo"); impl->changeTempo (*tempo, value, &impl->edit->getUndoManager()); impl->changed();
 }
 Result Session::tapTempo(double seconds)
 {
@@ -10053,7 +10183,7 @@ Result Session::tapTempo(double seconds)
     const double bpm=juce::jlimit(te::TempoSetting::minBPM,te::TempoSetting::maxBPM,60.0*impl->numTapIntervals/elapsed);
     auto* tempo=impl->edit->tempoSequence.getTempo(0);
     if (std::abs(tempo->getBpm()-bpm)<1e-9) return Result::ok();
-    impl->transaction("Tap tempo");impl->changeTempo(*tempo,bpm);impl->changed();return Result::ok();
+    impl->transaction("Tap tempo");impl->changeTempo(*tempo,bpm,&impl->edit->getUndoManager());impl->changed();return Result::ok();
 }
 Result Session::setMetronome (const MetronomeSettings& settings)
 {

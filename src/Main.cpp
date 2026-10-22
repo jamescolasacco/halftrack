@@ -109,6 +109,7 @@ int runClipLoopTests (const juce::File&);
 int runRangeClipboardTests (const juce::File&);
 int runRecordingLatencyTests (const juce::File&);
 int runVideoTests (const juce::File&);
+int runExternalSyncTests (const juce::File&);
 int runTempoAnalysisEvaluation (const juce::File& library, const juce::File& report);
 int runPackTests (const juce::File&);
 int runMackieTests (const juce::File&);
@@ -420,6 +421,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-similarity");
             setApplicationReturnValue (runSimilarityTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-external-sync"))
+        {
+            const int i = args.indexOf ("--self-test-external-sync");
+            setApplicationReturnValue (runExternalSyncTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-video"))
