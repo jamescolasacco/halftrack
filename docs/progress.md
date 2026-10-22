@@ -2068,3 +2068,11 @@ Engine, UI and QA areas. Researched by static reading of the reference's code (f
 - **Engine.** A new patch, `cmake/PatchCue.cmake`, adds three behaviour hooks and the cue's sum on its device; every earlier patch on its two files accepts its results.
 - **Measured.** The output-routing suite, per output channel of a four-output synthetic device, and the metronome, preview and UI suites. See [the contract](research/cue-contract.md).
 - **Changed defaults.** The click and previews now play 6 dB quieter by default, at the reference's cue level.
+
+## Solo in Place — 2026-10-22
+
+Engine, UI and QA areas.
+
+- **Solo in Place.** The reference's switch, kept with the project and not an undo step, in the View menu with Halftrack's other Options items. Off, soloed tracks are heard without the returns.
+- **A fix.** Soloing a return beside a source now mutes the other returns, as the reference's does; they used to stay open.
+- **Measured.** Sample-exact renders in the send/return suite, and the UI suite.

@@ -738,7 +738,6 @@ Halftrack's default fades follow a static reading of the reference's code ([cont
 Defaults where the reference's cue is not followed exactly ([contract](research/cue-contract.md)):
 
 - **Groups.** A group cannot be cued; its switch is disabled in Cue mode. The reference cues a group from after its devices.
-- **Solo in Place.** Halftrack always keeps returns audible while soloing, as the reference's default does; the reference's switch for it is not offered.
 - **Undo.** Cue Out and the Solo/Cue mode are kept with the project without undo steps, as Halftrack's Master Out is. The switches are undo steps, as Halftrack's solo was; the reference makes neither the mode nor the switches undo steps, and probably makes Cue Out one.
 - **The level's ramp.** A cue level change ramps across one audio block; the reference ramps its cue gates over a length set elsewhere.
 - **MIDI.** A cued MIDI track is heard through its instrument; what the reference cues of a track's MIDI is unexamined.

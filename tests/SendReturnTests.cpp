@@ -141,6 +141,13 @@ void routing (const juce::File& root, const Fixture& a, const Fixture& b)
     render (s, root, "two-sources", mix (a, b, 1.25, 1.25, 1.5, 1.5));
     ok (s.setTrackSolo (0, true), "solo first source");
     render (s, root, "source-solo", mix (a, b, 1.25, 1.25));
+    // Solo in Place, on at first as the reference's: off, the soloed source is heard without the return.
+    check (s.snapshot().soloInPlace, "Solo in Place starts on");
+    ok (s.setSoloInPlace (false), "switch Solo in Place off");
+    render (s, root, "source-solo-not-in-place", mix (a, b, 1, 1));
+    s.undo();
+    check (! s.snapshot().soloInPlace && ! s.snapshot().tracks[0].solo, "switching it is not an undo step: undo takes back the solo");
+    s.redo(); ok (s.setSoloInPlace (true), "Solo in Place on again");
     ok (s.setTrackSolo (2, true), "also solo return under documented combined-solo default");
     render (s, root, "combined-source-return-solo", mix (a, b, 1.25, 1.25, 0.5, 0.5));
     ok (s.setTrackSolo (0, false), "leave only return soloed");
@@ -155,6 +162,10 @@ void routing (const juce::File& root, const Fixture& a, const Fixture& b)
     ok (s.setTrackSendGain (0, secondID, db (0.5)), "send to second destination");
     ok (s.setTrackGain (3, db (0.5)), "half second return fader");
     render (s, root, "two-returns", mix (a, b, 1.5, 1.5, 1.5, 1.5));
+    // With a return soloed beside a source, the other returns go quiet, as the reference's do.
+    ok (s.setTrackSolo (0, true), "solo the first source"); ok (s.setTrackSolo (2, true), "and the first return");
+    render (s, root, "return-solo-mutes-other-returns", mix (a, b, 1.25, 1.25, 0.5, 0.5));
+    ok (s.setTrackSolo (0, false), "release the source"); ok (s.setTrackSolo (2, false), "and the return");
     const auto gain = plugin (s, "HALFTRACK_TEST_PLUGIN");
     ok (s.addPlugin (0, gain), "source effect precedes send taps");
     ok (s.addPlugin (2, gain), "return effect follows aux input");

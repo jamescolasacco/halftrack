@@ -578,6 +578,7 @@ public:
         juce::String cueOutput;
         float cueVolumeDb = -6;
         bool cueModeChosen = false, cueAvailable = false, cueMode = false;
+        bool soloInPlace = true;
         bool automationOverridden = false; // Some lane with points is switched off.
         float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
@@ -634,6 +635,11 @@ public:
     float cueVolumeDb() const;
     juce::Result setCueVolume (float decibels); // -70 (off) to +6 dB.
     juce::Result setCueMode (bool cue);
+    // Solo in Place, after the reference's (on at first, kept with the project, not an undo step):
+    // soloing tracks keeps the returns audible, fed by the soloed tracks' sends, unless a return is
+    // soloed. Off, soloed tracks are heard without the returns.
+    bool soloInPlace() const;
+    juce::Result setSoloInPlace (bool);
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
     // Take lanes. Arrangement recording puts each pass on an armed track in a take lane (reusing a lane
     // with nothing at or after the pass's start) as well as the main lane. Comping copies a lane's

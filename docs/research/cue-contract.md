@@ -10,6 +10,18 @@ Halftrack's cue follows a static reading of the reference's code and bundled def
 - **When Cue mode applies.** Cue mode needs a Cue Out sharing no channel with Main Out. Otherwise the mode is forced to Solo and the switch is disabled, and the saved choice comes back when the outputs separate. Cue Out starts on the same outputs as Main.
 - **Undo.** The mode and the switches are not undo steps; Cue Out and the cue level probably are (medium confidence).
 
+## Solo in Place
+
+The reference keeps Solo in Place with the Set, on at first and not an undo step, and offers it as a menu command (static reading). With it on, soloing tracks keeps the returns audible, fed by the soloed tracks' sends, unless a return is soloed, which mutes the others. With it off, soloed tracks are heard without the returns.
+
+Halftrack does the same: `Session::setSoloInPlace`, kept with the project and not an undo step, from the View menu's Solo in Place (where Halftrack keeps the reference's Options items). `tests/SendReturnTests.cpp` renders, sample by sample:
+
+- a soloed source heard with its return, and without it once Solo in Place is off;
+- that undo then takes back the solo, not the switch;
+- that soloing a return beside a source mutes the other return.
+
+The UI suite switches it from the View menu.
+
 ## Halftrack
 
 - **Cue Out** (`Session::setCueOutput`) names an output switched on in the Output Config; empty is the Master Out's, as at first. It is kept with the project and, as the Master Out is, is not an undo step.
@@ -48,6 +60,5 @@ Halftrack's cue follows a static reading of the reference's code and bundled def
 These are recorded in the [open questions](../open-questions.md#cue):
 
 - cueing groups;
-- Solo in Place as a switch: Halftrack keeps returns audible while soloing, as the reference's default does;
 - undo for Cue Out, and no undo for the switches, as the reference probably has them;
 - the reference's ramp length, and the cue of a MIDI track's own MIDI.

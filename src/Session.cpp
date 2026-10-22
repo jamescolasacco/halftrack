@@ -52,6 +52,8 @@ const juce::Identifier masterOutputProperty { "halftrackMasterOutput" };
 // level in dB, the Solo/Cue switch, and a track's switch while it cues rather than solos.
 const juce::Identifier cueOutputProperty { "halftrackCueOutput" }, cueVolumeProperty { "halftrackCueVolume" }, cueModeProperty { "halftrackCueMode" },
                        cueProperty { "halftrackCue" };
+// Solo in Place, kept with the project as the reference keeps it with the Set: on at first.
+const juce::Identifier soloInPlaceProperty { "halftrackSoloInPlace" };
 constexpr float defaultCueVolumeDb = -6.0f; // As the reference's default Set has it.
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
 te::Edit::CountIn countInMode (int bars)
@@ -3534,12 +3536,15 @@ struct Session::Impl
         // Derived gates are published through native graph updates on the message
         // thread. They never replace user send levels or create undo actions.
         const auto tracks = te::getAudioTracks (*edit);
-        bool anySolo = false, anySourceSolo = false;
+        bool anySolo = false, anySourceSolo = false, anyReturnSolo = false;
         for (auto* t : tracks)
         {
             anySolo = anySolo || t->isSolo (false);
             anySourceSolo = anySourceSolo || (! isReturn (*t) && t->isSolo (false));
+            anyReturnSolo = anyReturnSolo || (isReturn (*t) && t->isSolo (false));
         }
+        // Solo in Place, as the reference's: soloing keeps the returns audible unless one is soloed.
+        const bool inPlace = edit->state.getProperty (soloInPlaceProperty, true);
         for (auto* destination : tracks)
         {
             if (! isReturn (*destination)) continue;
@@ -3553,9 +3558,9 @@ struct Session::Impl
                     send->state.setProperty (te::IDs::enabled, selected && audible, nullptr);
                 }
             }
-            // Solo-in-place keeps every return output open, including effect
-            // tails left by sources whose feeds are now Off or solo-suppressed.
-            destination->state.setProperty (te::IDs::soloIsolate, anySourceSolo, nullptr);
+            // Solo in Place keeps every return output open, including effect tails left by
+            // sources whose feeds are now Off or solo-suppressed, unless a return is soloed.
+            destination->state.setProperty (te::IDs::soloIsolate, anySourceSolo && inPlace && ! anyReturnSolo, nullptr);
         }
         edit->updateMuteSoloStatuses();
     }
@@ -5168,6 +5173,7 @@ Session::Snapshot Session::snapshot() const
     s.cueModeChosen = e.state.getProperty (cueModeProperty, false);
     s.cueAvailable = impl->separateCueDevice() != nullptr;
     s.cueMode = s.cueModeChosen && s.cueAvailable;
+    s.soloInPlace = soloInPlace();
     for (const auto& m : e.state.getChildWithName (midiMapType))
         if (auto mapping = readMidiMapping (m); isMappableTarget (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
     s.midiLearnTarget = impl->midiLearnTarget;
@@ -10931,6 +10937,15 @@ Result Session::setCueVolume (float decibels)
     impl->transaction ("Cue volume");
     impl->edit->state.setProperty (cueVolumeProperty, decibels, &impl->edit->getUndoManager());
     impl->applyCue(); impl->changed(); return Result::ok();
+}
+bool Session::soloInPlace() const { return impl->edit->state.getProperty (soloInPlaceProperty, true); }
+Result Session::setSoloInPlace (bool on)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (on == soloInPlace()) return Result::ok();
+    impl->edit->state.setProperty (soloInPlaceProperty, on, nullptr); // As the reference's: not an undo step.
+    impl->edit->markAsChanged();
+    impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::setCueMode (bool cue)
 {

@@ -9249,6 +9249,7 @@ private:
             popup.addItem (93, "Narrow Grid", place.has_value()); popup.addItem (94, "Widen Grid", place.has_value());
             popup.addItem (95, "Triplet Grid", place.has_value(), g.tuplet == 3); popup.addItem (96, "Snap to Grid", place.has_value(), g.snap);
             popup.addItem (97, "Fixed Grid", place.has_value(), g.fixed);
+            popup.addItem (98, "Solo in Place", ! session.isExporting(), state.soloInPlace);
            #if JUCE_MAC
             popup.addItem (92, "Video Window", video::supported(), videoWindow != nullptr && videoWindow->isVisible());
            #endif
@@ -9321,6 +9322,7 @@ private:
             case 75: { const auto [a, b] = editRange(); report (session.deleteTime (a, b - a)); timeSelection = {}; refresh(); break; }
             case 89: { const auto [a, b] = editRange(); report (session.cutTime (a, b - a)); timeSelection = {}; refresh(); break; }
             case 101: report (session.pasteTime (pasteTimeTrack(), state.insertMarker)); refresh(); break;
+            case 98: report (session.setSoloInPlace (! state.soloInPlace)); refresh(); break;
             case 102: { const auto [a, b] = editRange(); report (session.duplicateTime (a, b)); refresh(); break; }
             case 76: case 77: case 78: case 79: case 80: case 81: case 82: case 83: selectionCommand (id); break;
             case 30: showPiano = false; addTrack(); resized(); break;
@@ -15322,6 +15324,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             session.undo(); refresh();
             cueOut->setSelectedId (1, juce::sendNotificationSync); refresh();
             check (state.cueOutput == outs[0] && ! soloCue->isEnabled(), "Cue Out back with the master leaves Cue mode unavailable");
+            check (state.soloInPlace, "Solo in Place starts on");
+            menuItemSelected (98, 3); refresh();
+            check (! state.soloInPlace, "the View menu's Solo in Place switches it off");
+            menuItemSelected (98, 3); refresh();
+            check (state.soloInPlace, "and on");
         }
         output->setSelectedId (2, juce::sendNotificationSync); refresh();
         check (state.tracks[0].output.kind == Session::OutputKind::sendsOnly && output->getText() == "Sends Only", "choosing Sends Only routes the track");
