@@ -11,6 +11,9 @@
 #elif JUCE_LINUX
  #include <unistd.h>
 #elif JUCE_WINDOWS
+ #ifndef NOMINMAX
+  #define NOMINMAX // windows.h otherwise defines min and max as macros.
+ #endif
  #include <windows.h>
  #include <psapi.h>
 #endif
