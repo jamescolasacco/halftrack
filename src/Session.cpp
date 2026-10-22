@@ -8650,8 +8650,10 @@ Result Session::copyMidiClip (const String& id, bool cut)
     const auto beats=clip->getLengthInBeats().inBeats();
     if(!std::isfinite(beats)||beats<=0)return Result::fail("The MIDI clip has an invalid beat duration.");
     auto copied=clip->state.createCopy();
+    // Read before a cut removes, and so deletes, the clip.
+    const auto offsetBeats=clip->getOffsetInBeats().inBeats();
     if(cut){impl->transaction("Cut MIDI clip");clip->removeFromParent();impl->changed();}
-    impl->midiClipboard=std::move(copied);impl->midiClipboardBeats=beats;impl->midiClipboardOffsetBeats=clip->getOffsetInBeats().inBeats();
+    impl->midiClipboard=std::move(copied);impl->midiClipboardBeats=beats;impl->midiClipboardOffsetBeats=offsetBeats;
     impl->rangeClipboard.reset();
     impl->audioClipboard={};impl->audioClipboardMedia.reset();return Result::ok();
 }
