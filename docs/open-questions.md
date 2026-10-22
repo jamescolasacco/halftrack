@@ -712,3 +712,7 @@ Defaults the reference's manual does not give:
 - At most eight notes sound at once.
 - A plain click on a key only sounds it; Shift-click selects that pitch's notes, as the manual says.
 - Moving a note sideways does not sound it again.
+
+### Start Recording on Scene Launch
+
+With the option on, a track already recording into a slot when another scene launches only ends that take; no new take begins in the launched scene's slot. Whether the reference starts recording there is unmeasured.

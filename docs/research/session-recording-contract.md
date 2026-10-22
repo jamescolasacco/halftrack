@@ -92,6 +92,25 @@ The control bar's Session Record button (`Session::sessionRecord (sceneIndex)`, 
 
 The UI suite records and ends a take with the button.
 
+## Takes started together
+
+The engine starts the transport as soon as the first take of a press starts recording. So when one action starts several takes from a stopped transport, every take uses the position the transport stood at. Before this, each later take saw a running transport and waited for the launch grid; a MIDI take from beat 2.6 began a bar late and lost the note played at once. `tests/SessionRecordTests.cpp` presses Session Record from beat 2.6 and finds the note in the MIDI take beside the audio one.
+
+## Start Recording on Scene Launch
+
+The reference's Record, Warp & Launch option of this name is off by default. Its manual says that, off, launching a scene does not record into its empty record-enabled slots. With the preference on (`Preferences::startRecordingOnSceneLaunch`), `Session::launchScene`:
+
+- records into the scene's empty slots on armed tracks, as Session Record does, after checking every input first;
+- launches the other tracks' clips as before;
+- leaves a track that is already recording into a slot alone, so its take ends with the launch as before, without a new take beginning (see [open questions](../open-questions.md#start-recording-on-scene-launch)).
+
+`tests/SessionRecordTests.cpp` checks:
+
+- that with the option off, launching an empty scene records nothing;
+- that with it on, the armed MIDI and audio tracks record and the unarmed one does not;
+- that the takes become looping clips, the MIDI one holding the note played;
+- that launching a scene of clips afterwards plays them, recording nothing.
+
 ## Not implemented
 
 - Audio overdub, and recording into the next empty slot when the scene's slot is full.

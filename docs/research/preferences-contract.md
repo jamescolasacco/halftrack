@@ -10,6 +10,7 @@ Halftrack's preferences follow part of the reference's Record, Warp & Launch pre
 | Default Warp Mode | Complex | The mode Session audio clips are warped in, and the mode Auto-Warp uses. Off is refused. |
 | Auto-Warp Long Samples | off | Arrangement imports longer than 30 seconds are warped at their estimated tempo. |
 | Default Launch Mode, Default Launch Quantization | Trigger, Global | What new Session clips (imported, created or recorded) launch with. |
+| Start Recording on Scene Launch | off | Launching a scene also records into its empty slots on armed tracks, as Session Record does ([Session recording contract](session-recording-contract.md#start-recording-on-scene-launch)). |
 | Theme, Zoom Display | Dark, 100% | The interface's theme (Dark, Light or High Contrast) and scale, 50-200% in steps of 25 ([themes contract](themes-contract.md)). |
 
 An import that the preferences warp is still one undo step.
@@ -33,10 +34,11 @@ An import that the preferences warp is still one undo step.
 - **Reset** persists.
 - **Other files:**
   - an older file keeps its one setting and gains the defaults;
+  - Follow Behavior Scroll and Start Recording on Scene Launch are read back;
   - a newer file's unknown setting is ignored;
   - an out-of-range value, and a file of junk, are set aside with the defaults kept and the reason given.
 
-The UI suite switches Exclusive Solo off in the Preferences panel, sees a plain click add a second soloed track, and resets.
+The UI suite switches Exclusive Solo off in the Preferences panel and sees a plain click add a second soloed track. It also finds Start Recording on Scene Launch off and switches it on, keeping the other settings, and then resets.
 
 ## Not yet covered
 

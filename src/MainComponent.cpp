@@ -10113,7 +10113,7 @@ private:
     public:
         explicit PreferencesPanel (Impl& o) : owner (o)
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &exclusiveArm, &exclusiveSolo, &autoWarp, &warpLabel, &warp, &modeLabel, &mode, &gridLabel, &grid, &themeLabel, &theme, &zoomLabel, &zoom, &followLabel, &follow, &reset })
+            for (auto* c : std::initializer_list<juce::Component*> { &exclusiveArm, &exclusiveSolo, &autoWarp, &sceneRecord, &warpLabel, &warp, &modeLabel, &mode, &gridLabel, &grid, &themeLabel, &theme, &zoomLabel, &zoom, &followLabel, &follow, &reset })
                 addAndMakeVisible (c);
             // Look: the interface theme and the display zoom.
             themeLabel.setText ("Theme", juce::dontSendNotification); zoomLabel.setText ("Zoom Display", juce::dontSendNotification);
@@ -10123,6 +10123,8 @@ private:
             for (int kind = 0; kind < themes::kindCount; ++kind) theme.addItem (themes::name ((themes::Kind) kind), kind + 1);
             for (int percent = 50; percent <= 200; percent += 25) zoom.addItem (juce::String (percent) + "%", percent);
             exclusiveArm.setName ("Exclusive arm"); exclusiveSolo.setName ("Exclusive solo"); autoWarp.setName ("Auto-warp long samples");
+            sceneRecord.setName ("Start recording on scene launch");
+            sceneRecord.setTooltip ("Start Recording on Scene Launch: launching a scene also records into its empty slots on armed tracks");
             warp.setName ("Default warp mode"); mode.setName ("Default launch mode"); grid.setName ("Default launch quantization"); reset.setName ("Reset preferences");
             warpLabel.setText ("Default Warp Mode", juce::dontSendNotification); modeLabel.setText ("Default Launch Mode", juce::dontSendNotification);
             gridLabel.setText ("Default Launch Quantization", juce::dontSendNotification);
@@ -10132,7 +10134,7 @@ private:
             for (const auto* name : { "Trigger", "Gate", "Toggle", "Repeat" }) mode.addItem (name, id++);
             id = 1;
             for (const auto* name : { "Global", "None", "8 Bars", "4 Bars", "2 Bars", "1 Bar", "1/2", "1/4", "1/8", "1/16", "1/32" }) grid.addItem (name, id++);
-            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp }) b->onClick = [this] { apply(); };
+            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &sceneRecord }) b->onClick = [this] { apply(); };
             warp.onChange = mode.onChange = grid.onChange = theme.onChange = zoom.onChange = follow.onChange = [this] { apply(); };
             reset.onClick = [this] { owner.report (owner.session.resetPreferences(), "Preferences reset to their defaults."); sync(); };
             sync();
@@ -10142,6 +10144,7 @@ private:
             const auto p = owner.session.preferences();
             exclusiveArm.setToggleState (p.exclusiveArm, juce::dontSendNotification); exclusiveSolo.setToggleState (p.exclusiveSolo, juce::dontSendNotification);
             autoWarp.setToggleState (p.autoWarpLongSamples, juce::dontSendNotification);
+            sceneRecord.setToggleState (p.startRecordingOnSceneLaunch, juce::dontSendNotification);
             for (int i = 0; i < (int) std::size (warpModes); ++i) if (warpModes[i] == p.defaultWarpMode) warp.setSelectedId (i + 1, juce::dontSendNotification);
             mode.setSelectedId ((int) p.defaultLaunchMode + 1, juce::dontSendNotification); grid.setSelectedId ((int) p.defaultLaunchQuantisation + 1, juce::dontSendNotification);
             theme.setSelectedId (p.theme + 1, juce::dontSendNotification); zoom.setSelectedId (p.zoomPercent, juce::dontSendNotification);
@@ -10152,6 +10155,7 @@ private:
             // Settings shown elsewhere, such as Driver Error Compensation, are kept.
             auto p = owner.session.preferences();
             p.exclusiveArm = exclusiveArm.getToggleState(); p.exclusiveSolo = exclusiveSolo.getToggleState(); p.autoWarpLongSamples = autoWarp.getToggleState();
+            p.startRecordingOnSceneLaunch = sceneRecord.getToggleState();
             p.defaultWarpMode = warpModes[(size_t) juce::jlimit (0, (int) std::size (warpModes) - 1, warp.getSelectedId() - 1)];
             p.defaultLaunchMode = (Session::LaunchMode) juce::jlimit (0, 3, mode.getSelectedId() - 1);
             p.defaultLaunchQuantisation = (Session::ClipQuantisation) juce::jlimit (0, 10, grid.getSelectedId() - 1);
@@ -10163,7 +10167,7 @@ private:
         void resized() override
         {
             auto area = getLocalBounds().reduced (16);
-            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp }) { b->setBounds (area.removeFromTop (26)); area.removeFromTop (4); }
+            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &sceneRecord }) { b->setBounds (area.removeFromTop (26)); area.removeFromTop (4); }
             for (auto [label, box] : { std::pair<juce::Label*, juce::ComboBox*> { &warpLabel, &warp }, { &modeLabel, &mode }, { &gridLabel, &grid }, { &themeLabel, &theme }, { &zoomLabel, &zoom }, { &followLabel, &follow } })
             { auto row = area.removeFromTop (26); label->setBounds (row.removeFromLeft (190)); box->setBounds (row.removeFromLeft (180)); area.removeFromTop (6); }
             area.removeFromTop (10); reset.setBounds (area.removeFromTop (26).removeFromLeft (160));
@@ -10172,12 +10176,13 @@ private:
         Impl& owner;
         static constexpr Session::WarpMode warpModes[] { Session::WarpMode::beats, Session::WarpMode::tones, Session::WarpMode::texture, Session::WarpMode::repitch,
                                                          Session::WarpMode::stretch, Session::WarpMode::complexPro, Session::WarpMode::efficient };
-        juce::ToggleButton exclusiveArm { "Exclusive Arm" }, exclusiveSolo { "Exclusive Solo" }, autoWarp { "Auto-Warp Long Samples" };
+        juce::ToggleButton exclusiveArm { "Exclusive Arm" }, exclusiveSolo { "Exclusive Solo" }, autoWarp { "Auto-Warp Long Samples" },
+                           sceneRecord { "Start Recording on Scene Launch" };
         juce::Label warpLabel, modeLabel, gridLabel, themeLabel, zoomLabel, followLabel;
         juce::ComboBox warp, mode, grid, theme, zoom, follow;
         juce::TextButton reset { "Reset to Defaults" };
     };
-    void showPreferences() { showDialog ("Halftrack - Preferences", std::make_unique<PreferencesPanel> (*this), 440, 396); }
+    void showPreferences() { showDialog ("Halftrack - Preferences", std::make_unique<PreferencesPanel> (*this), 440, 426); }
     // What this copy of Halftrack is: its version, source commit and platform (selectable, to paste
     // into a report), its license, and where it keeps settings and the User Library.
     class AboutPanel final : public juce::Component
@@ -13515,6 +13520,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             followChooser->setSelectedId (2, juce::sendNotificationSync); refresh();
             check (session.preferences().scrollFollow && session.preferences().driverErrorCompensationMs == 1.5, "choosing Scroll sets it, keeping the compensation");
             check (scrolledViewStart (12, 10) == 7 && scrolledViewStart (3, 10) == 0, "scrolling keeps the play head in the middle once it reaches it");
+            auto* sceneRecordToggle = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Start recording on scene launch"));
+            check (sceneRecordToggle != nullptr && sceneRecordToggle->getButtonText() == "Start Recording on Scene Launch" && ! sceneRecordToggle->getToggleState()
+                       && ! session.preferences().startRecordingOnSceneLaunch, "the panel offers Start Recording on Scene Launch, off by default");
+            sceneRecordToggle->setToggleState (true, juce::sendNotificationSync); refresh();
+            check (session.preferences().startRecordingOnSceneLaunch && session.preferences().scrollFollow, "switching it on sets it, keeping the others");
         }
         check (session.resetPreferences().wasOk(), "reset the preferences");
     }

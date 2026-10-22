@@ -3134,9 +3134,10 @@ struct Session::Impl
             valid = arm >= 0 && solo >= 0 && warp >= 0 && autoWarp >= 0 && mode >= 0 && grid >= 0 && look >= 0 && zoom >= 0;
             read = { arm == 1, solo == 1, (WarpMode) warp, autoWarp == 1, (LaunchMode) mode, (ClipQuantisation) grid, look, zoom };
             read.driverErrorCompensationMs = xml->getDoubleAttribute ("driverErrorCompensationMs", 0);
-            const int follow = number ("followBehaviour", 0, 2);
+            const int follow = number ("followBehaviour", 0, 2), sceneRecord = number ("startRecordingOnSceneLaunch", 0, 2);
             read.scrollFollow = follow == 1;
-            valid = valid && follow >= 0 && validPreferences (read);
+            read.startRecordingOnSceneLaunch = sceneRecord == 1;
+            valid = valid && follow >= 0 && sceneRecord >= 0 && validPreferences (read);
         }
         if (valid) { prefs = read; return; }
         // Set an unreadable file aside rather than lose it, and keep the defaults.
@@ -3155,6 +3156,7 @@ struct Session::Impl
         xml.setAttribute ("theme", next.theme); xml.setAttribute ("zoomPercent", next.zoomPercent);
         xml.setAttribute ("driverErrorCompensationMs", next.driverErrorCompensationMs);
         xml.setAttribute ("followBehaviour", next.scrollFollow ? 1 : 0);
+        xml.setAttribute ("startRecordingOnSceneLaunch", next.startRecordingOnSceneLaunch ? 1 : 0);
         const auto file = prefsFile();
         if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
         juce::TemporaryFile temporary (file);
@@ -4054,6 +4056,9 @@ struct Session::Impl
     struct CapturedNote { int channel = 1, pitch = 60; float velocity = 0; double onTime = 0, offTime = -1, onBeat = 0, offBeat = 0; bool timed = false; }; // Times in stream seconds.
     std::map<te::EditItemID, std::vector<CapturedNote>> captured;
     std::map<te::EditItemID, std::set<int>> previewing; // The notes the MIDI editor's Preview is playing.
+    // Set while one action starts several slot takes from a stopped transport, to where it stood: the
+    // engine starts the transport with the first take, and the rest must not wait for the launch grid.
+    std::optional<te::TimePosition> takesStart;
     std::vector<std::unique_ptr<MidiCaptureTap>> captureTaps;
     static constexpr size_t maximumCapturedNotes = 4096;
     void attachCapture()
@@ -6930,10 +6935,10 @@ Result Session::recordSlot (int trackIndex, int sceneIndex)
     // rebuild cannot replace a running play head.
     input->flushRecordingStateUpdates();
     impl->edit->dispatchPendingUpdatesSynchronously();
-    const bool wasPlaying = transport.isPlaying();
+    const bool wasPlaying = ! impl->takesStart && transport.isPlaying();
     // From a stopped transport the take starts at once; otherwise on the launch grid.
     const auto boundary = wasPlaying ? impl->launchBoundary() : std::nullopt;
-    const auto start = wasPlaying ? impl->unloopedTime (boundary) : transport.getPosition();
+    const auto start = impl->takesStart ? *impl->takesStart : wasPlaying ? impl->unloopedTime (boundary) : transport.getPosition();
     if (auto* midi = dynamic_cast<te::MidiInputDevice*> (&input->getInputDevice())) midi->quantisation.setType ("(none)");
     te::InputDeviceInstance::RecordingParameters params;
     params.punchRange = { start, te::Edit::getMaximumEditTimeRange().getEnd() };
@@ -6968,6 +6973,7 @@ Result Session::sessionRecord (int sceneIndex)
     const bool wasPlaying = transport.isPlaying();
     std::vector<std::pair<te::AudioTrack*, te::MidiClip*>> overdubbed;
     bool recorded = false;
+    const juce::ScopedValueSetter together (impl->takesStart, wasPlaying ? std::nullopt : std::optional (transport.getPosition()));
     // Every armed input must be usable before any slot starts recording.
     for (auto* t : te::getAudioTracks (*impl->edit))
         if (auto* input = impl->input (*t); input != nullptr && ! isReturn (*t) && input->isRecordingEnabled (t->itemID))
@@ -7066,12 +7072,31 @@ Result Session::launchScene (int sceneIndex)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! juce::isPositiveAndBelow (sceneIndex, impl->edit->getSceneList().getNumScenes())) return Result::fail ("Scene not found.");
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
+    // With Start Recording on Scene Launch, armed tracks record into the scene's empty slots
+    // (a track already recording into a slot just ends that take); every input is checked first.
+    std::vector<int> recording;
+    if (impl->prefs.startRecordingOnSceneLaunch && ! impl->edit->getTransport().isRecording())
+        for (int i = 0; i < (int) te::getAudioTracks (*impl->edit).size(); ++i)
+            if (auto* t = impl->track (i); t != nullptr && ! isReturn (*t) && impl->trackRecording (t->itemID.toString()) == nullptr)
+                if (auto* input = impl->input (*t); input != nullptr && input->isRecordingEnabled (t->itemID))
+                    if (auto* slot = impl->slot (i, sceneIndex); slot != nullptr && slot->getClip() == nullptr)
+                    {
+                        if (auto allowed = impl->hardwareInputAllowed (*input); allowed.failed()) return allowed;
+                        recording.push_back (i);
+                    }
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->edit->getTransport().ensureContextAllocated();
     const auto boundary = impl->launchBoundary();
-    for (auto* track : te::getAudioTracks (*impl->edit))
-        if (! isReturn (*track)) impl->queueTrack (*track, track->getClipSlotList().getClipSlots()[sceneIndex]->getClip(), boundary);
+    const auto tracks = te::getAudioTracks (*impl->edit);
+    for (int i = 0; i < (int) tracks.size(); ++i)
+        if (! isReturn (*tracks[i]) && std::find (recording.begin(), recording.end(), i) == recording.end())
+            impl->queueTrack (*tracks[i], tracks[i]->getClipSlotList().getClipSlots()[sceneIndex]->getClip(), boundary);
     impl->scheduleSceneChange (*impl->edit->getSceneList().getScenes()[sceneIndex], boundary);
+    {
+        auto& transport = impl->edit->getTransport();
+        const juce::ScopedValueSetter together (impl->takesStart, transport.isPlaying() ? std::nullopt : std::optional (transport.getPosition()));
+        for (auto i : recording) if (auto r = recordSlot (i, sceneIndex); r.failed()) return r;
+    }
     if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().play (false);
     sendChangeMessage(); return Result::ok();
 }

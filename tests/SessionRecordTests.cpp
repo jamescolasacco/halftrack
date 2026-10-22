@@ -114,6 +114,46 @@ int runSessionRecordTests (const juce::File& artifacts)
         check (slot (keys, 1).clip.notes.size() == 1 && slot (keys, 1).clip.notes[0].pitch == 67,
                "the overdub kept its note (" + juce::String ((int) slot (keys, 1).clip.notes.size()) + " notes)");
         s.stop();
+
+        // Start Recording on Scene Launch: off by default, launching a scene leaves armed tracks'
+        // empty slots alone; on, it records into them as Session Record does.
+        pumpSyntheticTestDevice (s, 40);
+        check (! slot (0, 2).hasClip && ! slot (keys, 2).hasClip && ! slot (1, 2).hasClip, "scene 3 is empty");
+        ok (s.launchScene (2), "launch scene 3 with the option off");
+        pumpSyntheticTestDevice (s, blocksPerSecond / 2);
+        check (! slot (0, 2).recording && ! slot (keys, 2).recording && ! slot (0, 2).hasClip, "launching a scene records nothing by default");
+        s.stop(); pumpSyntheticTestDevice (s, 40);
+        auto prefs = s.preferences(); prefs.startRecordingOnSceneLaunch = true;
+        ok (s.setPreferences (prefs), "switch Start Recording on Scene Launch on");
+        ok (s.launchScene (2), "launch scene 3 again");
+        for (int i = 0; i < 400 && ! (slot (0, 2).recording && slot (keys, 2).recording); ++i) pumpSyntheticTestDevice (s, 1);
+        check (slot (0, 2).recording && slot (keys, 2).recording && ! slot (1, 2).recording && s.snapshot().playing,
+               "now the armed tracks record into the scene's empty slots, the unarmed one does not");
+        pumpSyntheticTestDevice (s, 4);
+        controller.play (62, .25);
+        pumpSyntheticTestDevice (s, blocksPerSecond);
+        ok (s.sessionRecord (2), "Session Record ends the takes");
+        for (int i = 0; i < 800 && ! (slot (keys, 2).playing && slot (0, 2).playing); ++i) pumpSyntheticTestDevice (s, 1);
+        check (slot (keys, 2).hasClip && slot (keys, 2).playing && slot (keys, 2).clip.notes.size() == 1 && slot (keys, 2).clip.notes[0].pitch == 62
+                   && slot (0, 2).hasClip && slot (0, 2).playing && ! slot (1, 2).hasClip, "and they become clips that loop, the MIDI one holding its note");
+        ok (s.launchScene (0), "launch scene 1, whose slots hold clips");
+        for (int i = 0; i < 800 && ! (slot (keys, 0).playing && slot (0, 0).playing); ++i) pumpSyntheticTestDevice (s, 1);
+        check (slot (keys, 0).playing && slot (0, 0).playing && ! slot (keys, 0).recording && ! slot (0, 0).recording && ! slot (keys, 2).playing,
+               "a scene with clips launches them in place of the new takes, recording nothing");
+        prefs.startRecordingOnSceneLaunch = false; ok (s.setPreferences (prefs), "switch it off again");
+        // From a stopped transport away from a bar, every new take starts at once, not just the first.
+        s.stop(); pumpSyntheticTestDevice (s, 40);
+        s.seek (1.3); pumpSyntheticTestDevice (s, 8);
+        ok (s.sessionRecord (3), "press Session Record on scene 4 from beat 2.6");
+        pumpSyntheticTestDevice (s, 4);
+        check (slot (0, 3).recording && slot (keys, 3).recording, "both armed tracks record");
+        controller.play (65, .25);
+        pumpSyntheticTestDevice (s, blocksPerSecond / 2);
+        ok (s.sessionRecord (3), "press it again");
+        for (int i = 0; i < 800 && ! (slot (keys, 3).playing && slot (0, 3).playing); ++i) pumpSyntheticTestDevice (s, 1);
+        check (slot (keys, 3).hasClip && slot (keys, 3).clip.notes.size() == 1 && slot (keys, 3).clip.notes[0].pitch == 65,
+               "the MIDI take started with the audio one and holds the note played at once (" + juce::String ((int) slot (keys, 3).clip.notes.size()) + " notes)");
+        s.stop();
         std::cout << "Session record passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL session record: " << e.what() << std::endl; return 1; }

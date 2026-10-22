@@ -1929,3 +1929,13 @@ Engine and UI areas.
 
 See [the contract](research/note-preview-contract.md).
 
+## Start Recording on Scene Launch — 2026-10-22
+
+Engine and UI areas.
+
+- **The preference.** Start Recording on Scene Launch, off by default as in the reference. With it on, launching a scene records into its empty slots on armed tracks.
+- **A fix.** When one press starts several Session takes from a stopped transport, they now all start where the transport stood. The engine starts the transport with the first take, so the others used to wait for the launch grid, and a MIDI take could miss the first notes.
+- **Measured.** The Session record suite, the preferences suite and the UI suite.
+
+See [the contract](research/session-recording-contract.md#start-recording-on-scene-launch).
+

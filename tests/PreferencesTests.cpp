@@ -35,6 +35,8 @@ int runPreferencesTests (const juce::File& artifacts)
         Session::Preferences chosen;
         chosen.exclusiveArm = false; chosen.defaultWarpMode = Session::WarpMode::beats; chosen.autoWarpLongSamples = true;
         chosen.defaultLaunchMode = Session::LaunchMode::gate; chosen.defaultLaunchQuantisation = Session::ClipQuantisation::bar;
+        chosen.startRecordingOnSceneLaunch = true;
+        check (! Session::Preferences {}.startRecordingOnSceneLaunch, "Start Recording on Scene Launch is off by default, as in the reference");
         {
             Session s (false);
             file = s.preferencesFile();
@@ -89,6 +91,9 @@ int runPreferencesTests (const juce::File& artifacts)
         auto [scrolling, scrollingProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" followBehaviour=\"1\"/>");
         expected = {}; expected.scrollFollow = true;
         check (scrolling == expected && scrollingProblem.isEmpty(), "Follow Behavior Scroll is read back");
+        auto [sceneRecording, sceneRecordingProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" startRecordingOnSceneLaunch=\"1\"/>");
+        expected = {}; expected.startRecordingOnSceneLaunch = true;
+        check (sceneRecording == expected && sceneRecordingProblem.isEmpty(), "Start Recording on Scene Launch is read back");
         auto [newer, newerProblem] = reopen ("<HALFTRACKPREFERENCES version=\"7\" exclusiveArm=\"0\" futureSetting=\"42\"/>");
         expected = {}; expected.exclusiveArm = false;
         check (newer == expected && newerProblem.isEmpty(), "a newer file's unknown settings are ignored");

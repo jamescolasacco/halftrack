@@ -884,6 +884,9 @@ public:
         // Follow Behavior, after the reference's: Page turns the view a page as the play head leaves
         // it; Scroll keeps the play head in the view's middle and scrolls continuously.
         bool scrollFollow = false;
+        // Start Recording on Scene Launch, after the reference's (off by default): launching a scene
+        // also records into its empty slots on armed tracks.
+        bool startRecordingOnSceneLaunch = false;
         bool operator== (const Preferences&) const = default;
     };
     // The audio device's latency as it reports it, with Driver Error Compensation. Recordings are placed
