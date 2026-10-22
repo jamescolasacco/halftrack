@@ -649,3 +649,18 @@ Under heavy machine load (load average about 16, with four suites at once), the 
 Still open:
 - The gap seen once under real load was not reproduced again under that load. Generating it would have slowed another session's test runs on the same machine. Its block-aligned shape matches the silenced callbacks, and no other path in the engine was found to drop a block the driver delivered.
 - What the reference does at 100% CPU is unmeasured. It shows an overload indicator, but whether it ever skips input or rendering was not checked. Simplest default: never skip; a callback that runs late shows up as the driver's own dropout.
+
+### Moving and duplicating Session clips
+
+The reference's manual says clips move around the Session grid by drag-and-drop and that the Edit menu's commands work on them. It does not say:
+
+- what Duplicate does when the slot below holds a clip;
+- whether a playing clip dragged elsewhere keeps playing;
+- which modifier copies a drag.
+
+Defaults:
+
+- Duplicate inserts a new scene below for the copy rather than replacing the clip there. A forum report says duplicating from the last scene makes a new scene.
+- A clip moved within its track keeps playing, its slot changing places with the destination's; moved to another track it stops.
+- Option (Mac) or Ctrl (Windows, Linux) copies, as in the reference's Arrangement.
+- Dropping or pasting onto a clip replaces it.

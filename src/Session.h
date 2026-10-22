@@ -594,6 +594,18 @@ public:
     juce::Result importAudioToSlot (const juce::File&, int trackIndex, int sceneIndex);
     juce::Result addMidiClipToSlot (const juce::String& trackId, int sceneIndex, double lengthBeats = 4);
     juce::Result clearSlot (int trackIndex, int sceneIndex);
+    // Moving and copying Session clips, after the reference's grid. A clip goes to a slot of a track
+    // of its kind (MIDI or audio), replacing any clip there. Moved within its track a clip keeps
+    // playing; moved to another track it stops. A copy has new identities. Each is one undo step.
+    juce::Result moveSlotClip (int fromTrack, int fromScene, int toTrack, int toScene, bool copy = false);
+    // Duplicate: a copy in the slot below, or in a new scene inserted below when that slot is taken
+    // or the clip is in the last scene. `duplicateScene` is where it went.
+    juce::Result duplicateSlotClip (int trackIndex, int sceneIndex, int& duplicateScene);
+    // The Session clipboard: a slot's clip, its audio kept in a copy of its own, so it pastes into
+    // this or another project. A copy here replaces the Arrangement clipboard's, and theirs this.
+    juce::Result copySlotClip (int trackIndex, int sceneIndex, bool cut = false);
+    bool hasSlotClipboard() const;
+    juce::Result pasteSlotClip (int trackIndex, int sceneIndex);
     juce::Result launchSlot (int trackIndex, int sceneIndex);
     // A launch button press/release applying the slot clip's launch mode.
     juce::Result pressSlot (int trackIndex, int sceneIndex);

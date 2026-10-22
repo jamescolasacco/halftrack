@@ -652,6 +652,19 @@ The existing playing/queued handles belong to the original clips and are not tra
 Generated native-driver tests check source sound before and after copying, copied audio/MIDI playback, retained muted clips, row ordering, fresh identities, independent note edits, one-step history, portable reopening, source deletion, empty rows and ceiling rejection. The test sources are registered before any operation that can prepare audio readers, so accelerated callbacks do not depend on asynchronous disk-cache timing.
 
 
+## Session clip moving and copying
+
+`moveSlotClip(fromTrack, fromScene, toTrack, toScene, copy)` moves or copies a slot's clip to a slot on a track of its kind, replacing any clip there, as one undo step.
+
+- **Within its track.** A move swaps the two slots' places in the track's ClipSlotList. The engine names a launched clip's graph node by its slot's ID and carries its playback state across rebuilds, so a playing clip plays on unchanged.
+- **Elsewhere.** Other moves and all copies insert a ClipCopy with fresh clip and note IDs. A move then removes the source.
+
+`duplicateSlotClip` copies into the empty slot below, or inserts a scene below for the copy.
+
+The Session clipboard (`copySlotClip`, `pasteSlotClip`) holds a clip state. For an audio clip it also holds a temporary copy of the audio, which a paste collects into the project's assets. Copying to it clears the Arrangement clip and range clipboards, and their copies clear it.
+
+`captureAndInsertScene` uses the same slot swap: each playing clip's slot changes places with its copy's in the inserted scene, so the new scene plays on at once.
+
 ## Session scene ordering
 
 `moveScene(stableSceneId, destinationIndex)` moves an existing scene to a zero-based final row through the engine SceneList. Every track's corresponding slot moves with it, including empty and return rows. Scene/slot/clip/note identities, contents and active launch handles remain unchanged. There is one native undo step; moving to the current row is a clean no-op. Missing/ambiguous IDs, out-of-range destinations, incomplete rows, recording and export reject before mutation.

@@ -3216,6 +3216,13 @@ private:
             g.setColour (ink.withAlpha (0.85f)); g.fillRect (stopAll.getX() + 7, stopAll.getCentreY() - 4, 8, 8);
             g.setFont (font (10.0f)); g.drawText ("Stop All Clips", stopAll.withTrimmedLeft (22), juce::Justification::centredLeft, true);
             if (owner.state.scenes.empty()) { g.setColour (muted); g.setFont (font (13.0f)); g.drawText ("Insert a scene to begin launching clips.", grid.reduced (20), juce::Justification::centred); }
+            // A dragged clip's destination.
+            if (dragging && dropCell.first >= 0)
+            {
+                g.saveState(); g.reduceClipRegion (grid);
+                g.setColour (ink); g.drawRect (slotBounds (dropCell.first, dropCell.second).reduced (1), 2);
+                g.restoreState();
+            }
         }
         // A group column: header with disclosure triangle, slots that launch the members' row, and a stop button.
         void paintGroupColumn (juce::Graphics& g, int index, int x)
@@ -3320,6 +3327,7 @@ private:
                     // Gate and Repeat clips follow the button, so the release is sent on mouse up.
                     pressedCell = cell; owner.report (owner.session.pressSlot (cell.first, cell.second)); owner.refresh();
                 }
+                else if (const auto* slot = slotAt (cell.first, cell.second); slot != nullptr && slot->hasClip) dragFrom = cell;
                 repaint(); return;
             }
             if (stopAllBounds().contains (event.getPosition())) { owner.report (owner.session.stopAllLauncherClips()); owner.refresh(); return; }
@@ -3347,7 +3355,40 @@ private:
                 repaint();
             }
         }
-        void mouseUp (const juce::MouseEvent&) override { releasePressed (pressedCell); }
+        void mouseDrag (const juce::MouseEvent& event) override
+        {
+            if (dragFrom.first < 0 || (! dragging && event.getDistanceFromDragStart() < 4)) return;
+            dragging = true;
+            dropCell = cellAt (event.getPosition());
+            setMouseCursor (copyDrag (event.mods) ? juce::MouseCursor::CopyingCursor : juce::MouseCursor::DraggingHandCursor);
+            repaint();
+        }
+        void mouseUp (const juce::MouseEvent& event) override
+        {
+            releasePressed (pressedCell);
+            const auto from = std::exchange (dragFrom, { -1, -1 });
+            if (! std::exchange (dragging, false)) return;
+            setMouseCursor (juce::MouseCursor::NormalCursor);
+            const auto to = std::exchange (dropCell, { -1, -1 });
+            if (to.first >= 0 && to != from) dropClip (from, to, copyDrag (event.mods));
+            repaint();
+        }
+        // Dropping a dragged clip on a slot moves it there, or copies it with Option (Mac) or Ctrl held.
+        static bool copyDrag (juce::ModifierKeys mods)
+        {
+           #if JUCE_MAC
+            return mods.isAltDown();
+           #else
+            return mods.isCtrlDown();
+           #endif
+        }
+        void dropClip (std::pair<int, int> from, std::pair<int, int> to, bool copy)
+        {
+            const auto result = owner.session.moveSlotClip (from.first, from.second, to.first, to.second, copy);
+            owner.report (result);
+            owner.refresh();
+            if (result.wasOk()) owner.selectLauncherSlot (to.first, to.second);
+        }
         void mouseDoubleClick (const juce::MouseEvent& event) override
         {
             const auto cell = cellAt (event.getPosition());
@@ -3382,6 +3423,8 @@ private:
                 }
                 owner.refresh(); return true;
             }
+            if (const auto mods = key.getModifiers(); mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown() && (code == 'C' || code == 'X' || code == 'V' || code == 'D'))
+                return owner.slotCommand (code == 'X' ? 84 : code == 'C' ? 85 : code == 'V' ? 86 : 87);
             if (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey || code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
             {
                 int track = owner.selectedTrack, scene = owner.selectedSceneIndex();
@@ -3416,6 +3459,9 @@ private:
         Impl& owner;
         // Launch buttons held by the mouse and by Enter, released into Gate and Repeat clips.
         std::pair<int, int> pressedCell { -1, -1 }, keyCell { -1, -1 };
+        // A clip dragged from its slot, and the slot it would drop on.
+        std::pair<int, int> dragFrom { -1, -1 }, dropCell { -1, -1 };
+        bool dragging = false;
         void releasePressed (std::pair<int, int>& cell)
         {
             if (cell.first < 0) return;
@@ -7490,6 +7536,23 @@ private:
         const auto* slot = selectedSlot(); selectedLauncherClipId = slot != nullptr && slot->hasClip ? slot->clip.id : juce::String();
         pianoRoll.sync(); launcher.repaint(); deviceChain.sync();
     }
+    // The selected slot's Cut (84), Copy (85), Paste (86) and Duplicate (87), as in the reference's
+    // Session View. A duplicate is selected where it went.
+    bool slotCommand (int command)
+    {
+        const auto scene = selectedSceneIndex();
+        if (currentTrack() == nullptr || scene < 0 || currentTrack()->isReturn) return false;
+        if (command == 84 || command == 85) report (session.copySlotClip (selectedTrack, scene, command == 84), command == 84 ? "Cut the clip." : "Copied the clip.");
+        if (command == 86) report (session.pasteSlotClip (selectedTrack, scene));
+        if (command == 87)
+        {
+            int to = -1;
+            const auto result = session.duplicateSlotClip (selectedTrack, scene, to);
+            report (result);
+            if (result.wasOk()) { refresh(); selectLauncherSlot (selectedTrack, to); return true; }
+        }
+        refresh(); selectLauncherSlot (selectedTrack, selectedSceneIndex()); return true;
+    }
     void clearSelectedSlot()
     {
         const auto scene = selectedSceneIndex(); if (currentTrack() == nullptr || scene < 0 || currentTrack()->isReturn) return;
@@ -8333,6 +8396,11 @@ private:
             popup.addItem(57,"Move Selected Scene Up",selectedSceneIndex()>0&&!state.recording);
             popup.addItem(58,"Move Selected Scene Down",sceneSelected&&selectedSceneIndex()+1<(int)state.scenes.size()&&!state.recording);
             popup.addItem (59, "Selected Clip Follow Action...", selectedSlot() && selectedSlot()->hasClip && !state.recording);
+            popup.addSeparator();
+            const bool clip = selectedSlot() != nullptr && selectedSlot()->hasClip && ! state.recording;
+            popup.addItem (84, "Cut Clip", clip); popup.addItem (85, "Copy Clip", clip);
+            popup.addItem (86, "Paste Clip", selectedSlot() != nullptr && session.hasSlotClipboard() && ! state.recording);
+            popup.addItem (87, "Duplicate Clip", clip);
             popup.addSeparator(); popup.addItem (53, "Launch Selected Scene", sceneSelected); popup.addItem (54, "Stop All Session Clips"); popup.addItem (55, "Return to Arrangement");
         }
         return popup;
@@ -8410,6 +8478,7 @@ private:
                 refresh(); break;
             }
             case 57: case 58: moveSceneFromUI(selectedSceneId,id==57?-1:1); break;
+            case 84: case 85: case 86: case 87: slotCommand (id); break;
             case 52: report (session.removeScene (selectedSceneIndex())); break;
             case 53: report (session.launchScene (selectedSceneIndex())); break;
             case 54: report (session.stopAllLauncherClips()); break;
@@ -12875,6 +12944,48 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (handleKey (juce::KeyPress ('I', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)) && state.scenes.size() == scenes
                        && status.contains ("No Session clips are playing"),
                    "Cmd/Ctrl+Shift+I captures the playing clips, and says when there are none");
+        }
+        {
+            // Session clips: dragged to another slot they move, with Option (Mac) or Ctrl held they
+            // copy; Cmd/Ctrl+C, X, V and D act on the selected slot.
+            session.stop(); refresh();
+            check (session.addMidiTrack ("Slot editing").wasOk() && state.scenes.size() >= 4, "a track for Session clip editing"); refresh();
+            const int t = (int) state.tracks.size() - 1;
+            check (session.addMidiClipToSlot (state.tracks[(size_t) t].id, 0, 4).wasOk(), "a clip in its first slot"); refresh();
+            const auto id = state.tracks[(size_t) t].slots[0].clip.id;
+            showSessionView(); selectLauncherSlot (t, 0); launcher.scrollSelectionIntoView(); refresh();
+            const auto drag = [&] (int from, int to, bool copy)
+            {
+               #if JUCE_MAC
+                const auto modifier = juce::ModifierKeys::altModifier;
+               #else
+                const auto modifier = juce::ModifierKeys::ctrlModifier;
+               #endif
+                const juce::ModifierKeys mods (juce::ModifierKeys::leftButtonModifier | (copy ? modifier : 0));
+                // Past the launch button, on the clip's name.
+                const auto down = launcher.launchPoint (t, from) + juce::Point<float> (40, 0), up = launcher.launchPoint (t, to) + juce::Point<float> (40, 0);
+                const auto now = juce::Time::getCurrentTime();
+                const auto event = [&] (juce::Point<float> at, bool dragged)
+                { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, mods, 1.0f, 0, 0, 0, 0, &launcher, &launcher, now, down, now, 1, dragged); };
+                launcher.mouseDown (event (down, false)); launcher.mouseDrag (event ((down + up) / 2, true)); launcher.mouseDrag (event (up, true)); launcher.mouseUp (event (up, true));
+                refresh();
+            };
+            const auto slots = [&] { return state.tracks[(size_t) t].slots; };
+            drag (0, 2, false);
+            check (! slots()[0].hasClip && slots()[2].hasClip && slots()[2].clip.id == id && selectedSceneIndex() == 2, "dragging a clip to another slot moves it there and selects it");
+            drag (2, 3, true);
+            check (slots()[2].clip.id == id && slots()[3].hasClip && slots()[3].clip.id != id, "with the copy modifier held it is copied");
+            selectLauncherSlot (t, 2);
+            check (launcher.keyPressed (commandKey ('C')) && session.hasSlotClipboard(), "Cmd/Ctrl+C copies the selected slot's clip");
+            selectLauncherSlot (t, 0);
+            check (launcher.keyPressed (commandKey ('V')) && slots()[0].hasClip && slots()[0].clip.id != id, "Cmd/Ctrl+V pastes it into the selected slot");
+            check (launcher.keyPressed (commandKey ('D')) && slots()[1].hasClip && selectedSceneIndex() == 1, "Cmd/Ctrl+D duplicates it into the slot below and selects the copy");
+            check (launcher.keyPressed (commandKey ('X')) && ! slots()[1].hasClip, "Cmd/Ctrl+X cuts it");
+            menuItemSelected (86, 4);
+            check (slots()[1].hasClip, "Session > Paste Clip pastes it back");
+            for (int step = 0; step < 8; ++step) session.undo();
+            refresh();
+            check ((int) state.tracks.size() == t, "eight undo steps remove the track");
         }
        #if JUCE_MAC
         {

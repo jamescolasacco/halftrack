@@ -1784,3 +1784,12 @@ Engine and UI areas.
 - **Measured.** MIDI clips with held notes from two scenes and an audio loop are captured. Their render matches the uninterrupted render exactly (`tests/SceneCaptureTests.cpp`).
 
 See [the contract](research/scene-capture-contract.md).
+
+## Moving and copying Session clips — 2026-10-22
+
+Engine and UI areas.
+
+- **Grid editing.** A Session clip drags to another slot of its kind, and Option/Ctrl-drag copies it. Cut, Copy, Paste and Duplicate are in the Session menu and on Cmd/Ctrl+X/C/V/D, each one undo step. Duplicate fills the slot below or inserts a scene for the copy. Audio on the clipboard keeps its own file and pastes into other projects. Session and Arrangement copies share one clipboard.
+- **Measured.** A playing clip moved within its track renders with 0.0 difference from the unmoved performance, its held note sounding on (`tests/SlotClipTests.cpp`).
+
+See [the contract](research/session-clip-editing-contract.md).

@@ -111,6 +111,7 @@ int runRecordingLatencyTests (const juce::File&);
 int runVideoTests (const juce::File&);
 int runExternalSyncTests (const juce::File&);
 int runSceneCaptureTests (const juce::File&);
+int runSlotClipTests (const juce::File&);
 int runTempoAnalysisEvaluation (const juce::File& library, const juce::File& report);
 int runPackTests (const juce::File&);
 int runMackieTests (const juce::File&);
@@ -428,6 +429,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-scene-capture");
             setApplicationReturnValue (runSceneCaptureTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-slot-clips"))
+        {
+            const int i = args.indexOf ("--self-test-slot-clips");
+            setApplicationReturnValue (runSlotClipTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-external-sync"))

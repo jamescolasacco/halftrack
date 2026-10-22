@@ -37,7 +37,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | ARR-010 | freeze |  |
 | ARR-011 | launcher, session-record |  |
 | ARR-012 | audio-clips, clip-activation, clip-loops |  |
-| SES-001 | clip-loops, launcher, scene-capture, ui |  |
+| SES-001 | clip-loops, launcher, scene-capture, slot-clips, ui |  |
 | SES-002 | launcher |  |
 | SES-003 | launch-modes |  |
 | SES-004 | follow-actions |  |
