@@ -1981,3 +1981,13 @@ Engine, UI and root areas.
 - **A fix.** A bar of count-in now lasts the meter's bar in crotchets. In 6/8 it was two bars, and 7/8 could not be expressed. An engine patch (`cmake/PatchCountIn.cmake`) adds the four-bar mode and the bar length.
 - **Measured.** The metronome suite and the UI suite.
 
+## Metronome sounds — 2026-10-22
+
+Engine and UI areas.
+
+- **Sound.** The metronome's menu offers Classic (the default), Click and Wood, as the reference's does, kept with the preferences. The ticks are Halftrack's own, synthesised offline (`src/MetronomeSounds.cpp`) to the character of the reference's samples. The Session writes them beside the preferences and points the engine's click track at them.
+- **The menu** now has the reference's Count-In and Sound sections, and "Enable Only While Recording".
+- **Measured.** The metronome suite (each tick's level, pitch, silence at its ends and repeatability, and the files the click track plays) and the UI suite.
+
+See [the contract](research/metronome-contract.md).
+

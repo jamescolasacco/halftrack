@@ -17,7 +17,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | REC-002 | transport, ui |  |
 | REC-003 | session, tempo, tempo-map, time-signature |  |
 | REC-004 | punch, take-lanes, ui |  |
-| REC-005 | metronome |  |
+| REC-005 | metronome, ui |  |
 | REC-006 | audio-from, multitrack-recording |  |
 | REC-007 | recording-format, ui |  |
 | REC-008 | auto-arm, computer-keyboard, ui |  |

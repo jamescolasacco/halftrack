@@ -1,4 +1,5 @@
 #include "Session.h"
+#include "MetronomeSounds.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <tracktion_graph/tracktion_graph.h>
 #include <cmath>
@@ -134,6 +135,54 @@ void persistence(const juce::File& root)
         check(session.loadProject(bad).failed()&&session.snapshot().metronome==settings&&session.canRedo(),"invalid click project preserves active settings and redo");
     }
 }
+// The metronome's own sounds: each tick is deterministic, peaks at its designed level, rings at its
+// fundamental, starts and ends in silence, and the accent is higher; choosing one in the
+// preferences points the engine's click track at its ticks.
+double goertzel(const juce::AudioBuffer<float>& x,double hz,double rate)
+{
+    const double w=juce::MathConstants<double>::twoPi*hz/rate;double re=0,im=0;
+    for(int n=0;n<x.getNumSamples();++n){re+=x.getSample(0,n)*std::cos(w*n);im-=x.getSample(0,n)*std::sin(w*n);}
+    return std::sqrt(re*re+im*im);
+}
+void sounds(const juce::File& root)
+{
+    juce::ignoreUnused(root);
+    for(int i=0;i<Session::metronomeSoundCount;++i)
+    {
+        const auto sound=static_cast<Session::MetronomeSound>(i);const auto name=Session::metronomeSoundName(sound);
+        for(const bool accent:{false,true})
+        {
+            const auto a=metronome::tick(sound,accent,48000),b=metronome::tick(sound,accent,48000);
+            bool same=a.getNumSamples()==b.getNumSamples();for(int n=0;same&&n<a.getNumSamples();++n)same=a.getSample(0,n)==b.getSample(0,n);
+            const auto hz=metronome::tickFrequency(sound,accent);
+            check(same && std::abs(a.getMagnitude(0,a.getNumSamples())-metronome::tickPeak(sound,accent))<1e-6f && a.getSample(0,0)==0 && a.getSample(0,a.getNumSamples()-1)==0,
+                  name+(accent?" accent":"")+" is the same every time, peaks at its level, and starts and ends in silence");
+            check(goertzel(a,hz,48000)>3*goertzel(a,hz*.6,48000) && goertzel(a,hz,48000)>3*goertzel(a,hz*1.7,48000),name+(accent?" accent":"")+" rings at "+juce::String(hz,0)+" Hz");
+        }
+        check(metronome::tickFrequency(sound,true)>metronome::tickFrequency(sound,false),name+"'s accent is higher than its plain tick");
+    }
+    Session s(false);
+    te::Engine& engine=dynamic_cast<te::DeviceManager::TracktionEngineAudioDeviceManager&>(s.audioDeviceManager()).engine;
+    check(s.preferences().metronomeSound==Session::MetronomeSound::classic && engine.getPropertyStorage().getProperty(te::SettingID::clickTrackSampleBig).toString().contains("Halftrack Classic Accent"),
+          "the metronome plays Classic at first, as the reference's does");
+    auto p=s.preferences();p.metronomeSound=Session::MetronomeSound::wood;ok(s.setPreferences(p),"choose Wood");
+    const juce::File accent(engine.getPropertyStorage().getProperty(te::SettingID::clickTrackSampleBig).toString()),plain(engine.getPropertyStorage().getProperty(te::SettingID::clickTrackSampleSmall).toString());
+    juce::AudioFormatManager formats;formats.registerBasicFormats();
+    for(const auto& [file,isAccent]:{std::pair{accent,true},std::pair{plain,false}})
+    {
+        std::unique_ptr<juce::AudioFormatReader> r(formats.createReaderFor(file));
+        check(r!=nullptr && file.getFileName().contains("Wood"),"the click track plays "+file.getFileName());
+        juce::AudioBuffer<float> x(1,(int)r->lengthInSamples);r->read(&x,0,x.getNumSamples(),0,true,false);
+        const auto expected=metronome::tick(Session::MetronomeSound::wood,isAccent,48000);double worst=x.getNumSamples()==expected.getNumSamples()?0:1;
+        for(int n=0;worst<1&&n<x.getNumSamples();++n)worst=std::max(worst,(double)std::abs(x.getSample(0,n)-expected.getSample(0,n)));
+        check(worst<1e-6,"its samples are the Wood tick's (error "+juce::String(worst,8)+")");
+    }
+    {
+        Session reopened(false);
+        check(reopened.preferences().metronomeSound==Session::MetronomeSound::wood,"the sound is kept with the preferences");
+    }
+    p.metronomeSound=Session::MetronomeSound::classic;ok(s.setPreferences(p),"back to Classic");
+}
 void countIn(const juce::File& root)
 {
     for(double start:{0.0,6.0}) for(int bars:{0,1,2,4})
@@ -197,7 +246,7 @@ int runMetronomeTests(const juce::File& artifacts)
         const auto root=artifacts.getChildFile("metronome-"+juce::Uuid().toString());ok(root.createDirectory(),"create isolated metronome fixtures");
         for(double seconds:{-2.25,-1.0,-.25,0.0,.25,1.0,2.25})
             check(tracktion::graph::timeToSample(seconds,48000)==std::llround(seconds*48000),"graph sample conversion rounds signed time symmetrically");
-        playback(root);persistence(root);countIn(root);exportExcludesClick(root);
+        playback(root);persistence(root);countIn(root);exportExcludesClick(root);sounds(root);
         std::cout<<"Metronome tests passed: "<<root.getFullPathName()<<std::endl;return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL metronome: "<<e.what()<<std::endl;return 1;}

@@ -14,6 +14,7 @@
 #include "MackieControl.h"
 #include "PluginBinary.h"
 #include "TempoDetection.h"
+#include "MetronomeSounds.h"
 #include "VideoMedia.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
@@ -3279,12 +3280,36 @@ struct Session::Impl
     }
     String prefsProblem;
     File prefsFile() const { return engine.getPropertyStorage().getAppPrefsFolder().getChildFile ("Halftrack Preferences.xml"); }
+    // The metronome plays the chosen sound: its ticks are written beside the preferences and the
+    // engine's click track is pointed at them.
+    void applyMetronomeSound()
+    {
+        const auto name = Session::metronomeSoundName (prefs.metronomeSound);
+        const auto folder = engine.getPropertyStorage().getAppPrefsFolder().getChildFile ("Metronome");
+        if (folder.createDirectory().failed()) return;
+        for (const bool accent : { true, false })
+        {
+            const auto file = folder.getChildFile ("Halftrack " + name + (accent ? " Accent" : "") + ".wav");
+            const auto audio = metronome::tick (prefs.metronomeSound, accent, 48000);
+            juce::TemporaryFile temporary (file);
+            {
+                std::unique_ptr<juce::OutputStream> stream (temporary.getFile().createOutputStream());
+                juce::WavAudioFormat wav;
+                auto writer = stream != nullptr ? wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (1).withBitsPerSample (24)) : nullptr;
+                if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples())) continue;
+            }
+            if (temporary.overwriteTargetFileWithTemporary())
+                engine.getPropertyStorage().setProperty (accent ? te::SettingID::clickTrackSampleBig : te::SettingID::clickTrackSampleSmall, file.getFullPathName());
+        }
+        te::TransportControl::restartAllTransports (engine, false); // The click track reloads its sounds.
+    }
     static bool validPreferences (const Preferences& p)
     {
         return juce::isPositiveAndBelow ((int) p.defaultWarpMode, 8) && p.defaultWarpMode != WarpMode::off
             && juce::isPositiveAndBelow ((int) p.defaultLaunchMode, 4) && juce::isPositiveAndBelow ((int) p.defaultLaunchQuantisation, 11)
             && juce::isPositiveAndBelow (p.theme, Preferences::themeCount) && p.zoomPercent >= 50 && p.zoomPercent <= 200 && p.zoomPercent % 25 == 0
-            && std::isfinite (p.driverErrorCompensationMs) && std::abs (p.driverErrorCompensationMs) <= 200;
+            && std::isfinite (p.driverErrorCompensationMs) && std::abs (p.driverErrorCompensationMs) <= 200
+            && juce::isPositiveAndBelow ((int) p.metronomeSound, Session::metronomeSoundCount);
     }
     void loadPreferences()
     {
@@ -3314,9 +3339,10 @@ struct Session::Impl
             const int audioUnits = number ("useAudioUnits", 1, 2), vst3System = number ("useVst3SystemFolders", 1, 2), vst3Custom = number ("useVst3CustomFolder", 0, 2);
             read.useAudioUnits = audioUnits == 1; read.useVst3SystemFolders = vst3System == 1; read.useVst3CustomFolder = vst3Custom == 1;
             read.vst3CustomFolder = xml->getStringAttribute ("vst3CustomFolder");
-            const int edgeFades = number ("createFadesOnClipEdges", 1, 2);
+            const int edgeFades = number ("createFadesOnClipEdges", 1, 2), sound = number ("metronomeSound", 0, Session::metronomeSoundCount);
             read.createFadesOnClipEdges = edgeFades == 1;
-            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && validPreferences (read);
+            read.metronomeSound = static_cast<Session::MetronomeSound> (juce::jmax (0, sound));
+            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && validPreferences (read);
         }
         if (valid) { prefs = read; fadesOnClipEdges = prefs.createFadesOnClipEdges; return; }
         // Set an unreadable file aside rather than lose it, and keep the defaults.
@@ -3339,6 +3365,7 @@ struct Session::Impl
         xml.setAttribute ("useAudioUnits", next.useAudioUnits ? 1 : 0); xml.setAttribute ("useVst3SystemFolders", next.useVst3SystemFolders ? 1 : 0);
         xml.setAttribute ("useVst3CustomFolder", next.useVst3CustomFolder ? 1 : 0); xml.setAttribute ("vst3CustomFolder", next.vst3CustomFolder);
         xml.setAttribute ("createFadesOnClipEdges", next.createFadesOnClipEdges ? 1 : 0);
+        xml.setAttribute ("metronomeSound", (int) next.metronomeSound);
         const auto file = prefsFile();
         if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
         juce::TemporaryFile temporary (file);
@@ -4932,7 +4959,7 @@ struct Session::Impl
 Session::Session (bool enableAudioDevices, std::unique_ptr<juce::AudioIODeviceType> customDeviceType, juce::String midiPortPrefix)
     : impl (std::make_unique<Impl> (*this, enableAudioDevices, std::move (customDeviceType), midiPortPrefix))
 {
-    warp::registerStretchers(); impl->loadPreferences();
+    warp::registerStretchers(); impl->loadPreferences(); impl->applyMetronomeSound();
     if (enableAudioDevices) impl->ensureComputerKeyboard();
     else if (midiPortPrefix.isNotEmpty()) impl->engine.getDeviceManager().rescanMidiDeviceListSynchronously();
     newProject();
@@ -5692,10 +5719,16 @@ Result Session::setPreferences (const Preferences& next)
 {
     if (! Impl::validPreferences (next)) return Result::fail ("Those preferences are out of range.");
     if (next == impl->prefs && impl->prefsFile().existsAsFile()) return Result::ok();
+    const bool sound = next.metronomeSound != impl->prefs.metronomeSound;
     if (auto r = impl->savePreferences (next); r.failed()) return r;
+    if (sound) impl->applyMetronomeSound();
     impl->changed(); return Result::ok();
 }
 Result Session::resetPreferences() { return setPreferences ({}); }
+juce::String Session::metronomeSoundName (MetronomeSound sound)
+{
+    return sound == MetronomeSound::click ? "Click" : sound == MetronomeSound::wood ? "Wood" : "Classic";
+}
 Result Session::setComputerKeyboardEnabled (bool on)
 {
     if (on && impl->computerKeyboard == nullptr) impl->ensureComputerKeyboard();

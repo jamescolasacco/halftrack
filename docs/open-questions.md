@@ -726,3 +726,9 @@ Halftrack's default fades follow a static reading of the reference's code ([cont
 - **Loop wraps.** Warped, looped clips do not overlap their loop wrap by min(half the loop, 4 ms) as the reference's do.
 - **Sample alignment.** The reference evaluates its curve at points at most 32 samples apart and interpolates linearly, and rounds edges to 1/3843840 beat. Halftrack evaluates every sample. A split crossfade is exact either way, but single edges may differ from the reference's by up to about 0.02 of full scale. Unmeasured.
 
+### Metronome
+
+- **The sounds.** The reference's Classic, Click and Wood are its own samples, so Halftrack synthesises its own ticks to their character; they are not the same sounds.
+- **Count-in storage.** The count-in is kept with the project. The reference keeps it in its Metronome device, apparently outside the Set; whether it is global there is being researched.
+- **Rhythm.** Rhythm divisions are not implemented yet, so Halftrack ticks every crotchet, where the reference's Auto ticks on the meter's denominator.
+

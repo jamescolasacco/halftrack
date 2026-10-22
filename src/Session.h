@@ -503,6 +503,10 @@ public:
         double beat = 0, bpm = 120;
         bool operator== (const TempoPoint&) const = default;
     };
+    // The metronome's sound, after the reference's Sound choices (Classic by default).
+    enum class MetronomeSound { classic, click, wood };
+    static constexpr int metronomeSoundCount = 3;
+    static juce::String metronomeSoundName (MetronomeSound);
     struct MetronomeSettings
     {
         bool enabled = false, accent = true, recordingOnly = false;
@@ -899,6 +903,8 @@ public:
         // Create Fades on Clip Edges, after the reference's (on by default): new audio clips, and the
         // edges a split makes, get default fades.
         bool createFadesOnClipEdges = true;
+        // The metronome's sound, kept with the preferences as the reference keeps its metronome's.
+        MetronomeSound metronomeSound = MetronomeSound::classic;
         juce::String vst3CustomFolder;
         bool operator== (const Preferences&) const = default;
     };
