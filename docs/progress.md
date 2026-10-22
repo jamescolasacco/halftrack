@@ -1562,3 +1562,13 @@ UI change in `src/MainComponent.cpp` and `src/NativeEffectEditor.cpp`, with docu
 - **Audit.** The UI control audit checks the titles in three views.
 
 See [the contract](research/control-audit-contract.md#screen-readers).
+
+## Packaging and version reporting — 2026-10-21
+
+Root change in `CMakeLists.txt`, `cmake/WriteBuildInfo.cmake` (new), `src/BuildInfo.*` (new), `src/Main.cpp`, `scripts/verify_package.py` (new), `tests/test_verify_package.py` (new) and the CI workflow. The UI change is in `src/MainComponent.cpp`, with documentation.
+
+- **Version.** The CMake project version names the bundle, the application, `--version` and About Halftrack. Each build records its source commit, marked `-modified` when tracked files had uncommitted changes.
+- **About Halftrack.** It sits in the application menu on a Mac and in the Help menu elsewhere. It shows the version line as selectable text, the license, and where settings live.
+- **Package check.** CI installs each package into a fresh folder, checks its licenses, source and versions against the commit, runs the installed `--version`, then removes it.
+
+See [the contract](research/packaging-contract.md).

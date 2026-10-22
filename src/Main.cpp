@@ -1,3 +1,4 @@
+#include "BuildInfo.h"
 #include "MainComponent.h"
 #include "Session.h"
 #include <juce_gui_extra/juce_gui_extra.h>
@@ -113,7 +114,7 @@ class Application final : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "Halftrack"; }
-    const juce::String getApplicationVersion() override { return "0.1.0"; }
+    const juce::String getApplicationVersion() override { return halftrack::buildinfo::version(); }
     // The isolated plug-in scanner must be allowed to start a child instance.
     bool moreThanOneInstanceAllowed() override { return true; }
 
@@ -133,6 +134,13 @@ public:
         auto args = juce::StringArray::fromTokens (commandLine, true);
         args.removeEmptyStrings();
         for (auto& arg : args) arg = arg.unquoted();
+        // Prints what this build is and quits, without opening audio devices or a window.
+        if (args.contains ("--version"))
+        {
+            std::cout << halftrack::buildinfo::summary() << std::endl;
+            quit();
+            return;
+        }
         #if HALFTRACK_TESTS_ENABLED
         #if JUCE_MAC
         if (args.contains ("--self-test-au"))

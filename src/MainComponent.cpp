@@ -4,6 +4,8 @@
 #include "BrowserIndex.h"
 #include "ComputerKeyboard.h"
 #include "ArrangementAutomation.h"
+#include "BinaryData.h"
+#include "BuildInfo.h"
 #include "Collections.h"
 #include "NativeEffects.h"
 #include "RackEditor.h"
@@ -269,7 +271,9 @@ public:
         envelope.snapBeat = [this] (double beat) { return beatsAt (snapSeconds (secondsAt (beat))); };
         addAndMakeVisible (menu);
        #if JUCE_MAC
-        juce::MenuBarModel::setMacMainMenu (this);
+        // About Halftrack sits in the application menu, as on other Mac applications.
+        juce::PopupMenu appleItems; appleItems.addItem (aboutItem, "About Halftrack");
+        juce::MenuBarModel::setMacMainMenu (this, &appleItems);
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
@@ -7473,7 +7477,12 @@ private:
     void scrollBarMoved (juce::ScrollBar*, double start) override
     { if (state.playing) setFollow (false); viewStart = start; canvas.repaint(); ruler.repaint(); }
 
+   #if JUCE_MAC
     juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Create", "View", "Session" }; }
+   #else
+    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Create", "View", "Session", "Help" }; }
+   #endif
+    static constexpr int aboutItem = 91;
     juce::PopupMenu getMenuForIndex (int index, const juce::String&) override
     {
         juce::PopupMenu popup;
@@ -7527,6 +7536,7 @@ private:
             const bool canZoom = ! showSession || showPiano;
             popup.addItem (40, showPiano ? "Fit Piano Roll" : "Fit Arrangement", canZoom); popup.addItem (41, "Zoom In", canZoom); popup.addItem (42, "Zoom Out", canZoom);
         }
+        else if (index == 5) popup.addItem (aboutItem, "About Halftrack");
         else
         {
             const bool sceneSelected = selectedSceneIndex() >= 0;
@@ -7568,6 +7578,7 @@ private:
             case 48: toggleTakeLanes(); break;
             case 49: setAutomationMode (! automationMode); break;
             case 90: showInfo = ! showInfo; resized(); break;
+            case aboutItem: showAbout(); break;
             case 20: session.undo(); break;
             case 21: session.redo(); break;
             case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); break;
@@ -8368,6 +8379,41 @@ private:
         juce::TextButton reset { "Reset to Defaults" };
     };
     void showPreferences() { showDialog ("Halftrack - Preferences", std::make_unique<PreferencesPanel> (*this), 440, 300); }
+    // What this copy of Halftrack is: its version, source commit and platform (selectable, to paste
+    // into a report), its license, and where it keeps settings and the User Library.
+    class AboutPanel final : public juce::Component
+    {
+    public:
+        explicit AboutPanel (const juce::File& userLibrary)
+        {
+            mark = juce::Drawable::createFromImageData (BinaryData::halftrackmark_svg, BinaryData::halftrackmark_svgSize);
+            for (auto* c : std::initializer_list<juce::Component*> { &name, &version, &license, &storage }) addAndMakeVisible (c);
+            name.setText ("Halftrack", juce::dontSendNotification); name.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+            version.setName ("Version"); version.setTitle ("Version"); version.setReadOnly (true); version.setCaretVisible (false);
+            version.setText (buildinfo::summary(), false);
+            version.setColour (juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack); version.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
+            license.setName ("License"); license.setColour (juce::Label::textColourId, muted); license.setJustificationType (juce::Justification::topLeft);
+            license.setText ("Free software under the GNU Affero General Public License, version 3 only. Built with JUCE 8 (AGPLv3) and Tracktion Engine (GPLv3); "
+                             "the licenses and corresponding source come with each package.", juce::dontSendNotification);
+            storage.setName ("Storage"); storage.setColour (juce::Label::textColourId, muted); storage.setJustificationType (juce::Justification::topLeft);
+            storage.setText ("Settings: " + juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("Halftrack").getFullPathName()
+                             + (userLibrary != juce::File() ? "\nUser Library: " + userLibrary.getFullPathName() : juce::String()), juce::dontSendNotification);
+        }
+        void paint (juce::Graphics& g) override
+        { if (mark) mark->drawWithin (g, getLocalBounds().reduced (16).removeFromTop (72).removeFromLeft (72).toFloat(), juce::RectanglePlacement::centred, 1.0f); }
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced (16);
+            auto top = area.removeFromTop (72); top.removeFromLeft (84);
+            name.setBounds (top.removeFromTop (34)); version.setBounds (top.removeFromTop (28));
+            area.removeFromTop (12); license.setBounds (area.removeFromTop (52)); area.removeFromTop (6); storage.setBounds (area.removeFromTop (52));
+        }
+    private:
+        std::unique_ptr<juce::Drawable> mark;
+        juce::Label name, license, storage;
+        juce::TextEditor version;
+    };
+    void showAbout() { showDialog ("About Halftrack", std::make_unique<AboutPanel> (userLibrary), 480, 240); }
     void showPlugins()
     {
         auto list = std::make_unique<juce::PluginListComponent> (session.pluginFormats(), session.knownPlugins(), session.pluginScanDeadMansFile(), nullptr, false);
@@ -11230,6 +11276,44 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         auto* reset = dynamic_cast<juce::Button*> (findNamed (panel, "Reset preferences"));
         check (reset != nullptr, "the panel offers a reset"); reset->onClick();
         check (session.preferences() == Session::Preferences {} && exclusive->getToggleState(), "reset restores the defaults");
+    }
+    {
+        // About Halftrack: in the application menu on a Mac and the Help menu elsewhere, it names
+        // this build's version, commit and platform in selectable text, its license and where
+        // settings live.
+       #if JUCE_MAC
+        const auto* appleItems = juce::MenuBarModel::getMacExtraAppleItemsMenu();
+        check (appleItems != nullptr, "the application menu has extra items");
+        juce::PopupMenu::MenuItemIterator items (*appleItems);
+       #else
+        const auto help = getMenuForIndex (getMenuBarNames().indexOf ("Help"), "Help");
+        juce::PopupMenu::MenuItemIterator items (help);
+       #endif
+        bool listed = false;
+        while (items.next()) listed = listed || (items.getItem().itemID == aboutItem && items.getItem().text == "About Halftrack");
+        check (listed, "About Halftrack is in the menu");
+        check (juce::JUCEApplicationBase::getInstance() == nullptr || juce::JUCEApplicationBase::getInstance()->getApplicationVersion() == buildinfo::version(),
+               "the application reports the build's version");
+        check (buildinfo::version().matchesWildcard ("*.*.*", false) && buildinfo::commit().isNotEmpty() && buildinfo::platform().isNotEmpty(),
+               "the build names its version, commit and platform (" + buildinfo::summary() + ")");
+        AboutPanel about (userLibrary); about.setSize (480, 240);
+        auto* version = dynamic_cast<juce::TextEditor*> (findNamed (about, "Version"));
+        auto* license = dynamic_cast<juce::Label*> (findNamed (about, "License"));
+        auto* storage = dynamic_cast<juce::Label*> (findNamed (about, "Storage"));
+        check (version != nullptr && version->getText() == buildinfo::summary() && version->isReadOnly(), "the About panel shows the version line, read-only so it can be copied");
+        check (license != nullptr && license->getText().contains ("Affero General Public License, version 3 only"), "it states the license");
+        check (storage != nullptr && storage->getText().contains ("Settings: ") && about.getLocalBounds().contains (storage->getBounds()), "and where settings are kept");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                about.setLookAndFeel (&theme);
+                juce::Image image (juce::Image::ARGB, about.getWidth(), about.getHeight(), true);
+                { juce::Graphics g (image); g.fillAll (panel); about.paintEntireComponent (g, true); }
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("about.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk() && png.writeImageToStream (image, *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                about.setLookAndFeel (nullptr);
+            }
     }
     {
         // Audio & MIDI Setup lays out its recording and input settings inside the dialog.

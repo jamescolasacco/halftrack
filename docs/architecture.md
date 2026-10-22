@@ -227,6 +227,8 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 ## Browser index
 
+`buildinfo` (in `src/BuildInfo.*`) reports the CMake project version and the source commit that `cmake/WriteBuildInfo.cmake` writes to a generated header at each build. `--version` and About Halftrack show them. See the [packaging contract](research/packaging-contract.md).
+
 `BrowserIndex` (in `src/BrowserIndex.*`, independent of the engine) indexes a folder tree on a detached worker that owns only standard-library data and a shared `Scan` record, so a blocked filesystem call can outlive the browser. A global count limits outstanding scans to four. The UI starts it with each folder listing, polls its status from the window timer, and searches it on the message thread under the scan's mutex. See the [contract](research/browser-index-contract.md).
 
 ## Hosted instruments

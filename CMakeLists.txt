@@ -92,6 +92,7 @@ halftrack_patch_mpe_timing("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"
+    VERSION "${PROJECT_VERSION}"
     COMPANY_NAME "Halftrack Contributors"
     BUNDLE_ID "org.halftrack.studio"
     MICROPHONE_PERMISSION_ENABLED TRUE
@@ -101,8 +102,17 @@ juce_add_gui_app(Halftrack
     PLUGINHOST_AU TRUE)
 
 juce_add_binary_data(HalftrackAssets SOURCES assets/halftrack-mark.svg)
-target_sources(Halftrack PRIVATE src/Main.cpp src/Session.cpp src/NoteTools.cpp src/Grooves.cpp src/Tuner.cpp src/Spectrum.cpp src/MidiMonitor.cpp src/SubtractiveSynth.cpp src/UtilityProcessor.cpp src/UtilityEditor.cpp src/NativeEffects.cpp src/Racks.cpp src/EffectProcessors.cpp src/MidiEffects.cpp src/Instruments.cpp src/NativeEffectEditor.cpp src/RackEditor.cpp src/AudioClipEditor.cpp src/AutomationEditor.cpp src/ArrangementAutomation.cpp src/Collections.cpp src/WarpStretchers.cpp src/BrowserIndex.cpp src/PluginBinary.cpp src/MainComponent.cpp tests/SessionTests.cpp tests/MidiTests.cpp tests/PersistenceTests.cpp tests/LatencyTests.cpp tests/LauncherTests.cpp)
-target_include_directories(Halftrack PRIVATE src)
+# The version and source commit the application reports (--version, About Halftrack).
+find_package(Git QUIET)
+set(HALFTRACK_BUILD_INFO "${CMAKE_BINARY_DIR}/generated/HalftrackBuildInfo.h")
+add_custom_target(HalftrackBuildInfo
+    COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DOUTPUT=${HALFTRACK_BUILD_INFO} -DVERSION=${PROJECT_VERSION}
+            -DGIT_EXECUTABLE=${GIT_EXECUTABLE} -DHALFTRACK_COMMIT=${HALFTRACK_COMMIT} -P ${CMAKE_SOURCE_DIR}/cmake/WriteBuildInfo.cmake
+    BYPRODUCTS "${HALFTRACK_BUILD_INFO}"
+    VERBATIM)
+target_sources(Halftrack PRIVATE src/Main.cpp src/Session.cpp src/NoteTools.cpp src/Grooves.cpp src/Tuner.cpp src/Spectrum.cpp src/MidiMonitor.cpp src/SubtractiveSynth.cpp src/UtilityProcessor.cpp src/UtilityEditor.cpp src/NativeEffects.cpp src/Racks.cpp src/EffectProcessors.cpp src/MidiEffects.cpp src/Instruments.cpp src/NativeEffectEditor.cpp src/RackEditor.cpp src/AudioClipEditor.cpp src/AutomationEditor.cpp src/ArrangementAutomation.cpp src/Collections.cpp src/WarpStretchers.cpp src/BrowserIndex.cpp src/PluginBinary.cpp src/BuildInfo.cpp src/MainComponent.cpp tests/SessionTests.cpp tests/MidiTests.cpp tests/PersistenceTests.cpp tests/LatencyTests.cpp tests/LauncherTests.cpp)
+target_include_directories(Halftrack PRIVATE src "${CMAKE_BINARY_DIR}/generated")
+add_dependencies(Halftrack HalftrackBuildInfo)
 target_compile_definitions(Halftrack PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
     JUCE_PLUGINHOST_VST=0 JUCE_PLUGINHOST_VST3=1

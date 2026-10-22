@@ -58,6 +58,12 @@ jobs:
         run: xvfb-run -a -s "-screen 0 1280x900x24" ctest --test-dir build -C Release --output-on-failure
       - name: Package preview with licenses and source references
         run: python scripts/package_preview.py
+      - name: Install, identify and remove the package
+        if: runner.os != 'Linux'
+        run: python scripts/verify_package.py --report build/test-artifacts/package-verification.json
+      - name: Install, identify and remove the package with virtual display
+        if: runner.os == 'Linux'
+        run: xvfb-run -a -s "-screen 0 1280x900x24" python scripts/verify_package.py --report build/test-artifacts/package-verification.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

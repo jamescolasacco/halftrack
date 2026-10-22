@@ -613,3 +613,7 @@ The reference gives every MIDI track All Ins and arms the selected one. In Halft
 ### Audio device chosen while another is missing
 
 While the chosen interface is missing, choosing a different device by hand is not yet told apart from the system's fallback. So the chosen interface is still reopened when it returns. Whether the reference switches back in that case is unmeasured.
+
+### Signing, notarization and updates
+
+Release builds are unsigned (ad-hoc on macOS) and Halftrack never checks for updates. Developer ID signing, notarization and Windows Authenticode need accounts the project does not hold. An update service would contact the network, which Halftrack does not do. Default: manual updates, by installing a newer package; settings and the User Library carry over. Whether to add an opt-in update check is open.
