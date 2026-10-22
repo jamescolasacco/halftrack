@@ -42,7 +42,8 @@ As the reference's metronome does (static reading), the click plays at the cue v
 
 ## Punch-In
 
-As the reference's manual says, with Punch-In on "the metronome will only be audible after the punch-in point" (consulted 2026-10-22). Recording with Punch-In mutes the click before the loop's start. Without a count-in, `Session::record` gives the engine a click range from that point; the next Play clears it. With a count-in, the engine's count-in range is kept, so the click runs on through the pre-roll ([open questions](../open-questions.md#metronome)).
+- **The click.** The reference's manual (consulted 2026-10-22) says, of Enable Only While Recording, that with Punch-In on "the metronome will only be audible after the punch-in point". With that option, recording with Punch-In mutes the click before the loop's start: `Session::record` gives the engine a click range from that point, and the next Play clears it. Otherwise the pre-roll clicks as playback does. The reference's code shows no punch term in its click (static reading; [open questions](../open-questions.md#metronome)).
+- **The count-in.** As the reference's code has it (static reading), a count-in comes only when recording starts inside the punch window: from before Punch-In's point, or after Punch-Out's, the pre-roll plays at once.
 
 ## The menu
 
@@ -75,7 +76,7 @@ The same suite checks Rhythm by comparing playback clicks sample by sample:
 
 At the cue volume of −6 dB the click plays at half its level, sample by sample; the suite's other cases use a cue volume of 0 dB.
 
-With Punch-In and the brace at one second, a recording from the start clicks, sample by sample, only from one second on; an ordinary Play afterwards clicks from the start again.
+With Enable Only While Recording, Punch-In and the brace at one second, a recording from the start clicks, sample by sample, only from one second on; an ordinary Play afterwards clicks from the start again. With the click always on, the pre-roll clicks from the start. With a one-bar count-in, recording from before the brace starts at once, and from inside it counts in.
 
 The UI suite chooses four bars, Wood and 1/8 from the menu.
 

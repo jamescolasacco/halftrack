@@ -287,20 +287,32 @@ void countIn(const juce::File& root)
         settings.countInBars=0;ok(session.setMetronome(settings),"and none again");
     }
 }
-// With Punch-In the click is heard only from the punch-in point, as the reference's manual says,
-// and an ordinary Play afterwards clicks from the start again.
+// With Enable Only While Recording and Punch-In the click is heard only from the punch-in point, as
+// the reference's manual says, and an ordinary Play afterwards clicks from the start again.
+// Otherwise the pre-roll clicks, and it never counts in.
 void punchIn(const juce::File& root)
 {
     Fixture f(root);auto& session=f.session;auto settings=session.snapshot().metronome;
-    settings.enabled=true;settings.recordingOnly=false;settings.accent=false;settings.gain=1;ok(session.setMetronome(settings),"enable an unaccented click");
+    settings.enabled=true;settings.recordingOnly=true;settings.accent=false;settings.gain=1;ok(session.setMetronome(settings),"enable an unaccented click while recording only");
     const auto inputs=session.inputNames();check(!inputs.isEmpty(),"an input to punch into");ok(session.setTrackInput(0,inputs[0]),"assign it");ok(session.setTrackArmed(0,true),"arm for punching");
     ok(session.setTrackMonitor(0,Session::MonitorMode::off),"without monitoring");
     session.setLoop(false,1,2);ok(session.setPunchIn(true),"Punch-In at one second");
     session.seek(0);ok(session.record(),"record from the start with Punch-In");
     compareClicks(captureSyntheticTestDevice(session,3*48000/256),120,1,false,0,-1,1);session.stop();
     session.undo();check(session.snapshot().tracks[0].clips.empty(),"undo the punched take, which would play too");
+    settings.recordingOnly=false;ok(session.setMetronome(settings),"the click always on");
     session.seek(0);ok(session.play(),"play afterwards");
     compareClicks(captureSyntheticTestDevice(session,400),120,1,false);session.stop();
+    session.seek(0);ok(session.record(),"record with Punch-In again");
+    compareClicks(captureSyntheticTestDevice(session,3*48000/256),120,1,false);session.stop();
+    session.undo();check(session.snapshot().tracks[0].clips.empty(),"undo that take");
+    // A count-in only when recording starts inside the punch window, as the reference's code has it.
+    settings.countInBars=1;ok(session.setMetronome(settings),"a one-bar count-in");
+    session.seek(0);ok(session.record(),"record from before the punch-in point");
+    check(session.snapshot().position==0&&session.snapshot().countInBeatsRemaining==0,"the pre-roll plays at once, without counting in");session.stop();session.undo();
+    session.seek(1.5);ok(session.record(),"record from inside the brace");
+    check(session.snapshot().countInBeatsRemaining==4&&session.snapshot().position<1.5-1,"it counts in from inside the punch window");session.stop();
+    settings.countInBars=0;ok(session.setMetronome(settings),"no count-in for what follows");
 }
 }
 int runMetronomeTests(const juce::File& artifacts)

@@ -11374,7 +11374,15 @@ Result Session::beginRecording (bool waitForPlay)
     auto r = audioArmed ? impl->takeFolderReady() : impl->assets().createDirectory(); if (r.failed()) return r;
     for (auto* input : impl->edit->getAllInputDevices()) input->flushRecordingStateUpdates();
     impl->edit->dispatchPendingUpdatesSynchronously();
-    impl->edit->setCountInMode (countInMode (snapshot().metronome.countInBars));
+    // As the reference's, a count-in comes only when recording starts inside the punch window: from
+    // before Punch-In's point, the pre-roll plays at once (static reading of its code).
+    {
+        const auto& transport = impl->edit->getTransport();
+        const auto at = transport.isPlaying() ? transport.getPosition() : transport.startPosition.get();
+        const auto window = impl->loopRange();
+        const bool inside = (! impl->punchIn() || at >= window.getStart()) && (! impl->punchOut() || at < window.getEnd());
+        impl->edit->setCountInMode (countInMode (inside ? snapshot().metronome.countInBars : 0));
+    }
     for(auto* input:impl->edit->getAllInputDevices()) if(input->isRecordingActive())
         if(auto* midi=dynamic_cast<te::MidiInputDevice*>(&input->getInputDevice())) midi->quantisation.setType("(none)");
     impl->edit->setClickTrackRange ({});
@@ -11391,9 +11399,10 @@ Result Session::beginRecording (bool waitForPlay)
     transport.record (false, ! armed);
     if (! transport.isRecording()) impl->loopRecording.reset();
     if (! impl->edit->getTransport().isRecording()) return Result::fail ("Recording could not start. Check the selected input and device settings.");
-    // With Punch-In the metronome is heard only from the punch-in point, as the reference's manual
-    // says; the next Play clears the range. A count-in keeps the engine's own range.
-    if (impl->punchIn() && impl->edit->getNumCountInBeats() == 0)
+    // With Enable Only While Recording and Punch-In, the metronome is heard only from the punch-in
+    // point, as the reference's manual says; the next Play clears the range. A count-in keeps the
+    // engine's own range.
+    if (impl->punchIn() && impl->edit->clickTrackRecordingOnly.get() && impl->edit->getNumCountInBeats() == 0)
         impl->edit->setClickTrackRange ({ impl->loopRange().getStart(), te::Edit::getMaximumEditEnd() });
     impl->startPerformance (alreadyPlaying ? impl->playedTime() : impl->edit->getTransport().startPosition.get());
     impl->changed(); return Result::ok();

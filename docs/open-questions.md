@@ -731,7 +731,7 @@ Halftrack's default fades follow a static reading of the reference's code ([cont
 - **The sounds.** The reference's Classic, Click and Wood are its own samples, so Halftrack synthesises its own ticks to their character; they are not the same sounds.
 - **Count-in start.** The reference starts a count-in from mid-bar at the nearest bar line, roundNearest((t − bars·B − section start) / B)·B (static reading), so it is not always whole bars long. Halftrack counts in whole bars before the position.
 - **Rhythm timing.** The reference snaps ticks to its tick grid from the time-signature section start, and while stopped times them in whole samples. Halftrack places them on the beat grid from the start; it has one meter per project.
-- **Punch-In with a count-in.** With Punch-In on, the click is silent before the punch-in point, as the reference's manual says. With a count-in as well, Halftrack keeps the count-in's clicks and lets the click run on through the pre-roll; how the reference combines the two is unmeasured.
+- **Punch-In and the click.** The reference's manual says that with Enable Only While Recording and Punch-In the click is heard only after the punch-in point, and Halftrack does so; a static reading of its code finds no punch term in the click, so this is unmeasured.
 
 ### Track order
 
