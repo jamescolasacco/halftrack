@@ -56,7 +56,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | WRP-009 | grooves, ui |  |
 | WRP-010 | slicing, ui |  |
 | WRP-011 | shared-media |  |
-| MID-001 | ui |  |
+| MID-001 | note-tools, ui |  |
 | MID-002 | note-tools, ui |  |
 | MID-003 | note-chance, ui |  |
 | MID-004 | ui |  |

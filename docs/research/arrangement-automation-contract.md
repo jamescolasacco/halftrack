@@ -59,6 +59,7 @@ From the reference's manual:
 
 Evidence, from the UI suite:
 
+- a drag across an automation lane's background selects that time on its track;
 - dragging one of two selected breakpoints moves both by the same proportion while the others stay;
 - Shift-dragging a segment lowers both its ends;
 - simplifying five breakpoints on one line and a sixth off it keeps three;

@@ -1223,6 +1223,12 @@ private:
     { for (const auto& lane : lanes) if (! lane.group && lane.automation < 0 && lane.take < 0 && lane.index == track) return lane.y; return track * trackHeight; }
     int laneHeight (int track) const
     { for (const auto& lane : lanes) if (! lane.group && lane.automation < 0 && lane.take < 0 && lane.index == track) return lane.height; return trackHeight; }
+    // The track a time selection takes at a canvas y: the track, or the track an automation lane belongs to.
+    int selectionTrackAtY (int y) const
+    {
+        for (const auto& lane : lanes) if (y >= lane.y && y < lane.y + lane.height && ! lane.group && lane.take < 0) return lane.index;
+        return trackAtY (y);
+    }
     // Track under a canvas y, -1 for none (including group header lanes).
     int trackAtY (int y) const
     {
@@ -2543,6 +2549,8 @@ private:
             const auto* previousMidi = owner.currentMidiClip();
             const auto previousMidiId = previousMidi != nullptr && owner.selectedLauncherClipId.isEmpty() ? previousMidi->id : juce::String();
             auto track = owner.trackAtY (e.y);
+            // An automation lane's background selects time on its track, as the reference's does.
+            if (track < 0 && owner.automationMode) track = owner.selectionTrackAtY (e.y);
             if (track < 0) return;
             owner.selectedClip = -1;
             owner.selectedLauncherClipId.clear();
@@ -2656,7 +2664,7 @@ private:
             }
             if (selecting && e.mouseWasDraggedSinceMouseDown())
             {
-                extendSelection (owner.snapTime (juce::jmax (0.0, owner.viewStart + e.x / owner.pixelsPerSecond), e.mods), owner.trackAtY (juce::jmax (0, e.y)));
+                extendSelection (owner.snapTime (juce::jmax (0.0, owner.viewStart + e.x / owner.pixelsPerSecond), e.mods), owner.selectionTrackAtY (juce::jmax (0, e.y)));
                 return;
             }
             if (draggedClip < 0 || e.mods.isPopupMenu() || ! e.mouseWasDraggedSinceMouseDown()) return;
@@ -11655,7 +11663,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto decibels = [] (float p) { return Session::automationProportionToValue (Session::AutomationTarget::volume, p); };
             check (session.setTrackAutomation (trackId, Session::AutomationTarget::volume, { true, { { 1, -24 }, { 2, -12 }, { 3, -12 }, { 5, 0 } } }).wasOk(), "four breakpoints"); refresh();
             const auto before = volume().points;
-            timeSelection = { secondsAt (1.9), secondsAt (3.1), { trackId } };
+            {
+                // A drag across the automation lane's background selects that time on its track.
+                const auto a = juce::Point<float> (xOf (1.9), inLane.getY() + 2), b = juce::Point<float> (xOf (3.1), inLane.getY() + 2);
+                const auto bypass = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged)
+                { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | bypassModifier), 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, down, now, 1, dragged); };
+                canvas.mouseDown (bypass (a, a, false)); canvas.mouseDrag (bypass (b, a, true)); canvas.mouseUp (bypass (b, a, true)); refresh();
+                check (timeSelection.active() && timeSelection.trackIds == juce::StringArray { trackId } && std::abs (beatsAt (timeSelection.start) - 1.9) < .05 && std::abs (beatsAt (timeSelection.end) - 3.1) < .05
+                           && volume().points.size() == 4, "dragging across the automation lane's background selects that time on its track, adding no breakpoint");
+            }
             const auto second = juce::Point<float> (xOf (2), yOf (inLane, -12)), up = second.translated (0, -inLane.getHeight() * .1f);
             canvas.mouseDown (event (second, second, false)); canvas.mouseDrag (event (up, second, true)); canvas.mouseUp (event (up, second, true)); refresh();
             const auto moved = volume().points;
