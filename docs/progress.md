@@ -1939,3 +1939,14 @@ Engine and UI areas.
 
 See [the contract](research/session-recording-contract.md#start-recording-on-scene-launch).
 
+## Plug-in sources and Rescan — 2026-10-22
+
+Engine, UI and root areas.
+
+- **Plug-Ins settings.** These replace the generic plug-in list dialog, as the reference's settings do. They offer Use Audio Units v2, the VST3 system folders and a custom VST3 folder with Browse, plus Rescan; Alt/Option-click forgets the list first.
+- **Rescan.** It runs in the background through the plug-in list's scanner (the separate process in the app). It adds new plug-ins once and drops those whose file has gone or whose source is off.
+- **At launch.** The app rescans at each start unless Alt/Option is held (`src/Main.cpp`).
+- **Measured.** The new plug-in-sources suite, using the generated VST3 fixture in a custom folder, and the UI suite.
+
+See [the contract](research/plugin-sources-contract.md).
+

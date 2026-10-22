@@ -114,6 +114,7 @@ int runSceneCaptureTests (const juce::File&);
 int runSlotClipTests (const juce::File&);
 int runEditGridTests (const juce::File&);
 int runNotePreviewTests (const juce::File&);
+int runPluginSourcesTests (const juce::File&);
 int runTempoAnalysisEvaluation (const juce::File& library, const juce::File& report);
 int runPackTests (const juce::File&);
 int runMackieTests (const juce::File&);
@@ -452,6 +453,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-edit-grid");
             setApplicationReturnValue (runEditGridTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-plugin-sources"))
+        {
+            const int i = args.indexOf ("--self-test-plugin-sources");
+            setApplicationReturnValue (runPluginSourcesTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-note-preview"))
@@ -985,6 +992,10 @@ public:
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
                     "Could not open project", result.getErrorMessage());
         }
+        // As the reference does, look for new, changed and removed plug-ins at each launch, unless
+        // Alt (Option on a Mac) is held.
+        if (! juce::ModifierKeys::getCurrentModifiersRealtime().isAltDown())
+            if (auto scan = session->rescanPlugins(); scan.failed()) juce::Logger::writeToLog (scan.getErrorMessage());
         window = std::make_unique<Window> (*session);
         window->content->setUserLibrary (juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Halftrack").getChildFile ("User Library"));
         window->content->enableRecovery (juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)

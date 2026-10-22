@@ -887,6 +887,10 @@ public:
         // Start Recording on Scene Launch, after the reference's (off by default): launching a scene
         // also records into its empty slots on armed tracks.
         bool startRecordingOnSceneLaunch = false;
+        // Plug-In Sources, after the reference's Plug-Ins settings: Audio Units (macOS), the VST3
+        // system folders, and a custom VST3 folder when its switch is on.
+        bool useAudioUnits = true, useVst3SystemFolders = true, useVst3CustomFolder = false;
+        juce::String vst3CustomFolder;
         bool operator== (const Preferences&) const = default;
     };
     // The audio device's latency as it reports it, with Driver Error Compensation. Recordings are placed
@@ -1165,6 +1169,14 @@ public:
     juce::KnownPluginList& knownPlugins();
     juce::AudioPluginFormatManager& pluginFormats();
     juce::File pluginScanDeadMansFile() const;
+    // Scans the plug-in sources the preferences enable, in the background and through the separate
+    // scanner process where the engine has one, as the reference's Rescan does: new and changed
+    // plug-ins are added, and those removed or outside the sources dropped. everything first forgets
+    // the list, as the reference's Alt/Option-click on Rescan does. Refused while a scan runs.
+    juce::Result rescanPlugins (bool everything = false);
+    struct PluginScanStatus { bool scanning = false; float progress = 0; juce::String plugin; };
+    PluginScanStatus pluginScanStatus() const;
+    void cancelPluginScan();
     juce::Result addNativeEffect (int trackIndex, EffectKind);
     // A Tuner's latest pitch: the note (MIDI numbering, 69 is A4) nearest the detected frequency at the
     // device's reference pitch, and the distance from it in cents. Nothing for silence, aperiodic input,

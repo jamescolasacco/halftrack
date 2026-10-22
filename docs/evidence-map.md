@@ -89,7 +89,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | PLG-001 | plugin-binary, plugin-timing, session, track-duplicate, ui |  |
 | PLG-003 | au |  |
 | PLG-005 | plugin-binary, plugin-timing, session, track-duplicate, ui |  |
-| PLG-006 | plugin-scan |  |
+| PLG-006 | plugin-scan, plugin-sources, ui |  |
 | PLG-007 | plugin-scan |  |
 | PLG-008 | plugin-binary, plugin-timing, session, track-duplicate, ui |  |
 | PLG-009 | sidechain, ui |  |

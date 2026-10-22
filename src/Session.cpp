@@ -1596,6 +1596,66 @@ Session::ClipInfo describeLaneClip (const juce::ValueTree& state, te::Edit& edit
     return result;
 }
 
+// A rescan of the plug-in sources on a thread of its own. Each file goes through the plug-in list's
+// scanner, which hands it to the separate scanner process when the engine has one. The list is
+// finished, and the Session told, back on the message thread.
+class PluginSourceScan final : public juce::Thread, private juce::AsyncUpdater
+{
+public:
+    struct Source { juce::AudioPluginFormat* format = nullptr; juce::FileSearchPath paths; bool enabled = false; };
+    PluginSourceScan (juce::KnownPluginList& l, std::vector<Source> s, juce::File pedal, bool all, std::function<void()> done)
+        : juce::Thread ("Halftrack plug-in scan"), list (l), sources (std::move (s)), deadMansPedal (std::move (pedal)), everything (all), finished (std::move (done)) {}
+    ~PluginSourceScan() override { cancel(); stopThread (60000); cancelPendingUpdate(); }
+    void cancel() { signalThreadShouldExit(); if (abort) abort(); }
+    std::function<void()> abort;
+    std::atomic<float> progress { 0 };
+    juce::String current() const { const juce::ScopedLock sl (lock); return name; }
+    bool isScanning() const { return ! complete.load(); }
+private:
+    void run() override
+    {
+        for (size_t i = 0; i < sources.size() && ! threadShouldExit(); ++i)
+        {
+            auto& source = sources[i];
+            // A source switched off, and plug-ins gone from their files or outside the folders, leave the list.
+            for (const auto& type : list.getTypes())
+                if (type.pluginFormatName == source.format->getName())
+                {
+                    const bool inFolders = source.format->getName() != "VST3" || within (source.paths, type.fileOrIdentifier);
+                    if (everything || ! source.enabled || ! inFolders || ! source.format->doesPluginStillExist (type)) list.removeType (type);
+                }
+            if (! source.enabled) continue;
+            juce::PluginDirectoryScanner scanner (list, *source.format, source.paths, true, deadMansPedal, false);
+            juce::String scanning;
+            for (;;)
+            {
+                if (threadShouldExit()) break;
+                { const juce::ScopedLock sl (lock); name = scanner.getNextPluginFileThatWillBeScanned(); }
+                const bool more = scanner.scanNextFile (! everything, scanning);
+                progress = ((float) i + scanner.getProgress()) / (float) sources.size();
+                if (! more) break;
+            }
+        }
+        progress = 1;
+        triggerAsyncUpdate();
+    }
+    static bool within (const juce::FileSearchPath& paths, const juce::String& file)
+    {
+        for (int i = 0; i < paths.getNumPaths(); ++i)
+            if (juce::File (file).isAChildOf (paths[i]) || juce::File (file) == paths[i]) return true;
+        return false;
+    }
+    void handleAsyncUpdate() override { list.scanFinished(); complete = true; { const juce::ScopedLock sl (lock); name.clear(); } if (finished) finished(); }
+    juce::KnownPluginList& list;
+    std::vector<Source> sources;
+    juce::File deadMansPedal;
+    bool everything;
+    std::function<void()> finished;
+    juce::CriticalSection lock;
+    juce::String name;
+    std::atomic<bool> complete { false };
+};
+
 class Behaviour final : public te::EngineBehaviour
 {
 public:
@@ -2305,6 +2365,7 @@ struct Session::Impl
     }
     ~Impl()
     {
+        pluginScan.reset(); // Waits for a running scan to stop.
         // Removing the callback reports a device stop; the session is closing, so no take ends here.
         deviceStops.attached = false;
         engine.getDeviceManager().deviceManager.removeAudioCallback (&deviceStops);
@@ -3137,7 +3198,10 @@ struct Session::Impl
             const int follow = number ("followBehaviour", 0, 2), sceneRecord = number ("startRecordingOnSceneLaunch", 0, 2);
             read.scrollFollow = follow == 1;
             read.startRecordingOnSceneLaunch = sceneRecord == 1;
-            valid = valid && follow >= 0 && sceneRecord >= 0 && validPreferences (read);
+            const int audioUnits = number ("useAudioUnits", 1, 2), vst3System = number ("useVst3SystemFolders", 1, 2), vst3Custom = number ("useVst3CustomFolder", 0, 2);
+            read.useAudioUnits = audioUnits == 1; read.useVst3SystemFolders = vst3System == 1; read.useVst3CustomFolder = vst3Custom == 1;
+            read.vst3CustomFolder = xml->getStringAttribute ("vst3CustomFolder");
+            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && validPreferences (read);
         }
         if (valid) { prefs = read; return; }
         // Set an unreadable file aside rather than lose it, and keep the defaults.
@@ -3157,6 +3221,8 @@ struct Session::Impl
         xml.setAttribute ("driverErrorCompensationMs", next.driverErrorCompensationMs);
         xml.setAttribute ("followBehaviour", next.scrollFollow ? 1 : 0);
         xml.setAttribute ("startRecordingOnSceneLaunch", next.startRecordingOnSceneLaunch ? 1 : 0);
+        xml.setAttribute ("useAudioUnits", next.useAudioUnits ? 1 : 0); xml.setAttribute ("useVst3SystemFolders", next.useVst3SystemFolders ? 1 : 0);
+        xml.setAttribute ("useVst3CustomFolder", next.useVst3CustomFolder ? 1 : 0); xml.setAttribute ("vst3CustomFolder", next.vst3CustomFolder);
         const auto file = prefsFile();
         if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
         juce::TemporaryFile temporary (file);
@@ -4059,6 +4125,7 @@ struct Session::Impl
     // Set while one action starts several slot takes from a stopped transport, to where it stood: the
     // engine starts the transport with the first take, and the rest must not wait for the launch grid.
     std::optional<te::TimePosition> takesStart;
+    std::unique_ptr<PluginSourceScan> pluginScan; // The latest plug-in rescan, running or finished.
     std::vector<std::unique_ptr<MidiCaptureTap>> captureTaps;
     static constexpr size_t maximumCapturedNotes = 4096;
     void attachCapture()
@@ -11258,6 +11325,38 @@ File Session::pluginScanDeadMansFile() const
     auto folder = File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("Halftrack");
     folder.createDirectory(); return folder.getChildFile ("plugin-scan-in-progress.txt");
 }
+Result Session::rescanPlugins (bool everything)
+{
+    if (impl->pluginScan != nullptr && impl->pluginScan->isScanning()) return Result::fail ("A plug-in scan is already running.");
+    impl->pluginScan.reset();
+    const auto& p = impl->prefs;
+    std::vector<PluginSourceScan::Source> sources;
+    for (auto* format : pluginFormats().getFormats())
+    {
+        if (format->getName() == "VST3")
+        {
+            juce::FileSearchPath paths;
+            if (p.useVst3SystemFolders) paths = format->getDefaultLocationsToSearch();
+            if (const File custom (File::isAbsolutePath (p.vst3CustomFolder) ? p.vst3CustomFolder : String()); p.useVst3CustomFolder && custom.isDirectory())
+                paths.addIfNotAlreadyThere (custom);
+            sources.push_back ({ format, paths, paths.getNumPaths() > 0 });
+        }
+        else if (format->getName() == "AudioUnit") sources.push_back ({ format, format->getDefaultLocationsToSearch(), p.useAudioUnits });
+    }
+    if (everything) knownPlugins().clearBlacklistedFiles();
+    // The Impl, not Session::impl: a scan still running is stopped inside ~Impl, when impl is already null.
+    auto* owner = impl.get();
+    impl->pluginScan = std::make_unique<PluginSourceScan> (knownPlugins(), std::move (sources), pluginScanDeadMansFile(), everything, [owner] { owner->changed(); });
+    impl->pluginScan->abort = [owner] { owner->engine.getPluginManager().abortCurrentPluginScan(); };
+    impl->pluginScan->startThread();
+    impl->changed(); return Result::ok();
+}
+Session::PluginScanStatus Session::pluginScanStatus() const
+{
+    if (impl->pluginScan == nullptr) return {};
+    return { impl->pluginScan->isScanning(), impl->pluginScan->progress.load(), impl->pluginScan->current() };
+}
+void Session::cancelPluginScan() { if (impl->pluginScan != nullptr) impl->pluginScan->cancel(); }
 Result Session::addNativeEffect (int index, EffectKind kind)
 {
     if (auto frozen = impl->unfrozen (impl->track (index)); frozen.failed()) return frozen;

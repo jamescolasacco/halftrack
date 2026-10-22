@@ -8898,7 +8898,7 @@ private:
         juce::StringArray names;
         for (const auto& t : state.tracks) for (const auto& p : t.plugins) if (p.missing) names.addIfNotAlreadyThere (p.name);
         return names.isEmpty() ? juce::String()
-                               : "Missing plug-ins kept as placeholders: " + names.joinIntoString (", ") + ". Scan them in Scan / Manage Plug-ins and reopen the project to use them.";
+                               : "Missing plug-ins kept as placeholders: " + names.joinIntoString (", ") + ". Rescan in Plug-Ins Settings and reopen the project to use them.";
     }
     juce::String missingMediaSummary() const
     {
@@ -9075,7 +9075,7 @@ private:
             popup.addItem (5, "Import Audio...", currentTrack() == nullptr || ! currentTrack()->isReturn); popup.addItem (6, "Export Arrangement Audio...", ! state.tracks.empty()); popup.addSeparator();
             popup.addItem (9, "Import MIDI File..."); popup.addItem (10, "Export Selected MIDI Clip...", currentMidiClip() != nullptr); popup.addSeparator();
             popup.addItem (12, "Locate Missing Media...", ! session.missingMedia().isEmpty()); popup.addItem (15, "Install Pack...", packsFolder() != juce::File()); popup.addSeparator();
-            popup.addItem (14, "Preferences..."); popup.addItem (7, "Audio Setup..."); popup.addItem (13, "Audio Engine On", true, session.isAudioEngineEnabled()); popup.addItem (8, "Manage Plug-ins...");
+            popup.addItem (14, "Preferences..."); popup.addItem (7, "Audio Setup..."); popup.addItem (13, "Audio Engine On", true, session.isAudioEngineEnabled()); popup.addItem (8, "Plug-Ins Settings...");
         }
         else if (index == 1)
         {
@@ -10218,13 +10218,110 @@ private:
         juce::TextEditor version;
     };
     void showAbout() { showDialog ("About Halftrack", std::make_unique<AboutPanel> (userLibrary), 480, 240); }
-    void showPlugins()
+    // Plug-Ins settings, after the reference's: the plug-in sources, and Rescan, which looks for new,
+    // changed and removed plug-ins (Alt/Option-click forgets the list and scans everything afresh).
+    // Changing a source rescans once any scan running has stopped.
+    class PluginsPanel final : public juce::Component, private juce::Timer
     {
-        auto list = std::make_unique<juce::PluginListComponent> (session.pluginFormats(), session.knownPlugins(), session.pluginScanDeadMansFile(), nullptr, false);
-        list->setOptionsButtonText ("Scan / Manage Plug-ins");
-        list->setNumberOfThreadsForScanning (1);
-        showDialog ("Halftrack - Plug-in Library", std::move (list), 780, 520);
-    }
+    public:
+        explicit PluginsPanel (Impl& o) : owner (o)
+        {
+            for (auto* c : std::initializer_list<juce::Component*> { &heading, &audioUnits, &vst3System, &vst3Custom, &folderLabel, &folder, &browse, &rescanLabel, &rescan, &status })
+                addAndMakeVisible (c);
+           #if ! JUCE_MAC
+            audioUnits.setVisible (false);
+           #endif
+            heading.setText ("Plug-In Sources", juce::dontSendNotification); heading.setFont (font (12.0f, true));
+            audioUnits.setName ("Use Audio Units"); vst3System.setName ("Use VST3 system folders"); vst3Custom.setName ("Use VST3 custom folder");
+            folderLabel.setText ("VST3 Plug-In Custom Folder", juce::dontSendNotification); rescanLabel.setText ("Rescan Plug-Ins", juce::dontSendNotification);
+            folder.setName ("VST3 custom folder"); folder.setColour (juce::Label::textColourId, muted);
+            browse.setName ("Browse for the VST3 custom folder"); rescan.setName ("Rescan plug-ins"); status.setName ("Plug-in scan status");
+            rescan.setTooltip ("Rescan: look for new, changed and removed plug-ins. Hold Alt (Option on a Mac) to forget the list and scan everything afresh.");
+            for (auto* b : { &audioUnits, &vst3System, &vst3Custom }) b->onClick = [this] { apply(); };
+            browse.onClick = [this] { chooseFolder(); };
+            rescan.onClick = [this] { scan (juce::ModifierKeys::currentModifiers.isAltDown()); };
+            sync(); update(); startTimerHz (5);
+        }
+        void scan (bool everything)
+        {
+            if (owner.session.pluginScanStatus().scanning) { owner.session.cancelPluginScan(); pending = true; pendingEverything = pendingEverything || everything; }
+            else owner.report (owner.session.rescanPlugins (everything));
+            update();
+        }
+        void sync()
+        {
+            const auto p = owner.session.preferences();
+            audioUnits.setToggleState (p.useAudioUnits, juce::dontSendNotification); vst3System.setToggleState (p.useVst3SystemFolders, juce::dontSendNotification);
+            vst3Custom.setToggleState (p.useVst3CustomFolder, juce::dontSendNotification);
+            folder.setText (p.vst3CustomFolder.isEmpty() ? "No folder chosen" : p.vst3CustomFolder, juce::dontSendNotification);
+            for (auto* c : std::initializer_list<juce::Component*> { &folderLabel, &folder, &browse }) c->setEnabled (p.useVst3CustomFolder);
+        }
+        void apply()
+        {
+            auto p = owner.session.preferences();
+            p.useAudioUnits = audioUnits.getToggleState(); p.useVst3SystemFolders = vst3System.getToggleState(); p.useVst3CustomFolder = vst3Custom.getToggleState();
+            if (p == owner.session.preferences()) return;
+            owner.report (owner.session.setPreferences (p)); sync(); scan (false);
+        }
+        void chooseFolder()
+        {
+            const auto current = owner.session.preferences().vst3CustomFolder;
+            chooser = std::make_unique<juce::FileChooser> ("Choose the VST3 Plug-In Custom Folder",
+                                                           juce::File::isAbsolutePath (current) ? juce::File (current) : juce::File::getSpecialLocation (juce::File::userHomeDirectory));
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                                  [safe = juce::Component::SafePointer<PluginsPanel> (this)] (const juce::FileChooser& c)
+            {
+                if (safe == nullptr || ! c.getResult().isDirectory()) return;
+                safe->setFolder (c.getResult());
+            });
+        }
+        void setFolder (const juce::File& chosen)
+        {
+            auto p = owner.session.preferences(); p.vst3CustomFolder = chosen.getFullPathName();
+            owner.report (owner.session.setPreferences (p)); sync(); scan (false);
+        }
+        void update()
+        {
+            const auto s = owner.session.pluginScanStatus();
+            if (s.scanning)
+                status.setText ("Scanning" + (s.plugin.isEmpty() ? juce::String() : " " + juce::File (s.plugin).getFileName()) + "  (" + juce::String (juce::roundToInt (s.progress * 100)) + "%)",
+                                juce::dontSendNotification);
+            else
+            {
+                const auto n = owner.session.knownPlugins().getNumTypes();
+                status.setText (juce::String (n) + (n == 1 ? " plug-in" : " plug-ins"), juce::dontSendNotification);
+            }
+            rescan.setButtonText (s.scanning && pending ? "Restarting..." : "Rescan");
+        }
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced (16);
+            heading.setBounds (area.removeFromTop (22)); area.removeFromTop (6);
+            for (auto* b : { &audioUnits, &vst3System, &vst3Custom })
+                if (b->isVisible()) { b->setBounds (area.removeFromTop (26)); area.removeFromTop (4); }
+            auto row = area.removeFromTop (26); folderLabel.setBounds (row.removeFromLeft (190)); browse.setBounds (row.removeFromRight (80)); row.removeFromRight (6); folder.setBounds (row);
+            area.removeFromTop (10);
+            row = area.removeFromTop (26); rescanLabel.setBounds (row.removeFromLeft (190)); rescan.setBounds (row.removeFromLeft (100));
+            area.removeFromTop (8); status.setBounds (area.removeFromTop (22));
+        }
+    private:
+        void timerCallback() override
+        {
+            if (pending && ! owner.session.pluginScanStatus().scanning)
+            {
+                pending = false; const bool everything = std::exchange (pendingEverything, false);
+                owner.report (owner.session.rescanPlugins (everything));
+            }
+            update();
+        }
+        Impl& owner;
+        juce::Label heading, folderLabel, folder, rescanLabel, status;
+        juce::ToggleButton audioUnits { "Use Audio Units v2" }, vst3System { "Use VST3 Plug-In System Folders" }, vst3Custom { "Use VST3 Plug-In Custom Folder" };
+        juce::TextButton browse { "Browse" }, rescan { "Rescan" };
+        std::unique_ptr<juce::FileChooser> chooser;
+        bool pending = false, pendingEverything = false;
+    };
+    void showPlugins() { showDialog ("Halftrack - Plug-Ins", std::make_unique<PluginsPanel> (*this), 560, 270); }
     // Devices selected in the track's device chain, for grouping, ungrouping and deleting.
     juce::StringArray selectedDevices;
     std::vector<juce::String> trackDeviceIds() const
@@ -10315,7 +10412,7 @@ private:
         }
         popup.addSeparator();
         for (int i = 0; i < types.size(); ++i) popup.addItem (i + 1, types[i].name + "  (" + types[i].pluginFormatName + ")");
-        popup.addSeparator(); popup.addItem (100000, "Scan / Manage Plug-ins...");
+        popup.addSeparator(); popup.addItem (100000, "Plug-Ins Settings...");
         auto safe = juce::Component::SafePointer<Impl> (this);
         const auto track = state.tracks[static_cast<size_t> (selectedTrack)].id;
         const auto generation = state.projectGeneration;
@@ -13527,6 +13624,43 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (session.preferences().startRecordingOnSceneLaunch && session.preferences().scrollFollow, "switching it on sets it, keeping the others");
         }
         check (session.resetPreferences().wasOk(), "reset the preferences");
+    }
+    {
+        // Plug-Ins settings: only a custom folder, holding the test plug-in when there is one, so
+        // the plug-ins later checks use stay listed.
+        const auto* fixture = std::getenv ("HALFTRACK_TEST_PLUGIN");
+        const auto empty = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-ui-plugins-" + juce::Uuid().toString());
+        check (fixture != nullptr || empty.createDirectory().wasOk(), "a custom plug-in folder");
+        const auto folder = fixture != nullptr ? juce::File (fixture).getParentDirectory() : empty;
+        auto p = session.preferences(); p.useAudioUnits = false; p.useVst3SystemFolders = false; p.useVst3CustomFolder = true; p.vst3CustomFolder = folder.getFullPathName();
+        check (session.setPreferences (p).wasOk(), "use only the custom VST3 folder");
+        PluginsPanel panel (*this); panel.setSize (560, 270);
+        auto* custom = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Use VST3 custom folder"));
+        auto* system = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Use VST3 system folders"));
+        auto* rescanButton = dynamic_cast<juce::Button*> (findNamed (panel, "Rescan plug-ins"));
+        auto* statusLabel = dynamic_cast<juce::Label*> (findNamed (panel, "Plug-in scan status"));
+        auto* folderText = dynamic_cast<juce::Label*> (findNamed (panel, "VST3 custom folder"));
+        check (custom != nullptr && system != nullptr && rescanButton != nullptr && statusLabel != nullptr && folderText != nullptr
+                   && custom->getButtonText() == "Use VST3 Plug-In Custom Folder" && system->getButtonText() == "Use VST3 Plug-In System Folders"
+                   && custom->getToggleState() && ! system->getToggleState() && folderText->getText() == folder.getFullPathName() && rescanButton->getButtonText() == "Rescan",
+               "the Plug-Ins settings show the plug-in sources, the custom folder and Rescan, as the reference's do");
+        const auto settle = [&]
+        {
+            for (int i = 0; i < 6000 && session.pluginScanStatus().scanning; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (5);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (250); // The panel's status follows.
+            return ! session.pluginScanStatus().scanning;
+        };
+        const auto inFolder = [&] { int n = 0; for (const auto& t : session.knownPlugins().getTypes()) if (juce::File (t.fileOrIdentifier).isAChildOf (folder)) ++n; return n; };
+        const int expected = fixture != nullptr ? 1 : 0;
+        rescanButton->onClick();
+        check (settle() && inFolder() == expected && statusLabel->getText() == juce::String (session.knownPlugins().getNumTypes()) + (session.knownPlugins().getNumTypes() == 1 ? " plug-in" : " plug-ins"),
+               "Rescan scans the custom folder in the background and shows how many plug-ins there are (" + statusLabel->getText() + ")");
+        custom->setToggleState (false, juce::sendNotificationSync);
+        check (! session.preferences().useVst3CustomFolder && settle() && inFolder() == 0, "switching the custom folder off saves it and rescans, dropping its plug-ins");
+        custom->setToggleState (true, juce::sendNotificationSync);
+        check (session.preferences().useVst3CustomFolder && settle() && inFolder() == expected, "and switching it on again finds them");
+        check (session.resetPreferences().wasOk(), "restore the default sources");
+        empty.deleteRecursively();
     }
     {
         // About Halftrack: in the application menu on a Mac and the Help menu elsewhere, it names
