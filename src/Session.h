@@ -454,6 +454,7 @@ public:
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
         bool mute = false, solo = false, armed = false, isMidi = false, isReturn = false;
         bool frozen = false; // Plays a render of its clips and devices; devices and clips are locked.
+        int height = 0;      // Its Arrangement height in pixels, or 0 for the default.
         CrossfadeAssign crossfade = CrossfadeAssign::none;
         double delayMs = 0; // Track Delay: positive plays later, negative earlier.
         SendMode sendMode = SendMode::post;
@@ -910,6 +911,10 @@ public:
     juce::Result setClipActive (const juce::String& clipId, bool active);
     juce::Result renameClip (const juce::String& clipId, const juce::String& name);
     juce::Result renameTrack (int trackIndex, const juce::String&);
+    // A track's height in the Arrangement, saved with the project outside the undo history, as the
+    // reference saves its tracks' heights; 0 restores the default.
+    static constexpr int minimumTrackHeight = 20, maximumTrackHeight = 600;
+    juce::Result setTrackHeight (const juce::String& trackId, int pixels);
     juce::Result setMasterGain (float decibels);
     juce::Result setTrackCrossfade (const juce::String& trackId, CrossfadeAssign);
     // Track Delay moves a track's output (after its devices, before its sends and mixer) from

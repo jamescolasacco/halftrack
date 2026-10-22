@@ -135,6 +135,22 @@ int runTrackOrderTests (const juce::File& artifacts)
         check (order (session.snapshot()) == finalOrder, "grouped reorder redo retains order");
         ok (session.saveProject (project), "save reordered tracks and routing"); ok (session.loadProject (project), "reopen reordered tracks and routing");
         check (order (session.snapshot()) == finalOrder, "saved order is persistent"); retained (baseline, session.snapshot()); render (session, output, first, second);
+        // Track heights, saved with the project outside the undo history, and moving with their tracks.
+        {
+            const auto id = session.snapshot().tracks[1].id;
+            const bool couldUndo = session.canUndo();
+            check (session.setTrackHeight (id, Session::minimumTrackHeight - 1).failed() && session.setTrackHeight (id, Session::maximumTrackHeight + 1).failed()
+                       && session.setTrackHeight ("missing", 100).failed(), "heights outside 20 to 600 pixels, or for no track, are refused");
+            ok (session.setTrackHeight (id, 140), "make a track 140 pixels high");
+            check (session.snapshot().tracks[1].height == 140 && session.snapshot().tracks[0].height == 0 && session.canUndo() == couldUndo && ! session.snapshot().dirty,
+                   "it is that high, the others default, and it is neither an undo step nor an unsaved change");
+            ok (session.moveTrack (id, 0), "move it first");
+            check (session.snapshot().tracks[0].id == id && session.snapshot().tracks[0].height == 140, "its height moves with it");
+            ok (session.saveProject (project), "save the height"); ok (session.loadProject (project), "reopen");
+            check (session.snapshot().tracks[0].id == id && session.snapshot().tracks[0].height == 140, "the height is saved with the project");
+            ok (session.setTrackHeight (id, 0), "back to the default");
+            check (session.snapshot().tracks[0].height == 0, "0 restores the default height");
+        }
         std::cout << "Track order tests passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL track order: " << e.what() << std::endl; return 1; }

@@ -51,6 +51,7 @@ const juce::Identifier groupFoldedProperty { "halftrackGroupFolded" };
 const juce::Identifier launchModeProperty { "halftrackLaunchMode" };
 const juce::Identifier launchQuantisationProperty { "halftrackLaunchQuantisation" };
 const juce::Identifier launchLegatoProperty { "halftrackLaunchLegato" };
+const juce::Identifier trackHeightProperty { "halftrackHeight" };
 // An editing grid: a HALFTRACKGRID child of the Edit for the Arrangement's, or of a clip for its
 // editor's. It is read back through validation, so a damaged or older one reads as the default, and
 // written without an undo manager, so it is neither an undo step nor an unsaved change.
@@ -4794,6 +4795,7 @@ Session::Snapshot Session::snapshot() const
         info.mute = t->isMuted (false); info.solo = t->isSolo (false);
         info.isMidi = t->state.getProperty (midiTrackProperty, false);
         info.isReturn = isReturn (*t);
+        if (const int height = t->state.getProperty (trackHeightProperty, 0); height >= Session::minimumTrackHeight && height <= Session::maximumTrackHeight) info.height = height;
         if (info.isReturn) info.sendMode = sendMode (*t);
         else for (auto* destination : te::getAudioTracks (e))
             if (isReturn (*destination))
@@ -9616,6 +9618,16 @@ Result Session::renameClip(const String& id,const String& name)
     // This command changes only the project-owned display name.
     found->state.setProperty(te::IDs::name,trimmed,&impl->edit->getUndoManager());
     impl->changed();return Result::ok();
+}
+Result Session::setTrackHeight (const String& trackId, int pixels)
+{
+    if (pixels != 0 && (pixels < minimumTrackHeight || pixels > maximumTrackHeight)) return Result::fail ("A track is " + String (minimumTrackHeight) + " to " + String (maximumTrackHeight) + " pixels high.");
+    auto* track = impl->track (trackId);
+    if (track == nullptr) return Result::fail ("Track not found.");
+    if ((int) track->state.getProperty (trackHeightProperty, 0) == pixels) return Result::ok();
+    if (pixels == 0) track->state.removeProperty (trackHeightProperty, nullptr);
+    else track->state.setProperty (trackHeightProperty, pixels, nullptr);
+    sendChangeMessage(); return Result::ok();
 }
 Result Session::renameTrack (int index, const String& name)
 {

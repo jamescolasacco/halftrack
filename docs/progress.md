@@ -1872,3 +1872,13 @@ UI area.
 
 - **Editing.** In Automation Mode, the breakpoints inside a time selection drag together, Shift-dragging a segment moves it, and the envelope's context menu offers Simplify Envelope over the selection, as in the reference. Automation lanes' backgrounds select time.
 - **Measured.** The UI suite.
+
+## Track heights and optimizing the view — 2026-10-22
+
+Engine and UI areas.
+
+- **Heights.** Arrangement tracks resize from the split line under their headers, all at once with Option/Alt, and with Option/Alt +/- and Option/Alt-scrolling. Heights are saved with the project.
+- **Optimize.** H fits every track into the view and W fits the length, each toggling back, as in the reference.
+- **Measured.** The track order suite and the UI suite.
+
+See [the contract](research/track-heights-contract.md).

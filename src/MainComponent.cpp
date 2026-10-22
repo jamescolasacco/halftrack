@@ -953,6 +953,10 @@ public:
             else if (timeSelection.active()) selectionCommand (78); else deleteSelectedClip();
             return true;
         }
+        if (key.getModifiers().isAltDown() && ! cmd && ! showSession && (code == '=' || code == '+' || code == '-'))
+        { scaleTrackHeight (selectedTrack, code == '-' ? 1 / 1.25 : 1.25); return true; }
+        if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'H' || code == 'h')) { optimizeHeight(); return true; }
+        if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'W' || code == 'w')) { optimizeWidth(); return true; }
         if (key.getTextCharacter() == '+' || key.getTextCharacter() == '=') { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); return true; }
         if (key.getTextCharacter() == '-') { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); return true; }
         return false;
@@ -1209,7 +1213,7 @@ private:
                     if (state.groups[(size_t) g].id == track.groupId) { lanes.push_back ({ true, g, y, groupHeight }); y += groupHeight; }
             open = track.groupId;
             const auto* group = groupInfo (track.groupId);
-            const int height = group != nullptr && group->folded ? 0 : trackHeight;
+            const int height = group != nullptr && group->folded ? 0 : track.height > 0 ? track.height : trackHeight;
             lanes.push_back ({ false, t, y, height }); y += height;
             if (height > 0 && takeLanesShown.count (track.id))
                 for (int k = 0; k < (int) track.takeLanes.size(); ++k) { lanes.push_back ({ false, t, y, takeLaneHeight, -1, k }); y += takeLaneHeight; }
@@ -1223,6 +1227,52 @@ private:
     { for (const auto& lane : lanes) if (! lane.group && lane.automation < 0 && lane.take < 0 && lane.index == track) return lane.y; return track * trackHeight; }
     int laneHeight (int track) const
     { for (const auto& lane : lanes) if (! lane.group && lane.automation < 0 && lane.take < 0 && lane.index == track) return lane.height; return trackHeight; }
+    // Track heights, as in the reference: the split line under a header drags a track's height, with
+    // Option (Alt elsewhere) every track's; Option +/- and Option-scrolling in a lane change it.
+    void setTrackHeights (const juce::StringArray& ids, int pixels)
+    {
+        pixels = juce::jlimit (Session::minimumTrackHeight, Session::maximumTrackHeight, pixels);
+        for (const auto& id : ids) report (session.setTrackHeight (id, pixels == trackHeight ? 0 : pixels));
+        refresh(); resized(); canvas.repaint();
+    }
+    juce::StringArray allArrangementTracks() const { juce::StringArray ids; for (const auto& t : state.tracks) ids.add (t.id); return ids; }
+    void scaleTrackHeight (int track, double factor)
+    {
+        if (! juce::isPositiveAndBelow (track, (int) state.tracks.size())) return;
+        setTrackHeights ({ state.tracks[(size_t) track].id }, (int) std::round (laneHeight (track) * factor));
+    }
+    // Optimize Height (H) fits every track into the view, and again restores their heights; Optimize
+    // Width (W) fits the Arrangement's length into the view, and again restores the zoom.
+    std::optional<std::map<juce::String, int>> optimizedHeights;
+    std::optional<std::pair<double, double>> optimizedWidth;
+    void optimizeHeight()
+    {
+        if (optimizedHeights)
+        {
+            for (const auto& [id, height] : *optimizedHeights) report (session.setTrackHeight (id, height));
+            optimizedHeights.reset();
+        }
+        else
+        {
+            std::map<juce::String, int> saved;
+            int fixed = 0, count = 0;
+            for (const auto& lane : lanes)
+                if (lane.group || lane.automation >= 0 || lane.take >= 0) fixed += lane.height;
+                else if (lane.height > 0) ++count;
+            for (const auto& t : state.tracks) saved[t.id] = t.height;
+            if (count == 0) return;
+            const int each = juce::jlimit (Session::minimumTrackHeight, Session::maximumTrackHeight, (viewport.getHeight() - fixed) / count);
+            for (const auto& t : state.tracks) report (session.setTrackHeight (t.id, each));
+            optimizedHeights = std::move (saved);
+        }
+        refresh(); resized(); canvas.repaint();
+    }
+    void optimizeWidth()
+    {
+        if (optimizedWidth) { viewStart = optimizedWidth->first; pixelsPerSecond = optimizedWidth->second; optimizedWidth.reset(); updateScroll(); canvas.repaint(); ruler.repaint(); return; }
+        optimizedWidth = std::pair { viewStart, pixelsPerSecond };
+        fitTimeline();
+    }
     // The track a time selection takes at a canvas y: the track, or the track an automation lane belongs to.
     int selectionTrackAtY (int y) const
     {
@@ -1816,8 +1866,20 @@ private:
             automationDevice.setBounds (58, 27, w - 62, 18);
             automationControl.setBounds (58, 49, w - 90, 18); automationLane.setBounds (w - 28, 49, 24, 18);
         }
+        // The split line under an Arrangement header drags the track's height.
+        bool onSplitLine (juce::Point<int> at) const { return ! columnLayout && at.y >= getHeight() - 4; }
+        void mouseMove (const juce::MouseEvent& e) override { setMouseCursor (onSplitLine (e.getPosition()) ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor); }
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (heightAtDown <= 0) return;
+            const auto pixels = heightAtDown + e.getDistanceFromDragStartY();
+            owner.setTrackHeights (e.mods.isAltDown() ? owner.allArrangementTracks() : juce::StringArray { trackId }, pixels);
+        }
+        void mouseUp (const juce::MouseEvent&) override { heightAtDown = 0; }
         void mouseDown (const juce::MouseEvent& e) override
         {
+            heightAtDown = onSplitLine (e.getPosition()) && ! e.mods.isPopupMenu() ? getHeight() : 0;
+            if (heightAtDown > 0) return;
             if (! columnLayout && e.mods.isShiftDown() && ! e.mods.isPopupMenu())
             {
                 if (const auto* current = owner.currentTrack(); current != nullptr && current->id != trackId) owner.multiSelectedTracks.insert (current->id);
@@ -1831,6 +1893,7 @@ private:
     private:
         Impl& owner;
         int index;
+        int heightAtDown = 0;
         juce::String trackId;
         juce::Colour colour;
         float peakL = 0, peakR = 0;
@@ -2896,6 +2959,7 @@ private:
         void mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
         {
             if (event.mods.isCommandDown()) { owner.zoom (wheel.deltaY > 0 ? 1.12 : 1.0 / 1.12); return; }
+            if (event.mods.isAltDown() && wheel.deltaY != 0) { owner.scaleTrackHeight (owner.trackAtY (event.y), wheel.deltaY > 0 ? 1.12 : 1 / 1.12); return; }
             if (event.mods.isShiftDown() || std::abs (wheel.deltaX) > std::abs (wheel.deltaY))
             {
                 const auto delta = event.mods.isShiftDown() ? wheel.deltaY : wheel.deltaX;
@@ -13571,6 +13635,42 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (gridItem (221, pianoRoll.gridPlace()) && ! session.clipGrid (clipId).snap && noteGrid->getButtonText() == "Off", "Snap to Grid turns its snapping off");
             showArrangementView(); session.undo(); session.undo(); refresh();
             check (keys >= (int) state.tracks.size() || state.tracks[(size_t) keys].name != "Grid keys", "two undo steps remove the track");
+        }
+        {
+            // Track heights: the split line under a header drags one track's height, with Option/Alt every
+            // track's; Option/Alt +/- scales the selected track; H fits every track in and back; W fits the
+            // Arrangement's length and back.
+            session.stop(); showArrangementView(); refresh();
+            check (state.tracks.size() >= 2, "tracks to size");
+            const int t = 0;
+            selectTrack (t); refresh();
+            auto* row = canvas.getComponentAt (canvas.timelineWidth() + 20, laneY (t) + 10);
+            while (row != nullptr && row->getParentComponent() != &canvas) row = row->getParentComponent();
+            check (row != nullptr && laneHeight (t) == trackHeight, "the first track's header, at the default height");
+            const auto now = juce::Time::getCurrentTime();
+            const auto rowEvent = [&] (juce::Point<float> at, juce::Point<float> down, int modifiers, bool dragged)
+            { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers), 1.0f, 0, 0, 0, 0, row, row, now, down, now, 1, dragged); };
+            const auto split = juce::Point<float> (40.0f, (float) row->getHeight() - 2), lower = split.translated (0, 40);
+            row->mouseDown (rowEvent (split, split, 0, false)); row->mouseDrag (rowEvent (lower, split, 0, true)); row->mouseUp (rowEvent (lower, split, 0, true)); refresh();
+            check (laneHeight (t) == trackHeight + 40 && laneHeight (1) == trackHeight && state.tracks[0].height == trackHeight + 40, "dragging the split line makes the track 40 pixels taller, the others staying");
+            row = canvas.getComponentAt (canvas.timelineWidth() + 20, laneY (t) + 10);
+            while (row != nullptr && row->getParentComponent() != &canvas) row = row->getParentComponent();
+            const auto split2 = juce::Point<float> (40.0f, (float) row->getHeight() - 2), higher = split2.translated (0, -60);
+            row->mouseDown (rowEvent (split2, split2, juce::ModifierKeys::altModifier, false)); row->mouseDrag (rowEvent (higher, split2, juce::ModifierKeys::altModifier, true));
+            row->mouseUp (rowEvent (higher, split2, juce::ModifierKeys::altModifier, true)); refresh();
+            bool same = true;
+            for (int i = 0; i < (int) state.tracks.size(); ++i) same = same && laneHeight (i) == trackHeight - 20;
+            check (same, "with Option/Alt held, every track takes the new height");
+            const auto before = laneHeight (t);
+            check (handleKey (juce::KeyPress ('=', juce::ModifierKeys::altModifier, 0)) && laneHeight (t) == (int) std::round (before * 1.25), "Option/Alt + scales the selected track up");
+            check (handleKey (juce::KeyPress ('-', juce::ModifierKeys::altModifier, 0)) && std::abs (laneHeight (t) - before) <= 1, "and Option/Alt - back down");
+            check (handleKey (juce::KeyPress ('h', {}, 'h')) && laneY ((int) state.tracks.size() - 1) + laneHeight ((int) state.tracks.size() - 1) <= viewport.getHeight() + (int) state.tracks.size(),
+                   "H fits every track into the view");
+            check (handleKey (juce::KeyPress ('h', {}, 'h')) && laneHeight (t) == before && laneHeight (1) == trackHeight - 20, "and H again restores their heights");
+            const auto zoomBefore = pixelsPerSecond, startBefore = viewStart;
+            check (handleKey (juce::KeyPress ('w', {}, 'w')) && handleKey (juce::KeyPress ('w', {}, 'w')) && pixelsPerSecond == zoomBefore && viewStart == startBefore, "W fits the width and W again restores the zoom");
+            setTrackHeights (allArrangementTracks(), trackHeight);
+            check (laneHeight (t) == trackHeight && state.tracks[0].height == 0, "back to the default height");
         }
         {
             // Create > Consolidate Time to New Scene makes a scene of the selected time.
