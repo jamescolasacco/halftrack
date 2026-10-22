@@ -1553,3 +1553,12 @@ Engine change in `src/PluginBinary.*` (new), `src/Session.cpp`, `src/Main.cpp`, 
 - **Architectures.** A plug-in built only for another CPU architecture (an Intel-only plug-in on Apple silicon, say) is now explained when inserted or opened, instead of only failing to load. The explanation says what it is built for and what to install.
 
 See [the contract](research/plugin-timing-contract.md#architectures).
+
+## Screen reader titles — 2026-10-21
+
+UI change in `src/MainComponent.cpp` and `src/NativeEffectEditor.cpp`, with documentation.
+
+- **Titles.** Every visible control in the main views has a spoken title: track controls with their track's name, device controls with their device's, the rest with their readable names. The major regions have titles and descriptions.
+- **Audit.** The UI control audit checks the titles in three views.
+
+See [the contract](research/control-audit-contract.md#screen-readers).

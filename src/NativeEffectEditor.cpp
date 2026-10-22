@@ -70,7 +70,7 @@ public:
             if (compact) { labels[i].setFont (juce::FontOptions (9.5f)); labels[i].setJustificationType (juce::Justification::centred); labels[i].setMinimumHorizontalScale (.75f); }
             if (spec.choices)
             {
-                auto& control = choices[i]; control.setName (spec.key);
+                auto& control = choices[i]; control.setName (spec.key); control.setTitle (juce::String (effectName (kind)) + " " + spec.label); // Spoken by screen readers.
                 control.addItemList (juce::StringArray::fromTokens (spec.choices, "|", ""), 1);
                 control.onChange = [this, i] { edit (i, static_cast<float> (choices[i].getSelectedId()-1)); };
                 if (showAutomation) control.addMouseListener (this, false);
@@ -78,7 +78,8 @@ public:
             }
             else
             {
-                auto& control = sliders[i]; control.setName (spec.key); control.setRange (spec.minimum, spec.maximum, spec.integer ? 1.0 : 0.0);
+                auto& control = sliders[i]; control.setName (spec.key); control.setTitle (juce::String (effectName (kind)) + " " + spec.label);
+                control.setRange (spec.minimum, spec.maximum, spec.integer ? 1.0 : 0.0);
                 if (spec.midpoint > spec.minimum && spec.midpoint < spec.maximum && spec.midpoint != 0)
                     control.setSkewFactorFromMidPoint (spec.midpoint);
                 control.setSliderStyle (kind == Session::EffectKind::equalizer && ! compact ? juce::Slider::LinearHorizontal : juce::Slider::RotaryHorizontalVerticalDrag);

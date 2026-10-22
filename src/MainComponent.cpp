@@ -453,6 +453,13 @@ public:
         browserSearch.setTextToShowWhenEmpty ("Search this folder", muted);
         browserSearch.setFont (font (12.0f));
         browserSearch.onTextChange = [this] { updateBrowser(); };
+        // The large regions a screen reader moves between, each with what it holds.
+        browserSearch.setTitle ("Browser search");
+        browserList.setTitle ("Browser"); browserList.setDescription ("Devices, plug-ins, samples and grooves of the chosen category");
+        canvas.setTitle ("Arrangement"); canvas.setDescription ("Tracks and their clips along the timeline");
+        launcher.setTitle ("Session"); launcher.setDescription ("Clip slots by track and scene, with scene launch buttons and the mixer");
+        pianoRoll.setTitle ("MIDI clip editor"); pianoRoll.setDescription ("The selected clip's notes by pitch and time");
+        deviceChain.setTitle ("Devices"); deviceChain.setDescription ("The selected track's devices in order");
         browserList.setModel (this);
         browserList.setRowHeight (21);
         browserList.setOutlineThickness (0);
@@ -1341,6 +1348,12 @@ private:
                                             : juce::String (midi ? "Arm track for MIDI recording" : "Arm track for audio recording"));
             for (auto [button, name] : { std::pair { &mute, "mute" }, std::pair { &solo, "solo" }, std::pair { &arm, "arm" } })
                 button->getProperties().set ("midiMapTarget", returnTrack ? juce::String() : "track:" + track.id + ":" + name);
+            // Screen readers speak each control with its track's name.
+            mute.setTitle (track.name + " track activator"); solo.setTitle (track.name + " solo"); arm.setTitle (track.name + " arm");
+            gain.setTitle (track.name + " volume"); pan.setTitle (track.name + " pan"); delay.setTitle (track.name + " track delay");
+            input.setTitle (track.name + " input"); monitor.setTitle (track.name + " monitoring"); output.setTitle (track.name + " output");
+            sendMode.setTitle (track.name + " send position");
+            if (sideA != nullptr) { sideA->setTitle (track.name + " crossfader A"); sideB->setTitle (track.name + " crossfader B"); }
             auto names = owner.session.inputNames (midi);
             // Audio From another track: the tracks this one may take audio from, by name.
             juce::StringArray sources, sourceLabels;
@@ -6159,6 +6172,7 @@ private:
             missing = info.missing; loadError = info.loadError;
             power.setToggleState (info.enabled, juce::dontSendNotification);
             power.getProperties().set ("midiMapTarget", "device:" + pluginId + ":on");
+            power.setTitle (name + " on"); open.setTitle ("Open " + name + " in its own window"); remove.setTitle ("Remove " + name);
             open.setEnabled (! missing); open.setTooltip (missing ? "This plug-in is missing" : "Open this device in its own window");
             if (controls != nullptr) { controls->setVisible (! missing); if (! missing) controls->sync (info); }
             repaint();
@@ -7304,6 +7318,23 @@ private:
         if (mapping()) { mappingList.sync(); mapOverlay.repaint(); }
         updateScroll();
         followView();
+        titleControls (*this);
+    }
+    // Screen readers speak a control by its title. Controls named for people ("Track volume") take
+    // that name; ones whose names are identifiers have titles set where they are made.
+    static bool readableName (const juce::String& name)
+    {
+        return name.length() >= 3 && ! name.containsChar ('_')
+            && (name.containsAnyOf (" -") || (juce::CharacterFunctions::isUpperCase (name[0]) && ! name.substring (1).containsAnyOf ("ABCDEFGHIJKLMNOPQRSTUVWXYZ")));
+    }
+    void titleControls (juce::Component& parent)
+    {
+        for (auto* child : parent.getChildren())
+        {
+            const bool control = dynamic_cast<juce::Button*> (child) || dynamic_cast<juce::Slider*> (child) || dynamic_cast<juce::ComboBox*> (child) || dynamic_cast<juce::TextEditor*> (child);
+            if (control && child->getTitle().isEmpty() && readableName (child->getName())) child->setTitle (child->getName());
+            if (dynamic_cast<juce::Slider*> (child) == nullptr && dynamic_cast<juce::ComboBox*> (child) == nullptr) titleControls (*child);
+        }
     }
     void timerCallback() override
     {
@@ -12498,6 +12529,27 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             };
             visit (*this, {});
             check (idle.isEmpty(), "in " + view + ", every visible control works or is disabled" + (idle.isEmpty() ? juce::String() : ": " + idle.joinIntoString (", ")));
+            // And a screen reader can name each one: it is accessible, and what JUCE's handler would
+            // speak (its title, or a button's text when it has none) is a name, not a letter. Handlers
+            // exist only for components on a native window, which these checks do not open.
+            juce::StringArray unnamed;
+            const std::function<void (juce::Component&)> spoken = [&] (juce::Component& c)
+            {
+                if (! c.isVisible()) return;
+                const bool control = dynamic_cast<juce::Button*> (&c) || dynamic_cast<juce::Slider*> (&c) || dynamic_cast<juce::ComboBox*> (&c) || dynamic_cast<juce::TextEditor*> (&c);
+                if (control)
+                {
+                    auto title = c.getTitle();
+                    if (auto* button = dynamic_cast<juce::Button*> (&c); button != nullptr && title.isEmpty()) title = button->getButtonText();
+                    if (! c.isAccessible() || title.trim().length() < 3)
+                        unnamed.add ((c.getName().isNotEmpty() ? c.getName() : juce::String (typeid (c).name())) + " '" + title + "'");
+                    if (dynamic_cast<juce::Slider*> (&c) || dynamic_cast<juce::ComboBox*> (&c)) return;
+                }
+                if (dynamic_cast<juce::ScrollBar*> (&c) != nullptr) return;
+                for (auto* child : c.getChildren()) spoken (*child);
+            };
+            spoken (*this);
+            check (unnamed.isEmpty(), "in " + view + ", a screen reader can name every visible control" + (unnamed.isEmpty() ? juce::String() : ": " + unnamed.joinIntoString (", ")));
         };
         check (session.newProject().wasOk() && session.importAudio (audioFixture, 0).wasOk(), "a project to audit"); refresh();
         check (session.addNativeEffect (0, Session::EffectKind::eqThree).wasOk() && session.addMidiTrack ("Audit").wasOk(), "with a device and a MIDI track"); refresh();
@@ -12509,6 +12561,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         audit ("the Session View");
         showArrangementView(); selectTrack (midi); selectedClip = 0; refresh(); openPianoRoll(); refresh();
         audit ("the MIDI clip editor");
+        check (canvas.getTitle() == "Arrangement" && launcher.getTitle() == "Session" && pianoRoll.getTitle().isNotEmpty() && deviceChain.getTitle() == "Devices" && browserList.getTitle() == "Browser",
+               "the major regions have titles and descriptions for a screen reader");
         closeClipView(); showArrangementView(); refresh();
     }
 }
