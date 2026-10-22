@@ -201,6 +201,10 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `WarpSettings` carries the mode and each mode's settings; `setAudioClipWarp` maps Beats, Tones, Texture and Complex Pro to the engine stretcher modes that `cmake/PatchWarpModes.cmake` adds, and their settings to the stretch options' four Halftrack values. `src/WarpStretchers.*` holds the stretchers, registered with the engine when a Session starts. They allocate when created and not while processing. Transposition is part of `AudioClipSettings`, kept in clip properties and applied as the clip's pitch change. See the [contract](research/warp-modes-contract.md).
 
+## Video
+
+`video` (in `src/VideoMedia.*`) reads, writes and muxes movies through AVFoundation on macOS. On other systems it reports that movies are unsupported. A video clip is an audio clip with a `halftrackVideo` property naming its movie, resolved through the edit's file path resolver. Session collects the movie on save as it collects audio sources. The interface's Video window uses JUCE's `VideoComponent` and follows `Session::videoAt` from the window timer. See the [contract](research/video-contract.md).
+
 ## Recording latency
 
 The engine places takes by the device's reported latency and each input's record adjustment. The Session sets every audio input's adjustment from the Driver Error Compensation preference whenever recording starts, and reports the device's latency through `audioLatency()`. The input placement patch aligns input stamping with the output rendered in the same callback. See the [contract](research/recording-latency-contract.md).

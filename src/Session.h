@@ -31,6 +31,10 @@ public:
         // Exact [start, end) seconds, rounded to output frames. Requires zero tail.
         std::optional<juce::Range<double>> timeRange;
         bool stems = false; // Chosen in the export window: render every track to its own file with exportStems.
+        // Export Video: also a QuickTime movie beside the audio (its name with .mov), of the picture of
+        // the video clip under the export's start for the exported time, with the exported sound. An
+        // existing movie there is kept unless replaceVideo says to replace it.
+        bool video = false, replaceVideo = false;
     };
     enum class FollowAction { off, stop, replay, previous, next, first, last, cycle, any, other };
     // A track's side of the crossfader; unassigned tracks ignore it.
@@ -323,6 +327,8 @@ public:
         ClipLoop loop;
         std::vector<ClipEnvelope> envelopes; // Envelopes with points, in the order they were added.
         bool mediaMissing = false; // An audio clip whose file is not on disk plays silence.
+        // A video clip: an audio clip holding a movie's sound, whose picture plays with it.
+        juce::File videoFile;
     };
     struct LocatorInfo { juce::String id, name; double position = 0; };
     // The project meter. Beats are quarter notes at every meter, so a bar is numerator x 4 / denominator beats.
@@ -700,6 +706,15 @@ public:
     juce::Result linkTracks (const juce::StringArray& trackIds, juce::String& linkId);
     juce::Result unlinkTracks (const juce::StringArray& trackIds);
     juce::Result importAudio (const juce::File&, int trackIndex = -1, double startSeconds = 0);
+    // Imports a movie, after the reference: its sound becomes an audio clip (a new track's, by default,
+    // named after the movie) that keeps the movie, so its picture plays with it in the Video window
+    // and can be exported with the mix. The movie and its sound are collected into the project. A
+    // video clip plays at its own speed: it is not warped or reversed. One undo step. Movies are
+    // supported on macOS.
+    juce::Result importVideo (const juce::File& movie, int trackIndex = -1, double startSeconds = 0);
+    // The movie frame shown at a time: the first video clip there, track by track, that is active.
+    struct VideoFrame { juce::File movie; double seconds = 0; juce::String clipId; };
+    std::optional<VideoFrame> videoAt (double seconds) const;
     juce::Result setAudioClipSettings (const juce::String& clipId, const AudioClipSettings&);
     juce::Result setAudioClipReversed (const juce::String& clipId, bool reversed);
     // Arrangement clips may turn warping off; Session slots always follow the tempo.

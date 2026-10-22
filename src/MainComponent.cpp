@@ -15,6 +15,10 @@
 #include "NoteTools.h"
 #include "Packs.h"
 #include "Session.h"
+#include "VideoMedia.h"
+#if JUCE_MAC
+ #include <juce_video/juce_video.h>
+#endif
 
 #include <typeinfo>
 #include <algorithm>
@@ -7027,6 +7031,61 @@ private:
     AudioClipView audioClipView { *this };
     LaunchBox midiLaunch { *this };
     LoopBox clipLoop { *this };
+   #if JUCE_MAC
+    // The Video window, after the reference's: the picture of the video clip under the play head,
+    // playing along while the transport plays. The clip plays the movie's sound, so the picture is silent.
+    class VideoWindow final : public juce::DocumentWindow
+    {
+    public:
+        VideoWindow() : DocumentWindow ("Video", juce::Colours::black, DocumentWindow::closeButton)
+        {
+            setUsingNativeTitleBar (true); setResizable (true, false);
+            picture.setName ("Video picture");
+            setContentNonOwned (&picture, false);
+            centreWithSize (480, 270);
+        }
+        void closeButtonPressed() override { setVisible (false); }
+        void follow (const std::optional<Session::VideoFrame>& frame, bool playing)
+        {
+            if (! frame)
+            {
+                if (shown != juce::File()) { picture.closeVideo(); shown = juce::File(); }
+                return;
+            }
+            if (frame->movie != shown)
+            {
+                if (picture.load (frame->movie).failed()) return;
+                picture.setAudioVolume (0); shown = frame->movie;
+            }
+            const auto at = picture.getPlayPosition();
+            if (playing)
+            {
+                // Played along, and moved back into step when it drifts more than 0.1 s.
+                if (! picture.isPlaying()) { picture.setPlayPosition (frame->seconds); picture.play(); }
+                else if (std::abs (at - frame->seconds) > 0.1) picture.setPlayPosition (frame->seconds);
+            }
+            else
+            {
+                if (picture.isPlaying()) picture.stop();
+                if (std::abs (at - frame->seconds) > 0.001) picture.setPlayPosition (frame->seconds);
+            }
+        }
+        juce::File shownMovie() const { return shown; }
+        double position() const { return picture.getPlayPosition(); }
+    private:
+        juce::VideoComponent picture { false };
+        juce::File shown;
+    };
+    std::unique_ptr<VideoWindow> videoWindow;
+   #endif
+    void toggleVideoWindow()
+    {
+       #if JUCE_MAC
+        if (videoWindow == nullptr) videoWindow = std::make_unique<VideoWindow>();
+        videoWindow->setVisible (! videoWindow->isVisible());
+        if (videoWindow->isVisible()) videoWindow->follow (session.videoAt (state.position), state.playing);
+       #endif
+    }
     bool midiMapMode = false;
     MapOverlay mapOverlay { *this };
     MappingList mappingList { *this };
@@ -7962,6 +8021,9 @@ private:
         ++ticks;
         if (ticks % insertBlinkTicks == 0) canvas.repaint(); // The insert marker flashes.
         refresh();
+       #if JUCE_MAC
+        if (videoWindow != nullptr && videoWindow->isVisible()) videoWindow->follow (session.videoAt (state.position), state.playing);
+       #endif
         if (recoveryFile != juce::File() && ++recoveryTicks >= recoveryIntervalTicks) { recoveryTicks = 0; autosave(); }
     }
     void changeListenerCallback (juce::ChangeBroadcaster* source) override
@@ -8147,7 +8209,11 @@ private:
         {
             popup.addItem (45, "Session"); popup.addItem (43, "Arrangement"); popup.addItem (44, "Piano Roll"); popup.addItem (46, "Automation..."); popup.addItem (47, "Master Volume Automation..."); popup.addSeparator();
             popup.addItem (48, "Show Take Lanes", currentTrack() != nullptr && ! currentTrack()->isReturn && ! showSession, currentTrack() != nullptr && takeLanesShown.count (currentTrack()->id) > 0);
-            popup.addItem (49, "Automation Mode", ! showSession, automationMode); popup.addItem (90, "Info", true, showInfo); popup.addSeparator();
+            popup.addItem (49, "Automation Mode", ! showSession, automationMode); popup.addItem (90, "Info", true, showInfo);
+           #if JUCE_MAC
+            popup.addItem (92, "Video Window", video::supported(), videoWindow != nullptr && videoWindow->isVisible());
+           #endif
+            popup.addSeparator();
             const bool canZoom = ! showSession || showPiano;
             popup.addItem (40, showPiano ? "Fit Piano Roll" : "Fit Arrangement", canZoom); popup.addItem (41, "Zoom In", canZoom); popup.addItem (42, "Zoom Out", canZoom);
         }
@@ -8201,6 +8267,7 @@ private:
             case 48: toggleTakeLanes(); break;
             case 49: setAutomationMode (! automationMode); break;
             case 90: showInfo = ! showInfo; resized(); break;
+            case 92: toggleVideoWindow(); break;
             case aboutItem: showAbout(); break;
             case 20: session.undo(); break;
             case 21: session.redo(); break;
@@ -8338,7 +8405,7 @@ private:
     {
         if (currentTrack() != nullptr && currentTrack()->isReturn) return;
         if (showSession) { importSlotDialog (selectedTrack, selectedSceneIndex()); return; }
-        chooser = std::make_unique<juce::FileChooser> ("Import Audio", browserFolder, "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
+        chooser = std::make_unique<juce::FileChooser> ("Import Audio", browserFolder, juce::String ("*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3") + (video::supported() ? ";*.mov;*.mp4;*.m4v" : ""));
         auto safe = juce::Component::SafePointer<Impl> (this);
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems,
             [safe] (const juce::FileChooser& fc)
@@ -8358,6 +8425,12 @@ private:
         {
             juce::File file (path);
             if (isAudio (file)) audioFiles.push_back (file);
+            // A movie comes in as a video clip, on the chosen audio track while it is empty, otherwise a track of its own.
+            else if (video::isMovie (file))
+            {
+                const bool onChosen = track >= 0 && track < (int) state.tracks.size() && ! state.tracks[(size_t) track].isMidi && state.tracks[(size_t) track].clips.empty();
+                report (session.importVideo (file, onChosen ? track : -1, at), "Imported " + file.getFileName() + "."); refresh();
+            }
         }
         std::sort (audioFiles.begin(), audioFiles.end(), [] (const auto& a, const auto& b)
         {
@@ -8417,7 +8490,7 @@ private:
     class AudioExportDialog final : public juce::AlertWindow
     {
     public:
-        AudioExportDialog (juce::Component& parent, Theme& look, juce::Range<double> loop)
+        AudioExportDialog (juce::Component& parent, Theme& look, juce::Range<double> loop, bool hasVideo = false)
             : AlertWindow ("Export Audio", {}, juce::MessageBoxIconType::NoIcon, &parent), capturedLoop (loop)
         {
             setLookAndFeel (&look);
@@ -8435,18 +8508,23 @@ private:
             getComboBoxComponent ("bit-depth")->setSelectedItemIndex (1, juce::dontSendNotification);
             addComboBox ("effect-tail", { "0 seconds (none)", "1 second", "2 seconds", "5 seconds", "10 seconds", "30 seconds", "60 seconds" }, {});
             getComboBoxComponent ("effect-tail")->setSelectedItemIndex (2, juce::dontSendNotification);
+            // Create Video, after the reference: a movie of the video clip's picture with the exported sound.
+            addComboBox ("video", { "Audio only", "Create Video (the video clip's picture with this sound)" }, {});
+            getComboBoxComponent ("video")->setEnabled (hasVideo);
+            getComboBoxComponent ("video")->setDescription (hasVideo ? "Also write a QuickTime movie beside the audio: the picture of the video clip under the export's start, with the exported sound."
+                                                                     : "Create Video needs a video clip in the Arrangement.");
             addButton ("Choose Destination...", 1, juce::KeyPress (juce::KeyPress::returnKey));
             addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
             error.setName ("Export validation"); error.setColour (juce::Label::textColourId, orange);
             error.setJustificationType (juce::Justification::centredLeft); addAndMakeVisible (error);
-            const juce::StringArray order { "range", "rendered", "range-start", "range-end", "format", "channels", "sample-rate", "bit-depth", "normalization", "effect-tail" };
-            const juce::StringArray titles { "Export range", "Rendered track", "Start in seconds", "End in seconds", "File format", "Output channels", "Sample rate", "Bit depth", "Normalize exported peak", "Extra reverb and delay tail" };
+            const juce::StringArray order { "range", "rendered", "range-start", "range-end", "format", "channels", "sample-rate", "bit-depth", "normalization", "effect-tail", "video" };
+            const juce::StringArray titles { "Export range", "Rendered track", "Start in seconds", "End in seconds", "File format", "Output channels", "Sample rate", "Bit depth", "Normalize exported peak", "Extra reverb and delay tail", "Video" };
             getComboBoxComponent ("rendered")->setDescription ("Export the Master mix, or every track, group and return to its own file in a folder.");
             for (int i = 0; i < order.size(); ++i)
                 if (auto* control = controlNamed (order[i])) { control->setExplicitFocusOrder (i + 1); control->setTitle (titles[i]); }
             getComboBoxComponent ("range")->setDescription ("Export the entire arrangement, captured loop endpoints, or a custom time interval.");
             getTextEditor ("range-end")->setDescription ("End time, up to 172800 seconds. Selected ranges add no extra tail.");
-            getButton (0)->setExplicitFocusOrder (11); getButton (1)->setExplicitFocusOrder (12);
+            getButton (0)->setExplicitFocusOrder (12); getButton (1)->setExplicitFocusOrder (13);
             getComboBoxComponent ("range")->onChange = [this] { updateRangeControls(); };
             getComboBoxComponent ("format")->onChange = [this]
             {
@@ -8455,7 +8533,7 @@ private:
                 if (! canUse32 && depth->getSelectedId() == 3) depth->setSelectedId (2, juce::dontSendNotification);
             };
             updateRangeControls (true);
-            centreAroundComponent (&parent, 640, 550); layoutControls();
+            centreAroundComponent (&parent, 640, 610); layoutControls();
         }
         ~AudioExportDialog() override { setLookAndFeel (nullptr); }
         void resized() override { layoutControls(); }
@@ -8474,6 +8552,7 @@ private:
             label ("range", "Export range"); label ("rendered", "Rendered track"); label ("range-start", "Start (seconds)"); label ("range-end", "End (seconds)");
             label ("format", "File format"); label ("channels", "Output channels"); label ("sample-rate", "Sample rate");
             label ("bit-depth", "Bit depth"); label ("normalization", "Normalize exported peak"); label ("effect-tail", "Extra reverb / delay tail");
+            label ("video", "Video");
             const auto range = getComboBoxComponent ("range")->getSelectedItemIndex();
             g.drawFittedText (range == 0 ? "Extra tail time is added after the arrangement ends."
                 : range == 1 ? "Uses the loop endpoints captured when this window opened. No extra tail is added."
@@ -8494,10 +8573,11 @@ private:
             place ("format", 0, 278); place ("channels", 1, 278);
             place ("sample-rate", 0, 338); place ("bit-depth", 1, 338);
             place ("normalization", 0, 398); place ("effect-tail", 1, 398);
-            error.setBounds (20, 438, width - 40, 49);
+            place ("video", 0, 458, true);
+            error.setBounds (20, 498, width - 40, 49);
             if (getNumButtons() >= 2)
             {
-                getButton (0)->setBounds (width - 286, 502, 172, 28); getButton (1)->setBounds (width - 102, 502, 82, 28);
+                getButton (0)->setBounds (width - 286, 562, 172, 28); getButton (1)->setBounds (width - 102, 562, 82, 28);
             }
         }
         void updateRangeControls (bool initialise = false)
@@ -8551,6 +8631,7 @@ private:
         settings.normalizePeak = normalization > 0;
         settings.peakCeilingDb = normalization == 2 ? -3.0f : normalization == 3 ? 0.0f : -1.0f;
         settings.stems = dialog.getComboBoxComponent ("rendered")->getSelectedItemIndex() == 1;
+        if (auto* videoChoice = dialog.getComboBoxComponent ("video")) settings.video = videoChoice->isEnabled() && videoChoice->getSelectedItemIndex() == 1 && ! settings.stems;
         const auto mode = dialog.getComboBoxComponent ("range")->getSelectedItemIndex();
         if (mode == 0) return juce::Result::ok();
         auto start = dialog.capturedLoop.getStart(), end = dialog.capturedLoop.getEnd();
@@ -8582,7 +8663,9 @@ private:
     {
         if (session.isExporting()) return;
         const auto current = session.snapshot(); const auto generation = current.projectGeneration;
-        auto* alert = new AudioExportDialog (*this, theme, { current.loopStart, current.loopEnd });
+        const bool hasVideo = std::any_of (current.tracks.begin(), current.tracks.end(), [] (const auto& t)
+        { return std::any_of (t.clips.begin(), t.clips.end(), [] (const auto& c) { return c.videoFile != juce::File(); }); });
+        auto* alert = new AudioExportDialog (*this, theme, { current.loopStart, current.loopEnd }, hasVideo);
         alerts.emplace_back (alert);
         auto safe = juce::Component::SafePointer<Impl> (this);
         auto dialog = juce::Component::SafePointer<AudioExportDialog> (alert);
@@ -8650,6 +8733,23 @@ private:
     {
         if (selected == juce::File() || ! exportProjectMatches (generation)) return;
         const auto destination = selected.withFileExtension (exportExtension (settings.format));
+        // Create Video writes a movie beside the audio, which needs its own choice to replace.
+        if (const auto movie = destination.withFileExtension (".mov"); settings.video && ! settings.replaceVideo && movie.existsAsFile())
+        {
+            auto* alert = new juce::AlertWindow ("Replace Existing Movie?", "Create Video writes " + movie.getFileName() + ". Replace the existing movie?", juce::MessageBoxIconType::WarningIcon, this);
+            alert->setLookAndFeel (&theme);
+            alert->addButton ("Replace", 1);
+            alert->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+            alerts.emplace_back (alert);
+            auto safe = juce::Component::SafePointer<Impl> (this);
+            alert->enterModalState (true, juce::ModalCallbackFunction::create ([safe, selected, settings, generation] (int result)
+            {
+                if (result != 1 || safe == nullptr) return;
+                auto replacing = settings; replacing.replaceVideo = true;
+                safe->exportAudioSelection (selected, replacing, generation);
+            }), true);
+            return;
+        }
         // The native chooser only confirmed the spelling it returned. Adding the
         // chosen extension can name another existing file, which needs its own choice.
         if (destination != selected && destination.existsAsFile())
@@ -9715,7 +9815,8 @@ private:
     void returnKeyPressed (int row) override { activateBrowserRow (row); }
     bool isInterestedInFileDrag (const juce::StringArray& files) override
     {
-        for (const auto& path : files) if (isAudio (juce::File (path)) || juce::File (path).hasFileExtension ("halftrack")) return true;
+        for (const auto& path : files)
+            if (isAudio (juce::File (path)) || juce::File (path).hasFileExtension ("halftrack") || (video::supported() && video::isMovie (juce::File (path)))) return true;
         return false;
     }
     void fileDragEnter (const juce::StringArray&, int, int) override { canvas.dragHover = true; canvas.repaint(); }
@@ -9792,7 +9893,7 @@ void MainComponent::Impl::runExportInteractionChecks (const juce::File& audioFix
     check (dialog->getTextEditorContents ("range-start").isEmpty() && dialog->getTextEditorContents ("range-end").isEmpty()
         && dialog->getComboBoxComponent ("range")->getTitle() == "Export range",
         "entire export does not mislabel loop endpoints and keeps accessible control titles");
-    check (dialog->getWidth() == 640 && dialog->getHeight() == 550, "compact export dialog fits a laptop display");
+    check (dialog->getWidth() == 640 && dialog->getHeight() == 610, "compact export dialog fits a laptop display");
     for (auto* child : dialog->getChildren())
         if (dynamic_cast<juce::ComboBox*> (child) || dynamic_cast<juce::TextEditor*> (child) || dynamic_cast<juce::Button*> (child))
             check (dialog->getLocalBounds().contains (child->getBounds()), "every interactive export control is inside the dialog");
@@ -12631,6 +12732,37 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             timeSelection = {}; selectTrack (0); selectedClip = 0; refresh();
             check ((int) state.tracks.size() == rangeTrack, "five undo steps remove the range track");
         }
+       #if JUCE_MAC
+        {
+            // Movies: importing one makes a video clip, the Video window shows its frame under the play
+            // head, and Export Audio offers Create Video.
+            juce::TemporaryFile movieFile (".mov");
+            check (video::writeTestMovie (movieFile.getFile(), 50, 25, 64, 48, 440, 48000).wasOk(), "write a test movie");
+            const int before = (int) state.tracks.size();
+            importFiles ({ movieFile.getFile().getFullPathName() }, -1, 0); refresh();
+            check ((int) state.tracks.size() == before + 1 && state.tracks.back().clips.size() == 1 && state.tracks.back().clips[0].videoFile.existsAsFile(),
+                   "importing a movie makes a video clip on a track of its own");
+            menuItemSelected (92, 3);
+            check (videoWindow != nullptr && videoWindow->isVisible(), "View > Video Window opens it");
+            session.seek (0.6); refresh(); timerCallback();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+            check (videoWindow->shownMovie() == state.tracks.back().clips[0].videoFile && std::abs (videoWindow->position() - 0.6) < 0.05,
+                   "it shows the movie at the play head (" + juce::String (videoWindow->position(), 3) + " s)");
+            session.seek (5); refresh(); timerCallback();
+            check (videoWindow->shownMovie() == juce::File(), "past the clip it shows nothing");
+            menuItemSelected (92, 3);
+            check (! videoWindow->isVisible(), "View > Video Window closes it again");
+            exportDialog();
+            auto* exportWindow = dynamic_cast<AudioExportDialog*> (alerts.back().getComponent());
+            check (exportWindow != nullptr && exportWindow->getComboBoxComponent ("video")->isEnabled(), "Export Audio offers Create Video with a video clip in the Arrangement");
+            exportWindow->getComboBoxComponent ("video")->setSelectedItemIndex (1, juce::dontSendNotification);
+            Session::AudioExportSettings chosen;
+            check (readAudioExportSettings (*exportWindow, chosen).wasOk() && chosen.video, "choosing it asks for a movie with the export");
+            exportWindow->exitModalState (0); juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+            session.undo(); session.seek (0); refresh();
+            check ((int) state.tracks.size() == before, "one undo removes the movie's track");
+        }
+       #endif
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
             {

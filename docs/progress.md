@@ -1745,3 +1745,14 @@ Engine change in `src/Session.cpp` and `tests/RecordingStallTests.cpp` (new); th
 - **Measured.** `recording-stalls-acceptance` injects a 40 ms stall, six 8 ms callbacks in a row and a 100 ms stall into a 450-block take. Each drives the meter past 0.98. Before the fix, 6 callbacks fell silent and the take lost 6 blocks, its first wrong sample in the block after the first stall. After it, every sample is in order and the output never falls silent. The separation suite passed 3 of 3 runs at a load average of 6 to 8. It was not rerun at the original load of about 16.
 
 See [open questions](open-questions.md#cpu-overloads-during-takes).
+
+## Movies — 2026-10-22
+
+Engine, UI and root areas.
+
+- **Import.** On macOS, a QuickTime or MPEG-4 movie imports as a video clip: its sound is an audio clip that keeps the movie, both collected into the project.
+- **Video Window.** View > Video Window shows the clip's picture under the play head and plays along with the transport.
+- **Create Video.** Export Audio can also write a QuickTime movie of the picture with the exported sound.
+- **Measured.** A generated movie whose frames show their numbers reads back frame for frame, and the exported movie's sound equals the mix (`tests/VideoTests.cpp`).
+
+See [the contract](research/video-contract.md).

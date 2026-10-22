@@ -14,6 +14,7 @@
 #include "MackieControl.h"
 #include "PluginBinary.h"
 #include "TempoDetection.h"
+#include "VideoMedia.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 #include <array>
@@ -39,6 +40,7 @@ const juce::Identifier takeLanesType { "HALFTRACKTAKELANES" }, takeLaneType { "T
 const juce::Identifier repitchProperty { "halftrackRepitch" }; // Read by the Re-Pitch engine patch.
 const juce::Identifier transposeProperty { "halftrackTranspose" }, detuneProperty { "halftrackDetune" };
 const juce::Identifier implicitWarpEndProperty { "halftrackWarpEnd" }, warpMarkersPausedProperty { "halftrackWarpMarkersPaused" };
+const juce::Identifier videoProperty { "halftrackVideo" }; // A video clip's movie, absolute or relative to the project.
 const juce::Identifier recordQuantisationProperty { "halftrackRecordQuantisation" };
 const juce::Identifier countInProperty { "halftrackCountInBars" };
 const juce::Identifier inputTapProperty { "halftrackInputTap" }; // Read by the track-inputs engine patch.
@@ -700,7 +702,8 @@ bool canReverseAudio (te::WaveAudioClip& clip)
     return clip.getClipSlot() == nullptr && ! clip.isLooping() && ! clip.getAutoTempo() && ! clip.getWarpTime()
         && ! clip.getAutoPitch() && clip.getPitchChange() == 0 && clip.getSpeedRatio() == 1 && ! clip.isGrouped()
         && clip.getNumTakes (true) <= 1 && ! clip.isCurrentTakeComp() && clip.getClipEffects() == nullptr
-        && ! clip.isUsingARA() && ! clip.getClipTrack()->isFrozen (te::Track::anyFreeze);
+        && ! clip.isUsingARA() && ! clip.getClipTrack()->isFrozen (te::Track::anyFreeze)
+        && clip.state[videoProperty].toString().isEmpty(); // A movie's picture does not play backwards.
 }
 // Copying, cutting, pasting and duplicating take a MIDI clip whole, its loop and start with it.
 bool canCarryMidiClip (const te::MidiClip& clip)
@@ -1495,8 +1498,10 @@ Session::ClipInfo describeClip (te::Clip& clip)
         result.sourceLength = audio->getSourceLength().inSeconds(); result.canEditAudioRange = canEditAudioRange (*audio);
         result.canEditAudioFades = audio->getClipSlot() == nullptr;
         result.reversed = audio->getIsReversed(); result.canReverse = canReverseAudio (*audio);
-        result.warp = warpSettings (*audio); result.canWarp = ! audio->getIsReversed() && ! audio->isUsingARA() && ! audio->isGrouped();
+        result.warp = warpSettings (*audio);
+        result.canWarp = ! audio->getIsReversed() && ! audio->isUsingARA() && ! audio->isGrouped() && audio->state[videoProperty].toString().isEmpty();
         result.warpMarkers = warpMarkers (*audio);
+        if (const auto movie = audio->state[videoProperty].toString(); movie.isNotEmpty()) result.videoFile = clip.edit.filePathResolver (movie);
     }
     if (auto* midi = dynamic_cast<te::MidiClip*> (&clip))
     {
@@ -3037,6 +3042,7 @@ struct Session::Impl
     }
     // Preferences, read when the Session starts.
     Preferences prefs;
+    bool importingVideo = false; // A movie's sound keeps its own speed: no Auto-Warp.
     // Driver Error Compensation reaches every audio input before a recording starts.
     void applyDriverCompensation()
     {
@@ -5372,6 +5378,28 @@ Result Session::saveProject (const File& destination)
             node.setProperty (sampleSlotProperty (native->getKind(), slot), target.getRelativePathFrom (file.getParentDirectory()), nullptr);
             samples.push_back ({ native, slot, target });
         }
+    // Video clips' movies are collected the same way.
+    std::vector<std::pair<te::Clip*, File>> movies;
+    for (auto* t : te::getAudioTracks (*impl->edit))
+        for (auto* c : t->getClips())
+        {
+            const auto path = c->state[videoProperty].toString();
+            if (path.isEmpty()) continue;
+            const auto original = impl->edit->filePathResolver (path);
+            auto node = findStateWithID (state, c->state.getProperty (te::IDs::id));
+            if (! original.existsAsFile()) { node.setProperty (videoProperty, original.getRelativePathFrom (file.getParentDirectory()), nullptr); continue; }
+            File target;
+            if (original.isAChildOf (assets)) target = original;
+            else if (auto it = copied.find (original.getFullPathName()); it != copied.end()) target = it->second;
+            else
+            {
+                target = assets.getNonexistentChildFile (original.getFileNameWithoutExtension(), original.getFileExtension(), true);
+                if (! original.copyFileTo (target)) return Result::fail ("Could not collect the movie: " + original.getFileName());
+                copied[original.getFullPathName()] = target;
+            }
+            node.setProperty (videoProperty, target.getRelativePathFrom (file.getParentDirectory()), nullptr);
+            movies.emplace_back (c, target);
+        }
     juce::XmlElement document ("HALFTRACK");
     document.setAttribute ("version", 1);
     document.addChildElement (state.createXml().release());
@@ -5387,6 +5415,7 @@ Result Session::saveProject (const File& destination)
         clip->getSourceFileReference().source.setValue (source.getFullPathName(), nullptr);
     for (auto& collected : samples) collected.native->relocateSample (collected.slot, collected.target);
     for (auto& [clip, source] : laneSources) clip.setProperty (te::IDs::source, source.getFullPathName(), nullptr);
+    for (auto& [clip, movie] : movies) clip->state.setProperty (videoProperty, movie.getFullPathName(), nullptr);
     impl->edit->resetChangedStatus();
     impl->explicitChanges = false;
     sendChangeMessage();
@@ -7530,7 +7559,7 @@ Result Session::importAudio (const File& source, int index, double start)
     // Auto-Warp Long Samples: a long sample is taken for a song. Its tempo and first beat come from
     // its content: the clip starts on the first beat, with a warp marker there. A sound with no
     // steady beat to find takes the tempo of whole bars.
-    if (impl->prefs.autoWarpLongSamples && audio.getLength() > 30)
+    if (impl->prefs.autoWarpLongSamples && audio.getLength() > 30 && ! impl->importingVideo)
     {
         const auto found = impl->analyse (file)->tempo;
         const auto first = found && found->firstBeatSeconds < audio.getLength() - 1 ? found->firstBeatSeconds : 0.0;
@@ -7610,6 +7639,53 @@ Result Session::setClipBeats (const String& id, double startBeat, double lengthB
     impl->transaction ("Trim clip");
     clip->setPosition ({ { start, end }, offset });
     impl->changed(); return Result::ok();
+}
+Result Session::importVideo (const File& movie, int index, double start)
+{
+    if (! video::supported()) return Result::fail ("Movies are supported on macOS only.");
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before importing a movie.");
+    video::Info info;
+    if (auto r = video::probe (movie, info); r.failed()) return r;
+    auto assets = impl->assets();
+    if (auto r = assets.createDirectory(); r.failed()) return r;
+    // The movie and its sound join the project's media.
+    const auto kept = movie.isAChildOf (assets) ? movie : assets.getNonexistentChildFile (movie.getFileNameWithoutExtension(), movie.getFileExtension(), true);
+    if (kept != movie && ! movie.copyFileTo (kept)) return Result::fail ("Could not collect the movie into the project.");
+    const auto sound = assets.getNonexistentChildFile (movie.getFileNameWithoutExtension() + " Sound", ".wav", true);
+    const auto discard = [&] { sound.deleteFile(); if (kept != movie) kept.deleteFile(); };
+    if (auto r = video::extractSound (kept, sound); r.failed()) { discard(); return r; }
+    const OneUndoStep step (*this, true, impl->gesture != nullptr, "Import movie");
+    if (index < 0)
+    {
+        if (auto r = addAudioTrack (movie.getFileNameWithoutExtension()); r.failed()) { discard(); return r; }
+        index = te::getAudioTracks (*impl->edit).size() - 1;
+    }
+    impl->importingVideo = true;
+    const auto imported = importAudio (sound, index, start);
+    impl->importingVideo = false;
+    if (imported.failed()) { discard(); return imported; }
+    auto* track = impl->track (index);
+    for (auto* c : track != nullptr ? track->getClips() : juce::Array<te::Clip*> {})
+        if (auto* wave = dynamic_cast<te::WaveAudioClip*> (c); wave != nullptr && wave->getSourceFileReference().getFile() == sound && wave->state[videoProperty].toString().isEmpty())
+        {
+            wave->state.setProperty (videoProperty, kept.getFullPathName(), &impl->edit->getUndoManager());
+            wave->setName (movie.getFileNameWithoutExtension());
+        }
+    impl->changed(); return Result::ok();
+}
+std::optional<Session::VideoFrame> Session::videoAt (double seconds) const
+{
+    for (auto* track : te::getAudioTracks (*impl->edit))
+        for (auto* c : track->getClips())
+            if (auto* wave = dynamic_cast<te::WaveAudioClip*> (c); wave != nullptr && ! wave->isMuted())
+            {
+                const auto movie = wave->state[videoProperty].toString();
+                const auto p = wave->getPosition();
+                if (movie.isNotEmpty() && seconds >= p.getStart().inSeconds() && seconds < p.getEnd().inSeconds())
+                    return VideoFrame { impl->edit->filePathResolver (movie), p.offset.inSeconds() + seconds - p.getStart().inSeconds(), wave->itemID.toString() };
+            }
+    return std::nullopt;
 }
 std::vector<double> Session::audioClipTransients (const String& id)
 {
@@ -7699,6 +7775,7 @@ Result Session::setAudioClipWarp (const String& id, const WarpSettings& requeste
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
     if (! std::isfinite (settings.bpm) || settings.bpm < 20 || settings.bpm > 999) return Result::fail ("Clip tempo must be 20-999 BPM.");
     if (clip->getIsReversed() || clip->isUsingARA() || clip->isGrouped()) return Result::fail ("Unreverse or ungroup this clip before warping it.");
+    if (settings.mode != WarpMode::off && clip->state[videoProperty].toString().isNotEmpty()) return Result::fail ("A video clip plays at its own speed, so it is not warped.");
     const bool slot = clip->getClipSlot() != nullptr;
     if (slot && settings.mode == WarpMode::off) return Result::fail ("Session clips always follow the project tempo.");
     const auto previous = warpSettings (*clip);
@@ -10187,6 +10264,19 @@ Result Session::exportAudio (const File& file, const AudioExportSettings& settin
         ui.runTaskWithProgressBar (task);
         if (ui.cancelled) return Result::fail ("Export cancelled.");
         if (task.result.failed()) return task.result;
+    }
+    if (settings.video)
+    {
+        // The picture of the video clip under the export's start, for the exported time, with the
+        // exported sound, written before the audio replaces any earlier export.
+        const auto first = settings.timeRange ? static_cast<double> (firstFrame) / rate : 0.0;
+        const auto shown = videoAt (first);
+        if (! shown) return Result::fail ("Export Video needs a video clip playing at the start of the export.");
+        const auto movie = file.withFileExtension (".mov");
+        if (movie.exists() && ! settings.replaceVideo) return Result::fail ("A movie named " + movie.getFileName() + " is already there.");
+        juce::TemporaryFile written (movie);
+        if (auto r = video::writeWithSound (shown->movie, shown->seconds, end - first, output.getFile(), written.getFile()); r.failed()) return r;
+        if (! written.overwriteTargetFileWithTemporary()) return Result::fail ("The movie could not be written.");
     }
     if (! output.overwriteTargetFileWithTemporary()) return Result::fail ("The audio export could not be completed.");
     sendChangeMessage(); return Result::ok();
