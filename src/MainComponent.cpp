@@ -950,6 +950,7 @@ public:
         if (code == juce::KeyPress::F9Key) { if (state.recording) session.stop(); else report (session.record()); refresh(); return true; }
         if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)
         {
+            if (! showPiano && ! showSession && selectedFadeClip.isNotEmpty()) { deleteSelectedFade(); return true; }
             if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot();
             else if (timeSelection.active()) selectionCommand (78); else deleteSelectedClip();
             return true;
@@ -2498,7 +2499,8 @@ private:
                         for (bool out : { false, true })
                         {
                             const auto handle = fadeHandle (clip,t,out);
-                            g.setColour (background); g.fillRect (handle.x-4,handle.y-4,8.0f,8.0f);
+                            const bool chosen = owner.selectedFadeClip == clip.id && owner.selectedFadeEdge == (out ? 2 : 1);
+                            g.setColour (chosen ? orange : background); g.fillRect (handle.x-4,handle.y-4,8.0f,8.0f);
                             g.setColour (orange); g.drawRect (handle.x-4,handle.y-4,8.0f,8.0f,1.5f);
                         }
                     }
@@ -2638,7 +2640,7 @@ private:
                 }
                 // An automation lane's background selects time, as the reference's does; it holds no clips.
             }
-            grabKeyboardFocus(); fadeDrag = 0; rangeDrag = 0; dragClipId.clear();
+            grabKeyboardFocus(); fadeDrag = 0; rangeDrag = 0; dragClipId.clear(); owner.selectedFadeClip.clear();
             const auto previousTrack = owner.selectedTrack, previousClip = owner.selectedClip;
             const auto* previousMidi = owner.currentMidiClip();
             const auto previousMidiId = previousMidi != nullptr && owner.selectedLauncherClipId.isEmpty() ? previousMidi->id : juce::String();
@@ -2677,6 +2679,7 @@ private:
                         if (! e.mods.isPopupMenu())
                         {
                             fadeDrag = track == previousTrack && c == previousClip ? hitFade (clips[(size_t) c],track,e.position) : 0;
+                            if (fadeDrag != 0) { owner.selectedFadeClip = clips[(size_t) c].id; owner.selectedFadeEdge = fadeDrag; }
                             dragClipId = clips[(size_t) c].id;
                             originalRange = clips[(size_t) c];
                             originalFade = fadeDrag == 2 ? originalRange.audio.fadeOutSeconds : originalRange.audio.fadeInSeconds;
@@ -8944,6 +8947,20 @@ private:
     // the selection and the one clicked, and Cmd-click (Ctrl elsewhere) adds or removes one. It holds
     // the selected clip too while more than one is selected, and is empty otherwise.
     juce::StringArray selectedClipIds;
+    // A fade handle clicked in the Arrangement, as the reference selects one: its clip and edge
+    // (1 the fade-in, 2 the fade-out). Delete returns it to the default fade, or removes it.
+    juce::String selectedFadeClip; int selectedFadeEdge = 0;
+    void deleteSelectedFade()
+    {
+        const auto [t, c] = arrangementClipIndex (selectedFadeClip);
+        if (t < 0) { selectedFadeClip.clear(); return; }
+        auto settings = state.tracks[(size_t) t].clips[(size_t) c].audio;
+        const bool fallback = session.preferences().createFadesOnClipEdges;
+        if (selectedFadeEdge == 1) { settings.defaultFadeIn = fallback; if (! fallback) settings.fadeInSeconds = 0; }
+        else { settings.defaultFadeOut = fallback; if (! fallback) settings.fadeOutSeconds = 0; }
+        report (session.setAudioClipSettings (selectedFadeClip, settings));
+        refresh();
+    }
     bool isClipSelected (const juce::String& id) const { return selectedClipIds.contains (id); }
     std::pair<int, int> arrangementClipIndex (const juce::String& id) const
     {
@@ -14508,6 +14525,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         // With Create Fades on Clip Edges on, a new clip's fade handles sit 4 ms in, and dragging one
         // makes it an ordinary fade that one undo returns to the default.
         auto preferences = session.preferences(); preferences.createFadesOnClipEdges = true;
+        const auto clipsBefore = state.tracks[0].clips.size();
         check (session.setPreferences (preferences).wasOk() && session.importAudio (audioFixture, 0, 2).wasOk(), "import a clip with default fades at 2 s");
         viewStart = 1.99; updateScroll(); refresh(); selectedTrack = 0; selectedClip = (int) state.tracks[0].clips.size() - 1; refresh();
         const auto clip = state.tracks[0].clips[(size_t) selectedClip];
@@ -14520,8 +14538,16 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto dragged = state.tracks[0].clips[(size_t) selectedClip].audio;
         check (! dragged.defaultFadeIn && std::abs (dragged.fadeInSeconds - (.004 + 40 / pixelsPerSecond)) < 1e-6,
                "dragging it makes it an ordinary fade, longer by the drag (" + juce::String (dragged.fadeInSeconds, 5) + " s, " + (dragged.defaultFadeIn ? "default" : "ordinary") + ")");
+        const auto ordinary = canvas.fadeHandle (state.tracks[0].clips[(size_t) selectedClip], 0, false);
+        canvas.mouseDown (fadeEvent (ordinary, ordinary)); canvas.mouseUp (fadeEvent (ordinary, ordinary));
+        check (selectedFadeClip == clip.id && selectedFadeEdge == 1, "clicking a fade handle selects it");
+        check (handleKey (juce::KeyPress (juce::KeyPress::deleteKey)) && state.tracks[0].clips.size() == clipsBefore + 1
+                   && state.tracks[0].clips[(size_t) selectedClip].audio.defaultFadeIn && std::abs (state.tracks[0].clips[(size_t) selectedClip].audio.fadeInSeconds - .004) < 1e-9,
+               "Delete returns the selected fade to the 4 ms default, keeping the clip");
         session.undo(); refresh();
-        check (state.tracks[0].clips[(size_t) selectedClip].audio.defaultFadeIn, "one undo returns it to the default fade");
+        check (! state.tracks[0].clips[(size_t) selectedClip].audio.defaultFadeIn, "one undo brings the dragged fade back");
+        session.undo(); refresh();
+        check (state.tracks[0].clips[(size_t) selectedClip].audio.defaultFadeIn, "and another returns it to the default fade");
         session.undo(); viewStart = 0; updateScroll(); refresh(); selectedClip = 0;
         useHardClipEdges (session);
     }

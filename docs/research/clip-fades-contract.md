@@ -34,6 +34,7 @@ The reference fades audio clips at their edges unless told not to. Halftrack fol
 - **Editing.**
   - Setting a length or curve on a default edge makes it an ordinary fade.
   - Setting the flag makes it default again; the audio clip editor's Default switches do this.
+  - Clicking a fade handle in the Arrangement selects it, drawn filled. Delete then returns it to the default fade, or, with the setting off, removes it, as the reference's manual describes.
   - Each is one undo step, as before.
 - **Playback.** An engine patch (`cmake/PatchClipFades.cmake`) adds:
   - the smoothstep to the engine's fade curves;
@@ -56,6 +57,15 @@ The reference fades audio clips at their edges unless told not to. Halftrack fol
 - that a 6 ms clip splits its default fades 3 ms each;
 - that with the setting off, a new clip plays at full level from its first sample to its last.
 
+The audio clip editor's checks (in `audio-clips-acceptance`) switch an edge to Default and back, and undo both. The UI suite checks, with the setting on:
+
+- that a new clip's fade-in handle sits 4 ms into the clip;
+- that dragging it 40 pixels makes an ordinary 14 ms fade;
+- that clicking the handle selects it, and Delete returns it to the 4 ms default, keeping the clip;
+- that undo steps back through both.
+
+It also finds Create Fades on Clip Edges on in Preferences, and switches it off.
+
 ## Not yet
 
 These are recorded in the [open questions](../open-questions.md#default-clip-fades):
@@ -63,5 +73,4 @@ These are recorded in the [open questions](../open-questions.md#default-clip-fad
 - The Session Clip Fade switch, and the reference's Session launch and stop fades.
 - The overlap at a warped, looped clip's loop wrap.
 - What plays when the later clip has less than 4 ms of material before its start.
-- Delete on a fade handle in the Arrangement.
 - Exact alignment with the reference's renders: the reference evaluates its curve at points up to 32 samples apart and interpolates linearly between them, and rounds to a beat grid. Neither is measured.
