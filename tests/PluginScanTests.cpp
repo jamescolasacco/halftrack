@@ -355,6 +355,24 @@ int runPluginScanTests (const juce::File& destination)
         runWorker (manager, [&] { found = scanOnce(); });
         check (found == 1, "fresh child discovers fixture after cancellation");
         finish();
+        // The scan is kept for the next launch: the engine writes its list into its settings file,
+        // which saves two seconds after a change, and which the next launch's engine reads.
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2600);
+        {
+            juce::PropertiesFile::Options options; options.storageFormat = juce::PropertiesFile::storeAsXML;
+            juce::PropertiesFile saved (root.getChildFile ("Settings.xml"), options);
+           #if JUCE_64BIT
+            const auto setting = te::SettingID::knownPluginList64;
+           #else
+            const auto setting = te::SettingID::knownPluginList;
+           #endif
+            std::unique_ptr<juce::XmlElement> xml (saved.getXmlValue (te::PropertyStorage::settingToString (setting)));
+            juce::KnownPluginList relaunched;
+            if (xml != nullptr) relaunched.recreateFromXml (*xml);
+            check (xml != nullptr && relaunched.getTypes().size() == 1 && relaunched.getTypes()[0].fileOrIdentifier == plugin.getFullPathName()
+                       && relaunched.getTypes()[0].name == manager.knownPluginList.getTypes()[0].name,
+                   "the scanned plug-in is saved for the next launch, which reads it back");
+        }
         std::cout << "Scanner acceptance passed. Artifacts: " << root.getFullPathName() << std::endl;
         return 0;
     }
