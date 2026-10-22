@@ -5037,6 +5037,13 @@ private:
         {
             const auto* clip = owner.currentMidiClip();
             if (clip == nullptr || e.x < keysWidth) return;
+            // The loop brace and the start marker drag; the rest of the ruler places the insert marker.
+            if (const int grabbed = braceAt (*clip, e.position); grabbed != 0)
+            {
+                grabKeyboardFocus(); endGesture();
+                braceDrag = grabbed; braceOrigin = clip->loop; startOrigin = clip->contentStartBeat; dragOrigin = e.position; dragClipId = clip->id;
+                return;
+            }
             if (e.y >= headerHeight && e.y < gridTop)
             {
                 grabKeyboardFocus(); endGesture(); clearSelection();
@@ -5111,6 +5118,29 @@ private:
         {
             const auto* clip = owner.currentMidiClip();
             if (clip == nullptr || clip->id != dragClipId || e.mods.isPopupMenu() || ! e.mouseWasDraggedSinceMouseDown()) return;
+            if (braceDrag != 0)
+            {
+                // Ends resize the loop, its middle moves it with the start, and the start marker moves
+                // alone; on the note grid unless Alt is held. The start stays in the loop.
+                const auto delta = (e.position.x - dragOrigin.x) / pixelsPerBeat;
+                const auto snap = [&] (double beat) { return e.mods.isAltDown() ? beat : std::round (beat / snapBeats()) * snapBeats(); };
+                const double shortest = e.mods.isAltDown() ? 1.0 / 64 : snapBeats();
+                auto loop = braceOrigin;
+                auto start = startOrigin;
+                if (braceDrag == 1)
+                {
+                    const auto end = braceOrigin.start + braceOrigin.length;
+                    loop.start = juce::jlimit (0.0, end - shortest, snap (braceOrigin.start + delta)); loop.length = end - loop.start;
+                }
+                else if (braceDrag == 2) loop.length = std::max (shortest, snap (braceOrigin.start + braceOrigin.length + delta) - loop.start);
+                else if (braceDrag == 3) { loop.start = std::max (0.0, snap (braceOrigin.start + delta)); start = startOrigin + loop.start - braceOrigin.start; }
+                else start = std::max (0.0, snap (startOrigin + delta));
+                if (loop.on) start = juce::jlimit (loop.start, loop.start + loop.length - 1.0 / 1024, start);
+                if (loop == clip->loop && std::abs (start - clip->contentStartBeat) < 1e-9) return;
+                if (! gesture) { owner.session.beginEditGesture (braceDrag == 4 ? "Move clip start" : "Move clip loop"); gesture = true; }
+                owner.report (owner.session.setClipLoop (clip->id, loop, start)); owner.refresh();
+                return;
+            }
             if (marquee)
             {
                 marqueeBounds = juce::Rectangle<float>::leftTopRightBottom (juce::jmin (dragOrigin.x, e.position.x), juce::jmin (dragOrigin.y, e.position.y),
@@ -5150,7 +5180,7 @@ private:
         }
         void mouseUp (const juce::MouseEvent& e) override
         {
-            endGesture(); drawing = false; originalNotes.clear();
+            endGesture(); drawing = false; originalNotes.clear(); braceDrag = 0;
             if (marquee)
             {
                 if (! e.mouseWasDraggedSinceMouseDown()) clearSelection();
@@ -5243,6 +5273,21 @@ private:
     private:
         Impl& owner;
         static constexpr int headerHeight = 37, rulerHeight = 23, gridTop = headerHeight + rulerHeight, keysWidth = 55, rowHeight = 15, scrollSize = 11;
+        // A ruler drag of the loop brace (1 its start, 2 its end, 3 all of it) or the start marker (4).
+        int braceDrag = 0;
+        Session::ClipLoop braceOrigin;
+        double startOrigin = 0;
+        int braceAt (const Session::ClipInfo& clip, juce::Point<float> p) const
+        {
+            if (p.y < headerHeight || p.y >= gridTop) return 0;
+            const auto at = [this] (double beat) { return (float) (keysWidth + (beat - viewBeat) * pixelsPerBeat); };
+            if (std::abs (p.x - at (clip.contentStartBeat)) <= 5 && p.y >= gridTop - 11) return 4;
+            if (! clip.loop.on || p.y > headerHeight + 8) return 0;
+            const auto from = at (clip.loop.start), to = at (clip.loop.start + clip.loop.length);
+            if (std::abs (p.x - from) <= 4) return 1;
+            if (std::abs (p.x - to) <= 4) return 2;
+            return p.x > from && p.x < to ? 3 : 0;
+        }
     // The lane under the notes: note velocities as bars, or one controller lane as steps.
     // Edits preview locally and commit on release as one undo step.
     class LaneView final : public juce::Component
@@ -12417,6 +12462,31 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                    "moving the loop past the start takes the start with it");
             startField->setText ("1.1.1", juce::sendNotificationSync); refresh();
             check (loopClip().contentStartBeat == 1 && startField->getText() == "1.2.1", "a start outside the loop is refused");
+            {
+                // In the note editor's ruler, the loop brace and the start marker drag on the note grid.
+                pianoRoll.fit();
+                const auto rollBeat = (pianoRoll.getWidth() - 55.0 - 11.0) / 4.0;
+                const auto rollEvent = [&] (float x, float y, float downX, bool dragged)
+                {
+                    const auto when = juce::Time::getCurrentTime();
+                    return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { x, y }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                             &pianoRoll, &pianoRoll, when, { downX, y }, when, 1, dragged);
+                };
+                const auto rollDrag = [&] (double fromBeat, float y, double toBeat)
+                {
+                    const auto from = (float) (55 + fromBeat * rollBeat), to = (float) (55 + toBeat * rollBeat);
+                    pianoRoll.mouseDown (rollEvent (from, y, from, false)); pianoRoll.mouseDrag (rollEvent (to, y, from, true)); pianoRoll.mouseUp (rollEvent (to, y, from, true)); refresh();
+                };
+                rollDrag (3, 40, 4);
+                check (loopClip().loop == Session::ClipLoop { true, 1, 3 } && loopClip().contentStartBeat == 1, "dragging the loop brace's end lengthens the loop");
+                rollDrag (2.5, 40, 1.5);
+                check (loopClip().loop == Session::ClipLoop { true, 0, 3 } && loopClip().contentStartBeat == 0, "dragging the brace moves the loop, the start with it");
+                rollDrag (0, 56, 2);
+                check (loopClip().loop == Session::ClipLoop { true, 0, 3 } && loopClip().contentStartBeat == 2, "dragging the start marker moves the start alone");
+                for (int step = 0; step < 3; ++step) session.undo();
+                refresh();
+                check (loopClip().loop == Session::ClipLoop { true, 1, 2 } && loopClip().contentStartBeat == 1, "each drag is one undo step");
+            }
             const auto edgeEvent = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged)
             {
                 const auto when = juce::Time::getCurrentTime();

@@ -48,7 +48,13 @@ Looping, the clip plays from its start into the loop and round it for as long as
 - draw the loop brace along the top and a start marker;
 - follow the play head round the loop.
 
-Clicking the note editor's ruler seeks to where that beat first plays.
+Clicking the note editor's ruler seeks to where that beat first plays. Its loop brace drags:
+
+- its ends resize the loop;
+- its middle moves the loop and the start with it;
+- the start marker moves alone, kept in the loop.
+
+Drags snap to the note grid unless Alt is held, and each is one undo step.
 
 **The Arrangement:**
 
@@ -80,12 +86,12 @@ It also checks:
   - unlooping, which ends the clip with its audio;
   - Warp off, which ends the loop where it starts.
 
-The main UI suite turns Loop on from the Loop box and sets Length and Position, and checks that a start outside the loop is refused. It drags a looped clip's right edge to repeat it and its left edge to trim it, undoing each, and shows the Loop box for a warped audio clip.
+The main UI suite turns Loop on from the Loop box and sets Length and Position, and checks that a start outside the loop is refused. It drags the loop brace's end, the brace and the start marker in the note editor's ruler, undoing each. It drags a looped clip's right edge to repeat it and its left edge to trim it, undoing each, and shows the Loop box for a warped audio clip.
 
 ## Not yet covered
 
 - A start marker before the loop.
 - Loops for unwarped audio clips.
-- Dragging the loop brace and markers in the editors.
+- Dragging the loop brace in the audio clip view's waveform (its Loop box sets it).
 - Splitting, consolidating and range edits of looped clips.
 - The reference's behaviour when a long looped clip's loop is turned off; Halftrack keeps the clip's length for MIDI.
