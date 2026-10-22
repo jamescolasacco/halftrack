@@ -713,6 +713,22 @@ int runSessionTests (const juce::File& requestedDirectory)
             compare (read (root.getChildFile ("plugin-bypassed.wav")), unity, 1, 1, "VST3 bypass");
             success (session.removePlugin (0, 0), "remove VST3");
             require (session.snapshot().tracks[0].plugins.empty(), "plugin removal changes real graph");
+            // As in the reference with no device selected, a hosted effect joins the end of the chain.
+            using Kind = Session::EffectKind;
+            const auto hostedLast = [&] (int track, std::vector<Kind> before, const juce::String& where)
+            {
+                for (const auto kind : before) success (session.addNativeEffect (track, kind), "add a native device " + where);
+                success (session.addPlugin (track, *descriptions[0]), "add the VST3 " + where);
+                const auto chain = session.snapshot().tracks[(size_t) track].plugins;
+                bool ordered = chain.size() == before.size() + 1 && ! chain.back().isNativeEffect;
+                for (size_t i = 0; ordered && i < before.size(); ++i) ordered = chain[i].isNativeEffect && chain[i].effect.kind == before[i];
+                require (ordered, "the VST3 follows the devices already " + where);
+            };
+            hostedLast (0, { Kind::eqThree }, "on an audio track");
+            success (session.addMidiTrack ("Chain order"), "add a MIDI track for chain order");
+            hostedLast ((int) session.snapshot().tracks.size() - 1, { Kind::arpeggiator, Kind::eqThree }, "on a MIDI track");
+            success (session.addReturnTrack ("Chain return"), "add a return for chain order");
+            hostedLast ((int) session.snapshot().tracks.size() - 1, { Kind::eqThree }, "on a return");
         }
         else std::cout << "SKIP controlled VST3 test: HALFTRACK_TEST_PLUGIN is unset" << std::endl;
         recordingTests (root);

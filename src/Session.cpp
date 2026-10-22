@@ -2561,6 +2561,15 @@ struct Session::Impl
         if (auto* hosted = hostedInstrument (track)) return hosted;
         return nativeInstrument (track);
     }
+    // Where a new device joins the end of a track's chain: before its delay, sends and mixer, or
+    // before `before` (the instrument, for a MIDI effect) when that comes first.
+    static int chainEnd (te::AudioTrack& track, const te::Plugin* before = nullptr)
+    {
+        for (int i = 0; i < track.pluginList.size(); ++i)
+            if (auto* p = track.pluginList[i]; p == before || dynamic_cast<te::VolumeAndPanPlugin*> (p) || dynamic_cast<te::AuxSendPlugin*> (p) || dynamic_cast<TrackDelayPlugin*> (p))
+                return i;
+        return track.pluginList.size();
+    }
     Result validateNote (te::MidiClip& clip, int pitch, double start, double length, float velocity) const
     {
         const auto beats = edit->tempoSequence.toBeats (clip.getPosition().time).getLength().inBeats();
@@ -9329,11 +9338,7 @@ Result Session::addNativeEffect (int index, EffectKind kind)
     if (effectIsMidi (kind) && instrument == nullptr) return Result::fail ("MIDI effects need a MIDI track.");
     auto plugin = impl->edit->getPluginCache().createNewPlugin (state);
     if (! plugin) return Result::fail ("The native effect could not be created.");
-    int insertion = track->pluginList.size();
-    for (int i = 0; i < track->pluginList.size(); ++i)
-        if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i]) || dynamic_cast<TrackDelayPlugin*> (track->pluginList[i])
-            || (effectIsMidi (kind) && track->pluginList[i] == instrument))
-        { insertion = i; break; }
+    const int insertion = Impl::chainEnd (*track, effectIsMidi (kind) ? instrument : nullptr);
     impl->transaction ("Add " + String (effectName (kind)));
     track->pluginList.insertPlugin (plugin, insertion, nullptr);
     impl->changed(); return Result::ok();
@@ -9369,10 +9374,7 @@ Result Session::addUtility (int index)
     if (! track->pluginList.canInsertPlugin()) return Result::fail ("This track's device chain is full.");
     auto plugin = impl->edit->getPluginCache().createNewPlugin (UtilityPlugin::xmlTypeName, {});
     if (! plugin) return Result::fail ("The channel utility could not be created.");
-    int insertion = track->pluginList.size();
-    for (int i = 0; i < track->pluginList.size(); ++i)
-        if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i]) || dynamic_cast<TrackDelayPlugin*> (track->pluginList[i]))
-        { insertion = i; break; }
+    const int insertion = Impl::chainEnd (*track);
     impl->transaction ("Add channel utility");
     track->pluginList.insertPlugin (plugin, insertion, nullptr);
     impl->changed(); return Result::ok();
@@ -10017,8 +10019,10 @@ Result Session::addPlugin (int index, const juce::PluginDescription& description
         t->pluginList.insertPlugin (plugin, index, nullptr);
         impl->changed(); return Result::ok();
     }
-    auto insertIndex = isReturn (*t) ? 1 : 0;
-    if (auto* source = Impl::instrument (*t)) insertIndex = t->pluginList.indexOf (source) + (role == PluginRole::midiEffect ? 0 : 1);
+    // As in the reference with no device selected, an effect goes at the end of the chain, like a
+    // native effect, and a MIDI effect after the other MIDI effects, ahead of the instrument.
+    auto insertIndex = Impl::chainEnd (*t);
+    if (role == PluginRole::midiEffect) { auto* source = Impl::instrument (*t); insertIndex = source ? t->pluginList.indexOf (source) : 0; }
     t->pluginList.insertPlugin (plugin, insertIndex, nullptr);
     impl->changed(); return Result::ok();
 }

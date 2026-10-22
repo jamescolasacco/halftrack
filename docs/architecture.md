@@ -233,7 +233,7 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 ## Hosted instruments
 
-`Session::addPlugin` puts an instrument plug-in where `Impl::instrument` finds the track's instrument, and marks its state with `halftrackInstrument`. `Impl::hostedInstrument` then finds it, so native instrument replacement and effect insertion treat it as the instrument. The snapshot reports it as a plug-in with `isInstrument`, and the UI hides the built-in synth panel. See the [contract](research/plugin-timing-contract.md).
+`Session::addPlugin` puts an instrument plug-in where `Impl::instrument` finds the track's instrument, and marks its state with `halftrackInstrument`. `Impl::hostedInstrument` then finds it, so native instrument replacement and effect insertion treat it as the instrument. Effect plug-ins join the end of the chain through `Impl::chainEnd`, which `addNativeEffect` and `addUtility` share: before the track delay, sends and mixer, or for a MIDI effect immediately before the instrument. The snapshot reports it as a plug-in with `isInstrument`, and the UI hides the built-in synth panel. See the [contract](research/plugin-timing-contract.md).
 
 ## Audio device loss
 

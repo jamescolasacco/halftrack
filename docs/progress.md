@@ -1572,3 +1572,12 @@ Root change in `CMakeLists.txt`, `cmake/WriteBuildInfo.cmake` (new), `src/BuildI
 - **Package check.** CI installs each package into a fresh folder, checks its licenses, source and versions against the commit, runs the installed `--version`, then removes it.
 
 See [the contract](research/packaging-contract.md).
+
+## Effect plug-ins at the end of the chain — 2026-10-21
+
+Engine change in `src/Session.cpp`, `tests/SessionTests.cpp` and `tests/TrackDuplicateTests.cpp`, with documentation.
+
+- **Insertion.** An audio effect plug-in now joins the end of the track's chain, after the devices already there and before the track delay, sends and mixer, as built-in devices do and as the reference does when no device is selected. It used to go first: after the instrument on a MIDI track, after the input on a return. MIDI effect plug-ins still go ahead of the instrument, and instrument plug-ins still replace it. Saved projects keep their order.
+- **Tests.** The session suite checks the order on an audio track, a MIDI track and a return. The duplicate suite addresses its Utility and VST3 in their new order.
+
+See [the contract](research/plugin-timing-contract.md#where-an-effect-plug-in-goes).

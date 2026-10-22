@@ -617,3 +617,7 @@ While the chosen interface is missing, choosing a different device by hand is no
 ### Signing, notarization and updates
 
 Release builds are unsigned (ad-hoc on macOS) and Halftrack never checks for updates. Developer ID signing, notarization and Windows Authenticode need accounts the project does not hold. An update service would contact the network, which Halftrack does not do. Default: manual updates, by installing a newer package; settings and the User Library carry over. Whether to add an opt-in update check is open.
+
+### Device insertion
+
+The reference appends a device to the end of the chain when none is selected, and places it after the selected device otherwise. Halftrack does not yet insert beside a selected device: every new device, built-in or plug-in, joins the end of the chain (MIDI effects ahead of the instrument), whatever is selected. Default: append.
