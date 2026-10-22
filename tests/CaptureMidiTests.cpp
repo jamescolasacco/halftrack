@@ -137,6 +137,18 @@ int runCaptureMidiTests (const juce::File&)
         ok (s.setTrackArmed (keys, true), "arm again"); pumpSyntheticTestDevice (s, 8);
         check (s.heldInputNotes (keysId).empty(), "a key released while the track was disarmed is not still held");
         ok (s.setTrackArmed (keys, false), "disarm");
+
+        // A MIDI device appearing while playing makes the engine rebuild its devices; playback
+        // carries on from where it was rather than stopping.
+        s.seek (0); ok (s.play(), "play");
+        pumpSyntheticTestDevice (s, blocksPerSecond / 2);
+        {
+            const auto before = s.snapshot().position;
+            Controller another (s);
+            pumpSyntheticTestDevice (s, blocksPerSecond / 2);
+            check (s.snapshot().playing && s.snapshot().position > before + .3,
+                   "a MIDI device appearing while playing leaves playback running (" + juce::String (before, 3) + " s to " + juce::String (s.snapshot().position, 3) + " s)");
+        }
         std::cout << "Capture MIDI passed" << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL capture MIDI: " << e.what() << std::endl; return 1; }

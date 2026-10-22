@@ -58,7 +58,8 @@ public:
                 FirstCallbackObservation* firstCallback = nullptr)
     {
         // Test-only stress control: delay message dispatch without changing the generated audio clock.
-        if (const auto value=juce::SystemStats::getEnvironmentVariable("HALFTRACK_TEST_DISPATCH_MS",{}); value.isNotEmpty())
+        // A negative time dispatches nothing, for tests that dispatch on their own clock.
+        if (const auto value=juce::SystemStats::getEnvironmentVariable("HALFTRACK_TEST_DISPATCH_MS",{}); value.isNotEmpty() && dispatchMilliseconds>=0)
             dispatchMilliseconds=juce::jlimit(1,100,value.getIntValue());
         float peak = 0;
         for (int block = 0; block < blocks; ++block)
@@ -86,7 +87,7 @@ public:
             peak = juce::jmax (peak, blockPeak);
             if (firstCallback != nullptr && block == 0) firstCallback->peak = blockPeak;
             if (captured) for(int channel=0;channel<std::min(outputCount,captured->getNumChannels());++channel) captured->copyFrom(channel,block*blockSize,out,channel,0,blockSize);
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (dispatchMilliseconds);
+            if (dispatchMilliseconds >= 0) juce::MessageManager::getInstance()->runDispatchLoopUntil (dispatchMilliseconds);
         }
         return peak;
     }
@@ -523,6 +524,14 @@ juce::AudioBuffer<float> captureSyntheticTestDevice (Session& session, int block
     auto* device=dynamic_cast<SyntheticDevice*>(session.audioDeviceManager().getCurrentAudioDevice());
     if(!device || blocks<=0) throw std::runtime_error("invalid synthetic capture request");
     juce::AudioBuffer<float> result(2,blocks*device->currentBlockSize());result.clear();device->pump(blocks,1,&result);return result;
+}
+// Plays blocks without dispatching messages between them, for tests that keep real time and
+// dispatch on their own clock.
+float pumpSyntheticTestDeviceWithoutDispatch (Session& session, int blocks)
+{
+    auto* device = dynamic_cast<SyntheticDevice*> (session.audioDeviceManager().getCurrentAudioDevice());
+    if (device == nullptr) throw std::runtime_error ("synthetic test device is not selected");
+    return device->pump (blocks, -1);
 }
 // The synthetic device with four outputs, and a capture of all of them.
 std::unique_ptr<juce::AudioIODeviceType> makeFourOutputSyntheticTestDeviceType()

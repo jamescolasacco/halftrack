@@ -2023,3 +2023,12 @@ Engine, UI and QA areas.
 
 See [the contract](research/output-routing-contract.md).
 
+## Playback through MIDI device changes, and slow-CI fixes — 2026-10-22
+
+Engine and QA areas.
+
+- **A fix.** Plugging in, or removing, a MIDI device no longer stops playback. The engine rebuilt its playback devices and left the play head stopped; an engine patch (`cmake/PatchPlaybackContinues.cmake`) resumes it.
+- **Found through macOS CI.** The UI lane-click check failed there because the engine's periodic MIDI rescan found the suite's own virtual ports mid-playback. `HALFTRACK_TEST_DISPATCH_MS=15` reproduces it locally.
+- **External sync** now keeps its blocks in step with the wall clock however slowly messages are dispatched (a new `pumpSyntheticTestDeviceWithoutDispatch`), so its real-time tempo checks hold on the slower macOS runner.
+- **Measured.** The Capture MIDI suite (a device added while playing), the UI suite and the external sync suite, each also with slowed dispatch.
+

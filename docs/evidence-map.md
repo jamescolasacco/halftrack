@@ -133,7 +133,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | QA-005 | separation |  |
 | QA-006 | fuzz, graph-edits, large-session, soak, stuck-notes |  |
 | QA-007 | fuzz, graph-edits, large-session, soak, stuck-notes |  |
-| QA-008 | fuzz, graph-edits, large-session, soak, stuck-notes |  |
+| QA-008 | fuzz, graph-edits, large-session, soak, stuck-notes, capture-midi |  |
 | QA-009 | fuzz, graph-edits, large-session, soak, stuck-notes |  |
 | QA-010 |  | CI on macOS 15, Windows 2022 and Ubuntu 24.04 runs every suite |
 | QA-011 | device-loss | MOTU M4 hardware check (--hardware-check) |
