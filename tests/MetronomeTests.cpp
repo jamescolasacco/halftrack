@@ -151,11 +151,16 @@ void persistence(const juce::File& root)
 {
     Session session(false);const auto project=root.getChildFile("click.halftrack");auto settings=session.snapshot().metronome;
     settings.enabled=true;settings.accent=false;settings.recordingOnly=true;settings.gain=.4f;settings.countInBars=2;
-    ok(session.setMetronome(settings),"edit all metronome settings in one transaction");session.undo();check(!session.snapshot().metronome.enabled&&session.snapshot().metronome.countInBars==0,"one undo restores all click settings");
+    ok(session.setMetronome(settings),"edit all metronome settings in one transaction");session.undo();
+    check(!session.snapshot().metronome.enabled&&session.snapshot().metronome.countInBars==2,"one undo restores the click settings; the count-in, an application setting as the reference's, stays");
     auto invalid=settings;invalid.gain=std::numeric_limits<float>::quiet_NaN();check(session.setMetronome(invalid).failed()&&session.canRedo(),"nonfinite click level preserves redo");
     invalid=settings;invalid.countInBars=3;check(session.setMetronome(invalid).failed()&&session.canRedo(),"unsupported count-in preserves redo");
     session.redo();check(session.snapshot().metronome==settings,"redo restores exact click settings");
     ok(session.saveProject(project),"save click settings");ok(session.loadProject(project),"reopen click settings");check(session.snapshot().metronome==settings,"all click settings persist");
+    check(!project.loadFileAsString().contains("halftrackCountInBars"),"the count-in is not kept with the project");
+    ok(session.newProject(),"a new project");check(session.snapshot().metronome.countInBars==2,"and a new project keeps the application's count-in");
+    {Session other(false);check(other.snapshot().metronome.countInBars==2&&other.preferences().countInBars==2,"as does the next launch");}
+    ok(session.loadProject(project),"reopen the project");
     ok(session.setMetronome(settings),"unchanged click settings are a no-op");check(!session.canUndo()&&!session.snapshot().dirty,"unchanged settings leave clean history");
     for(const auto& value:juce::StringArray{"-1","3","nan","1.5"})
     {
@@ -255,6 +260,7 @@ void countIn(const juce::File& root)
         ok(session.setTrackInput(0,inputs[0]),"reassign generated capture input");ok(session.setTrackArmed(0,true),"arm early-stop take");
         ok(session.record(),"begin count-in before early stop");pumpSyntheticTestDevice(session,100);session.stop();
         check(session.snapshot().tracks[0].clips.empty(),"stopping during count-in creates no audio clip");
+        settings.countInBars=0;ok(session.setMetronome(settings),"no count-in for what follows");
     }
     // A bar counts in as long as the meter's bar: three crotchets in 6/8 and three and a half in 7/8.
     for(const auto [numerator,denominator,beats]:{std::tuple{6,8,3.0},std::tuple{7,8,3.5}})
@@ -265,12 +271,13 @@ void countIn(const juce::File& root)
         session.seek(0);ok(session.record(),"record with a one-bar count-in");
         check(std::abs(session.snapshot().position+beats*.5+.25)<1e-9 && session.snapshot().countInBeatsRemaining==beats,
               "a bar of "+juce::String(numerator)+"/"+juce::String(denominator)+" counts in "+juce::String(beats,1)+" beats ("+juce::String(session.snapshot().position,4)+" s)");
-        session.stop();
+        session.stop();settings.countInBars=0;ok(session.setMetronome(settings),"no count-in for what follows");
     }
     {
         Fixture f(root);auto& session=f.session;auto settings=session.snapshot().metronome;
         settings.countInBars=3;check(session.setMetronome(settings).failed(),"three bars is not one of the reference's count-ins");
         settings.countInBars=4;ok(session.setMetronome(settings),"four bars is");
+        settings.countInBars=0;ok(session.setMetronome(settings),"and none again");
     }
 }
 }

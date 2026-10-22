@@ -670,6 +670,7 @@ void countInRecording()
         &&std::abs(clip.notes[1].lengthBeats-.6)<1e-9,"post-count-in MIDI keeps exact musical timing");
     session.undo();check(session.snapshot().tracks[2].clips.empty(),"count-in MIDI take undoes once");session.redo();
     check(session.snapshot().tracks[2].clips[0].notes[0].id==clip.notes[0].id,"count-in MIDI redo retains editable identities");
+    click=session.snapshot().metronome;click.countInBars=0;ok(session.setMetronome(click),"no count-in for what follows, as it is the application's");
     }
 }
 
@@ -1478,6 +1479,7 @@ void playbackAndArrangementEditsDuringSessionTakes (const juce::File& root)
         check (state.metronome.countInBars == 2 && state.recordQuantisation == Session::RecordQuantisation::quarter
                && state.tracks[2].slots[1].clip.follow.action == Session::FollowAction::next,
                "the settings changed during the take are in place");
+        metronome = state.metronome; metronome.countInBars = 0; ok (session.setMetronome (metronome), "no count-in for what follows");
     }
 }
 

@@ -14932,13 +14932,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(metronome && metronome->isVisible(),"transport exposes the real metronome toggle");
     metronome->setToggleState(true,juce::dontSendNotification);metronome->onClick();refresh();
     check(state.metronome.enabled,"metronome button enables the native click");
-    applyMetronomeMenu(14);check(state.metronome.countInBars==4,"the count-in menu offers four bars, as the reference's does");session.undo();refresh();
+    applyMetronomeMenu(14);check(state.metronome.countInBars==4&&session.preferences().countInBars==4,"the count-in menu offers four bars, as the reference's does, kept as an application setting");
+    applyMetronomeMenu(10);
     applyMetronomeMenu(46);check(state.metronome.rhythm==.5f,"the menu's Rhythm section chooses 1/8");session.undo();refresh();
     check(state.metronome.rhythm==0,"and undo returns to Auto");
     applyMetronomeMenu(33);check(session.preferences().metronomeSound==Session::MetronomeSound::wood,"the menu's Sound section chooses Wood");
     applyMetronomeMenu(31);check(session.preferences().metronomeSound==Session::MetronomeSound::classic,"and Classic again");
     applyMetronomeMenu(11);check(state.metronome.countInBars==1,"native count-in menu chooses one bar");
-    session.undo();refresh();check(state.metronome.countInBars==0&&state.metronome.enabled,"count-in menu edit undoes independently");
+    applyMetronomeMenu(10);check(state.metronome.countInBars==0&&state.metronome.enabled,"None turns the count-in off again, without touching the other click settings");
     applyMetronomeMenu(22);applyMetronomeMenu(1);applyMetronomeMenu(2);
     check(state.metronome.gain==.4f&&!state.metronome.accent&&state.metronome.recordingOnly,"native click menu controls update model");
     tempo.setText("999",juce::sendNotificationSync);check(state.tempo==999&&tempo.getText()=="999.00","native tempo editor reaches exact supported maximum");

@@ -11,7 +11,7 @@ The metronome follows the reference's Metronome Settings menu. The reference's m
 
 - **The choices.** Recording waits for none, one, two or four bars of the project's meter, as the reference's choices are. A bar lasts the meter's bar in crotchets: three in 6/8, three and a half in 7/8.
 - **The engine.** An engine patch (`cmake/PatchCountIn.cmake`, see [dependencies](../dependencies.md)) adds the four-bar mode and the bar length. Before it, a bar of 6/8 counted in six beats, and 7/8 could not be expressed.
-- **Scope.** The count-in is kept with the project and is one undo step, as before.
+- **Scope.** The count-in is an application setting, as the reference's is (static reading: its ASongPrefData, set without an undo step, and its Metronome device is not saved in Sets). It is kept with the preferences (`Preferences::countInBars`, None by default), not with a project. Setting it is not an undo step, and it cannot change while recording. Projects saved by earlier versions still validate their count-in, which is ignored.
 
 ## Sound
 
@@ -53,6 +53,7 @@ The metronome's menu has sections, as the reference's does:
 - clicks sample by sample against generated impulse sounds: beats, accents, gain, loops, count-ins of none, one, two and four bars, recording placement and export exclusion, as before;
 - one-bar count-ins in 6/8 (1.5 s at 120 BPM) and 7/8 (1.75 s);
 - that three bars is refused;
+- that the count-in survives undo, a new project and the next launch, and is not written into the project;
 - each sound's plain and accented tick: repeatable, at its designed peak, starting and ending in silence, ringing at its fundamental, with the accent higher;
 - that the click track plays Classic at first;
 - that choosing Wood points it at files holding exactly the Wood ticks, and that the choice is kept.
@@ -69,4 +70,4 @@ The UI suite chooses four bars, Wood and 1/8 from the menu.
 ## Not yet
 
 - The reference's levels and routing: its metronome plays at the Preview volume on the cue output.
-- Where the count-in is kept. The reference keeps it as an application setting, outside the Set, while Halftrack keeps it with the project (see [open questions](../open-questions.md#metronome)).
+- Its count-in starting position: the reference rounds a count-in from mid-bar to the nearest bar line from the time-signature section start. Unmeasured, and Halftrack counts in whole bars before the position.

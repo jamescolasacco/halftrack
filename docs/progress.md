@@ -2004,3 +2004,10 @@ Engine, UI and root areas.
 
 See [the contract](research/metronome-contract.md#rhythm).
 
+## Application-wide count-in — 2026-10-22
+
+Engine area.
+
+- **Scope.** The count-in is now an application setting, as the reference's is (static reading): kept with the preferences, not each project, and not an undo step. Projects that hold one from earlier versions still validate it, and it is ignored.
+- **Measured.** The metronome suite (undo, a new project and the next launch keep it) and the MIDI input, preferences and UI suites.
+

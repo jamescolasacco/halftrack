@@ -3317,7 +3317,8 @@ struct Session::Impl
             && juce::isPositiveAndBelow ((int) p.defaultLaunchMode, 4) && juce::isPositiveAndBelow ((int) p.defaultLaunchQuantisation, 11)
             && juce::isPositiveAndBelow (p.theme, Preferences::themeCount) && p.zoomPercent >= 50 && p.zoomPercent <= 200 && p.zoomPercent % 25 == 0
             && std::isfinite (p.driverErrorCompensationMs) && std::abs (p.driverErrorCompensationMs) <= 200
-            && juce::isPositiveAndBelow ((int) p.metronomeSound, Session::metronomeSoundCount);
+            && juce::isPositiveAndBelow ((int) p.metronomeSound, Session::metronomeSoundCount)
+            && (p.countInBars == 0 || p.countInBars == 1 || p.countInBars == 2 || p.countInBars == 4);
     }
     void loadPreferences()
     {
@@ -3347,7 +3348,8 @@ struct Session::Impl
             const int audioUnits = number ("useAudioUnits", 1, 2), vst3System = number ("useVst3SystemFolders", 1, 2), vst3Custom = number ("useVst3CustomFolder", 0, 2);
             read.useAudioUnits = audioUnits == 1; read.useVst3SystemFolders = vst3System == 1; read.useVst3CustomFolder = vst3Custom == 1;
             read.vst3CustomFolder = xml->getStringAttribute ("vst3CustomFolder");
-            const int edgeFades = number ("createFadesOnClipEdges", 1, 2), sound = number ("metronomeSound", 0, Session::metronomeSoundCount);
+            const int edgeFades = number ("createFadesOnClipEdges", 1, 2), sound = number ("metronomeSound", 0, Session::metronomeSoundCount), countIn = number ("countInBars", 0, 5);
+            read.countInBars = countIn;
             read.createFadesOnClipEdges = edgeFades == 1;
             read.metronomeSound = static_cast<Session::MetronomeSound> (juce::jmax (0, sound));
             valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && validPreferences (read);
@@ -3374,6 +3376,7 @@ struct Session::Impl
         xml.setAttribute ("useVst3CustomFolder", next.useVst3CustomFolder ? 1 : 0); xml.setAttribute ("vst3CustomFolder", next.vst3CustomFolder);
         xml.setAttribute ("createFadesOnClipEdges", next.createFadesOnClipEdges ? 1 : 0);
         xml.setAttribute ("metronomeSound", (int) next.metronomeSound);
+        xml.setAttribute ("countInBars", next.countInBars);
         const auto file = prefsFile();
         if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
         juce::TemporaryFile temporary (file);
@@ -4067,7 +4070,7 @@ struct Session::Impl
             if (auto* device = input (*t))
                 device->getInputDevice().setMonitorMode (static_cast<te::InputDevice::MonitorMode> (
                     juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (monitorProperty, 0)))));
-        edit->setCountInMode (countInMode (static_cast<int> (edit->state.getProperty (countInProperty, 0))));
+        edit->setCountInMode (countInMode (prefs.countInBars)); // The application's count-in.
         refreshRouting();
         refreshCrossfade();
         edit->dispatchPendingUpdatesSynchronously();
@@ -4086,7 +4089,7 @@ struct Session::Impl
         edit->playInStopEnabled = true;
         edit->getAutomationRecordManager().setReadingAutomation (true);
         edit->getAutomationRecordManager().setWritingAutomation (false);
-        edit->setCountInMode (countInMode (static_cast<int> (edit->state.getProperty (countInProperty, 0))));
+        edit->setCountInMode (countInMode (prefs.countInBars)); // The application's count-in.
         refreshRouting();
         if (useDevices) edit->getTransport().ensureContextAllocated();
         edit->dispatchPendingUpdatesSynchronously();
@@ -5007,7 +5010,7 @@ Session::Snapshot Session::snapshot() const
     s.masterGainDb=e.getMasterVolumePlugin()->getVolumeDb();
     s.masterVolumeAutomation = automationLane (*e.getMasterVolumePlugin(), AutomationTarget::volume);
     s.metronome = {e.clickTrackEnabled.get(),e.clickTrackEmphasiseBars.get(),e.clickTrackRecordingOnly.get(),
-        e.getClickTrackVolume(),static_cast<int>(e.state.getProperty(countInProperty,0))};
+        e.getClickTrackVolume(),impl->prefs.countInBars};
     s.metronome.rhythm=static_cast<float>(static_cast<double>(e.state.getProperty(metronomeTickProperty,0.0)));
     s.recordQuantisation=static_cast<RecordQuantisation>(static_cast<int>(e.state.getProperty(recordQuantisationProperty,0)));
     const auto clickRange=e.getClickTrackRange();
@@ -5217,7 +5220,6 @@ Result Session::newProject()
     impl->edit->getMasterVolumePlugin()->setVolumeDb (0);
     impl->edit->tempoSequence.getTempo (0)->setBpm (120);
     impl->edit->clickTrackGain = .6f; impl->edit->clickTrackEmphasiseBars = true;
-    impl->edit->state.setProperty(countInProperty,0,nullptr);
     impl->edit->state.setProperty(recordQuantisationProperty,0,nullptr);
     impl->edit->getTransport().setLoopRange ({ te::TimePosition::fromSeconds (0), te::TimePosition::fromSeconds (8) });
     for (auto* t : te::getAudioTracks (*impl->edit)) impl->edit->deleteTrack (t);
@@ -5729,8 +5731,11 @@ Result Session::setPreferences (const Preferences& next)
     if (! Impl::validPreferences (next)) return Result::fail ("Those preferences are out of range.");
     if (next == impl->prefs && impl->prefsFile().existsAsFile()) return Result::ok();
     const bool sound = next.metronomeSound != impl->prefs.metronomeSound;
+    if (next.countInBars != impl->prefs.countInBars && impl->edit->getTransport().isRecording())
+        return Result::fail ("Stop recording before changing the count-in.");
     if (auto r = impl->savePreferences (next); r.failed()) return r;
     if (sound) impl->applyMetronomeSound();
+    impl->edit->setCountInMode (countInMode (next.countInBars));
     impl->changed(); return Result::ok();
 }
 Result Session::resetPreferences() { return setPreferences ({}); }
@@ -11171,13 +11176,20 @@ Result Session::setMetronome (const MetronomeSettings& settings)
     if(previous==settings) return Result::ok();
     if(impl->edit->getTransport().isRecording() && previous.countInBars!=settings.countInBars)
         return Result::fail("Stop recording before changing the count-in.");
+    // The count-in is the application's, as the reference's is: no undo step, not in the project.
+    if(previous.countInBars!=settings.countInBars)
+    {
+        auto next=impl->prefs; next.countInBars=settings.countInBars;
+        if(auto r=impl->savePreferences(next); r.failed()) return r;
+        impl->edit->setCountInMode(countInMode(settings.countInBars));
+        auto rest=previous; rest.countInBars=settings.countInBars;
+        if(rest==settings) { impl->changed(); return Result::ok(); }
+    }
     impl->transaction("Metronome"); auto* undo=&impl->edit->getUndoManager(); auto& edit=*impl->edit;
     edit.clickTrackEnabled.setValue(settings.enabled,undo);
     edit.clickTrackEmphasiseBars.setValue(settings.accent,undo);
     edit.clickTrackRecordingOnly.setValue(settings.recordingOnly,undo);
     edit.clickTrackGain.setValue(settings.gain,undo);
-    edit.state.setProperty(countInProperty,settings.countInBars,undo);
-    edit.setCountInMode(countInMode(settings.countInBars));
     // Auto is the default and is not written, as the reference's default set holds 0.
     if(settings.rhythm==0) edit.state.removeProperty(metronomeTickProperty,undo); else edit.state.setProperty(metronomeTickProperty,settings.rhythm,undo);
     impl->changed(); return Result::ok();

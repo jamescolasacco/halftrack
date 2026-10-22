@@ -91,6 +91,9 @@ int runPreferencesTests (const juce::File& artifacts)
         auto [scrolling, scrollingProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" followBehaviour=\"1\"/>");
         expected = {}; expected.scrollFollow = true;
         check (scrolling == expected && scrollingProblem.isEmpty(), "Follow Behavior Scroll is read back");
+        auto [countIn, countInProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" countInBars=\"4\"/>");
+        expected = {}; expected.countInBars = 4;
+        check (countIn == expected && countInProblem.isEmpty(), "a four-bar count-in is read back");
         auto [sceneRecording, sceneRecordingProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" startRecordingOnSceneLaunch=\"1\"/>");
         expected = {}; expected.startRecordingOnSceneLaunch = true;
         check (sceneRecording == expected && sceneRecordingProblem.isEmpty(), "Start Recording on Scene Launch is read back");

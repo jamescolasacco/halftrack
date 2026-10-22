@@ -517,7 +517,9 @@ public:
     {
         bool enabled = false, accent = true, recordingOnly = false;
         float gain = .6f;
-        int countInBars = 0; // 0, 1, 2 or 4 bars of the project meter, as the reference offers.
+        // 0, 1, 2 or 4 bars of the project meter, as the reference offers. This is the application's
+        // count-in (Preferences::countInBars): setting it is not an undo step or kept with a project.
+        int countInBars = 0;
         // Rhythm, as the reference's: 0 Auto (the meter's denominator), -1 one tick a bar, or a
         // division in crotchets from metronomeRhythms. A division that does not divide the bar
         // plays as Auto. Kept with the project.
@@ -915,6 +917,9 @@ public:
         bool createFadesOnClipEdges = true;
         // The metronome's sound, kept with the preferences as the reference keeps its metronome's.
         MetronomeSound metronomeSound = MetronomeSound::classic;
+        // The count-in, in bars (0, 1, 2 or 4), an application setting as the reference's is; it is
+        // also shown, and set, in MetronomeSettings.
+        int countInBars = 0;
         juce::String vst3CustomFolder;
         bool operator== (const Preferences&) const = default;
     };

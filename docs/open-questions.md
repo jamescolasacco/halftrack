@@ -729,6 +729,6 @@ Halftrack's default fades follow a static reading of the reference's code ([cont
 ### Metronome
 
 - **The sounds.** The reference's Classic, Click and Wood are its own samples, so Halftrack synthesises its own ticks to their character; they are not the same sounds.
-- **Count-in storage.** The reference keeps the count-in as an application setting, changed without an undo step (static reading). Halftrack keeps it with the project, as one undo step, until that is moved.
+- **Count-in start.** The reference starts a count-in from mid-bar at the nearest bar line, roundNearest((t − bars·B − section start) / B)·B (static reading), so it is not always whole bars long. Halftrack counts in whole bars before the position.
 - **Rhythm timing.** The reference snaps ticks to its tick grid from the time-signature section start, and while stopped times them in whole samples. Halftrack places them on the beat grid from the start; it has one meter per project.
 
