@@ -1856,3 +1856,12 @@ Engine area.
 - **Measured.** `tests/TakeLanesTests.cpp`.
 
 See [the contract](research/take-lanes-contract.md#loop-recording-2026-10-22).
+
+## Curved automation segments — 2026-10-22
+
+Engine and UI areas.
+
+- **Curves.** Automation points carry a curve for the segment after them, played by the engine. In Automation Mode, Option/Alt-dragging a segment curves it and Option/Alt-double-clicking straightens it, as in the reference. Drawing follows the engine's playback form of the curve, not `AutomationCurve::getValueAt`, which differs.
+- **Measured.** A curved volume render matches the predicted level within 2% (`tests/AutomationTests.cpp`), and the UI suite checks the gestures.
+
+See [the contract](research/arrangement-automation-contract.md#curved-segments-2026-10-22).

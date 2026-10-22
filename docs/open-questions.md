@@ -690,3 +690,7 @@ The manual says the command makes one new clip per track from the selection in a
 - Audio is warped at the tempo it was rendered at.
 - Automation stays in the Arrangement.
 - With no scene selected, the scene goes at the end.
+
+### Automation curve shape
+
+The reference's curved automation segments are drawn and played with a shape that is unmeasured. Halftrack uses the engine's quadratic Bézier, with a curve from -1 to 1. Halftrack draws the form the engine plays: `AutomationIterator`'s Bézier of the stored curve, not `AutomationCurve::getValueAt`'s, which doubles it.

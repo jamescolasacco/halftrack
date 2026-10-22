@@ -141,8 +141,15 @@ public:
     {
         double beat = 0;
         float value = 0; // Decibels for volume, -1..1 for pan.
+        // The shape of the segment to the next point, as the engine plays it: 0 straight, otherwise a
+        // curve, -0.5 to 0.5 bowing it (positive changing late), and beyond to ±1 bowing it further
+        // with its ends held.
+        float curve = 0;
         bool operator== (const AutomationPoint&) const = default;
     };
+    // The value a segment reaches part way along it (0 to 1), in the lane's 0-1 proportions, as the
+    // engine plays its curve.
+    static float curveProportion (float from, float to, float curve, double along);
     struct AutomationLane
     {
         bool enabled = true;

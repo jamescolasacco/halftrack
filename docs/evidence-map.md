@@ -81,7 +81,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | MIX-010 | racks |  |
 | MIX-011 | racks |  |
 | MIX-012 | racks |  |
-| MIX-013 | ui |  |
+| MIX-013 | automation, ui |  |
 | MIX-014 | automation-capture, ui |  |
 | MIX-015 | clip-envelopes, ui |  |
 | MIX-016 | tempo-map |  |

@@ -121,7 +121,7 @@ Session::AutomationLane automationLane (te::VolumeAndPanPlugin& plugin, Session:
     {
         const auto value = curve.getPointValue (i);
         lane.points.push_back ({ plugin.edit.tempoSequence.toBeats (curve.getPointTime (i)).inBeats(),
-            target == Session::AutomationTarget::volume ? te::volumeFaderPositionToDB (value) : value });
+            target == Session::AutomationTarget::volume ? te::volumeFaderPositionToDB (value) : value, curve.getPointCurve (i) });
     }
     return lane;
 }
@@ -145,7 +145,7 @@ std::vector<Session::PluginInfo::ControlAutomation> externalAutomation (te::Plug
         Session::PluginInfo::ControlAutomation entry { (int) i, {} };
         entry.lane.enabled = ! curve.bypass.get();
         for (int p = 0; p < curve.getNumPoints(); ++p)
-            entry.lane.points.push_back ({ plugin.edit.tempoSequence.toBeats (curve.getPointTime (p)).inBeats(), curve.getPointValue (p) });
+            entry.lane.points.push_back ({ plugin.edit.tempoSequence.toBeats (curve.getPointTime (p)).inBeats(), curve.getPointValue (p), curve.getPointCurve (p) });
         result.push_back (std::move (entry));
     }
     return result;
@@ -162,7 +162,7 @@ std::vector<Session::PluginInfo::ControlAutomation> deviceAutomation (NativeEffe
         entry.lane.enabled = ! curve.bypass.get();
         for (int p = 0; p < curve.getNumPoints(); ++p)
             entry.lane.points.push_back ({ plugin.edit.tempoSequence.toBeats (curve.getPointTime (p)).inBeats(),
-                                           effectProportionToValue (plugin.getKind(), i, curve.getPointValue (p)) });
+                                           effectProportionToValue (plugin.getKind(), i, curve.getPointValue (p)), curve.getPointCurve (p) });
         result.push_back (std::move (entry));
     }
     return result;
@@ -265,7 +265,7 @@ bool validAutomationLane (Session::AutomationTarget target, const Session::Autom
         if (! std::isfinite (point.beat) || point.beat < 0 || point.beat > 1000000 || point.beat <= previous
             || (previous >= 0 && point.beat - previous < 0.999e-6)
             || ! std::isfinite (point.value) || point.value < (target == Session::AutomationTarget::volume ? -100.0f : -1.0f)
-            || point.value > (target == Session::AutomationTarget::volume ? 6.0f : 1.0f)) return false;
+            || point.value > (target == Session::AutomationTarget::volume ? 6.0f : 1.0f) || ! (std::abs (point.curve) <= 1)) return false;
         previous = point.beat;
     }
     return true;
@@ -3285,7 +3285,7 @@ struct Session::Impl
         bool same = lane.enabled == ! curve.bypass.get() && lane.points.size() == static_cast<size_t> (curve.getNumPoints());
         for (size_t i = 0; same && i < lane.points.size(); ++i)
             same = std::abs (edit->tempoSequence.toBeats (curve.getPointTime ((int) i)).inBeats() - lane.points[i].beat) < 1e-9
-                && std::abs (curve.getPointValue ((int) i) - nativeValue (lane.points[i].value)) < 1e-6f;
+                && std::abs (curve.getPointValue ((int) i) - nativeValue (lane.points[i].value)) < 1e-6f && curve.getPointCurve ((int) i) == lane.points[i].curve;
         if (same) return Result::ok();
         if (! internalAutomationWrite)
             transaction (plugin.isMasterVolAndPan() ? "Edit master volume automation"
@@ -3302,7 +3302,7 @@ struct Session::Impl
         curve.clear (undo);
         curve.state.setProperty (te::IDs::bypass, ! lane.enabled, undo);
         for (const auto& point : lane.points)
-            curve.addPoint (te::EditPosition (te::BeatPosition::fromBeats (point.beat)), nativeValue (point.value), 0, undo);
+            curve.addPoint (te::EditPosition (te::BeatPosition::fromBeats (point.beat)), nativeValue (point.value), point.curve, undo);
         if (lane.points.empty()) parameter.setParameter (static_cast<float> (plugin.state[property]), juce::dontSendNotification);
         // Attaching a curve invalidates sibling parameter streams as well.
         // Native streams omit one-point curves: follow their static values on
@@ -3642,7 +3642,7 @@ struct Session::Impl
         {
             const double time = std::isfinite (point.beat) ? edit->tempoSequence.toTime (te::BeatPosition::fromBeats (point.beat)).inSeconds() : -1;
             if (! std::isfinite (point.beat) || point.beat < 0 || point.beat > 1000000 || point.beat <= previousBeat || (previousBeat >= 0 && point.beat - previousBeat < 0.999e-6)
-                || ! std::isfinite (point.value) || point.value < 0 || point.value > 1 || ! std::isfinite (time) || time <= previousTime)
+                || ! std::isfinite (point.value) || point.value < 0 || point.value > 1 || ! std::isfinite (time) || time <= previousTime || ! (std::abs (point.curve) <= 1))
                 return Result::fail ("Automation requires up to 4096 ordered beat points with values from 0 to 1.");
             previousBeat = point.beat; previousTime = time;
         }
@@ -3651,14 +3651,14 @@ struct Session::Impl
         bool same = lane.enabled == ! curve.bypass.get() && lane.points.size() == static_cast<size_t> (curve.getNumPoints());
         for (size_t i = 0; same && i < lane.points.size(); ++i)
             same = std::abs (edit->tempoSequence.toBeats (curve.getPointTime ((int) i)).inBeats() - lane.points[i].beat) < 1e-9
-                && std::abs (curve.getPointValue ((int) i) - lane.points[i].value) < 1e-6f;
+                && std::abs (curve.getPointValue ((int) i) - lane.points[i].value) < 1e-6f && curve.getPointCurve ((int) i) == lane.points[i].curve;
         if (same) return Result::ok();
         if (! internalAutomationWrite) transaction ("Edit " + parameterObject->getParameterName() + " automation");
         auto* undo = &edit->getUndoManager();
         plugin.remapOnTempoChange = true;
         curve.clear (undo);
         curve.state.setProperty (te::IDs::bypass, ! lane.enabled, undo);
-        for (const auto& point : lane.points) curve.addPoint (te::EditPosition (te::BeatPosition::fromBeats (point.beat)), point.value, 0, undo);
+        for (const auto& point : lane.points) curve.addPoint (te::EditPosition (te::BeatPosition::fromBeats (point.beat)), point.value, point.curve, undo);
         parameterObject->updateStream();
         edit->dispatchPendingUpdatesSynchronously();
         changed(); return Result::ok();
@@ -9722,6 +9722,20 @@ Result Session::setTrackPan (int index, float value)
     volume->state.setProperty (manualPanProperty, value, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
+float Session::curveProportion (float from, float to, float curve, double along)
+{
+    // The curve as the engine plays it (AutomationIterator::setPosition) over a unit segment. Its
+    // AutomationCurve::getValueAt doubles the curve instead, but that is not what is heard.
+    along = juce::jlimit (0.0, 1.0, along);
+    if (curve == 0 || from == to) return from + (float) along * (to - from);
+    const auto [bx, by] = tracktion::core::getBezierPoint (0.0, from, 1.0, to, curve);
+    if (curve >= -0.5f && curve <= 0.5f) return (float) tracktion::core::getBezierYFromX (along, 0.0, from, bx, by, 1.0, to);
+    double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    tracktion::core::getBezierEnds (0.0, from, 1.0, to, curve, x1, y1, x2, y2);
+    if (along <= x1) return from;
+    if (along >= x2) return to;
+    return (float) tracktion::core::getBezierYFromX (along, x1, y1, bx, by, x2, y2);
+}
 float Session::automationValueToProportion (AutomationTarget target, float value)
 {
     if (! std::isfinite (value)) return 0;
@@ -9824,7 +9838,8 @@ Result Session::setDeviceAutomation (const String& pluginId, int parameter, cons
     {
         const double time = std::isfinite (point.beat) ? impl->edit->tempoSequence.toTime (te::BeatPosition::fromBeats (point.beat)).inSeconds() : -1;
         if (! std::isfinite (point.beat) || point.beat < 0 || point.beat > 1000000 || point.beat <= previousBeat || (previousBeat >= 0 && point.beat - previousBeat < 0.999e-6)
-            || ! std::isfinite (point.value) || point.value < field.minimum || point.value > field.maximum || ! std::isfinite (time) || time <= previousTime)
+            || ! std::isfinite (point.value) || point.value < field.minimum || point.value > field.maximum || ! std::isfinite (time) || time <= previousTime
+            || ! (std::abs (point.curve) <= 1))
             return Result::fail ("Automation requires up to 4096 ordered beat points within the control's range.");
         previousBeat = point.beat; previousTime = time;
     }
@@ -9833,7 +9848,7 @@ Result Session::setDeviceAutomation (const String& pluginId, int parameter, cons
     bool same = lane.enabled == ! curve.bypass.get() && lane.points.size() == static_cast<size_t> (curve.getNumPoints());
     for (size_t i = 0; same && i < lane.points.size(); ++i)
         same = std::abs (impl->edit->tempoSequence.toBeats (curve.getPointTime ((int) i)).inBeats() - lane.points[i].beat) < 1e-9
-            && std::abs (curve.getPointValue ((int) i) - effectValueToProportion (kind, parameter, lane.points[i].value)) < 1e-6f;
+            && std::abs (curve.getPointValue ((int) i) - effectValueToProportion (kind, parameter, lane.points[i].value)) < 1e-6f && curve.getPointCurve ((int) i) == lane.points[i].curve;
     if (same) return Result::ok();
     if (! impl->internalAutomationWrite) impl->transaction ("Edit " + String (field.label) + " automation");
     auto* undo = &impl->edit->getUndoManager();
@@ -9843,7 +9858,7 @@ Result Session::setDeviceAutomation (const String& pluginId, int parameter, cons
     curve.clear (undo);
     curve.state.setProperty (te::IDs::bypass, ! lane.enabled, undo);
     for (const auto& point : lane.points)
-        curve.addPoint (te::EditPosition (te::BeatPosition::fromBeats (point.beat)), effectValueToProportion (kind, parameter, point.value), 0, undo);
+        curve.addPoint (te::EditPosition (te::BeatPosition::fromBeats (point.beat)), effectValueToProportion (kind, parameter, point.value), point.curve, undo);
     device->refreshAutomation();
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->changed(); return Result::ok();

@@ -11599,6 +11599,27 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto onLane = juce::Point<float> (xOf (1), yOf (inLane, volume().points[0].value));
         canvas.mouseDown (event (onLane, onLane, false)); canvas.mouseUp (event (onLane, onLane, false)); refresh();
         check (volume().points.size() == 2, "the lane edits the same envelope");
+        {
+            // Option-dragging a segment (Alt elsewhere) curves it; Option-double-clicking straightens it.
+            check (session.setTrackAutomation (trackId, Session::AutomationTarget::volume, { true, { { 1, -24 }, { 5, 0 } } }).wasOk(), "a rising segment from beat 2 to 6"); refresh();
+            const auto curveEvent = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged, int clicks = 1)
+            {
+                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::altModifier),
+                                         1.0f, 0, 0, 0, 0, &canvas, &canvas, now, down, now, clicks, dragged);
+            };
+            const auto from = Session::automationValueToProportion (Session::AutomationTarget::volume, -24), to = Session::automationValueToProportion (Session::AutomationTarget::volume, 0);
+            const auto middle = juce::Point<float> (xOf (3), inLane.getBottom() - (from + to) / 2 * inLane.getHeight());
+            const auto raised = middle.translated (0, -inLane.getHeight() * .2f);
+            canvas.mouseDown (curveEvent (middle, middle, false)); canvas.mouseDrag (curveEvent (raised, middle, true)); canvas.mouseUp (curveEvent (raised, middle, true)); refresh();
+            check (volume().points.size() == 2 && volume().points[0].curve < -.2f && Session::curveProportion (from, to, volume().points[0].curve, .5) > (from + to) / 2,
+                   "Option-dragging the segment up curves it, raising its middle, without adding a breakpoint");
+            session.undo(); refresh();
+            check (volume().points[0].curve == 0, "one undo straightens it");
+            session.redo(); refresh();
+            const auto onCurve = juce::Point<float> (xOf (3), inLane.getBottom() - Session::curveProportion (from, to, volume().points[0].curve, .5) * inLane.getHeight());
+            canvas.mouseDoubleClick (curveEvent (onCurve, onCurve, false, 2)); refresh();
+            check (volume().points.size() == 2 && volume().points[0].curve == 0, "Option-double-clicking the curved segment straightens it");
+        }
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
             {

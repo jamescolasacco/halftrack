@@ -158,15 +158,28 @@ std::optional<size_t> Envelope::hitSegment (const Target& t, juce::Rectangle<flo
     // The line runs flat before the first breakpoint and after the last.
     size_t right = 0;
     while (right < points.size() && xOfBeat (points[right].beat) < at.x) ++right;
-    float y;
-    if (right == 0) y = position (t, area, points.front()).y;
-    else if (right == points.size()) y = position (t, area, points.back()).y;
-    else
-    {
-        const auto a = position (t, area, points[right - 1]), b = position (t, area, points[right]);
-        y = b.x > a.x ? a.y + (b.y - a.y) * (at.x - a.x) / (b.x - a.x) : a.y;
-    }
-    return std::abs (at.y - y) <= hitRadius ? std::optional<size_t> (right) : std::nullopt;
+    return std::abs (at.y - yAt (t, area, right, at.x)) <= hitRadius ? std::optional<size_t> (right) : std::nullopt;
+}
+float Envelope::yAt (const Target& t, juce::Rectangle<float> area, size_t right, float x) const
+{
+    const auto& points = t.lane.points;
+    if (right == 0) return position (t, area, points.front()).y;
+    if (right >= points.size()) return position (t, area, points.back()).y;
+    const auto a = position (t, area, points[right - 1]), b = position (t, area, points[right]);
+    if (b.x <= a.x) return a.y;
+    const auto from = toProportion (t, points[right - 1].value), to = toProportion (t, points[right].value);
+    return area.getBottom() - Session::curveProportion (from, to, points[right - 1].curve, (x - a.x) / (b.x - a.x)) * area.getHeight();
+}
+// Option (Alt elsewhere) curves a segment; Cmd on the Mac, Alt elsewhere, bypasses snapping, as the
+// reference's do.
+static bool curvesSegment (juce::ModifierKeys mods) { return mods.isAltDown(); }
+static bool bypassesSnap (juce::ModifierKeys mods)
+{
+   #if JUCE_MAC
+    return mods.isCommandDown();
+   #else
+    return mods.isAltDown();
+   #endif
 }
 void Envelope::paint (juce::Graphics& g, juce::Rectangle<float> area, const Target& t) const
 {
@@ -182,7 +195,18 @@ void Envelope::paint (juce::Graphics& g, juce::Rectangle<float> area, const Targ
     else
     {
         path.startNewSubPath (area.getX(), position (t, area, t.lane.points.front()).y);
-        for (const auto& p : t.lane.points) path.lineTo (position (t, area, p));
+        for (size_t i = 0; i < t.lane.points.size(); ++i)
+        {
+            const auto to = position (t, area, t.lane.points[i]);
+            // A curved segment is drawn through points along it.
+            if (i > 0 && t.lane.points[i - 1].curve != 0)
+            {
+                const auto from = position (t, area, t.lane.points[i - 1]);
+                const int steps = juce::jlimit (2, 64, (int) ((to.x - from.x) / 4));
+                for (int k = 1; k < steps; ++k) { const auto x = from.x + (to.x - from.x) * (float) k / (float) steps; path.lineTo (x, yAt (t, area, i, x)); }
+            }
+            path.lineTo (to);
+        }
         path.lineTo (area.getRight(), position (t, area, t.lane.points.back()).y);
     }
     g.setColour (colour.withAlpha (t.lane.points.empty() ? .55f : 1.0f));
@@ -204,16 +228,24 @@ void Envelope::begin (Session& session, const Target& t)
 bool Envelope::mouseDown (Session& session, const Target& t, juce::Rectangle<float> area, const juce::MouseEvent& e)
 {
     if (! area.expanded (0, hitRadius).contains (e.position) || ! e.mods.isLeftButtonDown()) return false;
-    moved = false; downAt = e.position; dragged = hitPoint (t, area, e.position); pressedPoint = dragged >= 0;
+    moved = false; downAt = e.position; dragged = hitPoint (t, area, e.position); pressedPoint = dragged >= 0; curving = -1;
     if (pressedPoint) return true; // A click releases it; a drag moves it.
     if (const auto segment = hitSegment (t, area, e.position))
     {
+        // Option-dragging a segment between breakpoints curves it.
+        if (curvesSegment (e.mods))
+        {
+            if (*segment > 0 && *segment < t.lane.points.size()) { curving = (int) *segment - 1; curveFrom = t.lane.points[(size_t) curving].curve; }
+            return true;
+        }
         // Clicking a segment adds a breakpoint on it, under the pointer.
         auto lane = t.lane;
-        auto point = pointAt (t, area, e.position, ! (e.mods.isAltDown() || e.mods.isCommandDown()));
+        auto point = pointAt (t, area, e.position, ! bypassesSnap (e.mods));
         if (lane.points.size() >= 4096) return true;
         const auto at = std::lower_bound (lane.points.begin(), lane.points.end(), point.beat, [] (const auto& p, double beat) { return p.beat < beat; });
         if (at != lane.points.end() && std::abs (at->beat - point.beat) < 1e-6) { dragged = (int) std::distance (lane.points.begin(), at); return true; }
+        // The new breakpoint's segment keeps the curve of the one it splits.
+        if (at != lane.points.begin()) point.curve = std::prev (at)->curve;
         dragged = (int) std::distance (lane.points.begin(), at);
         lane.points.insert (at, point);
         begin (session, t);
@@ -224,12 +256,24 @@ bool Envelope::mouseDown (Session& session, const Target& t, juce::Rectangle<flo
 }
 bool Envelope::mouseDrag (Session& session, const Target& t, juce::Rectangle<float> area, const juce::MouseEvent& e)
 {
+    if (curving >= 0 && (size_t) curving + 1 < t.lane.points.size())
+    {
+        // Dragging up raises the segment's middle, dragging down lowers it.
+        auto lane = t.lane;
+        const bool rising = toProportion (t, lane.points[(size_t) curving + 1].value) > toProportion (t, lane.points[(size_t) curving].value);
+        const auto up = (downAt.y - e.position.y) / std::max (1.0f, area.getHeight());
+        lane.points[(size_t) curving].curve = std::clamp (curveFrom + (rising ? -1.0f : 1.0f) * up * 2.0f, -1.0f, 1.0f);
+        moved = true;
+        begin (session, t); write (session, t, lane);
+        return true;
+    }
     if (dragged < 0 || (size_t) dragged >= t.lane.points.size()) return dragged >= 0;
     if (! moved && e.position.getDistanceFrom (downAt) < 3) return true;
     moved = true;
     auto lane = t.lane;
     const auto index = (size_t) dragged;
-    auto point = pointAt (t, area, e.position, ! (e.mods.isAltDown() || e.mods.isCommandDown()));
+    auto point = pointAt (t, area, e.position, ! bypassesSnap (e.mods));
+    point.curve = lane.points[index].curve;
     // Shift gives a finer vertical step from where the drag began.
     if (e.mods.isShiftDown())
     {
@@ -247,7 +291,8 @@ bool Envelope::mouseDrag (Session& session, const Target& t, juce::Rectangle<flo
 }
 bool Envelope::mouseUp (Session& session, const Target& t)
 {
-    const bool handled = dragged >= 0 || gesture;
+    const bool handled = dragged >= 0 || curving >= 0 || gesture;
+    curving = -1;
     // Clicking a breakpoint without dragging it deletes it.
     if (pressedPoint && ! moved && dragged >= 0 && (size_t) dragged < t.lane.points.size())
     {
@@ -262,7 +307,17 @@ bool Envelope::doubleClick (Session& session, const Target& t, juce::Rectangle<f
 {
     if (! area.contains (e.position) || hitPoint (t, area, e.position) >= 0) return false;
     auto lane = t.lane;
-    const auto point = pointAt (t, area, e.position, ! (e.mods.isAltDown() || e.mods.isCommandDown()));
+    // Option-double-clicking a curved segment straightens it.
+    if (curvesSegment (e.mods))
+    {
+        if (const auto segment = hitSegment (t, area, e.position); segment && *segment > 0 && *segment < lane.points.size())
+        {
+            lane.points[*segment - 1].curve = 0;
+            session.beginEditGesture ("Straighten " + t.control + " automation"); write (session, t, lane); session.endEditGesture();
+        }
+        return true;
+    }
+    const auto point = pointAt (t, area, e.position, ! bypassesSnap (e.mods));
     if (lane.points.size() >= 4096) return true;
     const auto at = std::lower_bound (lane.points.begin(), lane.points.end(), point.beat, [] (const auto& p, double beat) { return p.beat < beat; });
     if (at != lane.points.end() && std::abs (at->beat - point.beat) < 1e-6) return true;

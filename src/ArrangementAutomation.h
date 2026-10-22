@@ -7,7 +7,8 @@
 // of its native devices (racks' inner devices included) and its plug-ins' parameters. Envelope
 // draws one of them across a lane and edits its breakpoints as the reference does: clicking a
 // segment adds a breakpoint, double-clicking empty space adds one there, clicking a breakpoint
-// deletes it and dragging moves it.
+// deletes it and dragging moves it. Option-dragging a segment (Alt elsewhere) curves it, and
+// Option-double-clicking it straightens it.
 namespace halftrack::arrangementAutomation
 {
 struct Target
@@ -52,10 +53,14 @@ private:
     int hitPoint (const Target&, juce::Rectangle<float> area, juce::Point<float>) const;
     // The segment under the point, as the index of its right-hand breakpoint (points.size() after the last).
     std::optional<size_t> hitSegment (const Target&, juce::Rectangle<float> area, juce::Point<float>) const;
+    // The line's y at an x on the segment ending at `right`, following its curve.
+    float yAt (const Target&, juce::Rectangle<float> area, size_t right, float x) const;
     juce::Point<float> position (const Target&, juce::Rectangle<float> area, const Session::AutomationPoint&) const;
     Session::AutomationPoint pointAt (const Target&, juce::Rectangle<float> area, juce::Point<float>, bool snap) const;
     void begin (Session&, const Target&);
     int dragged = -1;           // The breakpoint being dragged.
+    int curving = -1;           // The breakpoint whose segment an Option-drag is curving.
+    float curveFrom = 0;
     bool moved = false, gesture = false, pressedPoint = false;
     juce::String gestureKey;
     juce::Point<float> downAt;

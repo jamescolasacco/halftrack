@@ -32,4 +32,21 @@ The main UI suite turns Automation Mode on with A and checks:
 - that the lane button moves the envelope into a named lane, that edits there change the same automation, and that hiding the lane keeps it;
 - that A again restores the mixer controls.
 
-Missing: curved segments, segment selection and dragging, multi-breakpoint selection, Edit Value, Draw Mode, saving the shown lanes, clip envelopes, and fine checks of the chooser's per-device "show automated only" filter.
+## Curved segments (2026-10-22)
+
+The reference's manual: hold Alt (Win) / Option (Mac) and drag a line segment to curve it; Alt/Option-double-click straightens it. Halftrack does the same in Automation Mode's envelopes and lanes.
+
+- **Model.** `Session::AutomationPoint::curve` holds the shape of the segment to the next point, as the engine's automation curve does: 0 is straight, ±0.5 bows it, and up to ±1 bows it further with its ends held.
+  - It is read and written for track volume and pan, master volume, native device controls and plug-in parameters, and is validated.
+  - Time edits and the range clipboard already carried it.
+- **Drawing and hit tests.** These follow `Session::curveProportion`, the curve as the engine plays it (`AutomationIterator`). The engine's `AutomationCurve::getValueAt` doubles the curve before the Bézier, but that is not what plays, so the playback form is the one drawn.
+- **The gesture.** Dragging a segment's middle up raises it, either way the segment slopes. Snapping is bypassed with Cmd on the Mac and Alt elsewhere, as in the Arrangement.
+
+Evidence:
+
+- **The automation suite.** It renders a constant source through a volume segment from -24 to 0 dB over three beats, straight and with curve 0.4. Halfway along, the curve plays 0.214 of the plateau, against 0.218 predicted from `curveProportion`. The straight segment plays 0.366, against 0.372 predicted; the 2% gaps match block-rate automation. The curve reads back, a curve beyond 1 is refused, and one undo straightens it.
+- **The UI suite.** Option-dragging a rising segment up curves it, raising its middle without adding a breakpoint; one undo straightens it, and Option-double-clicking straightens it.
+
+The reference's curve shape is unmeasured: Halftrack's is the engine's quadratic Bézier.
+
+Missing: segment selection and dragging, multi-breakpoint selection, Edit Value, Draw Mode, saving the shown lanes, clip envelopes, and fine checks of the chooser's per-device "show automated only" filter.

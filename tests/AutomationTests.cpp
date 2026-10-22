@@ -635,12 +635,50 @@ void interpolationTests (const juce::File& root)
     check (error < .002, "rendered ramp follows native taper within block/smoothing bound; error=" + juce::String (error, 7));
 }
 }
+// A curved segment: volume from -24 dB to 0 dB over three beats, bowed. It reads back with its
+// curve, and halfway along plays the level the engine's curve gives, not the straight line's.
+void curveTests (const juce::File& root)
+{
+    Session s (false); ok (s.importAudio (constantFile (root), 0), "import a constant source for curves");
+    const auto id = s.snapshot().tracks[0].id;
+    const auto halfway = [&] (const juce::AudioBuffer<float>& audio)
+    {
+        // The level halfway along (0.75 s), relative to the plateau after the segment (1.75 s).
+        return audio.getMagnitude (0, 36000 - 240, 480) / audio.getMagnitude (0, 84000, 4800);
+    };
+    const auto predicted = [] (float curve)
+    {
+        const auto from = Session::automationValueToProportion (Target::volume, -24), to = Session::automationValueToProportion (Target::volume, 0);
+        return juce::Decibels::decibelsToGain (Session::automationProportionToValue (Target::volume, Session::curveProportion (from, to, curve, .5)));
+    };
+    Lane straight { true, { { 0, -24 }, { 3, 0 } } };
+    ok (s.setTrackAutomation (id, Target::volume, straight), "a straight segment");
+    const auto line = halfway (render (s, root));
+    Lane curved { true, { { 0, -24, .4f }, { 3, 0 } } };
+    ok (s.setTrackAutomation (id, Target::volume, curved), "the same segment curved");
+    const auto same = [] (const std::vector<Session::AutomationPoint>& a, const std::vector<Session::AutomationPoint>& b)
+    {
+        bool equal = a.size() == b.size();
+        for (size_t i = 0; equal && i < a.size(); ++i) equal = std::abs (a[i].beat - b[i].beat) < 1e-9 && std::abs (a[i].value - b[i].value) < 1e-3f && a[i].curve == b[i].curve;
+        return equal;
+    };
+    check (same (s.snapshot().tracks[0].volumeAutomation.points, curved.points), "the curve reads back with its points");
+    const auto bowed = halfway (render (s, root));
+    check (std::abs (line - predicted (0)) < .02 * predicted (0) && std::abs (bowed - predicted (.4f)) < .02 * predicted (.4f) && bowed < line * .8,
+           "halfway along, the curved segment plays the engine's curve, well below the straight line (" + juce::String (bowed, 4) + " against " + juce::String (line, 4) + "; predicted " + juce::String (predicted (.4f), 4) + " and " + juce::String (predicted (0), 4) + ")");
+    check (Session::curveProportion (.2f, .8f, 0, .25) == .2f + .25f * .6f && Session::curveProportion (.2f, .8f, .5f, 1) == .8f && Session::curveProportion (.2f, .8f, -.3f, 0) == .2f,
+           "a straight segment is linear, and every curve runs from its start to its end");
+    auto steep = curved; steep.points[0].curve = 1.5f;
+    check (s.setTrackAutomation (id, Target::volume, steep).failed(), "a curve beyond 1 is refused");
+    s.undo();
+    check (same (s.snapshot().tracks[0].volumeAutomation.points, straight.points), "one undo straightens it again");
+}
 int runAutomationTests (const juce::File& artifacts)
 {
     try
     {
         const auto root = artifacts.getChildFile ("automation-" + juce::Uuid().toString()); ok (root.createDirectory(), "create isolated test directory");
-        historyTests (root); malformedLoads (root); waveformTests (root); playbackPersistence (root); interpolationTests (root); beatBoundaryTests(); playbackModeRegressions (root); masterWaveformTests (root); masterHistoryTests (root); malformedMasterLoads (root); return 0;
+        historyTests (root); malformedLoads (root); waveformTests (root); playbackPersistence (root); interpolationTests (root); beatBoundaryTests(); playbackModeRegressions (root); masterWaveformTests (root); masterHistoryTests (root); malformedMasterLoads (root); curveTests (root); return 0;
     }
     catch (const std::exception& error) { std::cerr << "FAIL automation: " << error.what() << std::endl; return 1; }
 }
