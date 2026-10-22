@@ -136,7 +136,7 @@ void persistence(const juce::File& root)
 }
 void countIn(const juce::File& root)
 {
-    for(double start:{0.0,6.0}) for(int bars:{0,1,2})
+    for(double start:{0.0,6.0}) for(int bars:{0,1,2,4})
     {
         Fixture f(root);auto& session=f.session;auto settings=session.snapshot().metronome;settings.enabled=bars==0;settings.recordingOnly=bars==0;settings.countInBars=bars;settings.gain=1;
         ok(session.setMetronome(settings),"select count-in without ongoing metronome");
@@ -170,6 +170,22 @@ void countIn(const juce::File& root)
         ok(session.setTrackInput(0,inputs[0]),"reassign generated capture input");ok(session.setTrackArmed(0,true),"arm early-stop take");
         ok(session.record(),"begin count-in before early stop");pumpSyntheticTestDevice(session,100);session.stop();
         check(session.snapshot().tracks[0].clips.empty(),"stopping during count-in creates no audio clip");
+    }
+    // A bar counts in as long as the meter's bar: three crotchets in 6/8 and three and a half in 7/8.
+    for(const auto [numerator,denominator,beats]:{std::tuple{6,8,3.0},std::tuple{7,8,3.5}})
+    {
+        Fixture f(root);auto& session=f.session;ok(session.setTimeSignature(numerator,denominator),"set the meter");
+        auto settings=session.snapshot().metronome;settings.countInBars=1;ok(session.setMetronome(settings),"count in one bar");
+        const auto inputs=session.inputNames();ok(session.setTrackInput(0,inputs[0]),"assign an input");ok(session.setTrackArmed(0,true),"arm");
+        session.seek(0);ok(session.record(),"record with a one-bar count-in");
+        check(std::abs(session.snapshot().position+beats*.5+.25)<1e-9 && session.snapshot().countInBeatsRemaining==beats,
+              "a bar of "+juce::String(numerator)+"/"+juce::String(denominator)+" counts in "+juce::String(beats,1)+" beats ("+juce::String(session.snapshot().position,4)+" s)");
+        session.stop();
+    }
+    {
+        Fixture f(root);auto& session=f.session;auto settings=session.snapshot().metronome;
+        settings.countInBars=3;check(session.setMetronome(settings).failed(),"three bars is not one of the reference's count-ins");
+        settings.countInBars=4;ok(session.setMetronome(settings),"four bars is");
     }
 }
 }

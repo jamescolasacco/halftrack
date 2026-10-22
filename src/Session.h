@@ -507,7 +507,7 @@ public:
     {
         bool enabled = false, accent = true, recordingOnly = false;
         float gain = .6f;
-        int countInBars = 0; // 0, 1 or 2 bars of the project meter.
+        int countInBars = 0; // 0, 1, 2 or 4 bars of the project meter, as the reference offers.
         bool operator== (const MetronomeSettings&) const = default;
     };
     // A MIDI mapping (see setMidiLearnTarget): a controller on a channel and the target it drives

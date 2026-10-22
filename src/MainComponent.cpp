@@ -7970,6 +7970,7 @@ private:
         if(item==1) settings.accent=!settings.accent;
         else if(item==2) settings.recordingOnly=!settings.recordingOnly;
         else if(item>=10 && item<=12) settings.countInBars=item-10;
+        else if(item==14) settings.countInBars=4;
         else if(item>=21 && item<=25) settings.gain=(item-20)*.2f;
         else return;
         report(session.setMetronome(settings));refresh();
@@ -7981,8 +7982,9 @@ private:
         menu.addItem(1,"Accent first beat",true,settings.accent);
         menu.addItem(2,"Only while recording",true,settings.recordingOnly);
         countIn.addItem(10,"None",!state.recording,settings.countInBars==0);
-        countIn.addItem(11,"1 bar",!state.recording,settings.countInBars==1);
-        countIn.addItem(12,"2 bars",!state.recording,settings.countInBars==2);
+        countIn.addItem(11,"1 Bar",!state.recording,settings.countInBars==1);
+        countIn.addItem(12,"2 Bars",!state.recording,settings.countInBars==2);
+        countIn.addItem(14,"4 Bars",!state.recording,settings.countInBars==4);
         for(int i=1;i<=5;++i)level.addItem(20+i,juce::String(i*20)+"%",true,std::abs(settings.gain-i*.2f)<.001f);
         menu.addSubMenu("Count-in",countIn);menu.addSubMenu("Click level",level);
         const auto safe=juce::Component::SafePointer<Impl>(this);
@@ -14912,6 +14914,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(metronome && metronome->isVisible(),"transport exposes the real metronome toggle");
     metronome->setToggleState(true,juce::dontSendNotification);metronome->onClick();refresh();
     check(state.metronome.enabled,"metronome button enables the native click");
+    applyMetronomeMenu(14);check(state.metronome.countInBars==4,"the count-in menu offers four bars, as the reference's does");session.undo();refresh();
     applyMetronomeMenu(11);check(state.metronome.countInBars==1,"native count-in menu chooses one bar");
     session.undo();refresh();check(state.metronome.countInBars==0&&state.metronome.enabled,"count-in menu edit undoes independently");
     applyMetronomeMenu(22);applyMetronomeMenu(1);applyMetronomeMenu(2);

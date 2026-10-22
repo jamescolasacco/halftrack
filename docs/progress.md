@@ -1973,3 +1973,11 @@ Engine, UI and root areas.
 
 See [the contract](research/clip-fades-contract.md).
 
+## Four-bar count-in — 2026-10-22
+
+Engine, UI and root areas.
+
+- **Count-In** offers None, 1 Bar, 2 Bars and 4 Bars, as the reference's menu does.
+- **A fix.** A bar of count-in now lasts the meter's bar in crotchets. In 6/8 it was two bars, and 7/8 could not be expressed. An engine patch (`cmake/PatchCountIn.cmake`) adds the four-bar mode and the bar length.
+- **Measured.** The metronome suite and the UI suite.
+

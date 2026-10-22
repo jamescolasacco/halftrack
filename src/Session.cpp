@@ -44,6 +44,11 @@ const juce::Identifier implicitWarpEndProperty { "halftrackWarpEnd" }, warpMarke
 const juce::Identifier videoProperty { "halftrackVideo" }; // A video clip's movie, absolute or relative to the project.
 const juce::Identifier recordQuantisationProperty { "halftrackRecordQuantisation" };
 const juce::Identifier countInProperty { "halftrackCountInBars" };
+// The reference's count-ins, none or one, two or four bars, as the engine's modes.
+te::Edit::CountIn countInMode (int bars)
+{
+    return bars == 1 ? te::Edit::CountIn::oneBar : bars == 2 ? te::Edit::CountIn::twoBar : bars == 4 ? te::Edit::CountIn::fourBar : te::Edit::CountIn::none;
+}
 const juce::Identifier inputTapProperty { "halftrackInputTap" }; // Read by the track-inputs engine patch.
 const juce::Identifier sceneTempoProperty { "halftrackSceneTempo" }, sceneNumeratorProperty { "halftrackSceneNumerator" },
                        sceneDenominatorProperty { "halftrackSceneDenominator" };
@@ -927,7 +932,7 @@ Result validateMetronome (const juce::ValueTree& state)
         return !text.empty() && end==text.c_str()+text.size() && std::isfinite(number)
             && number>=lo && number<=hi && (!integral || std::floor(number)==number);
     };
-    if(!read(state.getProperty(countInProperty,0),0,2,true)) return Result::fail("Invalid project count-in.");
+    if(!read(state.getProperty(countInProperty,0),0,4,true) || static_cast<int>(state.getProperty(countInProperty,0))==3) return Result::fail("Invalid project count-in.");
     int count=0;
     for(const auto& node:state) if(node.hasType(te::IDs::CLICKTRACK))
     {
@@ -4027,7 +4032,7 @@ struct Session::Impl
             if (auto* device = input (*t))
                 device->getInputDevice().setMonitorMode (static_cast<te::InputDevice::MonitorMode> (
                     juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (monitorProperty, 0)))));
-        edit->setCountInMode (static_cast<te::Edit::CountIn> (static_cast<int> (edit->state.getProperty(countInProperty,0))));
+        edit->setCountInMode (countInMode (static_cast<int> (edit->state.getProperty (countInProperty, 0))));
         refreshRouting();
         refreshCrossfade();
         edit->dispatchPendingUpdatesSynchronously();
@@ -4046,7 +4051,7 @@ struct Session::Impl
         edit->playInStopEnabled = true;
         edit->getAutomationRecordManager().setReadingAutomation (true);
         edit->getAutomationRecordManager().setWritingAutomation (false);
-        edit->setCountInMode (static_cast<te::Edit::CountIn> (static_cast<int> (edit->state.getProperty(countInProperty,0))));
+        edit->setCountInMode (countInMode (static_cast<int> (edit->state.getProperty (countInProperty, 0))));
         refreshRouting();
         if (useDevices) edit->getTransport().ensureContextAllocated();
         edit->dispatchPendingUpdatesSynchronously();
@@ -4971,7 +4976,7 @@ Session::Snapshot Session::snapshot() const
     s.recordQuantisation=static_cast<RecordQuantisation>(static_cast<int>(e.state.getProperty(recordQuantisationProperty,0)));
     const auto clickRange=e.getClickTrackRange();
     if(s.recording && s.metronome.countInBars>0 && !clickRange.isEmpty())
-        s.countInBeatsRemaining=juce::jlimit(0.0,s.metronome.countInBars*4.0,
+        s.countInBeatsRemaining=juce::jlimit(0.0,e.getNumCountInBeats(),
             (e.tempoSequence.toBeats(clickRange.getEnd()).inBeats()+.5)-e.tempoSequence.toBeats(transport.getPosition()).inBeats());
     s.loopStart = transport.getLoopRange().getStart().inSeconds();
     s.loopEnd = transport.getLoopRange().getEnd().inSeconds();
@@ -10904,7 +10909,7 @@ Result Session::record()
     auto r = audioArmed ? impl->takeFolderReady() : impl->assets().createDirectory(); if (r.failed()) return r;
     for (auto* input : impl->edit->getAllInputDevices()) input->flushRecordingStateUpdates();
     impl->edit->dispatchPendingUpdatesSynchronously();
-    impl->edit->setCountInMode (static_cast<te::Edit::CountIn> (snapshot().metronome.countInBars));
+    impl->edit->setCountInMode (countInMode (snapshot().metronome.countInBars));
     for(auto* input:impl->edit->getAllInputDevices()) if(input->isRecordingActive())
         if(auto* midi=dynamic_cast<te::MidiInputDevice*>(&input->getInputDevice())) midi->quantisation.setType("(none)");
     impl->edit->setClickTrackRange ({});
@@ -11098,7 +11103,7 @@ Result Session::tapTempo(double seconds)
 Result Session::setMetronome (const MetronomeSettings& settings)
 {
     if(impl->exporting) return Result::fail("Finish or cancel the current export first.");
-    if(!std::isfinite(settings.gain) || settings.gain<.2f || settings.gain>1 || settings.countInBars<0 || settings.countInBars>2)
+    if(!std::isfinite(settings.gain) || settings.gain<.2f || settings.gain>1 || settings.countInBars<0 || settings.countInBars>4 || settings.countInBars==3)
         return Result::fail("Metronome level must be 20–100% and count-in zero, one or two bars.");
     const auto previous=snapshot().metronome;
     if(previous==settings) return Result::ok();
@@ -11110,7 +11115,7 @@ Result Session::setMetronome (const MetronomeSettings& settings)
     edit.clickTrackRecordingOnly.setValue(settings.recordingOnly,undo);
     edit.clickTrackGain.setValue(settings.gain,undo);
     edit.state.setProperty(countInProperty,settings.countInBars,undo);
-    edit.setCountInMode(static_cast<te::Edit::CountIn>(settings.countInBars));
+    edit.setCountInMode(countInMode(settings.countInBars));
     impl->changed(); return Result::ok();
 }
 Result Session::setRecordQuantisation(RecordQuantisation value)
