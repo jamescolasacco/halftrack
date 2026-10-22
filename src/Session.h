@@ -774,8 +774,19 @@ public:
         int theme = 0;
         static constexpr int themeCount = 3;
         int zoomPercent = 100; // 50-200, in steps of 25.
+        // Driver Error Compensation, after the reference's: recordings move this much earlier, -200 to
+        // 200 ms, for a driver that reports its latency wrongly.
+        double driverErrorCompensationMs = 0;
         bool operator== (const Preferences&) const = default;
     };
+    // The audio device's latency as it reports it, with Driver Error Compensation. Recordings are placed
+    // earlier by the overall latency, so what was heard is recorded where it played.
+    struct AudioLatency
+    {
+        double inputMs = 0, outputMs = 0, compensationMs = 0;
+        double overallMs() const noexcept { return inputMs + outputMs + compensationMs; }
+    };
+    AudioLatency audioLatency() const;
     static constexpr int preferencesVersion = 1;
     Preferences preferences() const;
     juce::Result setPreferences (const Preferences&);

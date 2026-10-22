@@ -201,6 +201,10 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `WarpSettings` carries the mode and each mode's settings; `setAudioClipWarp` maps Beats, Tones, Texture and Complex Pro to the engine stretcher modes that `cmake/PatchWarpModes.cmake` adds, and their settings to the stretch options' four Halftrack values. `src/WarpStretchers.*` holds the stretchers, registered with the engine when a Session starts. They allocate when created and not while processing. Transposition is part of `AudioClipSettings`, kept in clip properties and applied as the clip's pitch change. See the [contract](research/warp-modes-contract.md).
 
+## Recording latency
+
+The engine places takes by the device's reported latency and each input's record adjustment. The Session sets every audio input's adjustment from the Driver Error Compensation preference whenever recording starts, and reports the device's latency through `audioLatency()`. The input placement patch aligns input stamping with the output rendered in the same callback. See the [contract](research/recording-latency-contract.md).
+
 ## Clip loops
 
 `ClipInfo` reports a MIDI or warped audio clip's content start and loop in content beats. `setClipLoop` and `setClipBeats` translate them into the engine's loop range and offset: while a clip loops, the engine counts its offset from the loop's start. The interface shares a few content helpers (`contentEndBeat`, `contentSpans`, `sourceSecondsAt`) so the Arrangement, note editor and waveform draw and edit the same content. See the [contract](research/clip-loops-contract.md).

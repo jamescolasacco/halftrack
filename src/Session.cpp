@@ -3031,6 +3031,12 @@ struct Session::Impl
     }
     // Preferences, read when the Session starts.
     Preferences prefs;
+    // Driver Error Compensation reaches every audio input before a recording starts.
+    void applyDriverCompensation()
+    {
+        for (auto* in : engine.getDeviceManager().getWaveInputDevices())
+            if (in->getRecordAdjustmentMs() != prefs.driverErrorCompensationMs) in->setRecordAdjustmentMs (prefs.driverErrorCompensationMs);
+    }
     // Audio files' transients and tempo for warping, each read once while the file is unchanged.
     struct SoundAnalysis { std::vector<double> transients; std::optional<tempo::Estimate> tempo; };
     std::map<juce::String, std::shared_ptr<const SoundAnalysis>> analyses;
@@ -3054,7 +3060,8 @@ struct Session::Impl
     {
         return juce::isPositiveAndBelow ((int) p.defaultWarpMode, 8) && p.defaultWarpMode != WarpMode::off
             && juce::isPositiveAndBelow ((int) p.defaultLaunchMode, 4) && juce::isPositiveAndBelow ((int) p.defaultLaunchQuantisation, 11)
-            && juce::isPositiveAndBelow (p.theme, Preferences::themeCount) && p.zoomPercent >= 50 && p.zoomPercent <= 200 && p.zoomPercent % 25 == 0;
+            && juce::isPositiveAndBelow (p.theme, Preferences::themeCount) && p.zoomPercent >= 50 && p.zoomPercent <= 200 && p.zoomPercent % 25 == 0
+            && std::isfinite (p.driverErrorCompensationMs) && std::abs (p.driverErrorCompensationMs) <= 200;
     }
     void loadPreferences()
     {
@@ -3077,6 +3084,7 @@ struct Session::Impl
             const int look = number ("theme", 0, Preferences::themeCount), zoom = number ("zoomPercent", 100, 201);
             valid = arm >= 0 && solo >= 0 && warp >= 0 && autoWarp >= 0 && mode >= 0 && grid >= 0 && look >= 0 && zoom >= 0;
             read = { arm == 1, solo == 1, (WarpMode) warp, autoWarp == 1, (LaunchMode) mode, (ClipQuantisation) grid, look, zoom };
+            read.driverErrorCompensationMs = xml->getDoubleAttribute ("driverErrorCompensationMs", 0);
             valid = valid && validPreferences (read);
         }
         if (valid) { prefs = read; return; }
@@ -3094,6 +3102,7 @@ struct Session::Impl
         xml.setAttribute ("defaultWarpMode", (int) next.defaultWarpMode); xml.setAttribute ("autoWarpLongSamples", next.autoWarpLongSamples ? 1 : 0);
         xml.setAttribute ("defaultLaunchMode", (int) next.defaultLaunchMode); xml.setAttribute ("defaultLaunchQuantisation", (int) next.defaultLaunchQuantisation);
         xml.setAttribute ("theme", next.theme); xml.setAttribute ("zoomPercent", next.zoomPercent);
+        xml.setAttribute ("driverErrorCompensationMs", next.driverErrorCompensationMs);
         const auto file = prefsFile();
         if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
         juce::TemporaryFile temporary (file);
@@ -5199,6 +5208,17 @@ Result Session::setAudioInputEnabled (const String& inputName, bool enabled)
 }
 Session::Preferences Session::preferences() const { return impl->prefs; }
 juce::File Session::preferencesFile() const { return impl->prefsFile(); }
+Session::AudioLatency Session::audioLatency() const
+{
+    AudioLatency latency;
+    latency.compensationMs = impl->prefs.driverErrorCompensationMs;
+    if (auto* device = impl->engine.getDeviceManager().deviceManager.getCurrentAudioDevice(); device != nullptr && device->getCurrentSampleRate() > 0)
+    {
+        latency.inputMs = device->getInputLatencyInSamples() * 1000.0 / device->getCurrentSampleRate();
+        latency.outputMs = device->getOutputLatencyInSamples() * 1000.0 / device->getCurrentSampleRate();
+    }
+    return latency;
+}
 String Session::preferencesProblem() const { return impl->prefsProblem; }
 Result Session::setPreferences (const Preferences& next)
 {
@@ -6278,6 +6298,7 @@ Result Session::recordSlot (int trackIndex, int sceneIndex)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop Arrangement recording before recording into Session slots.");
+    impl->applyDriverCompensation();
     auto* slot = impl->slot (trackIndex, sceneIndex);
     if (! slot) return Result::fail ("Slot not found.");
     auto* track = impl->track (trackIndex);
@@ -9715,6 +9736,7 @@ Result Session::record()
     impl->endAudition();
     if (impl->edit->getTransport().isRecording()) return Result::ok();
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
+    impl->applyDriverCompensation();
     bool armed = false;
     for (auto* t : te::getAudioTracks (*impl->edit))
         if (auto* d = impl->input (*t); d != nullptr && d->isRecordingEnabled (t->itemID))

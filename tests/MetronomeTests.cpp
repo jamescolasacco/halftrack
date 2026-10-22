@@ -154,8 +154,8 @@ void countIn(const juce::File& root)
         std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(state.tracks[0].clips[0].file));
         check(reader && reader->sampleRate==48000 && reader->numChannels==2 && reader->bitsPerSample>=16,"decode generated count-in take");
         juce::AudioBuffer<float> recorded(2,(int)reader->lengthInSamples);check(reader->read(&recorded,0,recorded.getNumSamples(),0,true,true),"read entire recorded take");
-        // The queued graph start uses the following input reference block, as MIDI does.
-        const auto firstSample=inputStart+256+bars*2*48000+lead;double worst=0; int worstAt=0;
+        // The take begins with the input arriving as the recording's first block plays.
+        const auto firstSample=inputStart+bars*2*48000+lead;double worst=0; int worstAt=0;
         for(int c=0;c<2;++c)for(int n=0;n<recorded.getNumSamples();++n)
         {
             const double expected=.2f*std::sin(juce::MathConstants<double>::twoPi*(firstSample+n)*(c==0?440.0:660.0)/48000);

@@ -8808,7 +8808,7 @@ private:
         automationWindows.emplace_back (new Window (std::move (editor), theme, *this));
     }
     // Audio & MIDI Setup: the device selector, then the file type and bit depth takes are recorded in.
-    class AudioSetupPanel final : public juce::Component
+    class AudioSetupPanel final : public juce::Component, private juce::ChangeListener
     {
     public:
         // The engine keeps its own MIDI outputs, so the device selector's MIDI output chooser, which
@@ -8816,7 +8816,22 @@ private:
         explicit AudioSetupPanel (Impl& o) : owner (o), devices (o.session.audioDeviceManager(), 0, 128, 0, 128, true, false, true, false)
         {
             addAndMakeVisible (devices);
-            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth, &mpe, &inputConfig, &midiPorts, &surface }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth, &mpe, &inputConfig, &midiPorts, &surface, &compensationLabel, &compensation, &latency })
+                addAndMakeVisible (c);
+            // Driver Error Compensation, after the reference's: moves recordings earlier, for a driver that
+            // reports its latency wrongly; the device's latency as it reports it beside.
+            compensationLabel.setText ("Driver Error Compensation", juce::dontSendNotification);
+            compensation.setName ("Driver error compensation"); compensation.setEditable (true);
+            compensation.setTooltip ("Driver Error Compensation: recordings move this many milliseconds earlier, -200 to 200, to correct a driver's reported latency");
+            compensation.setColour (juce::Label::backgroundColourId, themes::colour (0xff1c1c1c)); compensation.setColour (juce::Label::outlineColourId, line);
+            compensation.onTextChange = [this]
+            {
+                auto next = owner.session.preferences();
+                next.driverErrorCompensationMs = compensation.getText().upToFirstOccurrenceOf ("ms", false, true).trim().getDoubleValue();
+                owner.report (owner.session.setPreferences (next)); sync();
+            };
+            latency.setName ("Audio latency");
+            owner.session.audioDeviceManager().addChangeListener (this);
             // Control Surface, after the reference's: a Mackie Control surface's input and output ports.
             surface.setName ("Control surface"); surface.setTooltip ("Control Surface: the MIDI ports of a Mackie Control surface (or one in Mackie mode)");
             surface.onClick = [this]
@@ -8929,11 +8944,16 @@ private:
             const bool track = chosen % 2 == 1 ? ! port.track : port.track, sync = chosen % 2 == 0 ? ! port.sync : port.sync;
             owner.report (owner.session.setMidiOutputPort (port.name, track, sync)); owner.refresh();
         }
+        ~AudioSetupPanel() override { owner.session.audioDeviceManager().removeChangeListener (this); }
         void sync()
         {
             const auto format = owner.session.recordingFormat();
             type.setSelectedId (static_cast<int> (format.type) + 1, juce::dontSendNotification);
             depth.setSelectedId (format.bitDepth, juce::dontSendNotification);
+            const auto now = owner.session.audioLatency();
+            compensation.setText (juce::String (now.compensationMs, 2) + " ms", juce::dontSendNotification);
+            latency.setText ("Input " + juce::String (now.inputMs, 2) + " ms   Output " + juce::String (now.outputMs, 2) + " ms   Overall " + juce::String (now.overallMs(), 2) + " ms",
+                             juce::dontSendNotification);
         }
         void resized() override
         {
@@ -8946,12 +8966,16 @@ private:
             row = area.removeFromBottom (36).reduced (16, 4);
             typeLabel.setBounds (row.removeFromLeft (120)); type.setBounds (row.removeFromLeft (90)); row.removeFromLeft (24);
             depthLabel.setBounds (row.removeFromLeft (80)); depth.setBounds (row.removeFromLeft (70));
+            row = area.removeFromBottom (32).reduced (16, 4);
+            compensationLabel.setBounds (row.removeFromLeft (170)); compensation.setBounds (row.removeFromLeft (80)); row.removeFromLeft (16);
+            latency.setBounds (row);
             devices.setBounds (area);
         }
     private:
+        void changeListenerCallback (juce::ChangeBroadcaster*) override { sync(); }
         Impl& owner;
         juce::AudioDeviceSelectorComponent devices;
-        juce::Label typeLabel, depthLabel;
+        juce::Label typeLabel, depthLabel, compensationLabel, compensation, latency;
         juce::ComboBox type, depth;
         juce::TextButton mpe { "MPE Inputs..." }, inputConfig { "Input Config..." }, midiPorts { "MIDI Ports..." }, surface { "Control Surface..." };
     };
@@ -13323,6 +13347,18 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (session.recordingFormat().type == Session::RecordingFileType::flac && session.recordingFormat().bitDepth == 16 && bitDepth->getSelectedId() == 16,
                    "a depth the type cannot hold is refused and the chooser shows the kept one");
             check (session.setRecordingFormat ({}).wasOk(), "back to WAV at 24 bits");
+            // Driver Error Compensation beside the device's reported latency.
+            auto* compensation = dynamic_cast<juce::Label*> (findNamed (setup, "Driver error compensation"));
+            auto* latency = dynamic_cast<juce::Label*> (findNamed (setup, "Audio latency"));
+            check (compensation != nullptr && latency != nullptr && compensation->getText() == "0.00 ms" && latency->getText().contains ("Overall"),
+                   "Audio Setup shows Driver Error Compensation and the overall latency");
+            compensation->setText ("2.5", juce::sendNotificationSync);
+            check (session.preferences().driverErrorCompensationMs == 2.5 && compensation->getText() == "2.50 ms" && latency->getText().contains ("Overall 2.50 ms"),
+                   "typing a compensation sets it and adds it to the overall latency");
+            compensation->setText ("500", juce::sendNotificationSync);
+            check (session.preferences().driverErrorCompensationMs == 2.5 && compensation->getText() == "2.50 ms", "a compensation beyond 200 ms is refused");
+            auto reset = session.preferences(); reset.driverErrorCompensationMs = 0;
+            check (session.setPreferences (reset).wasOk(), "back to no compensation");
         }
     }
     check (session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "prepare follow-action UI clip"); refresh(); showSessionView(); selectLauncherSlot (0, 0);

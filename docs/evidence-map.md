@@ -9,6 +9,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | AUD-006 | audio-engine, device-settings |  |
 | AUD-007 | device-loss | MOTU M4 unplug and replug by hand |
 | AUD-008 | input-permission |  |
+| AUD-009 | recording-latency, ui |  |
 | AUD-010 | midi-input, midi-monitor, session |  |
 | AUD-011 | audio-engine, ui |  |
 | AUD-012 | device-settings |  |

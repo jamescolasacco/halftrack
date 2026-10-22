@@ -1725,3 +1725,13 @@ Engine and UI areas.
 - **Measured.** Rendered stems show each track playing just the copied beats where pasted (`tests/RangeClipboardTests.cpp`), and the UI suite drives the keys.
 
 See [the contract](research/arrangement-selection-contract.md#cut-copy-and-paste-of-a-time-range-2026-10-22).
+
+## Recorded placement and Driver Error Compensation — 2026-10-22
+
+Engine, UI and root areas.
+
+- **Placement fixed.** Takes were placed one block early: the engine stamped input with the device's stream time while the output rendered with it plays a block later. An engine patch stamps input where its output plays, so through a simulated loopback a recorded click lands exactly where it played.
+- **Driver Error Compensation.** It moves recordings earlier for a driver that misreports its latency: a 200-sample misreport is put right by compensating 200 samples. Audio & MIDI Setup shows it with the input, output and overall latency.
+- **Not yet measured.** Physical loopback, which needs a cable from an output to an input.
+
+See [the contract](research/recording-latency-contract.md).
