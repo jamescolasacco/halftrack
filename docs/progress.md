@@ -2106,3 +2106,4 @@ Engine and QA areas. From a static reading of the reference's transport code.
 - **Recording round the loop** starts where the transport is. A first pass from before the loop runs to its end. With Punch-In or Punch-Out each pass is trimmed to the brace, so the pre-roll is left out and every pass gets its take lane.
 - **Engine.** A new patch, `cmake/PatchLoopPlayback.cmake`, on the play head, the transport and the recording parameters.
 - **Measured.** The transport, take-lanes and punch suites, with the full gate.
+- **Set Song Start Time Here.** The loop brace's menu item: while it is on, Play starts at the loop's start, the loop on or off. Kept with the project, one undo step.

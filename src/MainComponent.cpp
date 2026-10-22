@@ -3279,22 +3279,33 @@ private:
         juce::String selected,dragId;
         double anchor=0,original=0;int downX=0;
         bool definingLoop=false,locatorGesture=false;
-        void showMenu (const juce::String& id,double position)
+    public:
+        // The ruler's menu, and acting on a choice from it; the UI suite uses both.
+        juce::PopupMenu menuFor (const juce::String& id,double position) const
         {
             juce::PopupMenu menu;menu.addItem (1,"Add locator here");
             if (id.isNotEmpty()){menu.addItem (2,"Edit locator...");menu.addItem (3,"Delete locator");}
-            juce::PopupMenu jumps;juce::StringArray ids;
-            for (const auto& marker:owner.state.locators){ids.add(marker.id);jumps.addItem(100+ids.size()-1,marker.name+"  /  "+juce::String(marker.position,3)+" s");}
-            if (!ids.isEmpty())menu.addSubMenu ("Jump to locator",jumps);
+            // On the loop brace, as the reference's: Play then starts at the loop's start.
+            if (position>=owner.state.loopStart && position<owner.state.loopEnd) {menu.addSeparator();menu.addItem (4,"Set Song Start Time Here",true,owner.state.loopIsSongStart);}
+            juce::PopupMenu jumps;int index=0;
+            for (const auto& marker:owner.state.locators) jumps.addItem(100+index++,marker.name+"  /  "+juce::String(marker.position,3)+" s");
+            if (index>0)menu.addSubMenu ("Jump to locator",jumps);
+            return menu;
+        }
+        void choose (int choice,const juce::String& id,double position,const juce::StringArray& ids)
+        {
+            if(choice==1)addAt(position);
+            if(choice==2)owner.editLocatorDialog(id);
+            if(choice==3){owner.report(owner.session.removeLocator(id));owner.refresh();}
+            if(choice==4){owner.report(owner.session.setLoopIsSongStart(!owner.state.loopIsSongStart));owner.refresh();}
+            if(choice>=100&&choice-100<ids.size()){owner.report(owner.session.seekLocator(ids[choice-100]));owner.refresh();}
+        }
+    private:
+        void showMenu (const juce::String& id,double position)
+        {
+            juce::StringArray ids;for (const auto& marker:owner.state.locators)ids.add(marker.id);
             auto safe=juce::Component::SafePointer<Ruler> (this);
-            menu.showMenuAsync (juce::PopupMenu::Options(),[safe,id,position,ids](int choice)
-            {
-                if(safe==nullptr)return;
-                if(choice==1)safe->addAt(position);
-                if(choice==2)safe->owner.editLocatorDialog(id);
-                if(choice==3){safe->owner.report(safe->owner.session.removeLocator(id));safe->owner.refresh();}
-                if(choice>=100&&choice-100<ids.size()){safe->owner.report(safe->owner.session.seekLocator(ids[choice-100]));safe->owner.refresh();}
-            });
+            menuFor (id,position).showMenuAsync (juce::PopupMenu::Options(),[safe,id,position,ids](int choice) { if(safe!=nullptr)safe->choose(choice,id,position,ids); });
         }
     };
 
@@ -15342,6 +15353,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (state.soloInPlace, "Solo in Place starts on");
             menuItemSelected (98, 3); refresh();
             check (! state.soloInPlace, "the View menu's Solo in Place switches it off");
+            {
+                // The loop brace's menu offers Set Song Start Time Here, as the reference's does.
+                const auto loopBefore = std::pair { state.loopStart, state.loopEnd };
+                session.setLoop (state.looping, 1, 2); refresh();
+                const auto inside = 1.5;
+                const auto onBrace = ruler.menuFor ({}, inside), offBrace = ruler.menuFor ({}, 3);
+                bool offered = false, outside = false;
+                for (juce::PopupMenu::MenuItemIterator item (onBrace); item.next();) offered = offered || (item.getItem().itemID == 4 && item.getItem().text == "Set Song Start Time Here");
+                for (juce::PopupMenu::MenuItemIterator item (offBrace); item.next();) outside = outside || item.getItem().itemID == 4;
+                check (offered && ! outside, "the loop brace's menu offers Set Song Start Time Here, and only on the brace");
+                ruler.choose (4, {}, inside, {});
+                check (state.loopIsSongStart, "choosing it makes the loop the song's start");
+                ruler.choose (4, {}, inside, {});
+                check (! state.loopIsSongStart, "and choosing it again does not");
+                session.setLoop (state.looping, loopBefore.first, loopBefore.second); refresh();
+            }
             menuItemSelected (98, 3); refresh();
             check (state.soloInPlace, "and on");
         }

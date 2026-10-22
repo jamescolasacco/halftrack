@@ -579,6 +579,7 @@ public:
         float cueVolumeDb = -6;
         bool cueModeChosen = false, cueAvailable = false, cueMode = false;
         bool soloInPlace = true;
+        bool loopIsSongStart = false; // The loop brace's Set Song Start Time Here.
         bool automationOverridden = false; // Some lane with points is switched off.
         float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
@@ -640,6 +641,11 @@ public:
     // soloed. Off, soloed tracks are heard without the returns.
     bool soloInPlace() const;
     juce::Result setSoloInPlace (bool);
+    // The loop brace's Set Song Start Time Here, as the reference's (static reading of its code):
+    // while it is on, Play and Record from a stop start at the loop's start, the loop on or off,
+    // leaving the insert marker where it is. Kept with the project; one undo step.
+    bool loopIsSongStart() const;
+    juce::Result setLoopIsSongStart (bool);
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
     // Take lanes. Arrangement recording puts each pass on an armed track in a take lane (reusing a lane
     // with nothing at or after the pass's start) as well as the main lane. Comping copies a lane's

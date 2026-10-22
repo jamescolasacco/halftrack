@@ -54,6 +54,8 @@ const juce::Identifier cueOutputProperty { "halftrackCueOutput" }, cueVolumeProp
                        cueProperty { "halftrackCue" };
 // Solo in Place, kept with the project as the reference keeps it with the Set: on at first.
 const juce::Identifier soloInPlaceProperty { "halftrackSoloInPlace" };
+// The loop brace's Set Song Start Time Here, as the reference's: Play starts at the loop's start.
+const juce::Identifier loopIsSongStartProperty { "halftrackLoopIsSongStart" };
 constexpr float defaultCueVolumeDb = -6.0f; // As the reference's default Set has it.
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
 te::Edit::CountIn countInMode (int bars)
@@ -3512,6 +3514,13 @@ struct Session::Impl
         return nullptr;
     }
     float cueVolumeDb() const { return edit->state.getProperty (cueVolumeProperty, defaultCueVolumeDb); }
+    // Where Play starts from a stop, as the reference's does: the loop's start when it is the song's
+    // start, otherwise the insert marker.
+    te::TimePosition playStart() const
+    {
+        auto& transport = edit->getTransport();
+        return static_cast<bool> (edit->state.getProperty (loopIsSongStartProperty, false)) ? transport.getLoopRange().getStart() : transport.startPosition.get();
+    }
     bool cueActive() const { return dynamic_cast<Behaviour&> (engine.getEngineBehaviour()).cueActive; }
     // Cue mode needs a separate Cue Out; otherwise Solo applies, and the choice is kept for when it
     // is. A track's switch keeps its state between the modes: soloing in one, cueing in the other.
@@ -5198,6 +5207,7 @@ Session::Snapshot Session::snapshot() const
     s.cueAvailable = impl->separateCueDevice() != nullptr;
     s.cueMode = s.cueModeChosen && s.cueAvailable;
     s.soloInPlace = soloInPlace();
+    s.loopIsSongStart = loopIsSongStart();
     for (const auto& m : e.state.getChildWithName (midiMapType))
         if (auto mapping = readMidiMapping (m); isMappableTarget (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
     s.midiLearnTarget = impl->midiLearnTarget;
@@ -10964,6 +10974,15 @@ Result Session::setCueVolume (float decibels)
     impl->edit->state.setProperty (cueVolumeProperty, decibels, &impl->edit->getUndoManager());
     impl->applyCue(); impl->changed(); return Result::ok();
 }
+bool Session::loopIsSongStart() const { return impl->edit->state.getProperty (loopIsSongStartProperty, false); }
+Result Session::setLoopIsSongStart (bool on)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (on == loopIsSongStart()) return Result::ok();
+    impl->transaction ("Set Song Start Time");
+    impl->edit->state.setProperty (loopIsSongStartProperty, on, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
 bool Session::soloInPlace() const { return impl->edit->state.getProperty (soloInPlaceProperty, true); }
 Result Session::setSoloInPlace (bool on)
 {
@@ -11205,7 +11224,7 @@ Result Session::play()
     auto& transport = impl->edit->getTransport();
     // A waiting Record starts with playback, from the insert marker.
     if (impl->recordWaiting && ! transport.isPlaying()) { impl->recordWaiting = false; return beginRecording (false); }
-    if (! transport.isPlaying()) transport.setPosition (transport.startPosition);
+    if (! transport.isPlaying()) transport.setPosition (impl->playStart());
     transport.play (false); sendChangeMessage(); return Result::ok();
 }
 Result Session::continuePlayback()
@@ -11396,7 +11415,7 @@ Result Session::beginRecording (bool waitForPlay)
     // before Punch-In's point, the pre-roll plays at once (static reading of its code).
     {
         const auto& transport = impl->edit->getTransport();
-        const auto at = transport.isPlaying() ? transport.getPosition() : transport.startPosition.get();
+        const auto at = transport.isPlaying() ? transport.getPosition() : impl->playStart();
         const auto window = impl->loopRange();
         const bool inside = (! impl->punchIn() || at >= window.getStart()) && (! impl->punchOut() || at < window.getEnd());
         impl->edit->setCountInMode (countInMode (inside ? snapshot().metronome.countInBars : 0));
@@ -11407,7 +11426,7 @@ Result Session::beginRecording (bool waitForPlay)
     // Recording starts from the insert marker unless the transport is already playing.
     auto& transport = impl->edit->getTransport();
     const bool alreadyPlaying = transport.isPlaying();
-    if (! alreadyPlaying) transport.setPosition (transport.startPosition);
+    if (! alreadyPlaying) transport.setPosition (impl->playStart());
     // Loop recording, as the reference's: each pass becomes a take of its own at Stop, which ends the
     // engine's recording as one continuous take and splits it. Recording starts where the transport
     // is: from before the loop the first pass runs from there to the loop's end, and punching then

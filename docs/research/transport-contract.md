@@ -14,6 +14,7 @@ Halftrack's Play, Stop, Continue and locate follow the reference's [Arrangement 
   - Shift reverses the preference, as the manual says ("holding Shift while pressing Arrangement Record will engage the opposite behavior").
   - `Session::recordButton (shift)` does all this; `Session::record` presses it without Shift; `Snapshot::recordWaiting` reports the wait.
 - **With the loop on** (static reading of the reference's code), Play and Record still start from the insert marker. From before the loop the play head rolls into it and loops once inside; from at or past its end it plays on and never loops. A jump while playing goes where it is asked and behaves the same way. Before, the engine jumped to the loop's start, and clamped jumps into the loop ([dependencies](../dependencies.md#tracktion-loop-playback-patch)).
+- **Set Song Start Time Here**, in the loop brace's context menu (static reading of the reference's code). While it is on, Play and Record from a stop start at the loop's start, the loop on or off, leaving the insert marker where it is. It is kept with the project and each change is one undo step (`Session::setLoopIsSongStart`, `Snapshot::loopIsSongStart`).
 - **Stop** leaves the play position where playback stopped. **Shift+Space** continues from there.
 - **A second Stop** (the Stop button pressed while stopped) or **Home** returns the insert marker and play position to the start. Escape also stops and returns to the start.
 - **Locating** (the ruler, the position fields, locators, `Session::seek`) moves the play position and the insert marker together, jumping playback if it is running. It relocates the play head even when the engine's cached position already reads the target. That cache follows the play head on a timer, and offline it does not move at all.
@@ -37,10 +38,11 @@ Halftrack's Play, Stop, Continue and locate follow the reference's [Arrangement 
 - that Record pressed while recording ends a take of the length recorded, with playback running on, and pressed while playing records from there;
 - that with Start Playback with Record off, Record waits without playing; pressed again or Stop ends the wait; Play records from the insert marker; Shift reverses the preference either way; and launching a Session clip starts the waiting recording;
 - that with the loop on, playback from before the loop plays from the insert marker and then loops; from past its end it plays on; and jumps before and past it do the same;
+- that Set Song Start Time Here makes Play start at the loop's start with the loop off and the insert marker left elsewhere, as one undo step;
 - that the marker keeps its beat when the tempo halves.
 
 `tests/TakeLanesTests.cpp` ends a loop recording with the Record button: playback carries on round the loop, and its 2.5 passes are cut into lanes as at Stop.
 
-The main UI suite checks lane clicks while stopped and playing, Space, Shift+Space, the second Stop and Home. It presses the Record button: lit and waiting with Start Playback with Record off, then recording and playing, then ending the recording with playback running on.
+The main UI suite checks lane clicks while stopped and playing, Space, Shift+Space, the second Stop and Home. It finds Set Song Start Time Here in the ruler's menu on the loop brace only, and switches it on and off. It presses the Record button: lit and waiting with Start Playback with Record off, then recording and playing, then ending the recording with playback running on.
 
 Missing: quantized scrub jumps, holding in the scrub area to loop, the marker shown only on the clicked track, and checks of sounding notes and delay tails across jumps.

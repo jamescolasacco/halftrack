@@ -182,6 +182,19 @@ int runTransportTests (const juce::File& artifacts)
             const auto beyond = at (.5);
             check (beyond > 7.9 && beyond < 8 + slack, "and a jump past it plays on (" + juce::String (beyond, 3) + " s)");
             s.stop(); s.setLoop (false, 6, 7); s.setInsertMarker (3);
+            // The loop brace's Set Song Start Time Here: Play starts at the loop's start, loop on or off.
+            check (! s.snapshot().loopIsSongStart, "the loop is not the song's start at first");
+            ok (s.setLoopIsSongStart (true), "Set Song Start Time Here");
+            ok (s.play(), "Play");
+            const auto fromLoop = at (.5);
+            check (s.snapshot().loopIsSongStart && fromLoop > 6.4 && fromLoop < 6.5 + slack && near (s.snapshot().insertMarker, 3),
+                   "it plays from the loop's start, the loop off, leaving the insert marker (" + juce::String (fromLoop, 3) + " s)");
+            s.stop(); s.undo();
+            check (! s.snapshot().loopIsSongStart, "it is one undo step");
+            ok (s.play(), "Play again");
+            const auto fromMarker = at (.5);
+            check (fromMarker > 3.4 && fromMarker < 3.5 + slack, "and Play starts at the insert marker again (" + juce::String (fromMarker, 3) + " s)");
+            s.stop(); s.setInsertMarker (3);
         }
 
         // The marker keeps its beat when the tempo changes: beat 6 is 3 s at 120 BPM and 6 s at 60 BPM.
