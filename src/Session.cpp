@@ -702,6 +702,11 @@ bool canReverseAudio (te::WaveAudioClip& clip)
         && clip.getNumTakes (true) <= 1 && ! clip.isCurrentTakeComp() && clip.getClipEffects() == nullptr
         && ! clip.isUsingARA() && ! clip.getClipTrack()->isFrozen (te::Track::anyFreeze);
 }
+// Copying, cutting, pasting and duplicating take a MIDI clip whole, its loop and start with it.
+bool canCarryMidiClip (const te::MidiClip& clip)
+{
+    return clip.getClipSlot() == nullptr && ! clip.isGrouped() && ! clip.hasAnyTakes() && clip.getSpeedRatio() == 1;
+}
 bool canCopyMidiClip (const te::MidiClip& clip)
 {
     return clip.getClipSlot() == nullptr && ! clip.isLooping() && ! clip.isGrouped() && ! clip.hasAnyTakes()
@@ -1475,6 +1480,8 @@ Session::ClipInfo describeClip (te::Clip& clip)
     result.id = clip.itemID.toString(); result.name = clip.getName(); result.active = !clip.isMuted();
     result.start = position.time.getStart().inSeconds(); result.length = position.time.getLength().inSeconds();
     result.sourceOffset = position.offset.inSeconds();
+    const auto beats = clip.edit.tempoSequence.toBeats (position.time);
+    result.startBeat = beats.getStart().inBeats(); result.lengthBeats = beats.getLength().inBeats();
     result.follow = clipFollowSettings (clip.state);
     result.launch = clipLaunchSettings (clip.state);
     result.scale = clipScale (clip.state);
@@ -1493,9 +1500,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
     }
     if (auto* midi = dynamic_cast<te::MidiClip*> (&clip))
     {
-        result.isMidi = true; result.canEditMidiClip = canCopyMidiClip (*midi);
-        const auto beats = clip.edit.tempoSequence.toBeats (position.time);
-        result.startBeat = beats.getStart().inBeats(); result.lengthBeats = beats.getLength().inBeats();
+        result.isMidi = true; result.canEditMidiClip = canCarryMidiClip (*midi);
         for (auto* note : midi->getSequence().getNotes())
             result.notes.push_back ({ note->state.getProperty (midiNoteIDProperty).toString(), note->getNoteNumber(),
                                      note->getStartBeat().inBeats(), note->getLengthBeats().inBeats(), note->getVelocity() / 127.0f, !note->isMute(),
@@ -1514,6 +1519,23 @@ Session::ClipInfo describeClip (te::Clip& clip)
         {
             std::stable_sort (entry.points.begin(), entry.points.end(), [] (const auto& a, const auto& b) { return a.beat < b.beat; });
             result.controllers.push_back (std::move (entry));
+        }
+    }
+    // Content beats: what plays at the clip's start, and the loop. Looping, the engine's offset
+    // counts from the loop's start.
+    if (const auto* wave = dynamic_cast<te::WaveAudioClip*> (&clip); result.isMidi || (wave != nullptr && wave->getAutoTempo()))
+    {
+        result.canLoop = true;
+        const auto offset = clip.getOffsetInBeats().inBeats();
+        if (clip.isLooping())
+        {
+            result.loop = { true, clip.getLoopStartBeats().inBeats(), clip.getLoopLengthBeats().inBeats() };
+            result.contentStartBeat = result.loop.start + std::fmod (offset, result.loop.length);
+        }
+        else
+        {
+            result.contentStartBeat = offset;
+            result.loop = { false, offset, clip.edit.tempoSequence.toBeats (position.time).getLength().inBeats() };
         }
     }
     return result;
@@ -2286,6 +2308,22 @@ struct Session::Impl
         for (auto* marker : edit->getMarkerManager().getMarkers())
             if (marker->itemID.toString() == id) return marker;
         return nullptr;
+    }
+    te::Clip* anyClip (const String& id) const
+    {
+        for (auto* t : te::getAudioTracks (*edit))
+            for (auto* c : allTrackClips (*t)) if (c->itemID.toString() == id) return c;
+        return nullptr;
+    }
+    // Ends a clip's loop, the content beat at its start staying there.
+    static void endLoop (te::Clip& clip)
+    {
+        if (! clip.isLooping()) return;
+        const auto start = clip.getLoopStartBeats().inBeats() + std::fmod (clip.getOffsetInBeats().inBeats(), clip.getLoopLengthBeats().inBeats());
+        clip.setLoopRangeBeats ({});
+        auto position = clip.getPosition();
+        position.offset = te::TimeDuration::fromSeconds (start / clip.edit.tempoSequence.getBeatsPerSecondAt (position.getStart()));
+        clip.setPosition (position);
     }
     te::MidiClip* midiClip (const String& id) const
     {
@@ -4352,7 +4390,7 @@ struct Session::Impl
     int numTapIntervals=0, nextTapInterval=0;
     File scratch, projectFile;
     juce::ValueTree audioClipboard, midiClipboard;
-    double midiClipboardBeats = 0;
+    double midiClipboardBeats = 0, midiClipboardOffsetBeats = 0;
     std::unique_ptr<juce::TemporaryFile> audioClipboardMedia;
     std::unique_ptr<te::Edit> edit;
     GrooveWatcher grooveWatcher { edit };
@@ -7465,6 +7503,74 @@ Result Session::importAudio (const File& source, int index, double start)
     }
     impl->changed(); return Result::ok();
 }
+Result Session::setClipLoop (const String& id, const ClipLoop& loop, double startBeat)
+{
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing clip loops.");
+    auto* clip = impl->anyClip (id); if (! clip) return Result::fail ("Clip not found.");
+    const auto before = describeClip (*clip);
+    if (! before.canLoop) return Result::fail ("Loops are set on MIDI clips and warped audio clips.");
+    auto* wave = dynamic_cast<te::WaveAudioClip*> (clip);
+    const double sourceBeats = wave != nullptr ? wave->getLoopInfo().getNumBeats() : 1000000;
+    const auto within = [] (double v) { return std::isfinite (v) && v >= 0 && v <= 1000000; };
+    if (! within (startBeat) || ! within (loop.start) || ! within (loop.length)) return Result::fail ("Clip loop and start beats must be zero or more.");
+    if (loop.on)
+    {
+        if (loop.length < 1.0 / 64) return Result::fail ("A loop lasts at least a 64th of a beat.");
+        if (startBeat < loop.start - 1e-9 || startBeat >= loop.start + loop.length - 1e-9) return Result::fail ("The clip's start must lie in its loop.");
+        if (loop.start + loop.length > sourceBeats + 1e-6) return Result::fail ("A warped clip's loop must end within its audio.");
+    }
+    else
+    {
+        if (clip->getClipSlot() != nullptr) return Result::fail ("Session clips always loop.");
+        if (startBeat >= sourceBeats - 1e-6) return Result::fail ("The start must lie within the clip's audio.");
+    }
+    if (before.loop.on == loop.on && (! loop.on || before.loop == loop) && std::abs (before.contentStartBeat - startBeat) < 1e-9) return Result::ok();
+    impl->transaction ("Set clip loop");
+    const auto bps = impl->edit->tempoSequence.getBeatsPerSecondAt (clip->getPosition().getStart());
+    if (loop.on) clip->setLoopRangeBeats ({ te::BeatPosition::fromBeats (loop.start), te::BeatPosition::fromBeats (loop.start + loop.length) });
+    else Impl::endLoop (*clip);
+    auto position = clip->getPosition();
+    position.offset = te::TimeDuration::fromSeconds ((loop.on ? startBeat - loop.start : startBeat) / bps);
+    // Unlooped, warped audio ends with its source.
+    if (! loop.on && wave != nullptr)
+    {
+        const auto startBeatOfClip = impl->edit->tempoSequence.toBeats (position.getStart()).inBeats();
+        const auto end = impl->edit->tempoSequence.toTime (te::BeatPosition::fromBeats (startBeatOfClip + sourceBeats - startBeat));
+        if (position.getEnd() > end) position.time = position.time.withEnd (end);
+    }
+    clip->setPosition (position);
+    impl->changed(); return Result::ok();
+}
+Result Session::setClipBeats (const String& id, double startBeat, double lengthBeats, double contentStart)
+{
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before trimming clips.");
+    auto* clip = impl->anyClip (id); if (! clip) return Result::fail ("Clip not found.");
+    const auto before = describeClip (*clip);
+    if (! before.canLoop) return Result::fail ("Use the audio clip's own range for unwarped audio.");
+    if (clip->getClipSlot() != nullptr) return Result::fail ("Session clips have no place in the Arrangement.");
+    if (clip->isGrouped()) return Result::fail ("Ungroup this clip before trimming it.");
+    auto* wave = dynamic_cast<te::WaveAudioClip*> (clip);
+    const double sourceBeats = wave != nullptr ? wave->getLoopInfo().getNumBeats() : 1000000;
+    if (! std::isfinite (startBeat) || ! std::isfinite (lengthBeats) || ! std::isfinite (contentStart) || startBeat < 0 || contentStart < 0
+        || lengthBeats < 1.0 / 64 || startBeat + lengthBeats > 1000000)
+        return Result::fail ("A clip's start and content start must be zero or more, and it must last at least a 64th of a beat.");
+    if (before.loop.on && (contentStart < before.loop.start - 1e-9 || contentStart >= before.loop.start + before.loop.length - 1e-9))
+        return Result::fail ("A looped clip's start must lie in its loop.");
+    if (! before.loop.on && wave != nullptr && contentStart + lengthBeats > sourceBeats + 1e-6)
+        return Result::fail ("An unlooped warped clip cannot run past the end of its audio.");
+    auto& tempo = impl->edit->tempoSequence;
+    const auto start = tempo.toTime (te::BeatPosition::fromBeats (startBeat)), end = tempo.toTime (te::BeatPosition::fromBeats (startBeat + lengthBeats));
+    const auto offset = te::TimeDuration::fromSeconds ((before.loop.on ? contentStart - before.loop.start : contentStart) / tempo.getBeatsPerSecondAt (start));
+    const auto now = clip->getPosition();
+    if (std::abs ((now.getStart() - start).inSeconds()) < 1e-9 && std::abs ((now.getEnd() - end).inSeconds()) < 1e-9 && std::abs ((now.offset - offset).inSeconds()) < 1e-9) return Result::ok();
+    impl->transaction ("Trim clip");
+    clip->setPosition ({ { start, end }, offset });
+    impl->changed(); return Result::ok();
+}
 std::vector<double> Session::audioClipTransients (const String& id)
 {
     auto* clip = impl->audioClip (id);
@@ -7565,6 +7671,8 @@ Result Session::setAudioClipWarp (const String& id, const WarpSettings& requeste
     impl->transaction ("Warp audio clip");
     if (settings.mode == WarpMode::off)
     {
+        // Unwarped audio does not loop here: the loop ends, the clip's start staying where it is.
+        if (clip->isLooping()) { Impl::endLoop (*clip); offset = clip->getPosition().getOffset().inSeconds(); }
         // Back to source time: the visible source span is unchanged.
         const auto scale = tempo / previous.bpm;
         length *= scale; offset *= scale;
@@ -7609,15 +7717,13 @@ Result Session::setAudioClipWarp (const String& id, const WarpSettings& requeste
     { clip->state.removeProperty (warpMarkersPausedProperty, &impl->edit->getUndoManager()); clip->setWarpTime (true); }
     const auto scale = previous.mode == WarpMode::off ? settings.bpm / tempo : settings.bpm / previous.bpm;
     clip->getLoopInfo().setNumBeats (settings.bpm * source / 60);
-    if (slot)
+    // A loop covers the same audio at the new tempo.
+    if (clip->isLooping() && previous.mode != WarpMode::off && previous.bpm != settings.bpm)
     {
-        if (previous.mode != WarpMode::off && previous.bpm != settings.bpm)
-        {
-            const auto loop = clip->getLoopRangeBeats();
-            clip->setLoopRangeBeats ({ te::BeatPosition::fromBeats (loop.getStart().inBeats() * scale), te::BeatPosition::fromBeats (loop.getEnd().inBeats() * scale) });
-        }
+        const auto loop = clip->getLoopRangeBeats();
+        clip->setLoopRangeBeats ({ te::BeatPosition::fromBeats (loop.getStart().inBeats() * scale), te::BeatPosition::fromBeats (loop.getEnd().inBeats() * scale) });
     }
-    else
+    if (! slot)
     {
         if (previous.mode == WarpMode::off) clip->setAutoTempo (true);
         if (scale != 1)
@@ -8321,13 +8427,13 @@ Result Session::copyMidiClip (const String& id, bool cut)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (cut && impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before cutting clips.");
     auto* clip=impl->midiClip(id);
-    if (!clip || !canCopyMidiClip(*clip)) return Result::fail("Copy a single-take, unlooped Arrangement MIDI clip with zero source offset.");
+    if (!clip || !canCarryMidiClip(*clip)) return Result::fail("Copy a single-take, ungrouped Arrangement MIDI clip.");
     if(cut && clip->getClipTrack()->isFrozen(te::Track::anyFreeze)) return Result::fail("Unfreeze the source track before cutting clips.");
     const auto beats=clip->getLengthInBeats().inBeats();
     if(!std::isfinite(beats)||beats<=0)return Result::fail("The MIDI clip has an invalid beat duration.");
     auto copied=clip->state.createCopy();
     if(cut){impl->transaction("Cut MIDI clip");clip->removeFromParent();impl->changed();}
-    impl->midiClipboard=std::move(copied);impl->midiClipboardBeats=beats;
+    impl->midiClipboard=std::move(copied);impl->midiClipboardBeats=beats;impl->midiClipboardOffsetBeats=clip->getOffsetInBeats().inBeats();
     impl->audioClipboard={};impl->audioClipboardMedia.reset();return Result::ok();
 }
 bool Session::hasMidiClipClipboard() const {return impl->midiClipboard.isValid();}
@@ -8346,7 +8452,9 @@ Result Session::pasteMidiClip (const String& trackId, double start, String& past
     if(end>te::Edit::maximumLength||end<=start)return Result::fail("The complete MIDI clip must fit inside the 48-hour timeline.");
     auto copy=te::ClipCopy::fromClipboardState(impl->midiClipboard,false).withNewItemID(*impl->edit);
     auto state=copy.getState();state.setProperty(te::IDs::start,start,nullptr);state.setProperty(te::IDs::length,end-start,nullptr);
-    state.setProperty(te::IDs::offset,0,nullptr);state.setProperty(te::IDs::sync,te::Clip::syncBarsBeats,nullptr);renewMidiNoteIDs(state);
+    // The content start keeps its beat at the paste's tempo.
+    const auto offset=impl->midiClipboardOffsetBeats/impl->edit->tempoSequence.getBeatsPerSecondAt(te::TimePosition::fromSeconds(start));
+    state.setProperty(te::IDs::offset,offset,nullptr);state.setProperty(te::IDs::sync,te::Clip::syncBarsBeats,nullptr);renewMidiNoteIDs(state);
     impl->transaction("Paste MIDI clip");
     if(auto* clip=te::insertClipCopy(*track,copy)){pastedId=clip->itemID.toString();impl->changed();return Result::ok();}
     return Result::fail("The MIDI clip could not be pasted.");
@@ -8357,13 +8465,14 @@ Result Session::duplicateMidiClip (const String& id, String& duplicateId)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before duplicating clips.");
     auto* clip=impl->midiClip(id);
-    if(!clip||!canCopyMidiClip(*clip)||clip->getClipTrack()->isFrozen(te::Track::anyFreeze))
-        return Result::fail("Duplicate a single-take, unlooped Arrangement MIDI clip on an unfrozen track.");
+    if(!clip||!canCarryMidiClip(*clip)||clip->getClipTrack()->isFrozen(te::Track::anyFreeze))
+        return Result::fail("Duplicate a single-take, ungrouped Arrangement MIDI clip on an unfrozen track.");
     const auto start=clip->getPosition().getEnd();
     const auto end=impl->edit->tempoSequence.toTime(clip->getEndBeat()+clip->getLengthInBeats());
     if(end.inSeconds()>te::Edit::maximumLength)return Result::fail("The duplicate would exceed the 48-hour timeline.");
     auto copy=te::ClipCopy::fromClipboardState(clip->state,false).withNewItemID(*impl->edit);auto state=copy.getState();
     state.setProperty(te::IDs::start,start.inSeconds(),nullptr);state.setProperty(te::IDs::length,(end-start).inSeconds(),nullptr);renewMidiNoteIDs(state);
+    state.setProperty(te::IDs::offset,clip->getOffsetInBeats().inBeats()/impl->edit->tempoSequence.getBeatsPerSecondAt(start),nullptr);
     impl->transaction("Duplicate MIDI clip");
     if(auto* duplicate=te::insertClipCopy(*clip->getClipTrack(),copy)){duplicateId=duplicate->itemID.toString();impl->changed();return Result::ok();}
     return Result::fail("The MIDI clip could not be duplicated.");

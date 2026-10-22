@@ -26,7 +26,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | REC-012 | midi-ports, ui |  |
 | ARR-001 | ui |  |
 | ARR-002 | groups, track-duplicate, track-order, ui |  |
-| ARR-003 | audio-clips, ui |  |
+| ARR-003 | audio-clips, clip-loops, ui |  |
 | ARR-004 | range-edit, ui |  |
 | ARR-005 | midi-files, ui |  |
 | ARR-006 | audio-clips, range-edit |  |
@@ -35,7 +35,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | ARR-009 | locators |  |
 | ARR-010 | freeze |  |
 | ARR-011 | launcher, session-record |  |
-| ARR-012 | audio-clips, clip-activation |  |
+| ARR-012 | audio-clips, clip-activation, clip-loops |  |
 | SES-001 | launcher |  |
 | SES-002 | launcher |  |
 | SES-003 | launch-modes |  |

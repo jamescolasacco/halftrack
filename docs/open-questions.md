@@ -637,3 +637,7 @@ The permission handling is tested with a stand-in for macOS's permission and pro
 ### Where an auto-warped long sample starts
 
 The reference's Auto-Warp of a long sample places its first warp marker on the first downbeat. Halftrack also moves the clip's start onto the first beat it finds, so leading silence or a pickup is outside the clip and the beat lands where the clip was dropped. It finds beats, not bars, so the first beat may not be bar 1. Whether the reference moves the start marker in every case, and how it chooses the downbeat, were not measured. Simplest default: start on the first beat, with the audio before it outside the clip.
+
+### Clip starts before a loop, and unlooping a long clip
+
+The reference lets a clip's Start marker sit before its loop, so the content before the loop plays once. The engine counts a looped clip's offset from its loop's start, so Halftrack requires the start to lie in the loop. Turning a long looped MIDI clip's loop off keeps its length, playing silence after the content; a warped audio clip is shortened to end with its audio. The reference's handling of a long clip's unlooping was not measured. Simplest default: as described, with the start inside the loop.

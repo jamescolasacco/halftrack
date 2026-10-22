@@ -55,6 +55,92 @@ juce::Font font (float size = 12.0f, bool bold = false)
     return juce::Font (juce::FontOptions (size, bold ? juce::Font::bold : juce::Font::plain));
 }
 
+// A MIDI or warped audio clip's content, in its own beats. The editors show and edit it up to its end:
+// the loop's end while it loops, otherwise where the clip stops playing it.
+double contentEndBeat (const Session::ClipInfo& clip)
+{
+    return clip.loop.on ? clip.loop.start + clip.loop.length : clip.contentStartBeat + clip.lengthBeats;
+}
+// The content beat a clip plays a number of beats after its start, round its loop.
+double contentBeatAt (const Session::ClipInfo& clip, double beatsIn)
+{
+    const auto at = clip.contentStartBeat + beatsIn;
+    if (! clip.loop.on || clip.loop.length <= 0 || at < clip.loop.start + clip.loop.length) return at;
+    return clip.loop.start + std::fmod (at - clip.loop.start, clip.loop.length);
+}
+// The stretches of content a clip plays, in order: where each begins in the clip (beats from its
+// start), how long it lasts and its first content beat. A loop gives one stretch a pass.
+struct ContentSpan { double at, length, content; };
+std::vector<ContentSpan> contentSpans (const Session::ClipInfo& clip)
+{
+    if (! clip.loop.on || clip.loop.length <= 0) return { { 0, clip.lengthBeats, clip.contentStartBeat } };
+    std::vector<ContentSpan> spans;
+    double at = 0, content = clip.contentStartBeat;
+    const auto end = clip.loop.start + clip.loop.length;
+    while (at < clip.lengthBeats - 1e-9 && spans.size() < 4096)
+    {
+        const auto length = std::min (end - content, clip.lengthBeats - at);
+        spans.push_back ({ at, length, content });
+        at += length; content = clip.loop.start;
+    }
+    return spans;
+}
+// The beats after a clip's start at which it first plays a content beat, or 0 for content it skips.
+double beatsInAt (const Session::ClipInfo& clip, double content)
+{
+    if (content >= clip.contentStartBeat) return content - clip.contentStartBeat;
+    if (clip.loop.on && content >= clip.loop.start) return clip.loop.start + clip.loop.length - clip.contentStartBeat + content - clip.loop.start;
+    return 0;
+}
+// Beats as the reference's clip view shows them: a position as bar.beat.sixteenth from 1.1.1, a
+// length as bars.beats.sixteenths, in the meter's own beats. Text reads back either way.
+juce::String barsBeats (double beats, const Session::TimeSignature& meter, bool position)
+{
+    const double unit = 4.0 / meter.denominator, bar = meter.numerator * unit;
+    const auto whole = std::floor (beats / bar + 1e-9);
+    const auto inBar = std::max (0.0, beats - whole * bar), beat = std::floor (inBar / unit + 1e-9);
+    const auto sixteenths = std::max (0.0, (inBar - beat * unit) / 0.25);
+    const auto rounded = std::round (sixteenths * 100) / 100;
+    const auto shown = std::abs (rounded - std::round (rounded)) < 1e-6 ? juce::String ((int) std::round (rounded) + (position ? 1 : 0)) : juce::String (rounded + (position ? 1 : 0), 2);
+    return juce::String ((int) whole + (position ? 1 : 0)) + "." + juce::String ((int) beat + (position ? 1 : 0)) + "." + shown;
+}
+std::optional<double> readBarsBeats (const juce::String& text, const Session::TimeSignature& meter, bool position)
+{
+    const auto parts = juce::StringArray::fromTokens (text.trim(), ".", "");
+    if (parts.isEmpty() || parts.size() > 3) return std::nullopt;
+    double values[3] = { position ? 1.0 : 0.0, position ? 1.0 : 0.0, position ? 1.0 : 0.0 };
+    for (int i = 0; i < parts.size(); ++i)
+    {
+        if (parts[i].trim().isEmpty() || ! parts[i].trim().containsOnly ("0123456789.")) return std::nullopt;
+        values[i] = parts[i].getDoubleValue();
+    }
+    const double unit = 4.0 / meter.denominator, bar = meter.numerator * unit, offset = position ? 1 : 0;
+    const auto beats = (values[0] - offset) * bar + (values[1] - offset) * unit + (values[2] - offset) * 0.25;
+    if (! std::isfinite (beats) || beats < 0) return std::nullopt;
+    return beats;
+}
+// A warped audio clip's source time at a content beat, through its warp markers and then its tempo.
+double sourceSecondsAt (const Session::ClipInfo& clip, double beat)
+{
+    auto map = clip.warpMarkers;
+    if (map.empty() || map.front().sourceSeconds > 0 || map.front().beat > 0) map.insert (map.begin(), { 0, 0 });
+    for (size_t i = 1; i < map.size(); ++i)
+        if (beat <= map[i].beat)
+        {
+            const auto span = map[i].beat - map[i - 1].beat;
+            return map[i - 1].sourceSeconds + (span > 0 ? (beat - map[i - 1].beat) / span : 0) * (map[i].sourceSeconds - map[i - 1].sourceSeconds);
+        }
+    return map.back().sourceSeconds + (beat - map.back().beat) * 60 / std::max (1.0, clip.warp.bpm);
+}
+// The content beats a warped audio clip's source holds.
+double sourceBeats (const Session::ClipInfo& clip)
+{
+    if (! clip.isAudio) return 1000000;
+    const auto& markers = clip.warpMarkers;
+    if (markers.empty()) return clip.sourceLength * clip.warp.bpm / 60;
+    return markers.back().beat + (clip.sourceLength - markers.back().sourceSeconds) * clip.warp.bpm / 60;
+}
+
 class Theme final : public juce::LookAndFeel_V4
 {
 public:
@@ -286,7 +372,7 @@ public:
                  &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &meterLabel, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &info, &ruler, &viewport,
-                 &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipGroove, &deviceChain })
+                 &horizontalScroll, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain })
             addAndMakeVisible (child);
 
         for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &punchInButton, &punchOutButton, &followButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
@@ -668,6 +754,10 @@ public:
         auto editor = deviceChain.getBounds();
         midiLaunch.setVisible (launchClip != nullptr);
         if (launchClip != nullptr) { midiLaunch.setBounds (editor.removeFromLeft (LaunchBox::width).reduced (0, 6).withTrimmedLeft (6)); midiLaunch.setClip (*launchClip); }
+        // Every MIDI clip shows its Loop box: Start, End, Loop, Position and Length.
+        const auto* loopClip = showPiano && ! audioClip ? currentMidiClip() : nullptr;
+        clipLoop.setVisible (loopClip != nullptr);
+        if (loopClip != nullptr) { clipLoop.setBounds (editor.removeFromLeft (LoopBox::width).reduced (0, 6).withTrimmedLeft (6)); clipLoop.setClip (*loopClip); }
         // Every MIDI clip shows its Groove section beside the note editor.
         const auto* grooveClip = showPiano && ! audioClip ? currentMidiClip() : nullptr;
         clipGroove.setVisible (grooveClip != nullptr);
@@ -2023,7 +2113,7 @@ private:
         int hitTrim (const Session::ClipInfo& clip, int track, juce::Point<float> point) const
         {
             const auto bounds = clipBounds (clip, track);
-            if (! clip.canEditAudioRange || bounds.getWidth() < 20 || ! bounds.contains (point)) return 0;
+            if (! (clip.canEditAudioRange || clip.canLoop) || bounds.getWidth() < 20 || ! bounds.contains (point)) return 0;
             if (point.x-bounds.getX() <= 6) return 1;
             if (bounds.getRight()-point.x <= 6) return 2;
             return 0;
@@ -2101,22 +2191,49 @@ private:
                     g.drawText ((clip.active?juce::String():juce::String("OFF  /  "))+clip.name, bounds.withHeight (20).reduced (6, 0), juce::Justification::centredLeft, true);
                     auto wave = bounds.withTrimmedTop (24).reduced (2, 4);
                     g.setColour (themes::colour (0xff14252b).withAlpha (track.mute ? 0.4f : 0.9f));
+                    // Each stretch of content the clip plays, a loop's pass at a time.
+                    const auto spans = clip.canLoop ? contentSpans (clip) : std::vector<ContentSpan> {};
+                    const auto spanX = [&] (double beatsIn) { return wave.getX() + (float) (beatsIn / std::max (1e-9, clip.lengthBeats)) * wave.getWidth(); };
                     if (clip.isMidi && clip.lengthBeats > 0)
                     {
                         int low = 60, high = 71;
                         for (const auto& note : clip.notes) { low = juce::jmin (low, note.pitch); high = juce::jmax (high, note.pitch); }
                         const auto noteHeight = wave.getHeight() / (float) (high - low + 1);
-                        for (const auto& note : clip.notes)
+                        for (const auto& span : spans)
+                            for (const auto& note : clip.notes)
+                            {
+                                const auto from = std::max (note.startBeat, span.content), to = std::min (note.startBeat + note.lengthBeats, span.content + span.length);
+                                if (to <= from) continue;
+                                g.setColour (themes::colour (0xff14252b).withAlpha (note.active ? (track.mute ? 0.4f : 0.9f) : 0.25f));
+                                const auto x = spanX (span.at + from - span.content);
+                                g.fillRect (x, wave.getY() + (high - note.pitch) * noteHeight, juce::jmax (2.0f, spanX (span.at + to - span.content) - x), juce::jmax (2.0f, noteHeight * 0.65f));
+                            }
+                    }
+                    // Loop notches where each pass begins again.
+                    if (spans.size() > 1)
+                    {
+                        g.setColour (themes::colour (0xff182025));
+                        for (size_t i = 1; i < spans.size(); ++i)
                         {
-                            g.setColour (themes::colour (0xff14252b).withAlpha (note.active ? (track.mute ? 0.4f : 0.9f) : 0.25f));
-                            g.fillRect (wave.getX() + (float) (note.startBeat / clip.lengthBeats) * wave.getWidth(),
-                                        wave.getY() + (high - note.pitch) * noteHeight,
-                                        juce::jmax (2.0f, (float) (note.lengthBeats / clip.lengthBeats) * wave.getWidth()),
-                                        juce::jmax (2.0f, noteHeight * 0.65f));
+                            const auto x = spanX (spans[i].at);
+                            juce::Path notch; notch.addTriangle (x - 4, bounds.getY() + 20, x + 4, bounds.getY() + 20, x, bounds.getY() + 26);
+                            g.fillPath (notch); g.drawVerticalLine ((int) x, bounds.getY() + 20, bounds.getBottom());
                         }
                     }
                     auto* thumbnail = clip.isMidi ? nullptr : thumbnailFor (clip.file);
-                    if (thumbnail != nullptr && thumbnail->getTotalLength() > 0)
+                    if (thumbnail != nullptr && thumbnail->getTotalLength() > 0 && clip.isAudio && clip.canLoop && ! clip.reversed)
+                    {
+                        // A warped clip's waveform, each pass from its own source time.
+                        for (const auto& span : spans)
+                        {
+                            const auto x0 = std::max (0.0f, spanX (span.at)), x1 = std::min ((float) tw, spanX (span.at + span.length));
+                            if (x1 - x0 < .5f) continue;
+                            const auto toContent = [&] (float x) { return span.content + (x - spanX (span.at)) / std::max (1e-9f, spanX (span.at + span.length) - spanX (span.at)) * span.length; };
+                            const auto area = juce::Rectangle<float> (x0, wave.getY(), x1 - x0, wave.getHeight());
+                            thumbnail->drawChannels (g, area.toNearestInt(), sourceSecondsAt (clip, toContent (x0)), sourceSecondsAt (clip, toContent (x1)), 0.9f);
+                        }
+                    }
+                    else if (thumbnail != nullptr && thumbnail->getTotalLength() > 0)
                     {
                         const auto visible = wave.getIntersection (juce::Rectangle<float> (0, wave.getY(), (float) tw, wave.getHeight()));
                         const auto startSeconds = juce::jmax (0.0, (visible.getX() - wave.getX()) / owner.pixelsPerSecond);
@@ -2177,7 +2294,7 @@ private:
                             g.setColour (orange); g.drawRect (handle.x-4,handle.y-4,8.0f,8.0f,1.5f);
                         }
                     }
-                    if (selected && clip.canEditAudioRange && bounds.getWidth() >= 20)
+                    if (selected && (clip.canEditAudioRange || clip.canLoop) && bounds.getWidth() >= 20)
                     {
                         g.setColour (ink);
                         for (auto x : { bounds.getX()+3, bounds.getRight()-3 })
@@ -2462,6 +2579,35 @@ private:
                             offset = juce::jlimit (0.0, juce::jmax (0.0,clip.sourceLength-length), offset-delta);
                         if (! clipGesture) { owner.session.beginEditGesture (rangeDrag == 3 ? "Slip audio source" : "Trim audio edge"); clipGesture = true; }
                         const auto result = owner.session.setAudioClipRange (dragClipId,start,length,offset);
+                        owner.report (result); owner.refresh();
+                        if (result.wasOk()) owner.selectArrangementClip (dragClipId);
+                        return;
+                    }
+                    else if (clip.id == dragClipId && clip.canLoop && rangeDrag != 3)
+                    {
+                        // MIDI and warped clips trim in beats. A looped clip's start wraps round its
+                        // loop; an unlooped one cannot start before its content or, for audio, run
+                        // past its source.
+                        const auto& from = originalRange;
+                        const auto edge = owner.secondsAt (rangeDrag == 1 ? from.startBeat : from.startBeat + from.lengthBeats) + (e.x - dragStartX) / owner.pixelsPerSecond;
+                        const auto beat = owner.beatsAt (e.mods.isAltDown() ? edge : owner.snapSeconds (std::max (0.0, edge)));
+                        constexpr double shortest = 1.0 / 64;
+                        auto startBeat = from.startBeat, length = from.lengthBeats, content = from.contentStartBeat;
+                        if (rangeDrag == 1)
+                        {
+                            auto shift = juce::jlimit (-from.startBeat, from.lengthBeats - shortest, beat - from.startBeat);
+                            if (! from.loop.on) shift = std::max (shift, -from.contentStartBeat);
+                            startBeat += shift; length -= shift;
+                            content = from.loop.on ? from.loop.start + std::fmod (std::fmod (from.contentStartBeat - from.loop.start + shift, from.loop.length) + from.loop.length, from.loop.length)
+                                                   : from.contentStartBeat + shift;
+                        }
+                        else
+                        {
+                            length = std::max (shortest, beat - from.startBeat);
+                            if (! from.loop.on) length = std::min (length, sourceBeats (from) - from.contentStartBeat);
+                        }
+                        if (! clipGesture) { owner.session.beginEditGesture ("Trim clip edge"); clipGesture = true; }
+                        const auto result = owner.session.setClipBeats (dragClipId, startBeat, length, content);
                         owner.report (result); owner.refresh();
                         if (result.wasOk()) owner.selectArrangementClip (dragClipId);
                         return;
@@ -3421,6 +3567,118 @@ private:
         }
     };
 
+    // A MIDI or warped audio clip's Start, End and Loop, after the reference's clip view: the content
+    // beat it starts on, where an unlooped clip ends, and the loop's Position and Length, in
+    // bars.beats.sixteenths. Turning Loop on loops what the clip plays.
+    class LoopBox final : public juce::Component
+    {
+    public:
+        static constexpr int width = 150;
+        explicit LoopBox (Impl& o) : owner (o)
+        {
+            setName ("Loop box");
+            for (auto [field, name] : { std::pair<juce::Label*, const char*> { &start, "Clip start" }, { &end, "Clip end" }, { &position, "Loop position" }, { &length, "Loop length" } })
+            {
+                addAndMakeVisible (field); field->setName (name); field->setEditable (true);
+                field->setJustificationType (juce::Justification::centred);
+                field->setColour (juce::Label::backgroundColourId, themes::colour (0xff1c1c1c));
+                field->setColour (juce::Label::outlineColourId, line);
+                field->setColour (juce::Label::textColourId, ink);
+            }
+            addAndMakeVisible (loop); loop.setName ("Clip loop"); loop.setClickingTogglesState (true);
+            loop.setWantsKeyboardFocus (false); loop.setMouseClickGrabsKeyboardFocus (false);
+            loop.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); loop.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
+            loop.setTooltip ("Loop: repeat the loop's Position and Length for as long as the clip lasts");
+            start.setTooltip ("Start: the beat of the clip's content it starts playing on");
+            end.setTooltip ("End: where an unlooped clip stops playing its content");
+            start.onTextChange = [this] { edit (start); };
+            end.onTextChange = [this] { edit (end); };
+            position.onTextChange = [this] { edit (position); };
+            length.onTextChange = [this] { edit (length); };
+            loop.onClick = [this] { toggle(); };
+        }
+        void setClip (const Session::ClipInfo& shown)
+        {
+            clip = shown;
+            const auto& meter = owner.state.timeSignature;
+            start.setText (barsBeats (clip.contentStartBeat, meter, true), juce::dontSendNotification);
+            end.setText (barsBeats (clip.contentStartBeat + clip.lengthBeats, meter, true), juce::dontSendNotification);
+            position.setText (barsBeats (clip.loop.start, meter, true), juce::dontSendNotification);
+            length.setText (barsBeats (clip.loop.length, meter, false), juce::dontSendNotification);
+            loop.setToggleState (clip.loop.on, juce::dontSendNotification);
+            const bool enabled = ! owner.session.isExporting();
+            const bool slot = owner.state.tracks.empty() ? false : isSlotClip();
+            start.setEnabled (enabled); loop.setEnabled (enabled && ! slot);
+            end.setEnabled (enabled && ! clip.loop.on && ! slot);
+            position.setEnabled (enabled && clip.loop.on); length.setEnabled (enabled && clip.loop.on);
+            repaint();
+        }
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced (6, 0).withTrimmedTop (28);
+            const auto row = [&] (juce::Component& c) { auto r = area.removeFromTop (22); r.removeFromLeft (54); c.setBounds (r); area.removeFromTop (6); };
+            row (start); row (end);
+            loop.setBounds (area.removeFromTop (22)); area.removeFromTop (6);
+            row (position); row (length);
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (themes::colour (0xff303030)); g.fillRect (getLocalBounds());
+            g.setColour (themes::colour (0xff4a4a4a)); g.fillRect (getLocalBounds().withHeight (22));
+            g.setColour (line); g.drawRect (getLocalBounds());
+            g.setColour (ink); g.setFont (font (11.0f, true));
+            g.drawText ("Loop", getLocalBounds().withHeight (22).reduced (6, 0), juce::Justification::centredLeft);
+            g.setFont (font (10.0f));
+            for (auto [field, name] : { std::pair<juce::Label*, const char*> { &start, "Start" }, { &end, "End" }, { &position, "Position" }, { &length, "Length" } })
+            {
+                g.setColour (field->isEnabled() ? muted : muted.withAlpha (0.45f));
+                g.drawText (name, 6, field->getY(), 52, field->getHeight(), juce::Justification::centredLeft);
+            }
+        }
+    private:
+        Impl& owner;
+        Session::ClipInfo clip;
+        juce::Label start, end, position, length;
+        juce::TextButton loop { "Loop" };
+        bool isSlotClip() const
+        {
+            for (const auto& t : owner.state.tracks) for (const auto& c : t.clips) if (c.id == clip.id) return false;
+            return true;
+        }
+        void edit (juce::Label& field)
+        {
+            const auto& meter = owner.state.timeSignature;
+            const auto value = readBarsBeats (field.getText(), meter, &field != &length);
+            if (! value) { owner.report (juce::Result::fail ("Enter beats as bar.beat.sixteenth.")); setClip (clip); return; }
+            auto next = clip.loop;
+            auto from = clip.contentStartBeat;
+            if (&field == &start) from = *value;
+            else if (&field == &end)
+            {
+                owner.report (owner.session.setClipBeats (clip.id, clip.startBeat, *value - clip.contentStartBeat, clip.contentStartBeat)); owner.refresh(); return;
+            }
+            else
+            {
+                if (&field == &position) next.start = *value; else next.length = *value;
+                // The start stays in the loop.
+                if (from < next.start || from >= next.start + next.length) from = next.start;
+            }
+            owner.report (owner.session.setClipLoop (clip.id, next, from)); owner.refresh();
+        }
+        void toggle()
+        {
+            auto next = clip.loop;
+            next.on = loop.getToggleState();
+            if (next.on)
+            {
+                // What the clip plays becomes its loop.
+                next.start = clip.contentStartBeat;
+                next.length = std::max (1.0 / 64, std::min (clip.lengthBeats, sourceBeats (clip) - clip.contentStartBeat));
+            }
+            owner.report (owner.session.setClipLoop (clip.id, next, clip.contentStartBeat)); owner.refresh();
+        }
+    };
+
     // A MIDI clip's Groove section, after the reference's clip view: the pool groove the clip
     // plays with, Commit, and the Groove Pool window.
     class GrooveBox final : public juce::Component
@@ -3984,6 +4242,7 @@ private:
             for (auto* c : std::initializer_list<juce::Component*> { &warp, &mode, &bpm, &halve, &twice, &gain, &reverse, &transpose, &detune }) addAndMakeVisible (c);
             for (auto* c : std::initializer_list<juce::Component*> { &transientLoop, &transientEnvelope, &grainSize, &flux, &formants }) addChildComponent (c);
             addChildComponent (launch);
+            addChildComponent (loopBox);
             for (auto* b : { &warp, &halve, &twice, &reverse }) { b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); }
             warp.setName ("Clip warp"); warp.setClickingTogglesState (true); warp.setTooltip ("Warp: follow the project tempo (length fixed in beats)");
             warp.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); warp.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
@@ -4082,6 +4341,9 @@ private:
             clip = *selected;
             // Session clips show their Launch box between the Clip and Sample boxes.
             if (launch.isVisible() != owner.showSession) { launch.setVisible (owner.showSession); resized(); }
+            // A warped clip shows its Loop box after the Launch box.
+            if (loopBox.isVisible() != clip.canLoop) { loopBox.setVisible (clip.canLoop); resized(); }
+            if (clip.canLoop) loopBox.setClip (clip);
             if (owner.showSession) launch.setClip (clip);
             if (clip.file != shownFile) { shownFile = clip.file; thumbnail.setSource (clip.file.existsAsFile() ? new juce::FileInputSource (clip.file) : nullptr); }
             const bool warped = clip.warp.mode != Session::WarpMode::off;
@@ -4149,6 +4411,7 @@ private:
         void resized() override
         {
             launch.setBounds (clipBox().getRight() + 6, 6, LaunchBox::width, getHeight() - 12);
+            loopBox.setBounds (clipBox().getRight() + 6 + (launch.isVisible() ? LaunchBox::width + 6 : 0), 6, LoopBox::width, getHeight() - 12);
             auto sample = sampleBox();
             sample.removeFromTop (24);
             auto row = sample.removeFromTop (22).reduced (6, 0);
@@ -4228,6 +4491,17 @@ private:
                     const auto x = beatX (beat);
                     g.setColour (beat % 4 == 0 ? themes::colour (0x66ffffff) : themes::colour (0x22ffffff)); g.drawVerticalLine ((int) x, (float) wave.getY(), (float) wave.getBottom());
                 }
+                // The loop brace along the top and the start marker.
+                if (clip.loop.on)
+                {
+                    const auto from = beatX (clip.loop.start), to = beatX (clip.loop.start + clip.loop.length);
+                    g.setColour (themes::colour (0xffb4b4b4)); g.fillRect (from, (float) wave.getY(), to - from, 4.0f);
+                }
+                {
+                    const auto x = beatX (clip.contentStartBeat);
+                    juce::Path flag; flag.addTriangle (x, (float) wave.getBottom() - 10, x + 8, (float) wave.getBottom() - 5, x, (float) wave.getBottom());
+                    g.setColour (themes::colour (0xffdadada)); g.fillPath (flag);
+                }
                 // Transients: short grey marks along the top, where a double-click pins a marker.
                 g.setColour (themes::colour (0xffa0a0a0));
                 for (const auto t : transients)
@@ -4269,8 +4543,10 @@ private:
         juce::Label bpm;
         juce::Slider gain;
         LaunchBox launch { owner };
+        LoopBox loopBox { owner };
         bool gesture = false;
-        int launchSpace() const { return launch.isVisible() ? LaunchBox::width + 6 : 0; }
+        // The Launch and Loop boxes' room between the Clip and Sample boxes.
+        int launchSpace() const { return (launch.isVisible() ? LaunchBox::width + 6 : 0) + (loopBox.isVisible() ? LoopBox::width + 6 : 0); }
         juce::Rectangle<int> clipBox() const { return { 6, 6, 170, getHeight() - 12 }; }
         juce::Rectangle<int> sampleBox() const { return { 182 + launchSpace(), 6, 200, getHeight() - 12 }; }
         juce::Rectangle<int> waveBounds() const { return { 390 + launchSpace(), 6, juce::jmax (40, getWidth() - 396 - launchSpace()), getHeight() - 12 }; }
@@ -4292,12 +4568,13 @@ private:
         }
         void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
     public:
-        // The beats of the source the waveform shows, from the clip's offset over its length.
+        // The beats of the source the waveform shows: from the clip's start over its length, or the
+        // loop with the start when it loops.
         std::pair<double, double> visibleBeats() const
         {
             if (clip.warp.mode == Session::WarpMode::off) return { 0.0, clip.length };
-            const auto clipBeats = owner.session.beatsAt (clip.start + clip.length) - owner.session.beatsAt (clip.start);
-            return { clip.sourceOffset * owner.state.tempo / 60.0, clipBeats };
+            const auto first = clip.loop.on ? std::min (clip.loop.start, clip.contentStartBeat) : clip.contentStartBeat;
+            return { first, std::max (1e-6, contentEndBeat (clip) - first) };
         }
         float beatX (double beat) const
         {
@@ -4537,7 +4814,7 @@ private:
             std::unordered_set<juce::String> liveIds;
             if (clip != nullptr)
             {
-                insertionBeat = juce::jlimit (0.0, clip->lengthBeats, insertionBeat);
+                insertionBeat = juce::jlimit (0.0, contentEndBeat (*clip), insertionBeat);
                 liveIds.reserve (clip->notes.size());
                 for (const auto& note : clip->notes) liveIds.insert (note.id);
             }
@@ -4569,7 +4846,7 @@ private:
             const auto* clip = owner.currentMidiClip();
             viewBeat = 0;
             // Fits the edited clip and the shown clips after it.
-            auto length = clip != nullptr ? clip->lengthBeats : 16.0;
+            auto length = clip != nullptr ? contentEndBeat (*clip) : 16.0;
             if (clip != nullptr) for (const auto* other : owner.extraMidiClips()) length = juce::jmax (length, other->startBeat - clip->startBeat + other->lengthBeats);
             pixelsPerBeat = juce::jlimit (12.0, 240.0, gridBounds().getWidth() / juce::jmax (4.0, length));
             updateScroll(); repaint();
@@ -4652,8 +4929,12 @@ private:
                 g.setColour (bar ? themes::colour (0xff6e6e6e) : themes::colour (0xff434343));
                 g.drawVerticalLine (x, (float) gridTop, (float) grid.getBottom());
             }
-            const auto clipEnd = (float) (keysWidth + (clip->lengthBeats - viewBeat) * pixelsPerBeat);
+            // Content the clip does not play is dimmed: before its start (or loop) and after its end.
+            const auto clipEnd = (float) (keysWidth + (contentEndBeat (*clip) - viewBeat) * pixelsPerBeat);
             if (clipEnd < grid.getRight()) { g.setColour (background.withAlpha (0.7f)); g.fillRect (clipEnd, (float) gridTop, grid.getRight() - clipEnd, (float) grid.getHeight()); }
+            const auto played = clip->loop.on ? std::min (clip->loop.start, clip->contentStartBeat) : clip->contentStartBeat;
+            const auto clipStart = (float) (keysWidth + (played - viewBeat) * pixelsPerBeat);
+            if (clipStart > keysWidth) { g.setColour (background.withAlpha (0.7f)); g.fillRect ((float) keysWidth, (float) gridTop, clipStart - keysWidth, (float) grid.getHeight()); }
             g.reduceClipRegion (grid);
             // Other shown clips' notes, dimmed, where they fall against this clip.
             for (const auto* other : owner.extraMidiClips())
@@ -4699,7 +4980,8 @@ private:
                 g.setColour (orange); g.drawRect (marqueeBounds, 1.0f);
             }
             const auto* launched = owner.editedLauncherSlot();
-            const auto beatPosition = launched != nullptr ? launched->playPositionBeats : owner.beatsAt (owner.state.position) - clip->startBeat;
+            const auto into = owner.beatsAt (owner.state.position) - clip->startBeat;
+            const auto beatPosition = launched != nullptr ? launched->playPositionBeats : into >= 0 && into <= clip->lengthBeats ? contentBeatAt (*clip, into) : -1.0;
             const auto playhead = (float) (keysWidth + (beatPosition - viewBeat) * pixelsPerBeat);
             if (beatPosition >= 0 && (owner.selectedLauncherClipId.isEmpty() || launched != nullptr)) { g.setColour (ink); g.drawLine (playhead, (float) gridTop, playhead, (float) grid.getBottom(), 1.2f); }
             const auto insertX = (float) (keysWidth + (insertionBeat - viewBeat) * pixelsPerBeat);
@@ -4716,6 +4998,19 @@ private:
             for (double beat = std::floor (viewBeat / barBeats) * barBeats; beat <= viewBeat + grid.getWidth() / pixelsPerBeat; beat += barBeats)
                 g.drawText (juce::String (juce::roundToInt (beat / barBeats) + 1), (int) (keysWidth + (beat - viewBeat) * pixelsPerBeat) + 4, headerHeight, 45, rulerHeight, juce::Justification::centredLeft);
             g.setColour (line); g.drawHorizontalLine (headerHeight, 0.0f, (float) getWidth());
+            // The loop brace across the ruler and the start marker.
+            {
+                g.saveState(); g.reduceClipRegion (keysWidth, headerHeight, grid.getWidth(), rulerHeight);
+                if (clip->loop.on)
+                {
+                    const auto from = (float) (keysWidth + (clip->loop.start - viewBeat) * pixelsPerBeat), to = (float) (keysWidth + (clip->loop.start + clip->loop.length - viewBeat) * pixelsPerBeat);
+                    g.setColour (themes::colour (0xffb4b4b4)); g.fillRect (from, (float) headerHeight + 1, to - from, 4.0f);
+                }
+                const auto startX = (float) (keysWidth + (clip->contentStartBeat - viewBeat) * pixelsPerBeat);
+                juce::Path flag; flag.addTriangle (startX, (float) gridTop - 10, startX + 8, (float) gridTop - 5, startX, (float) gridTop);
+                g.setColour (ink); g.fillPath (flag);
+                g.restoreState();
+            }
             if (insertX >= grid.getX() && insertX <= grid.getRight())
             {
                 juce::Path marker;
@@ -4730,11 +5025,11 @@ private:
             if (e.y >= headerHeight && e.y < gridTop)
             {
                 grabKeyboardFocus(); endGesture(); clearSelection();
-                insertionBeat = juce::jlimit (0.0, clip->lengthBeats, std::round (beatAt (e.x) / snapBeats()) * snapBeats());
+                insertionBeat = juce::jlimit (0.0, contentEndBeat (*clip), std::round (beatAt (e.x) / snapBeats()) * snapBeats());
                 // Launcher playback has a clip-local clock. Its insertion cursor
                 // must not seek unrelated arrangement transport state.
                 if (owner.selectedLauncherClipId.isEmpty())
-                    owner.session.seek (owner.secondsAt (clip->startBeat + juce::jmax (0.0, beatAt (e.x))));
+                    owner.session.seek (owner.secondsAt (clip->startBeat + beatsInAt (*clip, juce::jmax (0.0, beatAt (e.x)))));
                 owner.refresh(); return;
             }
             if (! gridBounds().contains (e.getPosition())) return;
@@ -4783,9 +5078,9 @@ private:
             clearSelection();
             if (e.mods.isPopupMenu()) { repaint(); return; }
             const auto start = std::floor (beatAt (e.x) / snapBeats()) * snapBeats();
-            if (start < 0 || start >= clip->lengthBeats) return;
+            if (start < 0 || start >= contentEndBeat (*clip)) return;
             const auto pitch = juce::jlimit (0, 127, topPitch - (e.y - gridTop) / rowHeight);
-            const auto length = juce::jmin (defaultLength(), clip->lengthBeats - start);
+            const auto length = juce::jmin (defaultLength(), contentEndBeat (*clip) - start);
             const auto clipId = clip->id;
             const auto oldNotes = clip->notes;
             owner.session.beginEditGesture ("Draw MIDI note"); gesture = true;
@@ -4819,11 +5114,11 @@ private:
                 // Preserve valid model notes shorter than the mouse resize floor.
                 // Every selected note must admit the same length delta.
                 double minimum = juce::jmin (0.03125, originalNotes.front().lengthBeats) - originalNotes.front().lengthBeats;
-                double maximum = clip->lengthBeats - originalNotes.front().startBeat - originalNotes.front().lengthBeats;
+                double maximum = contentEndBeat (*clip) - originalNotes.front().startBeat - originalNotes.front().lengthBeats;
                 for (const auto& note : originalNotes)
                 {
                     minimum = juce::jmax (minimum, juce::jmin (0.03125, note.lengthBeats) - note.lengthBeats);
-                    maximum = juce::jmin (maximum, clip->lengthBeats - note.startBeat - note.lengthBeats);
+                    maximum = juce::jmin (maximum, contentEndBeat (*clip) - note.startBeat - note.lengthBeats);
                 }
                 if (minimum > maximum || ! std::isfinite (minimum) || ! std::isfinite (maximum)) return;
                 const auto lengthDelta = juce::jlimit (minimum, maximum, length - original.lengthBeats);
@@ -4895,7 +5190,7 @@ private:
             if (clip != nullptr && ! hasSelectedNote() && ! key.getModifiers().isCommandDown()
                 && (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey))
             {
-                insertionBeat = juce::jlimit (0.0, clip->lengthBeats, insertionBeat + (code == juce::KeyPress::leftKey ? -snapBeats() : snapBeats()));
+                insertionBeat = juce::jlimit (0.0, contentEndBeat (*clip), insertionBeat + (code == juce::KeyPress::leftKey ? -snapBeats() : snapBeats()));
                 revealInsertion(); repaint(); return true;
             }
             if (clip != nullptr && key.getModifiers().isCommandDown() && (code == 'A' || code == 'a'))
@@ -4965,7 +5260,7 @@ private:
                 g.drawVerticalLine ((int) x (beat), (float) area.getY(), (float) area.getBottom());
             }
             if (expression) paintExpression (g, area.toFloat());
-            else if (envelope.active()) envelope.paint (g, area.toFloat(), *clip, [this] (double b) { return x (b); }, clip->lengthBeats);
+            else if (envelope.active()) envelope.paint (g, area.toFloat(), *clip, [this] (double b) { return x (b); }, contentEndBeat (*clip));
             else if (lane == Session::pitchBendLane) { g.setColour (themes::colour (0xff3d3d3d)); g.drawHorizontalLine ((int) y (0), (float) area.getX(), (float) area.getRight()); }
             if (envelope.active() || expression) {}
             else if (lane < 0)
@@ -4989,7 +5284,7 @@ private:
             else
             {
                 const auto points = this->points();
-                const auto end = x (clip->lengthBeats);
+                const auto end = x (contentEndBeat (*clip));
                 juce::Path steps;
                 for (size_t i = 0; i < points.size(); ++i)
                 {
@@ -5007,7 +5302,7 @@ private:
             }
             g.restoreState();
             g.setColour (background.withAlpha (.7f));
-            if (const auto end = x (clip->lengthBeats); end < area.getRight()) g.fillRect (end, (float) area.getY(), area.getRight() - end, (float) area.getHeight());
+            if (const auto end = x (contentEndBeat (*clip)); end < area.getRight()) g.fillRect (end, (float) area.getY(), area.getRight() - end, (float) area.getHeight());
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
@@ -5018,7 +5313,7 @@ private:
             if (expression) { expressionDown (e); repaint(); return; }
             if (envelope.active())
             {
-                envelope.mouseDown (e, plot().toFloat(), *clip, [this] (double b) { return x (b); }, [this] (float px) { return beatAt (px); }, clip->lengthBeats);
+                envelope.mouseDown (e, plot().toFloat(), *clip, [this] (double b) { return x (b); }, [this] (float px) { return beatAt (px); }, contentEndBeat (*clip));
                 repaint(); return;
             }
             if (lane < 0)
@@ -5049,7 +5344,7 @@ private:
             if (expression) { expressionDrag (e); repaint(); return; }
             if (envelope.active())
             {
-                if (const auto* clip = roll.owner.currentMidiClip()) envelope.mouseDrag (e, plot().toFloat(), [this] (float px) { return beatAt (px); }, clip->lengthBeats);
+                if (const auto* clip = roll.owner.currentMidiClip()) envelope.mouseDrag (e, plot().toFloat(), [this] (float px) { return beatAt (px); }, contentEndBeat (*clip));
                 repaint(); return;
             }
             if (lane < 0) { if (velocityNote.isNotEmpty()) dragVelocity (e); return; }
@@ -5059,7 +5354,7 @@ private:
             auto& points = *preview;
             const auto* clip = roll.owner.currentMidiClip();
             const double low = dragged > 0 ? points[(size_t) dragged - 1].beat + 1.0 / 960 : 0;
-            const double high = (size_t) dragged + 1 < points.size() ? points[(size_t) dragged + 1].beat - 1.0 / 960 : (clip ? clip->lengthBeats : 0);
+            const double high = (size_t) dragged + 1 < points.size() ? points[(size_t) dragged + 1].beat - 1.0 / 960 : (clip ? contentEndBeat (*clip) : 0);
             points[(size_t) dragged] = { juce::jlimit (low, juce::jmax (low, high), snapped (beatAt (e.position.x), e.mods)), valueAt (e.position.y) };
             repaint();
         }
@@ -5207,7 +5502,7 @@ private:
         {
             const auto* clip = roll.owner.currentMidiClip();
             const auto grid = roll.snapBeats();
-            return juce::jlimit (0.0, clip ? clip->lengthBeats : 0.0, mods.isAltDown() ? beat : std::round (beat / grid) * grid);
+            return juce::jlimit (0.0, clip ? contentEndBeat (*clip) : 0.0, mods.isAltDown() ? beat : std::round (beat / grid) * grid);
         }
         std::vector<Session::MidiNoteInfo> notes() const
         {
@@ -5444,12 +5739,12 @@ private:
             const auto* clip = owner.currentMidiClip();
             if (clip == nullptr || clip->id != clipId || notes.empty()) return;
             double minimumBeatDelta = -notes.front().startBeat;
-            double maximumBeatDelta = clip->lengthBeats - notes.front().startBeat - notes.front().lengthBeats;
+            double maximumBeatDelta = contentEndBeat (*clip) - notes.front().startBeat - notes.front().lengthBeats;
             int minimumPitchDelta = -notes.front().pitch, maximumPitchDelta = 127 - notes.front().pitch;
             for (const auto& note : notes)
             {
                 minimumBeatDelta = juce::jmax (minimumBeatDelta, -note.startBeat);
-                maximumBeatDelta = juce::jmin (maximumBeatDelta, clip->lengthBeats - note.startBeat - note.lengthBeats);
+                maximumBeatDelta = juce::jmin (maximumBeatDelta, contentEndBeat (*clip) - note.startBeat - note.lengthBeats);
                 minimumPitchDelta = juce::jmax (minimumPitchDelta, -note.pitch);
                 maximumPitchDelta = juce::jmin (maximumPitchDelta, 127 - note.pitch);
             }
@@ -5466,7 +5761,7 @@ private:
         {
             const auto grid = gridBounds(); const auto* clip = owner.currentMidiClip();
             const auto visibleBeats = grid.getWidth() / pixelsPerBeat;
-            const auto totalBeats = juce::jmax (visibleBeats, clip != nullptr ? clip->lengthBeats : 16.0);
+            const auto totalBeats = juce::jmax (visibleBeats, clip != nullptr ? contentEndBeat (*clip) : 16.0);
             viewBeat = juce::jlimit (0.0, juce::jmax (0.0, totalBeats - visibleBeats), viewBeat);
             horizontal.setRangeLimits (0.0, totalBeats, juce::dontSendNotification); horizontal.setCurrentRange (viewBeat, visibleBeats, juce::dontSendNotification);
             const auto rows = juce::jlimit (1, 128, grid.getHeight() / rowHeight);
@@ -5487,7 +5782,7 @@ private:
             const auto* launched = owner.editedLauncherSlot();
             if (owner.selectedLauncherClipId.isNotEmpty() && launched == nullptr) return;
             const auto beat = launched != nullptr ? launched->playPositionBeats : owner.beatsAt (owner.state.position) - clip->startBeat;
-            if (beat < 0 || beat > clip->lengthBeats) return;
+            if (beat < 0 || beat > contentEndBeat (*clip)) return;
             const auto next = followedViewStart (beat, viewBeat, gridBounds().getWidth() / pixelsPerBeat);
             if (next != viewBeat) { viewBeat = next; updateScroll(); repaint(); }
         }
@@ -6621,6 +6916,7 @@ private:
     PianoRoll pianoRoll;
     AudioClipView audioClipView { *this };
     LaunchBox midiLaunch { *this };
+    LoopBox clipLoop { *this };
     bool midiMapMode = false;
     MapOverlay mapOverlay { *this };
     MappingList mappingList { *this };
@@ -7487,10 +7783,12 @@ private:
         launcher.sync();
         pianoRoll.sync();
         if (showPiano && (audioClipView.isVisible() != (selectedAudioClip() != nullptr) || midiLaunch.isVisible() != (selectedAudioClip() == nullptr && sessionMidiClip() != nullptr)
-                          || clipGroove.isVisible() != (selectedAudioClip() == nullptr && currentMidiClip() != nullptr))) resized();
+                          || clipGroove.isVisible() != (selectedAudioClip() == nullptr && currentMidiClip() != nullptr)
+                          || clipLoop.isVisible() != (selectedAudioClip() == nullptr && currentMidiClip() != nullptr))) resized();
         if (audioClipView.isVisible()) audioClipView.sync();
         if (midiLaunch.isVisible()) if (const auto* clip = sessionMidiClip()) midiLaunch.setClip (*clip);
         if (clipGroove.isVisible()) if (const auto* clip = currentMidiClip()) clipGroove.setClip (*clip);
+        if (clipLoop.isVisible()) if (const auto* clip = currentMidiClip()) clipLoop.setClip (*clip);
         if (groovePool != nullptr) groovePool->sync();
         newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
         importButton.setEnabled (currentTrack() == nullptr || ! currentTrack()->isReturn);
@@ -9535,8 +9833,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     };
     const auto arrangementRuler = juce::Point<float> ((float) (55 + 2 * beatWidth), 48.0f);
     pianoRoll.mouseDown (event (arrangementRuler, arrangementRuler));
-    // Mouse events carry integer pixels; expect the beat under the pixel actually clicked.
-    const auto clickedBeat = (std::floor (arrangementRuler.x) - 55.0) / beatWidth;
+    // Mouse events carry their position rounded to whole pixels; expect the beat under that pixel.
+    const auto clickedBeat = (std::round (arrangementRuler.x) - 55.0) / beatWidth;
     check (std::abs (state.position - clickedBeat * 60.0 / state.tempo) < 0.001 && std::abs (clickedBeat - 2) < 1.0 / beatWidth + 1e-9,
            "arrangement MIDI ruler seeks the global transport");
     pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
@@ -12060,6 +12358,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto clickClip = state.tracks[(size_t) clickTrack].clips[0].id;
             check (session.setAudioClipWarp (clickClip, { Session::WarpMode::stretch, 120 }).wasOk(), "warp them");
             selectTrack (clickTrack); selectedClip = 0; refresh(); audioClipView.sync();
+            check (findNamed (audioClipView, "Loop box") != nullptr && findNamed (audioClipView, "Loop box")->isVisible(), "a warped clip shows its Loop box");
             const auto transients = session.audioClipTransients (clickClip);
             check (transients.size() == 3 && std::abs (transients[1] - 0.75) < 1e-3, "the clip's transients are its three clicks");
             const auto beside = audioClipView.beatX (audioClipView.beatAtSource (transients[1])) + 3;
@@ -12070,6 +12369,63 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             for (int step = 0; step < 4; ++step) session.undo();
             selectTrack (0); selectedClip = 0; refresh(); audioClipView.sync();
             check ((int) state.tracks.size() == clickTrack, "four undo steps remove the clicks' track");
+        }
+        {
+            // Clip loops: a MIDI clip's Loop box loops what it plays and sets the loop's Position and
+            // Length; in the Arrangement its right edge repeats the loop and its left edge trims it.
+            showArrangementView(); refresh();
+            check (session.addMidiTrack ("Loops").wasOk(), "add a MIDI track for loops");
+            const int loopTrack = (int) session.snapshot().tracks.size() - 1;
+            check (session.addMidiClip (session.snapshot().tracks.back().id, 0, 4).wasOk(), "a one-bar MIDI clip"); refresh();
+            const auto loopClip = [&] { return state.tracks[(size_t) loopTrack].clips[0]; };
+            selectTrack (loopTrack); selectedClip = 0; refresh();
+            {
+                const auto at = canvas.clipBounds (loopClip(), loopTrack).getCentre();
+                const auto when = juce::Time::getCurrentTime();
+                canvas.mouseDoubleClick (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys(), 1.0f, 0, 0, 0, 0, &canvas, &canvas, when, at, when, 2, false));
+            }
+            auto* loopButton = dynamic_cast<juce::Button*> (findNamed (clipLoop, "Clip loop"));
+            auto* startField = dynamic_cast<juce::Label*> (findNamed (clipLoop, "Clip start"));
+            auto* positionField = dynamic_cast<juce::Label*> (findNamed (clipLoop, "Loop position"));
+            auto* lengthField = dynamic_cast<juce::Label*> (findNamed (clipLoop, "Loop length"));
+            check (showPiano && clipLoop.isVisible() && loopButton && startField && positionField && lengthField && ! loopButton->getToggleState()
+                       && ! lengthField->isEnabled() && startField->getText() == "1.1.1",
+                   "a MIDI clip shows its Loop box beside the note editor, unlooped from 1.1.1");
+            loopButton->setToggleState (true, juce::dontSendNotification); loopButton->onClick(); refresh();
+            check (loopClip().loop == Session::ClipLoop { true, 0, 4 } && lengthField->isEnabled() && lengthField->getText() == "1.0.0", "Loop loops what the clip plays, one bar");
+            lengthField->setText ("0.2.0", juce::sendNotificationSync); refresh();
+            check (loopClip().loop == Session::ClipLoop { true, 0, 2 }, "the Length field sets a two-beat loop");
+            positionField->setText ("1.2.1", juce::sendNotificationSync); refresh();
+            check (loopClip().loop == Session::ClipLoop { true, 1, 2 } && loopClip().contentStartBeat == 1 && startField->getText() == "1.2.1",
+                   "moving the loop past the start takes the start with it");
+            startField->setText ("1.1.1", juce::sendNotificationSync); refresh();
+            check (loopClip().contentStartBeat == 1 && startField->getText() == "1.2.1", "a start outside the loop is refused");
+            const auto edgeEvent = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged)
+            {
+                const auto when = juce::Time::getCurrentTime();
+                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::altModifier),
+                                         1.0f, 0, 0, 0, 0, &canvas, &canvas, when, down, when, 1, dragged);
+            };
+            const auto dragEdge = [&] (bool right, double beats)
+            {
+                selectTrack (loopTrack); selectedClip = 0; refresh();
+                const auto bounds = canvas.clipBounds (loopClip(), loopTrack);
+                const juce::Point<float> from (right ? bounds.getRight() - 2 : bounds.getX() + 2, bounds.getBottom() - 8);
+                const auto to = from + juce::Point<float> ((float) std::round (beats * 60 / state.tempo * pixelsPerSecond), 0);
+                canvas.mouseDown (edgeEvent (from, from, false)); canvas.mouseDrag (edgeEvent (to, from, true)); canvas.mouseUp (edgeEvent (to, from, true)); refresh();
+            };
+            const auto beatTolerance = state.tempo / 60 / pixelsPerSecond * 1.5; // A pixel and a half.
+            dragEdge (true, 4);
+            check (std::abs (loopClip().lengthBeats - 8) < beatTolerance && loopClip().loop == Session::ClipLoop { true, 1, 2 },
+                   "dragging the right edge makes the clip longer, repeating its loop");
+            session.undo(); refresh();
+            check (std::abs (loopClip().lengthBeats - 4) < 1e-6, "one undo returns its length");
+            dragEdge (false, 1);
+            check (std::abs (loopClip().startBeat - 1) < beatTolerance && std::abs (loopClip().lengthBeats - 3) < beatTolerance && std::abs (loopClip().contentStartBeat - 2) < beatTolerance,
+                   "dragging the left edge trims the clip, its start moving round the loop");
+            for (int step = 0; step < 6; ++step) session.undo();
+            selectTrack (0); selectedClip = 0; refresh();
+            check ((int) state.tracks.size() == loopTrack, "six undo steps remove the loops' track");
         }
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())

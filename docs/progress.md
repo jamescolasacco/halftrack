@@ -1702,3 +1702,15 @@ Engine and UI areas.
 - **Measured.** Generated loops cut to misleading lengths are found exactly. On 69 reference library loops of 6 s or more, 78% come within 0.5 BPM; the length guess does better on those, so short samples keep it.
 
 See [the contract](research/warp-contract.md#tempo-and-transient-analysis-2026-10-22).
+
+## Clip loops and edges — 2026-10-22
+
+Engine and UI areas.
+
+- **Loops.** MIDI and warped audio clips loop: the Loop box beside the note editor (and in a warped clip's view) sets Start, End, Loop, Position and Length in bars.beats.sixteenths.
+- **Edges.** In the Arrangement, a looped clip's right edge repeats its loop and its left edge trims it round the loop. Unlooped clips trim in beats, keeping their content in place.
+- **Editors.** The note editor and waveform dim what the clip does not play, show the loop brace and start, and follow the play head round the loop. The Arrangement draws each pass with a notch.
+- **Copies.** Duplicates and pastes keep the loop and start.
+- **Measured.** Each case is rendered and its beats compared (`tests/ClipLoopTests.cpp`), and the UI suite drives the box and the edges.
+
+See [the contract](research/clip-loops-contract.md).

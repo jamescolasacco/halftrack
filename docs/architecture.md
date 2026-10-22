@@ -201,6 +201,10 @@ Note expression lives in the engine's PITCHBEND, TIMBRE and PRESSURE children of
 
 `WarpSettings` carries the mode and each mode's settings; `setAudioClipWarp` maps Beats, Tones, Texture and Complex Pro to the engine stretcher modes that `cmake/PatchWarpModes.cmake` adds, and their settings to the stretch options' four Halftrack values. `src/WarpStretchers.*` holds the stretchers, registered with the engine when a Session starts. They allocate when created and not while processing. Transposition is part of `AudioClipSettings`, kept in clip properties and applied as the clip's pitch change. See the [contract](research/warp-modes-contract.md).
 
+## Clip loops
+
+`ClipInfo` reports a MIDI or warped audio clip's content start and loop in content beats. `setClipLoop` and `setClipBeats` translate them into the engine's loop range and offset: while a clip loops, the engine counts its offset from the loop's start. The interface shares a few content helpers (`contentEndBeat`, `contentSpans`, `sourceSecondsAt`) so the Arrangement, note editor and waveform draw and edit the same content. See the [contract](research/clip-loops-contract.md).
+
 ## Tempo and transient analysis
 
 `tempo` (in `src/TempoDetection.*`, independent of the engine but for the transient detector it shares with Beats warping) finds a sound's tempo and first beat. It works from an onset curve built a block at a time, so a file is never held whole. Session's `analyse` reads a file once while it is unchanged and keeps its transients and estimate in memory, for at most 256 files. Auto-Warp Long Samples reads the estimate on import; `audioClipTransients` gives the clip view the transients. The analysis runs on the message thread at import or when a warped clip is first shown, about 0.2 s for a three-minute file. See the [contract](research/warp-contract.md#tempo-and-transient-analysis-2026-10-22).

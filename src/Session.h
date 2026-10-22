@@ -294,6 +294,9 @@ public:
         float detuneCents = 0;
         bool operator== (const AudioClipSettings&) const = default;
     };
+    // A MIDI or warped audio clip's loop, in the beats of its content, after the reference's Loop
+    // switch with its Position and Length.
+    struct ClipLoop { bool on = false; double start = 0, length = 0; bool operator== (const ClipLoop&) const = default; };
     struct ClipInfo
     {
         juce::String id, name;
@@ -313,6 +316,11 @@ public:
         ScaleSettings scale;
         juce::String grooveId; // The pool groove a MIDI clip plays with; empty for None.
         std::vector<WarpMarker> warpMarkers; // A warped audio clip's markers, in order.
+        // MIDI and warped audio clips: the beat of their content heard at the clip's start (the
+        // start marker) and their loop. Unlooped, the loop gives the content the clip plays.
+        bool canLoop = false;
+        double contentStartBeat = 0;
+        ClipLoop loop;
         std::vector<ClipEnvelope> envelopes; // Envelopes with points, in the order they were added.
         bool mediaMissing = false; // An audio clip whose file is not on disk plays silence.
     };
@@ -705,6 +713,17 @@ public:
     // once while the file is unchanged.
     std::vector<double> audioClipTransients (const juce::String& clipId);
     juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
+    // Where a MIDI or warped audio clip's content starts and its loop, in content beats. Looping,
+    // the content plays from the start into the loop and round it for as long as the clip lasts;
+    // the start must lie in the loop (the reference also allows one before it). Unlooped, it plays
+    // from the start for the clip's length, and a warped audio clip ends with its source. Session
+    // clips always loop. The clip keeps its place. One undo step.
+    juce::Result setClipLoop (const juce::String& clipId, const ClipLoop&, double contentStartBeat);
+    // Places an Arrangement MIDI or warped audio clip's edges in project beats, with the content beat
+    // heard at its start: moving the start edge and that beat together trims the clip without
+    // moving its content. A looped clip lasts as long as it is made, repeating its loop; an unlooped
+    // warped audio clip ends with its source. One undo step.
+    juce::Result setClipBeats (const juce::String& clipId, double startBeat, double lengthBeats, double contentStartBeat);
     juce::Result splitAudioClip (const juce::String& clipId, double atSeconds, juce::String& rightClipId);
     // Splits an unlooped Arrangement MIDI clip; notes crossing the split become two notes and each
     // controller's value at the split starts the right-hand clip.
