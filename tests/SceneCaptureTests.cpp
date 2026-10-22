@@ -73,6 +73,57 @@ juce::AudioBuffer<float> perform (const juce::File& root, const std::function<vo
     s.stop(); dispatch();
     return heard;
 }
+
+// Consolidate Time to New Scene: two MIDI clips and an audio clip in four beats of the Arrangement
+// become one looping clip per track in a scene inserted after the first, the Arrangement as it was.
+void consolidateTests (const juce::File& root)
+{
+    Session s (false);
+    ok (s.saveProject (root.getChildFile ("Consolidate").getChildFile ("Consolidate.halftrack")), "save a project for the renders");
+    ok (s.addMidiTrack ("Bass"), "a MIDI track"); ok (s.addAudioTrack ("Tone"), "an audio track");
+    const auto trackIndex = [&] (const juce::String& name) { const auto tracks = s.snapshot().tracks; for (int t = 0; t < (int) tracks.size(); ++t) if (tracks[(size_t) t].name == name) return t; return -1; };
+    const int bass = trackIndex ("Bass"), tone = trackIndex ("Tone");
+    const auto bassId = s.snapshot().tracks[(size_t) bass].id, toneId = s.snapshot().tracks[(size_t) tone].id;
+    juce::StringArray added;
+    for (const auto& [beat, pitch] : { std::pair { 0.0, 40 }, std::pair { 2.0, 43 }, std::pair { 6.0, 47 } })
+    {
+        ok (s.addMidiClip (bassId, beat, 2), "a two-beat clip");
+        const auto clips = s.snapshot().tracks[(size_t) bass].clips;
+        for (const auto& c : clips) if (std::abs (c.startBeat - beat) < 1e-9) ok (s.addMidiNotes (c.id, { { "", pitch, 0, .5, .8f } }, added), "its note");
+    }
+    const auto toneFile = root.getChildFile ("Tone.wav");
+    {
+        juce::AudioBuffer<float> wave (1, 96000);
+        for (int n = 0; n < wave.getNumSamples(); ++n) wave.setSample (0, n, .3f * (float) std::sin (juce::MathConstants<double>::twoPi * 220 * n / 48000));
+        juce::WavAudioFormat format;
+        std::unique_ptr<juce::OutputStream> stream (toneFile.createOutputStream());
+        auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (1).withBitsPerSample (24));
+        check (writer && writer->writeFromAudioSampleBuffer (wave, 0, wave.getNumSamples()), "write a two-second tone");
+    }
+    ok (s.importAudio (toneFile, tone, 0), "the tone in the Arrangement");
+    const auto before = s.snapshot();
+    const auto ids = [] (const Session::TrackInfo& t) { juce::StringArray r; for (const auto& c : t.clips) r.add (c.id); return r; };
+    juce::String sceneId;
+    check (s.consolidateTimeToNewScene ({ bassId, toneId }, s.secondsAt (8), s.secondsAt (10), 0, sceneId).failed() && s.snapshot().scenes.size() == before.scenes.size(),
+           "a selection with nothing in it makes no scene");
+    ok (s.consolidateTimeToNewScene ({ bassId, toneId }, 0, s.secondsAt (4), 0, sceneId), "Consolidate Time to New Scene over the first four beats");
+    const auto now = s.snapshot();
+    check (now.scenes.size() == before.scenes.size() + 1 && now.scenes[1].id == sceneId && ! s.canRedo(), "a scene is inserted after the first, leaving nothing to redo");
+    check (ids (now.tracks[(size_t) bass]) == ids (before.tracks[(size_t) bass]) && ids (now.tracks[(size_t) tone]) == ids (before.tracks[(size_t) tone]),
+           "the Arrangement is left as it was");
+    const auto bassSlot = now.tracks[(size_t) bass].slots[1], toneSlot = now.tracks[(size_t) tone].slots[1];
+    check (bassSlot.hasClip && bassSlot.clip.isMidi && std::abs (bassSlot.clip.lengthBeats - 4) < 1e-6 && bassSlot.clip.notes.size() == 2
+               && bassSlot.clip.loop.on && std::abs (bassSlot.clip.loop.length - 4) < 1e-6,
+           "the MIDI track's clip holds both notes in the selection, four beats long and looping");
+    bool pitches = bassSlot.hasClip && bassSlot.clip.notes.size() == 2;
+    for (const auto& note : bassSlot.clip.notes) pitches = pitches && ((note.pitch == 40 && std::abs (note.startBeat) < 1e-6) || (note.pitch == 43 && std::abs (note.startBeat - 2) < 1e-6));
+    check (pitches, "its notes keep their beats: 40 at the start and 43 two beats in");
+    check (toneSlot.hasClip && toneSlot.clip.isAudio && toneSlot.clip.file.existsAsFile() && toneSlot.clip.file.isAChildOf (root.getChildFile ("Consolidate"))
+               && std::abs (toneSlot.clip.length - s.secondsAt (4)) < 1e-3 && toneSlot.clip.loop.on,
+           "the audio track's clip is the rendered selection, collected in the project, looping");
+    s.undo();
+    check (s.snapshot().scenes.size() == before.scenes.size() && ids (s.snapshot().tracks[(size_t) bass]) == ids (before.tracks[(size_t) bass]), "one undo removes the scene and nothing else");
+}
 }
 
 int runSceneCaptureTests (const juce::File& artifacts)
@@ -80,6 +131,7 @@ int runSceneCaptureTests (const juce::File& artifacts)
     try
     {
         const auto root = artifacts.getChildFile ("scene-capture-" + juce::Uuid().toString()); ok (root.createDirectory(), "create fixtures");
+        consolidateTests (root);
         const auto uninterrupted = perform (root, {});
         const auto captured = perform (root, [] (Session& s, const Fixture& f)
         {

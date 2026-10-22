@@ -8736,6 +8736,8 @@ private:
             popup.addItem (72, "Group Tracks", currentTrack() != nullptr && ! currentTrack()->isReturn && currentTrack()->groupId.isEmpty());
             popup.addItem (73, "Ungroup Tracks", currentTrack() != nullptr && currentTrack()->groupId.isNotEmpty());
             popup.addSeparator(); popup.addItem (32, "Add Plug-in...", currentTrack() != nullptr);
+            popup.addSeparator();
+            popup.addItem (88, "Consolidate Time to New Scene", timeSelection.active() && ! showSession && ! state.recording && state.scenes.size() < 256);
         }
         else if (index == 3)
         {
@@ -8849,6 +8851,14 @@ private:
             }
             case 57: case 58: moveSceneFromUI(selectedSceneId,id==57?-1:1); break;
             case 84: case 85: case 86: case 87: slotCommand (id); break;
+            case 88:
+            {
+                juce::String scene;
+                const auto result = session.consolidateTimeToNewScene (timeSelection.trackIds, timeSelection.start, timeSelection.end, selectedSceneIndex(), scene);
+                report (result, "Consolidated the selection into a new scene.");
+                if (result.wasOk()) selectedSceneId = scene;
+                refresh(); break;
+            }
             case 93: case 94: case 95: case 96: case 97: if (const auto place = focusedGrid()) gridCommand (id - 92, *place); break;
             case 52: report (session.removeScene (selectedSceneIndex())); break;
             case 53: report (session.launchScene (selectedSceneIndex())); break;
@@ -13446,6 +13456,23 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (gridItem (221, pianoRoll.gridPlace()) && ! session.clipGrid (clipId).snap && noteGrid->getButtonText() == "Off", "Snap to Grid turns its snapping off");
             showArrangementView(); session.undo(); session.undo(); refresh();
             check (keys >= (int) state.tracks.size() || state.tracks[(size_t) keys].name != "Grid keys", "two undo steps remove the track");
+        }
+        {
+            // Create > Consolidate Time to New Scene makes a scene of the selected time.
+            session.stop(); showArrangementView(); refresh();
+            const auto tracksBefore = state.tracks.size(), scenesBefore = state.scenes.size();
+            check (session.addMidiTrack ("Consolidate").wasOk(), "a track to consolidate"); refresh();
+            int t = -1;
+            for (int i = 0; i < (int) state.tracks.size(); ++i) if (state.tracks[(size_t) i].name == "Consolidate") t = i;
+            check (session.addMidiClip (state.tracks[(size_t) t].id, 0, 4).wasOk(), "a clip on it"); refresh();
+            timeSelection = { 0.0, secondsAt (4), { state.tracks[(size_t) t].id } };
+            menuItemSelected (88, 2);
+            const auto scene = selectedSceneIndex();
+            check (state.scenes.size() == scenesBefore + 1 && scene >= 0 && state.tracks[(size_t) t].slots[(size_t) scene].hasClip && state.tracks[(size_t) t].clips.size() == 1,
+                   "Create > Consolidate Time to New Scene makes a scene holding the selection, selects it, and leaves the Arrangement");
+            for (int step = 0; step < 3; ++step) session.undo();
+            refresh();
+            check (state.tracks.size() == tracksBefore && state.scenes.size() == scenesBefore, "three undo steps remove it, the clip and the track");
         }
         {
             // Selecting several clips: Shift-click takes in the clips between, Cmd/Ctrl-click leaves

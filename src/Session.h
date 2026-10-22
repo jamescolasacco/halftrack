@@ -608,6 +608,10 @@ public:
     // holding the clips now playing, one per track, which play on in it without interruption; copies
     // of them stay in their old scenes. Refused when none plays. One undo step.
     juce::Result captureAndInsertScene (int afterSceneIndex, juce::String& sceneId);
+    // Consolidate Time to New Scene, after the reference: each track's material in an Arrangement
+    // time selection becomes one looping clip, as Consolidate makes it, in a new scene after the
+    // given one (or at the end). The Arrangement is left as it was. One undo step.
+    juce::Result consolidateTimeToNewScene (const juce::StringArray& trackIds, double startSeconds, double endSeconds, int afterSceneIndex, juce::String& sceneId);
     juce::Result moveScene (const juce::String& sceneId, int destinationIndex);
     juce::Result renameScene (int sceneIndex, const juce::String& name);
     // Each is one undo step; an empty value clears it. Tempos run 20 to 999 BPM, meters 1 to 99 over 1, 2, 4, 8 or 16.

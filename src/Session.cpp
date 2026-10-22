@@ -6373,6 +6373,50 @@ Result Session::captureAndInsertScene (int after, String& capturedId)
     }
     impl->changed(); return Result::ok();
 }
+Result Session::consolidateTimeToNewScene (const juce::StringArray& trackIds, double start, double end, int after, String& sceneId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing scenes.");
+    auto& list = impl->edit->getSceneList();
+    if (list.getNumScenes() >= 256) return Result::fail ("This project has reached the scene limit.");
+    // The Arrangement's own Consolidate makes each track's clip. Copies of them are taken and the
+    // consolidation undone, so the Arrangement is as it was and its renders stay in the Assets.
+    juce::StringArray made;
+    if (auto r = consolidateRange (trackIds, start, end, made); r.failed()) return r;
+    struct Made { te::AudioTrack* track; juce::ValueTree state; double lengthBeats; bool midi; };
+    std::vector<Made> clips;
+    for (const auto& id : made)
+        if (auto* clip = impl->anyClip (id))
+            if (auto* track = dynamic_cast<te::AudioTrack*> (clip->getClipTrack()))
+                clips.push_back ({ track, clip->state.createCopy(), clip->getLengthInBeats().inBeats(), dynamic_cast<te::MidiClip*> (clip) != nullptr });
+    undo();
+    const auto bpm = impl->edit->tempoSequence.getTempoAt (te::TimePosition::fromSeconds (start)).getBpm();
+    const int index = juce::isPositiveAndBelow (after, list.getNumScenes()) ? after + 1 : list.getNumScenes();
+    beginEditGesture ("Consolidate time to new scene");
+    auto* scene = list.insertScene (index);
+    if (scene == nullptr) { endEditGesture(); return Result::fail ("The scene could not be inserted."); }
+    sceneId = juce::Uuid().toString();
+    scene->state.setProperty ("halftrackSceneID", sceneId, &impl->edit->getUndoManager());
+    for (auto* track : te::getAudioTracks (*impl->edit)) track->getClipSlotList().ensureNumberOfSlots (list.getNumScenes());
+    for (auto& m : clips)
+    {
+        auto* slot = m.track->getClipSlotList().getClipSlots()[index];
+        auto copy = te::ClipCopy::fromClipboardState (impl->asSlotClip (m.state, m.lengthBeats, 0, m.midi), false).withNewItemID (*impl->edit);
+        renewMidiNoteIDs (copy.getState());
+        auto* clip = slot != nullptr ? te::insertClipCopy (*slot, copy) : nullptr;
+        if (clip == nullptr) { endEditGesture(); undo(); return Result::fail ("A consolidated clip could not be placed in the scene."); }
+        // Session clips loop their whole length, and audio follows the tempo it was rendered at.
+        if (m.midi) clip->setLoopRangeBeats ({ te::BeatPosition(), te::BeatPosition::fromBeats (m.lengthBeats) });
+        else if (auto* wave = dynamic_cast<te::WaveAudioClip*> (clip))
+        {
+            wave->setLoopRange ({ te::TimePosition(), wave->getPosition().getLength() });
+            if (auto warped = setAudioClipWarp (wave->itemID.toString(), { impl->prefs.defaultWarpMode, bpm }); warped.failed()) { endEditGesture(); undo(); return warped; }
+        }
+        impl->applyLaunchDefaults (*clip);
+    }
+    endEditGesture();
+    impl->changed(); return Result::ok();
+}
 Result Session::moveScene (const String& id, int destination)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

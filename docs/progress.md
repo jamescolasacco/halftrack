@@ -1838,3 +1838,10 @@ Engine area.
 
 - **Paste.** A copied Session clip pastes into the Arrangement, and a copied Arrangement clip into a slot, as with the reference's one clipboard. A MIDI clip keeps its beats and content start either way. Arrangement clips take the default launch settings in a slot.
 - **Measured.** `tests/SlotClipTests.cpp`.
+
+## Consolidate Time to New Scene — 2026-10-22
+
+Engine and UI areas.
+
+- **The command.** Create > Consolidate Time to New Scene turns the Arrangement's time selection into a scene with one looping clip per track, made as Consolidate makes them, leaving the Arrangement as it was. It is one undo step.
+- **Measured.** `tests/SceneCaptureTests.cpp` and the UI suite.

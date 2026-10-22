@@ -678,3 +678,12 @@ The grid follows a static reading of the reference's code ([contract](research/e
 ### Selecting several Arrangement clips
 
 The reference's Shift-click extends a time selection, which can take in parts of clips. Halftrack's Shift-click selects whole clips: the clicked one and every clip wholly within the span. Default: copy, cut, duplicate and delete act on the whole clips selected. A group drag snaps the dragged clip and moves the others by the same amount, which is unmeasured against the reference.
+
+### Consolidate Time to New Scene
+
+The manual says the command makes one new clip per track from the selection in a scene below the selected one. Defaults where it is silent:
+
+- The clips loop their whole length.
+- Audio is warped at the tempo it was rendered at.
+- Automation stays in the Arrangement.
+- With no scene selected, the scene goes at the end.

@@ -33,7 +33,25 @@ It checks:
 
 The UI suite checks that Cmd/Ctrl+Shift+I says when nothing plays.
 
+## Consolidate Time to New Scene
+
+The reference's Create menu command turns an Arrangement time selection into a scene: each track's material in the range becomes one clip, placed in a new scene below the selected one.
+
+`Session::consolidateTimeToNewScene (trackIds, start, end, afterSceneIndex, sceneId)` does this:
+
+- **The clips.** They are made exactly as the Arrangement's Consolidate makes them: MIDI clips joined into one, audio rendered without devices into the project's Assets.
+- **The Arrangement.** It is left unchanged: the consolidation is undone after copies of its clips are taken, and the renders stay in the Assets.
+- **The scene.** The copies go into a new scene after the given one. MIDI keeps its beats; each clip loops its whole length. Audio follows the tempo it was rendered at, in the preferred warp mode. All take the preferences' launch settings.
+- **Undo and refusals.** It is one undo step and leaves nothing to redo. A selection holding no clips is refused.
+
+In the UI it is under Create, for the Arrangement's time selection, and selects the new scene.
+
+Evidence:
+
+- `consolidateTests` in `tests/SceneCaptureTests.cpp` consolidates four beats over a MIDI track (two clips in range, one after) and an audio track. The scene holds a four-beat looping MIDI clip with both notes at their beats, and a looping render of the audio collected into the project. The Arrangement's clip identities are unchanged, an empty selection is refused, and one undo removes the scene.
+- The UI suite runs the Create menu item.
+
 ## Not yet covered
 
 - Capturing the playing tempo and meter into the scene.
-- Consolidate Time to New Scene.
+- Whether the reference's consolidated Session clips loop, and whether it consolidates automation into clip envelopes. Unmeasured; Halftrack loops them and leaves automation in the Arrangement.
