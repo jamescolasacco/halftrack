@@ -11094,6 +11094,10 @@ Result Session::record()
     transport.record (false, ! armed);
     if (! transport.isRecording()) impl->loopRecording.reset();
     if (! impl->edit->getTransport().isRecording()) return Result::fail ("Recording could not start. Check the selected input and device settings.");
+    // With Punch-In the metronome is heard only from the punch-in point, as the reference's manual
+    // says; the next Play clears the range. A count-in keeps the engine's own range.
+    if (impl->punchIn() && impl->edit->getNumCountInBeats() == 0)
+        impl->edit->setClickTrackRange ({ impl->loopRange().getStart(), te::Edit::getMaximumEditEnd() });
     impl->startPerformance (alreadyPlaying ? impl->playedTime() : impl->edit->getTransport().startPosition.get());
     impl->changed(); return Result::ok();
 }

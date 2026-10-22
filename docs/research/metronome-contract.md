@@ -36,6 +36,10 @@ This follows a static reading of the reference's code (raw material in the ignor
 - **The menu.** Divisions that do not fit the project's meter are disabled; Auto and 1 Bar always fit.
 - **The engine.** A patch (`cmake/PatchMetronomeRhythm.cmake`) lets the click generator read the project's rhythm when it is prepared, resolve it as above, and place its ticks. Bars are numerator × 4 / denominator crotchets. The engine's own bar count treats a bar of 6/8 as six crotchets.
 
+## Punch-In
+
+As the reference's manual says, with Punch-In on "the metronome will only be audible after the punch-in point" (consulted 2026-10-22). Recording with Punch-In mutes the click before the loop's start. Without a count-in, `Session::record` gives the engine a click range from that point; the next Play clears it. With a count-in, the engine's count-in range is kept, so the click runs on through the pre-roll ([open questions](../open-questions.md#metronome)).
+
 ## The menu
 
 The metronome's menu has sections, as the reference's does:
@@ -64,6 +68,8 @@ The same suite checks Rhythm by comparing playback clicks sample by sample:
 - Auto ticking eighths in 6/8, and crotchets in 6/8;
 - crotchets in 7/8, which play as Auto;
 - the menu's list, the divisions that fit 6/8, 7/8, 3/2 and 4/4, a refused value, and undo.
+
+With Punch-In and the brace at one second, a recording from the start clicks, sample by sample, only from one second on; an ordinary Play afterwards clicks from the start again.
 
 The UI suite chooses four bars, Wood and 1/8 from the menu.
 

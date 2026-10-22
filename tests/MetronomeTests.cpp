@@ -280,6 +280,21 @@ void countIn(const juce::File& root)
         settings.countInBars=0;ok(session.setMetronome(settings),"and none again");
     }
 }
+// With Punch-In the click is heard only from the punch-in point, as the reference's manual says,
+// and an ordinary Play afterwards clicks from the start again.
+void punchIn(const juce::File& root)
+{
+    Fixture f(root);auto& session=f.session;auto settings=session.snapshot().metronome;
+    settings.enabled=true;settings.recordingOnly=false;settings.accent=false;settings.gain=1;ok(session.setMetronome(settings),"enable an unaccented click");
+    const auto inputs=session.inputNames();check(!inputs.isEmpty(),"an input to punch into");ok(session.setTrackInput(0,inputs[0]),"assign it");ok(session.setTrackArmed(0,true),"arm for punching");
+    ok(session.setTrackMonitor(0,Session::MonitorMode::off),"without monitoring");
+    session.setLoop(false,1,2);ok(session.setPunchIn(true),"Punch-In at one second");
+    session.seek(0);ok(session.record(),"record from the start with Punch-In");
+    compareClicks(captureSyntheticTestDevice(session,3*48000/256),120,1,false,0,-1,1);session.stop();
+    session.undo();check(session.snapshot().tracks[0].clips.empty(),"undo the punched take, which would play too");
+    session.seek(0);ok(session.play(),"play afterwards");
+    compareClicks(captureSyntheticTestDevice(session,400),120,1,false);session.stop();
+}
 }
 int runMetronomeTests(const juce::File& artifacts)
 {
@@ -289,7 +304,7 @@ int runMetronomeTests(const juce::File& artifacts)
         const auto root=artifacts.getChildFile("metronome-"+juce::Uuid().toString());ok(root.createDirectory(),"create isolated metronome fixtures");
         for(double seconds:{-2.25,-1.0,-.25,0.0,.25,1.0,2.25})
             check(tracktion::graph::timeToSample(seconds,48000)==std::llround(seconds*48000),"graph sample conversion rounds signed time symmetrically");
-        playback(root);persistence(root);countIn(root);exportExcludesClick(root);sounds(root);rhythms();
+        playback(root);persistence(root);countIn(root);punchIn(root);exportExcludesClick(root);sounds(root);rhythms();
         std::cout<<"Metronome tests passed: "<<root.getFullPathName()<<std::endl;return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL metronome: "<<e.what()<<std::endl;return 1;}

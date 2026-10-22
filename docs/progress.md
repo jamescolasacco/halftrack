@@ -2033,3 +2033,10 @@ Engine and QA areas.
 - **Measured.** The Capture MIDI suite (a device added while playing), the UI suite and the external sync suite, each also with slowed dispatch.
 
 - **A second fix.** Recording and stopping before the device's next block started playback a moment later: the engine's stop left a posted play in place, the play head started on that block and the transport followed it. The same patch now withdraws the posted play at a stop. Found through the punch suite failing under parallel load, where the first fix had kept that stray playback going through a MIDI rescan; the transport suite now records and stops at once and finds the transport stopped.
+
+## Metronome with Punch-In — 2026-10-22
+
+Engine and QA areas.
+
+- **The click with Punch-In.** As the reference's manual says, the metronome is heard only from the punch-in point while recording with Punch-In; an ordinary Play clicks from the start again.
+- **Measured.** The metronome suite compares the click sample by sample, before and after the punch-in point. It failed without the change.
