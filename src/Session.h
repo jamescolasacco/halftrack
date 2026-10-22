@@ -794,7 +794,9 @@ public:
     // time, one track of the same kind (audio or MIDI) for each copied track in order, replacing
     // what was there, as one undo step. Clips crossing the range must split there, as for Split.
     // A clip copy clears it, and it clears a clip copy.
-    juce::Result copyRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds, bool cut = false);
+    // With `onlyClips`, just those clips are kept (and cut), without the tracks' automation: the
+    // reference's copy of selected clips.
+    juce::Result copyRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds, bool cut = false, const juce::StringArray& onlyClips = {});
     bool hasRangeClipboard() const;
     double rangeClipboardLength() const;
     int rangeClipboardTracks() const;
@@ -865,6 +867,9 @@ public:
     juce::Result moveMidiClip (const juce::String& clipId, const juce::String& destinationTrackId, double startSeconds);
     juce::Result moveAudioClip (const juce::String& clipId, const juce::String& destinationTrackId, double startSeconds);
     juce::Result moveClip (int trackIndex, int clipIndex, double startSeconds);
+    // A copy of an Arrangement audio or MIDI clip at a time on a track of its kind, as a copying drag
+    // leaves; a MIDI clip keeps its beats, as a move does. One undo step.
+    juce::Result copyClipTo (const juce::String& clipId, const juce::String& destinationTrackId, double startSeconds, juce::String& copyId);
     juce::Result removeClip (int trackIndex, int clipIndex);
     juce::Result setClipFollowAction (const juce::String& clipId, const FollowSettings&);
     juce::Result setClipActive (const juce::String& clipId, bool active);

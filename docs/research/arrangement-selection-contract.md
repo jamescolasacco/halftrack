@@ -87,8 +87,41 @@ The UI suite drags a selection, duplicates it with Cmd/Ctrl+D, deletes it, undoe
 
 The UI suite copies a beat with Cmd/Ctrl+C, pastes it at the insert marker with Cmd/Ctrl+V (selecting it), and cuts it with Cmd/Ctrl+X.
 
+## Selecting several clips (2026-10-22)
+
+The reference's keyboard table names Shift-click for adjacent clips and Cmd-click (Ctrl on Windows) for nonadjacent ones; Option-drag (Ctrl on Windows) copies. Halftrack follows it in the Arrangement:
+
+- **Shift-click** on a clip adds it to the selection, with every clip lying wholly in the span from the selection to it, across the tracks between.
+- **Cmd-click** (Ctrl elsewhere) adds a clip, or on release without a drag leaves a selected one out.
+- **A plain click** on a clip of a group keeps the group for a drag; released without one, the clip is selected alone. A click on empty lane space clears the group.
+- **Dragging** one of a group moves every clip of it, all by the dragged clip's snapped move and change of track, as one undo step. A group with any clip that would land on a track of the wrong kind does not move.
+- **A copying drag** (Option, or Ctrl) of one clip or a group leaves copies where they were. Copies use `Session::copyClipTo`, and a MIDI copy keeps its beats.
+- **Delete** removes the group, as one undo step.
+- **Cmd/Ctrl+D** repeats the group after itself, each copy keeping its place, and selects the copies.
+- **Cmd/Ctrl+C and X** keep exactly the group's clips, in their places across the tracks they span, through `copyRange`'s `onlyClips`, without the tracks' automation. Cut removes just them. Cmd/Ctrl+V pastes them like a copied time selection.
+
+Moving a MIDI clip now keeps its length in beats and its content start's beat at the tempo where it lands, as the reference keeps a MIDI clip's beats. Before, a clip moved past a slowing tempo kept its seconds and lost beats.
+
+Evidence. The range clipboard suite covers:
+
+- copying the first and third of three clips alone, the paste holding just those;
+- cutting just them, undone in one step;
+- `copyClipTo` making a clip of its own that plays, undone in one step, and its refusals;
+- a copy and a move past a change to 60 BPM keeping their one beat.
+
+The UI suite checks:
+
+- a Shift-click taking in the clip between, and Cmd/Ctrl-click leaving one out;
+- a group drag of four beats;
+- Cmd/Ctrl+D selecting the copies;
+- Delete;
+- a copying drag;
+- Cmd/Ctrl+C and V of two clips, pasting just them;
+- nine undo steps restoring the project.
+
 ## Not implemented
 
+- Rubber-band (drag) selection of clips, and Shift-click that selects part of a clip, as the reference's selection of time does.
 - Selecting time on the ruler or across group lanes.
 - Pasting automation onto controls the destination lacks: such shapes are skipped.
 - Crop.

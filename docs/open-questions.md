@@ -674,3 +674,7 @@ The grid follows a static reading of the reference's code ([contract](research/e
 - **Tuplet commands.** Quintuplets and septuplets are named but have no command. A feature flag gates them in the reference, and whether it is on by default is unknown.
 - **Saving.** A grid change is not an unsaved change in Halftrack. Whether the reference marks the Set modified for it is unmeasured.
 - **Clip editors.** They keep their own snap menus until they get per-clip grids.
+
+### Selecting several Arrangement clips
+
+The reference's Shift-click extends a time selection, which can take in parts of clips. Halftrack's Shift-click selects whole clips: the clicked one and every clip wholly within the span. Default: copy, cut, duplicate and delete act on the whole clips selected. A group drag snaps the dragged clip and moves the others by the same amount, which is unmeasured against the reference.

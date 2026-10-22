@@ -1808,3 +1808,14 @@ Engine and UI areas.
 - **Measured.** `tests/EditGridTests.cpp` and the UI suite.
 
 See [the contract](research/edit-grid-contract.md).
+
+## Selecting several Arrangement clips — 2026-10-22
+
+UI and engine areas.
+
+- **Selection.** Shift-click and Cmd/Ctrl-click select several Arrangement clips. The group drags, copy-drags, duplicates, deletes, copies and cuts together, each one undo step.
+- **Engine.** `Session::copyClipTo` leaves the copies of a copying drag. `copyRange`'s `onlyClips` keeps exactly the selected clips.
+- **MIDI moves.** A moved MIDI clip now keeps its beats across tempo changes. It used to keep its seconds; a clip moved past a slow-down measured 0.605 beats instead of 1.
+- **Measured.** The range clipboard suite and the UI suite.
+
+See [the contract](research/arrangement-selection-contract.md#selecting-several-clips-2026-10-22).

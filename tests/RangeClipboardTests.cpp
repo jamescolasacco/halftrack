@@ -153,6 +153,52 @@ int runRangeClipboardTests (const juce::File& artifacts)
                "the dip is pasted five beats on and the volume returns after it, the original kept");
         s.undo();
         check (s.snapshot().tracks[(size_t) newAudio].volumeAutomation.points.size() == 3, "undo removes the pasted automation with the clips");
+
+        // Selected clips: their copy holds just them, cutting removes just them, and a clip copies to a
+        // time on a track of its kind, keeping its beats.
+        ok (s.newProject(), "a third project");
+        ok (s.saveProject (root.getChildFile ("Third").getChildFile ("Third.halftrack")), "saved");
+        ok (s.addMidiTrack ("Lead"), "a MIDI track");
+        int lead = -1;
+        for (int t = 0; t < (int) s.snapshot().tracks.size(); ++t) if (s.snapshot().tracks[(size_t) t].name == "Lead") lead = t;
+        check (lead >= 0, "it is in the project");
+        const auto leadId = s.snapshot().tracks[(size_t) lead].id;
+        synth = s.snapshot().tracks[(size_t) lead].synth; synth.attackSeconds = synth.decaySeconds = 0; synth.sustain = 1; synth.releaseSeconds = .01f;
+        ok (s.setSynthSettings (leadId, synth), "a synth with instant attack");
+        juce::StringArray ids;
+        for (const auto& [beat, velocity] : { std::pair { 0.0, 1.0f }, std::pair { 1.0, .25f }, std::pair { 2.0, 1.0f } })
+        {
+            ok (s.addMidiClip (leadId, beat, 1), "a one-beat clip");
+            const auto clips = s.snapshot().tracks[(size_t) lead].clips;
+            for (const auto& clip : clips)
+                if (std::abs (clip.startBeat - beat) < 1e-9) { ids.add (clip.id); ok (s.addMidiNotes (clip.id, { { "", 60, 0, .25, velocity } }, added), "its note"); }
+        }
+        check (ids.size() == 3 && pattern (s, lead, render, 6) == "LqL---", "three clips play loud, quiet, loud");
+        ok (s.copyRange ({ leadId }, 0, 1.5, false, { ids[0], ids[2] }), "copy the first and third clips alone");
+        ok (s.pasteRange (leadId, 2), "paste them at beat 5");
+        check (pattern (s, lead, render, 8) == "LqL-L-L-", "the paste holds just those clips, in their places");
+        s.undo();
+        ok (s.copyRange ({ leadId }, 0, 1.5, true, { ids[0], ids[2] }), "cut the first and third clips");
+        check (pattern (s, lead, render, 6) == "-L----" && s.snapshot().tracks[(size_t) lead].clips.size() == 1, "cutting removes just them, the second (now the loudest) playing alone");
+        s.undo();
+        check (pattern (s, lead, render, 6) == "LqL---", "and one undo puts them back");
+        juce::String copy;
+        ok (s.copyClipTo (ids[1], leadId, 2, copy), "copy the second clip to beat 5");
+        check (copy.isNotEmpty() && copy != ids[1] && pattern (s, lead, render, 8) == "LqL-q---", "a copy of its own plays there, the original kept");
+        s.undo();
+        check (s.snapshot().tracks[(size_t) lead].clips.size() == 3, "one undo removes the copy");
+        ok (s.addAudioTrack ("Audio"), "an audio track");
+        check (s.copyClipTo (ids[1], s.snapshot().tracks.back().id, 2, copy).failed() && s.copyClipTo ("missing", leadId, 2, copy).failed(),
+               "a MIDI clip is not copied to an audio track, nor a missing clip");
+        ok (s.setTempoMap ({ { 0, 120 }, { 4, 60 } }), "slow to 60 BPM at beat 5");
+        ok (s.copyClipTo (ids[1], leadId, s.secondsAt (6), copy), "copy the second clip to beat 7, after the change");
+        const auto clips = s.snapshot().tracks[(size_t) lead].clips;
+        for (const auto& clip : clips)
+            if (clip.id == copy) check (std::abs (clip.startBeat - 6) < 1e-6 && std::abs (clip.lengthBeats - 1) < 1e-6, "the copy keeps its one beat at the slower tempo");
+        ok (s.moveMidiClip (ids[1], leadId, s.secondsAt (8)), "move the second clip to beat 9");
+        const auto moved = s.snapshot().tracks[(size_t) lead].clips;
+        for (const auto& clip : moved)
+            if (clip.id == ids[1]) check (std::abs (clip.startBeat - 8) < 1e-6 && std::abs (clip.lengthBeats - 1) < 1e-6, "a moved clip keeps its one beat too (" + juce::String (clip.lengthBeats, 3) + ")");
         root.deleteRecursively();
         std::cout << "Range clipboard passed" << std::endl;
         return 0;

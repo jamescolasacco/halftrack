@@ -8701,7 +8701,7 @@ Result Session::duplicateRange (const juce::StringArray& trackIds, double start,
     impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }
-Result Session::copyRange (const juce::StringArray& trackIds, double start, double end, bool cut)
+Result Session::copyRange (const juce::StringArray& trackIds, double start, double end, bool cut, const juce::StringArray& onlyClips)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (cut && impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before cutting clips.");
@@ -8711,7 +8711,9 @@ Result Session::copyRange (const juce::StringArray& trackIds, double start, doub
     const auto order = te::getAudioTracks (*impl->edit);
     std::sort (tracks.begin(), tracks.end(), [&] (auto* a, auto* b) { return order.indexOf (a) < order.indexOf (b); });
     const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (end);
-    for (auto* t : tracks) for (const auto at : { from, to }) if (auto r = splittableAt (*t, at); r.failed()) return r;
+    // Whole selected clips need no splitting at the range's edges.
+    if (onlyClips.isEmpty())
+        for (auto* t : tracks) for (const auto at : { from, to }) if (auto r = splittableAt (*t, at); r.failed()) return r;
     auto clipboard = std::make_unique<Impl::RangeClipboard>();
     clipboard->start = start; clipboard->length = end - start;
     for (auto* t : tracks)
@@ -8721,6 +8723,7 @@ Result Session::copyRange (const juce::StringArray& trackIds, double start, doub
         for (auto* c : t->getClips())
         {
             if (! (c->getPosition().getStart() < to && c->getPosition().getEnd() > from)) continue;
+            if (! onlyClips.isEmpty() && ! onlyClips.contains (c->itemID.toString())) continue;
             auto state = c->state.createCopy();
             if (auto* wave = dynamic_cast<te::WaveAudioClip*> (c))
             {
@@ -8741,14 +8744,24 @@ Result Session::copyRange (const juce::StringArray& trackIds, double start, doub
         for (const auto& [key, parameter] : keyedParameters (*t))
         {
             const auto& curve = parameter->getCurve();
-            if (curve.getNumPoints() == 0) continue;
+            if (curve.getNumPoints() == 0 || ! onlyClips.isEmpty()) continue;
             Impl::RangeClipboard::Curve shape { key, {}, curve.getValueAt (from, 0.0f), curve.getValueAt (to - edgeGap, 0.0f) };
             for (const auto& p : curvePoints (curve)) if (p.time > from && p.time < to - edgeGap) shape.points.push_back ({ (p.time - from).inSeconds(), p.value, p.shape });
             copied.curves.push_back (std::move (shape));
         }
         clipboard->tracks.push_back (std::move (copied));
     }
-    if (cut) if (auto r = deleteRange (trackIds, start, end); r.failed()) return r;
+    if (cut && onlyClips.isEmpty()) if (auto r = deleteRange (trackIds, start, end); r.failed()) return r;
+    if (cut && ! onlyClips.isEmpty())
+    {
+        for (auto* t : tracks) if (auto frozen = impl->unfrozen (t); frozen.failed()) return frozen;
+        impl->transaction ("Cut clips");
+        for (auto* t : tracks)
+        {
+            const auto clips = t->getClips(); // Removing clips changes the track's list.
+            for (auto* c : clips) if (onlyClips.contains (c->itemID.toString())) c->removeFromParent();
+        }
+    }
     impl->midiClipboard = {}; impl->midiClipboardBeats = 0; impl->audioClipboard = {}; impl->audioClipboardMedia.reset(); impl->slotClipboard = {}; impl->slotClipboardMedia.reset();
     impl->rangeClipboard = std::move (clipboard);
     impl->changed(); return Result::ok();
@@ -9250,6 +9263,39 @@ Result Session::pasteAudioClip (const String& trackId, double start, String& pas
     target.deleteFile();
     return Result::fail ("The audio clip could not be pasted.");
 }
+Result Session::copyClipTo (const String& id, const String& destinationId, double start, String& copyId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before copying clips.");
+    auto* clip = impl->anyClip (id);
+    const bool midi = dynamic_cast<te::MidiClip*> (clip) != nullptr;
+    if (clip == nullptr || clip->getClipSlot() || clip->isGrouped() || ! (midi || dynamic_cast<te::WaveAudioClip*> (clip)))
+        return Result::fail ("Copy an ungrouped Arrangement audio or MIDI clip.");
+    auto* destination = impl->track (destinationId);
+    if (! destination || isReturn (*destination) || midi != static_cast<bool> (destination->state.getProperty (midiTrackProperty)))
+        return Result::fail (midi ? "Copy MIDI onto a MIDI track." : "Copy audio onto an audio track.");
+    if (auto frozen = impl->unfrozen (destination); frozen.failed()) return frozen;
+    if (! std::isfinite (start) || start < 0 || start + clip->getPosition().getLength().inSeconds() > te::Edit::maximumLength)
+        return Result::fail ("The complete clip must fit inside the 48-hour timeline.");
+    auto copy = te::ClipCopy::fromClip (*clip).withNewItemID (*impl->edit);
+    auto state = copy.getState();
+    renewMidiNoteIDs (state);
+    state.setProperty (te::IDs::start, start, nullptr);
+    if (midi)
+    {
+        // A MIDI clip keeps its beats, and its content start its beat, at the tempo where it lands.
+        auto& tempo = impl->edit->tempoSequence;
+        const auto at = te::TimePosition::fromSeconds (start);
+        const auto end = tempo.toTime (tempo.toBeats (at) + clip->getLengthInBeats());
+        state.setProperty (te::IDs::length, (end - at).inSeconds(), nullptr);
+        state.setProperty (te::IDs::offset, clip->getOffsetInBeats().inBeats() / tempo.getBeatsPerSecondAt (at), nullptr);
+    }
+    impl->transaction ("Copy clip");
+    auto* inserted = te::insertClipCopy (*destination, copy);
+    if (inserted == nullptr) { impl->edit->getUndoManager().undoCurrentTransactionOnly(); impl->changed(); return Result::fail ("The clip could not be copied."); }
+    copyId = inserted->itemID.toString();
+    impl->changed(); return Result::ok();
+}
 Result Session::moveMidiClip (const String& id, const String& destinationId, double start)
 {
     if (auto frozen = impl->unfrozen (impl->trackOfClip (id), impl->track (destinationId)); frozen.failed()) return frozen;
@@ -9270,9 +9316,13 @@ Result Session::moveMidiClip (const String& id, const String& destinationId, dou
     std::vector<te::Clip*> linked;
     if (clip->getClipTrack() == destination) if (auto r = impl->linkedMoves (*clip, offset, linked); r.failed()) return r;
     const te::Clip::Ptr retained (clip);
+    const auto lengthBeats = clip->getLengthInBeats(), offsetBeats = clip->getOffsetInBeats();
     impl->transaction ("Move MIDI clip");
     if (clip->getClipTrack() != destination && ! clip->moveTo (*destination)) return Result::fail ("Could not move the MIDI clip to that track.");
-    clip->setStart (te::TimePosition::fromSeconds (start), false, true);
+    // It keeps its beats, and its content start its beat, at the tempo where it lands.
+    auto& tempo = impl->edit->tempoSequence;
+    const auto at = te::TimePosition::fromSeconds (start);
+    clip->setPosition ({ { at, tempo.toTime (tempo.toBeats (at) + lengthBeats) }, te::TimeDuration::fromSeconds (offsetBeats.inBeats() / tempo.getBeatsPerSecondAt (at)) });
     Impl::moveLinked (linked, offset);
     impl->changed(); return Result::ok();
 }

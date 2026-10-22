@@ -858,6 +858,7 @@ public:
                     }
                 refresh(); return true;
             }
+            if (! shift && ! showSession && ! showPiano && selectedClipIds.size() > 1 && (code == 'D' || code == 'C' || code == 'X')) { clipGroupCommand ((char) code); return true; }
             if (! shift && ! showSession && ! showPiano && (code == 'E' || code == 'D' || code == 'C' || code == 'X' || code == 'V'))
             {
                 for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused != nullptr; focused = focused->getParentComponent())
@@ -2237,7 +2238,7 @@ private:
                     const auto& clip = track.clips[(size_t) c];
                     auto bounds = clipBounds (clip, t);
                     if (bounds.getRight() < 0 || bounds.getX() > tw) continue;
-                    const bool selected = (t == owner.selectedTrack && c == owner.selectedClip) || owner.isExtraMidiClip (clip.id) || owner.linkedToSelectedClip (t, clip);
+                    const bool selected = (t == owner.selectedTrack && c == owner.selectedClip) || owner.isExtraMidiClip (clip.id) || owner.linkedToSelectedClip (t, clip) || owner.isClipSelected (clip.id);
                     auto colour = track.colour;
                     if (colour.isTransparent()) colour = themes::colour (0xff76b5bf);
                     if (!clip.active) colour=muted;
@@ -2530,11 +2531,17 @@ private:
                             std::erase (owner.extraMidiClipIds, clips[(size_t) c].id);
                         }
                         else if (! e.mods.isPopupMenu()) owner.extraMidiClipIds.clear();
+                        if (! e.mods.isPopupMenu()) chooseClips (track, c, e.mods, previousTrack, previousClip);
+                        else if (! owner.isClipSelected (clips[(size_t) c].id)) owner.selectedClipIds.clear();
                         owner.selectedClip = c;
                         owner.timeSelection = {};
                         draggedClip = c;
                         originalStart = clips[(size_t) c].start;
-                        dragStartX = e.x;
+                        dragStartX = e.x; dragTrack = track;
+                        moving.clear();
+                        for (const auto& id : owner.selectedClipIds)
+                            if (const auto [mt, mc] = owner.arrangementClipIndex (id); mt >= 0)
+                                moving.push_back ({ id, mt, owner.state.tracks[(size_t) mt].clips[(size_t) mc].start, owner.state.tracks[(size_t) mt].clips[(size_t) mc].isMidi });
                         if (! e.mods.isPopupMenu())
                         {
                             fadeDrag = track == previousTrack && c == previousClip ? hitFade (clips[(size_t) c],track,e.position) : 0;
@@ -2552,7 +2559,7 @@ private:
                     }
             }
             draggedClip = -1;
-            owner.extraMidiClipIds.clear();
+            owner.extraMidiClipIds.clear(); owner.selectedClipIds.clear();
             // Dragging over empty lane space selects time; Shift-click extends the selection.
             if (! e.mods.isPopupMenu())
             {
@@ -2695,6 +2702,7 @@ private:
                     }
                 return;
             }
+            if (owner.selectedClipIds.size() > 1 && owner.selectedClipIds.contains (dragClipId)) { dragGroup (e, current); return; }
             // Resolve the stable identity on every event; sorting, deletion or a
             // project switch must never redirect a body drag to the old index.
             for (int t=0; t<(int)current.tracks.size(); ++t)
@@ -2707,7 +2715,14 @@ private:
                         const int destination = owner.trackAtY (e.y);
                         if (! juce::isPositiveAndBelow (destination,(int)current.tracks.size())
                             || current.tracks[(size_t)destination].isMidi != clip.isMidi || current.tracks[(size_t)destination].isReturn) return;
-                        if (! clipGesture) { owner.session.beginEditGesture ("Move clip"); clipGesture = true; }
+                        if (! clipGesture)
+                        {
+                            // A copying drag leaves a copy where the clip was, as the reference's does.
+                            owner.session.beginEditGesture (copyDrag (e.mods) ? "Copy clip" : "Move clip"); clipGesture = true;
+                            juce::String copy;
+                            if (copyDrag (e.mods) && juce::isPositiveAndBelow (dragTrack, (int) current.tracks.size()))
+                                owner.report (owner.session.copyClipTo (dragClipId, current.tracks[(size_t) dragTrack].id, originalStart, copy));
+                        }
                         const auto result = clip.isAudio ? owner.session.moveAudioClip (dragClipId,current.tracks[(size_t)destination].id,start)
                             : owner.session.moveMidiClip (dragClipId,current.tracks[(size_t)destination].id,start);
                         owner.report (result); owner.refresh();
@@ -2715,8 +2730,22 @@ private:
                         return;
                     }
         }
-        void mouseUp (const juce::MouseEvent&) override
+        void mouseUp (const juce::MouseEvent& e) override
         {
+            // A click without a drag on a clip of a group selects it alone, or with Cmd/Ctrl leaves it out.
+            if (! e.mouseWasDraggedSinceMouseDown() && dragClipId.isNotEmpty())
+            {
+                if (toggleOffOnUp)
+                {
+                    owner.selectedClipIds.removeString (dragClipId);
+                    const auto rest = owner.selectedClipIds;
+                    if (rest.size() < 2) owner.selectedClipIds.clear();
+                    if (! rest.isEmpty()) owner.selectArrangementClip (rest[0]);
+                }
+                else if (collapseOnUp) owner.selectedClipIds.clear();
+                repaint();
+            }
+            toggleOffOnUp = collapseOnUp = false;
             if (selectingTake) { selectingTake = false; return; }
             if (owner.envelopeKey.isNotEmpty())
             {
@@ -2728,6 +2757,79 @@ private:
             if (clipGesture) { owner.session.endEditGesture(); clipGesture = false; }
             draggedClip = -1; fadeDrag = 0; rangeDrag = 0; dragClipId.clear(); selecting = false;
         }
+        // A click on a clip: Cmd (Mac) or Ctrl adds it to the selection, or on mouse up without a drag
+        // leaves it out; Shift takes in every clip in the span from the selection to it, across the
+        // tracks between; a plain click on a clip of a group keeps the group for a drag; otherwise
+        // the clip is selected alone.
+        void chooseClips (int track, int c, juce::ModifierKeys mods, int previousTrack, int previousClip)
+        {
+            const auto& clip = owner.state.tracks[(size_t) track].clips[(size_t) c];
+            auto group = owner.selectedClipIds;
+            if (group.isEmpty() && juce::isPositiveAndBelow (previousTrack, (int) owner.state.tracks.size())
+                && juce::isPositiveAndBelow (previousClip, (int) owner.state.tracks[(size_t) previousTrack].clips.size()))
+                group.add (owner.state.tracks[(size_t) previousTrack].clips[(size_t) previousClip].id);
+            toggleOffOnUp = collapseOnUp = false;
+           #if JUCE_MAC
+            const bool adds = mods.isCommandDown();
+           #else
+            const bool adds = mods.isCtrlDown();
+           #endif
+            if (adds) { if (group.contains (clip.id)) toggleOffOnUp = true; else group.add (clip.id); }
+            else if (mods.isShiftDown() && ! mods.isAltDown() && ! group.isEmpty())
+            {
+                group.add (clip.id);
+                const auto span = owner.clipSpan (group);
+                for (int t = span.first; t <= span.last; ++t)
+                    for (const auto& other : owner.state.tracks[(size_t) t].clips)
+                        if (other.start >= span.start - 1e-9 && other.start + other.length <= span.end + 1e-9) group.addIfNotAlreadyThere (other.id);
+            }
+            else if (group.contains (clip.id) && group.size() > 1) collapseOnUp = true;
+            else group = { clip.id };
+            owner.selectedClipIds = group.size() > 1 ? group : juce::StringArray();
+        }
+        // Option (Mac) or Ctrl held as a drag begins copies, as in the reference.
+        static bool copyDrag (juce::ModifierKeys mods)
+        {
+           #if JUCE_MAC
+            return mods.isAltDown();
+           #else
+            return mods.isCtrlDown();
+           #endif
+        }
+        // A group moves together by the dragged clip's snapped move and its change of track, as long
+        // as every clip lands on a track of its kind; a copying drag leaves copies behind.
+        void dragGroup (const juce::MouseEvent& e, const Session::Snapshot& current)
+        {
+            auto start = juce::jmax (0.0, originalStart + (e.x - dragStartX) / owner.pixelsPerSecond);
+            if (owner.snaps (e.mods)) start = owner.toGrid (start);
+            auto shift = start - originalStart;
+            for (const auto& m : moving) shift = juce::jmax (shift, -m.start);
+            const auto destination = owner.trackAtY (e.y);
+            if (destination < 0 || destination >= (int) current.tracks.size()) return;
+            const int trackShift = destination - dragTrack;
+            for (const auto& m : moving)
+            {
+                const int t = m.track + trackShift;
+                if (! juce::isPositiveAndBelow (t, (int) current.tracks.size()) || current.tracks[(size_t) t].isReturn || current.tracks[(size_t) t].isMidi != m.midi) return;
+            }
+            if (! clipGesture)
+            {
+                owner.session.beginEditGesture (copyDrag (e.mods) ? "Copy clips" : "Move clips"); clipGesture = true;
+                if (copyDrag (e.mods))
+                    for (const auto& m : moving) { juce::String copy; owner.report (owner.session.copyClipTo (m.id, current.tracks[(size_t) m.track].id, m.start, copy)); }
+            }
+            for (const auto& m : moving)
+            {
+                const auto& to = current.tracks[(size_t) (m.track + trackShift)].id;
+                const auto result = m.midi ? owner.session.moveMidiClip (m.id, to, m.start + shift) : owner.session.moveAudioClip (m.id, to, m.start + shift);
+                if (result.failed()) { owner.report (result); break; }
+            }
+            owner.refresh(); owner.selectArrangementClip (dragClipId);
+        }
+        struct Moving { juce::String id; int track = -1; double start = 0; bool midi = false; };
+        std::vector<Moving> moving;
+        int dragTrack = -1;
+        bool toggleOffOnUp = false, collapseOnUp = false;
         // The selection runs from the anchor to the pointer in time and across the tracks between them.
         void extendSelection (double at, int track)
         {
@@ -8203,6 +8305,12 @@ private:
         const auto previous = state;
         const auto selectedId = currentTrack() != nullptr ? currentTrack()->id : juce::String();
         state = session.snapshot(); editGrid = session.editGrid();
+        if (! selectedClipIds.isEmpty())
+        {
+            juce::StringArray live;
+            for (const auto& id : selectedClipIds) if (arrangementClipIndex (id).first >= 0) live.add (id);
+            selectedClipIds = live.size() > 1 ? live : juce::StringArray();
+        }
         buildLanes();
         if (selectedId.isNotEmpty())
         {
@@ -8390,7 +8498,70 @@ private:
     {report(session.setClipActive(id,active));refresh();}
     void deleteSelectedClip()
     {
+        if (selectedClipIds.size() > 1)
+        {
+            // The selected clips go together, as one undo step.
+            const auto ids = selectedClipIds;
+            session.beginEditGesture ("Delete clips");
+            for (const auto& id : ids)
+                if (const auto [t, c] = arrangementClipIndex (id); t >= 0) { report (session.removeClip (t, c)); refresh(); }
+            session.endEditGesture();
+            selectedClipIds.clear(); selectedClip = -1; refresh(); return;
+        }
         if (selectedTrack >= 0 && selectedClip >= 0) { report (session.removeClip (selectedTrack, selectedClip)); selectedClip = -1; refresh(); }
+    }
+    // Arrangement clips selected together, as in the reference: Shift-click takes in the clips between
+    // the selection and the one clicked, and Cmd-click (Ctrl elsewhere) adds or removes one. It holds
+    // the selected clip too while more than one is selected, and is empty otherwise.
+    juce::StringArray selectedClipIds;
+    bool isClipSelected (const juce::String& id) const { return selectedClipIds.contains (id); }
+    std::pair<int, int> arrangementClipIndex (const juce::String& id) const
+    {
+        for (int t = 0; t < (int) state.tracks.size(); ++t)
+            for (int c = 0; c < (int) state.tracks[(size_t) t].clips.size(); ++c)
+                if (state.tracks[(size_t) t].clips[(size_t) c].id == id) return { t, c };
+        return { -1, -1 };
+    }
+    // The time and tracks a group of clips covers.
+    struct ClipSpan { double start = 0, end = 0; int first = -1, last = -1; };
+    ClipSpan clipSpan (const juce::StringArray& ids) const
+    {
+        ClipSpan span;
+        for (const auto& id : ids)
+            if (const auto [t, c] = arrangementClipIndex (id); t >= 0)
+            {
+                const auto& clip = state.tracks[(size_t) t].clips[(size_t) c];
+                if (span.first < 0) span = { clip.start, clip.start + clip.length, t, t };
+                span = { juce::jmin (span.start, clip.start), juce::jmax (span.end, clip.start + clip.length), juce::jmin (span.first, t), juce::jmax (span.last, t) };
+            }
+        return span;
+    }
+    // Copy and Cut keep exactly the selected clips, in their places across the tracks they span, to
+    // paste as a time selection does; Duplicate repeats them after the group, the copies selected.
+    void clipGroupCommand (char code)
+    {
+        const auto span = clipSpan (selectedClipIds);
+        if (span.first < 0) return;
+        if (code == 'C' || code == 'X')
+        {
+            juce::StringArray tracks;
+            for (int t = span.first; t <= span.last; ++t) tracks.add (state.tracks[(size_t) t].id);
+            const auto result = session.copyRange (tracks, span.start, span.end, code == 'X', selectedClipIds);
+            report (result, code == 'X' ? "Cut the clips." : "Copied the clips.");
+            if (result.wasOk() && code == 'X') { selectedClipIds.clear(); selectedClip = -1; }
+            refresh(); return;
+        }
+        juce::StringArray copies;
+        session.beginEditGesture ("Duplicate clips");
+        for (const auto& id : selectedClipIds)
+            if (const auto [t, c] = arrangementClipIndex (id); t >= 0)
+            {
+                juce::String copy;
+                report (session.copyClipTo (id, state.tracks[(size_t) t].id, state.tracks[(size_t) t].clips[(size_t) c].start + span.end - span.start, copy));
+                if (copy.isNotEmpty()) copies.add (copy);
+            }
+        session.endEditGesture(); refresh();
+        if (! copies.isEmpty()) { selectArrangementClip (copies[0]); selectedClipIds = copies.size() > 1 ? copies : juce::StringArray(); canvas.repaint(); }
     }
     void resetView()
     {
@@ -13175,6 +13346,62 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check ((int) state.tracks.size() == lane, "one undo removes the track");
             setGrid ({});
             showSessionView(); check (! gridReadout.isVisible(), "the Session View does not show it"); showArrangementView();
+        }
+        {
+            // Selecting several clips: Shift-click takes in the clips between, Cmd/Ctrl-click leaves
+            // one out; the group drags, duplicates, deletes and copies together; a copying drag
+            // leaves a copy behind.
+            session.stop(); showArrangementView(); setGrid ({}); viewStart = 0; pixelsPerSecond = 40; updateScroll(); refresh();
+            const auto tracksBefore = state.tracks.size();
+            check (session.addMidiTrack ("Group").wasOk(), "a track of clips"); refresh();
+            int t = -1;
+            for (int i = 0; i < (int) state.tracks.size(); ++i) if (state.tracks[(size_t) i].name == "Group") t = i;
+            for (const double beat : { 0.0, 4.0, 8.0 }) check (session.addMidiClip (state.tracks[(size_t) t].id, beat, 2).wasOk(), "a two-beat clip");
+            refresh();
+            const auto idAt = [&] (double beat) { for (const auto& c : state.tracks[(size_t) t].clips) if (std::abs (c.startBeat - beat) < 1e-6) return c.id; return juce::String(); };
+            const auto a = idAt (0), b = idAt (4), c = idAt (8);
+            const auto beatOf = [&] (const juce::String& id) { const auto [ct, cc] = arrangementClipIndex (id); return ct >= 0 ? state.tracks[(size_t) ct].clips[(size_t) cc].startBeat : -1.0; };
+            const auto now = juce::Time::getCurrentTime();
+            const auto pointOf = [&] (const juce::String& id) { const auto [ct, cc] = arrangementClipIndex (id); return canvas.clipBounds (state.tracks[(size_t) ct].clips[(size_t) cc], ct).getCentre(); };
+            const auto event = [&] (juce::Point<float> at, juce::Point<float> down, int modifiers, bool dragged)
+            { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers), 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, down, now, 1, dragged); };
+            const auto click = [&] (const juce::String& id, int modifiers) { const auto at = pointOf (id); canvas.mouseDown (event (at, at, modifiers, false)); canvas.mouseUp (event (at, at, modifiers, false)); refresh(); };
+            const auto drag = [&] (const juce::String& id, double beats, int modifiers)
+            {
+                const auto from = pointOf (id), to = from + juce::Point<float> ((float) ((secondsAt (beatOf (id) + beats) - secondsAt (beatOf (id))) * pixelsPerSecond), 0);
+                canvas.mouseDown (event (from, from, modifiers, false)); canvas.mouseDrag (event ((from + to) / 2, from, modifiers, true));
+                canvas.mouseDrag (event (to, from, modifiers, true)); canvas.mouseUp (event (to, from, modifiers, true)); refresh();
+            };
+           #if JUCE_MAC
+            const int adds = juce::ModifierKeys::commandModifier, copies = juce::ModifierKeys::altModifier;
+           #else
+            const int adds = juce::ModifierKeys::ctrlModifier, copies = juce::ModifierKeys::ctrlModifier;
+           #endif
+            click (a, 0);
+            check (selectedClipIds.isEmpty() && currentTrack() != nullptr && currentTrack()->clips[(size_t) selectedClip].id == a, "a click selects one clip");
+            click (c, juce::ModifierKeys::shiftModifier);
+            check (selectedClipIds.size() == 3 && isClipSelected (b), "Shift-clicking the third takes in the clip between");
+            click (b, adds);
+            check (selectedClipIds.size() == 2 && ! isClipSelected (b) && isClipSelected (a) && isClipSelected (c), "Cmd/Ctrl-clicking a selected clip leaves it out");
+            drag (c, 4, 0);
+            check (std::abs (beatOf (a) - 4) < 1e-6 && std::abs (beatOf (c) - 12) < 1e-6 && std::abs (beatOf (b) - 4) < 1e-6 && selectedClipIds.size() == 2,
+                   "dragging one of the group moves both four beats, the clip left out staying");
+            check (handleKey (commandKey ('D')) && state.tracks[(size_t) t].clips.size() == 5 && selectedClipIds.size() == 2 && ! isClipSelected (a)
+                       && std::abs (beatOf (selectedClipIds[0]) + beatOf (selectedClipIds[1]) - (14 + 22)) < 1e-6,
+                   "Cmd/Ctrl+D repeats the group after itself, selecting the copies");
+            check (handleKey (juce::KeyPress (juce::KeyPress::deleteKey)) && state.tracks[(size_t) t].clips.size() == 3 && selectedClipIds.isEmpty(), "Delete removes the group");
+            click (b, 0);
+            drag (b, 12, copies);
+            check (state.tracks[(size_t) t].clips.size() == 4 && std::abs (beatOf (b) - 16) < 1e-6 && idAt (4).isNotEmpty() && idAt (4) != b,
+                   "a copying drag moves the clip and leaves a copy where it was");
+            click (a, 0); click (c, adds);
+            check (selectedClipIds.size() == 2 && handleKey (commandKey ('C')) && session.hasRangeClipboard(), "Cmd/Ctrl+C copies the group");
+            session.setInsertMarker (secondsAt (24)); refresh();
+            check (handleKey (commandKey ('V')) && state.tracks[(size_t) t].clips.size() == 6 && idAt (24).isNotEmpty() && idAt (32).isNotEmpty() && idAt (28).isEmpty(),
+                   "and Cmd/Ctrl+V pastes just the two clips at the insert marker, in their places");
+            int steps = 0;
+            while (state.tracks.size() > tracksBefore && steps < 20) { session.undo(); refresh(); ++steps; }
+            check (state.tracks.size() == tracksBefore && steps == 9, "nine undo steps remove it all: one each for the group's move, duplicate, delete, copying drag and paste");
         }
        #if JUCE_MAC
         {
