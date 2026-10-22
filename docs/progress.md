@@ -1845,3 +1845,14 @@ Engine and UI areas.
 
 - **The command.** Create > Consolidate Time to New Scene turns the Arrangement's time selection into a scene with one looping clip per track, made as Consolidate makes them, leaving the Arrangement as it was. It is one undo step.
 - **Measured.** `tests/SceneCaptureTests.cpp` and the UI suite.
+
+## Loop recording into take lanes — 2026-10-22
+
+Engine area.
+
+- **Passes.** Recording round the Arrangement loop now gives each pass, audio or MIDI, its own take lane, the last pass ending on top in the main lane, as the reference's Comping chapter describes.
+- **A loss fixed.** Before, the engine referenced only the first pass and left the rest on disk unused.
+- **Short loops.** A Tracktion patch allows loops shorter than its two-second minimum.
+- **Measured.** `tests/TakeLanesTests.cpp`.
+
+See [the contract](research/take-lanes-contract.md#loop-recording-2026-10-22).

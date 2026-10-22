@@ -37,5 +37,5 @@ The UI suite checks the buttons' placement and toggling.
 - Pre-roll and count-in tied to the punch point (recording starts where playback starts).
 - The "only while recording" metronome sounding only after the punch-in point.
 - Session View punching.
-- Take lanes for loop recording (REC-010).
+- Splitting a loop recording into passes while a punch switch is on (without punching, loop recordings make a take lane per pass; see REC-010).
 - Measured comparison with the reference.

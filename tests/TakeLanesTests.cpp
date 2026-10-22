@@ -129,6 +129,69 @@ int runTakeLanesTests (const juce::File& artifacts)
         const auto after = s.snapshot().tracks[0];
         check (after.takeLanes.size() == 2 && after.takeLanes[0].clips.size() == 2 && after.takeLanes[1].clips[0].file == before.takeLanes[1].clips[0].file
                && after.takeLanes[1].clips[0].file.existsAsFile() && s.missingMedia().isEmpty(), "the lanes reopen with their audio");
+        // Loop recording, as the reference's: each pass round a loop becomes a take lane of its own,
+        // and the last pass recorded ends up on top in the main lane. A one-second loop, shorter than
+        // the engine's own minimum, records 3.5 passes of audio into one file, cut into passes.
+        {
+            ok (s.setTrackInput (0, s.inputNames()[0]), "route the input again"); ok (s.setTrackArmed (0, true), "and arm");
+            pumpSyntheticTestDevice (s, 8);
+            const auto lanesBefore = track().takeLanes.size();
+            s.setLoop (true, 8, 9);
+            take (s, 8, 3.5);
+            const auto t = track();
+            // The two lanes free after the loop's start are reused, as the reference reuses them, and two more made.
+            std::vector<Session::ClipInfo> passes;
+            for (const auto& lane : t.takeLanes) for (const auto& c : lane.clips) if (c.start >= 8 - 1e-6) passes.push_back (c);
+            std::sort (passes.begin(), passes.end(), [] (const auto& a, const auto& b) { return a.sourceOffset < b.sourceOffset; });
+            check (t.takeLanes.size() == lanesBefore + 2 && passes.size() == 4, "3.5 passes fill four take lanes, the two free after the loop's start reused");
+            bool laidOut = passes.size() == 4;
+            for (size_t k = 0; laidOut && k < 4; ++k)
+                laidOut = near (passes[k].start, 8) && near (passes[k].sourceOffset - passes[0].sourceOffset, (double) k) && passes[k].file == passes[0].file
+                       && (k < 3 ? near (passes[k].length, 1) : passes[k].length > .4 && passes[k].length < .6);
+            check (laidOut, "each lane holds its pass at the loop, one second each and the last a half, in order through one file");
+            std::vector<Session::ClipInfo> main;
+            for (const auto& c : t.clips) if (c.start >= 8 - 1e-6 && c.start < 9) main.push_back (c);
+            main = sorted (main);
+            check (main.size() == 2 && near (main[0].start, 8) && near (main[0].sourceOffset, passes[3].sourceOffset) && near (main[0].length, passes[3].length)
+                       && near (main[1].start, 8 + passes[3].length) && near (main[1].sourceOffset, passes[2].sourceOffset + passes[3].length) && near (main[1].start + main[1].length, 9),
+                   "the main lane plays the last pass, and the third after it");
+            s.undo();
+            check (track().takeLanes.size() == lanesBefore && track().takeLanes[0].clips.size() == 2, "one undo removes every pass");
+            s.redo();
+            ok (s.setTrackArmed (0, false), "disarm the audio track");
+        }
+        // MIDI loop recording through the computer keyboard: a note in each pass.
+        {
+            ok (s.addMidiTrack ("Keys"), "a MIDI track");
+            int keys = -1;
+            for (int i = 0; i < (int) s.snapshot().tracks.size(); ++i) if (s.snapshot().tracks[(size_t) i].name == "Keys") keys = i;
+            ok (s.setComputerKeyboardEnabled (true), "the computer keyboard on");
+            ok (s.setTrackInput (keys, Session::computerKeyboardName), "Keys takes it"); ok (s.setTrackArmed (keys, true), "arm Keys");
+            pumpSyntheticTestDevice (s, 8);
+            s.setLoop (true, 12, 14);
+            s.seek (12); ok (s.record(), "record round a two-second loop");
+            for (const int pitch : { 60, 62, 64 })
+            {
+                pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+                ok (s.computerKeyboardNote (pitch, .8f, true), "play a note");
+                pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+                ok (s.computerKeyboardNote (pitch, 0, false), "release it");
+                if (pitch != 64) pumpSyntheticTestDevice (s, blocksPerSecond * 3 / 2);
+            }
+            pumpSyntheticTestDevice (s, blocksPerSecond / 2);
+            s.stop(); pumpSyntheticTestDevice (s, 8);
+            const auto k = s.snapshot().tracks[(size_t) keys];
+            bool lanes = k.takeLanes.size() == 3;
+            const int pitches[] { 60, 62, 64 };
+            for (size_t l = 0; lanes && l < 3; ++l)
+                lanes = k.takeLanes[l].clips.size() == 1 && near (k.takeLanes[l].clips[0].start, 12) && k.takeLanes[l].clips[0].notes.size() == 1
+                     && k.takeLanes[l].clips[0].notes[0].pitch == pitches[l] && std::abs (k.takeLanes[l].clips[0].notes[0].startBeat - .5) < .1;
+            check (lanes, "three MIDI passes make three lanes, each holding its own note half a beat in");
+            int heard = 0; bool onlyLast = true;
+            for (const auto& c : k.clips) for (const auto& n : c.notes) { ++heard; onlyLast = onlyLast && n.pitch == 64; }
+            check (heard == 1 && onlyLast, "the main lane plays the last pass, its note replacing the earlier ones under it");
+            ok (s.setTrackArmed (keys, false), "disarm Keys");
+        }
         std::cout << "Take lanes passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL take lanes: " << e.what() << std::endl; return 1; }

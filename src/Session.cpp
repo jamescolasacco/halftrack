@@ -3566,6 +3566,71 @@ struct Session::Impl
         if (! target.isValid()) target = newTakeLane (t);
         target.appendChild (freshClipCopy (recorded.state), &edit->getUndoManager());
     }
+    // The loop being recorded over, while it is.
+    std::optional<te::TimeRange> loopRecording;
+    // A loop recording's continuous take, from where it began in the loop, split into its passes: the
+    // first to the loop's end, then each pass round the loop, the last perhaps partial. Each is a
+    // clip of the same media at the loop, its content starting where that pass began; a MIDI pass
+    // keeps just its own notes and controller events. The recorded clip becomes the first.
+    std::vector<te::Clip*> splitLoopPasses (te::AudioTrack& t, te::Clip& recorded, te::TimeRange loop)
+    {
+        const auto start = recorded.getPosition().getStart(), loopStart = loop.getStart();
+        const auto total = recorded.getPosition().getLength(), length = loop.getLength();
+        if (length <= te::TimeDuration::fromSeconds (.001) || start < loopStart - te::TimeDuration::fromSeconds (1e-6) || start >= loop.getEnd()) return { &recorded };
+        const auto first = std::min (total, loop.getEnd() - start);
+        auto* undo = &edit->getUndoManager();
+        auto& tempo = edit->tempoSequence;
+        auto* midi = dynamic_cast<te::MidiClip*> (&recorded);
+        const auto source = recorded.getPosition().getOffset();
+        // Each pass's stretch of the take, from its start.
+        struct Pass { te::TimePosition at; te::TimeDuration from, length; };
+        std::vector<Pass> layout { { start, {}, first } };
+        for (auto from = first; total - from > te::TimeDuration::fromSeconds (.01); from = from + length)
+            layout.push_back ({ loopStart, from, std::min (length, total - from) });
+        const auto state = recorded.state.createCopy();
+        std::vector<te::Clip*> passes;
+        for (size_t i = 0; i < layout.size(); ++i)
+        {
+            const auto& pass = layout[i];
+            te::Clip* clip = &recorded;
+            if (i > 0)
+            {
+                auto copy = freshClipCopy (state);
+                copy.setProperty (te::IDs::start, pass.at.inSeconds(), nullptr);
+                t.insertClipWithState (copy);
+                clip = t.findClipForID (te::EditItemID::fromVar (copy[te::IDs::id]));
+                if (clip == nullptr) break;
+            }
+            if (midi == nullptr)
+            {
+                clip->setPosition ({ { pass.at, pass.length }, source + pass.from });
+            }
+            else if (auto* m = dynamic_cast<te::MidiClip*> (clip))
+            {
+                // The pass's notes and events, moved to its start; the rest are another pass's.
+                const auto takeStart = (tempo.toBeats (start + pass.from) - tempo.toBeats (start)).inBeats();
+                const auto beats = (tempo.toBeats (start + pass.from + pass.length) - tempo.toBeats (start + pass.from)).inBeats();
+                auto& sequence = m->getSequence();
+                const auto notes = sequence.getNotes();
+                for (auto* note : notes)
+                {
+                    const auto at = note->getStartBeat().inBeats() - takeStart;
+                    if (at < -1e-9 || at >= beats - 1e-9) { sequence.removeNote (*note, undo); continue; }
+                    note->setStartAndLength (te::BeatPosition::fromBeats (std::max (0.0, at)), te::BeatDuration::fromBeats (std::min (note->getLengthBeats().inBeats(), beats - std::max (0.0, at))), undo);
+                }
+                const auto events = sequence.getControllerEvents();
+                for (auto* event : events)
+                {
+                    const auto at = event->getBeatPosition().inBeats() - takeStart;
+                    if (at < -1e-9 || at >= beats - 1e-9) sequence.removeControllerEvent (*event, undo);
+                    else event->setBeatPosition (te::BeatPosition::fromBeats (std::max (0.0, at)), undo);
+                }
+                m->setPosition ({ { pass.at, tempo.toTime (tempo.toBeats (pass.at) + te::BeatDuration::fromBeats (beats)) }, {} });
+            }
+            passes.push_back (clip);
+        }
+        return passes;
+    }
     // An external plug-in parameter's lane, in 0-1 values; one undo step unless written internally.
     Result setExternalAutomation (te::ExternalPlugin& plugin, int parameter, const AutomationLane& lane)
     {
@@ -10323,7 +10388,13 @@ void Session::stop()
     else impl->performanceStart.reset();
     te::Edit::UndoTransactionInhibitor stopping (*impl->edit);
     impl->cancelLaunches();
+    // A loop recording ends as one continuous take, split into its passes below: switching the loop
+    // off ends the engine's recording unlooped.
+    const auto loopRecording = recording ? impl->loopRecording : std::nullopt;
+    impl->loopRecording.reset();
+    if (loopRecording) impl->edit->getTransport().looping.setValue (false, nullptr);
     impl->edit->getTransport().stop (false, false);
+    if (loopRecording) impl->edit->getTransport().looping.setValue (true, nullptr);
     if (recording)
     {
         const auto grid=recordGrid(snapshot().recordQuantisation);
@@ -10356,8 +10427,16 @@ void Session::stop()
                 std::vector<te::Clip*> recorded;
                 for (auto* clip : track->getClips())
                     if (! impl->clipsBeforeRecording.count (clip->itemID.toString()) && clip->getClipSlot() == nullptr) recorded.push_back (clip);
+                if (loopRecording)
+                {
+                    std::vector<te::Clip*> passes;
+                    for (auto* clip : recorded) for (auto* pass : impl->splitLoopPasses (*track, *clip, *loopRecording)) passes.push_back (pass);
+                    recorded = passes;
+                }
                 for (auto* clip : recorded) impl->keepTake (*track, *clip);
-                for (auto* clip : recorded) impl->replaceUnder (*track, *clip, impl->clipsBeforeRecording);
+                // In order, so the last pass is left on top in the main lane, as the reference copies it there.
+                auto earlier = impl->clipsBeforeRecording;
+                for (auto* clip : recorded) { impl->replaceUnder (*track, *clip, earlier); earlier.insert (clip->itemID.toString()); }
             }
         impl->changed();
     }
@@ -10407,10 +10486,17 @@ Result Session::record()
         if(auto* midi=dynamic_cast<te::MidiInputDevice*>(&input->getInputDevice())) midi->quantisation.setType("(none)");
     impl->edit->setClickTrackRange ({});
     // Recording starts from the insert marker unless the transport is already playing.
-    const bool alreadyPlaying = impl->edit->getTransport().isPlaying();
-    if (! alreadyPlaying) impl->edit->getTransport().setPosition (impl->edit->getTransport().startPosition);
+    auto& transport = impl->edit->getTransport();
+    const bool alreadyPlaying = transport.isPlaying();
+    if (! alreadyPlaying) transport.setPosition (transport.startPosition);
+    // Loop recording, as the reference's: each pass becomes a take of its own at Stop, which ends the
+    // engine's recording as one continuous take and splits it. Started from a stop, the engine
+    // begins at the loop's start.
+    impl->loopRecording.reset();
+    if (transport.looping && armed && ! impl->punchIn() && ! impl->punchOut()) impl->loopRecording = transport.getLoopRange();
     // With Automation Arm on, or Session clips playing, recording runs with no track armed.
-    impl->edit->getTransport().record (false, ! armed);
+    transport.record (false, ! armed);
+    if (! transport.isRecording()) impl->loopRecording.reset();
     if (! impl->edit->getTransport().isRecording()) return Result::fail ("Recording could not start. Check the selected input and device settings.");
     impl->startPerformance (alreadyPlaying ? impl->playedTime() : impl->edit->getTransport().startPosition.get());
     impl->changed(); return Result::ok();

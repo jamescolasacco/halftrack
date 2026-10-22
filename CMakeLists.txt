@@ -95,6 +95,8 @@ include(cmake/PatchMidiPorts.cmake)
 halftrack_patch_midi_ports("${tracktion_SOURCE_DIR}")
 include(cmake/PatchInputPlacement.cmake)
 halftrack_patch_input_placement("${tracktion_SOURCE_DIR}")
+include(cmake/PatchLoopRecordLength.cmake)
+halftrack_patch_loop_record_length("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"
