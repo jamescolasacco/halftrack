@@ -44,4 +44,47 @@ Evidence (`tests/GroupTests.cpp`):
 
 The UI suite checks the Session columns and Arrangement header lanes of a nested group, folding the outer group, and ungrouping the selected inner group.
 
-Not implemented: group sends, moving tracks between groups, presets and racks on group or Main chains, sidechains into group or Main plug-ins, per-clip launch modes through group slots, and any comparison with reference group summing.
+Not implemented: group sends, presets and racks on group or Main chains, sidechains into group or Main plug-ins, per-clip launch modes through group slots, and any comparison with reference group summing.
+
+## Moving tracks (2026-10-23)
+
+This follows a static reading of the reference's code: its track move (0x10242f8d4), its drop target (0x1032c50ac) and its placement check (0x1024319a8). The grouping rule comes from Group Tracks' enable check (0x10242a09c).
+
+- **Moving.** `moveTracks(ids, groupId, beforeId)` moves tracks and groups into a group, or to the top level when `groupId` is empty.
+  - They go before `beforeId`, a track or group in that place, or at its end. At the top level the end is before the returns.
+  - Groups move with their contents.
+  - Dropping tracks where they already are changes nothing and makes no undo step. Otherwise the move is one undo step.
+- **Refusals.** These are refused:
+  - return tracks, which stay among the returns;
+  - a group moving into itself or into a group inside it;
+  - a move that would leave a group empty;
+  - unknown tracks or groups;
+  - a place outside the chosen group.
+- **Empty groups.** Grouping is refused when it would empty a group other than the one the new group goes into, as the reference's enable rule has it. For moves, the reference has nothing that deletes or refuses an emptied group: neither its move nor the group's transaction handler (0x10219e5e4) does (medium), so it seems to keep the empty group. Halftrack refuses such moves until its views can show an empty group (see [open questions](../open-questions.md)).
+- **Dragging headers.** In the Arrangement, dragging a track's header by its name or background moves the track, or every selected track if it is selected. A group's header moves the group. They land where the reference's drop target puts them:
+  - over the upper half of a track or group, before it, in its group;
+  - over the lower half of a group's header, folded or not, into the group, first;
+  - over the lower half of a track, after it, in its group;
+  - below every lane, after the last track.
+
+  A track's automation and take lanes count as the track. Return lanes are no place for tracks, and a dragged group has no place inside itself; neither shows a line. Elsewhere an orange line across the headers shows where the tracks would go.
+- **Correction.** Pressing the first 18 pixels of a track's name toggled its fold, because the header took the name's coordinates for its own. Only the header's fold corner folds now.
+
+Evidence (`tests/GroupTests.cpp`):
+- a track moved into a group before another plays the same mix;
+- a track moved out lands at the top level after the groups, and one undo puts it back;
+- dropping a track where it is changes nothing and makes no undo step;
+- a group cannot move into itself or into a group inside it;
+- unknown ids, a place outside the group, and grouping or moving that would empty a group are refused.
+
+The UI suite drags headers:
+- Pressing a track's name starts a drag without folding the track.
+- Over the lower half of a nested group's header the drop goes into that group first, and the line is drawn there.
+- Dropping moves the track; dropping below every lane moves it to the end, and two undo steps put it back.
+- A group's header shows no drop over its own lower half, and dropping it after a track moves it with its contents.
+
+Not reproduced:
+- **Choosing the nesting level.** At a group's end the reference picks the level from the pointer's horizontal position, one level per 5 pixels from the header's left edge (0x103834258; pixel layout medium). Halftrack always takes the innermost group, which is the reference's choice when no level is picked.
+- **After a move.** Afterwards the reference reveals the place, unfolding folded groups (0x10242a5fc, medium).
+- **Audio To.** Moving a track into or out of a group switches its Audio To between Main and Group in the reference, leaving other destinations (0x1024bdbf8). Halftrack's grouped tracks always play into their group.
+- **Other gestures.** Copying by drag, reordering returns by drag, dragging Session column headers and scrolling during a drag.

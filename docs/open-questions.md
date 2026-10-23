@@ -84,7 +84,9 @@ Default: copy one unlooped, ungrouped, single-take Arrangement MIDI clip at norm
 
 - Moving a MIDI clip to another track uses that track's existing instrument and processing. It does not move or duplicate the source track's devices. The current project has one constant tempo; clip movement retains duration and source offset. Tempo-map-aware relocation remains separate future work.
 
-- Track ordering applies to the single shared top-level list, including return tracks. Returns can appear before their sources because routing uses bus identity. Context menus offer up/down in Arrangement and left/right in Session; the Track menu offers earlier/later in either view. Nested groups and track-header drag gestures remain future work.
+- Track ordering applies to the single shared top-level list, including return tracks. Returns can appear before their sources because routing uses bus identity. Context menus offer up/down in Arrangement and left/right in Session; the Track menu offers earlier/later in either view. Arrangement headers drag tracks and groups into and out of groups ([moving tracks](research/groups-contract.md#moving-tracks-2026-10-23)). Return reordering by drag and Session column-header drags remain future work.
+
+- **Empty groups after a move.** A static reading found nothing in the reference that deletes an emptied group or refuses the move (medium), so it seems to keep the empty group. Only its Group Tracks rule refuses to empty another group. Default: Halftrack refuses moves that would leave a group empty, so no group is ever empty, until its views can show one.
 
 - Whole-track Duplicate copies ordinary unfrozen top-level audio/MIDI tracks immediately after the source, named with a “copy” suffix. It keeps mixer mute/solo, device state and sends to existing returns, shares immutable audio media, and starts without recording inputs or active Session launches. Return/group/frozen duplication is rejected until its bus/group/freeze behavior is implemented.
 

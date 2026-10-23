@@ -193,6 +193,30 @@ int runGroupTests (const juce::File& artifacts)
                    "ungrouping moves its tracks and groups into the group around it");
             check (difference (render (n, mix), plain) < 1e-6, "and the mix is the same");
             n.undo(); check (n.snapshot().groups.size() == 3, "undo restores the outer group");
+            // Moving tracks into and out of groups, as dragging headers does.
+            {
+                Session pair (false);
+                const auto x = pair.snapshot().tracks[0].id, y = pair.snapshot().tracks[1].id;
+                juce::String first, second, both;
+                ok (pair.groupTracks ({ x }, first), "group x alone"); ok (pair.groupTracks ({ y }, second), "group y alone");
+                check (pair.groupTracks ({ x, y }, both).failed(), "grouping that would empty another group is refused, as in the reference");
+                check (pair.moveTracks ({ y }, {}, {}).failed(), "moving a group's only track out is refused, leaving no group empty");
+            }
+            ok (n.moveTracks ({ ids[2] }, outer, ids[1]), "move c into the outer group, before b");
+            const auto moved = n.snapshot();
+            check (moved.tracks[1].id == ids[2] && moved.tracks[1].groupId == outer && moved.tracks[2].id == ids[1] && moved.tracks[2].groupId == outer,
+                   "c now plays in the outer group, before b");
+            check (difference (render (n, mix), plain) < 1e-6, "and the mix is the same");
+            check (n.moveTracks ({ top }, outer, {}).failed() && n.moveTracks ({ outer }, inner, {}).failed(), "a group cannot move into itself or a group inside it");
+            ok (n.moveTracks ({ ids[1] }, {}, {}), "move b out to the top level");
+            const auto out = n.snapshot();
+            check (out.tracks.back().id == ids[1] && out.tracks.back().groupId.isEmpty(), "b plays at the top level, after the groups");
+            n.undo(); check (n.snapshot().tracks[2].id == ids[1] && n.snapshot().tracks[2].groupId == outer, "one undo puts it back");
+            check (n.moveTracks ({ "missing" }, {}, {}).failed() && n.moveTracks ({ ids[1] }, "missing", {}).failed() && n.moveTracks ({ ids[1] }, outer, ids[0]).failed(),
+                   "unknown tracks, unknown groups and a place outside the group are refused");
+            ok (n.moveTracks ({ ids[2] }, outer, ids[2]), "drop c where it is, before itself");
+            check (n.snapshot().tracks[1].id == ids[2] && n.snapshot().tracks[1].groupId == outer, "c stays put");
+            n.undo(); check (n.snapshot().tracks[2].id == ids[2] && n.snapshot().tracks[2].groupId == top, "which made no undo step: one undo takes c back out of the outer group");
         }
         std::cout << "Groups passed: " << root.getFullPathName() << std::endl; return 0;
     }

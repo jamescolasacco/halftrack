@@ -1236,6 +1236,75 @@ private:
         for (const auto* g = groupInfo (id); g != nullptr; g = groupInfo (g->parentId)) if (g->parentId == outer) return true;
         return false;
     }
+    // Dragging Arrangement headers, as in the reference: the tracks or group moving, and where they
+    // would go: into a group (empty for the top level), before a track or group there.
+    struct TrackDrop { juce::String groupId, beforeId; int lineY = -1; };
+    juce::StringArray draggedTracks;
+    std::optional<TrackDrop> trackDrop;
+    // Where dragged headers would land, as the reference places them. Over the upper half of a track
+    // or group they go before it; over the lower half of a group's header, into the group first,
+    // folded or not; over the lower half of a track, after it in its group. Below every lane they go
+    // after the last track. A track's automation and take lanes count as the track; returns are no
+    // place for tracks.
+    std::optional<TrackDrop> trackDropAt (int y) const
+    {
+        // A lane's track or group, and the group it is in.
+        const auto itemOf = [this] (const Lane& lane) -> std::pair<juce::String, juce::String>
+        {
+            if (lane.group) { const auto& g = state.groups[(size_t) lane.index]; return { g.id, g.parentId }; }
+            const auto& t = state.tracks[(size_t) lane.index]; return { t.id, t.groupId };
+        };
+        const auto item = [] (const Lane& lane) { return lane.automation < 0 && lane.take < 0; };
+        const auto returnLane = [this] (const Lane& lane) { return ! lane.group && state.tracks[(size_t) lane.index].isReturn; };
+        const auto within = [this] (const juce::String& group, const juce::String& outer) { return outer.isEmpty() || group == outer || groupInside (group, outer); };
+        int returnsY = lanesHeight;
+        for (const auto& lane : lanes) if (item (lane) && returnLane (lane)) { returnsY = lane.y; break; }
+        for (size_t i = 0; i < lanes.size(); ++i)
+        {
+            const auto& lane = lanes[i];
+            if (! item (lane) || lane.height <= 0) continue;
+            auto next = i + 1;
+            while (next < lanes.size() && ! item (lanes[next])) ++next;
+            const int bottom = next < lanes.size() ? lanes[next].y : lanesHeight;
+            if (y >= bottom) continue;
+            if (y < lane.y || returnLane (lane)) return std::nullopt;
+            const auto [id, parent] = itemOf (lane);
+            if (y < (lane.y + bottom) / 2) return TrackDrop { parent, id, lane.y };
+            if (lane.group)
+            {
+                const auto first = next < lanes.size() && itemOf (lanes[next]).second == id ? itemOf (lanes[next]).first : juce::String();
+                return TrackDrop { id, first, bottom };
+            }
+            // After a track: before the next item in its group, or at the group's end.
+            for (auto k = next; k < lanes.size(); ++k)
+            {
+                if (! item (lanes[k])) continue;
+                const auto [nextId, nextParent] = itemOf (lanes[k]);
+                if (nextParent == parent) return TrackDrop { parent, nextId, bottom };
+                if (! within (nextParent, parent)) break;
+            }
+            return TrackDrop { parent, {}, bottom };
+        }
+        return TrackDrop { {}, {}, returnsY };
+    }
+    void dragTracks (const juce::String& id, int y)
+    {
+        if (draggedTracks.isEmpty())
+        {
+            const auto selected = selectedTrackIds();
+            draggedTracks = selected.contains (id) ? selected : juce::StringArray { id };
+        }
+        // Nowhere inside a group being dragged.
+        auto drop = trackDropAt (y);
+        for (const auto& dragged : draggedTracks)
+            if (drop && (drop->groupId == dragged || groupInside (drop->groupId, dragged))) drop.reset();
+        trackDrop = drop; canvas.repaint();
+    }
+    void dropTracks()
+    {
+        if (trackDrop && ! draggedTracks.isEmpty()) report (session.moveTracks (draggedTracks, trackDrop->groupId, trackDrop->beforeId));
+        draggedTracks.clear(); trackDrop.reset(); refresh(); canvas.repaint();
+    }
     void buildLanes()
     {
         lanes.clear(); int y = 0; std::vector<int> open;
@@ -2122,11 +2191,20 @@ private:
         void mouseMove (const juce::MouseEvent& e) override { setMouseCursor (onSplitLine (e.getPosition()) ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor); }
         void mouseDrag (const juce::MouseEvent& e) override
         {
-            if (heightAtDown <= 0) return;
+            if (heightAtDown <= 0)
+            {
+                // Dragging the header by its name or background moves the track, or the selected tracks.
+                if (dragArmed && e.getDistanceFromDragStart() > 6) { headerDrag = true; owner.dragTracks (trackId, e.getEventRelativeTo (&owner.canvas).getPosition().y); }
+                return;
+            }
             const auto pixels = heightAtDown + e.getDistanceFromDragStartY();
             owner.setTrackHeights (e.mods.isAltDown() ? owner.allArrangementTracks() : juce::StringArray { trackId }, pixels);
         }
-        void mouseUp (const juce::MouseEvent&) override { heightAtDown = 0; }
+        void mouseUp (const juce::MouseEvent&) override
+        {
+            heightAtDown = 0; dragArmed = false;
+            if (std::exchange (headerDrag, false)) owner.dropTracks();
+        }
         // Double-clicking a mixer control resets it, and the controls linked to it (see Session::resetTrackControl).
         void mouseDoubleClick (const juce::MouseEvent& e) override
         {
@@ -2142,7 +2220,8 @@ private:
         {
             heightAtDown = onSplitLine (e.getPosition()) && ! folded && ! e.mods.isPopupMenu() ? getHeight() : 0;
             if (heightAtDown > 0) return;
-            if (! columnLayout && ! e.mods.isPopupMenu() && e.x < 18 && e.y < 22)
+            dragArmed = ! columnLayout && ! returnTrack && ! e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name);
+            if (! columnLayout && ! e.mods.isPopupMenu() && e.originalComponent == this && e.x < 18 && e.y < 22)
             { owner.selectTrack (index); owner.foldTracks (e.mods.isAltDown() ? owner.allArrangementTracks() : juce::StringArray { trackId }, ! folded); return; }
             const auto within = [&e] (juce::Component& c) { return e.originalComponent == &c || c.isParentOf (e.originalComponent); };
             // A control of a selected track keeps the selection, so the other selected tracks move with
@@ -2170,7 +2249,7 @@ private:
         Impl& owner;
         int index;
         int heightAtDown = 0;
-        bool folded = false;
+        bool folded = false, dragArmed = false, headerDrag = false;
         juce::String trackId;
         juce::Colour colour;
         float peakL = 0, peakR = 0;
@@ -2365,8 +2444,19 @@ private:
             // The pan controls' menu switches the group's pan mode, as on tracks.
             const auto within = [&e] (juce::Component& c) { return e.originalComponent == &c || c.isParentOf (e.originalComponent); };
             if (e.mods.isPopupMenu() && (within (pan) || within (leftSplit) || within (rightSplit))) { owner.groupPanModeMenu (groupId, ! splitPan); return; }
+            dragArmed = ! columnLayout && ! e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name);
             // Clicking the group shows its device chain.
             if (! e.mods.isPopupMenu()) owner.selectChain (groupId);
+        }
+        // Dragging the header by its name or background moves the group, with everything in it.
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (dragArmed && e.getDistanceFromDragStart() > 6) { headerDrag = true; owner.dragTracks (groupId, e.getEventRelativeTo (&owner.canvas).getPosition().y); }
+        }
+        void mouseUp (const juce::MouseEvent&) override
+        {
+            dragArmed = false;
+            if (std::exchange (headerDrag, false)) owner.dropTracks();
         }
         void paint (juce::Graphics& g) override
         {
@@ -2410,7 +2500,7 @@ private:
         Session::MixerSections laidOut;
         juce::Label name;
         juce::Slider gain, pan, leftSplit, rightSplit;
-        bool splitPan = false;
+        bool splitPan = false, dragArmed = false, headerDrag = false;
     };
 
     // The header of an automation lane: what it shows, and a button that hides it.
@@ -2611,6 +2701,12 @@ private:
             if (point.x-bounds.getX() <= 6) return 1;
             if (bounds.getRight()-point.x <= 6) return 2;
             return 0;
+        }
+        // Where dragged headers would land, as a line across the headers.
+        void paintOverChildren (juce::Graphics& g) override
+        {
+            if (! owner.trackDrop) return;
+            g.setColour (orange); g.fillRect (timelineWidth(), juce::jlimit (0, juce::jmax (0, getHeight() - 2), owner.trackDrop->lineY - 1), trackWidth, 2);
         }
         void paint (juce::Graphics& g) override
         {
@@ -15929,6 +16025,59 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             for (const auto& lane : lanes) if (lane.group && lane.height > 0) ++shownGroupLanes;
             check (shownGroupLanes == 1 && laneHeight (0) == 0 && laneHeight (1) == 0, "folding the outer group hides the inner group and every track inside");
             check (session.setGroupFolded (group, false).wasOk(), "unfold it"); refresh();
+            {
+                // Dragging headers moves tracks and groups, as in the reference: onto the lower half of a
+                // group's header goes into it, first; below every lane goes after the last track.
+                const auto first = state.tracks[0].id, second = state.tracks[1].id;
+                const auto indexOf = [&] (const juce::String& id) { for (int t = 0; t < (int) state.tracks.size(); ++t) if (state.tracks[(size_t) t].id == id) return t; return -1; };
+                const auto groupLane = [&] (const juce::String& id) { for (const auto& lane : lanes) if (lane.group && state.groups[(size_t) lane.index].id == id) return lane; return Lane {}; };
+                const auto now = juce::Time::getCurrentTime();
+                juce::Component* label = nullptr;
+                const auto event = [&] (int canvasY, bool dragged)
+                {
+                    const auto down = juce::Point<float> (10.0f, 8.0f);
+                    const auto at = dragged ? label->getLocalPoint (&canvas, juce::Point<int> (canvas.timelineWidth() + 40, canvasY)).toFloat() : down;
+                    return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                             label, label, now, down, now, 1, dragged);
+                };
+                // A header's name, under which the drag starts.
+                const auto grab = [&] (int canvasY, const juce::String& name)
+                {
+                    label = canvas.getComponentAt (canvas.timelineWidth() + 30, canvasY);
+                    if (label == nullptr || label->getName() != name) return false;
+                    label->getParentComponent()->mouseDown (event (0, false)); return true;
+                };
+                const auto move = [&] (int canvasY) { label->getParentComponent()->mouseDrag (event (canvasY, true)); };
+                const auto release = [&] (int canvasY) { label->getParentComponent()->mouseUp (event (canvasY, true)); refresh(); };
+                const auto innerLane = groupLane (inner);
+                check (grab (laneY (1) + 10, "Track name") && ! state.tracks[1].folded, "pressing the second track's name starts a drag, without folding the track");
+                move (innerLane.y + innerLane.height * 3 / 4);
+                check (trackDrop && trackDrop->groupId == inner && trackDrop->beforeId == first && trackDrop->lineY == innerLane.y + innerLane.height,
+                       "over the lower half of the inner group's header, it would go into the group, first");
+                const auto shown = canvas.createComponentSnapshot ({ canvas.timelineWidth(), trackDrop->lineY - 1, trackWidth, 2 }, true);
+                check (shown.getPixelAt (trackWidth / 2, 0) == orange.get() && shown.getPixelAt (trackWidth / 2, 1) == orange.get(), "a line across the headers shows where");
+                release (innerLane.y + innerLane.height * 3 / 4);
+                check (! trackDrop && indexOf (second) == 0 && state.tracks[0].groupId == inner && state.tracks[1].groupId == inner,
+                       "dropping it there moves the track into the inner group, before the first");
+                check (grab (laneY (indexOf (second)) + 10, "Track name"), "grab it again");
+                move (lanesHeight + 20);
+                check (trackDrop && trackDrop->groupId.isEmpty() && trackDrop->beforeId.isEmpty() && trackDrop->lineY == lanesHeight, "below every lane it would go after the last track");
+                release (lanesHeight + 20);
+                check (indexOf (second) == 1 && state.tracks[1].groupId.isEmpty() && state.tracks[0].groupId == inner, "dropping it there moves it out of the groups, to the end");
+                session.undo(); session.undo(); refresh();
+                check (state.tracks[0].id == first && state.tracks[0].groupId == inner && state.tracks[1].id == second && state.tracks[1].groupId == group, "two undo steps put it back");
+                // A group's header drags the group, with what is in it, but not into itself.
+                check (grab (groupLane (inner).y + 10, "Group name"), "pressing the inner group's name starts a drag");
+                move (groupLane (inner).y + groupLane (inner).height * 3 / 4);
+                check (! trackDrop, "over its own header's lower half there is nowhere to drop");
+                move (laneY (1) + laneHeight (1) * 3 / 4);
+                check (trackDrop && trackDrop->groupId == group && trackDrop->beforeId.isEmpty(), "over the lower half of the second track it would go after it, at the outer group's end");
+                release (laneY (1) + laneHeight (1) * 3 / 4);
+                check (state.tracks[0].id == second && state.tracks[1].id == first && state.tracks[1].groupId == inner && groupLane (inner).y > laneY (0),
+                       "dropping it there moves the inner group, with its track, after the second track");
+                session.undo(); refresh();
+                check (state.tracks[0].id == first && state.tracks[0].groupId == inner, "one undo puts the group back");
+            }
             showSessionView(); refresh();
             selectChain (inner); ungroupSelectedTrack(); refresh();
             check (state.groups.size() == 1 && state.tracks[0].groupId == group && launcher.columnCount() == 3, "ungrouping the selected inner group returns its track to the outer group");

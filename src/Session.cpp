@@ -3341,6 +3341,43 @@ struct Session::Impl
         if (playTake) queueTrack (*t, clip, boundary);
         changed();
     }
+    // The tracks and groups directly inside a group, or at the top level, in order.
+    juce::Array<te::Track*> siblings (te::FolderTrack* parent) const
+    {
+        juce::Array<te::Track*> result;
+        if (parent != nullptr) result = parent->getAllSubTracks (false);
+        else for (auto* t : te::getAllTracks (*edit)) if (t->getParentTrack() == nullptr) result.add (t);
+        result.removeIf ([] (te::Track* t)
+        { auto* folder = dynamic_cast<te::FolderTrack*> (t); return dynamic_cast<te::AudioTrack*> (t) == nullptr && (folder == nullptr || ! folder->isSubmixFolder()); });
+        return result;
+    }
+    // Tracks and groups by id, in visual order, without those inside another of them.
+    juce::Array<te::Track*> roots (const juce::StringArray& ids) const
+    {
+        std::set<String> wanted (ids.begin(), ids.end());
+        juce::Array<te::Track*> result;
+        for (auto* t : te::getAllTracks (*edit))
+            if (wanted.contains (t->itemID.toString()) && (dynamic_cast<te::AudioTrack*> (t) != nullptr || group (t->itemID.toString()) != nullptr)) result.add (t);
+        const auto all = result;
+        result.removeIf ([&all] (te::Track* t)
+        {
+            for (auto* other : all) if (auto* folder = dynamic_cast<te::FolderTrack*> (other); folder != nullptr && other != t && inside (*t, *folder)) return true;
+            return false;
+        });
+        return result;
+    }
+    // A group, other than `keep`, that moving these would leave empty, as the reference never does.
+    te::FolderTrack* emptiedGroup (const juce::Array<te::Track*>& moving, const te::FolderTrack* keep) const
+    {
+        for (auto* t : moving)
+            if (auto* parent = t->getParentFolderTrack(); parent != nullptr && parent != keep)
+            {
+                bool all = true;
+                for (auto* sibling : siblings (parent)) all = all && moving.contains (sibling);
+                if (all) return parent;
+            }
+        return nullptr;
+    }
     // Whether a track is in a group, directly or in a group inside it.
     static bool inside (const te::Track& track, const te::FolderTrack& folder)
     {
@@ -9410,6 +9447,9 @@ Result Session::groupTracks (const juce::StringArray& ids, String& groupId)
             if (auto* folder = dynamic_cast<te::FolderTrack*> (other); folder != nullptr && other != track && Impl::inside (*track, *folder)) return true;
         return false;
     });
+    // As in the reference, grouping may empty only the group the new one goes into.
+    if (impl->emptiedGroup (members, members.getFirst()->getParentFolderTrack()) != nullptr)
+        return Result::fail ("Grouping these would leave another group empty.");
     impl->transaction ("Group tracks");
     auto folder = impl->edit->insertNewFolderTrack (te::TrackInsertPoint (*members.getFirst(), true), nullptr, true);
     if (folder == nullptr) return Result::fail ("Could not create the group.");
@@ -9433,6 +9473,51 @@ Result Session::ungroupTracks (const String& groupId)
     for (auto* track : members)
     { impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (folder->getParentTrack(), preceding)); preceding = track; }
     impl->edit->deleteTrack (folder);
+    impl->changed(); return Result::ok();
+}
+Result Session::moveTracks (const juce::StringArray& ids, const String& groupId, const String& beforeId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before moving tracks.");
+    te::FolderTrack* parent = nullptr;
+    if (groupId.isNotEmpty() && (parent = impl->group (groupId)) == nullptr) return Result::fail ("Group not found.");
+    for (const auto& id : ids) if (impl->track (id) == nullptr && impl->group (id) == nullptr) return Result::fail ("Track not found.");
+    const auto moving = impl->roots (ids);
+    if (moving.isEmpty()) return Result::fail ("Choose tracks to move.");
+    for (auto* t : moving)
+    {
+        if (auto* audio = dynamic_cast<te::AudioTrack*> (t); audio != nullptr && isReturn (*audio)) return Result::fail ("Return tracks move among the returns.");
+        if (auto* folder = dynamic_cast<te::FolderTrack*> (t); folder != nullptr && parent != nullptr && (folder == parent || Impl::inside (*parent, *folder)))
+            return Result::fail ("A group cannot move into itself.");
+    }
+    if (impl->emptiedGroup (moving, nullptr) != nullptr) return Result::fail ("Moving these would leave a group empty.");
+    const auto present = impl->siblings (parent);
+    auto siblings = present;
+    siblings.removeIf ([&moving] (te::Track* t) { return moving.contains (t); });
+    te::Track* before = nullptr;
+    if (beforeId.isNotEmpty())
+    {
+        before = impl->track (beforeId);
+        if (before == nullptr) before = impl->group (beforeId);
+        // Before one of those moving is before the first after it that stays.
+        if (before != nullptr && moving.contains (before) && present.contains (before))
+        {
+            const auto from = present.indexOf (before) + 1; before = nullptr;
+            for (int i = from; i < present.size() && before == nullptr; ++i) if (! moving.contains (present[i])) before = present[i];
+        }
+        else if (before == nullptr || ! siblings.contains (before)) return Result::fail ("The place to move to is not in that group.");
+    }
+    // At the top level the other tracks stay before the returns.
+    if (before == nullptr && parent == nullptr)
+        for (auto* t : siblings) if (auto* audio = dynamic_cast<te::AudioTrack*> (t); audio != nullptr && isReturn (*audio)) { before = t; break; }
+    const int at = before != nullptr ? siblings.indexOf (before) : siblings.size();
+    // Dropped where they already are: nothing changes.
+    auto result = siblings;
+    result.insertArray (at, moving.begin(), moving.size());
+    if (result == present) return Result::ok();
+    te::Track* preceding = at > 0 ? siblings[at - 1] : nullptr;
+    impl->transaction ("Move tracks");
+    for (auto* t : moving) { impl->edit->moveTrack (te::Track::Ptr (t), te::TrackInsertPoint (parent, preceding)); preceding = t; }
     impl->changed(); return Result::ok();
 }
 Result Session::renameGroup (const String& groupId, const String& name)
