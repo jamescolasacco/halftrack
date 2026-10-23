@@ -3366,7 +3366,7 @@ struct Session::Impl
         });
         return result;
     }
-    // A group, other than `keep`, that moving these would leave empty, as the reference never does.
+    // A group, other than `keep`, that grouping these would leave empty, as the reference's Group Tracks never does.
     te::FolderTrack* emptiedGroup (const juce::Array<te::Track*>& moving, const te::FolderTrack* keep) const
     {
         for (auto* t : moving)
@@ -6271,10 +6271,13 @@ Session::Snapshot Session::snapshot() const
         for (auto* p : impl->plugins (index++)) info.plugins.push_back (describe (*p));
         s.tracks.push_back (std::move (info));
     }
+    int tracksBefore = 0;
     for (auto* track : te::getAllTracks (e))
-        if (auto* folder = dynamic_cast<te::FolderTrack*> (track); folder != nullptr && folder->isSubmixFolder())
+        if (dynamic_cast<te::AudioTrack*> (track) != nullptr) ++tracksBefore;
+        else if (auto* folder = dynamic_cast<te::FolderTrack*> (track); folder != nullptr && folder->isSubmixFolder())
         {
             GroupInfo group;
+            group.position = tracksBefore;
             group.id = folder->itemID.toString(); group.name = impl->displayName (*folder); group.userName = Impl::ownName (*folder); group.colour = folder->getColour();
             group.numberLabel = String (impl->trackNumber (*folder));
             group.mute = folder->isMuted (false); group.solo = folder->isSolo (false) || static_cast<bool> (folder->state.getProperty (cueProperty, false));
@@ -9490,7 +9493,6 @@ Result Session::moveTracks (const juce::StringArray& ids, const String& groupId,
         if (auto* folder = dynamic_cast<te::FolderTrack*> (t); folder != nullptr && parent != nullptr && (folder == parent || Impl::inside (*parent, *folder)))
             return Result::fail ("A group cannot move into itself.");
     }
-    if (impl->emptiedGroup (moving, nullptr) != nullptr) return Result::fail ("Moving these would leave a group empty.");
     const auto present = impl->siblings (parent);
     auto siblings = present;
     siblings.removeIf ([&moving] (te::Track* t) { return moving.contains (t); });
@@ -9716,17 +9718,36 @@ Result Session::removeTrack (int index)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
+    return removeTracks ({ t->itemID.toString() });
+}
+Result Session::removeTracks (const juce::StringArray& ids)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before removing tracks.");
-    // Other tracks can go during a Session take; this one would take the recording slot with it.
-    if (impl->trackRecording (t->itemID.toString())) return Result::fail ("End this track's Session recording before removing it.");
-    closePluginEditors(); impl->meters.clear(); impl->transaction ("Remove track");
-    if (isReturn (*t))
-        for (auto* source : te::getAudioTracks (*impl->edit))
-            if (auto* send = findSend (*source, t->itemID.toString())) send->deleteFromParent();
-    // Plug-ins taking their sidechain from it keep their sidechain, without a source.
-    for (auto* p : impl->edit->getPluginCache().getPlugins())
-        if (p->getSidechainSourceID() == t->itemID) p->state.removeProperty (te::IDs::sidechainSourceID, &impl->edit->getUndoManager());
-    impl->edit->deleteTrack (t); impl->refreshRouting(); impl->changed(); return Result::ok();
+    for (const auto& id : ids) if (impl->track (id) == nullptr && impl->group (id) == nullptr) return Result::fail ("Track not found.");
+    const auto roots = impl->roots (ids);
+    if (roots.isEmpty()) return Result::fail ("Choose tracks to delete.");
+    // Every track going, those inside a group going included.
+    juce::Array<te::AudioTrack*> going;
+    for (auto* t : te::getAudioTracks (*impl->edit))
+        for (auto* root : roots)
+            if (auto* folder = dynamic_cast<te::FolderTrack*> (root); root == t || (folder != nullptr && Impl::inside (*t, *folder))) { going.add (t); break; }
+    // Other tracks can go during a Session take; these would take the recording slot with them.
+    for (auto* t : going)
+        if (impl->trackRecording (t->itemID.toString())) return Result::fail ("End this track's Session recording before removing it.");
+    closePluginEditors(); impl->meters.clear(); impl->transaction (roots.size() > 1 ? "Delete tracks" : "Delete track");
+    for (auto* t : going)
+    {
+        if (isReturn (*t))
+            for (auto* source : te::getAudioTracks (*impl->edit))
+                if (auto* send = findSend (*source, t->itemID.toString())) send->deleteFromParent();
+        // Plug-ins taking their sidechain from it keep their sidechain, without a source.
+        for (auto* p : impl->edit->getPluginCache().getPlugins())
+            if (p->getSidechainSourceID() == t->itemID) p->state.removeProperty (te::IDs::sidechainSourceID, &impl->edit->getUndoManager());
+    }
+    // A group goes with everything in it.
+    for (auto* root : roots) impl->edit->deleteTrack (root);
+    impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::importAudio (const File& source, int index, double start)
 {
@@ -12994,13 +13015,12 @@ Result Session::exportStems (const File& folder, const AudioExportSettings& sett
     const juce::String extension = settings.format == ExportFormat::aiff ? ".aiff" : settings.format == ExportFormat::flac ? ".flac" : ".wav";
     // Stems in display order: a group before its members, returns after the tracks, then Master.
     struct Stem { String name; std::optional<String> trackId, groupId; bool master = false; };
-    std::vector<Stem> stems; String open;
-    for (const auto& track : snapshot.tracks)
+    std::vector<Stem> stems;
+    size_t g = 0;
+    for (size_t t = 0; t <= snapshot.tracks.size(); ++t)
     {
-        if (track.groupId.isNotEmpty() && track.groupId != open)
-            for (const auto& group : snapshot.groups) if (group.id == track.groupId) stems.push_back ({ group.name, std::nullopt, group.id });
-        open = track.groupId;
-        if (! track.isReturn) stems.push_back ({ track.name, track.id, std::nullopt });
+        for (; g < snapshot.groups.size() && snapshot.groups[g].position <= (int) t; ++g) stems.push_back ({ snapshot.groups[g].name, std::nullopt, snapshot.groups[g].id });
+        if (t < snapshot.tracks.size() && ! snapshot.tracks[t].isReturn) stems.push_back ({ snapshot.tracks[t].name, snapshot.tracks[t].id, std::nullopt });
     }
     for (const auto& track : snapshot.tracks) if (track.isReturn) stems.push_back ({ track.name, track.id, std::nullopt });
     if (settings.stemTracks.isEmpty()) stems.push_back ({ "Main", std::nullopt, std::nullopt, true }); // The reference's Main track.

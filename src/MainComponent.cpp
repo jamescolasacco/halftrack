@@ -972,6 +972,7 @@ public:
         if (code == juce::KeyPress::F9Key) { report (session.recordButton (shift)); refresh(); return true; }
         if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)
         {
+            if (! showSession && headerFocus) { deleteSelectedHeaders(); return true; }
             if (! showPiano && ! showSession && selectedFadeClip.isNotEmpty()) { deleteSelectedFade(); return true; }
             if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot();
             else if (timeSelection.active()) selectionCommand (78); else deleteSelectedClip();
@@ -1248,6 +1249,27 @@ private:
         }
         return path;
     }
+    // Whether a group, or one around it, is folded.
+    bool anyFolded (const juce::String& groupId) const
+    {
+        for (const auto g : groupPath (groupId)) if (state.groups[(size_t) g].folded) return true;
+        return false;
+    }
+    // The tracks and groups in the order the views show them: each group's header before what is in
+    // it, empty groups too.
+    struct Item { bool group = false; int index = -1; };
+    static std::vector<Item> visualOrder (const Session::Snapshot& shown)
+    {
+        std::vector<Item> items;
+        size_t g = 0;
+        for (int t = 0; t <= (int) shown.tracks.size(); ++t)
+        {
+            for (; g < shown.groups.size() && shown.groups[g].position <= t; ++g) items.push_back ({ true, (int) g });
+            if (t < (int) shown.tracks.size()) items.push_back ({ false, t });
+        }
+        return items;
+    }
+    std::vector<Item> visualOrder() const { return visualOrder (state); }
     // Whether a group is inside another, at any depth.
     bool groupInside (const juce::String& id, const juce::String& outer) const
     {
@@ -1325,25 +1347,20 @@ private:
     }
     void buildLanes()
     {
-        lanes.clear(); int y = 0; std::vector<int> open;
-        for (int t = 0; t < (int) state.tracks.size(); ++t)
+        lanes.clear(); int y = 0;
+        for (const auto& item : visualOrder())
         {
-            const auto& track = state.tracks[(size_t) t];
-            // A header lane for each group the track opens, outermost first; a folded group hides
-            // everything inside it, nested groups' headers too.
-            const auto path = groupPath (track.groupId);
-            size_t common = 0;
-            while (common < open.size() && common < path.size() && open[common] == path[common]) ++common;
-            for (size_t k = common; k < path.size(); ++k)
+            // A header lane for each group, above what is in it; a folded group hides everything
+            // inside it, nested groups' headers too.
+            if (item.group)
             {
-                bool hidden = false;
-                for (size_t outer = 0; outer < k; ++outer) hidden = hidden || state.groups[(size_t) path[outer]].folded;
-                lanes.push_back ({ true, path[k], y, hidden ? 0 : groupHeight }); y += hidden ? 0 : groupHeight;
+                const bool hidden = anyFolded (state.groups[(size_t) item.index].parentId);
+                lanes.push_back ({ true, item.index, y, hidden ? 0 : groupHeight }); y += hidden ? 0 : groupHeight;
+                continue;
             }
-            open = path;
-            bool folded = false;
-            for (const auto g : path) folded = folded || state.groups[(size_t) g].folded;
-            const int height = folded ? 0 : track.folded ? foldedTrackHeight : track.height > 0 ? track.height : trackHeight;
+            const int t = item.index;
+            const auto& track = state.tracks[(size_t) t];
+            const int height = anyFolded (track.groupId) ? 0 : track.folded ? foldedTrackHeight : track.height > 0 ? track.height : trackHeight;
             lanes.push_back ({ false, t, y, height }); y += height;
             if (height > 0 && ! track.folded && takeLanesShown.count (track.id))
                 for (int k = 0; k < (int) track.takeLanes.size(); ++k) { lanes.push_back ({ false, t, y, takeLaneHeight, -1, k }); y += takeLaneHeight; }
@@ -1472,6 +1489,44 @@ private:
         if (id != Session::mainChain && groupInfo (id) == nullptr) return;
         selectedChain = id; selectedDevices.clear();
         deviceChain.sync(); deviceChain.repaint(); canvas.repaint();
+    }
+    // The reference's headers take the selection focus: after a click on an Arrangement header's name
+    // or background, Delete deletes the selected tracks, or the selected group with everything in it,
+    // and the track now where the first was is selected.
+    static constexpr const char* arrangementHeader = "arrangementHeader";
+    bool headerFocus = false;
+    struct HeaderFocusWatcher final : juce::MouseListener
+    {
+        explicit HeaderFocusWatcher (Impl& o) : owner (o) { owner.addMouseListener (this, true); }
+        ~HeaderFocusWatcher() override { owner.removeMouseListener (this); }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            auto* c = e.originalComponent;
+            if (c != nullptr && (c->getName() == "Track name" || c->getName() == "Group name")) c = c->getParentComponent();
+            owner.headerFocus = c != nullptr && static_cast<bool> (c->getProperties()[arrangementHeader]);
+        }
+        Impl& owner;
+    } headerFocusWatcher { *this };
+    void deleteSelectedHeaders()
+    {
+        juce::StringArray ids;
+        int first = selectedTrack;
+        if (const auto* group = groupInfo (selectedChain)) { ids.add (group->id); first = group->position; }
+        else
+        {
+            ids = selectedTrackIds();
+            for (int t = 0; t < (int) state.tracks.size(); ++t) if (ids.contains (state.tracks[(size_t) t].id)) { first = t; break; }
+        }
+        if (ids.isEmpty()) return;
+        session.closePluginEditors();
+        const auto result = session.removeTracks (ids);
+        report (result);
+        if (result.failed()) return;
+        multiSelectedTracks.clear(); selectedChain.clear(); selectedClip = -1; headerFocus = false;
+        refresh();
+        if (state.tracks.empty()) selectedTrack = -1;
+        else selectTrack (juce::jlimit (0, (int) state.tracks.size() - 1, first));
+        refresh();
     }
     juce::StringArray selectedTrackIds() const
     {
@@ -1670,6 +1725,7 @@ private:
         {
             for (auto* c : std::initializer_list<juce::Component*> { &name, &mute, &solo, &arm, &gain, &pan, &input, &monitor, &sendMode }) addAndMakeVisible (c);
             addChildComponent (inputDetail); inputDetail.setName ("Track input channel");
+            getProperties().set (arrangementHeader, ! columnLayout);
             name.setName ("Track name");
             name.setFont (font (11.5f, true));
             if (! columnLayout) name.setColour (juce::Label::textColourId, themes::colour (0xff141414));
@@ -2362,6 +2418,7 @@ private:
             for (auto* c : std::initializer_list<juce::Component*> { &fold, &name, &activator, &solo, &gain, &pan }) addAndMakeVisible (c);
             fold.setName ("Group fold"); fold.setTooltip ("Fold or unfold the group's tracks");
             fold.onClick = [this] { if (const auto* g = info()) owner.report (owner.session.setGroupFolded (groupId, ! g->folded)); owner.refresh(); };
+            getProperties().set (arrangementHeader, ! columnLayout);
             name.setName ("Group name"); name.setFont (font (11.5f, true)); name.setEditable (false, true, false);
             name.setColour (juce::Label::textColourId, themes::colour (0xff141414));
             name.onTextChange = [this] { owner.report (owner.session.renameGroup (groupId, name.getText())); owner.refresh(); };
@@ -3840,25 +3897,18 @@ private:
         struct Column { int track = -1, group = -1; };
         void buildColumns()
         {
-            columns.clear(); std::vector<int> open;
-            for (int t = 0; t < (int) owner.state.tracks.size(); ++t)
+            columns.clear();
+            for (const auto& item : owner.visualOrder())
             {
-                const auto& track = owner.state.tracks[(size_t) t];
-                if (track.isReturn && ! owner.state.mixerSections.returns) continue; // The Returns section hidden.
-                // A column for each group the track opens, outermost first, unless a group around it is folded.
-                const auto path = owner.groupPath (track.groupId);
-                size_t common = 0;
-                while (common < open.size() && common < path.size() && open[common] == path[common]) ++common;
-                for (size_t k = common; k < path.size(); ++k)
+                // A column for each group, before what is in it, unless a group around it is folded.
+                if (item.group)
                 {
-                    bool hidden = false;
-                    for (size_t outer = 0; outer < k; ++outer) hidden = hidden || owner.state.groups[(size_t) path[outer]].folded;
-                    if (! hidden) columns.push_back ({ -1, path[k] });
+                    if (! owner.anyFolded (owner.state.groups[(size_t) item.index].parentId)) columns.push_back ({ -1, item.index });
+                    continue;
                 }
-                open = path;
-                bool folded = false;
-                for (const auto g : path) folded = folded || owner.state.groups[(size_t) g].folded;
-                if (! folded) columns.push_back ({ t, -1 });
+                const auto& track = owner.state.tracks[(size_t) item.index];
+                if (track.isReturn && ! owner.state.mixerSections.returns) continue; // The Returns section hidden.
+                if (! owner.anyFolded (track.groupId)) columns.push_back ({ item.index, -1 });
             }
         }
         int columnCount() const { return (int) columns.size(); }
@@ -9828,7 +9878,7 @@ private:
         }
         else if (index == 2)
         {
-            popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (35, "Insert Return Track"); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", currentTrack() != nullptr);
+            popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (35, "Insert Return Track"); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", currentTrack() != nullptr || groupInfo (selectedChain) != nullptr);
             popup.addSeparator();
             popup.addItem (38, "Duplicate Selected Track", currentTrack() != nullptr && !currentTrack()->isReturn);
             popup.addItem (39, "Insert Take Lane", currentTrack() != nullptr && ! currentTrack()->isReturn && ! showSession);
@@ -9951,7 +10001,7 @@ private:
             case 33: addMidiTrack(); break;
             case 35: addReturnTrack(); break;
             case 34: if (showSession) createLauncherMidiClip(); else createMidiClip (state.insertMarker); break;
-            case 31: if (selectedTrack >= 0) { session.closePluginEditors(); report (session.removeTrack (selectedTrack)); selectedClip = -1; } break;
+            case 31: deleteSelectedHeaders(); break;
             case 32: addPluginMenu(); break;
             case 36: case 37: if (const auto* track = currentTrack()) reorderTrack (track->id, id == 36 ? -1 : 1); break;
             case 38: if (const auto* track = currentTrack()) duplicateTrackFromUI (track->id); break;
@@ -10374,8 +10424,10 @@ private:
         auto* alert = new AudioExportDialog (*this, theme, { current.loopStart, current.loopEnd }, hasVideo);
         {
             std::vector<std::pair<juce::String, juce::String>> tracks; juce::StringArray selected;
-            for (const auto& group : current.groups) tracks.push_back ({ group.id, group.name });
-            for (const auto& track : current.tracks) tracks.push_back ({ track.id, track.name });
+            // In display order, each group before what is in it.
+            for (const auto& item : visualOrder (current))
+                if (item.group) tracks.push_back ({ current.groups[(size_t) item.index].id, current.groups[(size_t) item.index].name });
+                else tracks.push_back ({ current.tracks[(size_t) item.index].id, current.tracks[(size_t) item.index].name });
             if (const auto* track = currentTrack()) selected.add (track->id);
             for (const auto& id : multiSelectedTracks) selected.addIfNotAlreadyThere (id);
             alert->setTracks (tracks, selected);
@@ -16051,6 +16103,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const int outerIndex = [&] { for (int g = 0; g < (int) state.groups.size(); ++g) if (state.groups[(size_t) g].id == group) return g; return -1; }();
             const int innerIndex = [&] { for (int g = 0; g < (int) state.groups.size(); ++g) if (state.groups[(size_t) g].id == inner) return g; return -1; }();
             check (outerIndex >= 0 && innerIndex >= 0 && state.groups[(size_t) innerIndex].parentId == group, "the inner group sits in the outer one");
+            const auto order = visualOrder();
+            check (order.size() == 4 && order[0].group && order[0].index == outerIndex && order[1].group && order[1].index == innerIndex
+                       && ! order[2].group && order[2].index == 0 && ! order[3].group && order[3].index == 1,
+                   "the views and the export window list the outer group, the inner group, then the tracks");
             check (launcher.columnCount() == 4 && launcher.groupColumnOf (outerIndex) == 0 && launcher.groupColumnOf (innerIndex) == 1 && launcher.columnOf (0) == 2 && launcher.columnOf (1) == 3,
                    "the Session view shows the outer group's column, the inner group's, then their tracks");
             showArrangementView(); refresh();
@@ -16114,6 +16170,28 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                        "dropping it there moves the inner group, with its track, after the second track");
                 session.undo(); refresh();
                 check (state.tracks[0].id == first && state.tracks[0].groupId == inner, "one undo puts the group back");
+                // An emptied group keeps its header and column, as the reference's does.
+                check (session.moveTracks ({ first }, {}, {}).wasOk(), "move the first track out, emptying the inner group"); refresh();
+                const auto innerAt = [&] { for (int g = 0; g < (int) state.groups.size(); ++g) if (state.groups[(size_t) g].id == inner) return g; return -1; }();
+                check (innerAt >= 0 && state.groups[(size_t) innerAt].memberIds.isEmpty() && groupLane (inner).height == groupHeight && groupLane (inner).y < laneY (indexOf (second)),
+                       "the empty inner group keeps its header lane, above the second track");
+                showSessionView(); refresh();
+                check (launcher.groupColumnOf (innerAt) == 1 && launcher.columnOf (indexOf (second)) == 2, "and its Session column, between the outer group's and the second track's");
+                showArrangementView(); session.undo(); refresh();
+                // Delete after a click on a header's name deletes the selection: here the inner group, with its track.
+                check (grab (groupLane (inner).y + 10, "Group name"), "press the inner group's name");
+                release (groupLane (inner).y + 10);
+                headerFocusWatcher.mouseDown (event (0, false));
+                check (headerFocus && selectedChain == inner, "clicking it selects the group and gives the headers the focus");
+                check (handleKey (juce::KeyPress (juce::KeyPress::deleteKey)), "Delete is handled"); refresh();
+                check (groupInfo (inner) == nullptr && indexOf (first) < 0 && state.tracks.size() == 1 && selectedTrack == 0 && ! headerFocus,
+                       "Delete deletes the group with its track, and selects the track now first");
+                session.undo(); refresh();
+                check (groupInfo (inner) != nullptr && indexOf (first) == 0 && state.tracks[0].groupId == inner, "one undo brings both back");
+                // After a click elsewhere, Delete acts there instead.
+                const auto now2 = juce::Time::getCurrentTime();
+                headerFocusWatcher.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { 10.0f, 10.0f }, {}, 1.0f, 0, 0, 0, 0, &canvas, &canvas, now2, { 10.0f, 10.0f }, now2, 1, false));
+                check (! headerFocus, "a click in the lanes takes the focus from the headers");
             }
             showSessionView(); refresh();
             selectChain (inner); ungroupSelectedTrack(); refresh();

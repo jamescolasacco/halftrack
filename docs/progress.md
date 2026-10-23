@@ -2224,7 +2224,7 @@ Engine and UI areas. From a static reading of the reference's code, groups nest.
 Engine and UI areas. From a static reading of the reference's move and drop code, Arrangement headers drag tracks and groups into, out of and between groups (`Session::moveTracks`).
 - Over a header's upper half they go before it. Over a group header's lower half they go into the group, first, and over a track's lower half they go after it. Below every lane they go after the last track.
 - An orange line shows the place.
-- Returns stay among the returns, a group cannot go into itself, and no group is left empty. Grouping that would empty another group is now refused too, as the reference's rule has it.
+- Returns stay among the returns, and a group cannot go into itself. Grouping that would empty another group is now refused too, as the reference's rule has it. (A later change lets moves empty a group, as the reference's do.)
 - Pressing the start of a track's name no longer folds the track.
 
 Measured in the groups suite with renders, refusals and undo, and checked in the UI suite ([contract](research/groups-contract.md#moving-tracks-2026-10-23)).
@@ -2232,3 +2232,12 @@ Measured in the groups suite with renders, refusals and undo, and checked in the
 ## Header clicks arrive once — 2026-10-23
 
 UI area. Arrangement headers, group headers and the Main's Session strip listened to their own mouse events to see their children's, and JUCE then delivers a component's own events twice. The fold corner therefore folded and unfolded the track in one click, and the wheel over a header's background scrolled twice. They now take their children's events through `ChildMouseEvents`, which passes on the children's only. Checked in the UI suite.
+
+## Deleting groups and empty groups — 2026-10-23
+
+Engine and UI areas. These follow a static reading of the reference's Delete and move code.
+- **Deleting.** `Session::removeTracks` deletes tracks and groups in one undo step, a group with everything inside it. After a click on an Arrangement header's name or background, Delete deletes the selection, a selected group included, and selects the track now in the first one's place.
+- **Empty groups.** Moves and deletions may now leave a group empty, as the reference allows. `GroupInfo::position` places every group's header, so both views show empty groups.
+- **Display order.** The stem export and the export window list groups in display order: a group holding only a group now has its stem.
+
+Measured in the groups and stems suites, and checked in the UI suite ([contract](research/groups-contract.md#deleting-2026-10-23)).

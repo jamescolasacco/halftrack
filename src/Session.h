@@ -535,6 +535,9 @@ public:
         bool mute = false, solo = false, folded = false;
         juce::String parentId;       // The group it is inside, if any.
         juce::StringArray memberIds; // Its own tracks, in order; groups inside it name it as their parent.
+        // Where its header is: before Snapshot::tracks[position], or after every track at tracks.size().
+        // An empty group has a place too.
+        int position = 0;
         std::vector<PluginInfo> plugins; // Its audio devices, in chain order.
     };
     // A point on the tempo map: the tempo ramps linearly from each point to the next and holds after the last.
@@ -897,8 +900,8 @@ public:
     juce::Result ungroupTracks (const juce::String& groupId);
     // Moves tracks and groups into a group (empty for the top level), before a track or group there
     // (empty for its end, before the returns), as dragging headers does in the reference. Their
-    // contents move with groups. A group cannot move into itself, returns stay among the returns,
-    // and no group may be left empty. One undo step.
+    // contents move with groups. A group cannot move into itself, and returns stay among the returns.
+    // A group the move empties stays, empty, as the reference's does. One undo step.
     juce::Result moveTracks (const juce::StringArray& trackAndGroupIds, const juce::String& groupId, const juce::String& beforeId);
     // As renameTrack.
     juce::Result renameGroup (const juce::String& groupId, const juce::String& name);
@@ -912,6 +915,10 @@ public:
     juce::Result stopGroup (const juce::String& groupId);
     juce::Result moveTrack (const juce::String& trackId, int destinationIndex);
     juce::Result removeTrack (int trackIndex);
+    // Deletes tracks and groups, a group with everything in it, as the reference's Delete does. Sends
+    // to a deleted return go, and plug-ins taking their sidechain from a deleted track keep it without
+    // a source. One undo step.
+    juce::Result removeTracks (const juce::StringArray& trackAndGroupIds);
     // Linked-track editing, after the reference's: Arrangement edits on a linked track apply to the
     // other tracks in its link. Moving a clip in time, trimming, deleting or (de)activating it does
     // the same to the clips on the linked tracks that start and end with it (within 1 ms); a split

@@ -87,6 +87,15 @@ int runStemExportTests (const juce::File& artifacts)
         check (error (read (chosen.getChildFile ("Song Keys.wav")), [&] (int n) { return half * b (n); }) < 1e-5, "and they sound as the full export's do");
         settings.stemTracks = { "missing" };
         check (s.exportStems (root.getChildFile ("None"), settings, files).failed() && files.isEmpty(), "a choice with no track in the project is refused");
+        // Nested groups: a group holding only a group still has its stem, before the group inside it.
+        juce::String outer; ok (s.groupTracks ({ group }, outer), "group the Keys group"); ok (s.renameGroup (outer, "Bus"), "name the outer group");
+        settings.stemTracks = {};
+        const auto nested = root.getChildFile ("Nested");
+        ok (s.exportStems (nested, settings, files), "export the nested stems");
+        names.clear(); for (const auto& f : files) names.add (juce::File (f).getFileName());
+        check (names == juce::StringArray { "Song Lead.wav", "Song Bus.wav", "Song Keys.wav", "Song Pad.wav", "Song A-Room.wav", "Song Main.wav" },
+               "the outer group's stem comes first, then the group inside it: " + names.joinIntoString (", "));
+        check (error (read (nested.getChildFile ("Song Bus.wav")), [&] (int n) { return half * b (n); }) < 1e-5, "the outer group's stem holds the group inside it");
         std::cout << "Stems passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL stems: " << e.what() << std::endl; return 1; }

@@ -200,7 +200,19 @@ int runGroupTests (const juce::File& artifacts)
                 juce::String first, second, both;
                 ok (pair.groupTracks ({ x }, first), "group x alone"); ok (pair.groupTracks ({ y }, second), "group y alone");
                 check (pair.groupTracks ({ x, y }, both).failed(), "grouping that would empty another group is refused, as in the reference");
-                check (pair.moveTracks ({ y }, {}, {}).failed(), "moving a group's only track out is refused, leaving no group empty");
+                ok (pair.moveTracks ({ y }, {}, {}), "move a group's only track out to the end");
+                const auto emptied = pair.snapshot();
+                const auto infoOf = [] (const Session::Snapshot& shot, const juce::String& id) { for (const auto& g : shot.groups) if (g.id == id) return g; return Session::GroupInfo {}; };
+                check (emptied.groups.size() == 2 && infoOf (emptied, second).memberIds.isEmpty() && emptied.tracks[1].id == y && emptied.tracks[1].groupId.isEmpty(),
+                       "the group stays, empty, as the reference's does");
+                check (infoOf (emptied, first).position == 0 && infoOf (emptied, second).position == 1, "its header sits after the first track, before the one moved out");
+                ok (pair.moveTracks ({ y }, second, {}), "move the track back into the empty group");
+                check (pair.snapshot().tracks[1].groupId == second, "it is in it again");
+                ok (pair.removeTracks ({ first }), "delete the first group");
+                check (pair.snapshot().groups.size() == 1 && pair.snapshot().tracks.size() == 1 && pair.snapshot().tracks[0].id == y, "it goes with its track");
+                pair.undo();
+                check (pair.snapshot().groups.size() == 2 && pair.snapshot().tracks.size() == 2 && pair.snapshot().tracks[0].groupId == first, "one undo brings both back");
+                check (pair.removeTracks ({ "missing" }).failed() && pair.removeTracks ({}).failed(), "unknown and empty deletions are refused");
             }
             ok (n.moveTracks ({ ids[2] }, outer, ids[1]), "move c into the outer group, before b");
             const auto moved = n.snapshot();
@@ -217,6 +229,15 @@ int runGroupTests (const juce::File& artifacts)
             ok (n.moveTracks ({ ids[2] }, outer, ids[2]), "drop c where it is, before itself");
             check (n.snapshot().tracks[1].id == ids[2] && n.snapshot().tracks[1].groupId == outer, "c stays put");
             n.undo(); check (n.snapshot().tracks[2].id == ids[2] && n.snapshot().tracks[2].groupId == top, "which made no undo step: one undo takes c back out of the outer group");
+            // Deleting, as the reference's Delete does: a group goes with everything inside it.
+            ok (n.removeTracks ({ top }), "delete the top group");
+            check (n.snapshot().tracks.empty() && n.snapshot().groups.empty(), "its groups and tracks, at every level, go with it");
+            n.undo();
+            check (n.snapshot().tracks.size() == 3 && n.snapshot().groups.size() == 3 && n.snapshot().tracks[0].groupId == inner, "one undo restores the whole tree");
+            check (difference (render (n, mix), plain) < 1e-6, "playing as before");
+            ok (n.removeTracks ({ ids[0], ids[2] }), "delete a and c together");
+            check (n.snapshot().tracks.size() == 1 && n.snapshot().tracks[0].id == ids[1] && n.snapshot().groups.size() == 3, "b and the groups stay, the inner group empty");
+            n.undo(); check (n.snapshot().tracks.size() == 3, "one undo restores both");
         }
         std::cout << "Groups passed: " << root.getFullPathName() << std::endl; return 0;
     }
