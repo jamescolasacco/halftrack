@@ -63,6 +63,24 @@ juce::Font font (float size = 12.0f, bool bold = false)
     return juce::Font (juce::FontOptions (size, bold ? juce::Font::bold : juce::Font::plain));
 }
 
+// Gives a component its children's mouse events too, as they reach each child. JUCE gives a component
+// that listens to itself its own events twice, directly and again as a listener, so this passes on
+// the children's only.
+class ChildMouseEvents final : public juce::MouseListener
+{
+public:
+    explicit ChildMouseEvents (juce::Component& c) : component (c) { component.addMouseListener (this, true); }
+    ~ChildMouseEvents() override { component.removeMouseListener (this); }
+    void mouseMove (const juce::MouseEvent& e) override { if (fromChild (e)) component.mouseMove (e); }
+    void mouseDown (const juce::MouseEvent& e) override { if (fromChild (e)) component.mouseDown (e); }
+    void mouseDrag (const juce::MouseEvent& e) override { if (fromChild (e)) component.mouseDrag (e); }
+    void mouseUp (const juce::MouseEvent& e) override { if (fromChild (e)) component.mouseUp (e); }
+    void mouseDoubleClick (const juce::MouseEvent& e) override { if (fromChild (e)) component.mouseDoubleClick (e); }
+private:
+    bool fromChild (const juce::MouseEvent& e) const { return e.originalComponent != &component; }
+    juce::Component& component;
+};
+
 // A MIDI or warped audio clip's content, in its own beats. The editors show and edit it up to its end:
 // the loop's end while it loops, otherwise where the clip stops playing it.
 double contentEndBeat (const Session::ClipInfo& clip)
@@ -1814,7 +1832,6 @@ private:
                 };
                 automationLane.onClick = [this] { owner.addAutomationLane (trackId, shownKey); };
             }
-            addMouseListener (this, true);
         }
         const juce::String& getTrackId() const { return trackId; }
         void sync (const Session::TrackInfo& track, int position)
@@ -2288,6 +2305,7 @@ private:
         std::unique_ptr<juce::TextButton> sideA, sideB;
         Session::MixerSections laidOut;
         juce::Rectangle<int> meterBounds() const { return { 66, gain.getY() + 4, 10, juce::jmax (10, gain.getBottom() - 20 - gain.getY()) }; }
+        ChildMouseEvents childMouse { *this };
     public:
         // The Session mixer's Audio To row, which every strip leaves room for so their faders line up.
         static constexpr int outputRow = 21;
@@ -2382,7 +2400,6 @@ private:
                 split->onDragEnd = [this] { owner.session.endEditGesture(); };
                 split->onValueChange = [this, split, right] { owner.report (owner.session.setGroupSplitPan (groupId, right, (float) split->getValue())); };
             }
-            addMouseListener (this, true);
             if (columnLayout)
             {
                 // Session mixer strip: the grid column header names and folds the group.
@@ -2501,6 +2518,7 @@ private:
         juce::Label name;
         juce::Slider gain, pan, leftSplit, rightSplit;
         bool splitPan = false, dragArmed = false, headerDrag = false;
+        ChildMouseEvents childMouse { *this };
     };
 
     // The header of an automation lane: what it shows, and a button that hides it.
@@ -4343,7 +4361,6 @@ private:
             explicit MasterStrip (Impl& o) : owner (o)
             {
                 setName ("Session master strip");
-                addMouseListener (this, true); // A click anywhere on the strip shows the Main's chain.
                 gain.setName ("Session master volume"); gain.setSliderStyle (juce::Slider::LinearVertical);
                 gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 16); gain.setNormalisableRange (Session::levelRange (false));
                 gain.setDoubleClickReturnValue (true, 0);
@@ -4461,6 +4478,7 @@ private:
             juce::Slider cueVolume;
             Session::MixerSections laidOut;
             float peakL = 0, peakR = 0;
+            ChildMouseEvents childMouse { *this }; // A click anywhere on the strip shows the Main's chain.
         } masterStrip { owner };
         juce::ScrollBar horizontal { false }, vertical { true };
         double offsetX = 0, offsetScene = 0;
@@ -13308,6 +13326,25 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         handleKey (juce::KeyPress ('A', {}, 'a')); refresh();
         check (automationMode != automation, "then A switches Automation Mode again");
         handleKey (juce::KeyPress ('A', {}, 'a')); refresh();
+    }
+    {
+        // Headers take their children's mouse events through ChildMouseEvents, once each. JUCE also hands
+        // a component listening to itself its own events, which made the fold corner fold and unfold.
+        struct Counting final : juce::Component
+        {
+            int downs = 0;
+            juce::Component child;
+            ChildMouseEvents forward { *this };
+            Counting() { addAndMakeVisible (child); }
+            void mouseDown (const juce::MouseEvent&) override { ++downs; }
+        } counting;
+        const auto now = juce::Time::getCurrentTime();
+        const auto from = [&] (juce::Component& origin)
+        { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), {}, {}, 1.0f, 0, 0, 0, 0, &origin, &origin, now, {}, now, 1, false); };
+        counting.forward.mouseDown (from (counting));
+        check (counting.downs == 0, "a header's own click does not reach it again as a listener's");
+        counting.forward.mouseDown (from (counting.child));
+        check (counting.downs == 1, "its children's clicks reach it once");
     }
     {
         // Linked tracks: Link Tracks links the selected headers, which show the indicator; clicking it

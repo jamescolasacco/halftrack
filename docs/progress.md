@@ -2228,3 +2228,7 @@ Engine and UI areas. From a static reading of the reference's move and drop code
 - Pressing the start of a track's name no longer folds the track.
 
 Measured in the groups suite with renders, refusals and undo, and checked in the UI suite ([contract](research/groups-contract.md#moving-tracks-2026-10-23)).
+
+## Header clicks arrive once — 2026-10-23
+
+UI area. Arrangement headers, group headers and the Main's Session strip listened to their own mouse events to see their children's, and JUCE then delivers a component's own events twice. The fold corner therefore folded and unfolded the track in one click, and the wheel over a header's background scrolled twice. They now take their children's events through `ChildMouseEvents`, which passes on the children's only. Checked in the UI suite.
