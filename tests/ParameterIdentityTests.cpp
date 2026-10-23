@@ -1,4 +1,5 @@
 #include "Session.h"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -75,7 +76,7 @@ int runParameterIdentityTests (const juce::File& artifacts)
         // Duplicating: the copy's devices have their own identities and automation; the mapping stays.
         juce::String copyId;
         ok (s.duplicateTrack (trackId, copyId), "duplicate the Drums track");
-        const auto copied = s.snapshot().tracks[(size_t) trackIndex ("Drums copy")];
+        const auto copied = [&] { for (const auto& t : s.snapshot().tracks) if (t.id == copyId) return t; return Session::TrackInfo {}; }();
         juce::String copiedEq;
         for (const auto& p : copied.plugins) if (p.isNativeEffect && p.effect.kind == Session::EffectKind::eqThree) copiedEq = p.id;
         check (copiedEq.isNotEmpty() && copiedEq != eq && device (s.snapshot(), copiedEq)->automation.size() == 1 && ! mapped (s, "device:" + copiedEq + ":1"),
@@ -89,7 +90,9 @@ int runParameterIdentityTests (const juce::File& artifacts)
         s.undo();
         drives (20, 0);
         check (mapped (s, eqKey) && near (eqValue(), range->first) && eqAutomated(), "undo restores the EQ, its mapping and automation");
-        check (trackIndex ("Bass") >= 0 && trackIndex ("Drums copy") >= 0, "and only the deletion: edits made while a controller moves are undo steps of their own");
+        const auto afterUndo = s.snapshot();
+        check (trackIndex ("Bass") >= 0 && std::any_of (afterUndo.tracks.begin(), afterUndo.tracks.end(), [&] (const auto& t) { return t.id == copyId; }),
+               "and only the deletion: edits made while a controller moves are undo steps of their own");
 
         // Reopening keeps every identity.
         ok (s.saveProject (project), "save");

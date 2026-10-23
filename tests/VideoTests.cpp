@@ -83,7 +83,7 @@ int runVideoTests (const juce::File& artifacts)
         ok (s.importVideo (movie), "import the movie");
         const auto clip = [&] { return s.snapshot().tracks.back().clips[0]; };
         const auto assets = root.getChildFile ("Film").getChildFile ("Film Assets");
-        check (s.snapshot().tracks.size() == tracks + 1 && s.snapshot().tracks.back().name == "Picture" && clip().name == "Picture" && std::abs (clip().length - 2) < .01
+        check (s.snapshot().tracks.size() == tracks + 1 && s.snapshot().tracks.back().name == juce::String ((int) s.snapshot().tracks.size()) + "-Picture" && clip().name == "Picture" && std::abs (clip().length - 2) < .01
                    && clip().videoFile.isAChildOf (assets) && clip().videoFile.existsAsFile() && clip().file.isAChildOf (assets) && clip().warp.mode == Session::WarpMode::off,
                "it becomes a track named after it, with an unwarped clip of its sound, both collected into the project");
         s.undo();

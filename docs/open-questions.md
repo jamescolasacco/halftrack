@@ -735,7 +735,7 @@ Halftrack's default fades follow a static reading of the reference's code ([cont
 
 ### The default project and track names
 
-The reference's built-in default Set (read 2026-10-22) holds two MIDI tracks without instruments and two audio tracks, named 1-MIDI, 2-MIDI, 3-Audio and 4-Audio. It also has two returns, A-Reverb (with Reverb) and B-Delay (with Delay), eight scenes, 120 BPM and 4/4. Its tracks name themselves from their position and their first device until renamed. Halftrack's new project has two audio tracks named Audio 1 and Audio 2, and a new MIDI track gets the built-in synth. Matching the reference's default would change what every suite builds on, so it waits for a factory default set kept apart from the test projects.
+The reference's built-in default Set (read 2026-10-22) holds two MIDI tracks without instruments and two audio tracks, named 1-MIDI, 2-MIDI, 3-Audio and 4-Audio. It also has two returns, A-Reverb (with Reverb) and B-Delay (with Delay), eight scenes, 120 BPM and 4/4. Its tracks name themselves from their position and their first device until renamed, as Halftrack's now do ([contract](research/track-names-contract.md)). Halftrack's new project has two audio tracks, 1-Audio and 2-Audio, and a new MIDI track gets the built-in synth (so it shows 2-Subtractive where the reference's empty track shows 2-MIDI). Matching the reference's default tracks and empty MIDI tracks would change what every suite builds on, so it waits for a factory default set kept apart from the test projects.
 
 ### Mixer sections
 
@@ -747,7 +747,7 @@ A locator or the loop brace can be the song's start, as in the reference. Whethe
 
 ### Track order
 
-Return tracks stay after every other track, as the reference keeps them. A new audio or MIDI track goes after the other tracks and before the returns. Where the reference inserts a new track after the selected one, Halftrack still adds it at the end of the other tracks. Moves cannot cross the returns. A project from an earlier version that holds a return among the other tracks opens with its returns moved last, outside the undo history.
+Return tracks stay after every other track, as the reference keeps them. Insert puts a new audio or MIDI track after the last selected track, or after the other tracks and before the returns, as the reference's does ([contract](research/track-names-contract.md)); an unfolded selected group and selected clips do not take part. Moves cannot cross the returns. A project from an earlier version that holds a return among the other tracks opens with its returns moved last, outside the undo history.
 
 ### Cue
 

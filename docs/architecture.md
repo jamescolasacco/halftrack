@@ -865,6 +865,17 @@ The cue lives in the project's Edit state: `halftrackCueOutput` (an output name,
 
 The `Behaviour` answers the cue patch's hooks: `isTrackCued` and `getCueOutputDeviceID` when graphs are built, and `getCueGain` on the audio thread from a `std::atomic<float>`. `GrooveWatcher` restarts playback when a `halftrackCue` flag changes, so the graph follows. See the [contract](research/cue-contract.md) and the [cue patch](dependencies.md#tracktion-cue-patch).
 
+## Track names
+
+A track's stored engine name is its own name, and empty means automatic. The engine reads an empty audio-track name as "Track N" and an empty folder name as "Submix N", so `Session::Impl::ownName` reads the state directly. `Impl::displayName` builds the name shown from:
+
+- the track's number among audio, MIDI and group tracks;
+- a return's letter;
+- a MIDI track's first instrument, the first clip's name, or the type word;
+- leading # replacement.
+
+The snapshot reports it with the own name. `Impl::refreshFirstClipNames` keeps each track's `halftrackFirstClipName` and `halftrackFirstClipId` without undo after every change, undo, redo and load. Code without a Session, such as the take file names the engine asks Halftrack's behaviour for, reaches the shown name through `shownName (track)`, which calls the behaviour's `trackName`; the Session sets it at construction and clears it on destruction. See the [contract](research/track-names-contract.md).
+
 ## MIDI remote control
 
 `MidiRemote`, owned by `Session::Impl`, is the `MidiInputDevice::RemoteControl` of every MIDI input device with an instance in the current Edit, except the computer keyboard and the virtual inputs that gather others (All MIDI Ins). It is reattached on load, on input refresh and every second, and holds the devices through weak references; detaching clears it from each. The [remote MIDI patch](dependencies.md#tracktion-remote-midi-patch) offers it each message on the MIDI thread before the device's instances. It takes the mapped notes and controllers, and all of them while a mapping is learned, reading a table of atomic flags that `Impl::publishRemote` rewrites on the message thread after every change, undo, redo and learn-target change. What it takes it copies into a fixed 256-entry ring under a spin lock, and the device keeps from its instances. An `AsyncUpdater` drains the ring on the message thread into `Session::handleMidiControl` or `handleMidiNote`. Those learn or apply mappings stored in the Edit's `HALFTRACKMIDIMAP`, resolving targets with the same lane keys and tapers as automation capture; clip slots are pressed and released through `pressSlot` and `releaseSlot`, so mapped notes, controllers and keys follow each clip's Launch Mode.

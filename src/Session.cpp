@@ -57,6 +57,8 @@ const juce::Identifier soloInPlaceProperty { "halftrackSoloInPlace" };
 // The loop brace's Set Song Start Time Here, as the reference's: Play starts at the loop's start.
 const juce::Identifier loopIsSongStartProperty { "halftrackLoopIsSongStart" };
 const juce::Identifier locatorSongStartProperty { "halftrackSongStart" }; // On the locator that is the song's start.
+// A track's first clip's name, which its automatic name can show, and that clip while it is the only one.
+const juce::Identifier firstClipNameProperty { "halftrackFirstClipName" }, firstClipIdProperty { "halftrackFirstClipId" };
 // The Session mixer's sections shown, as view state.
 const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsProperty { "halftrackMixerSends" }, mixerReturnsProperty { "halftrackMixerReturns" }, mixerVolumeProperty { "halftrackMixerVolume" },
                        mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" }, mixerShownProperty { "halftrackMixerInSession" };
@@ -1924,12 +1926,19 @@ public:
         auto base = te::EditFileOperations (track.edit).getEditFile();
         auto dir = base.getSiblingFile (base.getFileNameWithoutExtension() + " Assets");
         dir.createDirectory();
-        return dir.getNonexistentChildFile (File::createLegalFileName (track.getName()) + " Take", extension, true);
+        return dir.getNonexistentChildFile (File::createLegalFileName (trackName ? trackName (track) : track.getName()) + " Take", extension, true);
     }
+    std::function<juce::String (te::Track&)> trackName; // The name a track shows; the Session sets it.
 private:
     bool useDevices;
     juce::String midiPortPrefix;
 };
+// The name a track shows (see Session::renameTrack), wherever the Session's engine runs.
+String shownName (const te::Track& track)
+{
+    auto& behaviour = dynamic_cast<Behaviour&> (track.edit.engine.getEngineBehaviour());
+    return behaviour.trackName ? behaviour.trackName (const_cast<te::Track&> (track)) : track.getName();
+}
 
 // Test engines keep Tracktion's settings and temporary files in a folder owned by
 // this process, so test runs (concurrent ones in other checkouts included) never
@@ -2556,6 +2565,7 @@ struct Session::Impl
             }
             useDevices = true;
         }
+        dynamic_cast<Behaviour&> (engine.getEngineBehaviour()).trackName = [this] (te::Track& t) { return displayName (t); };
         scratch = File::getSpecialLocation (File::tempDirectory).getChildFile ("Halftrack-" + juce::Uuid().toString());
         scratch.createDirectory();
         // JUCE treats a nonexistent base path as a directory when making relative paths.
@@ -2569,6 +2579,7 @@ struct Session::Impl
     }
     ~Impl()
     {
+        dynamic_cast<Behaviour&> (engine.getEngineBehaviour()).trackName = nullptr;
         pluginScan.reset(); // Waits for a running scan to stop.
         // Removing the callback reports a device stop; the session is closing, so no take ends here.
         deviceStops.attached = false;
@@ -3126,6 +3137,7 @@ struct Session::Impl
     {
         flushStructuralUpdates();
         publishRemote(); // A mapping learned, removed or whose target went.
+        refreshFirstClipNames();
         // Tracktion resets initialization changes on a deferred timer. Keep an
         // independent flag so that timer cannot clear a real user edit.
         explicitChanges = true;
@@ -3149,7 +3161,7 @@ struct Session::Impl
     static Result unfrozen (const te::Track* first, const te::Track* second = nullptr)
     {
         for (const auto* t : { first, second })
-            if (t != nullptr && t->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + t->getName() + "\" before editing its devices or clips.");
+            if (t != nullptr && t->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + shownName (*t) + "\" before editing its devices or clips.");
         return Result::ok();
     }
     te::Track* trackOfPlugin (const String& pluginId) const
@@ -3542,6 +3554,111 @@ struct Session::Impl
         for (auto* other : te::getAudioTracks (*edit))
             if (other != &t && other->getParentTrack() == nullptr && isReturn (*other))
             { edit->moveTrack (te::Track::Ptr (&t), te::TrackInsertPoint (*other, true)); return; }
+    }
+    // Where a new audio or MIDI track goes, as the reference's Insert commands put it: right after
+    // `after`, inside its group, after a group `after` names and everything in it, or after the
+    // other tracks.
+    void placeNewTrack (te::AudioTrack& t, const String& after)
+    {
+        if (auto* other = track (after); other != nullptr && other != &t && ! isReturn (*other))
+        { edit->moveTrack (te::Track::Ptr (&t), te::TrackInsertPoint (*other, false)); return; }
+        if (auto* folder = group (after)) { edit->moveTrack (te::Track::Ptr (&t), te::TrackInsertPoint (*folder, false)); return; }
+        placeBeforeReturns (t);
+    }
+    // Track names, as the reference's (static reading of its code). A track's own name is its
+    // stored name; the engine reads an empty one as "Track N", so it is read from the state.
+    static String ownName (const te::Track& t) { return t.state[te::IDs::name].toString(); }
+    // Its number: its place among the audio, MIDI and group tracks, returns not counted.
+    int trackNumber (const te::Track& t) const
+    {
+        int number = 0;
+        for (auto* other : te::getAllTracks (*edit))
+        {
+            const auto* audio = dynamic_cast<const te::AudioTrack*> (other);
+            const auto* folder = dynamic_cast<const te::FolderTrack*> (other);
+            if ((audio != nullptr && ! isReturn (*audio)) || (folder != nullptr && folder->isSubmixFolder())) ++number;
+            if (other == &t) break;
+        }
+        return number;
+    }
+    String returnLetter (const te::AudioTrack& t) const
+    {
+        juce::juce_wchar letter = 'A';
+        for (auto* other : te::getAudioTracks (*edit)) { if (other == &t) break; if (isReturn (*other)) ++letter; }
+        return String::charToString (letter);
+    }
+    // What an automatic name shows after its number or letter.
+    String automaticPart (te::Track& t) const
+    {
+        auto* audio = dynamic_cast<te::AudioTrack*> (&t);
+        if (audio == nullptr) return "Group";
+        if (isReturn (*audio))
+        {
+            juce::StringArray names;
+            for (auto* p : plugins (te::getAudioTracks (*edit).indexOf (audio))) names.add (p->getName());
+            return names.isEmpty() ? String ("Return") : names.joinIntoString (" | ");
+        }
+        const bool midi = audio->state.getProperty (midiTrackProperty, false);
+        if (midi) if (auto* sound = instrument (*audio)) return sound->getName();
+        const String type = midi ? "MIDI" : "Audio";
+        // A first clip named only for its track (the type word, or a number and the type word, with
+        // any count after it) does not name the track.
+        const auto first = audio->state[firstClipNameProperty].toString().trim();
+        const auto stem = first.trimCharactersAtEnd ("0123456789 ");
+        const auto number = stem.upToFirstOccurrenceOf ("-", false, false);
+        const bool onlyType = stem.equalsIgnoreCase (type)
+            || (stem.contains ("-") && number.isNotEmpty() && number.containsOnly ("0123456789") && stem.fromFirstOccurrenceOf ("-", false, false).equalsIgnoreCase (type));
+        return first.isNotEmpty() && ! onlyType ? first : type;
+    }
+    // The name a track shows: its own, a leading run of # becoming its number padded to the run's
+    // length, or its number and automatic part; a return's letter comes before either.
+    String displayName (te::Track& t) const
+    {
+        const auto own = ownName (t);
+        if (auto* audio = dynamic_cast<te::AudioTrack*> (&t); audio != nullptr && isReturn (*audio))
+            return returnLetter (*audio) + "-" + (own.isNotEmpty() ? own : automaticPart (t));
+        const int number = trackNumber (t);
+        if (own.isEmpty()) return String (number) + "-" + automaticPart (t);
+        int hashes = 0;
+        while (hashes < own.length() && own[hashes] == '#') ++hashes;
+        return hashes == 0 ? own : String (number).paddedLeft ('0', hashes) + own.substring (hashes);
+    }
+    // What renaming to `typed` keeps as a track's own name: an empty name, the automatic name, or
+    // on a return its automatic part alone, make the name automatic again. A return's own letter
+    // typed before the name, as its shown name has it, is not kept twice.
+    String typedName (te::Track& t, const String& typed) const
+    {
+        auto trimmed = typed.trim();
+        auto* audio = dynamic_cast<te::AudioTrack*> (&t);
+        const bool onReturn = audio != nullptr && isReturn (*audio);
+        if (onReturn && trimmed.startsWith (returnLetter (*audio) + "-") && trimmed.length() > 2 && trimmed != returnLetter (*audio) + "-" + automaticPart (t))
+            trimmed = trimmed.substring (2).trim();
+        const auto part = automaticPart (t);
+        const auto automatic = (onReturn ? returnLetter (*audio) : String (trackNumber (t))) + "-" + part;
+        return trimmed.isEmpty() || trimmed == automatic || (onReturn && trimmed == part) ? String() : trimmed;
+    }
+    // The first clip's name, as the reference keeps it: it follows the clip while the track has that
+    // clip alone, stays when more come, and goes with the last. Kept with the project, outside the
+    // undo history.
+    void refreshFirstClipNames()
+    {
+        for (auto* t : te::getAudioTracks (*edit))
+        {
+            if (isReturn (*t)) continue;
+            std::vector<te::Clip*> clips;
+            for (auto* c : t->getClips()) clips.push_back (c);
+            for (auto* slot : t->getClipSlotList().getClipSlots()) if (auto* c = slot->getClip()) clips.push_back (c);
+            auto& state = t->state;
+            const auto keep = [&state] (const juce::Identifier& key, const String& value)
+            {
+                if (value.isEmpty()) { if (state.hasProperty (key)) state.removeProperty (key, nullptr); }
+                else if (state[key].toString() != value) state.setProperty (key, value, nullptr);
+            };
+            if (clips.empty()) { keep (firstClipNameProperty, {}); keep (firstClipIdProperty, {}); }
+            else if (clips.size() > 1) keep (firstClipIdProperty, {});
+            else if (state[firstClipNameProperty].toString().isEmpty() || state[firstClipIdProperty].toString() == clips[0]->itemID.toString())
+            { keep (firstClipNameProperty, clips[0]->getName()); keep (firstClipIdProperty, clips[0]->itemID.toString()); }
+        }
     }
     void keepReturnsLast()
     {
@@ -4306,6 +4423,7 @@ struct Session::Impl
         edit->getAutomationRecordManager().setWritingAutomation (false);
         edit->setCountInMode (countInMode (prefs.countInBars)); // The application's count-in.
         keepReturnsLast();
+        refreshFirstClipNames(); // Projects from before first clips' names were kept.
         applyMasterOutput();
         refreshRouting();
         if (useDevices) edit->getTransport().ensureContextAllocated();
@@ -5394,7 +5512,7 @@ Session::Snapshot Session::snapshot() const
     for (auto* t : te::getAudioTracks (e))
     {
         TrackInfo info;
-        info.id = t->itemID.toString(); info.name = t->getName(); info.colour = t->getColour();
+        info.id = t->itemID.toString(); info.name = impl->displayName (*t); info.userName = Impl::ownName (*t); info.colour = t->getColour();
         if (const auto link = t->state[linkProperty].toString(); link.isNotEmpty() && linkSizes[link] > 1) info.linkId = link;
         info.autoArmed = info.id == impl->autoArmed;
         info.mute = t->isMuted (false); info.solo = t->isSolo (false) || static_cast<bool> (t->state.getProperty (cueProperty, false));
@@ -5523,7 +5641,7 @@ Session::Snapshot Session::snapshot() const
         if (auto* folder = dynamic_cast<te::FolderTrack*> (track); folder != nullptr && folder->isSubmixFolder())
         {
             GroupInfo group;
-            group.id = folder->itemID.toString(); group.name = folder->getName(); group.colour = folder->getColour();
+            group.id = folder->itemID.toString(); group.name = impl->displayName (*folder); group.userName = Impl::ownName (*folder); group.colour = folder->getColour();
             group.mute = folder->isMuted (false); group.solo = folder->isSolo (false) || static_cast<bool> (folder->state.getProperty (cueProperty, false));
             group.folded = folder->state.getProperty (groupFoldedProperty, false);
             if (auto* v = folder->getVolumePlugin()) { group.gainDb = v->getVolumeDb(); group.pan = v->getPan(); }
@@ -5566,7 +5684,7 @@ Result Session::newProject()
     impl->edit->state.setProperty(recordQuantisationProperty,0,nullptr);
     impl->edit->getTransport().setLoopRange ({ te::TimePosition::fromSeconds (0), te::TimePosition::fromSeconds (8) });
     for (auto* t : te::getAudioTracks (*impl->edit)) impl->edit->deleteTrack (t);
-    addAudioTrack ("Audio 1"); addAudioTrack ("Audio 2");
+    addAudioTrack(); addAudioTrack(); // Automatic names: 1-Audio and 2-Audio.
     impl->edit->getSceneList().ensureNumberOfScenes (8);
     for (auto* scene : impl->edit->getSceneList().getScenes())
     {
@@ -6426,7 +6544,7 @@ Result Session::locateMissingMedia (const File& folder, int& found)
     if (found > 0) { impl->edit->restartPlayback(); impl->explicitChanges = true; impl->pristineNewDocument = false; }
     sendChangeMessage(); return Result::ok();
 }
-Result Session::addAudioTrack (String name)
+Result Session::addAudioTrack (String name, const String& after)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     impl->transaction ("Add audio track");
@@ -6434,17 +6552,17 @@ Result Session::addAudioTrack (String name)
     impl->edit->ensureNumberOfAudioTracks (count + 1);
     auto* t = impl->track (count);
     if (! t) return Result::fail ("Could not create an audio track.");
-    t->setName (name.isEmpty() ? "Audio " + String (count + 1) : name);
+    t->setName (name.trim()); // Empty is automatic.
     const juce::uint32 colours[] = { 0xffd0a35e, 0xff86a395, 0xff899bbb, 0xffb98579, 0xffaaa179, 0xffa58aaa };
     t->setColour (juce::Colour (colours[count % 6]));
     if (auto result = useTrackMixer (*t); result.failed()) return result;
     t->getVolumePlugin()->setVolumeDb (0);
     t->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
-    impl->placeBeforeReturns (*t); impl->lastCreated = t;
+    impl->placeNewTrack (*t, after); impl->lastCreated = t;
     impl->changed();
     return Result::ok();
 }
-Result Session::addMidiTrack (String name)
+Result Session::addMidiTrack (String name, const String& after)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     impl->transaction ("Add MIDI track");
@@ -6452,7 +6570,7 @@ Result Session::addMidiTrack (String name)
     impl->edit->ensureNumberOfAudioTracks (count + 1);
     auto* track = impl->track (count);
     if (! track) return Result::fail ("Could not create a MIDI track.");
-    track->setName (name.isEmpty() ? "MIDI " + String (count + 1) : name);
+    track->setName (name.trim()); // Empty is automatic.
     track->setColour (juce::Colour (0xff9d91bc));
     track->state.setProperty (midiTrackProperty, true, &impl->edit->getUndoManager());
     if (auto result = useTrackMixer (*track); result.failed()) return result;
@@ -6461,10 +6579,10 @@ Result Session::addMidiTrack (String name)
     if (! synth) return Result::fail ("Could not create the built-in synthesizer.");
     track->pluginList.insertPlugin (synth, 0, nullptr);
     track->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
-    impl->placeBeforeReturns (*track); impl->lastCreated = track;
+    impl->placeNewTrack (*track, after); impl->lastCreated = track;
     impl->changed(); return Result::ok();
 }
-Result Session::addReturnTrack (String name)
+Result Session::addReturnTrack (String name, const String& after)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     impl->transaction ("Add return track");
@@ -6483,13 +6601,16 @@ Result Session::addReturnTrack (String name)
     track->state.setProperty (returnProperty, true, undo);
     track->state.setProperty (returnBusProperty, bus, undo);
     track->state.setProperty (returnModeProperty, static_cast<int> (SendMode::post), undo);
-    track->setName (name.trim().isEmpty() ? "Return " + String (static_cast<int> (used.size()) + 1) : name.trim());
+    track->setName (name.trim()); // Empty is automatic.
     track->setColour (juce::Colour (0xffb9a283));
     if (auto result = useTrackMixer (*track); result.failed()) return result;
     track->getVolumePlugin()->setVolumeDb (0);
     aux->busNumber = bus;
     track->pluginList.insertPlugin (input, 0, nullptr);
     track->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
+    // Right after the return `after` names, as the reference puts a new return; otherwise last.
+    if (auto* other = impl->track (after); other != nullptr && other != track && isReturn (*other))
+        impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (*other, false));
     impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::setTrackSendGain (int index, const String& destinationID, float decibels)
@@ -6976,7 +7097,7 @@ Result Session::captureMidi (CaptureDestination destination, juce::StringArray& 
             int scene = -1;
             const auto slots = track->getClipSlotList().getClipSlots();
             for (int i = 0; i < slots.size() && scene < 0; ++i) if (slots[i]->getClip() == nullptr) scene = i;
-            if (scene < 0) { result = Result::fail ("\"" + track->getName() + "\" has no empty slot to capture into."); continue; }
+            if (scene < 0) { result = Result::fail ("\"" + shownName (*track) + "\" has no empty slot to capture into."); continue; }
             if (result = addMidiClipToSlot (id, scene, length); result.failed()) continue;
             clipId = track->getClipSlotList().getClipSlots()[scene]->getClip()->itemID.toString();
         }
@@ -8639,8 +8760,7 @@ Result Session::groupTracks (const juce::StringArray& ids, String& groupId)
     auto folder = impl->edit->insertNewFolderTrack (te::TrackInsertPoint (*members.getFirst(), true), nullptr, true);
     if (folder == nullptr) return Result::fail ("Could not create the group.");
     if (auto result = useTrackMixer (*folder); result.failed()) return result;
-    int count = 0; for (auto* track : te::getAllTracks (*impl->edit)) if (auto* f = dynamic_cast<te::FolderTrack*> (track); f && f->isSubmixFolder()) ++count;
-    folder->setName ("Group " + String (count));
+    folder->setName ({}); // Automatic: its number and Group.
     folder->setColour (members.getFirst()->getColour());
     te::Track* preceding = nullptr;
     for (auto* track : members) { impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (folder.get(), preceding)); preceding = track; }
@@ -8665,9 +8785,9 @@ Result Session::renameGroup (const String& groupId, const String& name)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* folder = impl->group (groupId); if (! folder) return Result::fail ("Group not found.");
-    if (name.trim().isEmpty()) return Result::fail ("Enter a group name.");
-    if (folder->getName() == name.trim()) return Result::ok();
-    impl->transaction ("Rename group"); folder->setName (name.trim()); impl->changed(); return Result::ok();
+    const auto own = impl->typedName (*folder, name);
+    if (own == Impl::ownName (*folder)) return Result::ok();
+    impl->transaction ("Rename group"); folder->setName (own); impl->changed(); return Result::ok();
 }
 Result Session::setGroupGain (const String& groupId, float value)
 {
@@ -8751,7 +8871,7 @@ Result Session::duplicateTrack (const String& id, String& duplicateId)
             }
     renewMidiNoteIDs (track->state, undo);
     track->state.removeProperty (linkProperty, undo); // A duplicate starts unlinked.
-    track->setName (source->getName() + " copy");
+    track->setName (Impl::ownName (*source)); // A duplicate keeps the source's name, or its automatic one.
     // Input target assignments live outside this copied track, so the new ID has
     // no input/arm state. Runtime Session ownership must not silence its Arrangement.
     track->state.setProperty (te::IDs::playSlotClips, false, undo);
@@ -8813,7 +8933,7 @@ Result Session::flattenTrack (const String& trackId)
     if (reader == nullptr || reader->lengthInSamples <= 0) return Result::fail ("The frozen render is unavailable. Unfreeze and freeze the track again.");
     // The render becomes ordinary project audio: a 32-bit float WAV in the Assets folder.
     auto assets = impl->assets(); if (auto r = assets.createDirectory(); r.failed()) return r;
-    const auto file = assets.getNonexistentChildFile (File::createLegalFileName (track->getName()) + " Flattened", ".wav", true);
+    const auto file = assets.getNonexistentChildFile (File::createLegalFileName (shownName (*track)) + " Flattened", ".wav", true);
     {
         juce::AudioBuffer<float> audio ((int) reader->numChannels, (int) reader->lengthInSamples);
         if (! reader->read (&audio, 0, audio.getNumSamples(), 0, true, true)) return Result::fail ("The frozen render could not be read.");
@@ -8844,7 +8964,7 @@ Result Session::flattenTrack (const String& trackId)
         for (auto* input : impl->edit->getAllInputDevices())
             if (input->getTargets().contains (track->itemID)) [[maybe_unused]] auto removed = input->removeTarget (track->itemID, undo);
     }
-    auto clip = te::insertWaveClip (*track, track->getName() + " Flattened", file, { { te::TimePosition(), te::TimePosition::fromSeconds (seconds) }, {} }, te::DeleteExistingClips::no);
+    auto clip = te::insertWaveClip (*track, shownName (*track) + " Flattened", file, { { te::TimePosition(), te::TimePosition::fromSeconds (seconds) }, {} }, te::DeleteExistingClips::no);
     if (! clip) return Result::fail ("Could not create the flattened clip.");
     clip->getSourceFileReference().setToFile (file, te::SourceFileReference::PathStyle::alwaysAbsolute, false);
     clip->setAutoTempo (false); clip->setAutoPitch (false);
@@ -8876,7 +8996,8 @@ Result Session::importAudio (const File& source, int index, double start)
     te::AudioFile audio (impl->engine, source);
     if (! audio.isValid() || audio.getLength() <= 0) return Result::fail ("This audio file could not be read.");
     if (! std::isfinite (start) || start < 0) return Result::fail ("Clip start must be zero or greater.");
-    if (index < 0) { auto r = addAudioTrack (source.getFileNameWithoutExtension()); if (r.failed()) return r; index = te::getAudioTracks (*impl->edit).indexOf (impl->lastCreated); }
+    // A new track is named automatically, which its first clip names after the file.
+    if (index < 0) { auto r = addAudioTrack(); if (r.failed()) return r; index = te::getAudioTracks (*impl->edit).indexOf (impl->lastCreated); }
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
     if (isReturn (*t) || static_cast<bool> (t->state.getProperty (midiTrackProperty))) return Result::fail ("Import audio onto an audio track.");
     auto assets = impl->assets(); auto r = assets.createDirectory(); if (r.failed()) return r;
@@ -8993,7 +9114,7 @@ Result Session::importVideo (const File& movie, int index, double start)
     const OneUndoStep step (*this, true, impl->gesture != nullptr, "Import movie");
     if (index < 0)
     {
-        if (auto r = addAudioTrack (movie.getFileNameWithoutExtension()); r.failed()) { discard(); return r; }
+        if (auto r = addAudioTrack(); r.failed()) { discard(); return r; } // Named by its first clip, the movie's.
         index = te::getAudioTracks (*impl->edit).indexOf (impl->lastCreated);
     }
     impl->importingVideo = true;
@@ -9616,7 +9737,7 @@ Result splittableAt (te::AudioTrack& track, te::TimePosition at)
     {
         const auto p = clip->getPosition();
         if (p.getStart() >= at || p.getEnd() <= at) continue;
-        if (track.isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + track.getName() + "\" before editing its clips.");
+        if (track.isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + shownName (track) + "\" before editing its clips.");
         if (auto* wave = dynamic_cast<te::WaveAudioClip*> (clip); wave != nullptr && canSplitAt (*wave, at.inSeconds())) continue;
         if (auto* midi = dynamic_cast<te::MidiClip*> (clip); midi != nullptr && canSplitMidiAt (*midi, at)) continue;
         return Result::fail ("\"" + clip->getName() + "\" cannot be split at the selection edge (warped, looped, inside a fade or too close to its end).");
@@ -9975,15 +10096,15 @@ Result Session::consolidateRange (const juce::StringArray& trackIds, double star
             impl->refreshRouting();
             impl->edit->dispatchPendingUpdatesSynchronously();
             const te::Edit::ScopedRenderStatus renderStatus (*impl->edit, true);
-            const auto target = assets.getNonexistentChildFile (File::createLegalFileName (t->getName() + " Consolidated"), ".wav", true);
+            const auto target = assets.getNonexistentChildFile (File::createLegalFileName (shownName (*t) + " Consolidated"), ".wav", true);
             te::Renderer::Parameters p (*impl->edit);
             p.destFile = target; p.audioFormat = impl->engine.getAudioFileFormatManager().getWavFormat();
             p.bitDepth = 32; p.sampleRateForAudio = rate; p.blockSizeForAudio = 512;
             p.time = range; p.tracksToDo = te::toBitSet (juce::Array<te::Track*> { t });
             for (auto* c : t->getClips()) if (c->getPosition().time.overlaps (range)) p.allowedClips.add (c);
             p.usePlugins = false; p.useMasterPlugins = false; p.canRenderInMono = false; p.checkNodesForAudio = false; p.ditheringEnabled = false;
-            const auto rendered = te::Renderer::renderToFile ("Consolidate " + t->getName(), p);
-            if (! rendered.existsAsFile()) { restore(); return Result::fail ("\"" + t->getName() + "\" could not be consolidated."); }
+            const auto rendered = te::Renderer::renderToFile ("Consolidate " + shownName (*t), p);
+            if (! rendered.existsAsFile()) { restore(); return Result::fail ("\"" + shownName (*t) + "\" could not be consolidated."); }
             renders[t] = rendered;
         }
         restore();
@@ -10000,7 +10121,7 @@ Result Session::consolidateRange (const juce::StringArray& trackIds, double star
         if (auto found = renders.find (t); found != renders.end())
         {
             for (auto& c : inside) c->removeFromParent();
-            auto clip = te::insertWaveClip (*t, t->getName() + " Consolidated", found->second, { range, {} }, te::DeleteExistingClips::no);
+            auto clip = te::insertWaveClip (*t, shownName (*t) + " Consolidated", found->second, { range, {} }, te::DeleteExistingClips::no);
             if (! clip) return Result::fail ("The consolidated clip could not be created.");
             clip->setAutoTempo (false); clip->setAutoPitch (false);
             clip->setFadeIn (te::TimeDuration()); clip->setFadeOut (te::TimeDuration());
@@ -10044,7 +10165,7 @@ Result Session::insertTime (double start, double length)
             const auto p = clip->getPosition(); end = std::max (end, p.getEnd().inSeconds());
             if (p.getStart().inSeconds() < start && p.getEnd().inSeconds() > start)
             {
-                if (track->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + track->getName() + "\" before inserting time inside its clips.");
+                if (track->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + shownName (*track) + "\" before inserting time inside its clips.");
                 const auto* wave = dynamic_cast<te::WaveAudioClip*> (clip); const auto* midi = dynamic_cast<te::MidiClip*> (clip);
                 if ((wave != nullptr && ! canSplitAt (*wave, start)) || (midi != nullptr && ! canCopyMidiClip (*midi)) || (wave == nullptr && midi == nullptr))
                     return Result::fail ("\"" + clip->getName() + "\" cannot be split at the insertion point. Move it or choose another point.");
@@ -10102,7 +10223,7 @@ Result Session::deleteTime (double start, double length)
         {
             const auto p = clip->getPosition(); const auto cs = p.getStart().inSeconds(), ce = p.getEnd().inSeconds();
             if (ce <= start || cs >= end) continue;
-            if (track->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + track->getName() + "\" before deleting time from its clips.");
+            if (track->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + shownName (*track) + "\" before deleting time from its clips.");
             const auto* wave = dynamic_cast<te::WaveAudioClip*> (clip); const auto* midi = dynamic_cast<te::MidiClip*> (clip);
             const bool ok = midi != nullptr ? canCopyMidiClip (*midi)
                           : wave != nullptr && (cs >= start || canSplitAt (*wave, start)) && (ce <= end || canSplitAt (*wave, end));
@@ -10600,8 +10721,9 @@ Result Session::renameTrack (int index, const String& name)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
-    if (name.trim().isEmpty()) return Result::fail ("Enter a track name.");
-    impl->transaction ("Rename track"); t->setName (name.trim()); impl->changed(); return Result::ok();
+    const auto own = impl->typedName (*t, name);
+    if (own == Impl::ownName (*t)) return Result::ok();
+    impl->transaction ("Rename track"); t->setName (own); impl->changed(); return Result::ok();
 }
 float Session::crossfadeGain (CrossfadeAssign side, float position)
 {
@@ -11952,6 +12074,7 @@ void Session::undo()
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
     impl->applyCue(); // A cue volume or switch undone, in either mode.
     impl->publishRemote(); // A mapping undone.
+    impl->refreshFirstClipNames();
     impl->finishInputChange(monitored);sendChangeMessage();
 }
 void Session::redo()
@@ -11973,6 +12096,7 @@ void Session::redo()
     impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
     impl->applyCue();
     impl->publishRemote();
+    impl->refreshFirstClipNames();
     impl->finishInputChange(monitored);sendChangeMessage();
 }
 bool Session::canUndo() const { return ! impl->exporting && ! impl->anyRecording() && impl->edit->getUndoManager().canUndo(); }

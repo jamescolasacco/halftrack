@@ -43,7 +43,8 @@ void retained (const Session::Snapshot& before, const Session::Snapshot& after)
     for (const auto& a : before.tracks)
     {
         const auto& b = find (after, a.id);
-        check (a.name == b.name && a.colour == b.colour && a.isMidi == b.isMidi && a.isReturn == b.isReturn
+        // Automatic names renumber as tracks move, as the reference's do; a name of its own stays.
+        check (a.userName == b.userName && a.colour == b.colour && a.isMidi == b.isMidi && a.isReturn == b.isReturn
             && a.gainDb == b.gainDb && a.pan == b.pan && a.mute == b.mute && a.solo == b.solo && a.armed == b.armed
             && a.monitor == b.monitor && a.inputName == b.inputName && a.sendMode == b.sendMode
             && a.plugins.size() == b.plugins.size() && a.clips.size() == b.clips.size()
@@ -200,6 +201,79 @@ int runTrackOrderTests (const juce::File& artifacts)
             ok (s.saveProject (mixed), "save them"); ok (s.newProject(), "a new project");
             check (s.mixerSections() == Session::MixerSections {}, "which has the defaults");
             ok (s.loadProject (mixed), "reopen"); check (s.mixerSections() == shown, "and the saved sections come back");
+        }
+        {
+            // Where Insert puts a track, and automatic names, as the reference's (static reading of its code).
+            Session s (false);
+            const auto names = [&] { juce::StringArray n; for (const auto& t : s.snapshot().tracks) n.add (t.name); return n; };
+            const auto at = [&] (int i) { return s.snapshot().tracks[(size_t) i]; };
+            check (names() == juce::StringArray { "1-Audio", "2-Audio" } && at (0).userName.isEmpty(), "a new project's tracks are named automatically");
+            ok (s.addMidiTrack ({}, at (0).id), "insert a MIDI track after the first");
+            const auto midi = at (1).id;
+            check (names() == juce::StringArray { "1-Audio", "2-Subtractive", "3-Audio" }, "it goes right after it, named by its instrument, and the track after it renumbers");
+            ok (s.removeTrackInstrument (midi), "remove its instrument");
+            check (at (1).name == "2-MIDI", "without an instrument it is 2-MIDI");
+            ok (s.addReturnTrack(), "a return"); ok (s.addReturnTrack(), "and another");
+            const auto firstReturn = at (3).id, secondReturn = at (4).id;
+            ok (s.addReturnTrack ({}, firstReturn), "insert a return after the first");
+            check (names() == juce::StringArray { "1-Audio", "2-MIDI", "3-Audio", "A-Return", "B-Return", "C-Return" } && at (3).id == firstReturn && at (5).id == secondReturn,
+                   "it goes right after it, and returns are lettered in order");
+            ok (s.addAudioTrack ({}, firstReturn), "insert an audio track with a return selected");
+            check (names() == juce::StringArray { "1-Audio", "2-MIDI", "3-Audio", "4-Audio", "A-Return", "B-Return", "C-Return" }, "it goes after the other tracks");
+            s.undo();
+            check (names().size() == 6, "an insertion is one undo step");
+            ok (s.addNativeEffect (3, Session::EffectKind::reverb), "give return A a device");
+            ok (s.addNativeEffect (3, Session::EffectKind::delay), "and another");
+            const auto devices = at (3).plugins;
+            check (at (3).name == "A-" + devices[0].name + " | " + devices[1].name, "a return without its own name shows its devices' names (" + at (3).name + ")");
+            // Renaming.
+            ok (s.renameTrack (0, "Bass"), "rename the first track");
+            check (at (0).name == "Bass" && at (0).userName == "Bass", "a name of its own shows without a number");
+            s.undo(); check (at (0).name == "1-Audio", "renaming is one undo step"); s.redo();
+            ok (s.renameTrack (2, "## Keys"), "a name starting with two #");
+            check (at (2).name == "03 Keys", "a leading run of # becomes the number, padded to its length");
+            ok (s.renameTrack (2, "  "), "rename to nothing");
+            check (at (2).name == "3-Audio" && at (2).userName.isEmpty(), "an empty name makes it automatic again");
+            ok (s.renameTrack (2, "3-Audio"), "type the automatic name");
+            check (at (2).userName.isEmpty() && s.renameTrack (2, " Lead ").wasOk() && at (2).name == "Lead", "the automatic name stays automatic; a typed one is trimmed");
+            ok (s.renameTrack (3, "Verb"), "rename return A");
+            check (at (3).name == "A-Verb", "a return keeps its letter before its own name");
+            ok (s.renameTrack (3, "A-Hall"), "type the letter too");
+            check (at (3).userName == "Hall" && at (3).name == "A-Hall", "the letter is not kept twice");
+            ok (s.renameTrack (3, devices[0].name + " | " + devices[1].name), "type its automatic part");
+            check (at (3).userName.isEmpty(), "which makes it automatic again");
+            // A track's first clip names it, as the reference's does.
+            ok (s.renameTrack (2, {}), "track 3 automatic again");
+            ok (s.importAudio (a, 2), "give it a clip from a.wav");
+            check (at (2).name == "3-a", "its first clip names it");
+            ok (s.renameClip (at (2).clips[0].id, "Riff"), "rename the clip");
+            check (at (2).name == "3-Riff", "the name follows its only clip");
+            ok (s.importAudio (b, 2, 4), "add a second clip");
+            ok (s.renameClip (at (2).clips[0].id, "Changed"), "rename the first clip again");
+            check (at (2).name == "3-Riff", "with two clips the name stays");
+            ok (s.removeClip (2, 1), "remove one"); ok (s.removeClip (2, 0), "and the other");
+            check (at (2).name == "3-Audio", "with none it is gone");
+            ok (s.importAudio (a, 2), "a new clip");
+            ok (s.renameClip (at (2).clips[0].id, "3-Audio 2"), "named only for its track");
+            check (at (2).name == "3-Audio", "a clip named only for its track does not name it");
+            ok (s.renameClip (at (2).clips[0].id, "Hook"), "name it");
+            // Groups count, and grouped tracks after them renumber.
+            juce::String group;
+            ok (s.groupTracks ({ at (0).id, midi }, group), "group the first two tracks");
+            check (names() == juce::StringArray { "Bass", "3-MIDI", "4-Hook", "A-" + devices[0].name + " | " + devices[1].name, "B-Return", "C-Return" }
+                       && s.snapshot().groups.size() == 1 && s.snapshot().groups[0].name == "1-Group", "the group is 1-Group and the tracks after it renumber");
+            ok (s.renameGroup (group, "Drums"), "rename the group");
+            check (s.snapshot().groups[0].name == "Drums" && s.renameGroup (group, "").wasOk() && s.snapshot().groups[0].name == "1-Group", "a group renames, and back to automatic");
+            // Insert after a grouped track goes into the group; after the group, after everything in it.
+            ok (s.addAudioTrack ({}, midi), "insert after the grouped MIDI track");
+            check (at (2).groupId == group && at (2).name == "4-Audio", "it joins the group after it");
+            ok (s.addAudioTrack ({}, group), "insert after the group");
+            check (at (3).groupId.isEmpty() && at (3).name == "5-Audio" && at (4).name == "6-Hook", "it goes after the group and everything in it");
+            // Automatic names and first clips are saved.
+            const auto saved = names();
+            const auto named = root.getChildFile ("Named").getChildFile ("Named.halftrack");
+            ok (s.saveProject (named), "save"); ok (s.loadProject (named), "reopen");
+            check (names() == saved && ! s.snapshot().dirty, "the names reopen as they were, unchanged");
         }
         std::cout << "Track order tests passed: " << root.getFullPathName() << std::endl; return 0;
     }

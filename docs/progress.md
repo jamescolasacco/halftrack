@@ -2139,3 +2139,12 @@ Engine and UI areas. From a static reading of the reference's code: its record a
 
 Engine area. From a static reading of the reference's remote-control code (findings in the ignored `artifacts/reverse-engineering/notemap/`): a note or key on a control now toggles a two-state switch, steps a choice to the next value and wraps, and sends anything else to Min from at or above the midpoint of its range, or to Max below it. A controller sets a switch (activator, solo, arm, device switch, Record, Loop, Metronome) on at 64 and above and off below, instead of toggling it as it rises. Measured in the MIDI mapping and key map suites.
 
+## Track insertion and automatic names — 2026-10-23
+
+Engine and UI areas. From a static reading of the reference's code (findings in the ignored `artifacts/reverse-engineering/tracks/`):
+
+- **Insert** puts a new audio or MIDI track after the last selected track, inside its group, or after the other tracks when a return is selected or nothing is. A new return goes after a selected return. The new track is selected alone. Cmd/Ctrl+Option/Alt+T inserts a return.
+- **Insert MIDI Track** makes an empty MIDI track, as the reference's does; it no longer makes and opens a clip.
+- **Names.** Tracks without a name of their own show automatic names: their number and their MIDI instrument's name, their first clip's name, or Audio, MIDI or Group. Returns show their letter and their devices' names. Renaming to nothing, or to the automatic name, makes a name automatic again, and a leading # becomes the number. A new project's tracks, and imported audio and movie tracks, are named automatically.
+- **Measured.** The track-order, video and UI suites, with the full gate ([contract](research/track-names-contract.md)).
+

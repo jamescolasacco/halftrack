@@ -835,7 +835,7 @@ public:
             if (code == 'K' && ! shift) { setKeyMapMode (! keyMapMode); return true; }
             if (code == 'O') { openDialog(); return true; }
             if (code == 'N') { ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) safe->startNewProject(); }); return true; }
-            if (code == 'T') { if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
+            if (code == 'T') { if (key.getModifiers().isAltDown()) addReturnTrack(); else if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
             if (code == 'Z') { if (shift) session.redo(); else session.undo(); refresh(); return true; }
             if (code == 'F' && ! shift) { setFollow (! followPlayhead); refresh(); return true; }
             if (code == 'L' && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (79); return true; }
@@ -8697,12 +8697,12 @@ private:
         for (int i = (int) state.tracks.size(); --i >= 0;) if (! state.tracks[(size_t) i].isReturn) return i;
         return -1;
     }
+    // Insert MIDI Track makes an empty MIDI track, as the reference's does; Insert MIDI Clip adds a clip.
     void addMidiTrack()
     {
-        session.beginEditGesture ("Create MIDI track");
-        const auto result = session.addMidiTrack(); report (result); refresh();
-        if (result.wasOk()) { selectTrack (lastOrdinaryTrack()); if (showSession) createLauncherMidiClip(); else createMidiClip (state.insertMarker); }
-        session.endEditGesture();
+        const auto before = trackIds();
+        const auto result = session.addMidiTrack ({}, insertionPoint (false)); report (result); refresh();
+        if (result.wasOk()) { multiSelectedTracks.clear(); selectTrack (createdTrack (before)); }
     }
     GridPlace arrangementGrid() const { return { {}, gridPixelsPerBeat(), visibleBeats(), canvas.timelineWidth() }; }
     const Session::ClipInfo* clipById (const juce::String& id) const
@@ -9119,16 +9119,35 @@ private:
         refresh();
         report (result, (missingPluginSummary() + " " + missingMediaSummary()).trim());
     }
+    // Where Insert puts a new track, as the reference's does: after the last selected track in track
+    // order, or after the other tracks when that is a return. A return goes after a selected return.
+    juce::String insertionPoint (bool forReturn) const
+    {
+        const auto ids = selectedTrackIds();
+        if (ids.isEmpty()) return {};
+        for (const auto& t : state.tracks) if (t.id == ids[ids.size() - 1]) return t.isReturn == forReturn ? t.id : juce::String();
+        return {};
+    }
+    std::set<juce::String> trackIds() const { std::set<juce::String> ids; for (const auto& t : state.tracks) ids.insert (t.id); return ids; }
+    // The track a command just made, which the reference selects alone.
+    int createdTrack (const std::set<juce::String>& before) const
+    {
+        for (int i = 0; i < (int) state.tracks.size(); ++i) if (! before.contains (state.tracks[(size_t) i].id)) return i;
+        return lastOrdinaryTrack();
+    }
     void addTrack()
     {
         showPiano = false;
-        report (session.addAudioTrack()); refresh(); selectTrack (lastOrdinaryTrack());
+        const auto before = trackIds();
+        report (session.addAudioTrack ({}, insertionPoint (false))); refresh();
+        multiSelectedTracks.clear(); selectTrack (createdTrack (before));
         viewport.setViewPosition (0, juce::jmax (0, laneY (selectedTrack) - viewport.getHeight() + trackHeight));
     }
     void addReturnTrack()
     {
-        const auto result = session.addReturnTrack(); report (result); refresh();
-        if (result.wasOk()) { selectTrack ((int) state.tracks.size() - 1); showPiano = false; resized(); }
+        const auto before = trackIds();
+        const auto result = session.addReturnTrack ({}, insertionPoint (true)); report (result); refresh();
+        if (result.wasOk()) { multiSelectedTracks.clear(); selectTrack (createdTrack (before)); showPiano = false; resized(); }
     }
     void setClipActiveFromUI(const juce::String& id,bool active)
     {report(session.setClipActive(id,active));refresh();}
@@ -11436,8 +11455,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     // User-facing note/synth edits use production handlers. The bounded fixture
     // at the end also establishes a facade-valid length below the mouse minimum.
     menuItemSelected (33, 2);
+    check (currentTrack() != nullptr && currentTrack()->isMidi && currentTrack()->clips.empty() && currentMidiClip() == nullptr,
+           "Insert MIDI Track makes an empty MIDI track, as the reference's does");
+    menuItemSelected (34, 2);
     check (currentMidiClip() != nullptr && currentMidiClip()->lengthBeats == 16.0 && showPiano,
-           "MIDI track action creates and opens a four-bar editor");
+           "Insert MIDI Clip creates and opens a four-bar editor");
     pianoRoll.fit();
     // The note grid is the clip's own, adaptive by default; these checks draw on a fixed 1/16 grid.
     const auto sixteenths = [] { Session::EditGrid g; g.fixed = true; return g; }();
@@ -12829,7 +12851,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     menuItemSelected (31, 2);
     menuItemSelected (20, 1);
     menuItemSelected (21, 1);
-    menuItemSelected (33, 2); fixNoteGrid();
+    menuItemSelected (33, 2); menuItemSelected (34, 2); fixNoteGrid();
     check (currentMidiClip() != nullptr && currentMidiClip()->notes.empty(),
            "delete, undo, redo and new track leave the piano editor attached to live state");
     menuItemSelected (45, 3);
@@ -13026,11 +13048,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     menuItemSelected (20, 1);
     check (state.scenes.size() == sceneCount + 1 && state.scenes.back().id == addedScene,
            "scene deletion undo preserves the scene identity");
-    const auto dropPoint = getLocalPoint (&launcher, launcher.slotCentre (0, 1).toInt());
+    // The first audio track's column: Insert puts MIDI tracks after the selected track, so one can come first.
+    int audioColumn = 0;
+    while (audioColumn < (int) state.tracks.size() && state.tracks[(size_t) audioColumn].isMidi) ++audioColumn;
+    const auto dropPoint = getLocalPoint (&launcher, launcher.slotCentre (audioColumn, 1).toInt());
     filesDropped ({ audioFixture.getFullPathName() }, dropPoint.x, dropPoint.y);
-    check (state.tracks.front().slots[1].hasClip && ! state.tracks.front().slots[1].clip.isMidi,
+    check (state.tracks[(size_t) audioColumn].slots[1].hasClip && ! state.tracks[(size_t) audioColumn].slots[1].clip.isMidi,
            "production file-drop handler imports decoded audio into the addressed Session slot");
-    const auto audioClipId = state.tracks.front().slots[1].clip.id;
+    const auto audioClipId = state.tracks[(size_t) audioColumn].slots[1].clip.id;
     if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
     {
         const juce::File directory (juce::String::fromUTF8 (configured));
@@ -13052,17 +13077,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             capture ("session", 1440, 900); capture ("session", 1100, 720);
             selectLauncherSlot (midiTrack, 0); openPianoRoll();
             capture ("session-piano", 1440, 900); capture ("session-piano", 1100, 720);
-            showSessionView(); selectLauncherSlot (0, 1);
+            showSessionView(); selectLauncherSlot (audioColumn, 1);
         }
         else std::cerr << "UI snapshot directory could not be created" << std::endl;
     }
     status.clear();
     filesDropped ({ audioFixture.getFullPathName() }, dropPoint.x, dropPoint.y);
-    check (state.tracks.front().slots[1].clip.id == audioClipId && status.contains ("already contains"),
+    check (state.tracks[(size_t) audioColumn].slots[1].clip.id == audioClipId && status.contains ("already contains"),
            "occupied audio-slot drop is rejected without replacing the existing clip");
     launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey, juce::ModifierKeys (juce::ModifierKeys::shiftModifier), 0));
     pumpSyntheticTestDevice (session, 8); refresh();
-    check (state.tracks.front().slots[1].playing && ! state.tracks[(size_t) midiTrack].slots.front().playing,
+    check (state.tracks[(size_t) audioColumn].slots[1].playing && ! state.tracks[(size_t) midiTrack].slots.front().playing,
            "Shift+Enter launches the selected scene and its empty MIDI slot stops the previous clip");
     menuItemSelected (54, 4);
     pumpSyntheticTestDevice (session, 8); refresh();
@@ -13101,8 +13126,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (currentTrack()->sendMode == Session::SendMode::pre,
            "return Pre-fader control changes the actual destination routing mode");
     returnName->setText ("Room Return", juce::sendNotificationSync); refresh();
-    check (currentTrack()->id == firstReturnId && currentTrack()->name == "Room Return",
-           "existing rename control preserves the return identity");
+    check (currentTrack()->id == firstReturnId && currentTrack()->userName == "Room Return" && currentTrack()->name.endsWith ("-Room Return"),
+           "existing rename control preserves the return identity, shown after its letter");
+    returnName->setText (currentTrack()->name + " 2", juce::sendNotificationSync); refresh();
+    check (currentTrack()->userName == "Room Return 2", "renaming from the shown name does not repeat the letter");
+    returnName->setText ("Room Return", juce::sendNotificationSync); refresh();
     menuItemSelected (35, 2);
     const auto secondReturnId = currentTrack()->id;
     returnName = dynamic_cast<juce::Label*> (findNamed (*canvas.getChildComponent (selectedTrack), "Track name"));
@@ -13112,7 +13140,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     auto sendSlider = [&] (const juce::String& name)
     {
         closeClipView(); // Sends live in the device view, which an open clip editor replaces.
-        auto* slider = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "Send to " + name));
+        auto shown = name; // The return's shown name, after its letter.
+        for (const auto& t : state.tracks) if (t.isReturn && t.userName == name) shown = t.name;
+        auto* slider = dynamic_cast<juce::Slider*> (findNamed (deviceChain, "Send to " + shown));
         bool visible = slider != nullptr;
         for (auto* child = static_cast<juce::Component*> (slider); child != this; child = child != nullptr ? child->getParentComponent() : nullptr)
         {
@@ -13149,7 +13179,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (sendIs (sourceTrack, firstReturnId, -100) && sendIs (sourceTrack, secondReturnId, 0),
            "turning one send Off leaves the other route unchanged");
     roomSend->setValue (-9, juce::sendNotificationSync);
-    menuItemSelected (33, 2); fixNoteGrid();
+    menuItemSelected (33, 2); menuItemSelected (34, 2); fixNoteGrid();
     const auto midiSourceId = currentTrack()->id;
     check (sendSlider ("Room Return")->getValue() == -100 && sendSlider ("Echo Return")->getValue() == -100,
            "new MIDI source exposes its own independent send levels");
@@ -13200,7 +13230,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         for (int i = 0; i < parent.getNumChildComponents(); ++i)
         {
             auto* child = parent.getChildComponent (i);
-            if (auto* label = dynamic_cast<juce::Label*> (child); label != nullptr && label->getName() == "Track name" && label->getText() == "Room Return") return label;
+            if (auto* label = dynamic_cast<juce::Label*> (child); label != nullptr && label->getName() == "Track name" && label->getText().endsWith ("-Room Return")) return label;
             if (auto* found = findReturnLabel (*child)) return found;
         }
         return nullptr;
@@ -13246,7 +13276,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     }
     // Multi-note regression: all edits enter through the production piano mouse,
     // key, menu and slider callbacks. Fixture notes are drawn by the mouse handler.
-    menuItemSelected (43, 3); menuItemSelected (33, 2); pianoRoll.fit(); fixNoteGrid();
+    menuItemSelected (43, 3); menuItemSelected (33, 2); menuItemSelected (34, 2); pianoRoll.fit(); fixNoteGrid();
     const auto groupClipId = currentMidiClip()->id;
     const auto groupTrack = selectedTrack;
     const auto groupBeatWidth = (pianoRoll.getWidth() - 66.0) / 16.0;
@@ -13397,7 +13427,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     pianoRoll.keyPressed (undo); menuItemSelected (44, 3);
     check (currentMidiClip() != nullptr && currentMidiClip()->id == groupClipId && ! pianoRoll.hasSelectedNote(), "clip creation undo resolves live clip identity without stale selection");
 
-    menuItemSelected (33, 2); pianoRoll.fit(); fixNoteGrid();
+    menuItemSelected (33, 2); menuItemSelected (34, 2); pianoRoll.fit(); fixNoteGrid();
     groupClick (groupPoint (0.1, 60)); const auto lowId = currentMidiClip()->notes.back().id;
     edge = groupPoint (1, 60) - juce::Point<float> (2, 0);
     groupDrag (edge, edge + juce::Point<float> ((float) groupBeatWidth, 0));
@@ -13471,7 +13501,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
 
     // The facade also accepts notes shorter than the mouse editor's 1/32-beat
     // floor. Establish that valid fixture directly, then use real UI handlers.
-    menuItemSelected (33, 2); pianoRoll.fit(); fixNoteGrid();
+    menuItemSelected (33, 2); menuItemSelected (34, 2); pianoRoll.fit(); fixNoteGrid();
     groupClick (groupPoint (1.1, 60)); const auto shortId = currentMidiClip()->notes.back().id;
     groupClick (groupPoint (15.1, 64)); const auto endId = currentMidiClip()->notes.back().id;
     check (session.updateMidiNote (currentMidiClip()->id, shortId, 60, 1, 1.0 / 64, 0.8f).wasOk(),
@@ -13483,7 +13513,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
            "group resize preserves valid sub-grid notes without an inverted interval or partial edit");
     // A bounded, preexisting dense clip exercises Select All across notes outside
     // the current viewport. This checks correctness without a timing threshold.
-    menuItemSelected (33, 2); pianoRoll.fit(); fixNoteGrid();
+    menuItemSelected (33, 2); menuItemSelected (34, 2); pianoRoll.fit(); fixNoteGrid();
     const auto denseTrackId = currentTrack()->id, denseClipId = currentMidiClip()->id;
     const auto denseProject = noteLoad.directory.getChildFile ("Dense notes.halftrack");
     check (session.saveProject (denseProject).wasOk(), "save generated dense-note project fixture");
@@ -13537,7 +13567,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
 
     // Clipboard commands use copied values and exact IDs returned by the facade.
     // All note edits below enter through the production mouse/key handlers.
-    menuItemSelected (33, 2); pianoRoll.fit(); fixNoteGrid();
+    menuItemSelected (33, 2); menuItemSelected (34, 2); pianoRoll.fit(); fixNoteGrid();
     const auto clipboardTrackId = currentTrack()->id, clipboardClipId = currentMidiClip()->id;
     const auto commandKey = [] (char key) { return juce::KeyPress (key, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0); };
     const auto copyNotes = commandKey ('C'), cutNotes = commandKey ('X'), pasteNotes = commandKey ('V'), duplicateNotes = commandKey ('D');
@@ -13812,7 +13842,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
 
     // A project can contain ambiguous note IDs. Neither Cut nor Delete may
     // remove a valid first note before rejecting a later ambiguous identity.
-    menuItemSelected (33, 2); pianoRoll.fit(); fixNoteGrid();
+    menuItemSelected (33, 2); menuItemSelected (34, 2); pianoRoll.fit(); fixNoteGrid();
     groupClick (groupPoint (1.1, 60)); const auto uniqueCutId = currentMidiClip()->notes.back().id;
     groupClick (groupPoint (3.1, 64)); const auto ambiguousCutId = currentMidiClip()->notes.back().id;
     groupClick (groupPoint (5.1, 67)); const auto repeatedCutId = currentMidiClip()->notes.back().id;
@@ -15997,6 +16027,16 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tempo == 97 && state.projectFile == juce::File() && ! state.dirty && state.tracks.size() == 3, "New starts from the default set, untitled and unchanged");
         setUserLibrary ({}); check (session.newProject().wasOk(), "leave the template behind"); refresh();
         library.deleteRecursively();
+    }
+    {
+        // Insert puts a track after the selected one and selects it alone, as the reference's does.
+        check (session.newProject().wasOk(), "a new project for Insert"); refresh();
+        selectTrack (0); menuItemSelected (30, 2); refresh();
+        check (selectedTrack == 1 && state.tracks.size() == 3 && state.tracks[1].name == "2-Audio" && state.tracks[2].name == "3-Audio",
+               "Insert Audio Track puts the track after the selected one, selected, and the tracks after it renumber");
+        handleKey (juce::KeyPress ('T', juce::ModifierKeys::commandModifier | juce::ModifierKeys::altModifier, 0)); refresh();
+        check (currentTrack() != nullptr && currentTrack()->isReturn && currentTrack()->name == "A-Return", "Cmd/Ctrl+Option/Alt+T inserts a return track");
+        check (session.newProject().wasOk(), "leave the Insert project"); refresh();
     }
     {
         // Exclusive solo and arm: a plain click releases the others, Cmd/Ctrl-click adds; neither is an undo step.

@@ -465,7 +465,9 @@ public:
     };
     struct TrackInfo
     {
-        juce::String id, name;
+        // The name shown: the user's name, or an automatic one as the reference's (see renameTrack).
+        // userName is empty while the name is automatic.
+        juce::String id, name, userName;
         juce::Colour colour;
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
         bool mute = false, solo = false, armed = false, isMidi = false, isReturn = false;
@@ -498,7 +500,7 @@ public:
     // A group sums its member tracks through its own mixer, like a bus.
     struct GroupInfo
     {
-        juce::String id, name;
+        juce::String id, name, userName; // As TrackInfo's.
         juce::Colour colour;
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
         bool mute = false, solo = false, folded = false;
@@ -627,9 +629,14 @@ public:
     juce::Result saveDefaultSet (const juce::File&);
     juce::Result newProjectFromDefaultSet (const juce::File&);
     juce::Result recoverProject (const juce::File& recovery, juce::File& recoveredFrom);
-    juce::Result addAudioTrack (juce::String name = {});
-    juce::Result addMidiTrack (juce::String name = {});
-    juce::Result addReturnTrack (juce::String name = {});
+    // New tracks, as the reference's Insert commands make them (static reading of its code). An audio
+    // or MIDI track goes right after the track `after` names, inside its group, or after a group
+    // `after` names and everything in it; with `after` empty or naming a return it goes after the
+    // other tracks, before the returns. A return track goes right after the return `after` names,
+    // otherwise after the other returns. An empty name is automatic (see renameTrack). One undo step.
+    juce::Result addAudioTrack (juce::String name = {}, const juce::String& after = {});
+    juce::Result addMidiTrack (juce::String name = {}, const juce::String& after = {});
+    juce::Result addReturnTrack (juce::String name = {}, const juce::String& after = {});
     juce::Result setTrackSendGain (int sourceTrackIndex, const juce::String& returnTrackId, float decibels);
     juce::Result setReturnSendMode (const juce::String& returnTrackId, SendMode);
     juce::Result importMidiFile (const juce::File&, double startBeat, std::vector<juce::String>& clipIds);
@@ -842,6 +849,7 @@ public:
     // Groups top-level audio/MIDI tracks (not returns) into a new group placed at the first one.
     juce::Result groupTracks (const juce::StringArray& trackIds, juce::String& groupId);
     juce::Result ungroupTracks (const juce::String& groupId);
+    // As renameTrack.
     juce::Result renameGroup (const juce::String& groupId, const juce::String& name);
     juce::Result setGroupGain (const juce::String& groupId, float decibels);
     juce::Result setGroupPan (const juce::String& groupId, float pan);
@@ -1035,6 +1043,14 @@ public:
     juce::Result setClipFollowAction (const juce::String& clipId, const FollowSettings&);
     juce::Result setClipActive (const juce::String& clipId, bool active);
     juce::Result renameClip (const juce::String& clipId, const juce::String& name);
+    // Track names, as the reference's (static reading of its code). A track without a name of its
+    // own shows an automatic one: its number in the track list (groups and grouped tracks counted,
+    // returns not), "-", and a MIDI track's first instrument's name, else the name of the first clip
+    // it was given (unless that is only the type word or a number and the type word), else Audio,
+    // MIDI or Group. A return shows its letter (A, B, ...), "-", and its own name or its devices'
+    // names joined with " | ", or Return. A name of its own is shown as it is, a leading run of #
+    // becoming the track's number, padded with zeros to the run's length. Renaming trims the name;
+    // an empty name, or the automatic name itself, makes it automatic again. One undo step.
     juce::Result renameTrack (int trackIndex, const juce::String&);
     // A track's height in the Arrangement, saved with the project outside the undo history, as the
     // reference saves its tracks' heights; 0 restores the default.

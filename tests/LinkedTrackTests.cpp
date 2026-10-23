@@ -1,4 +1,5 @@
 #include "Session.h"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -145,7 +146,10 @@ int runLinkedTrackTests (const juce::File& artifacts)
         // Duplicates start unlinked; unlinking a track leaves the others linked until one remains.
         juce::String copy;
         ok (s.duplicateTrack (snareId, copy), "duplicate Snare");
-        check (s.snapshot().tracks[(size_t) index ("Snare copy")].linkId.isEmpty() && track ("Snare").linkId == link, "the duplicate starts unlinked");
+        const auto duplicated = s.snapshot();
+        const auto duplicate = std::find_if (duplicated.tracks.begin(), duplicated.tracks.end(), [&] (const auto& t) { return t.id == copy; });
+        check (duplicate != duplicated.tracks.end() && duplicate->name == "Snare" && duplicate->linkId.isEmpty() && track ("Snare").linkId == link,
+               "the duplicate keeps the name, as the reference's does, and starts unlinked");
         s.undo();
         ok (s.unlinkTracks ({ keysId }), "unlink Keys");
         check (track ("Keys").linkId.isEmpty() && track ("Kick").linkId == link && track ("Snare").linkId == link, "Kick and Snare stay linked");

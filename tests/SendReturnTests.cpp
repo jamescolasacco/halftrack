@@ -216,8 +216,8 @@ void history (const juce::File& root, const Fixture& a, const Fixture& b)
     s.undo(); render (s, root, "undo-tap", mix (a, b, 0.625, 0.625));
     s.redo(); render (s, root, "redo-tap", mix (a, b, 0.75, 0.75));
     ok (s.renameTrack (2, "Changed return"), "undoable return rename");
-    s.undo(); check (s.snapshot().tracks[2].name == "History return", "undo return rename");
-    s.redo(); check (s.snapshot().tracks[2].name == "Changed return", "redo return rename");
+    s.undo(); check (s.snapshot().tracks[2].name == "A-History return", "undo return rename (the return keeps its letter)");
+    s.redo(); check (s.snapshot().tracks[2].name == "A-Changed return", "redo return rename");
     const auto gain = plugin (s, "HALFTRACK_TEST_PLUGIN");
     ok (s.addPlugin (2, gain), "history return effect");
     render (s, root, "before-return-delete", mix (a, b, 0.625, 0.625));
