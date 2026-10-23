@@ -4103,7 +4103,7 @@ private:
         explicit LaunchBox (Impl& o) : owner (o)
         {
             setName ("Launch box");
-            for (auto* c : std::initializer_list<juce::Component*> { &mode, &legato, &grid }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &mode, &legato, &grid, &velocity }) addAndMakeVisible (c);
             mode.setName ("Launch mode");
             for (auto* text : { "Trigger", "Gate", "Toggle", "Repeat" }) mode.addItem (text, mode.getNumItems() + 1);
             mode.setTooltip ("Launch mode: Trigger starts on press, Gate plays while held, Toggle starts and stops on press, Repeat retriggers on the grid while held");
@@ -4114,6 +4114,13 @@ private:
             legato.setWantsKeyboardFocus (false); legato.setMouseClickGrabsKeyboardFocus (false);
             legato.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); legato.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             legato.setTooltip ("Legato: start in phase with the clip already playing on this track");
+            // Velocity, as the reference's Launch box shows its amount: 0 to 100 %.
+            velocity.setName ("Launch velocity"); velocity.setSliderStyle (juce::Slider::LinearBar);
+            velocity.setRange (0, 100, 0.1); velocity.setTextValueSuffix (" %"); velocity.setNumDecimalPlacesToDisplay (1);
+            velocity.setColour (juce::Slider::trackColourId, themes::colour (0xffffab3d).withAlpha (0.55f)); velocity.setColour (juce::Slider::textBoxTextColourId, ink);
+            velocity.setTooltip ("Velocity: how much a launching MIDI note's velocity sets the clip's volume");
+            velocity.onDragEnd = [this] { apply(); };
+            velocity.onValueChange = [this] { if (! velocity.isMouseButtonDown()) apply(); };
             mode.onChange = [this] { apply(); }; grid.onChange = [this] { apply(); }; legato.onClick = [this] { apply(); };
         }
         void setClip (const Session::ClipInfo& shown)
@@ -4122,7 +4129,8 @@ private:
             mode.setSelectedId ((int) clip.launch.mode + 1, juce::dontSendNotification);
             grid.setSelectedId ((int) clip.launch.quantisation + 1, juce::dontSendNotification);
             legato.setToggleState (clip.launch.legato, juce::dontSendNotification);
-            for (auto* c : std::initializer_list<juce::Component*> { &mode, &legato, &grid }) c->setEnabled (! owner.session.isExporting());
+            if (! velocity.isMouseButtonDown()) velocity.setValue (clip.launch.velocityAmount * 100.0, juce::dontSendNotification);
+            for (auto* c : std::initializer_list<juce::Component*> { &mode, &legato, &grid, &velocity }) c->setEnabled (! owner.session.isExporting());
         }
         void resized() override
         {
@@ -4130,6 +4138,7 @@ private:
             area.removeFromTop (14); mode.setBounds (area.removeFromTop (22));
             area.removeFromTop (8); legato.setBounds (area.removeFromTop (22));
             area.removeFromTop (20); grid.setBounds (area.removeFromTop (22));
+            area.removeFromTop (20); velocity.setBounds (area.removeFromTop (20));
         }
         void paint (juce::Graphics& g) override
         {
@@ -4141,16 +4150,19 @@ private:
             g.setColour (muted); g.setFont (font (10.0f));
             g.drawText ("Mode", 6, mode.getY() - 14, getWidth() - 12, 13, juce::Justification::bottomLeft);
             g.drawText ("Quantization", 6, grid.getY() - 14, getWidth() - 12, 13, juce::Justification::bottomLeft);
+            g.drawText ("Velocity", 6, velocity.getY() - 14, getWidth() - 12, 13, juce::Justification::bottomLeft);
         }
     private:
         Impl& owner;
         Session::ClipInfo clip;
         juce::ComboBox mode, grid;
         juce::TextButton legato { "Legato" };
+        juce::Slider velocity;
         void apply()
         {
             const Session::LaunchSettings settings { static_cast<Session::LaunchMode> (mode.getSelectedId() - 1),
-                                                     static_cast<Session::ClipQuantisation> (grid.getSelectedId() - 1), legato.getToggleState() };
+                                                     static_cast<Session::ClipQuantisation> (grid.getSelectedId() - 1), legato.getToggleState(),
+                                                     (float) (velocity.getValue() / 100.0) };
             if (settings == clip.launch) return;
             owner.report (owner.session.setClipLaunchSettings (clip.id, settings)); owner.refresh();
         }
@@ -12999,6 +13011,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         legato->setToggleState (true, juce::dontSendNotification); legato->onClick();
         check (slotState().clip.launch == Session::LaunchSettings { Session::LaunchMode::gate, Session::ClipQuantisation::none, true },
                "the Launch box edits the clip's launch mode, quantization and legato");
+        auto* launchVelocity = dynamic_cast<juce::Slider*> (findNamed (midiLaunch, "Launch velocity"));
+        check (launchVelocity != nullptr && launchVelocity->isVisible() && launchVelocity->getValue() == 0 && launchVelocity->getTextFromValue (0) == "0.0 %",
+               "the Launch box shows Velocity at 0.0 %, as the reference's does");
+        launchVelocity->setValue (50, juce::sendNotificationSync); refresh();
+        check (std::abs (slotState().clip.launch.velocityAmount - .5f) < 1e-6f, "its Velocity sets the clip's amount");
+        session.undo(); refresh();
+        check (slotState().clip.launch.velocityAmount == 0 && launchVelocity->getValue() == 0, "undo returns it to 0 % in the box");
         launcher.mouseDown (launcherEvent (launchPoint)); pumpSyntheticTestDevice (session, 8); refresh();
         check (slotState().playing, "holding a Gate clip's launch button plays it");
         launcher.mouseUp (launcherEvent (launchPoint)); pumpSyntheticTestDevice (session, 8); refresh();

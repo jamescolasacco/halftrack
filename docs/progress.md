@@ -2152,3 +2152,13 @@ Engine and UI areas. From a static reading of the reference's code (findings in 
 
 Engine, UI and root areas. Without a saved default set, the app starts, and File > New makes new projects, from a project like the reference's built-in default Set: 1-MIDI and 2-MIDI without instruments, 3-Audio, 4-Audio, a return with the reverb and one with the delay, eight scenes, 120 BPM in 4/4. A project or audio files named at launch replace it. The Session's plain new project of two audio tracks stays for the suites. Measured in the track-order and UI suites ([contract](research/presets-contract.md)).
 
+## Launch velocity — 2026-10-23
+
+Engine, UI and root areas. From a static reading of the reference's code (findings in the ignored `artifacts/reverse-engineering/notemap/`; its level scales from the earlier `semantic-triage-volume-conversion-20261014`):
+
+- **Velocity.** The Launch box's Velocity (0 to 100 %, saved with the clip) sets how much a launching note's velocity changes the clip. A note mapped to a slot launches it with its velocity, and any other launch with full velocity.
+- **The effect.** An audio clip's gain moves along the reference's clip gain scale (−70 to +24 dB, built in `src/LevelScale.h` as the reference builds it), and a MIDI clip's note-on velocities scale, never below 1, until the next launch.
+- **Engine.** A new patch, `cmake/PatchLaunchVelocity.cmake`, carries the gain and scale on the launch handle to the slot's node.
+- **Measured.** The launch-modes suite renders the levels within 2e-7 of an independent model of the scale and reads the MIDI velocities through a MIDI Monitor. The UI suite edits Velocity.
+- **Also.** The transport and external-sync suites allow for a loaded runner starting late after a jump or Continue.
+

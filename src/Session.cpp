@@ -2,6 +2,7 @@
 #include "SubtractiveSynth.h"
 #include "UtilityProcessor.h"
 #include "UtilityEditor.h"
+#include "LevelScale.h"
 #include "NativeEffects.h"
 #include "Racks.h"
 #include "NoteTools.h"
@@ -76,6 +77,7 @@ const juce::Identifier groupFoldedProperty { "halftrackGroupFolded" };
 const juce::Identifier launchModeProperty { "halftrackLaunchMode" };
 const juce::Identifier launchQuantisationProperty { "halftrackLaunchQuantisation" };
 const juce::Identifier launchLegatoProperty { "halftrackLaunchLegato" };
+const juce::Identifier launchVelocityProperty { "halftrackLaunchVelocity" }; // The Velocity amount, 0 to 1.
 const juce::Identifier trackHeightProperty { "halftrackHeight" }, trackFoldedProperty { "halftrackFolded" };
 // An editing grid: a HALFTRACKGRID child of the Edit for the Arrangement's, or of a clip for its
 // editor's. It is read back through validation, so a damaged or older one reads as the default, and
@@ -115,6 +117,8 @@ Session::LaunchSettings clipLaunchSettings (const juce::ValueTree& state)
     if (mode >= 0 && mode <= 3) settings.mode = static_cast<Session::LaunchMode> (mode);
     if (grid >= 0 && grid < (int) clipLaunchGrids.size()) settings.quantisation = static_cast<Session::ClipQuantisation> (grid);
     settings.legato = state.getProperty (launchLegatoProperty, false);
+    if (const auto amount = static_cast<float> (state.getProperty (launchVelocityProperty, 0.0f)); std::isfinite (amount) && amount >= 0 && amount <= 1)
+        settings.velocityAmount = amount;
     return settings;
 }
 const juce::Identifier midiNoteIDProperty { "halftrackNoteId" };
@@ -2860,11 +2864,19 @@ struct Session::Impl
                 if (auto h = c->getLaunchHandle())
                 {
                     h->setLooping (std::nullopt);
-                    if (c == selected) { if (playing != nullptr) h->playSynced (*playing, boundary); else h->play (boundary); }
+                    if (c == selected)
+                    {
+                        // The launch's velocity, which the clip plays with until its next launch.
+                        const auto factor = levelscale::launchFactor (launchVelocity, clipLaunchSettings (c->state).velocityAmount);
+                        if (auto* audio = dynamic_cast<te::AudioClipBase*> (c)) h->setLaunchVelocity (levelscale::launchGain (juce::Decibels::decibelsToGain (audio->getGainDB(), -1000.0f), factor), 1.0f);
+                        else h->setLaunchVelocity (1.0f, factor);
+                        if (playing != nullptr) h->playSynced (*playing, boundary); else h->play (boundary);
+                    }
                     else h->stop (boundary);
                 }
         if (performanceStart) performance[track.itemID].push_back ({ unloopedTime (boundary), selected != nullptr ? selected->itemID : te::EditItemID(), {} });
     }
+    float launchVelocity = 1.0f; // A pressing note's velocity over 127 while pressSlot launches; otherwise 1.
     // Arrangement recording of the Session: each track's clip changes between Record and Stop, as
     // the unlooped times they happen at. An invalid clip id is a stop.
     struct PerformanceChange { te::TimePosition at; te::EditItemID clip; te::TimeDuration offset; };
@@ -5067,8 +5079,8 @@ struct Session::Impl
         if (parts[0] == "device") return parts.size() == 3 && parts[2] == "on" && devicePosition (parts[1]).first >= 0;
         return false;
     }
-    // Presses a mapped button as a click would.
-    Result pressButton (const String& target)
+    // Presses a mapped button as a click would; a note's velocity over 127 reaches a clip slot.
+    Result pressButton (const String& target, float velocity = 1.0f)
     {
         const auto parts = juce::StringArray::fromTokens (target, ":", "");
         const auto snapshot = owner.snapshot();
@@ -5091,7 +5103,7 @@ struct Session::Impl
             if (parts[2] == "arm") return owner.setTrackArmed (index, ! info.armed);
             if (parts[2] == "stop") return owner.stopLauncherTrack (index);
         }
-        if (parts[0] == "slot") { const int t = trackIndexOf (parts[1]), scene = sceneIndexOf (parts[2]); return t >= 0 && scene >= 0 ? owner.pressSlot (t, scene) : Result::ok(); }
+        if (parts[0] == "slot") { const int t = trackIndexOf (parts[1]), scene = sceneIndexOf (parts[2]); return t >= 0 && scene >= 0 ? owner.pressSlot (t, scene, velocity) : Result::ok(); }
         if (parts[0] == "scene") { const int scene = sceneIndexOf (parts[1]); return scene >= 0 ? owner.launchScene (scene) : Result::ok(); }
         if (parts[0] == "device")
         {
@@ -7713,7 +7725,8 @@ Result Session::setClipLaunchSettings (const String& id, const LaunchSettings& s
         for (auto* slot : track->getClipSlotList().getClipSlots()) if (auto* c = slot->getClip(); c && c->itemID.toString() == id) clip = c;
     if (! clip) return Result::fail ("Session clip not found.");
     if (static_cast<int> (settings.mode) < 0 || static_cast<int> (settings.mode) > 3
-        || static_cast<int> (settings.quantisation) < 0 || static_cast<int> (settings.quantisation) >= (int) clipLaunchGrids.size())
+        || static_cast<int> (settings.quantisation) < 0 || static_cast<int> (settings.quantisation) >= (int) clipLaunchGrids.size()
+        || ! std::isfinite (settings.velocityAmount) || settings.velocityAmount < 0 || settings.velocityAmount > 1)
         return Result::fail ("Unknown launch setting.");
     if (clipLaunchSettings (clip->state) == settings) return Result::ok();
     auto* um = &impl->edit->getUndoManager();
@@ -7721,6 +7734,8 @@ Result Session::setClipLaunchSettings (const String& id, const LaunchSettings& s
     clip->state.setProperty (launchModeProperty, static_cast<int> (settings.mode), um);
     clip->state.setProperty (launchQuantisationProperty, static_cast<int> (settings.quantisation), um);
     clip->state.setProperty (launchLegatoProperty, settings.legato, um);
+    if (settings.velocityAmount > 0) clip->state.setProperty (launchVelocityProperty, settings.velocityAmount, um);
+    else clip->state.removeProperty (launchVelocityProperty, um);
     impl->changed(); return Result::ok();
 }
 Result Session::recordSlot (int trackIndex, int sceneIndex)
@@ -7824,9 +7839,11 @@ Result Session::sessionRecord (int sceneIndex)
     if (! transport.isPlaying()) { transport.ensureContextAllocated(); transport.play (false); }
     sendChangeMessage(); return Result::ok();
 }
-Result Session::pressSlot (int trackIndex, int sceneIndex)
+Result Session::pressSlot (int trackIndex, int sceneIndex, float velocity)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! std::isfinite (velocity) || velocity < 0 || velocity > 1) return Result::fail ("A launch velocity is between 0 and 1.");
+    const juce::ScopedValueSetter launching (impl->launchVelocity, velocity);
     auto* slot = impl->slot (trackIndex, sceneIndex);
     if (! slot) return Result::fail ("Slot not found.");
     auto* clip = slot->getClip();
@@ -11186,7 +11203,7 @@ Result Session::handleMidiNote (int channel, int note, int velocity)
     if (! mapping || ! isMappableTarget (mapping->target)) return Result::ok();
     // A clip slot is pressed and released with the note; anything else acts on its note-on.
     if (velocity == 0) return impl->releaseButton (mapping->target);
-    if (isButtonTarget (mapping->target)) return impl->pressButton (mapping->target);
+    if (isButtonTarget (mapping->target)) return impl->pressButton (mapping->target, (float) velocity / 127.0f);
     return impl->noteOnControl (mapping->target, mapping->minimum, mapping->maximum);
 }
 bool Session::isButtonTarget (const String& target)

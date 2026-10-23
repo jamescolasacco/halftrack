@@ -773,7 +773,7 @@ Defaults where the reference's remote control is not followed ([MIDI mapping](re
 
 - **Remote switches.** Every MIDI input acts as a remote, except the computer keyboard and All MIDI Ins (whose sources already do). The reference has a Remote switch per input port.
 - **Note ranges.** A note maps alone. The reference can map a range of keys to a slot to play it chromatically, or spread a control's values across a range.
-- **Launch velocity.** A note's velocity does not change the launched clip's volume yet.
+- **Launch velocity.** How the reference handles a velocity change while a launch plays (whether it ramps), before any launch, in Arrangement playback and for follow-action launches is not read. Halftrack's starts at the launch, is full before one, and keeps the last launch's for follow actions ([contract](research/launch-modes-contract.md)).
 - **Switch ranges.** A controller mapped to a switch control (a device's two-state control) takes the nearest step along its range rather than turning on inside Min–Max.
 - **Learning over a mapping.** Learning a note or controller already mapped elsewhere moves it without the reference's confirmation.
 - **Solo and arm timing.** The reference gathers solo and arm presses from remote controls on a short timer and applies them together; Halftrack applies each at once.

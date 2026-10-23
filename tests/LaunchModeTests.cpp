@@ -2,6 +2,7 @@
 #include <tracktion_engine/tracktion_engine.h>
 #include <tracktion_engine/testing/tracktion_EnginePlayer.h>
 #include <cmath>
+#include <limits>
 #include <iostream>
 #include <stdexcept>
 
@@ -111,6 +112,89 @@ void settingsTests (const juce::File& root)
     juce::String scene;
     ok (session.duplicateScene (session.snapshot().scenes[0].id, scene), "duplicate the configured scene");
     check (slotClip (session, 0, 1).launch == Launch { Mode::repeat, Grid::eightBars, false }, "duplicated clips keep their launch settings");
+    // Velocity, as the reference's Velocity Amount: 0 to 1, none at first.
+    check (slotClip (session, 0, 0).launch.velocityAmount == 0, "Velocity starts at 0 %");
+    ok (session.setClipLaunchSettings (clip.id, { Mode::repeat, Grid::eightBars, false, .5f }), "Velocity at 50 %");
+    check (slotClip (session, 0, 0).launch.velocityAmount == .5f, "the amount is reported");
+    session.undo(); check (slotClip (session, 0, 0).launch.velocityAmount == 0, "it is an undo step"); session.redo();
+    check (session.setClipLaunchSettings (clip.id, { Mode::repeat, Grid::eightBars, false, -.1f }).failed()
+           && session.setClipLaunchSettings (clip.id, { Mode::repeat, Grid::eightBars, false, 1.5f }).failed()
+           && session.setClipLaunchSettings (clip.id, { Mode::repeat, Grid::eightBars, false, std::numeric_limits<float>::quiet_NaN() }).failed()
+           && slotClip (session, 0, 0).launch.velocityAmount == .5f, "amounts outside 0 to 1 are refused");
+    ok (session.saveProject (project), "save the amount"); ok (session.loadProject (project), "reopen it");
+    check (slotClip (session, 0, 0).launch.velocityAmount == .5f, "the amount reopens");
+    check (session.pressSlot (0, 0, 1.5f).failed() && session.pressSlot (0, 0, -1).failed(), "a press's velocity is between 0 and 1");
+}
+
+// Launch velocity, after the reference's (static reading of its code): a note launching a clip sets
+// its volume by its velocity and the clip's amount, along the reference's clip gain scale, or
+// scales a MIDI clip's note velocities. The expected levels come from an independent model of that
+// scale (the research's own script), not from Halftrack's implementation.
+void velocityTests (const juce::File& root)
+{
+    MemoryBuffers buffers;
+    Session session (false);
+    auto& engine = engineFor (session);
+    te::test_utilities::EnginePlayer player (engine, parameters());
+    const auto steady = fixture (root, "steady", [] (int) { return .25f; });
+    ok (session.importAudioToSlot (steady.file, 0, 0), "import a steady clip");
+    registerFixture (buffers, engine, slotClip (session, 0, 0).file, steady.audio);
+    const auto id = slotClip (session, 0, 0).id;
+    auto snapshot = session.snapshot();
+    ok (session.setLaunchQuantisation (Session::LaunchQuantisation::none), "no global grid");
+    ok (session.setClipLaunchSettings (id, { Mode::trigger, Grid::none, false, 1.0f }), "Velocity at 100 %");
+    ok (session.setMidiLearnTarget ("slot:" + snapshot.tracks[0].id + ":" + snapshot.scenes[0].id), "learn the slot");
+    ok (session.handleMidiNote (1, 60, 100), "with C3"); ok (session.setMidiLearnTarget ({}), "end learning");
+    const auto db = [] (double decibels) { return (float) std::pow (10.0, decibels / 20.0); };
+    const auto noteLaunch = [&] (int velocity) { ok (session.handleMidiNote (1, 60, velocity), "C3 at velocity " + juce::String (velocity)); ok (session.handleMidiNote (1, 60, 0), "its note-off"); };
+    ok (session.play(), "start the transport");
+    player.process (4800);
+    noteLaunch (64);
+    level (player.process (12000), 2000, 12000, .25f * db (-16.19968), "velocity 64 at 100 % plays the clip 16.2 dB down");
+    noteLaunch (100);
+    level (player.process (12000), 2000, 12000, .25f * db (-5.01469), "velocity 100 restarts it 5.0 dB down");
+    ok (session.pressSlot (0, 0), "launch it with the mouse");
+    level (player.process (12000), 2000, 12000, .25f, "any other launch plays it at full volume");
+    ok (session.setClipLaunchSettings (id, { Mode::trigger, Grid::none, false, .5f }), "Velocity at 50 %");
+    noteLaunch (100);
+    level (player.process (12000), 2000, 12000, .25f * db (-2.14732), "velocity 100 at 50 % plays it 2.1 dB down");
+    ok (session.setClipLaunchSettings (id, { Mode::trigger, Grid::none, false, 0.0f }), "Velocity at 0 %");
+    noteLaunch (1);
+    level (player.process (12000), 2000, 12000, .25f, "at 0 % a note's velocity changes nothing");
+    session.stop();
+
+    // A MIDI clip's note-on velocities, as a MIDI Monitor before the instrument sees them.
+    ok (session.addMidiTrack ("Keys"), "a MIDI track");
+    snapshot = session.snapshot();
+    const int keys = (int) snapshot.tracks.size() - 1;
+    const auto keysId = snapshot.tracks[(size_t) keys].id;
+    ok (session.addNativeEffect (keys, Session::EffectKind::midiMonitor), "a MIDI Monitor");
+    ok (session.addMidiClipToSlot (keysId, 0, 4), "a Session MIDI clip");
+    snapshot = session.snapshot();
+    const auto midiClip = snapshot.tracks[(size_t) keys].slots[0].clip.id;
+    juce::String monitor;
+    for (const auto& p : snapshot.tracks[(size_t) keys].plugins) if (p.isNativeEffect && p.effect.kind == Session::EffectKind::midiMonitor) monitor = p.id;
+    ok (session.addMidiNote (midiClip, 67, 0, 1, 100 / 127.0f), "a note at velocity 100 on its first beat");
+    ok (session.setClipLaunchSettings (midiClip, { Mode::trigger, Grid::none, false, 1.0f }), "Velocity at 100 %");
+    ok (session.setMidiLearnTarget ("slot:" + keysId + ":" + snapshot.scenes[0].id), "learn the MIDI slot");
+    ok (session.handleMidiNote (1, 62, 100), "with D3"); ok (session.setMidiLearnTarget ({}), "end learning");
+    const auto lastNoteOn = [&]
+    {
+        if (const auto reading = session.midiMonitor (monitor))
+            for (auto m = reading->messages.rbegin(); m != reading->messages.rend(); ++m) if ((m->status & 0xf0) == 0x90 && m->data2 > 0) return m->data2;
+        return -1;
+    };
+    ok (session.play(), "start the transport again");
+    ok (session.handleMidiNote (1, 62, 64), "D3 at velocity 64"); ok (session.handleMidiNote (1, 62, 0), "its note-off");
+    player.process (12000);
+    check (lastNoteOn() == 50, "velocity 64 at 100 % scales the clip's velocity 100 to 50 (" + juce::String (lastNoteOn()) + ")");
+    ok (session.pressSlot (keys, 0), "relaunch it with the mouse");
+    player.process (12000);
+    check (lastNoteOn() == 100, "any other launch plays the clip's own velocity (" + juce::String (lastNoteOn()) + ")");
+    ok (session.handleMidiNote (1, 62, 1), "D3 at velocity 1"); ok (session.handleMidiNote (1, 62, 0), "its note-off");
+    player.process (12000);
+    check (lastNoteOn() == 1, "a scaled velocity never falls below 1 (" + juce::String (lastNoteOn()) + ")");
+    session.stop();
 }
 
 void modeTests (const juce::File& root)
@@ -295,6 +379,7 @@ int runLaunchModeTests (const juce::File& artifacts)
         settingsTests (root);
         modeTests (root);
         repeatTests (root);
+        velocityTests (root);
         legatoTests (root, false);
         legatoTests (root, true);
         groupSlotTests (root);

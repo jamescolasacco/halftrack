@@ -19,6 +19,18 @@ Clip quantization offers Global (the control bar setting), None, 8/4/2/1 Bars, 1
 
 Legato starts the launched clip from the playing clip's position on that track instead of from its start. It uses the engine's `LaunchHandle::playSynced`.
 
+## Velocity
+
+`LaunchSettings::velocityAmount` (0 to 1, shown as 0.0 to 100.0 % in the Launch box's Velocity, 0 at first) is the reference's Velocity Amount, from a static reading of its code (findings in the ignored `artifacts/reverse-engineering/notemap/`). It is saved as `halftrackLaunchVelocity` and is one undo step with the other launch settings; amounts outside 0 to 1 are refused, and a damaged stored one reads as 0.
+
+- **The launch's velocity.** A launch by a mapped MIDI note has velocity v, the note's velocity over 127. Every other launch has v = 1: the mouse, a key, a controller, a scene, and Repeat's retriggers of a press. `pressSlot` takes the velocity, and mapped notes pass theirs.
+- **The factor.** f = v × amount + (1 − amount), in single precision.
+- **Audio clips.** The clip's gain moves to f times its position on the reference's clip gain scale (101 levels from −70 to +24 dB, built as the reference builds them, in `src/LevelScale.h`), and the launch plays at that gain. At 100 % and 0 dB clip gain, velocity 100 is 5.0 dB down, 64 is 16.2 dB down, and 1 about 64 dB down; at 50 %, velocity 100 is 2.1 dB down. A clip at or below the scale's −70 dB bottom is left as it is.
+- **MIDI clips.** Each note-on velocity is multiplied by f, never below 1. Note-offs are left alone.
+- **How long it lasts.** The engine takes the gain and scale up as the launch starts, or as it restarts a playing clip. They last through loops and graph rebuilds until the next launch, so a mouse launch restores full volume.
+
+The launch-modes suite renders these levels against an independent model of the scale (the research's own script), within 2e-7. It checks the MIDI velocities through a MIDI Monitor, along with the amount's defaults, undo, validation and persistence. The UI suite edits Velocity in the Launch box and undoes it.
+
 ## Implementation
 
 Repeat uses the engine launch handle's repeat loop (`LaunchHandle::setLooping`). The loop duration is one grid step at the play head, measured from the time-signature-aware grid. No UI timer runs, and the retrigger is sample-accurate in graph processing. Any launch, stop or transport cancellation on the track clears the loop. Held Gate/Repeat buttons are tracked per track and dropped when another launch replaces them, so a stale release cannot stop a different launch.
@@ -47,7 +59,7 @@ UI checks cover the Launch box controls, mouse and Enter press/release, and Togg
 
 ## Not implemented
 
-- Launch velocity amount.
+- The reference's handling of a velocity change while a launch plays (whether it ramps), before any launch, in Arrangement playback, and for follow-action launches. Halftrack's starts at the launch, is full before one, and keeps the last launch's for follow actions.
 - Gate/Repeat on scene launches.
 - Weighted follow actions in the Launch box.
 - Any comparison with reference launch timing.

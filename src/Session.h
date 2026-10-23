@@ -55,6 +55,13 @@ public:
         LaunchMode mode = LaunchMode::trigger;
         ClipQuantisation quantisation = ClipQuantisation::global;
         bool legato = false; // Start in phase with the clip already playing on the track.
+        // Velocity, 0 to 1 (shown as a percentage): how much a launching note's velocity sets the
+        // clip's volume, as the reference's Velocity Amount does (static reading of its code). A
+        // launch blends its velocity v (a note's over 127; 1 for any other launch) with it into
+        // f = v x amount + 1 - amount, which scales an audio clip's gain position along the
+        // reference's clip gain scale (-70 to +24 dB) and a MIDI clip's note-on velocities (never
+        // below 1), from that launch until the next.
+        float velocityAmount = 0;
         bool operator== (const LaunchSettings&) const = default;
     };
     struct FollowSettings
@@ -749,8 +756,9 @@ public:
     juce::Result clearSlots (const std::vector<SlotRef>&);
     juce::Result copySlotClips (const std::vector<SlotRef>&, bool cut = false);
     juce::Result launchSlot (int trackIndex, int sceneIndex);
-    // A launch button press/release applying the slot clip's launch mode.
-    juce::Result pressSlot (int trackIndex, int sceneIndex);
+    // A launch button press/release applying the slot clip's launch mode. velocity is a pressing
+    // note's velocity over 127, which the clip's Velocity amount applies; any other press is 1.
+    juce::Result pressSlot (int trackIndex, int sceneIndex, float velocity = 1.0f);
     juce::Result releaseSlot (int trackIndex, int sceneIndex);
     // Records the armed track's input into an empty slot from the next launch boundary. Pressing the
     // recording slot again ends the take on the grid and plays it in loop; stopping the track keeps it silent.
