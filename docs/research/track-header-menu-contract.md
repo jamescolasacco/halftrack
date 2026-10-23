@@ -30,7 +30,7 @@ The reference's Arrangement menu, with what Halftrack shows:
 | Delete | see [deleting](groups-contract.md#deleting-2026-10-23) | Delete, when `canRemoveTracks` |
 | Clear All Envelopes | Automation Mode | not yet: left out |
 | Rename | not for Main | Rename: the name edits in place in the Arrangement, in a dialog from a Session title |
-| Edit Info Text | | not yet: left out |
+| Edit Info Text | the header has editable info text | Edit Info Text, for the clicked track or group: a dialog edits its own text (`setInfoText`, saved, one undo step), which the Info view shows while pointing at its Arrangement header, Session title or Session mixer strip |
 | Freeze / Unfreeze, plural for more than one | selected tracks that can freeze; Unfreeze when all are frozen | the same, over the selected tracks with Arrangement clips or frozen. Each track's freeze is its own undo step |
 | Bounce Track in Place | | not yet. Halftrack keeps its Flatten for a frozen clicked track there until it has Bounce Track in Place; the reference's 12.2.1 has no Flatten |
 | Insert Audio Track, Insert MIDI Track | always | the same |
@@ -56,6 +56,7 @@ The UI suite checks:
 - that Delete is left out where it would empty a group;
 - that the colour grid colours two selected tracks in one undo step and marks the colour in use;
 - that Rename edits the clicked track's name in its header, and Select Content selects its clip's time on its track;
+- that a track's info text shows in the Info view at its header and Session title, and an undo restores the usual description (the groups suite saves and reopens info texts);
 - right-click selection.
 
 The groups suite checks the return limit.

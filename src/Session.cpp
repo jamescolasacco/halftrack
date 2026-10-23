@@ -125,6 +125,7 @@ const juce::Identifier midiNoteIDProperty { "halftrackNoteId" };
 const juce::Identifier noteChanceProperty { "halftrackChance" }, noteVelocityRangeProperty { "halftrackVelocityRange" };
 const juce::Identifier returnProperty { "halftrackReturn" };
 const juce::Identifier linkProperty { "halftrackLink" }; // Linked-track editing: tracks with the same value edit together.
+const juce::Identifier infoTextProperty { "halftrackInfoText" }; // A track's or group's own info text (Edit Info Text).
 const juce::Identifier hostedInstrumentProperty { "halftrackInstrument" }; // A hosted plug-in that is its track's instrument.
 // A hosted plug-in's sidechain tap (InputTap, Post FX by default) and whether it is off; the
 // engine's node builder reads both (see cmake/PatchSidechainTaps.cmake).
@@ -6492,7 +6493,7 @@ Session::Snapshot Session::snapshot() const
     for (auto* t : te::getAudioTracks (e))
     {
         TrackInfo info;
-        info.id = t->itemID.toString(); info.name = impl->displayName (*t); info.userName = Impl::ownName (*t); info.colour = t->getColour();
+        info.id = t->itemID.toString(); info.name = impl->displayName (*t); info.userName = Impl::ownName (*t); info.colour = t->getColour(); info.infoText = t->state[infoTextProperty].toString();
         info.numberLabel = isReturn (*t) ? impl->returnLetter (*t) : String (impl->trackNumber (*t));
         if (const auto link = t->state[linkProperty].toString(); link.isNotEmpty() && linkSizes[link] > 1) info.linkId = link;
         info.autoArmed = info.id == impl->autoArmed;
@@ -6602,7 +6603,7 @@ Session::Snapshot Session::snapshot() const
         {
             GroupInfo group;
             group.position = tracksBefore;
-            group.id = folder->itemID.toString(); group.name = impl->displayName (*folder); group.userName = Impl::ownName (*folder); group.colour = folder->getColour();
+            group.id = folder->itemID.toString(); group.name = impl->displayName (*folder); group.userName = Impl::ownName (*folder); group.colour = folder->getColour(); group.infoText = folder->state[infoTextProperty].toString();
             group.numberLabel = String (impl->trackNumber (*folder));
             group.mute = folder->isMuted (false); group.solo = folder->isSolo (false) || static_cast<bool> (folder->state.getProperty (cueProperty, false));
             group.folded = folder->state.getProperty (groupFoldedProperty, false);
@@ -9914,6 +9915,19 @@ Result Session::moveTracks (const juce::StringArray& ids, const String& groupId,
     te::Track* preceding = at > 0 ? siblings[at - 1] : nullptr;
     impl->transaction ("Move tracks");
     for (auto* t : moving) { impl->edit->moveTrack (te::Track::Ptr (t), te::TrackInsertPoint (parent, preceding)); preceding = t; }
+    impl->changed(); return Result::ok();
+}
+Result Session::setInfoText (const String& id, const String& text)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    te::Track* t = impl->track (id);
+    if (t == nullptr) t = impl->group (id);
+    if (t == nullptr) return Result::fail ("Track not found.");
+    const auto own = text.trim();
+    if (own == t->state[infoTextProperty].toString()) return Result::ok();
+    impl->transaction ("Edit info text");
+    if (own.isEmpty()) t->state.removeProperty (infoTextProperty, &impl->edit->getUndoManager());
+    else t->state.setProperty (infoTextProperty, own, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
 Result Session::setTrackColours (const juce::StringArray& ids, juce::Colour colour)

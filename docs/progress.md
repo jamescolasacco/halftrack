@@ -2329,3 +2329,7 @@ UI and engine areas. After a static reading of the reference's header menu, a tr
 ## Track Copy, Cut and Paste — 2026-10-23
 
 Engine and UI areas. The headers' menu gains Cut, Copy and Paste, as the reference's has, and Cmd+X, Cmd+C and Cmd+V do the same after a header or title click. Paste puts the copied tracks and groups after the selected ones, as Duplicate places its copies, and selects them. Sends to returns a project lacks are left out. Duplicate and Paste share the copies' clean-up, which now flushes every copied track's plug-ins first. Checked in the groups and UI suites ([groups contract](research/groups-contract.md#duplicating-2026-10-23), [menu](research/track-header-menu-contract.md)).
+
+## Edit Info Text — 2026-10-23
+
+Engine and UI areas. As the reference's header menu has it, Edit Info Text gives a track or group its own text. The Info view shows that text while pointing at the track's header. `setInfoText` saves it with the project in one undo step. Checked in the groups and UI suites ([menu](research/track-header-menu-contract.md)).

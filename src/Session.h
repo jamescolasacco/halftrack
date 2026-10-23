@@ -513,6 +513,7 @@ public:
         // shows: the track's number (groups counted, as in automatic names), or a return's letter.
         juce::String id, name, userName, numberLabel;
         juce::Colour colour;
+        juce::String infoText; // Its own info text, from Edit Info Text; empty for none.
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
         bool splitPan = false; // Split Stereo pan mode, with these pans of the left and right channels.
         float leftSplitPan = -1, rightSplitPan = 1;
@@ -549,6 +550,7 @@ public:
     {
         juce::String id, name, userName, numberLabel; // As TrackInfo's.
         juce::Colour colour;
+        juce::String infoText; // As TrackInfo's.
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
         bool splitPan = false; // As TrackInfo's.
         float leftSplitPan = -1, rightSplitPan = 1;
@@ -955,6 +957,9 @@ public:
     juce::Result groupTracks (const juce::StringArray& trackAndGroupIds, juce::String& groupId);
     // Whether groupTracks would group these, as the reference's Group Tracks command is enabled.
     bool canGroupTracks (const juce::StringArray& trackAndGroupIds) const;
+    // A track's or group's own info text, as the reference's Edit Info Text gives one: the Info view
+    // shows it while pointing at the track's header. Empty clears it. Saved; one undo step.
+    juce::Result setInfoText (const juce::String& trackOrGroupId, const juce::String& text);
     // Gives tracks and groups a colour, opaque, as the reference's header colour grid does; one undo step.
     juce::Result setTrackColours (const juce::StringArray& trackAndGroupIds, juce::Colour);
     juce::Result ungroupTracks (const juce::String& groupId);

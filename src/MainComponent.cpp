@@ -1653,6 +1653,9 @@ private:
     // or background, or a Session column's title, Delete deletes the selected tracks, or the selected
     // group with everything in it, and the track now where the first was is selected.
     static constexpr const char* arrangementHeader = "arrangementHeader";
+    // A header's track name and own info text, for the Info view.
+    static constexpr const char* infoTitleProperty = "infoTitle";
+    static constexpr const char* infoTextProperty = "infoText";
     bool headerFocus = false;
     struct HeaderFocusWatcher final : juce::MouseListener
     {
@@ -2114,6 +2117,7 @@ private:
         {
             jassert (trackId == track.id);
             index = position;
+            getProperties().set (infoTitleProperty, track.name); getProperties().set (infoTextProperty, track.infoText); // For the Info view.
             if (folded != track.folded) { folded = track.folded; repaint(); }
             colour = track.colour;
             midi = track.isMidi; returnTrack = track.isReturn;
@@ -2662,6 +2666,7 @@ private:
         {
             const auto* g = info(); if (g == nullptr) return;
             colour = g->colour; folded = g->folded; peakL = g->peakL; peakR = g->peakR; fold.folded = folded; fold.repaint();
+            getProperties().set (infoTitleProperty, g->name); getProperties().set (infoTextProperty, g->infoText); // For the Info view.
             if (! name.isBeingEdited()) name.setText (g->name, juce::dontSendNotification);
             activator.setToggleState (! g->mute, juce::dontSendNotification); solo.setToggleState (g->solo, juce::dontSendNotification);
             solo.setEnabled (! owner.state.cueMode); // Groups cannot be cued.
@@ -4668,6 +4673,18 @@ private:
         }
         // Whether the press now under way is on a column's title.
         bool titlePressed() const { return headerPressed.isNotEmpty(); }
+        // Pointing at a title whose track or group has its own info text gives it to the Info view.
+        void mouseMove (const juce::MouseEvent& event) override
+        {
+            juce::String title, text;
+            if (const int column = columnAt (event.x); column >= 0 && event.y < headerHeight)
+            {
+                if (const auto g = columns[(size_t) column].group; g >= 0) { title = owner.state.groups[(size_t) g].name; text = owner.state.groups[(size_t) g].infoText; }
+                else { const auto& track = owner.state.tracks[(size_t) columns[(size_t) column].track]; title = track.name; text = track.infoText; }
+            }
+            getProperties().set (infoTitleProperty, title); getProperties().set (infoTextProperty, text);
+        }
+        void mouseExit (const juce::MouseEvent&) override { getProperties().set (infoTextProperty, juce::String()); }
         void mouseDrag (const juce::MouseEvent& event) override
         {
             if (headerPressed.isNotEmpty())
@@ -10115,13 +10132,31 @@ private:
         }), true);
         return nullptr;
     }
+    // Edit Info Text, for the clicked track or group: its own text for the Info view.
+    void editInfoTextDialog (const juce::String& id)
+    {
+        const auto* group = groupInfo (id);
+        const auto* track = trackInfo (id);
+        if (group == nullptr && track == nullptr) return;
+        auto* dialog = new juce::AlertWindow ("Edit Info Text", "Shown in the Info view while pointing at " + (group != nullptr ? group->name : track->name) + ".", juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor ("text", group != nullptr ? group->infoText : track->infoText, "Info text");
+        if (auto* editor = dialog->getTextEditor ("text")) { editor->setMultiLine (true, true); editor->setReturnKeyStartsNewLine (true); editor->setSize (300, 90); }
+        dialog->addButton ("OK", 1); dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
+        auto safe = juce::Component::SafePointer<Impl> (this); auto safeDialog = juce::Component::SafePointer<juce::AlertWindow> (dialog);
+        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog, id] (int result)
+        {
+            if (safe == nullptr || safeDialog == nullptr || result != 1) return;
+            safe->report (safe->session.setInfoText (id, safeDialog->getTextEditorContents ("text"))); safe->refresh();
+        }), true);
+    }
     // A track's or group's header menu, in the reference's order (ATrackHeader::FillContextMenu): its
     // commands act on the selected tracks, Rename on the clicked one. As in the reference, a command
     // that cannot act there is left out, and a separator only comes between items. The Arrangement's
     // has the take lane and link items; the Session view's titles do not. A colour picked in the grid
     // is put in `colour`.
     enum HeaderItem { headerCut = 100, headerCopy, headerPaste, headerDuplicate = 1, headerDelete, headerRename, headerFreeze, headerFlatten, headerInsertAudio, headerInsertMidi, headerInsertReturn,
-                      headerGroup, headerUngroup, headerSelectContent, headerInsertTakeLane, headerShowTakeLanes, headerDeleteTakeLanes, headerLink, headerUnlink, headerColour };
+                      headerGroup, headerUngroup, headerSelectContent, headerEditInfo, headerInsertTakeLane, headerShowTakeLanes, headerDeleteTakeLanes, headerLink, headerUnlink, headerColour };
     juce::PopupMenu headerMenu (const juce::String& id, bool arrangement, std::shared_ptr<int> colour, bool join) const
     {
         const auto ids = headerSelection();
@@ -10137,6 +10172,7 @@ private:
         if (session.canRemoveTracks (ids)) item (headerDelete, "Delete");
         separator();
         item (headerRename, "Rename");
+        item (headerEditInfo, "Edit Info Text");
         separator();
         // Freeze acts on the selected tracks that can freeze; Unfreeze when all of those are frozen.
         const auto freezable = freezableTracks (ids);
@@ -10187,6 +10223,7 @@ private:
             case headerDuplicate: duplicateFromUI (ids); return;
             case headerDelete: deleteSelectedHeaders(); return;
             case headerRename: renameHeader (id, arrangement); return;
+            case headerEditInfo: editInfoTextDialog (id); return;
             case headerFreeze: freezeTracksFromUI (freezableTracks (ids)); return;
             case headerFlatten: freezeTrackFromUI (id, true); return;
             case headerInsertAudio: showPiano = false; addTrack(); resized(); return;
@@ -11737,11 +11774,18 @@ private:
     public:
         InfoView() { setName ("Info View"); setInterceptsMouseClicks (false, false); startTimerHz (10); }
         juce::String title, body { "Point at a control to see what it does." };
-        // Describes a component, or the nearest of its parents that says what it is.
+        // Describes a component, or the nearest of its parents that says what it is. A header with its
+        // own info text shows that, as the reference's Info View shows Edit Info Text's.
         void describe (juce::Component* component)
         {
             juce::String nextTitle, nextBody;
             bool unavailable = false;
+            for (auto* c = component; c != nullptr && c != this; c = c->getParentComponent())
+                if (const auto own = c->getProperties()[infoTextProperty].toString(); own.isNotEmpty())
+                {
+                    if (c->getProperties()[infoTitleProperty].toString() != title || own != body) { title = c->getProperties()[infoTitleProperty].toString(); body = own; repaint(); }
+                    return;
+                }
             for (auto* c = component; c != nullptr && c != this; c = c->getParentComponent())
             {
                 auto tip = dynamic_cast<juce::TooltipClient*> (c) != nullptr ? dynamic_cast<juce::TooltipClient*> (c)->getTooltip() : juce::String();
@@ -17347,14 +17391,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     const auto colour = std::make_shared<int> (-1);
                     check (selectForHeaderMenu (second) && selectedTrackIds() == juce::StringArray { second }, "right-clicking the second track selects it");
                     const bool clips = ! state.tracks[(size_t) indexOf (second)].clips.empty();
-                    const auto expected = juce::String ("Cut|Copy|Duplicate|Delete|-|Rename|-|") + (clips ? "Freeze Track|-|" : "")
+                    const auto expected = juce::String ("Cut|Copy|Duplicate|Delete|-|Rename|Edit Info Text|-|") + (clips ? "Freeze Track|-|" : "")
                         + "Insert Audio Track|Insert MIDI Track|Insert Return Track|Group Tracks|-|Select Content" + (clips ? "" : " (off)")
                         + "|-|Insert Take Lane|Show Take Lanes|Delete All Take Lanes (off)|-|Link Tracks (off)|Unlink Tracks (off)|-|[colours]";
                     check (listed (headerMenu (second, true, colour, false)) == expected, "a track's menu: " + listed (headerMenu (second, true, colour, false)));
                     check (listed (headerMenu (second, false, colour, false)) == expected.upToFirstOccurrenceOf ("Select Content", true, false) + "|-|[colours]",
                            "a Session title's has no take lane or link items, and Select Content for its audio or MIDI track: " + listed (headerMenu (second, false, colour, false)));
                     check (selectForHeaderMenu (inner) && selectedChain == inner, "right-clicking the inner group selects it");
-                    check (listed (headerMenu (inner, true, colour, false)) == "Cut|Copy|Duplicate|Delete|-|Rename|-|Insert Audio Track|Insert MIDI Track|Insert Return Track|Group Tracks|Ungroup Tracks|-|Select Content"
+                    check (listed (headerMenu (inner, true, colour, false)) == "Cut|Copy|Duplicate|Delete|-|Rename|Edit Info Text|-|Insert Audio Track|Insert MIDI Track|Insert Return Track|Group Tracks|Ungroup Tracks|-|Select Content"
                                    + juce::String (state.tracks[(size_t) indexOf (first)].clips.empty() ? " (off)" : "") + "|-|[colours]",
                            "a group's: Ungroup Tracks, no take lane or link items: " + listed (headerMenu (inner, true, colour, false)));
                     check (selectForHeaderMenu (first) && selectedTrackIds() == juce::StringArray { first } && selectedChain.isEmpty(), "right-clicking the first track selects it alone");
@@ -17385,6 +17429,20 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     secondName->hideEditor (true); secondName->setText ("Bass", juce::sendNotificationSync); refresh();
                     check (state.tracks[(size_t) indexOf (second)].name == "Bass", "which renames it");
                     session.undo(); refresh();
+                    // A track's own info text shows in the Info view while pointing at its header.
+                    check (session.setInfoText (second, "Lead vocal, take three").wasOk(), "give the second track an info text"); refresh();
+                    info.describe (secondName);
+                    check (info.title == state.tracks[(size_t) indexOf (second)].name && info.body == "Lead vocal, take three", "the Info view shows it at the track's header");
+                    {
+                        // And at its Session title.
+                        const auto at = juce::Point<float> ((float) launcher.columnX (launcher.columnOf (indexOf (second))) + 50.0f, 10.0f);
+                        const auto when = juce::Time::getCurrentTime();
+                        launcher.mouseMove (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, {}, 1.0f, 0, 0, 0, 0, &launcher, &launcher, when, at, when, 0, false));
+                        info.describe (&launcher);
+                        check (info.body == "Lead vocal, take three", "and at its Session title");
+                    }
+                    session.undo(); refresh(); info.describe (secondName);
+                    check (info.body != "Lead vocal, take three", "and after one undo the header's usual description");
                     // Select Content selects the time the selected tracks' clips cover.
                     check (session.importAudio (audioFixture, indexOf (second), 2.0).wasOk(), "a clip on the second track"); refresh();
                     selectForHeaderMenu (second);

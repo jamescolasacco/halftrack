@@ -180,12 +180,18 @@ int runGroupTests (const juce::File& artifacts)
             const auto sixDown = (float) std::pow (10.0, -6.0 / 20);
             check (difference (render (n, mix), plain, sixDown, sixDown) < 1e-5, "the top group's fader moves everything inside it");
             ok (n.setGroupGain (top, 0), "back to unity");
+            ok (n.setInfoText (top, "Everything"), "give the top group an info text"); ok (n.setInfoText (ids[0], "  The first take  "), "and a one too");
             const auto project = root.getChildFile ("Nested.halftrack");
             ok (n.saveProject (project), "save");
             Session reopened (false);
             ok (reopened.loadProject (project), "reopen");
             const auto again = reopened.snapshot();
             check (again.groups.size() == 3 && again.tracks[0].groupId == inner && again.tracks[1].groupId == outer && again.tracks[2].groupId == top, "the nesting reopens");
+            check (again.tracks[0].infoText == "The first take" && [&] { for (const auto& g : again.groups) if (g.id == top) return g.infoText == "Everything"; return false; }(),
+                   "with the info texts, trimmed, as Edit Info Text set them");
+            ok (n.setInfoText (top, ""), "clear the group's"); n.undo(); n.undo();
+            check (n.snapshot().tracks[0].infoText.isEmpty(), "two undo steps take both texts back");
+            check (n.setInfoText ("missing", "x").failed(), "an unknown track has no info text");
             ok (n.ungroupTracks (outer), "ungroup the outer group");
             const auto flatter = n.snapshot();
             check (flatter.groups.size() == 2 && flatter.tracks[0].groupId == inner && flatter.tracks[1].groupId == top
