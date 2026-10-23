@@ -1016,7 +1016,7 @@ public:
         if (code == juce::KeyPress::F9Key) { report (session.recordButton (shift)); refresh(); return true; }
         if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)
         {
-            if (! showSession && headerFocus) { deleteSelectedHeaders(); return true; }
+            if (headerFocus) { deleteSelectedHeaders(); return true; }
             if (! showPiano && ! showSession && selectedFadeClip.isNotEmpty()) { deleteSelectedFade(); return true; }
             if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot();
             else if (timeSelection.active()) selectionCommand (78); else deleteSelectedClip();
@@ -1624,8 +1624,8 @@ private:
         deviceChain.sync(); deviceChain.repaint(); canvas.repaint();
     }
     // The reference's headers take the selection focus: after a click on an Arrangement header's name
-    // or background, Delete deletes the selected tracks, or the selected group with everything in it,
-    // and the track now where the first was is selected.
+    // or background, or a Session column's title, Delete deletes the selected tracks, or the selected
+    // group with everything in it, and the track now where the first was is selected.
     static constexpr const char* arrangementHeader = "arrangementHeader";
     bool headerFocus = false;
     struct HeaderFocusWatcher final : juce::MouseListener
@@ -1635,6 +1635,7 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             auto* c = e.originalComponent;
+            if (c == &owner.launcher) { owner.headerFocus = owner.launcher.titlePressed(); return; }
             if (c != nullptr && (c->getName() == "Track name" || c->getName() == "Group name")) c = c->getParentComponent();
             owner.headerFocus = c != nullptr && static_cast<bool> (c->getProperties()[arrangementHeader]);
         }
@@ -4614,6 +4615,8 @@ private:
             if (drop) lineX = after ? left + columnWidth : left;
             return drop;
         }
+        // Whether the press now under way is on a column's title.
+        bool titlePressed() const { return headerPressed.isNotEmpty(); }
         void mouseDrag (const juce::MouseEvent& event) override
         {
             if (headerPressed.isNotEmpty())
@@ -16916,6 +16919,16 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                            "dragging it after the second track moves the inner group, with its track, there");
                     session.undo(); refresh();
                     check (state.tracks[0].id == first && launcher.groupColumnOf (groupAt (inner)) == 1, "one undo puts the group back");
+                    // Delete after a click on a title deletes the selection, as after a header's.
+                    press (3); headerFocusWatcher.mouseDown (titleEvent (pressed, false)); drop (pressed);
+                    check (headerFocus && selectedTrack == 1, "clicking the second track's title gives the titles the focus");
+                    check (handleKey (juce::KeyPress (juce::KeyPress::deleteKey)), "Delete is handled"); refresh();
+                    check (indexOf (second) < 0 && state.tracks.size() == 1 && ! headerFocus, "Delete deletes the track");
+                    session.undo(); refresh();
+                    check (indexOf (second) == 1 && state.tracks[1].groupId == group, "one undo brings it back");
+                    pressed = launcher.slotCentre (0, 0).toInt();
+                    launcher.mouseDown (titleEvent (pressed, false)); headerFocusWatcher.mouseDown (titleEvent (pressed, false)); drop (pressed);
+                    check (! headerFocus, "a click on a slot takes the focus from the titles");
                     showArrangementView(); refresh();
                 }
                 // An emptied group keeps its header and column, as the reference's does.

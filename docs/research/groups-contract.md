@@ -124,7 +124,7 @@ This follows a static reading of the reference's Delete (0x1032cdd64, 0x1024415e
   - Plug-ins taking a sidechain from a deleted track keep the sidechain without a source.
   - Deleting a group's last track leaves the group, empty.
   - `removeTrack(index)` now deletes through it.
-- **Interface.** After a click on an Arrangement header's name or background, Delete deletes the selection: the selected group, or the selected tracks. Afterwards the track now where the first deleted one was is selected, as in the reference (medium). After a click in the lanes, Delete acts there as before. The Create menu's Delete Selected Track does the same, a selected group included.
+- **Interface.** After a click on an Arrangement header's name or background, or on a Session column's title, Delete deletes the selection: the selected group, or the selected tracks. Afterwards the track now where the first deleted one was is selected, as in the reference (medium). After a click in the lanes or on a Session slot, Delete acts there as before. The Create menu's Delete Selected Track does the same, a selected group included.
 - **Ungroup.** Ungroup (see Nested groups) keeps the contents and discards only the group: its devices, mixer settings and automation, as in the reference.
 
 Evidence (`tests/GroupTests.cpp`):
@@ -133,9 +133,7 @@ Evidence (`tests/GroupTests.cpp`):
 - deleting two tracks together, leaving an inner group empty;
 - unknown and empty deletions being refused.
 
-The UI suite clicks a nested group's name and presses Delete. The group goes with its track, the next track is selected, and one undo brings both back. After a click in the lanes, the headers no longer have the focus.
-
-Not reproduced: the reference's Delete in the Session view's column headers. Halftrack's Session view still clears the selected slot.
+The UI suite clicks a nested group's name and presses Delete. The group goes with its track, the next track is selected, and one undo brings both back. After a click in the lanes, the headers no longer have the focus. In the Session view, Delete after a click on a track's title deletes the track, one undo brings it back, and a click on a slot takes the focus from the titles.
 
 ## Group sends (2026-10-23)
 
