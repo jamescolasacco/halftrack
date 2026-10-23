@@ -903,6 +903,8 @@ public:
             if (code == 'L' && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (79); return true; }
             if (code == 'J' && ! shift && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (80); return true; }
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
+            // After a click on a header, Duplicate duplicates the selected tracks, as the reference's headers do.
+            if (code == 'D' && ! shift && ! key.getModifiers().isAltDown() && headerFocus) { duplicateSelectedHeaders(); return true; }
             if (! shift && ! showSession && ! showPiano && timeSelection.active() && (code == 'E' || code == 'D' || code == 'C' || code == 'X'))
             { selectionCommand (code == 'E' ? 76 : code == 'D' ? 77 : code == 'C' ? 81 : 82); return true; }
             // A copied time selection pastes at the insert marker from the selected track.
@@ -4802,7 +4804,10 @@ private:
                 owner.refresh(); return true;
             }
             if (const auto mods = key.getModifiers(); mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown() && (code == 'C' || code == 'X' || code == 'V' || code == 'D'))
+            {
+                if (code == 'D' && owner.headerFocus) { owner.duplicateSelectedHeaders(); return true; } // After a click on a title.
                 return owner.slotCommand (code == 'X' ? 84 : code == 'C' ? 85 : code == 'V' ? 86 : 87);
+            }
             if (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey || code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
             {
                 int track = owner.selectedTrack, scene = owner.selectedSceneIndex();
@@ -9912,15 +9917,29 @@ private:
         const bool frozen = state.tracks[(size_t) index].frozen;
         report (flatten ? session.flattenTrack (trackId) : session.setTrackFrozen (trackId, ! frozen)); refresh();
     }
-    void duplicateTrackFromUI (const juce::String& trackId)
+    // Duplicates tracks and groups as the reference's Duplicate does, then selects the copies, as it
+    // selects the new block: the first, with the other tracks among them. When the first lands in a
+    // folded group, that group is selected instead.
+    void duplicateFromUI (const juce::StringArray& ids)
     {
-        juce::String created; const auto result = session.duplicateTrack (trackId, created); report (result); refresh();
-        if (result.wasOk())
+        juce::StringArray copies; const auto result = session.duplicateTracks (ids, copies); report (result); refresh();
+        if (result.failed() || copies.isEmpty()) return;
+        multiSelectedTracks.clear(); selectedClip = -1; selectedLauncherClipId.clear(); showPiano = false;
+        const auto* group = groupInfo (copies[0]);
+        const auto first = trackIndex (copies[0]);
+        const auto parent = group != nullptr ? group->parentId : first >= 0 ? state.tracks[(size_t) first].groupId : juce::String();
+        if (anyFolded (parent)) selectChain (parent);
+        else if (group != nullptr) selectChain (group->id);
+        else
         {
-            const auto index = launcherIndices (created, {}).first;
-            selectTrack (index); selectedClip = -1; selectedLauncherClipId.clear(); showPiano = false; resized();
+            for (int i = 1; i < copies.size(); ++i) if (trackIndex (copies[i]) >= 0) multiSelectedTracks.insert (copies[i]);
+            selectTrack (first);
         }
+        resized();
     }
+    void duplicateTrackFromUI (const juce::String& trackId) { duplicateFromUI ({ trackId }); }
+    // The headers' Duplicate: the selected group, or the selected tracks.
+    void duplicateSelectedHeaders() { if (const auto ids = headerSelection(); session.canDuplicateTracks (ids)) duplicateFromUI (ids); }
     void reorderTrack (const juce::String& trackId, int direction)
     {
         const auto current = session.snapshot();
@@ -10436,7 +10455,7 @@ private:
             popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (35, "Insert Return Track");
             popup.addItem (110, "Insert Time Signature Change", ! showSession && ! state.recording); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", session.canRemoveTracks (headerSelection()));
             popup.addSeparator();
-            popup.addItem (38, "Duplicate Selected Track", currentTrack() != nullptr && !currentTrack()->isReturn);
+            popup.addItem (38, "Duplicate Selected Track", session.canDuplicateTracks (headerSelection()));
             popup.addItem (39, "Insert Take Lane", currentTrack() != nullptr && ! currentTrack()->isReturn && ! showSession);
             popup.addItem (36, "Move Selected Track Earlier", canMoveTrack (selectedTrack, -1));
             popup.addItem (37, "Move Selected Track Later", canMoveTrack (selectedTrack, 1));
@@ -10562,7 +10581,7 @@ private:
             case 110: insertMeterChange (beatsAt (state.insertMarker)); break;
             case 32: addPluginMenu(); break;
             case 36: case 37: if (const auto* track = currentTrack()) reorderTrack (track->id, id == 36 ? -1 : 1); break;
-            case 38: if (const auto* track = currentTrack()) duplicateTrackFromUI (track->id); break;
+            case 38: duplicateSelectedHeaders(); break;
             case 72: groupSelectedTracks(); break;
             case 73: ungroupSelectedTrack(); break;
             case 40: if (showPiano) pianoRoll.fit(); else fitTimeline(); break;
@@ -17051,6 +17070,23 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 headerFocusWatcher.mouseDown (event (0, false));
                 check (headerFocus && handleKey (juce::KeyPress (juce::KeyPress::deleteKey)), "Delete is handled"); refresh();
                 check (indexOf (first) == 0 && state.tracks.size() == 2 && ! session.canRemoveTracks (headerSelection()), "but keeps the inner group's only track, which Delete Selected Track cannot delete either");
+                // Cmd+D after a click on a header duplicates the selection, as the reference's Duplicate
+                // does: the inner group, with its track, goes as a copy right after that track.
+                check (grab (groupLane (inner).y + 10, "Group name"), "press the inner group's name"); release (groupLane (inner).y + 10);
+                headerFocusWatcher.mouseDown (event (0, false));
+                check (headerFocus && handleKey (juce::KeyPress ('D', juce::ModifierKeys::commandModifier, 0)), "Cmd+D is handled"); refresh();
+                const auto* copied = state.tracks.size() == 3 ? groupInfo (state.tracks[1].groupId) : nullptr;
+                check (state.groups.size() == 3 && copied != nullptr && copied->id != inner && copied->parentId == group && selectedChain == copied->id
+                           && state.tracks[0].id == first && state.tracks[2].id == second,
+                       "it copies the inner group, with its track, after that track in the outer group, and selects the copy");
+                session.undo(); refresh();
+                check (state.groups.size() == 2 && state.tracks.size() == 2, "one undo removes the copy");
+                check (grab (laneY (indexOf (second)) + 10, "Track name"), "press the second track's name"); release (laneY (indexOf (second)) + 10);
+                headerFocusWatcher.mouseDown (event (0, false));
+                menuItemSelected (38, 2); refresh();
+                check (state.tracks.size() == 3 && state.tracks[2].groupId == group && selectedTrack == 2 && state.tracks[2].id != second,
+                       "Duplicate Selected Track copies the second track after it, selecting the copy");
+                session.undo(); refresh();
                 // After a click elsewhere, Delete acts there instead.
                 const auto now2 = juce::Time::getCurrentTime();
                 headerFocusWatcher.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { 10.0f, 10.0f }, {}, 1.0f, 0, 0, 0, 0, &canvas, &canvas, now2, { 10.0f, 10.0f }, now2, 1, false));

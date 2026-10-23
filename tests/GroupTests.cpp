@@ -248,6 +248,36 @@ int runGroupTests (const juce::File& artifacts)
             check (n.snapshot().tracks.size() == 2 && n.snapshot().tracks[0].id == ids[1] && n.snapshot().groups.size() == 2, "b, the added track and the other groups stay");
             n.undo(); check (n.snapshot().tracks.size() == 4, "one undo restores both");
             ok (n.removeTracks ({ added }), "delete the added track, the top group staying");
+            {
+                // Duplicating, as the reference's Duplicate does: one block right after the last of them
+                // (after a group's last track), inside the group that one is in, a group with everything in it.
+                juce::StringArray copies;
+                ok (n.duplicateTracks ({ outer }, copies), "duplicate the outer group");
+                const auto twice = n.snapshot();
+                const auto groupIn = [&twice] (const juce::String& id) { for (const auto& g : twice.groups) if (g.id == id) return g; return Session::GroupInfo {}; };
+                check (copies.size() == 1 && groupIn (copies[0]).parentId == top && twice.groups.size() == 5 && twice.tracks.size() == 5,
+                       "a copy of the outer group, in the top group, with what is inside it");
+                check (twice.tracks[0].id == ids[0] && twice.tracks[1].id == ids[1] && twice.tracks[4].id == ids[2]
+                           && twice.tracks[2].groupId != inner && groupIn (twice.tracks[2].groupId).parentId == copies[0] && twice.tracks[3].groupId == copies[0],
+                       "after b, the outer group's last track, and before c: a copy of a in a copy of the inner group, then a copy of b");
+                ok (n.setGroupMute (outer, true), "mute the original");
+                check (difference (render (n, mix), plain) < 1e-6, "the copies play as the originals did");
+                n.undo(); n.undo();
+                check (n.snapshot().groups.size() == 3 && n.snapshot().tracks.size() == 3, "two undo steps remove the mute and the whole copy");
+                ok (n.duplicateTracks ({ ids[2], ids[0] }, copies), "duplicate a and c together");
+                const auto pair = n.snapshot();
+                check (copies.size() == 2 && pair.tracks.size() == 5 && pair.tracks[2].id == ids[2] && pair.tracks[3].id == copies[0] && pair.tracks[4].id == copies[1]
+                           && pair.tracks[3].groupId == top && pair.tracks[4].groupId == top,
+                       "their copies go together after c, in its group, in track order, a's leaving the inner group");
+                n.undo();
+                ok (n.duplicateTracks ({ ids[1] }, copies), "duplicate b alone");
+                check (n.snapshot().tracks.size() == 4 && n.snapshot().tracks[2].id == copies[0] && n.snapshot().tracks[2].groupId == outer, "its copy goes right after it, in the outer group");
+                n.undo();
+                juce::StringArray kept { "keep" };
+                check (n.duplicateTracks ({ "missing" }, kept).failed() && n.duplicateTracks ({}, kept).failed() && kept == juce::StringArray { "keep" } && n.canRedo(),
+                       "unknown and empty duplications are refused, leaving the result and redo alone");
+                check (n.snapshot().tracks.size() == 3 && n.snapshot().groups.size() == 3, "and the tree as it was");
+            }
         }
         {
             // Returns move among the returns, and other tracks stay before them, as the reference's drop

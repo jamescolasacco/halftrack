@@ -921,6 +921,14 @@ public:
     // Loads (or with an empty file clears) a Drum Sampler pad, switching the instrument to a Drum Sampler if needed.
     juce::Result setDrumPadSample (const juce::String& trackId, int pad, const juce::File& sample);
     juce::Result duplicateTrack (const juce::String& trackId, juce::String& duplicateId);
+    // Duplicates tracks and groups, a group with everything in it, as the reference's Duplicate does:
+    // the copies go as one block, in order, right after the last of them (after a group's last
+    // track), in the group that one is in. Copies keep their devices, clips, sends and mixer; their
+    // MIDI notes are new and links are not copied. Return and frozen tracks are refused for now.
+    // duplicateIds lists the copies, groups and tracks, in order. One undo step.
+    juce::Result duplicateTracks (const juce::StringArray& trackAndGroupIds, juce::StringArray& duplicateIds);
+    // Whether duplicateTracks would duplicate these.
+    bool canDuplicateTracks (const juce::StringArray& trackAndGroupIds) const;
     // Freeze renders a track's Arrangement clips through its devices and plays the render; one undo step each.
     juce::Result setTrackFrozen (const juce::String& trackId, bool frozen);
     // Flatten replaces a frozen track's clips and devices with one audio clip of its render.

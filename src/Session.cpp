@@ -3425,6 +3425,27 @@ struct Session::Impl
         }
         return Result::ok();
     }
+    // A track or group, then every one inside it, in order.
+    static juce::Array<te::Track*> subtree (te::Track& root)
+    {
+        juce::Array<te::Track*> tracks { &root };
+        if (auto* folder = dynamic_cast<te::FolderTrack*> (&root))
+            for (auto* t : te::getAllTracks (root.edit)) if (inside (*t, *folder)) tracks.add (t);
+        return tracks;
+    }
+    // Whether these tracks and groups can be duplicated: those Halftrack copies, so far without returns
+    // and frozen tracks, which the reference duplicates too.
+    Result duplicable (const juce::StringArray& ids) const
+    {
+        for (const auto& id : ids) if (track (id) == nullptr && group (id) == nullptr) return Result::fail ("Track not found.");
+        const auto chosen = roots (ids);
+        if (chosen.isEmpty()) return Result::fail ("Choose tracks to duplicate.");
+        for (auto* root : chosen)
+            for (auto* t : subtree (*root))
+                if (auto* audio = dynamic_cast<te::AudioTrack*> (t); audio != nullptr && (isReturn (*audio) || audio->isFrozen (te::Track::anyFreeze)))
+                    return Result::fail ("Duplicate unfrozen audio and MIDI tracks and groups. Return and frozen tracks are not duplicated yet.");
+        return Result::ok();
+    }
     // A group, other than `keep`, that grouping these would leave empty, as the reference's Group Tracks never does.
     te::FolderTrack* emptiedGroup (const juce::Array<te::Track*>& moving, const te::FolderTrack* keep) const
     {
@@ -9726,6 +9747,10 @@ Result Session::unlinkTracks (const juce::StringArray& ids)
     impl->endSingleLinks (left);
     impl->changed(); return Result::ok();
 }
+bool Session::canDuplicateTracks (const juce::StringArray& ids) const
+{
+    return ! impl->exporting && ! impl->edit->getTransport().isRecording() && impl->duplicable (ids).wasOk();
+}
 bool Session::canRemoveTracks (const juce::StringArray& ids) const
 {
     for (const auto& id : ids) if (impl->track (id) == nullptr && impl->group (id) == nullptr) return false;
@@ -9879,44 +9904,67 @@ Result Session::setGroupFolded (const String& groupId, bool folded)
 }
 Result Session::duplicateTrack (const String& id, String& duplicateId)
 {
+    juce::StringArray copies;
+    auto result = duplicateTracks ({ id }, copies);
+    if (result.wasOk()) duplicateId = copies[0];
+    return result;
+}
+Result Session::duplicateTracks (const juce::StringArray& ids, juce::StringArray& duplicateIds)
+{
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before duplicating tracks.");
-    auto* source = impl->track (id);
-    if (! source || isReturn (*source) || source->getParentTrack() != nullptr || source->isFrozen (te::Track::anyFreeze))
-        return Result::fail ("Duplicate an unfrozen top-level audio or MIDI track.");
-    impl->transaction ("Duplicate track");
-    auto copy = impl->edit->copyTrack (te::Track::Ptr (source), te::TrackInsertPoint (*source, false));
-    auto* track = dynamic_cast<te::AudioTrack*> (copy.get());
-    if (! track) return Result::fail ("Could not duplicate the track.");
+    if (auto refused = impl->duplicable (ids); refused.failed()) return refused;
+    const auto roots = impl->roots (ids);
+    const auto within = [] (te::Track& root) { return Impl::subtree (root); };
+    impl->transaction (roots.size() > 1 || dynamic_cast<te::FolderTrack*> (roots.getFirst()) != nullptr ? "Duplicate tracks" : "Duplicate track");
+    // As the reference's Duplicate places them: one block, in order, right after the last of them
+    // (after a group's last track), in the group that one is in.
+    te::Track::Ptr preceding (roots.getLast());
+    auto* parent = roots.getLast()->getParentTrack();
     auto* undo = &impl->edit->getUndoManager();
-    // Native construction restores explicit values through the manual setter,
-    // which can rewrite a single-point curve. Restore source points inside this
-    // same duplication transaction, after construction has completed.
-    if (auto* sourceMixer = source->getVolumePlugin())
-        if (auto* copiedMixer = track->getVolumePlugin())
-            for (const auto target : mixerTargets)
-            {
-                auto* from = automationParameter (*sourceMixer, target);
-                auto* parameter = automationParameter (*copiedMixer, target);
-                if (from == nullptr || parameter == nullptr || from->getCurve().getNumPoints() == 0) continue;
-                auto& original = from->getCurve(); auto& copiedCurve = parameter->getCurve();
-                copiedCurve.clear (undo);
-                for (int i = 0; i < original.getNumPoints(); ++i)
-                {
-                    const auto point = original.getPoint (i);
-                    copiedCurve.addPoint (point.time, point.value, point.curve, undo);
-                }
-                parameter->updateStream();
-                parameter->updateFromAutomationSources (impl->edit->getTransport().getPosition());
-            }
-    renewMidiNoteIDs (track->state, undo);
-    track->state.removeProperty (linkProperty, undo); // A duplicate starts unlinked.
-    track->setName (Impl::ownName (*source)); // A duplicate keeps the source's name, or its automatic one.
-    // Input target assignments live outside this copied track, so the new ID has
-    // no input/arm state. Runtime Session ownership must not silence its Arrangement.
-    track->state.setProperty (te::IDs::playSlotClips, false, undo);
-    track->state.setProperty (monitorProperty, static_cast<int> (MonitorMode::off), undo);
-    impl->refreshRouting(); impl->changed(); duplicateId = track->itemID.toString(); return Result::ok();
+    juce::StringArray created;
+    for (auto* root : roots)
+    {
+        auto copy = impl->edit->copyTrack (te::Track::Ptr (root), te::TrackInsertPoint (parent, preceding.get()));
+        if (copy == nullptr) { impl->changed(); return Result::fail ("Could not duplicate the track."); }
+        const auto sources = within (*root), copies = within (*copy);
+        for (int i = 0; i < copies.size() && i < sources.size(); ++i)
+        {
+            auto* source = sources[i];
+            // Native construction restores explicit values through the manual setter,
+            // which can rewrite a single-point curve. Restore source points inside this
+            // same duplication transaction, after construction has completed.
+            if (auto* sourceMixer = volumeOf (*source))
+                if (auto* copiedMixer = volumeOf (*copies[i]))
+                    for (const auto target : mixerTargets)
+                    {
+                        auto* from = automationParameter (*sourceMixer, target);
+                        auto* parameter = automationParameter (*copiedMixer, target);
+                        if (from == nullptr || parameter == nullptr || from->getCurve().getNumPoints() == 0) continue;
+                        auto& original = from->getCurve(); auto& copiedCurve = parameter->getCurve();
+                        copiedCurve.clear (undo);
+                        for (int p = 0; p < original.getNumPoints(); ++p)
+                        {
+                            const auto point = original.getPoint (p);
+                            copiedCurve.addPoint (point.time, point.value, point.curve, undo);
+                        }
+                        parameter->updateStream();
+                        parameter->updateFromAutomationSources (impl->edit->getTransport().getPosition());
+                    }
+            auto* track = dynamic_cast<te::AudioTrack*> (copies[i]);
+            copies[i]->setName (Impl::ownName (*source)); // A duplicate keeps the source's name, or its automatic one.
+            if (track == nullptr) continue;
+            renewMidiNoteIDs (track->state, undo);
+            track->state.removeProperty (linkProperty, undo); // A duplicate starts unlinked.
+            // Input target assignments live outside this copied track, so the new ID has
+            // no input/arm state. Runtime Session ownership must not silence its Arrangement.
+            track->state.setProperty (te::IDs::playSlotClips, false, undo);
+            track->state.setProperty (monitorProperty, static_cast<int> (MonitorMode::off), undo);
+        }
+        created.add (copy->itemID.toString());
+        preceding = copy;
+    }
+    impl->refreshRouting(); impl->changed(); duplicateIds = created; return Result::ok();
 }
 Result Session::moveTrack (const String& id, int destinationIndex)
 {

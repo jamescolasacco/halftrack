@@ -140,6 +140,25 @@ Evidence (`tests/GroupTests.cpp`):
 
 The UI suite clicks a nested group's name and presses Delete. The group goes with its track, the next track is selected, and one undo brings both back. After a click in the lanes, the headers no longer have the focus. In the Session view, Delete after a click on a track's title deletes the track, one undo brings it back, and a click on a slot takes the focus from the titles. Delete after a click on the inner group's only track keeps it. The UI and automation editor suites remove tracks until one is left, which stays; the UI suite then opens a project saved without tracks, as earlier versions allowed, and checks the Automation window with none.
 
+## Duplicating (2026-10-23)
+
+This follows a static reading of the reference's Duplicate for track headers (Arrangement 0x1037d7908, Session 0x103a52280, both through DuplicateSelectedTracks 0x10243278c).
+
+- **API.** `duplicateTracks(ids, copies)` duplicates tracks and groups in one undo step. A group is copied with everything inside it.
+  - As in the reference, the copies go as one block, in track order, right after the last selected item (after a group's last track), inside the group that item is in (medium-high). So copies of tracks from different groups join the last one's group.
+  - `copies` lists the copies of the chosen items, in order. Inside a copied group, the tracks are new as well.
+  - Copies keep devices, clips, sends, mixer settings and automation; their MIDI notes get new identities and they start unlinked, as single-track duplicates did.
+  - `canDuplicateTracks(ids)` says whether it would go ahead. Unknown or empty choices are refused without an undo step.
+- **Interface.** After a click on a header or a Session title, Cmd+D duplicates the selection, the selected group or tracks. Create > Duplicate Selected Track does the same. As the reference selects the new block, the first copy is selected, with the other copied tracks; a copied group is selected as a group. When the first copy lands in a folded group, that group is selected.
+
+Evidence (`tests/GroupTests.cpp`): a copy of a nested group goes after its last track, in its group, with copies of what is inside; muting the original, the copies play the original mix; two undo steps remove the mute and the copy. Two tracks from different groups go together after the last, in its group, and a single grouped track's copy goes right after it. Unknown and empty duplications leave the result and redo alone. The UI suite duplicates a nested group with Cmd+D after a click on its name, selecting the copy, and a grouped track from the Create menu.
+
+Not reproduced:
+- **Returns and frozen tracks.** The reference duplicates both, a return as a new return. Halftrack refuses them for now.
+- **Recording.** The reference refuses only when a copied track's Session clip is recording (AClipSlot::sErrorCannotCopyRecordingClip). Halftrack refuses any duplication while recording.
+- **Colour.** The copies pass the reference's automatic colour picker (0x1021d4f68); whether that recolours them was not determined. Halftrack's keep the source's colour.
+- **Take lanes.** With only take lanes selected, the reference's Arrangement Duplicate duplicates them instead (sManeuverTextDuplicateTakeLanes).
+
 ## Group sends (2026-10-23)
 
 The reference's group mixer is the ordinary track mixer, with a send per return (its Set schema; [group findings](#moving-tracks-2026-10-23)). Halftrack's groups now have sends too.
