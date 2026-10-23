@@ -5525,6 +5525,7 @@ Session::Snapshot Session::snapshot() const
     {
         TrackInfo info;
         info.id = t->itemID.toString(); info.name = impl->displayName (*t); info.userName = Impl::ownName (*t); info.colour = t->getColour();
+        info.numberLabel = isReturn (*t) ? impl->returnLetter (*t) : String (impl->trackNumber (*t));
         if (const auto link = t->state[linkProperty].toString(); link.isNotEmpty() && linkSizes[link] > 1) info.linkId = link;
         info.autoArmed = info.id == impl->autoArmed;
         info.mute = t->isMuted (false); info.solo = t->isSolo (false) || static_cast<bool> (t->state.getProperty (cueProperty, false));
@@ -5654,6 +5655,7 @@ Session::Snapshot Session::snapshot() const
         {
             GroupInfo group;
             group.id = folder->itemID.toString(); group.name = impl->displayName (*folder); group.userName = Impl::ownName (*folder); group.colour = folder->getColour();
+            group.numberLabel = String (impl->trackNumber (*folder));
             group.mute = folder->isMuted (false); group.solo = folder->isSolo (false) || static_cast<bool> (folder->state.getProperty (cueProperty, false));
             group.folded = folder->state.getProperty (groupFoldedProperty, false);
             if (auto* v = folder->getVolumePlugin()) { group.gainDb = v->getVolumeDb(); group.pan = v->getPan(); }

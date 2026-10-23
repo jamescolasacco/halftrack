@@ -1486,7 +1486,7 @@ private:
             solo.onClick = [this] { owner.selectTrack (index); owner.soloFromUI (index, {}, solo.getToggleState(), juce::ModifierKeys::getCurrentModifiers().isCommandDown()); };
             arm.onClick = [this] { owner.selectTrack (index); owner.armFromUI (index, arm.getToggleState(), juce::ModifierKeys::getCurrentModifiers().isCommandDown()); };
             mute.setTooltip ("Track activator: click to mute or unmute"); solo.setTooltip ("Solo track"); arm.setTooltip ("Arm track for audio recording");
-            solo.setName ("Track solo");
+            mute.setName ("Track activator"); solo.setName ("Track solo");
             mute.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); mute.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             solo.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff57a7ff)); solo.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             arm.setName ("Record arm"); input.setName ("Track audio input"); monitor.setName ("Track monitoring");
@@ -1626,7 +1626,7 @@ private:
             gain.getProperties().set ("midiMapTarget", "mixer:" + track.id + ":volume"); pan.getProperties().set ("midiMapTarget", "mixer:" + track.id + ":pan");
             showAutomationState (pan, track.panAutomation, "Track pan. Double-click to center.", "Pan");
             mute.setToggleState (! track.mute, juce::dontSendNotification);
-            mute.setButtonText (juce::String (position + 1));
+            mute.setButtonText (track.numberLabel); // Its number, or a return's letter, as the reference's activator shows.
             solo.setToggleState (track.solo, juce::dontSendNotification);
             // In Cue mode the switch cues the track, as the reference's does.
             solo.setButtonText (owner.state.cueMode ? "C" : "S");
@@ -2084,7 +2084,7 @@ private:
             if (! name.isBeingEdited()) name.setText (g->name, juce::dontSendNotification);
             activator.setToggleState (! g->mute, juce::dontSendNotification); solo.setToggleState (g->solo, juce::dontSendNotification);
             solo.setEnabled (! owner.state.cueMode); // Groups cannot be cued.
-            activator.setButtonText ("G");
+            activator.setButtonText (g->numberLabel); // A group's number, as the reference's shows.
             if (! gain.isMouseButtonDown()) gain.setValue (g->gainDb, juce::dontSendNotification);
             if (! pan.isMouseButtonDown()) pan.setValue (g->pan, juce::dontSendNotification);
             if (columnLayout)
@@ -16210,6 +16210,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "Insert Audio Track puts the track after the selected one, selected, and the tracks after it renumber");
         handleKey (juce::KeyPress ('T', juce::ModifierKeys::commandModifier | juce::ModifierKeys::altModifier, 0)); refresh();
         check (currentTrack() != nullptr && currentTrack()->isReturn && currentTrack()->name == "A-Return", "Cmd/Ctrl+Option/Alt+T inserts a return track");
+        {
+            auto* activator = dynamic_cast<juce::Button*> (findNamed (*canvas.getChildComponent (selectedTrack), "Track activator"));
+            check (activator != nullptr && activator->getButtonText() == "A", "the return's activator shows its letter, as the reference's does");
+        }
         check (session.newProject().wasOk(), "leave the Insert project"); refresh();
     }
     {

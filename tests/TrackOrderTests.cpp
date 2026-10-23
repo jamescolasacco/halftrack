@@ -262,6 +262,12 @@ int runTrackOrderTests (const juce::File& artifacts)
             ok (s.groupTracks ({ at (0).id, midi }, group), "group the first two tracks");
             check (names() == juce::StringArray { "Bass", "3-MIDI", "4-Hook", "A-" + devices[0].name + " | " + devices[1].name, "B-Return", "C-Return" }
                        && s.snapshot().groups.size() == 1 && s.snapshot().groups[0].name == "1-Group", "the group is 1-Group and the tracks after it renumber");
+            {
+                const auto grouped = s.snapshot();
+                juce::StringArray labels; for (const auto& t : grouped.tracks) labels.add (t.numberLabel);
+                check (labels == juce::StringArray { "2", "3", "4", "A", "B", "C" } && grouped.groups[0].numberLabel == "1",
+                       "activators show the tracks' numbers, groups counted, and the returns' letters: " + labels.joinIntoString (" "));
+            }
             ok (s.renameGroup (group, "Drums"), "rename the group");
             check (s.snapshot().groups[0].name == "Drums" && s.renameGroup (group, "").wasOk() && s.snapshot().groups[0].name == "1-Group", "a group renames, and back to automatic");
             // Insert after a grouped track goes into the group; after the group, after everything in it.

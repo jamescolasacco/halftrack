@@ -473,8 +473,9 @@ public:
     struct TrackInfo
     {
         // The name shown: the user's name, or an automatic one as the reference's (see renameTrack).
-        // userName is empty while the name is automatic.
-        juce::String id, name, userName;
+        // userName is empty while the name is automatic. numberLabel is what the reference's activator
+        // shows: the track's number (groups counted, as in automatic names), or a return's letter.
+        juce::String id, name, userName, numberLabel;
         juce::Colour colour;
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
         bool mute = false, solo = false, armed = false, isMidi = false, isReturn = false;
@@ -507,7 +508,7 @@ public:
     // A group sums its member tracks through its own mixer, like a bus.
     struct GroupInfo
     {
-        juce::String id, name, userName; // As TrackInfo's.
+        juce::String id, name, userName, numberLabel; // As TrackInfo's.
         juce::Colour colour;
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
         bool mute = false, solo = false, folded = false;

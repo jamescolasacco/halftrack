@@ -31,6 +31,8 @@ A track's own name is its stored name, and empty means automatic. `TrackInfo::na
 - **Names of their own.** A name of its own is shown without a number. A leading run of # becomes the track's number, padded with zeros to the run's length: "## Keys" on track 3 shows 03 Keys.
 - **Renaming** (`renameTrack`, `renameGroup`) trims the name. An empty name or the automatic name itself makes it automatic again; so does, on a return, its automatic part alone. On a return, its letter typed before the name (as when editing the shown name) is not kept twice. Each rename is one undo step, and renaming to the same name is none.
 
+**Activators.** A track's activator shows its number, counted as in automatic names (groups included), and a return's shows its letter, as the reference's do (`TrackInfo::numberLabel`, `GroupInfo::numberLabel`). A group's shows its number, where Halftrack's showed G.
+
 A new project's two tracks, imported audio and imported movies get automatic names. Their first clips then name imported tracks after their files. Duplicates keep the source's own name, or stay automatic, where Halftrack used to add " copy". Take, flatten, consolidate and stem files, and messages, use the name shown, so a return's stem is, for example, "Song A-Room.wav".
 
 ## Evidence
@@ -44,7 +46,7 @@ A new project's two tracks, imported audio and imported movies get automatic nam
 - that return A's two devices name it;
 - renaming, its undo step, a leading ## padded to 03, empty and automatic names returning to automatic, trimming, and a return's letter before its own name;
 - that the first clip names a track, the name follows its only clip, stays with two clips, goes with none, and a clip named "3-Audio 2" does not name it;
-- that a group is 1-Group and the tracks after it renumber;
+- that a group is 1-Group and the tracks after it renumber, the activators showing 1 for the group, 2 to 4 for the tracks and A to C for the returns;
 - that inserting after a grouped track joins the group, and inserting after the group goes after everything in it;
 - that the names reopen unchanged and the project is not marked changed.
 
@@ -52,7 +54,7 @@ Moving tracks renumbers automatic names, so the track-order suite's identity che
 
 - Insert MIDI Track making an empty track without an instrument, named n-MIDI, as one undo step, and Insert MIDI Clip adding the clip;
 - Insert Audio Track after the selected track, selected, with the tracks after it renumbered;
-- Cmd/Ctrl+Option/Alt+T inserting a return named A-Return;
+- Cmd/Ctrl+Option/Alt+T inserting a return named A-Return, whose activator shows A;
 - a return renamed from its label shown after its letter, and editing the shown name not repeating the letter.
 
 ## Not implemented
