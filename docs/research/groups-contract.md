@@ -47,6 +47,14 @@ The UI suite checks the Session columns and Arrangement header lanes of a nested
 
 Not implemented: group sends, presets and racks on group or Main chains, sidechains into group or Main plug-ins, per-clip launch modes through group slots, and any comparison with reference group summing.
 
+## Folding with keys (2026-10-23)
+
+The reference registers Fold Selected Track ('flds', sMenuFoldSelectedTrack) and Expand All Tracks ('flda', sMenuExpandAllTracks) with the Arrangement's headers and with the Session view's header row, as Toggle Show Selected Grouped Tracks and Toggle Show All Grouped Tracks (LTrackHeaderManager registration 0x103a4dea4; key bindings at 0x1002b0abc, not decoded). Halftrack:
+- **U** folds or unfolds the selected group in either view. In the Arrangement, with a track selected instead, it folds the selected tracks, as before.
+- **Option/Alt+U** folds or unfolds every group, and in the Arrangement every track as well. It folds when the selected group or track is unfolded. With neither, in the Session view, it folds when any group is unfolded.
+
+The UI suite folds and unfolds a selected group with U in both views, and every group with Option/Alt+U from a selected track in the Session view.
+
 ## Moving tracks (2026-10-23)
 
 This follows a static reading of the reference's code: its track move (0x10242f8d4), its drop target (0x1032c50ac) and its placement check (0x1024319a8). The grouping rule comes from Group Tracks' enable check (0x10242a09c).

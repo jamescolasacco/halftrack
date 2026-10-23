@@ -2337,3 +2337,7 @@ Engine and UI areas. As the reference's header menu has it, Edit Info Text gives
 ## Copying drags — 2026-10-23
 
 UI and engine areas. With Option (Mac) or Ctrl held, dropping Arrangement headers or Session titles copies the tracks and groups to the place a move would take them, as the reference's copying drop does; a group may be copied into itself. `copyTracksTo` makes the copies as Duplicate does and shares Paste's copy step. Checked in the groups and UI suites ([contract](research/groups-contract.md#moving-tracks-2026-10-23)).
+
+## Folding groups with keys — 2026-10-23
+
+UI area. U folds or unfolds a selected group, in the Session view as well as the Arrangement, and Option/Alt+U every group, as the reference binds its fold commands to both views' headers. Before, U only folded Arrangement tracks, even with a group selected. Checked in the UI suite ([contract](research/groups-contract.md#folding-with-keys-2026-10-23)).

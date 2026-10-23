@@ -1028,7 +1028,7 @@ public:
         if (key.getModifiers().isAltDown() && ! cmd && ! showSession && (code == '=' || code == '+' || code == '-'))
         { scaleTrackHeight (selectedTrack, code == '-' ? 1 / 1.25 : 1.25); return true; }
         if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'H' || code == 'h')) { optimizeHeight(); return true; }
-        if (! cmd && ! shift && ! showSession && ! showPiano && (code == 'U' || code == 'u')) { toggleFold (key.getModifiers().isAltDown()); return true; }
+        if (! cmd && ! shift && ! showPiano && (code == 'U' || code == 'u')) { toggleFold (key.getModifiers().isAltDown()); return true; }
         if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'W' || code == 'w')) { optimizeWidth(); return true; }
         if (key.getTextCharacter() == '+' || key.getTextCharacter() == '=') { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); return true; }
         if (key.getTextCharacter() == '-') { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); return true; }
@@ -1559,21 +1559,28 @@ private:
     }
     juce::StringArray allArrangementTracks() const { juce::StringArray ids; for (const auto& t : state.tracks) ids.add (t.id); return ids; }
     // Folding, as in the reference: a track's triangle folds it to its header strip, with Option/Alt
-    // every track; U folds or unfolds the selected tracks, and Option/Alt+U every track.
+    // every track.
     static constexpr int foldedTrackHeight = 24;
     void foldTracks (const juce::StringArray& ids, bool folded)
     {
         for (const auto& id : ids) report (session.setTrackFolded (id, folded));
         refresh(); resized(); canvas.repaint();
     }
+    // U folds or unfolds the selected tracks, or the selected group's tracks, and Alt+U all of them,
+    // as the reference's Fold Selected Track and Expand All Tracks commands do; in the Session view
+    // they fold groups' columns.
     void toggleFold (bool every)
     {
-        const auto* current = currentTrack();
-        if (current == nullptr) return;
+        const auto* group = groupInfo (selectedChain);
+        const auto* current = showSession ? nullptr : currentTrack();
+        if (group == nullptr && current == nullptr && ! (every && ! state.groups.empty())) return;
+        const bool fold = group != nullptr ? ! group->folded : current != nullptr ? ! current->folded
+                        : std::any_of (state.groups.begin(), state.groups.end(), [] (const auto& g) { return ! g.folded; });
+        for (const auto& g : state.groups) if (every || g.id == selectedChain) report (session.setGroupFolded (g.id, fold));
         juce::StringArray ids;
-        if (every) ids = allArrangementTracks();
-        else { ids.add (current->id); for (const auto& id : multiSelectedTracks) ids.addIfNotAlreadyThere (id); }
-        foldTracks (ids, ! current->folded);
+        if (! showSession && every) ids = allArrangementTracks();
+        else if (group == nullptr && current != nullptr) { ids.add (current->id); for (const auto& id : multiSelectedTracks) ids.addIfNotAlreadyThere (id); }
+        foldTracks (ids, fold);
     }
     void scaleTrackHeight (int track, double factor)
     {
@@ -17150,6 +17157,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             }
         launcher.mouseDown (groupEvent (launcher.groupFoldPoint (0))); refresh();
         check (! state.groups[0].folded && launcher.columnCount() == 3, "clicking again unfolds the members");
+        // U folds the selected group's columns, and Option/Alt+U every group's, as the reference's Session commands do.
+        selectChain (group); refresh();
+        check (handleKey (juce::KeyPress ('u', {}, 'u')) && state.groups[0].folded && launcher.columnCount() == 1, "U folds the selected group");
+        check (handleKey (juce::KeyPress ('u', {}, 'u')) && ! state.groups[0].folded && launcher.columnCount() == 3, "and unfolds it");
+        selectTrack (0); refresh();
+        check (handleKey (juce::KeyPress ('u', juce::ModifierKeys::altModifier, 0)) && state.groups[0].folded, "Option/Alt+U folds every group, a track selected");
+        check (handleKey (juce::KeyPress ('u', juce::ModifierKeys::altModifier, 0)) && ! state.groups[0].folded, "and again unfolds them");
         {
             // Nested groups: a group inside the group gets its own header lane and column, and
             // folding the outer group hides everything inside it.
@@ -17323,6 +17337,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (state.tracks[0].id == second && state.tracks[0].groupId == inner && ! groupInfo (inner)->folded && laneHeight (0) > 0, "dropping it there opens the group");
                 session.undo(); refresh();
                 check (state.tracks[1].id == second && state.tracks[1].groupId == group && ! groupInfo (inner)->folded, "one undo moves it back, leaving the group open");
+                // In the Arrangement too, U folds a selected group rather than a track.
+                selectChain (inner); refresh();
+                check (handleKey (juce::KeyPress ('u', {}, 'u')) && groupInfo (inner)->folded && laneHeight (indexOf (first)) == 0 && ! state.tracks[(size_t) indexOf (first)].folded,
+                       "U folds the selected group, hiding its track");
+                check (handleKey (juce::KeyPress ('u', {}, 'u')) && ! groupInfo (inner)->folded && laneHeight (indexOf (first)) > 0, "and unfolds it");
                 {
                     // In the Session view a column's title drags the same way, sideways: over a column's
                     // left half before it, over its right half after it, the height in the title
