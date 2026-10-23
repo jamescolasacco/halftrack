@@ -203,6 +203,44 @@ int runTransportTests (const juce::File& artifacts)
             const auto fromMarker = started (fromLoop);
             check (fromMarker >= 3 && fromMarker < 4, "and Play starts at the insert marker again (" + juce::String (fromMarker, 3) + " s)");
             s.stop(); s.setInsertMarker (3);
+            // A locator's Set Song Start Time Here: Play starts at the locator, which takes the song's
+            // start from the loop; moving the locator moves it, and deleting it clears it.
+            juce::String songLocator, otherLocator;
+            ok (s.addLocator (4.5, "Song", songLocator), "a locator at 4.5 s");
+            ok (s.addLocator (2, "Other", otherLocator), "and another at 2 s");
+            ok (s.setLoopIsSongStart (true), "the loop is the song's start");
+            ok (s.setLocatorSongStart (songLocator, true), "Set Song Start Time Here on the locator");
+            const auto holder = [&]
+            {
+                juce::String which = s.snapshot().loopIsSongStart ? "loop" : "";
+                for (const auto& l : s.snapshot().locators) if (l.songStart) which += l.id;
+                return which;
+            };
+            check (holder() == songLocator, "the locator takes the song's start from the loop");
+            ok (s.play(), "Play");
+            const auto fromLocator = started (3);
+            check (fromLocator >= 4.5 && fromLocator < 5.5 && near (s.snapshot().insertMarker, 3), "it plays from the locator, leaving the insert marker (" + juce::String (fromLocator, 3) + " s)");
+            s.stop();
+            ok (s.updateLocator (songLocator, "Song", 1), "move the locator to 1 s");
+            const auto stoppedAt = s.snapshot().position;
+            ok (s.play(), "Play");
+            const auto fromMoved = started (stoppedAt);
+            check (fromMoved >= 1 && fromMoved < 2, "the song's start moves with it (" + juce::String (fromMoved, 3) + " s)");
+            s.stop();
+            ok (s.setLocatorSongStart (otherLocator, true), "Set Song Start Time Here on the other locator");
+            check (holder() == otherLocator, "one locator holds it at a time");
+            s.undo();
+            check (holder() == songLocator, "it is one undo step");
+            ok (s.setLoopIsSongStart (true), "the loop's Set Song Start Time Here");
+            check (holder() == "loop", "the loop takes it back from the locator");
+            ok (s.setLocatorSongStart (songLocator, true), "the locator again");
+            ok (s.removeLocator (songLocator), "delete the locator");
+            check (holder().isEmpty(), "deleting it clears the song's start");
+            const auto beforePlay = s.snapshot().position;
+            ok (s.play(), "Play");
+            const auto fromInsert = started (beforePlay);
+            check (fromInsert >= 3 && fromInsert < 4, "and Play starts at the insert marker (" + juce::String (fromInsert, 3) + " s)");
+            s.stop(); ok (s.removeLocator (otherLocator), "remove the other locator"); s.setInsertMarker (3);
         }
 
         // The marker keeps its beat when the tempo changes: beat 6 is 3 s at 120 BPM and 6 s at 60 BPM.

@@ -372,7 +372,8 @@ public:
         juce::File videoFile;
         EditGrid grid; // Its editor's grid.
     };
-    struct LocatorInfo { juce::String id, name; double position = 0; };
+    // A locator; songStart while it is the song's start (see setLocatorSongStart).
+    struct LocatorInfo { juce::String id, name; double position = 0; bool songStart = false; };
     // The project meter. Beats are quarter notes at every meter, so a bar is numerator x 4 / denominator beats.
     struct TimeSignature
     {
@@ -661,6 +662,11 @@ public:
     // leaving the insert marker where it is. Kept with the project; one undo step.
     bool loopIsSongStart() const;
     juce::Result setLoopIsSongStart (bool);
+    // A locator's Set Song Start Time Here, as the reference's: the locator becomes the song's start,
+    // so Play from a stop starts there, taking it from the loop brace or another locator, since
+    // one thing holds it at a time; one undo step. Moving the locator moves the song's start and
+    // deleting it clears it. The loop brace's setLoopIsSongStart takes it from a locator likewise.
+    juce::Result setLocatorSongStart (const juce::String& locatorId, bool);
     // The Session mixer's sections, as the reference's View menu shows and hides them (see MixerSections).
     MixerSections mixerSections() const;
     void setMixerSections (const MixerSections&);

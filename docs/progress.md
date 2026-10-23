@@ -2127,3 +2127,7 @@ Engine, UI and root areas (a new Tracktion patch). Following the reference manua
 - **Piano editor.** Its note names now put C3 at note 60, as the reference and the rest of Halftrack do.
 - **Measured.** The MIDI mapping, key map and UI suites, including a virtual controller feeding an armed MIDI track; with the remote passing everything through, the track-input check fails.
 
+## A locator as the song's start — 2026-10-23
+
+Engine and UI areas. From a static reading of the reference's code (findings in the ignored `artifacts/reverse-engineering/tracks/`). A locator's menu offers Set Song Start Time Here: Play then starts at the locator, which takes the song's start from the loop brace or another locator. Moving the locator moves it and deleting it clears it; it is one undo step and kept with the project. The ruler marks the song's start. Measured in the transport, locator and UI suites ([contract](research/transport-contract.md)).
+

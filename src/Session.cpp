@@ -56,6 +56,7 @@ const juce::Identifier cueOutputProperty { "halftrackCueOutput" }, cueVolumeProp
 const juce::Identifier soloInPlaceProperty { "halftrackSoloInPlace" };
 // The loop brace's Set Song Start Time Here, as the reference's: Play starts at the loop's start.
 const juce::Identifier loopIsSongStartProperty { "halftrackLoopIsSongStart" };
+const juce::Identifier locatorSongStartProperty { "halftrackSongStart" }; // On the locator that is the song's start.
 // The Session mixer's sections shown, as view state.
 const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsProperty { "halftrackMixerSends" }, mixerReturnsProperty { "halftrackMixerReturns" }, mixerVolumeProperty { "halftrackMixerVolume" },
                        mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" }, mixerShownProperty { "halftrackMixerInSession" };
@@ -1301,9 +1302,14 @@ Result validateLocators (const juce::ValueTree& state)
         if (! node.getParent().hasType (te::IDs::MARKERTRACK) || ! id.isValid() || clipIds[id.toString()] != 1
             || ! read (te::IDs::start,start) || ! read (te::IDs::length,length) || ! read (te::IDs::sync,sync)
             || sync != te::Clip::syncAbsolute || length < 0 || start+length > te::Edit::maximumLength
-            || ! validLocator (node[te::IDs::name].toString(),start))
+            || ! validLocator (node[te::IDs::name].toString(),start)
+            || (node.hasProperty (locatorSongStartProperty) && node[locatorSongStartProperty].toString() != "0" && node[locatorSongStartProperty].toString() != "1"))
             return Result::fail ("The project contains invalid or ambiguous locator data.");
     }
+    // One thing holds the song's start: a locator or the loop brace.
+    const auto holders = std::count_if (markers.begin(), markers.end(), [] (const auto& node) { return static_cast<bool> (node.getProperty (locatorSongStartProperty, false)); })
+                         + (static_cast<bool> (state.getProperty (loopIsSongStartProperty, false)) ? 1 : 0);
+    if (holders > 1) return Result::fail ("The project contains invalid or ambiguous locator data.");
     return Result::ok();
 }
 
@@ -3566,12 +3572,20 @@ struct Session::Impl
         return nullptr;
     }
     float cueVolumeDb() const { return edit->state.getProperty (cueVolumeProperty, defaultCueVolumeDb); }
-    // Where Play starts from a stop, as the reference's does: the loop's start when it is the song's
-    // start, otherwise the insert marker.
+    // Where Play starts from a stop, as the reference's does: the song's start (a locator, or the
+    // loop's start) when one holds it, otherwise the insert marker.
     te::TimePosition playStart() const
     {
         auto& transport = edit->getTransport();
+        for (auto* marker : edit->getMarkerManager().getMarkers())
+            if (static_cast<bool> (marker->state.getProperty (locatorSongStartProperty, false))) return marker->getPosition().getStart();
         return static_cast<bool> (edit->state.getProperty (loopIsSongStartProperty, false)) ? transport.getLoopRange().getStart() : transport.startPosition.get();
+    }
+    // Takes the song's start from every locator, inside the current transaction.
+    void clearLocatorSongStarts()
+    {
+        for (auto* marker : edit->getMarkerManager().getMarkers())
+            if (marker->state.hasProperty (locatorSongStartProperty)) marker->state.removeProperty (locatorSongStartProperty, &edit->getUndoManager());
     }
     bool cueActive() const { return dynamic_cast<Behaviour&> (engine.getEngineBehaviour()).cueActive; }
     // Cue mode needs a separate Cue Out; otherwise Solo applies, and the choice is kept for when it
@@ -5289,7 +5303,8 @@ Session::Snapshot Session::snapshot() const
     s.loopEnd = transport.getLoopRange().getEnd().inSeconds();
     s.cpu = impl->engine.getDeviceManager().getCpuUsage();
     for (auto* marker : e.getMarkerManager().getMarkers())
-        s.locators.push_back ({ marker->itemID.toString(), marker->getName(), marker->getPosition().getStart().inSeconds() });
+        s.locators.push_back ({ marker->itemID.toString(), marker->getName(), marker->getPosition().getStart().inSeconds(),
+                                static_cast<bool> (marker->state.getProperty (locatorSongStartProperty, false)) });
     for (auto* scene : e.getSceneList().getScenes())
     {
         SceneInfo info { scene->state.getProperty ("halftrackSceneID").toString(), scene->name.get(), {}, {} };
@@ -11112,7 +11127,22 @@ Result Session::setLoopIsSongStart (bool on)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (on == loopIsSongStart()) return Result::ok();
     impl->transaction ("Set Song Start Time");
+    if (on) impl->clearLocatorSongStarts(); // The loop takes the song's start from a locator.
     impl->edit->state.setProperty (loopIsSongStartProperty, on, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::setLocatorSongStart (const String& locatorId, bool on)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* marker = impl->locator (locatorId); if (! marker) return Result::fail ("Locator not found.");
+    if (on == static_cast<bool> (marker->state.getProperty (locatorSongStartProperty, false))) return Result::ok();
+    impl->transaction ("Set Song Start Time");
+    impl->clearLocatorSongStarts();
+    if (on)
+    {
+        impl->edit->state.setProperty (loopIsSongStartProperty, false, &impl->edit->getUndoManager());
+        marker->state.setProperty (locatorSongStartProperty, true, &impl->edit->getUndoManager());
+    }
     impl->changed(); return Result::ok();
 }
 bool Session::soloInPlace() const { return impl->edit->state.getProperty (soloInPlaceProperty, true); }

@@ -3198,6 +3198,13 @@ private:
                 width=juce::jmin (width,(float)((nextMarker->position-marker.position)*owner.pixelsPerSecond)-3);
             return {x,36,juce::jmax (12.0f,width),20};
         }
+        // The song's start, which the ruler marks with a small play triangle: a locator, or the loop's start.
+        std::optional<double> songStartTime() const
+        {
+            for (const auto& marker:owner.state.locators) if (marker.songStart) return marker.position;
+            if (owner.state.loopIsSongStart) return owner.state.loopStart;
+            return std::nullopt;
+        }
         juce::String hitLocator (juce::Point<float> point) const
         {
             if (point.x < 0 || point.x >= owner.canvas.timelineWidth()) return {};
@@ -3237,6 +3244,12 @@ private:
                 g.drawVerticalLine ((int)bounds.getX(),37,56);
                 g.setFont (font (10.0f,marker.id==selected));
                 g.drawText (marker.name,bounds.withTrimmedLeft (11),juce::Justification::centredLeft,true);
+            }
+            if (const auto start=songStartTime())
+            {
+                const auto sx=(float)((*start-owner.viewStart)*owner.pixelsPerSecond);
+                juce::Path play;play.addTriangle (sx+2,47,sx+2,55,sx+8,51);
+                g.setColour (ink);g.fillPath (play);
             }
             const auto px=(float)((owner.state.position-owner.viewStart)*owner.pixelsPerSecond);
             juce::Path needle;needle.addTriangle (px-5,15,px+5,15,px,23);
@@ -3314,9 +3327,15 @@ private:
         juce::PopupMenu menuFor (const juce::String& id,double position) const
         {
             juce::PopupMenu menu;menu.addItem (1,"Add locator here");
-            if (id.isNotEmpty()){menu.addItem (2,"Edit locator...");menu.addItem (3,"Delete locator");}
+            if (id.isNotEmpty())
+            {
+                menu.addItem (2,"Edit locator...");menu.addItem (3,"Delete locator");
+                // On a locator, as the reference's: Play then starts at the locator.
+                bool songStart=false;for (const auto& marker:owner.state.locators) songStart=songStart||(marker.id==id&&marker.songStart);
+                menu.addSeparator();menu.addItem (5,"Set Song Start Time Here",true,songStart);
+            }
             // On the loop brace, as the reference's: Play then starts at the loop's start.
-            if (position>=owner.state.loopStart && position<owner.state.loopEnd) {menu.addSeparator();menu.addItem (4,"Set Song Start Time Here",true,owner.state.loopIsSongStart);}
+            else if (position>=owner.state.loopStart && position<owner.state.loopEnd) {menu.addSeparator();menu.addItem (4,"Set Song Start Time Here",true,owner.state.loopIsSongStart);}
             juce::PopupMenu jumps;int index=0;
             for (const auto& marker:owner.state.locators) jumps.addItem(100+index++,marker.name+"  /  "+juce::String(marker.position,3)+" s");
             if (index>0)menu.addSubMenu ("Jump to locator",jumps);
@@ -3328,6 +3347,9 @@ private:
             if(choice==2)owner.editLocatorDialog(id);
             if(choice==3){owner.report(owner.session.removeLocator(id));owner.refresh();}
             if(choice==4){owner.report(owner.session.setLoopIsSongStart(!owner.state.loopIsSongStart));owner.refresh();}
+            if(choice==5)
+                for (const auto& marker:owner.state.locators)
+                    if (marker.id==id){owner.report(owner.session.setLocatorSongStart(id,!marker.songStart));owner.refresh();break;}
             if(choice>=100&&choice-100<ids.size()){owner.report(owner.session.seekLocator(ids[choice-100]));owner.refresh();}
         }
     private:
@@ -15485,6 +15507,21 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (state.loopIsSongStart, "choosing it makes the loop the song's start");
                 ruler.choose (4, {}, inside, {});
                 check (! state.loopIsSongStart, "and choosing it again does not");
+                juce::String locatorId;
+                report (session.addLocator (1.25, "Song", locatorId)); refresh();
+                const auto onLocator = ruler.menuFor (locatorId, 1.25);
+                bool locatorItem = false, loopItem = false;
+                for (juce::PopupMenu::MenuItemIterator item (onLocator); item.next();)
+                {
+                    locatorItem = locatorItem || (item.getItem().itemID == 5 && item.getItem().text == "Set Song Start Time Here" && ! item.getItem().isTicked);
+                    loopItem = loopItem || item.getItem().itemID == 4;
+                }
+                check (locatorItem && ! loopItem, "a locator's menu offers its own Set Song Start Time Here, not the loop's");
+                ruler.choose (5, locatorId, 1.25, {}); refresh();
+                check (state.locators.size() == 1 && state.locators[0].songStart && ruler.songStartTime() == std::optional<double> (1.25), "choosing it makes the locator the song's start, marked in the ruler");
+                ruler.choose (5, locatorId, 1.25, {}); refresh();
+                check (! state.locators[0].songStart && ! ruler.songStartTime(), "and choosing it again does not");
+                report (session.removeLocator (locatorId)); refresh();
                 session.setLoop (state.looping, loopBefore.first, loopBefore.second); refresh();
             }
             menuItemSelected (98, 3); refresh();

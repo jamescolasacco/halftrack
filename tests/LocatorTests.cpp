@@ -42,6 +42,22 @@ int runLocatorTests(const juce::File& artifacts)
         ok(s.saveProject(project),"save native locator state");ok(s.loadProject(project),"reopen named locators");
         check(s.snapshot().locators[1].id==verse&&s.snapshot().locators[1].name=="Verse A"&&s.snapshot().locators[1].position==2.5,"locator data round trips");
         ok(s.updateLocator(verse,"Verse A",2.5),"identical locator edit no-op");check(!s.canUndo()&&!s.snapshot().dirty,"identical edit preserves clean history");
+        {
+            // The song's start reopens on its locator; a project with two song starts is refused.
+            const auto songProject=root.getChildFile("song-start.halftrack");
+            ok(s.setLocatorSongStart(verse,true),"make Verse A the song's start");ok(s.saveProject(songProject),"save it");
+            {
+                Session reopened(false);ok(reopened.loadProject(songProject),"reopen it");
+                const auto reopenedLocators=reopened.snapshot().locators;
+                check(reopenedLocators.size()==3&&reopenedLocators[1].id==verse&&reopenedLocators[1].songStart&&!reopenedLocators[0].songStart,"the song's start reopens on its locator");
+                auto xml=juce::XmlDocument::parse(songProject);check(xml!=nullptr,"parse it");
+                xml->getChildByName("EDIT")->setAttribute("halftrackLoopIsSongStart",1);
+                const auto twice=root.getChildFile("two-starts.halftrack");check(xml->writeTo(twice),"write a project whose loop also holds it");
+                check(reopened.loadProject(twice).failed()&&reopened.snapshot().locators[1].songStart,"two song starts are refused, keeping the open project");
+            }
+            s.undo();check(!s.snapshot().locators[1].songStart,"undo takes it back");
+            ok(s.saveProject(project),"save again without it");
+        }
         s.seek(0);ok(s.navigateLocator(true),"navigate forward");check(s.snapshot().position==2.5,"next excludes current locator");
         ok(s.navigateLocator(true),"navigate to final locator");check(s.snapshot().position==4,"next reaches following locator");
         ok(s.navigateLocator(true),"navigation at end no-op");check(s.snapshot().position==4,"navigation does not wrap");

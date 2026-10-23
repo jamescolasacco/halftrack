@@ -14,7 +14,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | AUD-011 | audio-engine, ui |  |
 | AUD-012 | device-settings |  |
 | REC-001 | session, tempo |  |
-| REC-002 | transport, ui |  |
+| REC-002 | locators, transport, ui |  |
 | REC-003 | session, tempo, tempo-map, time-signature |  |
 | REC-004 | punch, take-lanes, ui |  |
 | REC-005 | metronome, ui |  |

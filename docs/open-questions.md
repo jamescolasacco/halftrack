@@ -743,7 +743,7 @@ The reference's Performance Impact section is not offered: there is no performan
 
 ### Song start
 
-The reference can also make a locator the song's start; Halftrack offers only the loop brace's Set Song Start Time Here. Whether the reference's song start follows a loop brace moved afterwards is unknown; Halftrack's does, since it is the loop's start whenever Play starts.
+A locator or the loop brace can be the song's start, as in the reference. Whether the reference's song start follows a loop brace moved afterwards is unknown (no update was found in its code); Halftrack's does, since it is the loop's start whenever Play starts. The ruler's play triangle marking the song's start is Halftrack's own sign.
 
 ### Track order
 
