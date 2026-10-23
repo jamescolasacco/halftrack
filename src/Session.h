@@ -932,8 +932,9 @@ public:
     juce::Result ungroupTracks (const juce::String& groupId);
     // Moves tracks and groups into a group (empty for the top level), before a track or group there
     // (empty for its end, before the returns), as dragging headers does in the reference. Their
-    // contents move with groups. A group cannot move into itself, and returns stay among the returns.
-    // A group the move empties stays, empty, as the reference's does. One undo step.
+    // contents move with groups. A group cannot move into itself. Returns move only among the returns
+    // (before one, or after the last with no place given), and other tracks stay before them. A group
+    // the move empties stays, empty, as the reference's does. One undo step.
     juce::Result moveTracks (const juce::StringArray& trackAndGroupIds, const juce::String& groupId, const juce::String& beforeId);
     // As renameTrack.
     juce::Result renameGroup (const juce::String& groupId, const juce::String& name);

@@ -1314,8 +1314,8 @@ private:
     // or group they go before it; over the lower half of a group's header, into the group first,
     // folded or not; over the lower half of a track, after it in its group. Below every lane they go
     // after the last track. A track's automation and take lanes count as the track; returns are no
-    // place for tracks.
-    std::optional<TrackDrop> trackDropAt (int y) const
+    // place for tracks. Dragged returns land among the returns only, before one or after the last.
+    std::optional<TrackDrop> trackDropAt (int y, bool returns = false) const
     {
         // A lane's track or group, and the group it is in.
         const auto itemOf = [this] (const Lane& lane) -> std::pair<juce::String, juce::String>
@@ -1328,6 +1328,24 @@ private:
         const auto within = [this] (const juce::String& group, const juce::String& outer) { return outer.isEmpty() || group == outer || groupInside (group, outer); };
         int returnsY = lanesHeight;
         for (const auto& lane : lanes) if (item (lane) && returnLane (lane)) { returnsY = lane.y; break; }
+        if (returns)
+        {
+            for (size_t i = 0; i < lanes.size(); ++i)
+            {
+                const auto& lane = lanes[i];
+                if (! item (lane) || lane.height <= 0) continue;
+                auto next = i + 1;
+                while (next < lanes.size() && ! item (lanes[next])) ++next;
+                const int bottom = next < lanes.size() ? lanes[next].y : lanesHeight;
+                if (y >= bottom) continue;
+                if (y < lane.y || ! returnLane (lane)) return std::nullopt;
+                const auto& id = state.tracks[(size_t) lane.index].id;
+                if (y < (lane.y + bottom) / 2) return TrackDrop { {}, id, lane.y };
+                const auto after = next < lanes.size() && returnLane (lanes[next]) ? state.tracks[(size_t) lanes[next].index].id : juce::String();
+                return TrackDrop { {}, after, bottom };
+            }
+            return TrackDrop { {}, {}, lanesHeight };
+        }
         for (size_t i = 0; i < lanes.size(); ++i)
         {
             const auto& lane = lanes[i];
@@ -1363,8 +1381,12 @@ private:
             const auto selected = selectedTrackIds();
             draggedTracks = selected.contains (id) ? selected : juce::StringArray { id };
         }
+        // Returns land among the returns, and a mix of returns and other tracks nowhere.
+        int returns = 0;
+        for (const auto& t : state.tracks) if (t.isReturn && draggedTracks.contains (t.id)) ++returns;
+        if (returns > 0 && returns < draggedTracks.size()) { trackDrop.reset(); canvas.repaint(); return; }
         // Nowhere inside a group being dragged.
-        auto drop = trackDropAt (y);
+        auto drop = trackDropAt (y, returns > 0);
         for (const auto& dragged : draggedTracks)
             if (drop && (drop->groupId == dragged || groupInside (drop->groupId, dragged))) drop.reset();
         trackDrop = drop; canvas.repaint();
@@ -2349,7 +2371,7 @@ private:
         {
             heightAtDown = onSplitLine (e.getPosition()) && ! folded && ! e.mods.isPopupMenu() ? getHeight() : 0;
             if (heightAtDown > 0) return;
-            dragArmed = ! columnLayout && ! returnTrack && ! e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name);
+            dragArmed = ! columnLayout && ! e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name);
             if (! columnLayout && ! e.mods.isPopupMenu() && e.originalComponent == this && e.x < 18 && e.y < 22)
             { owner.selectTrack (index); owner.foldTracks (e.mods.isAltDown() ? owner.allArrangementTracks() : juce::StringArray { trackId }, ! folded); return; }
             const auto within = [&e] (juce::Component& c) { return e.originalComponent == &c || c.isParentOf (e.originalComponent); };
@@ -16336,6 +16358,31 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         ruler.choose (12, {}, secondsAt (7), {}, 1); refresh();
         check (state.timeSignatures.size() == 1, "which deletes it");
         session.setInsertMarker (0); refresh();
+    }
+    {
+        // Dragging a return's header moves it among the returns, as the reference's drop rules allow.
+        showArrangementView();
+        check (session.addReturnTrack ("First").wasOk() && session.addReturnTrack ("Second").wasOk(), "two returns to reorder"); refresh();
+        const int count = (int) state.tracks.size();
+        const auto first = state.tracks[(size_t) count - 2].id, second = state.tracks[(size_t) count - 1].id;
+        auto* label = canvas.getComponentAt (canvas.timelineWidth() + 30, laneY (count - 1) + 10);
+        check (label != nullptr && label->getName() == "Track name", "the second return's name");
+        auto* row = label->getParentComponent();
+        const auto now = juce::Time::getCurrentTime();
+        const auto down = juce::Point<float> (10.0f, 8.0f);
+        const auto event = [&] (int canvasY, bool dragged)
+        {
+            const auto at = dragged ? label->getLocalPoint (&canvas, juce::Point<int> (canvas.timelineWidth() + 40, canvasY)).toFloat() : down;
+            return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0, label, label, now, down, now, 1, dragged);
+        };
+        row->mouseDown (event (0, false)); row->mouseDrag (event (laneY (count - 2) + 5, true));
+        check (trackDrop && trackDrop->beforeId == first && trackDrop->groupId.isEmpty(), "over the first return's upper half it would go before it");
+        row->mouseDrag (event (laneY (0) + 5, true));
+        check (! trackDrop, "over an ordinary track there is nowhere to drop a return");
+        row->mouseDrag (event (laneY (count - 2) + 5, true)); row->mouseUp (event (laneY (count - 2) + 5, true)); refresh();
+        check (state.tracks[(size_t) count - 2].id == second && state.tracks[(size_t) count - 1].id == first, "dropping it there puts it first among the returns");
+        session.undo(); refresh();
+        check (state.tracks[(size_t) count - 2].id == first, "one undo puts it back");
     }
     check(session.newProject().wasOk()&&session.importAudio(audioFixture,0).wasOk()&&session.addMidiTrack("Activation").wasOk(),"prepare clip activation controls");refresh();
     const auto activationAudio=state.tracks[0].clips[0].id,activationTrack=state.tracks[2].id;

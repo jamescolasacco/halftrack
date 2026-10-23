@@ -242,6 +242,25 @@ int runGroupTests (const juce::File& artifacts)
             n.undo(); check (n.snapshot().tracks.size() == 3, "one undo restores both");
         }
         {
+            // Returns move among the returns, and other tracks stay before them, as the reference's drop
+            // rules keep them.
+            Session r (false);
+            ok (r.addReturnTrack ("A"), "a first return"); ok (r.addReturnTrack ("B"), "a second"); ok (r.addReturnTrack ("C"), "a third");
+            const auto order = [&r] { juce::StringArray ids; for (const auto& t : r.snapshot().tracks) ids.add (t.id); return ids; };
+            const auto start = order();
+            const auto t0 = start[0], t1 = start[1], ra = start[2], rb = start[3], rc = start[4];
+            ok (r.moveTracks ({ rc }, {}, ra), "move the third return before the first");
+            check (order() == juce::StringArray { t0, t1, rc, ra, rb }, "the returns reorder among themselves");
+            ok (r.moveTracks ({ rc }, {}, {}), "move it to the end of the returns");
+            check (order() == start, "it is last again");
+            r.undo(); check (order() == juce::StringArray { t0, t1, rc, ra, rb }, "one undo moves it back");
+            r.redo();
+            check (r.moveTracks ({ ra }, {}, t0).failed() && r.moveTracks ({ t0 }, {}, rb).failed() && r.moveTracks ({ t0, ra }, {}, {}).failed(),
+                   "a return cannot go among the other tracks, nor a track among the returns, nor both at once");
+            ok (r.moveTracks ({ t0 }, {}, ra), "a track can go before the first return, the other tracks' end");
+            check (order() == juce::StringArray { t1, t0, ra, rb, rc }, "it is the last track before the returns");
+        }
+        {
             // Group automation and mapping: a group's mixer is automated and mapped as a track's.
             Session m (false);
             ok (m.importAudio (a, 0), "import a for group automation");

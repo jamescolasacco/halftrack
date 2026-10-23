@@ -55,8 +55,9 @@ This follows a static reading of the reference's code: its track move (0x10242f8
   - They go before `beforeId`, a track or group in that place, or at its end. At the top level the end is before the returns.
   - Groups move with their contents.
   - Dropping tracks where they already are changes nothing and makes no undo step. Otherwise the move is one undo step.
+- **Returns.** Return tracks move only among the returns, before one or after the last when no place is given, as the reference's drop target keeps returns and other tracks apart (0x1032c50ac). Other tracks stay before the first return.
 - **Refusals.** These are refused:
-  - return tracks, which stay among the returns;
+  - a return moving among the other tracks, a track among the returns, or both at once;
   - a group moving into itself or into a group inside it;
   - unknown tracks or groups;
   - a place outside the chosen group.
@@ -67,7 +68,7 @@ This follows a static reading of the reference's code: its track move (0x10242f8
   - over the lower half of a track, after it, in its group;
   - below every lane, after the last track.
 
-  A track's automation and take lanes count as the track. Return lanes are no place for tracks, and a dragged group has no place inside itself; neither shows a line. Elsewhere an orange line across the headers shows where the tracks would go.
+  A track's automation and take lanes count as the track. Return lanes are no place for tracks, and a dragged group has no place inside itself; neither shows a line. A return's header drags among the return lanes only, before a return or after the last. Elsewhere an orange line across the headers shows where the tracks would go.
 - **Correction.** Pressing the first 18 pixels of a track's name toggled its fold, because the header took the name's coordinates for its own. Only the header's fold corner folds now.
 - **Order.** `GroupInfo::position` says where each group's header is: before `Snapshot::tracks[position]`. Both views, the stem export and the export window's Rendered Track list use it to place groups, empty ones too, in display order. Before, a group holding only a group had no stem, and nested groups' stems were out of order.
 
@@ -77,13 +78,15 @@ Evidence (`tests/GroupTests.cpp`):
 - a track moved out lands at the top level after the groups, and one undo puts it back;
 - dropping a track where it is changes nothing and makes no undo step;
 - a group cannot move into itself or into a group inside it;
-- unknown ids, a place outside the group, and grouping or moving that would empty a group are refused.
+- unknown ids, a place outside the group, and grouping or moving that would empty a group are refused;
+- returns reordered among themselves, with one undo, and refused among the other tracks.
 
 The UI suite drags headers:
 - Pressing a track's name starts a drag without folding the track.
 - Over the lower half of a nested group's header the drop goes into that group first, and the line is drawn there.
 - Dropping moves the track; dropping below every lane moves it to the end, and two undo steps put it back.
 - A group's header shows no drop over its own lower half, and dropping it after a track moves it with its contents.
+- A return's header shows no drop over an ordinary track, and dropping it on the first return's upper half puts it first among the returns.
 - An emptied group keeps its header lane and Session column.
 
 The stems suite exports a group holding only a group, before the group inside it.
@@ -92,7 +95,7 @@ Not reproduced:
 - **Choosing the nesting level.** At a group's end the reference picks the level from the pointer's horizontal position, one level per 5 pixels from the header's left edge (0x103834258; pixel layout medium). Halftrack always takes the innermost group, which is the reference's choice when no level is picked.
 - **After a move.** Afterwards the reference reveals the place, unfolding folded groups (0x10242a5fc, medium).
 - **Audio To.** Moving a track into or out of a group switches its Audio To between Main and Group in the reference, leaving other destinations (0x1024bdbf8). Halftrack's grouped tracks always play into their group.
-- **Other gestures.** Copying by drag, reordering returns by drag, dragging Session column headers and scrolling during a drag.
+- **Other gestures.** Copying by drag, dragging Session column headers and scrolling during a drag.
 
 ## Deleting (2026-10-23)
 

@@ -9640,12 +9640,13 @@ Result Session::moveTracks (const juce::StringArray& ids, const String& groupId,
     for (const auto& id : ids) if (impl->track (id) == nullptr && impl->group (id) == nullptr) return Result::fail ("Track not found.");
     const auto moving = impl->roots (ids);
     if (moving.isEmpty()) return Result::fail ("Choose tracks to move.");
+    // Returns move among the returns, and other tracks stay before them, as the reference keeps them.
+    const auto returnTrack = [] (te::Track* t) { auto* audio = dynamic_cast<te::AudioTrack*> (t); return audio != nullptr && isReturn (*audio); };
+    const auto returns = std::count_if (moving.begin(), moving.end(), returnTrack);
+    if (returns > 0 && (returns < moving.size() || parent != nullptr)) return Result::fail ("Return tracks move among the returns.");
     for (auto* t : moving)
-    {
-        if (auto* audio = dynamic_cast<te::AudioTrack*> (t); audio != nullptr && isReturn (*audio)) return Result::fail ("Return tracks move among the returns.");
         if (auto* folder = dynamic_cast<te::FolderTrack*> (t); folder != nullptr && parent != nullptr && (folder == parent || Impl::inside (*parent, *folder)))
             return Result::fail ("A group cannot move into itself.");
-    }
     const auto present = impl->siblings (parent);
     auto siblings = present;
     siblings.removeIf ([&moving] (te::Track* t) { return moving.contains (t); });
@@ -9662,9 +9663,13 @@ Result Session::moveTracks (const juce::StringArray& ids, const String& groupId,
         }
         else if (before == nullptr || ! siblings.contains (before)) return Result::fail ("The place to move to is not in that group.");
     }
-    // At the top level the other tracks stay before the returns.
-    if (before == nullptr && parent == nullptr)
-        for (auto* t : siblings) if (auto* audio = dynamic_cast<te::AudioTrack*> (t); audio != nullptr && isReturn (*audio)) { before = t; break; }
+    // At the top level the other tracks stay before the returns: at the end means before the first,
+    // and no later return is a place for them. Returns go before a return or after the last.
+    te::Track* firstReturn = nullptr;
+    if (parent == nullptr) for (auto* t : siblings) if (returnTrack (t)) { firstReturn = t; break; }
+    if (returns > 0 && before != nullptr && ! returnTrack (before)) return Result::fail ("Return tracks move among the returns.");
+    if (returns == 0 && before == nullptr) before = firstReturn;
+    if (returns == 0 && before != nullptr && returnTrack (before) && before != firstReturn) return Result::fail ("Tracks stay before the returns.");
     const int at = before != nullptr ? siblings.indexOf (before) : siblings.size();
     // Dropped where they already are: nothing changes.
     auto result = siblings;

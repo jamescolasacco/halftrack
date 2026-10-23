@@ -2287,3 +2287,7 @@ Engine and UI areas. As the reference's manual describes, Delete Fragmentary Bar
 ## MIDI file time signatures — 2026-10-23
 
 Engine and UI areas. As the reference offers, importing a MIDI file with time signatures asks whether to import them. They become markers from the import's beat, in the import's undo step (`importMidiFile(..., timeSignatures)`, `Session::midiFileTimeSignatures`). Checked in the time-signature and UI suites ([contract](research/time-signature-contract.md#importing-midi-files)).
+
+## Returns reorder by drag — 2026-10-23
+
+Engine and UI areas. As the reference's drop rules keep returns and other tracks apart, a return's Arrangement header drags among the returns only, before a return or after the last. Other tracks stay before the first return. `Session::moveTracks` takes returns for that and refuses mixing them. Checked in the groups and UI suites ([contract](research/groups-contract.md#moving-tracks-2026-10-23)).
