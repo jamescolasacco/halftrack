@@ -863,10 +863,24 @@ void renewMidiNoteIDs (juce::ValueTree state, juce::UndoManager* undo = nullptr)
     if (state.hasType (te::IDs::NOTE)) state.setProperty (midiNoteIDProperty,juce::Uuid().toString(),undo);
     for (auto child : state) renewMidiNoteIDs (child,undo);
 }
-double recordGrid(Session::RecordQuantisation choice)
+// A recorded beat on a Record Quantization grid; the combined grids take the nearer of both.
+double snapToRecordGrid(Session::RecordQuantisation choice,double beat)
 {
-    constexpr double grids[]={0,1,.5,1.0/3,.25,1.0/6,.125};
-    return grids[juce::jlimit(0,6,static_cast<int>(choice))];
+    const auto snap=[beat](double grid){return std::floor(beat/grid+.5)*grid;};
+    const auto nearer=[beat](double a,double b){return std::abs(a-beat)<=std::abs(b-beat)?a:b;};
+    switch(choice)
+    {
+        case Session::RecordQuantisation::quarter: return snap(1);
+        case Session::RecordQuantisation::eighth: return snap(.5);
+        case Session::RecordQuantisation::eighthTriplet: return snap(1.0/3);
+        case Session::RecordQuantisation::sixteenth: return snap(.25);
+        case Session::RecordQuantisation::sixteenthTriplet: return snap(1.0/6);
+        case Session::RecordQuantisation::thirtysecond: return snap(.125);
+        case Session::RecordQuantisation::eighthAndTriplet: return nearer(snap(.5),snap(1.0/3));
+        case Session::RecordQuantisation::sixteenthAndTriplet: return nearer(snap(.25),snap(1.0/6));
+        case Session::RecordQuantisation::none: break;
+    }
+    return beat;
 }
 Result validateMasterVolume(const juce::ValueTree& state)
 {
@@ -919,7 +933,7 @@ Result validateRecordQuantisation(const juce::ValueTree& state)
 {
     const auto text=state.getProperty(recordQuantisationProperty,0).toString().trim().toStdString();char* end=nullptr;
     const auto value=std::strtod(text.c_str(),&end);
-    if(text.empty() || end!=text.c_str()+text.size() || !std::isfinite(value) || value<0 || value>6 || std::floor(value)!=value)
+    if(text.empty() || end!=text.c_str()+text.size() || !std::isfinite(value) || value<0 || value>8 || std::floor(value)!=value)
         return Result::fail("Invalid project recording quantization.");
     return Result::ok();
 }
@@ -11343,7 +11357,7 @@ void Session::finishRecording (bool stopTransport)
     }
     if (recording)
     {
-        const auto grid=recordGrid(snapshot().recordQuantisation);
+        const auto grid=snapshot().recordQuantisation;
         for (auto* track : te::getAudioTracks (*impl->edit)) for (auto* clip : allTrackClips (*track))
             if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
             {
@@ -11353,11 +11367,11 @@ void Session::finishRecording (bool stopTransport)
                     if (!note->state.hasProperty (midiNoteIDProperty))
                     {
                         auto* undo=&impl->edit->getUndoManager();
-                        if(grid>0)
+                        if(grid!=RecordQuantisation::none)
                         {
                             const auto length=note->getLengthBeats().inBeats();
                             const auto absolute=range.getStart().inBeats()+note->getStartBeat().inBeats();
-                            const auto snapped=std::floor(absolute/grid+.5)*grid-range.getStart().inBeats();
+                            const auto snapped=snapToRecordGrid(grid,absolute)-range.getStart().inBeats();
                             const auto start=juce::jlimit(0.0,std::max(0.0,range.getLength().inBeats()-length),snapped);
                             note->setStartAndLength(te::BeatPosition::fromBeats(start),note->getLengthBeats(),undo);
                         }
@@ -11684,7 +11698,7 @@ Result Session::setMetronome (const MetronomeSettings& settings)
 Result Session::setRecordQuantisation(RecordQuantisation value)
 {
     const int choice=static_cast<int>(value);
-    if(choice<0 || choice>6) return Result::fail("Choose a supported recording grid.");
+    if(choice<0 || choice>8) return Result::fail("Choose a supported recording grid.");
     if(snapshot().recordQuantisation==value) return Result::ok();
     if(impl->exporting || impl->edit->getTransport().isRecording()) return Result::fail("Stop recording or finish exporting before changing recording quantization.");
     impl->transaction("Recording quantization");

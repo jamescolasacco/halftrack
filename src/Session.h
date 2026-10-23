@@ -17,7 +17,8 @@ public:
     // The global launch grid, as the reference's: None, 8 Bars to 1 Bar, then 1/2 to 1/32 with the
     // triplets (launchQuantisations lists them in its menu's order). Later values keep the first ones' numbers.
     enum class LaunchQuantisation { none, beat, bar, eightBars, fourBars, twoBars, half, halfTriplet, quarterTriplet, eighth, eighthTriplet, sixteenth, sixteenthTriplet, thirtysecond };
-    enum class RecordQuantisation { none, quarter, eighth, eighthTriplet, sixteenth, sixteenthTriplet, thirtysecond };
+    // Record Quantization, as the reference's: the combined grids snap to the nearer straight or triplet point.
+    enum class RecordQuantisation { none, quarter, eighth, eighthTriplet, sixteenth, sixteenthTriplet, thirtysecond, eighthAndTriplet, sixteenthAndTriplet };
     enum class MonitorMode { off, automatic, on };
     enum class SendMode { pre, post };
     enum class ExportFormat { wav, aiff, flac };

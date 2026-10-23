@@ -677,9 +677,10 @@ void countInRecording()
 
 void recordingQuantisation(const juce::File& root)
 {
-    constexpr double grids[]={0,1,.5,1.0/3,.25,1.0/6,.125};
+    // The last two are the reference's combined grids, each snapping to the nearer straight or triplet point.
+    constexpr double grids[]={0,1,.5,1.0/3,.25,1.0/6,.125,.5,.25},triplets[]={0,0,0,0,0,0,0,1.0/3,1.0/6};
     constexpr double starts[]={.23,.75,1.78,2.13},lengths[]={.17,.4,.21,.55};
-    for(int choice=0;choice<7;++choice)
+    for(int choice=0;choice<9;++choice)
     {
         GeneratedInput f;auto& session=f.session;const auto mode=static_cast<Session::RecordQuantisation>(choice);
         check(session.snapshot().recordQuantisation==Session::RecordQuantisation::none,"new projects disable recording quantization");
@@ -693,7 +694,7 @@ void recordingQuantisation(const juce::File& root)
         // A remembered native device quantizer must not quantize this document a second time.
         f.controller.midi->quantisation.setType("1 beat");
         ok(session.setTrackArmed(2,true),"arm quantized take");session.seek(0);ok(session.record(),"start take on selected recording grid");
-        check(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>((choice+1)%7)).failed(),"recording grid cannot change during a take");
+        check(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>((choice+1)%9)).failed(),"recording grid cannot change during a take");
         const auto origin=f.devices.getCurrentStreamTime()+256.0/48000;pumpSyntheticTestDevice(session,4);
         for(int n=0;n<4;++n)
         {
@@ -707,7 +708,9 @@ void recordingQuantisation(const juce::File& root)
         for(int n=0;n<4;++n)
         {
             auto note=std::find_if(clip.notes.begin(),clip.notes.end(),[n](const auto& value){return value.pitch==60+n;});
-            const auto expected=choice==0?starts[n]:std::floor(starts[n]/grids[choice]+.5)*grids[choice];
+            const auto onGrid=[&](double grid){return std::floor(starts[n]/grid+.5)*grid;};
+            auto expected=choice==0?starts[n]:onGrid(grids[choice]);
+            if(triplets[choice]>0&&std::abs(onGrid(triplets[choice])-starts[n])<std::abs(expected-starts[n]))expected=onGrid(triplets[choice]);
             check(note!=clip.notes.end()&&std::abs(clip.startBeat+note->startBeat-expected)<1e-9
                 &&std::abs(note->lengthBeats-lengths[n])<1e-9&&std::abs(note->velocity-(80+n)/127.0)<1e-6,
                 "recorded onset follows independent grid arithmetic while length and velocity are retained");
@@ -745,7 +748,7 @@ void recordingQuantisation(const juce::File& root)
         const auto project=root.getChildFile("quantized-"+juce::String(choice)+".halftrack");ok(session.saveProject(project),"save quantized take and grid");ok(session.loadProject(project),"reopen quantized take and grid");
         check(session.snapshot().recordQuantisation==mode&&session.snapshot().tracks[2].clips[0].notes.size()==4,"recording grid and quantized notes survive reopen");
         ok(session.setRecordQuantisation(mode),"unchanged recording grid is a no-op");check(!session.canUndo()&&!session.snapshot().dirty,"unchanged recording grid keeps clean history");
-        if(choice==4)for(const auto& invalid:juce::StringArray{"-1","7","1.5","nan","4 trailing"})
+        if(choice==4)for(const auto& invalid:juce::StringArray{"-1","9","1.5","nan","4 trailing"})
         {
             auto xml=juce::XmlDocument::parse(project);xml->getChildByName("EDIT")->setAttribute("halftrackRecordQuantisation",invalid);const auto bad=root.getChildFile("bad-record-grid.halftrack");check(xml->writeTo(bad),"write malformed recording grid fixture");
             check(session.loadProject(bad).failed()&&session.snapshot().recordQuantisation==mode&&session.snapshot().tracks[2].clips[0].id==clip.id,"invalid grid cannot replace active project");

@@ -9272,8 +9272,9 @@ private:
         {
             popup.addItem (20, "Undo", session.canUndo()); popup.addItem (21, "Redo", session.canRedo()); popup.addSeparator();
             juce::PopupMenu recordingGrid;
-            const juce::StringArray grids {"Off","1/4 note","1/8 note","1/8 triplet","1/16 note","1/16 triplet","1/32 note"};
-            for(int i=0;i<grids.size();++i) recordingGrid.addItem(60+i,grids[i],!state.recording,static_cast<int>(state.recordQuantisation)==i);
+            // In the reference's order; the two combined grids came later and take ids 120 and 121.
+            const std::pair<int,const char*> grids[] {{0,"None"},{1,"1/4"},{2,"1/8"},{3,"1/8T"},{7,"1/8 + 1/8T"},{4,"1/16"},{5,"1/16T"},{8,"1/16 + 1/16T"},{6,"1/32"}};
+            for(const auto& [value,name]:grids) recordingGrid.addItem(value<7?60+value:113+value,name,!state.recording,static_cast<int>(state.recordQuantisation)==value);
             popup.addSubMenu("Recording quantization",recordingGrid);popup.addSeparator();
             popup.addItem (22, showPiano ? "Delete Selected Notes" : showSession ? "Clear Selected Slot" : "Delete Selected Clip", showPiano ? pianoRoll.hasSelectedNote() : showSession ? selectedSlot() != nullptr && selectedSlot()->hasClip : selectedClip >= 0);
             // Time edits use the time selection, or the loop brace when nothing is selected.
@@ -9357,6 +9358,7 @@ private:
     {
         if (session.isExporting()) return;
         if(id>=60 && id<=66) { report(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>(id-60)));refresh();return; }
+        if(id==120 || id==121) { report(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>(id-113)));refresh();return; }
         switch (id)
         {
             case 1: ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) safe->startNewProject(); }); break;
@@ -15160,6 +15162,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     session.undo();refresh();check(std::abs(state.masterGainDb+9)<1e-4,"a complete master-fader drag undoes once");
     check(std::abs(master->valueFromTextFunction("invalid")+9)<1e-4&&master->valueFromTextFunction("-inf dB")==-100,"master text rejects invalid values and accepts silence");
     master->setValue(0,juce::sendNotificationSync);refresh();check(std::abs(state.masterGainDb)<1e-4,"master fader resets to unity");
+    menuItemSelected(121,1);check(state.recordQuantisation==Session::RecordQuantisation::sixteenthAndTriplet,"the Edit menu offers the reference's combined 1/16 + 1/16T grid");session.undo();refresh();
     menuItemSelected(64,1);check(state.recordQuantisation==Session::RecordQuantisation::sixteenth,"Edit menu sets recording quantization");
     menuItemSelected(20,1);check(state.recordQuantisation==Session::RecordQuantisation::none,"recording quantization menu edit undoes once");
     menuItemSelected(21,1);check(state.recordQuantisation==Session::RecordQuantisation::sixteenth,"recording quantization menu redo restores grid");
