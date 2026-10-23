@@ -2108,6 +2108,7 @@ private:
             }
         }
         const juce::String& getTrackId() const { return trackId; }
+        void beginRename() { name.showEditor(); }
         void sync (const Session::TrackInfo& track, int position)
         {
             jassert (trackId == track.id);
@@ -2493,12 +2494,12 @@ private:
                 if (const auto* current = owner.currentTrack(); current != nullptr && current->id != trackId) owner.multiSelectedTracks.insert (current->id);
                 owner.selectTrack (index); return;
             }
+            const bool headerMenu = e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name);
             if (! e.mods.isPopupMenu()) collapseOnUp = owner.pressTrackHeader (index, ! columnLayout && e.mods.isShiftDown(), dragArmed);
-            else owner.selectTrack (index);
+            else if (! headerMenu) owner.selectTrack (index);
             // The pan controls' menu switches the pan mode, as the reference's does.
             if (e.mods.isPopupMenu() && (within (pan) || within (leftSplit) || within (rightSplit))) { owner.panModeMenu (trackId, ! splitPan); return; }
-            if (e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name))
-                if (const auto* track = owner.currentTrack()) owner.showTrackOrderMenu (track->id, columnLayout);
+            if (headerMenu) owner.showHeaderMenu (trackId, ! columnLayout);
         }
     private:
         Impl& owner;
@@ -2655,6 +2656,7 @@ private:
             gain.updateText(); pan.updateText();
         }
         const juce::String& getId() const noexcept { return groupId; }
+        void beginRename() { name.showEditor(); }
         void sync()
         {
             const auto* g = info(); if (g == nullptr) return;
@@ -2755,6 +2757,7 @@ private:
             // The pan controls' menu switches the group's pan mode, as on tracks.
             const auto within = [&e] (juce::Component& c) { return e.originalComponent == &c || c.isParentOf (e.originalComponent); };
             if (e.mods.isPopupMenu() && (within (pan) || within (leftSplit) || within (rightSplit))) { owner.groupPanModeMenu (groupId, ! splitPan); return; }
+            if (e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name)) { owner.showHeaderMenu (groupId, ! columnLayout); return; }
             dragArmed = ! columnLayout && ! e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name);
             // Clicking the group shows its device chain.
             if (! e.mods.isPopupMenu()) owner.selectChain (groupId);
@@ -4563,8 +4566,9 @@ private:
                 const auto local = event.x - columnX (column);
                 if (event.y < headerHeight)
                 {
+                    if (event.mods.isPopupMenu()) { owner.showHeaderMenu (group.id, false); repaint(); return; }
                     if (local < 20) owner.report (owner.session.setGroupFolded (group.id, ! group.folded));
-                    else if (! event.mods.isPopupMenu()) { headerPressed = group.id; owner.selectChain (group.id); } // Its title selects the group, and drags it.
+                    else { headerPressed = group.id; owner.selectChain (group.id); } // Its title selects the group, and drags it.
                 }
                 else if (event.y < gridArea().getBottom())
                 {
@@ -4617,8 +4621,9 @@ private:
             const auto track = column >= 0 ? columns[(size_t) column].track : -1;
             if (event.x < tracksWidth() && track >= 0 && track < (int) owner.state.tracks.size())
             {
-                // A track's title selects it, as an Arrangement header does, and drags it.
-                if (event.y < headerHeight && ! event.mods.isPopupMenu())
+                // A track's title selects it, as an Arrangement header does, and drags it; its menu is the header's.
+                if (event.y < headerHeight && event.mods.isPopupMenu()) { owner.showHeaderMenu (owner.state.tracks[(size_t) track].id, false); repaint(); return; }
+                if (event.y < headerHeight)
                 {
                     headerPressed = owner.state.tracks[(size_t) track].id;
                     collapseHeadersOnUp = owner.pressTrackHeader (track, event.mods.isShiftDown(), true);
@@ -9953,33 +9958,253 @@ private:
         const auto to = index + direction;
         return index >= 0 && juce::isPositiveAndBelow (to, (int) state.tracks.size()) && state.tracks[(size_t) index].isReturn == state.tracks[(size_t) to].isReturn;
     }
-    void showTrackOrderMenu (const juce::String& id, bool horizontal)
+    // Halftrack's own palette for the headers' colour grid, laid out as the reference's: 5 rows of
+    // 14, a hue to a column and the last column grey, lighter rows first.
+    static constexpr int paletteColumns = 14, paletteRows = 5;
+    static juce::Colour paletteColour (int index)
     {
-        const auto indices = launcherIndices (id, {});
-        juce::PopupMenu menu;
-        menu.addItem (1, horizontal ? "Move track left" : "Move track up", canMoveTrack (indices.first, -1));
-        menu.addItem (2, horizontal ? "Move track right" : "Move track down", canMoveTrack (indices.first, 1));
-        const auto* info = indices.first >= 0 ? &state.tracks[(size_t) indices.first] : nullptr;
-        menu.addSeparator(); menu.addItem (3, "Duplicate track", info != nullptr && ! info->isReturn && ! info->frozen);
-        menu.addSeparator();
-        menu.addItem (4, info != nullptr && info->frozen ? "Unfreeze Track" : "Freeze Track", info != nullptr && ! info->isReturn && (info->frozen || ! info->clips.empty()));
-        menu.addItem (5, "Flatten", info != nullptr && info->frozen);
-        // Link Tracks links the selected tracks; with Cmd/Ctrl held, they join this track's link.
-        const auto selection = selectedTrackIds();
-        const bool join = juce::ModifierKeys::getCurrentModifiers().isCommandDown() && info != nullptr && info->linkId.isNotEmpty();
-        const bool anyLinked = std::any_of (state.tracks.begin(), state.tracks.end(), [&] (const auto& t) { return selection.contains (t.id) && t.linkId.isNotEmpty(); });
-        menu.addSeparator();
-        menu.addItem (6, "Link Tracks", info != nullptr && ! info->isReturn && (selection.size() >= 2 || (join && ! selection.isEmpty())));
-        menu.addItem (7, selection.size() > 1 ? "Unlink Tracks" : "Unlink Track", anyLinked);
-        menu.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), id, join] (int result)
+        const int column = index % paletteColumns, row = juce::jlimit (0, paletteRows - 1, index / paletteColumns);
+        constexpr float brightness[] { 0.92f, 0.82f, 0.72f, 0.6f, 0.46f }, saturation[] { 0.62f, 0.48f, 0.36f, 0.42f, 0.38f };
+        if (column == paletteColumns - 1) return juce::Colour::greyLevel (0.86f - 0.16f * (float) row);
+        return juce::Colour::fromHSV (std::fmod (0.98f + (float) column * 0.92f / (paletteColumns - 1), 1.0f), saturation[row], brightness[row], 1.0f);
+    }
+    struct ColourGrid final : juce::PopupMenu::CustomComponent
+    {
+        ColourGrid (std::vector<juce::Colour> used, std::shared_ptr<int> picked) : CustomComponent (false), inUse (std::move (used)), chosen (std::move (picked))
+        { setTitle ("Track colours"); }
+        static constexpr int cell = 15;
+        void getIdealSize (int& width, int& height) override { width = paletteColumns * cell + 12; height = paletteRows * cell + 8; }
+        int swatchAt (juce::Point<int> at) const
         {
-            if (safe == nullptr) return;
-            if (result == 1 || result == 2) safe->reorderTrack (id, result == 1 ? -1 : 1);
-            else if (result == 3) safe->duplicateTrackFromUI (id);
-            else if (result == 4 || result == 5) safe->freezeTrackFromUI (id, result == 5);
-            else if (result == 6) safe->linkSelectedTracks (join);
-            else if (result == 7) safe->unlinkSelectedTracks();
-        });
+            const int column = (at.x - 6) / cell, row = (at.y - 4) / cell;
+            return at.x >= 6 && at.y >= 4 && column < paletteColumns && row < paletteRows ? row * paletteColumns + column : -1;
+        }
+        juce::Point<int> swatchCentre (int index) const { return { 6 + (index % paletteColumns) * cell + cell / 2, 4 + (index / paletteColumns) * cell + cell / 2 }; }
+        bool marked (int index) const { return std::find (inUse.begin(), inUse.end(), paletteColour (index)) != inUse.end(); }
+        void paint (juce::Graphics& g) override
+        {
+            for (int i = 0; i < paletteColumns * paletteRows; ++i)
+            {
+                const auto box = juce::Rectangle<int> (6 + (i % paletteColumns) * cell, 4 + (i / paletteColumns) * cell, cell, cell).reduced (1);
+                g.setColour (paletteColour (i)); g.fillRect (box);
+                if (marked (i)) { g.setColour (themes::colour (0xff141414)); g.drawRect (box.reduced (3), 2); } // In use by a selected track.
+                if (i == hovered) { g.setColour (themes::colour (0xffffffff)); g.drawRect (box, 1); }
+            }
+        }
+        void mouseMove (const juce::MouseEvent& e) override { if (const auto i = swatchAt (e.getPosition()); i != hovered) { hovered = i; repaint(); } }
+        void mouseExit (const juce::MouseEvent&) override { hovered = -1; repaint(); }
+        void mouseUp (const juce::MouseEvent& e) override { if (const auto i = swatchAt (e.getPosition()); i >= 0) { *chosen = i; triggerMenuItem(); } }
+        std::vector<juce::Colour> inUse;
+        std::shared_ptr<int> chosen;
+        int hovered = -1;
+    };
+    const Session::TrackInfo* trackInfo (const juce::String& id) const { const auto t = trackIndex (id); return t >= 0 ? &state.tracks[(size_t) t] : nullptr; }
+    // The tracks of these tracks and groups, those inside the groups included, in order.
+    juce::StringArray tracksWithin (const juce::StringArray& ids) const
+    {
+        juce::StringArray tracks;
+        for (const auto& track : state.tracks)
+            if (ids.contains (track.id) || std::any_of (ids.begin(), ids.end(), [&] (const juce::String& g) { return groupInfo (g) != nullptr && (track.groupId == g || groupInside (track.groupId, g)); }))
+                tracks.add (track.id);
+        return tracks;
+    }
+    // Those of the selected tracks Freeze acts on: tracks with Arrangement clips, or frozen ones.
+    juce::StringArray freezableTracks (const juce::StringArray& ids) const
+    {
+        juce::StringArray tracks;
+        for (const auto& id : ids)
+            if (const auto* track = trackInfo (id); track != nullptr && ! track->isReturn && (track->frozen || ! track->clips.empty())) tracks.add (id);
+        return tracks;
+    }
+    void freezeTracksFromUI (const juce::StringArray& ids)
+    {
+        bool allFrozen = true;
+        for (const auto& id : ids) if (const auto* track = trackInfo (id)) allFrozen = allFrozen && track->frozen;
+        for (const auto& id : ids)
+            if (const auto* track = trackInfo (id); track != nullptr && track->frozen == allFrozen) { report (session.setTrackFrozen (id, ! allFrozen)); refresh(); }
+    }
+    // The selected tracks' take lanes.
+    juce::StringArray selectedTakeLanes (const juce::StringArray& ids) const
+    {
+        juce::StringArray lanes;
+        for (const auto& id : tracksWithin (ids)) if (const auto* track = trackInfo (id)) for (const auto& lane : track->takeLanes) lanes.add (lane.id);
+        return lanes;
+    }
+    // Select Content, as the reference's: in the Arrangement the time the selected tracks' clips
+    // cover, on those tracks; in the Session view their clips.
+    bool canSelectContent (const juce::StringArray& ids, bool arrangement) const
+    {
+        if (! arrangement)
+            return ! ids.isEmpty() && std::all_of (ids.begin(), ids.end(), [this] (const juce::String& id) { const auto* t = trackInfo (id); return t != nullptr && ! t->isReturn; });
+        for (const auto& id : tracksWithin (ids)) if (const auto* track = trackInfo (id); track != nullptr && ! track->clips.empty()) return true;
+        return false;
+    }
+    void selectContent (const juce::StringArray& ids, bool arrangement)
+    {
+        if (! canSelectContent (ids, arrangement)) return;
+        if (! arrangement)
+        {
+            std::vector<Session::SlotRef> slots;
+            for (const auto& id : ids)
+                if (const auto t = trackIndex (id); t >= 0)
+                    for (int scene = 0; scene < (int) state.tracks[(size_t) t].slots.size(); ++scene)
+                        if (state.tracks[(size_t) t].slots[(size_t) scene].hasClip) slots.push_back ({ t, scene });
+            if (slots.size() == 1) selectLauncherSlot (slots[0].track, slots[0].scene);
+            selectedSlots = slots.size() > 1 ? slots : std::vector<Session::SlotRef>();
+            launcher.repaint(); return;
+        }
+        TimeSelection chosen; chosen.start = std::numeric_limits<double>::max();
+        for (const auto& id : tracksWithin (ids))
+            if (const auto* track = trackInfo (id))
+            {
+                chosen.trackIds.add (id);
+                for (const auto& clip : track->clips) { chosen.start = std::min (chosen.start, clip.start); chosen.end = std::max (chosen.end, clip.start + clip.length); }
+            }
+        timeSelection = chosen; canvas.repaint();
+    }
+    // Rename, for the clicked track or group: its name edits in place in the Arrangement, the header
+    // editing it returned, and in a dialog from a Session title.
+    juce::Component* renameHeader (const juce::String& id, bool arrangement)
+    {
+        if (arrangement)
+        {
+            for (int i = 0; i < canvas.getNumChildComponents(); ++i)
+            {
+                if (auto* row = dynamic_cast<TrackRow*> (canvas.getChildComponent (i)); row != nullptr && row->getTrackId() == id) { row->beginRename(); return row; }
+                if (auto* header = dynamic_cast<GroupHeader*> (canvas.getChildComponent (i)); header != nullptr && header->getId() == id) { header->beginRename(); return header; }
+            }
+            return nullptr;
+        }
+        const auto* group = groupInfo (id);
+        const auto* track = trackInfo (id);
+        if (group == nullptr && track == nullptr) return nullptr;
+        auto* dialog = new juce::AlertWindow (group != nullptr ? "Rename Group" : "Rename Track", group != nullptr ? "Enter a group name." : "Enter a track name.", juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor ("name", group != nullptr ? group->name : track->name, "Name");
+        dialog->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey)); dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
+        auto safe = juce::Component::SafePointer<Impl> (this); auto safeDialog = juce::Component::SafePointer<juce::AlertWindow> (dialog);
+        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog, id] (int result)
+        {
+            if (safe == nullptr || safeDialog == nullptr || result != 1) return;
+            const auto name = safeDialog->getTextEditorContents ("name");
+            if (safe->groupInfo (id) != nullptr) safe->report (safe->session.renameGroup (id, name));
+            else if (const auto t = safe->trackIndex (id); t >= 0) safe->report (safe->session.renameTrack (t, name));
+            safe->refresh();
+        }), true);
+        return nullptr;
+    }
+    // A track's or group's header menu, in the reference's order (ATrackHeader::FillContextMenu): its
+    // commands act on the selected tracks, Rename on the clicked one. As in the reference, a command
+    // that cannot act there is left out, and a separator only comes between items. The Arrangement's
+    // has the take lane and link items; the Session view's titles do not. A colour picked in the grid
+    // is put in `colour`.
+    enum HeaderItem { headerDuplicate = 1, headerDelete, headerRename, headerFreeze, headerFlatten, headerInsertAudio, headerInsertMidi, headerInsertReturn,
+                      headerGroup, headerUngroup, headerSelectContent, headerInsertTakeLane, headerShowTakeLanes, headerDeleteTakeLanes, headerLink, headerUnlink, headerColour };
+    juce::PopupMenu headerMenu (const juce::String& id, bool arrangement, std::shared_ptr<int> colour, bool join) const
+    {
+        const auto ids = headerSelection();
+        juce::PopupMenu menu;
+        bool pending = false;
+        const auto item = [&] (int result, const juce::String& text, bool enabled = true, bool ticked = false)
+        { if (pending) menu.addSeparator(); pending = false; menu.addItem (result, text, enabled, ticked); };
+        const auto separator = [&pending] { pending = true; };
+        if (session.canDuplicateTracks (ids)) item (headerDuplicate, "Duplicate");
+        if (session.canRemoveTracks (ids)) item (headerDelete, "Delete");
+        separator();
+        item (headerRename, "Rename");
+        separator();
+        // Freeze acts on the selected tracks that can freeze; Unfreeze when all of those are frozen.
+        const auto freezable = freezableTracks (ids);
+        const bool allFrozen = ! freezable.isEmpty() && std::all_of (freezable.begin(), freezable.end(), [this] (const juce::String& t) { return trackInfo (t)->frozen; });
+        if (! freezable.isEmpty()) item (headerFreeze, juce::String (allFrozen ? "Unfreeze " : "Freeze ") + (freezable.size() > 1 ? "Tracks" : "Track"));
+        const auto* track = trackInfo (id);
+        if (track != nullptr && track->frozen) item (headerFlatten, "Flatten");
+        separator();
+        item (headerInsertAudio, "Insert Audio Track"); item (headerInsertMidi, "Insert MIDI Track");
+        if (std::count_if (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return t.isReturn; }) < Session::maximumReturnTracks) item (headerInsertReturn, "Insert Return Track");
+        if (session.canGroupTracks (groupingSelection())) item (headerGroup, "Group Tracks");
+        if (groupInfo (selectedChain) != nullptr) item (headerUngroup, "Ungroup Tracks");
+        separator();
+        item (headerSelectContent, "Select Content", canSelectContent (ids, arrangement));
+        if (arrangement && track != nullptr && ! track->isReturn && ! automationMode)
+        {
+            separator();
+            const auto selected = tracksWithin (ids);
+            const bool shown = std::all_of (selected.begin(), selected.end(), [this] (const juce::String& t) { return takeLanesShown.count (t) > 0; });
+            item (headerInsertTakeLane, "Insert Take Lane"); item (headerShowTakeLanes, "Show Take Lanes", true, shown);
+            item (headerDeleteTakeLanes, "Delete All Take Lanes", ! selectedTakeLanes (ids).isEmpty());
+        }
+        // Links join audio and MIDI tracks (Halftrack's groups do not link yet).
+        if (arrangement && track != nullptr && ! track->isReturn)
+        {
+            separator();
+            const auto selection = selectedTrackIds();
+            const bool anyLinked = std::any_of (state.tracks.begin(), state.tracks.end(), [&] (const auto& t) { return selection.contains (t.id) && t.linkId.isNotEmpty(); });
+            item (headerLink, "Link Tracks", selection.size() >= 2 || (join && ! selection.isEmpty()));
+            item (headerUnlink, "Unlink Tracks", anyLinked);
+        }
+        std::vector<juce::Colour> used;
+        for (const auto& t : ids)
+        {
+            if (const auto* g = groupInfo (t)) used.push_back (g->colour);
+            else if (const auto* info = trackInfo (t)) used.push_back (info->colour);
+        }
+        if (pending || menu.getNumItems() > 0) menu.addSeparator();
+        menu.addCustomItem (headerColour, std::make_unique<ColourGrid> (used, colour), nullptr, "Track Colours");
+        return menu;
+    }
+    void chooseHeaderItem (int result, const juce::String& id, bool arrangement, int colour, bool join)
+    {
+        const auto ids = headerSelection();
+        switch (result)
+        {
+            case headerDuplicate: duplicateFromUI (ids); return;
+            case headerDelete: deleteSelectedHeaders(); return;
+            case headerRename: renameHeader (id, arrangement); return;
+            case headerFreeze: freezeTracksFromUI (freezableTracks (ids)); return;
+            case headerFlatten: freezeTrackFromUI (id, true); return;
+            case headerInsertAudio: showPiano = false; addTrack(); resized(); return;
+            case headerInsertMidi: addMidiTrack(); return;
+            case headerInsertReturn: addReturnTrack(); return;
+            case headerGroup: groupSelectedTracks(); return;
+            case headerUngroup: ungroupSelectedTrack(); return;
+            case headerSelectContent: selectContent (ids, arrangement); return;
+            case headerInsertTakeLane:
+                for (const auto& t : tracksWithin (ids))
+                    if (const auto* track = trackInfo (t); track != nullptr && ! track->isReturn) { juce::String lane; report (session.insertTakeLane (t, lane)); takeLanesShown.insert (t); }
+                break;
+            case headerShowTakeLanes:
+            {
+                const auto selected = tracksWithin (ids);
+                const bool shown = std::all_of (selected.begin(), selected.end(), [this] (const juce::String& t) { return takeLanesShown.count (t) > 0; });
+                for (const auto& t : selected) { if (shown) takeLanesShown.erase (t); else takeLanesShown.insert (t); }
+                break;
+            }
+            case headerDeleteTakeLanes: report (session.removeTakeLanes (selectedTakeLanes (ids))); break;
+            case headerLink: linkSelectedTracks (join); return;
+            case headerUnlink: unlinkSelectedTracks(); return;
+            case headerColour: if (colour >= 0) report (session.setTrackColours (ids, paletteColour (colour))); break;
+            default: return;
+        }
+        refresh(); resized();
+    }
+    // Right-clicking a header selects its track or group, unless it is selected (whether it exists).
+    bool selectForHeaderMenu (const juce::String& id)
+    {
+        if (groupInfo (id) != nullptr) { if (selectedChain != id) selectChain (id); return true; }
+        const auto t = trackIndex (id);
+        if (t < 0) return false;
+        if (! selectedTrackIds().contains (id) || groupInfo (selectedChain) != nullptr) multiSelectedTracks.clear();
+        else if (const auto* current = currentTrack(); current != nullptr && current->id != id) multiSelectedTracks.insert (current->id);
+        selectedChain.clear(); selectTrack (t); return true;
+    }
+    void showHeaderMenu (const juce::String& id, bool arrangement)
+    {
+        if (! selectForHeaderMenu (id)) return;
+        const bool join = juce::ModifierKeys::getCurrentModifiers().isCommandDown();
+        auto colour = std::make_shared<int> (-1);
+        headerMenu (id, arrangement, colour, join).showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), id, arrangement, colour, join] (int result)
+        { if (safe != nullptr) safe->chooseHeaderItem (result, id, arrangement, *colour, join); });
     }
     void selectTrack (int track)
     {
@@ -10452,7 +10677,7 @@ private:
         }
         else if (index == 2)
         {
-            popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (35, "Insert Return Track");
+            popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (35, "Insert Return Track", std::count_if (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return t.isReturn; }) < Session::maximumReturnTracks);
             popup.addItem (110, "Insert Time Signature Change", ! showSession && ! state.recording); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", session.canRemoveTracks (headerSelection()));
             popup.addSeparator();
             popup.addItem (38, "Duplicate Selected Track", session.canDuplicateTracks (headerSelection()));
@@ -17081,6 +17306,61 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                        "it copies the inner group, with its track, after that track in the outer group, and selects the copy");
                 session.undo(); refresh();
                 check (state.groups.size() == 2 && state.tracks.size() == 2, "one undo removes the copy");
+                {
+                    // The headers' menu, in the reference's order: the items that can act, separators only between them.
+                    const auto listed = [] (const juce::PopupMenu& menu)
+                    {
+                        juce::StringArray texts;
+                        for (juce::PopupMenu::MenuItemIterator items (menu); items.next();)
+                        {
+                            const auto& item = items.getItem();
+                            texts.add (item.isSeparator ? "-" : item.customComponent != nullptr ? "[colours]" : item.text + (item.isEnabled ? "" : " (off)") + (item.isTicked ? " (on)" : ""));
+                        }
+                        return texts.joinIntoString ("|");
+                    };
+                    const auto colour = std::make_shared<int> (-1);
+                    check (selectForHeaderMenu (second) && selectedTrackIds() == juce::StringArray { second }, "right-clicking the second track selects it");
+                    const bool clips = ! state.tracks[(size_t) indexOf (second)].clips.empty();
+                    const auto expected = juce::String ("Duplicate|Delete|-|Rename|-|") + (clips ? "Freeze Track|-|" : "")
+                        + "Insert Audio Track|Insert MIDI Track|Insert Return Track|Group Tracks|-|Select Content" + (clips ? "" : " (off)")
+                        + "|-|Insert Take Lane|Show Take Lanes|Delete All Take Lanes (off)|-|Link Tracks (off)|Unlink Tracks (off)|-|[colours]";
+                    check (listed (headerMenu (second, true, colour, false)) == expected, "a track's menu: " + listed (headerMenu (second, true, colour, false)));
+                    check (listed (headerMenu (second, false, colour, false)) == expected.upToFirstOccurrenceOf ("Select Content", true, false) + "|-|[colours]",
+                           "a Session title's has no take lane or link items, and Select Content for its audio or MIDI track: " + listed (headerMenu (second, false, colour, false)));
+                    check (selectForHeaderMenu (inner) && selectedChain == inner, "right-clicking the inner group selects it");
+                    check (listed (headerMenu (inner, true, colour, false)) == "Duplicate|Delete|-|Rename|-|Insert Audio Track|Insert MIDI Track|Insert Return Track|Group Tracks|Ungroup Tracks|-|Select Content"
+                                   + juce::String (state.tracks[(size_t) indexOf (first)].clips.empty() ? " (off)" : "") + "|-|[colours]",
+                           "a group's: Ungroup Tracks, no take lane or link items: " + listed (headerMenu (inner, true, colour, false)));
+                    check (selectForHeaderMenu (first) && selectedTrackIds() == juce::StringArray { first } && selectedChain.isEmpty(), "right-clicking the first track selects it alone");
+                    check (! listed (headerMenu (first, true, colour, false)).contains ("Delete|"), "its menu leaves Delete out, as the inner group keeps its only track");
+                    // The colour grid colours the selected tracks, and marks the colour in use.
+                    multiSelectedTracks.insert (second); refresh();
+                    check (selectForHeaderMenu (second) && selectedTrackIds() == juce::StringArray { first, second }, "right-clicking a selected track keeps the selection");
+                    chooseHeaderItem (headerColour, first, true, 3, false); refresh();
+                    check (state.tracks[(size_t) indexOf (first)].colour == paletteColour (3) && state.tracks[(size_t) indexOf (second)].colour == paletteColour (3),
+                           "a colour picked in the grid colours both selected tracks");
+                    ColourGrid grid ({ paletteColour (3) }, colour);
+                    check (grid.marked (3) && ! grid.marked (4) && grid.swatchAt (grid.swatchCentre (17)) == 17, "the grid marks the colour in use and finds its swatches");
+                    session.undo(); refresh();
+                    check (state.tracks[(size_t) indexOf (first)].colour != paletteColour (3), "one undo takes both colours back");
+                    multiSelectedTracks.clear(); refresh();
+                    // Rename edits the clicked track's name in place.
+                    auto* secondName = dynamic_cast<juce::Label*> (canvas.getComponentAt (canvas.timelineWidth() + 30, laneY (indexOf (second)) + 10));
+                    check (secondName != nullptr && secondName->getName() == "Track name" && renameHeader (second, true) == secondName->getParentComponent(),
+                           "Rename edits the second track's name in its header");
+                    secondName->hideEditor (true); secondName->setText ("Bass", juce::sendNotificationSync); refresh();
+                    check (state.tracks[(size_t) indexOf (second)].name == "Bass", "which renames it");
+                    session.undo(); refresh();
+                    // Select Content selects the time the selected tracks' clips cover.
+                    check (session.importAudio (audioFixture, indexOf (second), 2.0).wasOk(), "a clip on the second track"); refresh();
+                    selectForHeaderMenu (second);
+                    chooseHeaderItem (headerSelectContent, second, true, -1, false);
+                    const auto& clip = state.tracks[(size_t) indexOf (second)].clips.back();
+                    check (timeSelection.active() && timeSelection.trackIds == juce::StringArray { second } && std::abs (timeSelection.start - clip.start) < 1e-6
+                               && std::abs (timeSelection.end - (clip.start + clip.length)) < 1e-6,
+                           "Select Content selects the time its clip covers, on that track");
+                    timeSelection = {}; session.undo(); refresh();
+                }
                 check (grab (laneY (indexOf (second)) + 10, "Track name"), "press the second track's name"); release (laneY (indexOf (second)) + 10);
                 headerFocusWatcher.mouseDown (event (0, false));
                 menuItemSelected (38, 2); refresh();

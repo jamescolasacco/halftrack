@@ -7548,6 +7548,9 @@ Result Session::addMidiTrack (String name, const String& after)
 Result Session::addReturnTrack (String name, const String& after)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    // As the reference's Insert Return Track is enabled only below 12 returns.
+    int returns = 0; for (auto* t : te::getAudioTracks (*impl->edit)) returns += isReturn (*t) ? 1 : 0;
+    if (returns >= maximumReturnTracks) return Result::fail ("A project has at most 12 return tracks.");
     impl->transaction ("Add return track");
     auto input = impl->edit->getPluginCache().createNewPlugin (te::AuxReturnPlugin::xmlTypeName, {});
     auto* aux = dynamic_cast<te::AuxReturnPlugin*> (input.get());
@@ -7963,6 +7966,25 @@ Result Session::removeTakeLane (const String& laneId)
     std::vector<juce::ValueTree> lanes { lane };
     for (auto* other : impl->linkedTracks (*track)) if (auto linked = impl->laneAt (*other, position); linked.isValid()) lanes.push_back (linked);
     impl->transaction ("Delete take lane");
+    for (auto& l : lanes) l.getParent().removeChild (l, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::removeTakeLanes (const juce::StringArray& laneIds)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (laneIds.isEmpty()) return Result::fail ("Choose take lanes to delete.");
+    // Each lane, and the lanes at its place on the tracks linked to its track, once.
+    std::vector<juce::ValueTree> lanes;
+    const auto add = [&lanes] (const juce::ValueTree& l) { if (std::find (lanes.begin(), lanes.end(), l) == lanes.end()) lanes.push_back (l); };
+    for (const auto& id : laneIds)
+    {
+        auto [track, lane] = impl->takeLane (id);
+        if (track == nullptr) return Result::fail ("Take lane not found.");
+        add (lane);
+        const int position = lane.getParent().indexOf (lane);
+        for (auto* other : impl->linkedTracks (*track)) if (auto linked = impl->laneAt (*other, position); linked.isValid()) add (linked);
+    }
+    impl->transaction (lanes.size() > 1 ? "Delete take lanes" : "Delete take lane");
     for (auto& l : lanes) l.getParent().removeChild (l, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
@@ -9839,6 +9861,23 @@ Result Session::moveTracks (const juce::StringArray& ids, const String& groupId,
     te::Track* preceding = at > 0 ? siblings[at - 1] : nullptr;
     impl->transaction ("Move tracks");
     for (auto* t : moving) { impl->edit->moveTrack (te::Track::Ptr (t), te::TrackInsertPoint (parent, preceding)); preceding = t; }
+    impl->changed(); return Result::ok();
+}
+Result Session::setTrackColours (const juce::StringArray& ids, juce::Colour colour)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (ids.isEmpty()) return Result::fail ("Choose tracks to colour.");
+    juce::Array<te::Track*> tracks;
+    for (const auto& id : ids)
+    {
+        te::Track* t = impl->track (id);
+        if (t == nullptr) t = impl->group (id);
+        if (t == nullptr) return Result::fail ("Track not found.");
+        if (t->getColour() != colour.withAlpha (1.0f)) tracks.addIfNotAlreadyThere (t);
+    }
+    if (tracks.isEmpty()) return Result::ok();
+    impl->transaction ("Set track colour");
+    for (auto* t : tracks) t->setColour (colour.withAlpha (1.0f));
     impl->changed(); return Result::ok();
 }
 Result Session::renameGroup (const String& groupId, const String& name)

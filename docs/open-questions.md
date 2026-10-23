@@ -813,3 +813,12 @@ Send lanes follow the reference's automatable Send parameter ([contract](researc
 - **Names.** The automation chooser names a send for its return (for example A-Echo). How the reference's choosers name sends is not read.
 - **Frozen tracks.** Editing a frozen track's send lane is refused, as for its volume and pan lanes. Whether the reference allows mixer automation edits on a frozen track is not read.
 - **Off sends.** Points on a send that is Off make the send in the same undo step; the reference has every send all along.
+
+Track header menu ([contract](research/track-header-menu-contract.md)). Defaults where the reference's details are not read:
+
+- **Right-click selection.** Right-clicking an unselected header selects its track or group alone, and right-clicking a selected one keeps the selection. The reference's menu code only marks the clicked track.
+- **Labels.** The items are named plainly for their commands (Duplicate, Delete, Rename, Freeze Track, Select Content and so on), as the reference's English text is in its encrypted language file.
+- **Colours.** The colour grid uses Halftrack's own palette, in the reference's 5 by 14 layout.
+- **Freeze.** Freezing several tracks from the menu makes an undo step for each track.
+- **Insertion.** Insert Audio, MIDI and Return Track insert after the selected track, as Halftrack's Create menu does; where the reference's insert was not decoded.
+

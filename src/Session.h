@@ -704,6 +704,8 @@ public:
     juce::Result addAudioTrack (juce::String name = {}, const juce::String& after = {});
     juce::Result addMidiTrack (juce::String name = {}, const juce::String& after = {});
     juce::Result addReturnTrack (juce::String name = {}, const juce::String& after = {});
+    // A project has at most 12 return tracks, as the reference's Insert Return Track allows.
+    static constexpr int maximumReturnTracks = 12;
     juce::Result setTrackSendGain (int sourceTrackIndex, const juce::String& returnTrackId, float decibels);
     // A group's send, as a track's: the reference's group mixers have one per return.
     juce::Result setGroupSendGain (const juce::String& groupId, const juce::String& returnTrackId, float decibels);
@@ -762,6 +764,9 @@ public:
     // cycling replaces it with the next or previous lane holding material in the range.
     juce::Result insertTakeLane (const juce::String& trackId, juce::String& laneId);
     juce::Result removeTakeLane (const juce::String& laneId);
+    // Deletes take lanes, with the lanes at their places on linked tracks, as one undo step, as the
+    // reference's Delete All Take Lanes does for the selected tracks.
+    juce::Result removeTakeLanes (const juce::StringArray& laneIds);
     juce::Result renameTakeLane (const juce::String& laneId, const juce::String& name);
     juce::Result compTake (const juce::String& laneId, double startSeconds, double endSeconds);
     juce::Result cycleTake (const juce::String& trackId, double startSeconds, double endSeconds, bool next);
@@ -939,6 +944,8 @@ public:
     juce::Result groupTracks (const juce::StringArray& trackAndGroupIds, juce::String& groupId);
     // Whether groupTracks would group these, as the reference's Group Tracks command is enabled.
     bool canGroupTracks (const juce::StringArray& trackAndGroupIds) const;
+    // Gives tracks and groups a colour, opaque, as the reference's header colour grid does; one undo step.
+    juce::Result setTrackColours (const juce::StringArray& trackAndGroupIds, juce::Colour);
     juce::Result ungroupTracks (const juce::String& groupId);
     // Moves tracks and groups into a group (empty for the top level), before a track or group there
     // (empty for its end, before the returns), as dragging headers does in the reference. Their

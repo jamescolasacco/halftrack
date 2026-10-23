@@ -297,6 +297,8 @@ int runGroupTests (const juce::File& artifacts)
                    "a return cannot go among the other tracks, nor a track among the returns, nor both at once");
             ok (r.moveTracks ({ t0 }, {}, ra), "a track can go before the first return, the other tracks' end");
             check (order() == juce::StringArray { t1, t0, ra, rb, rc }, "it is the last track before the returns");
+            for (int i = 0; i < 9; ++i) ok (r.addReturnTrack(), "returns up to twelve");
+            check (r.addReturnTrack().failed() && r.snapshot().tracks.size() == 14, "a thirteenth is refused, as the reference's Insert Return Track allows twelve");
         }
         {
             // Group automation and mapping: a group's mixer is automated and mapped as a track's.
