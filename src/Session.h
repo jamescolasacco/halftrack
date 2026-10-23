@@ -969,6 +969,10 @@ public:
     // (before one, or after the last with no place given), and other tracks stay before them. A group
     // the move empties stays, empty, as the reference's does. One undo step.
     juce::Result moveTracks (const juce::StringArray& trackAndGroupIds, const juce::String& groupId, const juce::String& beforeId);
+    // Copies tracks and groups to a place given as moveTracks takes it, as a copying drag of headers
+    // does in the reference: with new identities, as Duplicate copies them, and a group may be copied
+    // into itself. Returns and frozen tracks are refused, as for Duplicate. One undo step.
+    juce::Result copyTracksTo (const juce::StringArray& trackAndGroupIds, const juce::String& groupId, const juce::String& beforeId, juce::StringArray& copiedIds);
     // As renameTrack.
     juce::Result renameGroup (const juce::String& groupId, const juce::String& name);
     juce::Result setGroupGain (const juce::String& groupId, float decibels);

@@ -312,6 +312,26 @@ int runGroupTests (const juce::File& artifacts)
                        "b's copy comes back after c, with its own name (automatic, numbered by its place) and clip: " + n.snapshot().tracks[2].name + " / " + tree.tracks[1].name);
                 n.undo(); n.undo();
                 check (n.snapshot().tracks.size() == 3 && n.snapshot().tracks[1].id == ids[1], "two undo steps undo the paste and the cut");
+                // A copying drag puts copies where a move would go; a group can be copied into itself.
+                juce::StringArray copied;
+                ok (n.copyTracksTo ({ ids[1] }, inner, ids[0], copied), "copy b into the inner group, before a");
+                check (copied.size() == 1 && n.snapshot().tracks.size() == 4 && n.snapshot().tracks[0].id == copied[0] && n.snapshot().tracks[0].groupId == inner
+                           && n.snapshot().tracks[2].id == ids[1] && n.snapshot().tracks[2].groupId == outer,
+                       "the copy goes first in the inner group, and b stays in the outer one");
+                n.undo();
+                ok (n.copyTracksTo ({ outer }, outer, {}, copied), "copy the outer group into itself, at its end");
+                const auto inside = n.snapshot();
+                const auto parentIn = [&inside] (const juce::String& id) { for (const auto& g : inside.groups) if (g.id == id) return g.parentId; return juce::String ("?"); };
+                check (inside.groups.size() == 5 && parentIn (copied[0]) == outer && inside.tracks.size() == 5 && inside.tracks[1].id == ids[1] && inside.tracks[4].id == ids[2]
+                           && parentIn (inside.tracks[2].groupId) == copied[0] && inside.tracks[3].groupId == copied[0],
+                       "its copy, with copies of what was inside, goes after b, inside the outer group, before c");
+                n.undo();
+                ok (n.copyTracksTo ({ ids[2] }, {}, {}, copied), "copy c to the top level's end");
+                check (n.snapshot().tracks.size() == 4 && n.snapshot().tracks[3].id == copied[0] && n.snapshot().tracks[3].groupId.isEmpty(), "its copy is the last track, outside the groups");
+                n.undo();
+                check (n.copyTracksTo ({ ids[1] }, "missing", {}, copied).failed() && n.copyTracksTo ({ ids[1] }, inner, ids[2], copied).failed()
+                           && n.snapshot().tracks.size() == 3,
+                       "an unknown group, or a place outside the group, is refused");
             }
         }
         {

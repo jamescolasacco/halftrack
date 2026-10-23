@@ -2333,3 +2333,7 @@ Engine and UI areas. The headers' menu gains Cut, Copy and Paste, as the referen
 ## Edit Info Text — 2026-10-23
 
 Engine and UI areas. As the reference's header menu has it, Edit Info Text gives a track or group its own text. The Info view shows that text while pointing at the track's header. `setInfoText` saves it with the project in one undo step. Checked in the groups and UI suites ([menu](research/track-header-menu-contract.md)).
+
+## Copying drags — 2026-10-23
+
+UI and engine areas. With Option (Mac) or Ctrl held, dropping Arrangement headers or Session titles copies the tracks and groups to the place a move would take them, as the reference's copying drop does; a group may be copied into itself. `copyTracksTo` makes the copies as Duplicate does and shares Paste's copy step. Checked in the groups and UI suites ([contract](research/groups-contract.md#moving-tracks-2026-10-23)).

@@ -1449,15 +1449,28 @@ private:
         if (returns > 0 && returns < draggedTracks.size()) return std::nullopt;
         return returns > 0;
     }
-    // Aims the dragged headers, though nowhere inside a group being dragged.
+    // Option on the Mac, Ctrl elsewhere, copies what a drag carries, as the reference's drags do.
+    static bool copyModifier (juce::ModifierKeys mods)
+    {
+       #if JUCE_MAC
+        return mods.isAltDown();
+       #else
+        return mods.isCtrlDown();
+       #endif
+    }
+    // Whether the headers being dragged would be copied, from the copy key at the last drag.
+    bool copyingTracks = false;
+    // Aims the dragged headers, though a move goes nowhere inside a group being dragged; copies may,
+    // as the reference's copying drop allows (0x103274744).
     void aimTrackDrop (std::optional<TrackDrop> drop)
     {
         for (const auto& dragged : draggedTracks)
-            if (drop && (drop->groupId == dragged || groupInside (drop->groupId, dragged))) drop.reset();
+            if (drop && ! copyingTracks && (drop->groupId == dragged || groupInside (drop->groupId, dragged))) drop.reset();
         trackDrop = drop;
     }
-    void dragTracks (const juce::String& id, juce::Point<int> at)
+    void dragTracks (const juce::String& id, juce::Point<int> at, bool copy = false)
     {
+        copyingTracks = copy;
         const auto returns = draggedReturns (id);
         aimTrackDrop (returns ? trackDropAt (at, *returns) : std::nullopt); canvas.repaint();
     }
@@ -1479,7 +1492,14 @@ private:
     }
     void dropTracks()
     {
-        if (trackDrop && ! draggedTracks.isEmpty())
+        if (trackDrop && ! draggedTracks.isEmpty() && copyingTracks)
+        {
+            juce::StringArray copies;
+            const auto result = session.copyTracksTo (draggedTracks, trackDrop->groupId, trackDrop->beforeId, copies);
+            report (result); refresh();
+            if (result.wasOk()) selectCopies (copies);
+        }
+        else if (trackDrop && ! draggedTracks.isEmpty())
         {
             const auto result = session.moveTracks (draggedTracks, trackDrop->groupId, trackDrop->beforeId);
             report (result);
@@ -1493,7 +1513,7 @@ private:
                 if (const auto* around = groupInfo (parent); around != nullptr && around->folded) session.setGroupFolded (parent, false);
             }
         }
-        draggedTracks.clear(); trackDrop.reset(); refresh(); canvas.repaint();
+        draggedTracks.clear(); trackDrop.reset(); copyingTracks = false; refresh(); canvas.repaint();
     }
     void buildLanes()
     {
@@ -2458,7 +2478,7 @@ private:
             if (heightAtDown <= 0)
             {
                 // Dragging the header by its name or background moves the track, or the selected tracks.
-                if (dragArmed && e.getDistanceFromDragStart() > 6) { headerDrag = true; owner.dragTracks (trackId, e.getEventRelativeTo (&owner.canvas).getPosition()); }
+                if (dragArmed && e.getDistanceFromDragStart() > 6) { headerDrag = true; owner.dragTracks (trackId, e.getEventRelativeTo (&owner.canvas).getPosition(), copyModifier (e.mods)); }
                 return;
             }
             const auto pixels = heightAtDown + e.getDistanceFromDragStartY();
@@ -2771,7 +2791,7 @@ private:
         // Dragging the header by its name or background moves the group, with everything in it.
         void mouseDrag (const juce::MouseEvent& e) override
         {
-            if (dragArmed && e.getDistanceFromDragStart() > 6) { headerDrag = true; owner.dragTracks (groupId, e.getEventRelativeTo (&owner.canvas).getPosition()); }
+            if (dragArmed && e.getDistanceFromDragStart() > 6) { headerDrag = true; owner.dragTracks (groupId, e.getEventRelativeTo (&owner.canvas).getPosition(), copyModifier (e.mods)); }
         }
         void mouseUp (const juce::MouseEvent&) override
         {
@@ -4692,6 +4712,7 @@ private:
                 if (! headerDragging && event.getDistanceFromDragStart() <= 6) return;
                 headerDragging = true;
                 int line = -1;
+                owner.copyingTracks = copyModifier (event.mods);
                 const auto returns = owner.draggedReturns (headerPressed);
                 owner.aimTrackDrop (returns ? columnDropAt (event.getPosition(), *returns, line) : std::nullopt);
                 dropLineX = owner.trackDrop ? line : -1;
@@ -17271,6 +17292,27 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     check (state.tracks[1].id == second && state.tracks[1].groupId.isEmpty(), "dropping it there takes it out of the groups");
                     session.undo(); refresh();
                     check (state.tracks[1].groupId == group, "one undo puts it back");
+                }
+                // With Option (Mac) or Ctrl held, the drop copies the track there instead, as the reference's copying drag does.
+                {
+                   #if JUCE_MAC
+                    const auto copyKey = juce::ModifierKeys::altModifier;
+                   #else
+                    const auto copyKey = juce::ModifierKeys::ctrlModifier;
+                   #endif
+                    check (grab (laneY (indexOf (second)) + 10, "Track name"), "press the second track's name");
+                    const auto lower = groupLane (inner).y + groupLane (inner).height * 3 / 4;
+                    const auto down = juce::Point<float> (10.0f, 8.0f);
+                    const auto at = label->getLocalPoint (&canvas, juce::Point<int> (canvas.timelineWidth() + 40, lower)).toFloat();
+                    label->getParentComponent()->mouseDrag (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | copyKey),
+                                                                              1.0f, 0, 0, 0, 0, label, label, now, down, now, 1, true));
+                    check (copyingTracks && trackDrop && trackDrop->groupId == inner && trackDrop->beforeId == first, "over the inner group's lower half a copy would go in, first");
+                    release (lower);
+                    check (state.tracks.size() == 3 && state.tracks[0].groupId == inner && state.tracks[0].id != second && state.tracks[1].id == first
+                               && state.tracks[2].id == second && state.tracks[2].groupId == group && selectedTrack == 0,
+                           "dropping copies the second track there, leaving it in place, and selects the copy");
+                    session.undo(); refresh();
+                    check (state.tracks.size() == 2, "one undo removes the copy");
                 }
                 // Dropping a track into a folded group opens the group, as the reference's move does.
                 check (session.setGroupFolded (inner, true).wasOk(), "fold the inner group"); refresh();

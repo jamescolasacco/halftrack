@@ -3498,6 +3498,30 @@ struct Session::Impl
             track->state.setProperty (monitorProperty, static_cast<int> (MonitorMode::off), undo);
         }
     }
+    // A new track from a copied state, with new identities and without sends to returns the project
+    // lacks, put last at the top level for its caller to move into place. `original` keeps the state
+    // it was made from, for freshCopy.
+    te::Track* appendCopy (const juce::ValueTree& stored, juce::ValueTree& original)
+    {
+        std::set<String> returns;
+        for (auto* t : te::getAudioTracks (*edit)) if (isReturn (*t)) returns.insert (t->itemID.toString());
+        auto copy = stored.createCopy();
+        te::EditItemID::remapIDs (copy, nullptr, *edit);
+        const std::function<void (juce::ValueTree)> dropSends = [&] (juce::ValueTree node)
+        {
+            for (int i = node.getNumChildren(); --i >= 0;)
+            {
+                auto child = node.getChild (i);
+                if (child.hasType (te::IDs::PLUGIN) && child[te::IDs::type].toString() == te::AuxSendPlugin::xmlTypeName
+                    && ! returns.contains (child[sendReturnProperty].toString())) node.removeChild (i, nullptr);
+                else if (child.hasType (te::IDs::TRACK) || child.hasType (te::IDs::FOLDERTRACK)) dropSends (child);
+            }
+        };
+        dropSends (copy);
+        original = copy.createCopy();
+        edit->state.addChild (copy, -1, &edit->getUndoManager());
+        return te::findTrackForState (*edit, copy);
+    }
     // The headers' Copy: each copied top-most track's or group's state, in order.
     std::vector<juce::ValueTree> trackClipboard;
     // A group, other than `keep`, that grouping these would leave empty, as the reference's Group Tracks never does.
@@ -9917,6 +9941,50 @@ Result Session::moveTracks (const juce::StringArray& ids, const String& groupId,
     for (auto* t : moving) { impl->edit->moveTrack (te::Track::Ptr (t), te::TrackInsertPoint (parent, preceding)); preceding = t; }
     impl->changed(); return Result::ok();
 }
+Result Session::copyTracksTo (const juce::StringArray& ids, const String& groupId, const String& beforeId, juce::StringArray& copiedIds)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before copying tracks.");
+    if (auto refused = impl->duplicable (ids); refused.failed()) return refused;
+    te::FolderTrack* parent = nullptr;
+    if (groupId.isNotEmpty() && (parent = impl->group (groupId)) == nullptr) return Result::fail ("Group not found.");
+    te::Track* before = nullptr;
+    if (beforeId.isNotEmpty())
+    {
+        before = impl->track (beforeId);
+        if (before == nullptr) before = impl->group (beforeId);
+        if (before == nullptr || ! impl->siblings (parent).contains (before)) return Result::fail ("The place to copy to is not in that group.");
+        if (auto* audio = dynamic_cast<te::AudioTrack*> (before); audio != nullptr && isReturn (*audio)
+            && [&] { for (auto* t : impl->siblings (nullptr)) if (auto* r = dynamic_cast<te::AudioTrack*> (t); r != nullptr && isReturn (*r)) return r != audio; return false; }())
+            return Result::fail ("Tracks stay before the returns.");
+    }
+    // The copies are made from the tracks as they are, so a group can be copied into itself.
+    std::vector<juce::ValueTree> states;
+    for (auto* root : impl->roots (ids))
+    {
+        for (auto* t : Impl::subtree (*root)) t->flushStateToValueTree();
+        states.push_back (root->state.createCopy());
+    }
+    impl->transaction (states.size() > 1 || states.front().hasType (te::IDs::FOLDERTRACK) ? "Copy tracks" : "Copy track");
+    juce::StringArray created;
+    for (const auto& stored : states)
+    {
+        juce::ValueTree original;
+        auto* track = impl->appendCopy (stored, original);
+        if (track == nullptr) { impl->changed(); return Result::fail ("Could not copy the tracks."); }
+        // Before `before`, or at the end of the group, the top level's before the returns.
+        auto others = impl->siblings (parent);
+        others.removeAllInstancesOf (track);
+        te::Track* firstReturn = nullptr;
+        if (parent == nullptr) for (auto* t : others) if (auto* audio = dynamic_cast<te::AudioTrack*> (t); audio != nullptr && isReturn (*audio)) { firstReturn = t; break; }
+        if (auto* place = before != nullptr ? before : firstReturn) impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (*place, true));
+        else if (! others.isEmpty()) impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (*others.getLast(), false));
+        else impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (parent, nullptr));
+        impl->freshCopy (*track, original);
+        created.add (track->itemID.toString());
+    }
+    impl->refreshRouting(); impl->changed(); copiedIds = created; return Result::ok();
+}
 Result Session::setInfoText (const String& id, const String& text)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -10076,29 +10144,11 @@ Result Session::pasteTracks (const juce::StringArray& afterIds, juce::StringArra
         for (auto* t : impl->siblings (nullptr))
             if (auto* audio = dynamic_cast<te::AudioTrack*> (t); audio == nullptr || ! isReturn (*audio)) preceding = t;
     impl->transaction (impl->trackClipboard.size() > 1 || impl->trackClipboard.front().hasType (te::IDs::FOLDERTRACK) ? "Paste tracks" : "Paste track");
-    auto* undo = &impl->edit->getUndoManager();
-    std::set<String> returns;
-    for (auto* t : te::getAudioTracks (*impl->edit)) if (isReturn (*t)) returns.insert (t->itemID.toString());
     juce::StringArray created;
     for (const auto& stored : impl->trackClipboard)
     {
-        auto copy = stored.createCopy();
-        te::EditItemID::remapIDs (copy, nullptr, *impl->edit);
-        // Sends to returns this project does not have go.
-        const std::function<void (juce::ValueTree)> dropSends = [&] (juce::ValueTree node)
-        {
-            for (int i = node.getNumChildren(); --i >= 0;)
-            {
-                auto child = node.getChild (i);
-                if (child.hasType (te::IDs::PLUGIN) && child[te::IDs::type].toString() == te::AuxSendPlugin::xmlTypeName
-                    && ! returns.contains (child[sendReturnProperty].toString())) node.removeChild (i, nullptr);
-                else if (child.hasType (te::IDs::TRACK) || child.hasType (te::IDs::FOLDERTRACK)) dropSends (child);
-            }
-        };
-        dropSends (copy);
-        const auto original = copy.createCopy();
-        impl->edit->state.addChild (copy, -1, undo);
-        auto* track = te::findTrackForState (*impl->edit, copy);
+        juce::ValueTree original;
+        auto* track = impl->appendCopy (stored, original);
         if (track == nullptr) { impl->changed(); return Result::fail ("Could not paste the tracks."); }
         if (preceding != nullptr) impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (parent, preceding));
         else for (auto* t : te::getAudioTracks (*impl->edit))
