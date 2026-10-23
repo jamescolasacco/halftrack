@@ -940,11 +940,12 @@ int runAutomationEditorTests (const juce::File& root)
         check (session.moveTrack (session.snapshot().tracks[0].id, 1).wasOk(), "reorder a track while master editor is open"); master.synchronise();
         check (master.available() && masterLane() == beforeTrackRemoval && master.trackChoice.getText() == "Main",
             "track reordering never redirects the master destination");
-        while (! session.snapshot().tracks.empty()) check (session.removeTrack (0).wasOk(), "remove an unrelated track while Master remains selected");
+        while (session.snapshot().tracks.size() > 1) check (session.removeTrack (0).wasOk(), "remove an unrelated track while Master remains selected");
+        check (session.removeTrack (0).failed(), "the last track stays, as the reference's Delete keeps one");
         master.synchronise();
-        check (master.available() && master.trackChoice.getNumItems() == 1 && masterLane() == beforeTrackRemoval,
-            "master editor remains available with no tracks");
-        masterClick (8, -3); check (masterLane().points.size() == 3, "master pointer editing works in an empty track list");
+        check (master.available() && master.trackChoice.getNumItems() == 2 && master.trackChoice.getText() == "Main" && masterLane() == beforeTrackRemoval,
+            "master editor remains available, on Main, with one track left");
+        masterClick (8, -3); check (masterLane().points.size() == 3, "master pointer editing works after the removals");
         {
             auto stream = root.getChildFile ("master-automation-editor.png").createOutputStream();
             check (stream && stream->setPosition (0) && stream->truncate().wasOk()

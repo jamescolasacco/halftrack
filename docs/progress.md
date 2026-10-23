@@ -2313,3 +2313,7 @@ UI area. After a static reading of the reference's Session header row, a track's
 ## Nesting strips — 2026-10-23
 
 UI area. Arrangement headers of tracks and groups inside groups start after a strip for each group around them, in the groups' colours, outermost first. As in the reference's arranger, the strips pick a drop's nesting level, 5 pixels a level, and the drop line starts after the strips of the groups it lands in. A group's header no longer moves onto its last automation lane when one opens below it. As the reference's move does, dropping a track into a folded group opens the group. Checked in the UI suite ([contract](research/groups-contract.md#moving-tracks-2026-10-23)).
+
+## Delete keeps a group's last track — 2026-10-23
+
+Engine and UI areas. The track headers' menu research decoded the reference's Delete enable rule. A deletion led by a track or group may not leave a group, or the project, without tracks of that kind; one led by a return always goes ahead. `removeTracks` now refuses such deletions, `canRemoveTracks` reports them, and Delete and Delete Selected Track do nothing then, as the reference's disabled command does. Before, Halftrack let a deletion empty a group or the whole project. Projects saved without tracks still open. Checked in the groups, automation editor and UI suites ([contract](research/groups-contract.md#deleting-2026-10-23)).

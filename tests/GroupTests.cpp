@@ -231,15 +231,23 @@ int runGroupTests (const juce::File& artifacts)
             ok (n.moveTracks ({ ids[2] }, outer, ids[2]), "drop c where it is, before itself");
             check (n.snapshot().tracks[1].id == ids[2] && n.snapshot().tracks[1].groupId == outer, "c stays put");
             n.undo(); check (n.snapshot().tracks[2].id == ids[2] && n.snapshot().tracks[2].groupId == top, "which made no undo step: one undo takes c back out of the outer group");
-            // Deleting, as the reference's Delete does: a group goes with everything inside it.
+            // Deleting, as the reference's Delete does: a group goes with everything inside it. As its
+            // Delete is enabled, a deletion may not leave a group without tracks, nor the project.
+            check (! n.canRemoveTracks ({ top }) && n.removeTracks ({ top }).failed(), "the top group, the project's only item, stays");
+            check (! n.canRemoveTracks ({ ids[0] }) && n.removeTracks ({ ids[0], ids[2] }).failed(), "a, the inner group's only track, stays, alone or with c");
+            check (n.snapshot().tracks.size() == 3 && n.snapshot().groups.size() == 3, "the refusals change nothing");
+            ok (n.addAudioTrack(), "add a track after the tree");
+            const auto added = n.snapshot().tracks[3].id;
+            check (n.canRemoveTracks ({ top }), "with it there the top group can go");
             ok (n.removeTracks ({ top }), "delete the top group");
-            check (n.snapshot().tracks.empty() && n.snapshot().groups.empty(), "its groups and tracks, at every level, go with it");
+            check (n.snapshot().tracks.size() == 1 && n.snapshot().tracks[0].id == added && n.snapshot().groups.empty(), "its groups and tracks, at every level, go with it");
             n.undo();
-            check (n.snapshot().tracks.size() == 3 && n.snapshot().groups.size() == 3 && n.snapshot().tracks[0].groupId == inner, "one undo restores the whole tree");
+            check (n.snapshot().tracks.size() == 4 && n.snapshot().groups.size() == 3 && n.snapshot().tracks[0].groupId == inner, "one undo restores the whole tree");
             check (difference (render (n, mix), plain) < 1e-6, "playing as before");
-            ok (n.removeTracks ({ ids[0], ids[2] }), "delete a and c together");
-            check (n.snapshot().tracks.size() == 1 && n.snapshot().tracks[0].id == ids[1] && n.snapshot().groups.size() == 3, "b and the groups stay, the inner group empty");
-            n.undo(); check (n.snapshot().tracks.size() == 3, "one undo restores both");
+            ok (n.removeTracks ({ inner, ids[2] }), "delete the inner group and c together");
+            check (n.snapshot().tracks.size() == 2 && n.snapshot().tracks[0].id == ids[1] && n.snapshot().groups.size() == 2, "b, the added track and the other groups stay");
+            n.undo(); check (n.snapshot().tracks.size() == 4, "one undo restores both");
+            ok (n.removeTracks ({ added }), "delete the added track, the top group staying");
         }
         {
             // Returns move among the returns, and other tracks stay before them, as the reference's drop

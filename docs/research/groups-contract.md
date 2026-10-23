@@ -61,7 +61,7 @@ This follows a static reading of the reference's code: its track move (0x10242f8
   - a group moving into itself or into a group inside it;
   - unknown tracks or groups;
   - a place outside the chosen group.
-- **Empty groups.** Grouping is refused when it would empty a group other than the one the new group goes into, as the reference's enable rule has it. Moves and deletions may empty a group, which stays. The reference has nothing that deletes or refuses an emptied group: neither its move nor the group's transaction handler (0x10219e5e4) does (medium). An empty group keeps its header lane and Session column, and tracks can be dropped into it.
+- **Empty groups.** Grouping is refused when it would empty a group other than the one the new group goes into, as the reference's enable rule has it. Moves may empty a group, which stays: the reference has nothing that deletes or refuses an emptied group, neither its move nor the group's transaction handler (0x10219e5e4) (medium). Deletions may not (see Deleting). An empty group keeps its header lane and Session column, and tracks can be dropped into it.
 - **Dragging headers.** In the Arrangement, dragging a track's header by its name or background moves the track, or every selected track if it is selected. A group's header moves the group. They land where the reference's drop target puts them:
   - over the upper half of a track or group, before it, in its group;
   - over the lower half of a group's header, folded or not, into the group, first;
@@ -126,7 +126,7 @@ This follows a static reading of the reference's Delete (0x1032cdd64, 0x1024415e
   - A group goes with everything inside it, nested groups included.
   - Sends to a deleted return go.
   - Plug-ins taking a sidechain from a deleted track keep the sidechain without a source.
-  - Deleting a group's last track leaves the group, empty.
+  - As the reference's Delete is enabled (CanDeleteTracks 0x10242c070, via 0x1032cd8a4; high), a deletion led by a track or group is refused when it would leave a group, or the top level, without any of its tracks of that kind (the other tracks or the returns; 0x10242c184). So a group keeps its last track, and the project keeps a track or group besides its returns. A deletion led by a return is always allowed. `canRemoveTracks(ids)` says whether a deletion would go ahead.
   - `removeTrack(index)` now deletes through it.
 - **Interface.** After a click on an Arrangement header's name or background, or on a Session column's title, Delete deletes the selection: the selected group, or the selected tracks. Afterwards the track now where the first deleted one was is selected, as in the reference (medium). After a click in the lanes or on a Session slot, Delete acts there as before. The Create menu's Delete Selected Track does the same, a selected group included.
 - **Ungroup.** Ungroup (see Nested groups) keeps the contents and discards only the group: its devices, mixer settings and automation, as in the reference.
@@ -134,10 +134,11 @@ This follows a static reading of the reference's Delete (0x1032cdd64, 0x1024415e
 Evidence (`tests/GroupTests.cpp`):
 - deleting a group with its track, and one undo restoring both;
 - deleting a three-level tree at once, with one undo restoring it and its mix;
-- deleting two tracks together, leaving an inner group empty;
+- the project's only top-level group, a group's only track, and that track with another, refused without change, then the group deleted once a track is added beside it;
+- deleting a group and a track together;
 - unknown and empty deletions being refused.
 
-The UI suite clicks a nested group's name and presses Delete. The group goes with its track, the next track is selected, and one undo brings both back. After a click in the lanes, the headers no longer have the focus. In the Session view, Delete after a click on a track's title deletes the track, one undo brings it back, and a click on a slot takes the focus from the titles.
+The UI suite clicks a nested group's name and presses Delete. The group goes with its track, the next track is selected, and one undo brings both back. After a click in the lanes, the headers no longer have the focus. In the Session view, Delete after a click on a track's title deletes the track, one undo brings it back, and a click on a slot takes the focus from the titles. Delete after a click on the inner group's only track keeps it. The UI and automation editor suites remove tracks until one is left, which stays; the UI suite then opens a project saved without tracks, as earlier versions allowed, and checks the Automation window with none.
 
 ## Group sends (2026-10-23)
 

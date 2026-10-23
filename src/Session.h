@@ -952,8 +952,11 @@ public:
     juce::Result removeTrack (int trackIndex);
     // Deletes tracks and groups, a group with everything in it, as the reference's Delete does. Sends
     // to a deleted return go, and plug-ins taking their sidechain from a deleted track keep it without
-    // a source. One undo step.
+    // a source. As the reference's Delete is enabled, a deletion led by a track or group may not leave
+    // a group without tracks, or the project without tracks besides returns. One undo step.
     juce::Result removeTracks (const juce::StringArray& trackAndGroupIds);
+    // Whether removeTracks would delete these.
+    bool canRemoveTracks (const juce::StringArray& trackAndGroupIds) const;
     // Linked-track editing, after the reference's: Arrangement edits on a linked track apply to the
     // other tracks in its link. Moving a clip in time, trimming, deleting or (de)activating it does
     // the same to the clips on the linked tracks that start and end with it (within 1 ms); a split

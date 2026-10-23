@@ -3408,6 +3408,23 @@ struct Session::Impl
             return Result::fail ("Grouping these would leave another group empty.");
         return Result::ok();
     }
+    // Whether these can be deleted, as the reference's Delete is enabled (0x10242c070). With a track or
+    // group first, no group may be left without tracks, nor the top level without tracks or groups:
+    // a level loses all its items of a kind, returns or the others, only when the first is a return.
+    Result deletable (const juce::Array<te::Track*>& roots) const
+    {
+        if (roots.isEmpty()) return Result::fail ("Choose tracks to delete.");
+        const auto returnTrack = [] (te::Track* t) { auto* audio = dynamic_cast<te::AudioTrack*> (t); return audio != nullptr && isReturn (*audio); };
+        if (returnTrack (roots.getFirst())) return Result::ok();
+        for (auto* t : roots)
+        {
+            bool all = true;
+            for (auto* sibling : siblings (t->getParentFolderTrack())) if (returnTrack (sibling) == returnTrack (t)) all = all && roots.contains (sibling);
+            if (all) return Result::fail (t->getParentFolderTrack() != nullptr ? "Deleting these would leave a group without tracks: delete the group, or keep one of its tracks."
+                                                                              : "A project keeps at least one track besides its returns.");
+        }
+        return Result::ok();
+    }
     // A group, other than `keep`, that grouping these would leave empty, as the reference's Group Tracks never does.
     te::FolderTrack* emptiedGroup (const juce::Array<te::Track*>& moving, const te::FolderTrack* keep) const
     {
@@ -9709,6 +9726,11 @@ Result Session::unlinkTracks (const juce::StringArray& ids)
     impl->endSingleLinks (left);
     impl->changed(); return Result::ok();
 }
+bool Session::canRemoveTracks (const juce::StringArray& ids) const
+{
+    for (const auto& id : ids) if (impl->track (id) == nullptr && impl->group (id) == nullptr) return false;
+    return impl->deletable (impl->roots (ids)).wasOk();
+}
 bool Session::canGroupTracks (const juce::StringArray& ids) const
 {
     juce::Array<te::Track*> members;
@@ -10002,7 +10024,7 @@ Result Session::removeTracks (const juce::StringArray& ids)
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before removing tracks.");
     for (const auto& id : ids) if (impl->track (id) == nullptr && impl->group (id) == nullptr) return Result::fail ("Track not found.");
     const auto roots = impl->roots (ids);
-    if (roots.isEmpty()) return Result::fail ("Choose tracks to delete.");
+    if (auto refused = impl->deletable (roots); refused.failed()) return refused;
     // Every track going, those inside a group going included.
     juce::Array<te::AudioTrack*> going;
     for (auto* t : te::getAudioTracks (*impl->edit))

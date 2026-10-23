@@ -1664,17 +1664,20 @@ private:
         }
         Impl& owner;
     } headerFocusWatcher { *this };
+    // What the headers' Delete and Duplicate act on: the selected group, or the selected tracks.
+    juce::StringArray headerSelection() const
+    {
+        if (const auto* group = groupInfo (selectedChain)) return { group->id };
+        return selectedTrackIds();
+    }
     void deleteSelectedHeaders()
     {
-        juce::StringArray ids;
+        const auto ids = headerSelection();
         int first = selectedTrack;
-        if (const auto* group = groupInfo (selectedChain)) { ids.add (group->id); first = group->position; }
-        else
-        {
-            ids = selectedTrackIds();
-            for (int t = 0; t < (int) state.tracks.size(); ++t) if (ids.contains (state.tracks[(size_t) t].id)) { first = t; break; }
-        }
-        if (ids.isEmpty()) return;
+        if (const auto* group = groupInfo (selectedChain)) first = group->position;
+        else for (int t = 0; t < (int) state.tracks.size(); ++t) if (ids.contains (state.tracks[(size_t) t].id)) { first = t; break; }
+        // As the reference's Delete is disabled, nothing happens when it would empty a group or the project.
+        if (ids.isEmpty() || ! session.canRemoveTracks (ids)) return;
         session.closePluginEditors();
         const auto result = session.removeTracks (ids);
         report (result);
@@ -10431,7 +10434,7 @@ private:
         else if (index == 2)
         {
             popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (35, "Insert Return Track");
-            popup.addItem (110, "Insert Time Signature Change", ! showSession && ! state.recording); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", currentTrack() != nullptr || groupInfo (selectedChain) != nullptr);
+            popup.addItem (110, "Insert Time Signature Change", ! showSession && ! state.recording); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", session.canRemoveTracks (headerSelection()));
             popup.addSeparator();
             popup.addItem (38, "Duplicate Selected Track", currentTrack() != nullptr && !currentTrack()->isReturn);
             popup.addItem (39, "Insert Take Lane", currentTrack() != nullptr && ! currentTrack()->isReturn && ! showSession);
@@ -17043,6 +17046,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                        "Delete deletes the group with its track, and selects the track now first");
                 session.undo(); refresh();
                 check (groupInfo (inner) != nullptr && indexOf (first) == 0 && state.tracks[0].groupId == inner, "one undo brings both back");
+                // Not the inner group's only track, though: the reference's Delete keeps a group's last track.
+                check (grab (laneY (indexOf (first)) + 10, "Track name"), "press the first track's name"); release (laneY (indexOf (first)) + 10);
+                headerFocusWatcher.mouseDown (event (0, false));
+                check (headerFocus && handleKey (juce::KeyPress (juce::KeyPress::deleteKey)), "Delete is handled"); refresh();
+                check (indexOf (first) == 0 && state.tracks.size() == 2 && ! session.canRemoveTracks (headerSelection()), "but keeps the inner group's only track, which Delete Selected Track cannot delete either");
                 // After a click elsewhere, Delete acts there instead.
                 const auto now2 = juce::Time::getCurrentTime();
                 headerFocusWatcher.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { 10.0f, 10.0f }, {}, 1.0f, 0, 0, 0, 0, &canvas, &canvas, now2, { 10.0f, 10.0f }, now2, 1, false));
@@ -17616,7 +17624,23 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (masterDestination && masterDestination->getText() == "Main" && masterTarget && masterTarget->getNumItems() == 2 && masterTarget->getText() == "Volume",
         "Master Volume Automation menu opens the master destination on its volume (song tempo is the other master target)");
     masterWindow->closeButtonPressed();
-    while (! state.tracks.empty()) { check (session.removeTrack (0).wasOk(), "remove track for empty-project automation navigation"); refresh(); }
+    while (state.tracks.size() > 1) { check (session.removeTrack (0).wasOk(), "remove track for empty-project automation navigation"); refresh(); }
+    check (session.removeTrack (0).failed(), "the last track stays, as the reference's Delete keeps one");
+    {
+        // A project saved without tracks, as earlier versions could, still opens.
+        juce::TemporaryFile trackless (".halftrack");
+        check (session.saveProject (trackless.getFile()).wasOk(), "save the project to strip of its tracks");
+        auto xml = juce::XmlDocument::parse (trackless.getFile());
+        auto* edit = xml != nullptr ? xml->getChildByName ("EDIT") : nullptr;
+        for (auto* child = edit != nullptr ? edit->getFirstChildElement() : nullptr; child != nullptr;)
+        {
+            auto* next = child->getNextElement();
+            if (child->hasTagName ("TRACK") || child->hasTagName ("FOLDERTRACK")) edit->removeChildElement (child, true);
+            child = next;
+        }
+        check (edit != nullptr && xml->writeTo (trackless.getFile()) && session.loadProject (trackless.getFile()).wasOk(), "open it without its tracks"); refresh();
+        check (state.tracks.empty(), "which has none");
+    }
     check (automationButton->isEnabled(), "Automation button remains available with no tracks");
     automationButton->onClick();
     auto* emptyDestination = dynamic_cast<juce::ComboBox*> (findNamed (*automationWindows.back(), "automation-track"));
