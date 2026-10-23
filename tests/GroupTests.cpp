@@ -66,7 +66,16 @@ int runGroupTests (const juce::File& artifacts)
                && snapshot.tracks[0].groupId == group && snapshot.tracks[1].groupId == group && snapshot.tracks[2].groupId.isEmpty(),
                "track order and indices are unchanged, with membership reported per track");
         check (difference (render (s, mix), reference) < 1e-6, "a unity group renders the same sum as the ungrouped tracks");
-        check (s.groupTracks ({ before.tracks[0].id }, group).failed(), "grouped tracks cannot be grouped again");
+        {
+            // As in the reference, a grouped track groups into a group inside its group.
+            juce::String inner;
+            ok (s.groupTracks ({ before.tracks[0].id }, inner), "group a grouped track");
+            const auto nested = s.snapshot();
+            check (nested.groups.size() == 2 && nested.tracks[0].groupId == inner && nested.groups[1].parentId == group && nested.groups[0].parentId.isEmpty()
+                       && nested.groups[0].memberIds == juce::StringArray { before.tracks[1].id }, "it makes a group inside the group, holding the track");
+            check (difference (render (s, mix), reference) < 1e-6, "the nested group plays the same mix");
+            s.undo(); check (s.snapshot().groups.size() == 1 && s.snapshot().tracks[0].groupId == group, "one undo removes the inner group");
+        }
         ok (s.setGroupGain (group, -6), "lower the group");
         const auto gain = std::pow (10.0f, -6.0f / 20);
         check (difference (render (s, mix), reference, gain, gain) < 1e-6, "group gain scales the summed members");
@@ -150,6 +159,40 @@ int runGroupTests (const juce::File& artifacts)
             check (difference (render (reopened, mix), plain, (float) sixDown, (float) sixDown) < 1e-5, "and play as before");
             ok (reopened.removePlugin (Session::mainChain, 0), "remove the Main's Utility");
             check (reopened.snapshot().mainPlugins.empty(), "it is gone");
+        }
+        {
+            // Nesting: groups inside groups, grouping groups, and ungrouping one level at a time.
+            Session n (false);
+            ok (n.importAudio (a, 0), "import a"); ok (n.importAudio (b, 1), "import b"); ok (n.addAudioTrack ("C"), "add c"); ok (n.importAudio (c, 2), "import c");
+            const auto plain = render (n, mix);
+            const auto ids = [&n] { juce::StringArray result; for (const auto& t : n.snapshot().tracks) result.add (t.id); return result; }();
+            juce::String outer, inner, top;
+            ok (n.groupTracks ({ ids[0], ids[1] }, outer), "group a and b");
+            ok (n.groupTracks ({ ids[0] }, inner), "group a inside it");
+            ok (n.groupTracks ({ outer, ids[2] }, top), "group the outer group with c");
+            const auto tree = n.snapshot();
+            const auto groupNamed = [&tree] (const juce::String& id) { for (const auto& g : tree.groups) if (g.id == id) return g; return Session::GroupInfo {}; };
+            check (groupNamed (outer).parentId == top && groupNamed (inner).parentId == outer && groupNamed (top).parentId.isEmpty()
+                       && tree.tracks[0].groupId == inner && tree.tracks[1].groupId == outer && tree.tracks[2].groupId == top,
+                   "three levels: a in the inner group, b in the outer, c and the outer group in the top one");
+            check (difference (render (n, mix), plain) < 1e-6, "the nested groups play the same mix");
+            ok (n.setGroupGain (top, -6), "the top group 6 dB down");
+            const auto sixDown = (float) std::pow (10.0, -6.0 / 20);
+            check (difference (render (n, mix), plain, sixDown, sixDown) < 1e-5, "the top group's fader moves everything inside it");
+            ok (n.setGroupGain (top, 0), "back to unity");
+            const auto project = root.getChildFile ("Nested.halftrack");
+            ok (n.saveProject (project), "save");
+            Session reopened (false);
+            ok (reopened.loadProject (project), "reopen");
+            const auto again = reopened.snapshot();
+            check (again.groups.size() == 3 && again.tracks[0].groupId == inner && again.tracks[1].groupId == outer && again.tracks[2].groupId == top, "the nesting reopens");
+            ok (n.ungroupTracks (outer), "ungroup the outer group");
+            const auto flatter = n.snapshot();
+            check (flatter.groups.size() == 2 && flatter.tracks[0].groupId == inner && flatter.tracks[1].groupId == top
+                       && [&] { for (const auto& g : flatter.groups) if (g.id == inner) return g.parentId == top; return false; }(),
+                   "ungrouping moves its tracks and groups into the group around it");
+            check (difference (render (n, mix), plain) < 1e-6, "and the mix is the same");
+            n.undo(); check (n.snapshot().groups.size() == 3, "undo restores the outer group");
         }
         std::cout << "Groups passed: " << root.getFullPathName() << std::endl; return 0;
     }

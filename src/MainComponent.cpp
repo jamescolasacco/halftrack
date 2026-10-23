@@ -1217,18 +1217,46 @@ private:
     }
     const Session::GroupInfo* groupInfo (const juce::String& id) const
     { for (const auto& g : state.groups) if (g.id == id) return &g; return nullptr; }
+    // The groups a group is inside, and the group itself, outermost first, by index in state.groups.
+    std::vector<int> groupPath (const juce::String& id) const
+    {
+        std::vector<int> path;
+        for (auto current = id; current.isNotEmpty() && path.size() <= state.groups.size();)
+        {
+            int found = -1;
+            for (int g = 0; g < (int) state.groups.size(); ++g) if (state.groups[(size_t) g].id == current) found = g;
+            if (found < 0) break;
+            path.insert (path.begin(), found); current = state.groups[(size_t) found].parentId;
+        }
+        return path;
+    }
+    // Whether a group is inside another, at any depth.
+    bool groupInside (const juce::String& id, const juce::String& outer) const
+    {
+        for (const auto* g = groupInfo (id); g != nullptr; g = groupInfo (g->parentId)) if (g->parentId == outer) return true;
+        return false;
+    }
     void buildLanes()
     {
-        lanes.clear(); int y = 0; juce::String open;
+        lanes.clear(); int y = 0; std::vector<int> open;
         for (int t = 0; t < (int) state.tracks.size(); ++t)
         {
             const auto& track = state.tracks[(size_t) t];
-            if (track.groupId != open && track.groupId.isNotEmpty())
-                for (int g = 0; g < (int) state.groups.size(); ++g)
-                    if (state.groups[(size_t) g].id == track.groupId) { lanes.push_back ({ true, g, y, groupHeight }); y += groupHeight; }
-            open = track.groupId;
-            const auto* group = groupInfo (track.groupId);
-            const int height = group != nullptr && group->folded ? 0 : track.folded ? foldedTrackHeight : track.height > 0 ? track.height : trackHeight;
+            // A header lane for each group the track opens, outermost first; a folded group hides
+            // everything inside it, nested groups' headers too.
+            const auto path = groupPath (track.groupId);
+            size_t common = 0;
+            while (common < open.size() && common < path.size() && open[common] == path[common]) ++common;
+            for (size_t k = common; k < path.size(); ++k)
+            {
+                bool hidden = false;
+                for (size_t outer = 0; outer < k; ++outer) hidden = hidden || state.groups[(size_t) path[outer]].folded;
+                lanes.push_back ({ true, path[k], y, hidden ? 0 : groupHeight }); y += hidden ? 0 : groupHeight;
+            }
+            open = path;
+            bool folded = false;
+            for (const auto g : path) folded = folded || state.groups[(size_t) g].folded;
+            const int height = folded ? 0 : track.folded ? foldedTrackHeight : track.height > 0 ? track.height : trackHeight;
             lanes.push_back ({ false, t, y, height }); y += height;
             if (height > 0 && ! track.folded && takeLanesShown.count (track.id))
                 for (int k = 0; k < (int) track.takeLanes.size(); ++k) { lanes.push_back ({ false, t, y, takeLaneHeight, -1, k }); y += takeLaneHeight; }
@@ -1320,9 +1348,13 @@ private:
     }
     void groupSelectedTracks()
     {
+        // A selected group groups too, with the tracks selected besides it.
         juce::StringArray ids;
-        for (const auto& track : state.tracks) if (multiSelectedTracks.contains (track.id) || (currentTrack() != nullptr && track.id == currentTrack()->id)) ids.add (track.id);
+        if (groupInfo (selectedChain) != nullptr) ids.add (selectedChain);
+        for (const auto& track : state.tracks)
+            if (multiSelectedTracks.contains (track.id) || (ids.isEmpty() && currentTrack() != nullptr && track.id == currentTrack()->id)) ids.add (track.id);
         juce::String group; report (session.groupTracks (ids, group)); multiSelectedTracks.clear(); refresh();
+        if (group.isNotEmpty()) selectChain (group);
     }
     // Linked-track editing. The selected tracks, then Link Tracks: with Cmd/Ctrl held, the selection
     // joins the clicked track's link. Selecting time or a clip on a linked track selects the same on
@@ -1412,7 +1444,9 @@ private:
     juce::String hoveredLink; // The link whose indicator is under the pointer; its tracks are outlined.
     void ungroupSelectedTrack()
     {
-        if (const auto* track = currentTrack(); track != nullptr && track->groupId.isNotEmpty()) report (session.ungroupTracks (track->groupId));
+        // A selected group ungroups; otherwise the selected track's group does.
+        if (groupInfo (selectedChain) != nullptr) { report (session.ungroupTracks (selectedChain)); selectedChain.clear(); }
+        else if (const auto* track = currentTrack(); track != nullptr && track->groupId.isNotEmpty()) report (session.ungroupTracks (track->groupId));
         refresh();
     }
     static constexpr int minimumClipViewHeight = 340, dividerHeight = 5;
@@ -2593,7 +2627,7 @@ private:
                     g.setColour (themes::colour (0xff262626)); g.fillRect (0, lane.y, tw, lane.height);
                     // Member clips summarized as thin bars, as on a folded group lane.
                     for (int t = 0; t < (int) owner.state.tracks.size(); ++t)
-                        if (owner.state.tracks[(size_t) t].groupId == group.id)
+                        if (owner.state.tracks[(size_t) t].groupId == group.id || owner.groupInside (owner.state.tracks[(size_t) t].groupId, group.id))
                             for (const auto& clip : owner.state.tracks[(size_t) t].clips)
                             {
                                 const auto x = (float) ((clip.start - owner.viewStart) * owner.pixelsPerSecond);
@@ -3692,17 +3726,25 @@ private:
         struct Column { int track = -1, group = -1; };
         void buildColumns()
         {
-            columns.clear(); juce::String open;
+            columns.clear(); std::vector<int> open;
             for (int t = 0; t < (int) owner.state.tracks.size(); ++t)
             {
                 const auto& track = owner.state.tracks[(size_t) t];
                 if (track.isReturn && ! owner.state.mixerSections.returns) continue; // The Returns section hidden.
-                if (track.groupId != open && track.groupId.isNotEmpty())
-                    for (int g = 0; g < (int) owner.state.groups.size(); ++g)
-                        if (owner.state.groups[(size_t) g].id == track.groupId) columns.push_back ({ -1, g });
-                open = track.groupId;
-                const auto* group = owner.groupInfo (track.groupId);
-                if (group == nullptr || ! group->folded) columns.push_back ({ t, -1 });
+                // A column for each group the track opens, outermost first, unless a group around it is folded.
+                const auto path = owner.groupPath (track.groupId);
+                size_t common = 0;
+                while (common < open.size() && common < path.size() && open[common] == path[common]) ++common;
+                for (size_t k = common; k < path.size(); ++k)
+                {
+                    bool hidden = false;
+                    for (size_t outer = 0; outer < k; ++outer) hidden = hidden || owner.state.groups[(size_t) path[outer]].folded;
+                    if (! hidden) columns.push_back ({ -1, path[k] });
+                }
+                open = path;
+                bool folded = false;
+                for (const auto g : path) folded = folded || owner.state.groups[(size_t) g].folded;
+                if (! folded) columns.push_back ({ t, -1 });
             }
         }
         int columnCount() const { return (int) columns.size(); }
@@ -3892,7 +3934,7 @@ private:
                 if (! cell.intersects (grid)) continue;
                 bool clips = false, playing = false, queued = false;
                 for (int t = 0; t < (int) owner.state.tracks.size(); ++t)
-                    if (owner.state.tracks[(size_t) t].groupId == group.id)
+                    if (owner.state.tracks[(size_t) t].groupId == group.id || owner.groupInside (owner.state.tracks[(size_t) t].groupId, group.id))
                         if (const auto* slot = slotAt (t, scene))
                         { clips = clips || slot->hasClip; playing = playing || slot->playing; queued = queued || slot->queued || slot->stopQueued; }
                 if (clips)
@@ -3909,7 +3951,8 @@ private:
                 if (owner.state.scenes[(size_t) scene].id == owner.selectedSceneId) { g.setColour (orange.withAlpha (0.5f)); g.drawRect (cell, 1); }
             }
             g.restoreState();
-            for (const auto& track : owner.state.tracks) active = active || (track.groupId == group.id && track.launcherActive);
+            for (const auto& track : owner.state.tracks)
+                active = active || ((track.groupId == group.id || owner.groupInside (track.groupId, group.id)) && track.launcherActive);
             const auto stop = juce::Rectangle<int> (x, grid.getBottom(), columnWidth, stopHeight).reduced (1, 0).withTrimmedBottom (1);
             g.setColour (slotColour.darker (0.15f)); g.fillRect (stop);
             g.setColour (active ? orange : muted); g.fillRect (stop.getCentreX() - 4, stop.getCentreY() - 4, 8, 8);
@@ -15867,6 +15910,29 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             }
         launcher.mouseDown (groupEvent (launcher.groupFoldPoint (0))); refresh();
         check (! state.groups[0].folded && launcher.columnCount() == 3, "clicking again unfolds the members");
+        {
+            // Nested groups: a group inside the group gets its own header lane and column, and
+            // folding the outer group hides everything inside it.
+            juce::String inner;
+            check (session.groupTracks ({ state.tracks[0].id }, inner).wasOk(), "group the first track inside the group"); refresh();
+            const int outerIndex = [&] { for (int g = 0; g < (int) state.groups.size(); ++g) if (state.groups[(size_t) g].id == group) return g; return -1; }();
+            const int innerIndex = [&] { for (int g = 0; g < (int) state.groups.size(); ++g) if (state.groups[(size_t) g].id == inner) return g; return -1; }();
+            check (outerIndex >= 0 && innerIndex >= 0 && state.groups[(size_t) innerIndex].parentId == group, "the inner group sits in the outer one");
+            check (launcher.columnCount() == 4 && launcher.groupColumnOf (outerIndex) == 0 && launcher.groupColumnOf (innerIndex) == 1 && launcher.columnOf (0) == 2 && launcher.columnOf (1) == 3,
+                   "the Session view shows the outer group's column, the inner group's, then their tracks");
+            showArrangementView(); refresh();
+            std::vector<int> groupLanes;
+            for (const auto& lane : lanes) if (lane.group && lane.height > 0) groupLanes.push_back (lane.index);
+            check (groupLanes == std::vector<int> { outerIndex, innerIndex } && laneY (0) > 0 && laneHeight (0) > 0, "the Arrangement shows both group headers above the tracks");
+            check (session.setGroupFolded (group, true).wasOk(), "fold the outer group"); refresh();
+            int shownGroupLanes = 0;
+            for (const auto& lane : lanes) if (lane.group && lane.height > 0) ++shownGroupLanes;
+            check (shownGroupLanes == 1 && laneHeight (0) == 0 && laneHeight (1) == 0, "folding the outer group hides the inner group and every track inside");
+            check (session.setGroupFolded (group, false).wasOk(), "unfold it"); refresh();
+            showSessionView(); refresh();
+            selectChain (inner); ungroupSelectedTrack(); refresh();
+            check (state.groups.size() == 1 && state.tracks[0].groupId == group && launcher.columnCount() == 3, "ungrouping the selected inner group returns its track to the outer group");
+        }
         // The Master column follows the last track; its strip edits the master level; sends sit in the strips.
         check (std::abs (launcher.stopAllPoint().x - (3 * LauncherGrid::columnWidth + LauncherGrid::sceneWidth / 2.0f)) < 2, "the Master column follows the last track column");
         auto* masterFader = dynamic_cast<juce::Slider*> (findNamed (launcher, "Session master volume"));

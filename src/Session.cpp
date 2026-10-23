@@ -3341,6 +3341,13 @@ struct Session::Impl
         if (playTake) queueTrack (*t, clip, boundary);
         changed();
     }
+    // Whether a track is in a group, directly or in a group inside it.
+    static bool inside (const te::Track& track, const te::FolderTrack& folder)
+    {
+        for (auto* parent = track.getParentFolderTrack(); parent != nullptr; parent = parent->getParentFolderTrack())
+            if (parent == &folder) return true;
+        return false;
+    }
     te::FolderTrack* group (const String& id) const
     {
         for (auto* track : te::getAllTracks (*edit))
@@ -6235,6 +6242,7 @@ Session::Snapshot Session::snapshot() const
             group.numberLabel = String (impl->trackNumber (*folder));
             group.mute = folder->isMuted (false); group.solo = folder->isSolo (false) || static_cast<bool> (folder->state.getProperty (cueProperty, false));
             group.folded = folder->state.getProperty (groupFoldedProperty, false);
+            if (auto* parent = folder->getParentFolderTrack()) group.parentId = parent->itemID.toString();
             if (auto* v = folder->getVolumePlugin()) { group.gainDb = v->getVolumeDb(); group.pan = v->getPan(); }
             if (auto* mixer = dynamic_cast<TrackMixer*> (folder->getVolumePlugin()))
             { group.splitPan = mixer->splitPan(); group.leftSplitPan = mixer->leftSplit->getCurrentValue(); group.rightSplitPan = mixer->rightSplit->getCurrentValue(); }
@@ -8557,7 +8565,7 @@ Result Session::launchGroupSlot (const String& groupId, int sceneIndex)
     impl->edit->getTransport().ensureContextAllocated();
     const auto boundary = impl->launchBoundary();
     for (auto* track : te::getAudioTracks (*impl->edit))
-        if (track->getParentFolderTrack() == folder) impl->queueTrack (*track, track->getClipSlotList().getClipSlots()[sceneIndex]->getClip(), boundary);
+        if (Impl::inside (*track, *folder)) impl->queueTrack (*track, track->getClipSlotList().getClipSlots()[sceneIndex]->getClip(), boundary);
     if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().play (false);
     recordIfWaiting(); // Launching starts a waiting Record, as the reference's does.
     sendChangeMessage(); return Result::ok();
@@ -8569,7 +8577,7 @@ Result Session::stopGroup (const String& groupId)
     if (! folder) return Result::fail ("Group not found.");
     const auto boundary = impl->launchBoundary();
     for (auto* track : te::getAudioTracks (*impl->edit))
-        if (track->getParentFolderTrack() == folder) impl->queueTrack (*track, nullptr, boundary);
+        if (Impl::inside (*track, *folder)) impl->queueTrack (*track, nullptr, boundary);
     sendChangeMessage(); return Result::ok();
 }
 Result Session::stopAllLauncherClips()
@@ -9386,15 +9394,22 @@ Result Session::groupTracks (const juce::StringArray& ids, String& groupId)
     if (ids.isEmpty()) return Result::fail ("Select at least one track to group.");
     std::set<String> wanted;
     for (const auto& id : ids) if (! wanted.insert (id).second) return Result::fail ("Each track can be grouped once.");
-    // Members keep their visual order regardless of the request order.
-    juce::Array<te::AudioTrack*> members;
-    for (auto* track : te::getAudioTracks (*impl->edit)) if (wanted.contains (track->itemID.toString())) members.add (track);
+    // Members keep their visual order regardless of the request order. They are tracks or groups,
+    // as in the reference; the new group goes where the first one is, inside its group if it is in one.
+    juce::Array<te::Track*> members;
+    for (auto* track : te::getAllTracks (*impl->edit))
+        if (wanted.contains (track->itemID.toString()) && (dynamic_cast<te::AudioTrack*> (track) != nullptr || impl->group (track->itemID.toString()) != nullptr))
+            members.add (track);
     if ((size_t) members.size() != wanted.size()) return Result::fail ("Track not found.");
     for (auto* track : members)
+        if (auto* audio = dynamic_cast<te::AudioTrack*> (track); audio != nullptr && isReturn (*audio)) return Result::fail ("Return tracks cannot be grouped.");
+    // What is inside a chosen group moves with it.
+    members.removeIf ([&members] (te::Track* track)
     {
-        if (isReturn (*track)) return Result::fail ("Return tracks cannot be grouped.");
-        if (track->getParentTrack() != nullptr) return Result::fail ("Grouped tracks cannot be grouped again.");
-    }
+        for (auto* other : members)
+            if (auto* folder = dynamic_cast<te::FolderTrack*> (other); folder != nullptr && other != track && Impl::inside (*track, *folder)) return true;
+        return false;
+    });
     impl->transaction ("Group tracks");
     auto folder = impl->edit->insertNewFolderTrack (te::TrackInsertPoint (*members.getFirst(), true), nullptr, true);
     if (folder == nullptr) return Result::fail ("Could not create the group.");

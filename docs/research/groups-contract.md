@@ -22,4 +22,26 @@ As each of the reference's tracks has one, a group and the Main have device chai
 
 Evidence (`tests/GroupTests.cpp`): a group's Utility at −6 dB plays its members 6 dB down. The Main's adds another 6 dB before its fader, and a switched-off device passes the sound. Instruments, MIDI effects and unknown chains are refused. A Channel EQ moves before the Utility, and one undo puts it back. The chains reopen and play as before, and removal works. The UI suite clicks a group strip and the Main's strip, adds a device to each, returns to a track's chain and undoes both.
 
-Not implemented: nested groups, group sends, moving tracks between groups, presets and racks on group or Main chains, sidechains into group or Main plug-ins, per-clip launch modes through group slots, and any comparison with reference group summing.
+## Nested groups (2026-10-23)
+
+From a static reading of the reference's code (Group Tracks 0x10260d478, its grouping 0x102448fc4, Ungroup 0x102441b7c), groups nest.
+
+- **Grouping.** `groupTracks` takes tracks and groups. The new group goes where the first of them is: inside its group, if it is in one. Grouping a grouped track therefore makes a group inside its group. Tracks and groups inside a chosen group move with it. Return tracks are still refused.
+- **Ungrouping.** It moves a group's tracks and groups into the group around it, or to the top level.
+- **Members.** Launching a group's slot or stopping the group acts on every track inside it, at any depth. The group's fader, activator and solo act on its whole contents.
+- **Snapshot.** `GroupInfo::parentId` names the group around a group. A track's `groupId` names its own group.
+- **Interface.**
+  - The Arrangement shows a header lane for each group above its contents, outermost first. Folding a group hides everything inside it, nested groups' headers included.
+  - The Session view shows each group's column before its contents.
+  - A group lane summarises the clips of every track inside it.
+  - With a group selected (by clicking its header or strip), Group Tracks groups it with the tracks selected besides it, and Ungroup Tracks ungroups it.
+
+Evidence (`tests/GroupTests.cpp`):
+- a grouped track grouped into an inner group, with the same mix and one undo;
+- three levels built by grouping a group with a track, playing the same mix, with the top group's fader moving everything inside;
+- the nesting reopening;
+- ungrouping the middle group moving its contents into the top group, with the mix unchanged, and undo.
+
+The UI suite checks the Session columns and Arrangement header lanes of a nested group, folding the outer group, and ungrouping the selected inner group.
+
+Not implemented: group sends, moving tracks between groups, presets and racks on group or Main chains, sidechains into group or Main plug-ins, per-clip launch modes through group slots, and any comparison with reference group summing.

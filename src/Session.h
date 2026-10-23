@@ -533,7 +533,8 @@ public:
         bool splitPan = false; // As TrackInfo's.
         float leftSplitPan = -1, rightSplitPan = 1;
         bool mute = false, solo = false, folded = false;
-        juce::StringArray memberIds; // Track order.
+        juce::String parentId;       // The group it is inside, if any.
+        juce::StringArray memberIds; // Its own tracks, in order; groups inside it name it as their parent.
         std::vector<PluginInfo> plugins; // Its audio devices, in chain order.
     };
     // A point on the tempo map: the tempo ramps linearly from each point to the next and holds after the last.
@@ -889,8 +890,10 @@ public:
     juce::Result setTrackFrozen (const juce::String& trackId, bool frozen);
     // Flatten replaces a frozen track's clips and devices with one audio clip of its render.
     juce::Result flattenTrack (const juce::String& trackId);
-    // Groups top-level audio/MIDI tracks (not returns) into a new group placed at the first one.
-    juce::Result groupTracks (const juce::StringArray& trackIds, juce::String& groupId);
+    // Groups audio and MIDI tracks and groups (not returns) into a new group, placed where the first
+    // of them is: inside its group, if it is in one, as the reference nests groups. What is inside a
+    // chosen group moves with it. Launching or stopping a group acts on every track inside it.
+    juce::Result groupTracks (const juce::StringArray& trackAndGroupIds, juce::String& groupId);
     juce::Result ungroupTracks (const juce::String& groupId);
     // As renameTrack.
     juce::Result renameGroup (const juce::String& groupId, const juce::String& name);
