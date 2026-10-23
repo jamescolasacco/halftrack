@@ -1341,42 +1341,71 @@ private:
     struct TrackDrop { juce::String groupId, beforeId; int lineY = -1; };
     juce::StringArray draggedTracks;
     std::optional<TrackDrop> trackDrop;
-    // Where dragged headers would land, as the reference places them. Over the upper half of a track
-    // or group they go before it; over the lower half of a group's header, into the group first,
-    // folded or not; over the lower half of a track, after it in its group. Below every lane they go
-    // after the last track. A track's automation and take lanes count as the track; returns are no
-    // place for tracks. Dragged returns land among the returns only, before one or after the last.
+    // The groups a track or group is inside, outermost first.
+    juce::StringArray groupsAround (const juce::String& id) const
+    {
+        juce::String parent;
+        if (const auto* group = groupInfo (id)) parent = group->parentId;
+        else if (const auto t = trackIndex (id); t >= 0) parent = state.tracks[(size_t) t].groupId;
+        juce::StringArray around;
+        for (const auto g : groupPath (parent)) around.add (state.groups[(size_t) g].id);
+        return around;
+    }
+    // Where headers dropped beside a track or group go, as the reference's drop target places them.
+    // Before it: in its group, before it. After a folded group's header: into the group, first. After
+    // anything else: at the next place, in one of the groups that place can be in, from the deepest
+    // one the items either side of it share to the innermost one the item before it is in (an
+    // unfolded group's header is in itself, so what follows it goes in, first). Without a nesting
+    // level picked that is the innermost; a picked group gives the one a level outward of it, or the
+    // outermost if it is not among them. Beside nothing is after the last track. Returns go among
+    // the returns only, and other tracks never there.
+    std::optional<TrackDrop> dropBeside (const juce::String& itemId, bool after, const juce::String& levelRef, bool returns) const
+    {
+        std::vector<Item> order;
+        for (const auto& item : visualOrder()) if ((! item.group && state.tracks[(size_t) item.index].isReturn) == returns) order.push_back (item);
+        const auto idOf = [this] (const Item& item) { return item.group ? state.groups[(size_t) item.index].id : state.tracks[(size_t) item.index].id; };
+        if (itemId.isEmpty()) return TrackDrop {};
+        int at = -1;
+        for (int i = 0; i < (int) order.size(); ++i) if (idOf (order[(size_t) i]) == itemId) at = i;
+        if (at < 0) return std::nullopt;
+        const auto& item = order[(size_t) at];
+        const auto parent = item.group ? state.groups[(size_t) item.index].parentId : state.tracks[(size_t) item.index].groupId;
+        if (! after) return TrackDrop { parent, itemId };
+        const auto* group = item.group ? &state.groups[(size_t) item.index] : nullptr;
+        // An item's id, then the groups around it, innermost first, then the top level.
+        const auto path = [&] (int i)
+        {
+            juce::StringArray chain;
+            if (i < (int) order.size())
+            {
+                chain = groupsAround (idOf (order[(size_t) i]));
+                std::reverse (chain.begin(), chain.end());
+                chain.insert (0, idOf (order[(size_t) i]));
+            }
+            chain.add ({}); // Past the last item the only place is the top level's end.
+            return chain;
+        };
+        const auto next = path (at + 1);
+        if (group != nullptr && group->folded) return TrackDrop { itemId, next.indexOf (itemId) > 0 ? next[0] : juce::String() };
+        // The groups the next place can be in, outermost first.
+        juce::StringArray candidates;
+        auto before = path (at);
+        if (group == nullptr) before.remove (0);
+        for (const auto& g : before) { candidates.insert (0, g); if (next.contains (g)) break; }
+        const auto picked = levelRef.isEmpty() ? candidates.size() - 1 : candidates.indexOf (levelRef);
+        const auto into = candidates[levelRef.isEmpty() ? picked : juce::jmax (0, picked - 1)];
+        // Before what follows there, or at the group's end.
+        const auto inNext = next.indexOf (into);
+        return TrackDrop { into, inNext > 0 ? next[inNext - 1] : juce::String() };
+    }
+    // Where dragged headers would land in the Arrangement, as the reference places them: over the
+    // upper half of a track or group before it, over the lower half after it (see dropBeside). Below
+    // every lane they go after the last track. A track's automation and take lanes count as the track.
     std::optional<TrackDrop> trackDropAt (int y, bool returns = false) const
     {
-        // A lane's track or group, and the group it is in.
-        const auto itemOf = [this] (const Lane& lane) -> std::pair<juce::String, juce::String>
-        {
-            if (lane.group) { const auto& g = state.groups[(size_t) lane.index]; return { g.id, g.parentId }; }
-            const auto& t = state.tracks[(size_t) lane.index]; return { t.id, t.groupId };
-        };
         const auto item = [] (const Lane& lane) { return lane.automation < 0 && lane.take < 0; };
-        const auto returnLane = [this] (const Lane& lane) { return ! lane.group && state.tracks[(size_t) lane.index].isReturn; };
-        const auto within = [this] (const juce::String& group, const juce::String& outer) { return outer.isEmpty() || group == outer || groupInside (group, outer); };
         int returnsY = lanesHeight;
-        for (const auto& lane : lanes) if (item (lane) && returnLane (lane)) { returnsY = lane.y; break; }
-        if (returns)
-        {
-            for (size_t i = 0; i < lanes.size(); ++i)
-            {
-                const auto& lane = lanes[i];
-                if (! item (lane) || lane.height <= 0) continue;
-                auto next = i + 1;
-                while (next < lanes.size() && ! item (lanes[next])) ++next;
-                const int bottom = next < lanes.size() ? lanes[next].y : lanesHeight;
-                if (y >= bottom) continue;
-                if (y < lane.y || ! returnLane (lane)) return std::nullopt;
-                const auto& id = state.tracks[(size_t) lane.index].id;
-                if (y < (lane.y + bottom) / 2) return TrackDrop { {}, id, lane.y };
-                const auto after = next < lanes.size() && returnLane (lanes[next]) ? state.tracks[(size_t) lanes[next].index].id : juce::String();
-                return TrackDrop { {}, after, bottom };
-            }
-            return TrackDrop { {}, {}, lanesHeight };
-        }
+        for (const auto& lane : lanes) if (item (lane) && ! lane.group && state.tracks[(size_t) lane.index].isReturn) { returnsY = lane.y; break; }
         for (size_t i = 0; i < lanes.size(); ++i)
         {
             const auto& lane = lanes[i];
@@ -1385,42 +1414,55 @@ private:
             while (next < lanes.size() && ! item (lanes[next])) ++next;
             const int bottom = next < lanes.size() ? lanes[next].y : lanesHeight;
             if (y >= bottom) continue;
-            if (y < lane.y || returnLane (lane)) return std::nullopt;
-            const auto [id, parent] = itemOf (lane);
-            if (y < (lane.y + bottom) / 2) return TrackDrop { parent, id, lane.y };
-            if (lane.group)
-            {
-                const auto first = next < lanes.size() && itemOf (lanes[next]).second == id ? itemOf (lanes[next]).first : juce::String();
-                return TrackDrop { id, first, bottom };
-            }
-            // After a track: before the next item in its group, or at the group's end.
-            for (auto k = next; k < lanes.size(); ++k)
-            {
-                if (! item (lanes[k])) continue;
-                const auto [nextId, nextParent] = itemOf (lanes[k]);
-                if (nextParent == parent) return TrackDrop { parent, nextId, bottom };
-                if (! within (nextParent, parent)) break;
-            }
-            return TrackDrop { parent, {}, bottom };
+            if (y < lane.y) return std::nullopt;
+            const bool after = y >= (lane.y + bottom) / 2;
+            auto drop = dropBeside (lane.group ? state.groups[(size_t) lane.index].id : state.tracks[(size_t) lane.index].id, after, {}, returns);
+            if (drop) drop->lineY = after ? bottom : lane.y;
+            return drop;
         }
-        return TrackDrop { {}, {}, returnsY };
+        return TrackDrop { {}, {}, returns ? lanesHeight : returnsY };
     }
-    void dragTracks (const juce::String& id, int y)
+    // Starts or continues dragging headers: the item, or the selected tracks when it is one of them.
+    // Whether they are returns, or nothing for a mix of returns and other tracks, which land nowhere.
+    std::optional<bool> draggedReturns (const juce::String& id)
     {
         if (draggedTracks.isEmpty())
         {
             const auto selected = selectedTrackIds();
             draggedTracks = selected.contains (id) ? selected : juce::StringArray { id };
         }
-        // Returns land among the returns, and a mix of returns and other tracks nowhere.
         int returns = 0;
         for (const auto& t : state.tracks) if (t.isReturn && draggedTracks.contains (t.id)) ++returns;
-        if (returns > 0 && returns < draggedTracks.size()) { trackDrop.reset(); canvas.repaint(); return; }
-        // Nowhere inside a group being dragged.
-        auto drop = trackDropAt (y, returns > 0);
+        if (returns > 0 && returns < draggedTracks.size()) return std::nullopt;
+        return returns > 0;
+    }
+    // Aims the dragged headers, though nowhere inside a group being dragged.
+    void aimTrackDrop (std::optional<TrackDrop> drop)
+    {
         for (const auto& dragged : draggedTracks)
             if (drop && (drop->groupId == dragged || groupInside (drop->groupId, dragged))) drop.reset();
-        trackDrop = drop; canvas.repaint();
+        trackDrop = drop;
+    }
+    void dragTracks (const juce::String& id, int y)
+    {
+        const auto returns = draggedReturns (id);
+        aimTrackDrop (returns ? trackDropAt (y, *returns) : std::nullopt); canvas.repaint();
+    }
+    // Pressing a track's header: with Shift the track joins or leaves the selected tracks. Where a
+    // drag can start, pressing a track selected with others keeps them all for the drag, and the
+    // result says a click without one then selects the track alone. Otherwise it is selected alone.
+    bool pressTrackHeader (int index, bool shift, bool draggable)
+    {
+        const auto& id = state.tracks[(size_t) index].id;
+        const bool keep = draggable && ! multiSelectedTracks.empty() && (selectedTrack == index || multiSelectedTracks.contains (id));
+        if (shift || keep)
+        {
+            if (const auto* current = currentTrack(); current != nullptr && current->id != id) multiSelectedTracks.insert (current->id);
+            if (shift && ! multiSelectedTracks.erase (id)) multiSelectedTracks.insert (id);
+        }
+        else multiSelectedTracks.clear();
+        selectTrack (index);
+        return keep && ! shift;
     }
     void dropTracks()
     {
@@ -2390,7 +2432,9 @@ private:
         void mouseUp (const juce::MouseEvent&) override
         {
             heightAtDown = 0; dragArmed = false;
+            const bool collapse = std::exchange (collapseOnUp, false);
             if (std::exchange (headerDrag, false)) owner.dropTracks();
+            else if (collapse) { owner.multiSelectedTracks.clear(); owner.selectTrack (index); }
         }
         // Double-clicking a mixer control resets it, and the controls linked to it (see Session::resetTrackControl).
         void mouseDoubleClick (const juce::MouseEvent& e) override
@@ -2420,13 +2464,8 @@ private:
                 if (const auto* current = owner.currentTrack(); current != nullptr && current->id != trackId) owner.multiSelectedTracks.insert (current->id);
                 owner.selectTrack (index); return;
             }
-            if (! columnLayout && e.mods.isShiftDown() && ! e.mods.isPopupMenu())
-            {
-                if (const auto* current = owner.currentTrack(); current != nullptr && current->id != trackId) owner.multiSelectedTracks.insert (current->id);
-                if (! owner.multiSelectedTracks.erase (trackId)) owner.multiSelectedTracks.insert (trackId);
-            }
-            else if (! e.mods.isPopupMenu()) owner.multiSelectedTracks.clear();
-            owner.selectTrack (index);
+            if (! e.mods.isPopupMenu()) collapseOnUp = owner.pressTrackHeader (index, ! columnLayout && e.mods.isShiftDown(), dragArmed);
+            else owner.selectTrack (index);
             // The pan controls' menu switches the pan mode, as the reference's does.
             if (e.mods.isPopupMenu() && (within (pan) || within (leftSplit) || within (rightSplit))) { owner.panModeMenu (trackId, ! splitPan); return; }
             if (e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name))
@@ -2436,7 +2475,7 @@ private:
         Impl& owner;
         int index;
         int heightAtDown = 0;
-        bool folded = false, dragArmed = false, headerDrag = false;
+        bool folded = false, dragArmed = false, headerDrag = false, collapseOnUp = false;
         juce::String trackId;
         juce::Colour colour;
         float peakL = 0, peakR = 0;
@@ -4390,6 +4429,9 @@ private:
                 g.setColour (ink); g.drawRect (slotBounds (dropCell.first, dropCell.second).reduced (1), 2);
                 g.restoreState();
             }
+            // Where dragged headers would land: a line down the columns' edge.
+            if (headerDragging && owner.trackDrop && dropLineX >= 0)
+            { g.setColour (orange); g.fillRect (juce::jlimit (0, juce::jmax (0, tracksWidth() - 2), dropLineX - 1), 0, 2, grid.getBottom() + stopHeight); }
         }
         // A group column: header with disclosure triangle, slots that launch the members' row, and a stop button.
         void paintGroupColumn (juce::Graphics& g, int index, int x)
@@ -4468,11 +4510,16 @@ private:
         {
             if (owner.session.isExporting()) return;
             grabKeyboardFocus();
+            headerPressed.clear(); collapseHeadersOnUp = false;
             if (const int column = columnAt (event.x); column >= 0 && columns[(size_t) column].group >= 0)
             {
                 const auto& group = owner.state.groups[(size_t) columns[(size_t) column].group];
                 const auto local = event.x - columnX (column);
-                if (event.y < headerHeight) { if (local < 20) owner.report (owner.session.setGroupFolded (group.id, ! group.folded)); }
+                if (event.y < headerHeight)
+                {
+                    if (local < 20) owner.report (owner.session.setGroupFolded (group.id, ! group.folded));
+                    else if (! event.mods.isPopupMenu()) { headerPressed = group.id; owner.selectChain (group.id); } // Its title selects the group, and drags it.
+                }
                 else if (event.y < gridArea().getBottom())
                 {
                     const int scene = (int) ((event.y - gridTop) / (double) rowHeight + offsetScene);
@@ -4524,13 +4571,61 @@ private:
             const auto track = column >= 0 ? columns[(size_t) column].track : -1;
             if (event.x < tracksWidth() && track >= 0 && track < (int) owner.state.tracks.size())
             {
-                owner.selectTrack (track);
+                // A track's title selects it, as an Arrangement header does, and drags it.
+                if (event.y < headerHeight && ! event.mods.isPopupMenu())
+                {
+                    headerPressed = owner.state.tracks[(size_t) track].id;
+                    collapseHeadersOnUp = owner.pressTrackHeader (track, event.mods.isShiftDown(), true);
+                }
+                else owner.selectTrack (track);
                 if (! owner.state.tracks[(size_t) track].isReturn && event.y >= gridArea().getBottom() && event.y < gridArea().getBottom() + stopHeight) { owner.report (owner.session.stopLauncherTrack (track)); owner.refresh(); }
                 repaint();
             }
         }
+        // Where dragged headers would land over the column titles, as the reference's Session places
+        // them: over a column's left half before its track or group, over its right half after it (see
+        // Impl::dropBeside), the height in the title picking the nesting level: a group around the
+        // track for every 6 pixels from its top, outermost first. Returns land among the returns, or
+        // over the Main column's left half after the last of them. Past the Main column is after the
+        // last track. The line showing where goes at the column edge, as lineX.
+        std::optional<Impl::TrackDrop> columnDropAt (juce::Point<int> at, bool returns, int& lineX) const
+        {
+            lineX = -1;
+            if (at.y < 0 || at.y >= headerHeight) return std::nullopt;
+            const int column = columnAt (at.x);
+            if (column < 0)
+            {
+                const bool onMain = at.x >= masterX() && at.x < masterX() + sceneWidth;
+                if (at.x < masterX() || (onMain && (! returns || at.x >= masterX() + sceneWidth / 2))) return std::nullopt;
+                // After the last of the tracks or returns dragged.
+                int last = -1;
+                for (int c = 0; c < (int) columns.size(); ++c)
+                    if (columns[(size_t) c].group >= 0 ? ! returns : owner.state.tracks[(size_t) columns[(size_t) c].track].isReturn == returns) last = c;
+                lineX = last >= 0 ? columnX (last) + columnWidth : 0;
+                return Impl::TrackDrop {};
+            }
+            const auto& shown = columns[(size_t) column];
+            const auto id = shown.group >= 0 ? owner.state.groups[(size_t) shown.group].id : owner.state.tracks[(size_t) shown.track].id;
+            const int left = columnX (column);
+            const bool after = at.x >= left + columnWidth / 2;
+            juce::String level;
+            if (const auto around = owner.groupsAround (id); ! returns && at.y / 6 < around.size()) level = around[at.y / 6];
+            auto drop = owner.dropBeside (id, after, level, returns);
+            if (drop) lineX = after ? left + columnWidth : left;
+            return drop;
+        }
         void mouseDrag (const juce::MouseEvent& event) override
         {
+            if (headerPressed.isNotEmpty())
+            {
+                if (! headerDragging && event.getDistanceFromDragStart() <= 6) return;
+                headerDragging = true;
+                int line = -1;
+                const auto returns = owner.draggedReturns (headerPressed);
+                owner.aimTrackDrop (returns ? columnDropAt (event.getPosition(), *returns, line) : std::nullopt);
+                dropLineX = owner.trackDrop ? line : -1;
+                repaint(); return;
+            }
             if (rubberFrom.first >= 0)
             {
                 if (const auto cell = cellAt (event.getPosition()); cell.first >= 0)
@@ -4549,6 +4644,14 @@ private:
         }
         void mouseUp (const juce::MouseEvent& event) override
         {
+            if (headerPressed.isNotEmpty())
+            {
+                headerPressed.clear(); dropLineX = -1;
+                const bool collapse = std::exchange (collapseHeadersOnUp, false);
+                if (std::exchange (headerDragging, false)) owner.dropTracks();
+                else if (collapse) { owner.multiSelectedTracks.clear(); owner.selectTrack (owner.selectedTrack); }
+                repaint(); return;
+            }
             releasePressed (pressedCell);
             rubberFrom = { -1, -1 };
             // A click without a drag on a slot of a group selects it alone, or with Cmd/Ctrl leaves it out.
@@ -4691,6 +4794,11 @@ private:
         // A clip dragged from its slot, and the slot it would drop on.
         std::pair<int, int> dragFrom { -1, -1 }, dropCell { -1, -1 };
         bool dragging = false;
+        // A column's title pressed, which a drag moves with the tracks selected with it, and the line
+        // showing where they would land.
+        juce::String headerPressed;
+        bool headerDragging = false, collapseHeadersOnUp = false;
+        int dropLineX = -1;
         void releasePressed (std::pair<int, int>& cell)
         {
             if (cell.first < 0) return;
@@ -16444,6 +16552,32 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tracks[(size_t) count - 2].id == second && state.tracks[(size_t) count - 1].id == first, "dropping it there puts it first among the returns");
         session.undo(); refresh();
         check (state.tracks[(size_t) count - 2].id == first, "one undo puts it back");
+        // In the Session view a return's title drags it the same way, or over the Main column's left
+        // half after the last return.
+        showSessionView(); selectTrack (count - 1); launcher.scrollSelectionIntoView(); refresh();
+        const int firstColumn = launcher.columnOf (count - 2), secondColumn = launcher.columnOf (count - 1);
+        check (firstColumn > 0 && secondColumn == firstColumn + 1 && launcher.columnX (firstColumn - 1) >= 0, "the returns' columns follow the tracks', in view");
+        const juce::Point<int> pressed { launcher.columnX (secondColumn) + 60, 10 };
+        const auto titleEvent = [&] (juce::Point<int> at, bool dragged)
+        {
+            return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at.toFloat(), juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                     &launcher, &launcher, now, pressed.toFloat(), now, 1, dragged);
+        };
+        launcher.mouseDown (titleEvent (pressed, false));
+        launcher.mouseDrag (titleEvent ({ launcher.columnX (firstColumn) + 20, 10 }, true));
+        check (trackDrop && trackDrop->groupId.isEmpty() && trackDrop->beforeId == first, "over the first return's left half it would go before it");
+        launcher.mouseDrag (titleEvent ({ launcher.columnX (firstColumn - 1) + 20, 10 }, true));
+        check (! trackDrop, "over an ordinary track's title there is nowhere to drop a return");
+        launcher.mouseDrag (titleEvent ({ launcher.masterX() + LauncherGrid::sceneWidth - 20, 10 }, true));
+        check (! trackDrop, "nor over the Main column's right half");
+        launcher.mouseDrag (titleEvent ({ launcher.masterX() + 20, 10 }, true));
+        check (trackDrop && trackDrop->groupId.isEmpty() && trackDrop->beforeId.isEmpty(), "over its left half it would go after the last return");
+        launcher.mouseDrag (titleEvent ({ launcher.columnX (firstColumn) + 20, 10 }, true));
+        launcher.mouseUp (titleEvent ({ launcher.columnX (firstColumn) + 20, 10 }, true)); refresh();
+        check (state.tracks[(size_t) count - 2].id == second && state.tracks[(size_t) count - 1].id == first, "dropping it on the first return's left half puts it first");
+        session.undo(); refresh();
+        check (state.tracks[(size_t) count - 2].id == first, "and one undo puts it back");
+        showArrangementView();
     }
     check(session.newProject().wasOk()&&session.importAudio(audioFixture,0).wasOk()&&session.addMidiTrack("Activation").wasOk(),"prepare clip activation controls");refresh();
     const auto activationAudio=state.tracks[0].clips[0].id,activationTrack=state.tracks[2].id;
@@ -16710,6 +16844,80 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                        "dropping it there moves the inner group, with its track, after the second track");
                 session.undo(); refresh();
                 check (state.tracks[0].id == first && state.tracks[0].groupId == inner, "one undo puts the group back");
+                // Pressing a track selected with others keeps them for the drag, and a click without one
+                // selects it alone.
+                const auto shiftClick = [&]
+                {
+                    const auto down = juce::Point<float> (10.0f, 8.0f);
+                    return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), down, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier),
+                                             1.0f, 0, 0, 0, 0, label, label, now, down, now, 1, false);
+                };
+                check (grab (laneY (indexOf (first)) + 10, "Track name"), "press the first track's name"); release (laneY (indexOf (first)) + 10);
+                label = canvas.getComponentAt (canvas.timelineWidth() + 30, laneY (indexOf (second)) + 10);
+                label->getParentComponent()->mouseDown (shiftClick()); label->getParentComponent()->mouseUp (shiftClick()); refresh();
+                check (selectedTrackIds() == juce::StringArray { first, second }, "Shift-clicking the second track's name selects both");
+                check (grab (laneY (indexOf (first)) + 10, "Track name"), "press the first track's name again");
+                move (lanesHeight + 20);
+                check (draggedTracks == juce::StringArray { first, second } && trackDrop && trackDrop->groupId.isEmpty() && trackDrop->beforeId.isEmpty(), "dragging it drags both");
+                release (lanesHeight + 20);
+                check (state.tracks[0].id == first && state.tracks[1].id == second && state.tracks[0].groupId.isEmpty() && state.tracks[1].groupId.isEmpty(),
+                       "dropping them below every lane moves both out of the groups, to the end");
+                session.undo(); refresh();
+                check (state.tracks[0].groupId == inner && state.tracks[1].groupId == group, "one undo puts both back");
+                check (grab (laneY (indexOf (first)) + 10, "Track name"), "press the first track's name, still selected with the second");
+                release (laneY (indexOf (first)) + 10);
+                check (multiSelectedTracks.empty() && selectedTrackIds() == juce::StringArray { first }, "releasing without a drag selects it alone");
+                {
+                    // In the Session view a column's title drags the same way, sideways: over a column's
+                    // left half before it, over its right half after it, the height in the title
+                    // picking the nesting level, 6 pixels a level from the top, outermost first.
+                    showSessionView(); refresh();
+                    check (launcher.groupColumnOf (outerIndex) == 0 && launcher.groupColumnOf (innerIndex) == 1 && launcher.columnOf (0) == 2 && launcher.columnOf (1) == 3,
+                           "the outer group's column, the inner's, then the first and second tracks'");
+                    juce::Point<int> pressed;
+                    const auto titleEvent = [&] (juce::Point<int> at, bool dragged)
+                    {
+                        return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at.toFloat(), juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                                 &launcher, &launcher, now, pressed.toFloat(), now, 1, dragged);
+                    };
+                    const auto title = [&] (int column, int x, int y) { return juce::Point<int> (launcher.columnX (column) + x, y); };
+                    const auto press = [&] (int column) { pressed = title (column, 60, 10); launcher.mouseDown (titleEvent (pressed, false)); refresh(); };
+                    const auto over = [&] (juce::Point<int> at) { launcher.mouseDrag (titleEvent (at, true)); };
+                    const auto drop = [&] (juce::Point<int> at) { launcher.mouseUp (titleEvent (at, true)); refresh(); };
+                    const int width = LauncherGrid::columnWidth;
+                    press (3);
+                    check (selectedTrack == 1, "pressing the second track's title selects it");
+                    over (title (2, 20, 15));
+                    check (trackDrop && trackDrop->groupId == inner && trackDrop->beforeId == first, "over the first track's left half it would go before it, in the inner group");
+                    const auto line = launcher.createComponentSnapshot ({ launcher.columnX (2) - 1, 30, 2, 1 }, true);
+                    check (line.getPixelAt (0, 0) == orange.get() && line.getPixelAt (1, 0) == orange.get(), "a line down the columns' edge shows where");
+                    over (title (2, width - 20, 15));
+                    check (trackDrop && trackDrop->groupId == inner && trackDrop->beforeId.isEmpty(), "low in the title of its right half it would go after it, at the inner group's end");
+                    over (title (2, width - 20, 3));
+                    check (trackDrop && trackDrop->groupId == group && trackDrop->beforeId == second, "near the top, picking the outer group, it would go after the inner group, before the second track");
+                    over (title (3, width - 20, 9));
+                    check (trackDrop && trackDrop->groupId == group && trackDrop->beforeId.isEmpty(), "past the levels the second track is in, after it at the outer group's end");
+                    over (title (3, width - 20, 3));
+                    check (trackDrop && trackDrop->groupId.isEmpty() && trackDrop->beforeId.isEmpty(), "in the top 6 pixels of its own right half it would leave the outer group, for the end");
+                    over (title (3, width - 20, 40));
+                    check (! trackDrop, "below the titles there is nowhere to drop");
+                    over (title (3, width - 20, 3)); drop (title (3, width - 20, 3));
+                    check (state.tracks[1].id == second && state.tracks[1].groupId.isEmpty() && state.tracks[0].groupId == inner, "dropping it there takes it out of the groups");
+                    session.undo(); refresh();
+                    check (state.tracks[1].groupId == group, "one undo puts it back");
+                    press (1);
+                    check (selectedChain == inner, "pressing the inner group's title selects the group");
+                    over (title (1, width - 20, 15));
+                    check (! trackDrop, "over its own right half there is nowhere to drop");
+                    over (title (3, width - 20, 15)); drop (title (3, width - 20, 15));
+                    const auto groupAt = [&] (const juce::String& id) { for (int g = 0; g < (int) state.groups.size(); ++g) if (state.groups[(size_t) g].id == id) return g; return -1; };
+                    check (state.tracks[0].id == second && state.tracks[1].id == first && state.tracks[1].groupId == inner && state.tracks[0].groupId == group
+                               && launcher.groupColumnOf (groupAt (inner)) == 2,
+                           "dragging it after the second track moves the inner group, with its track, there");
+                    session.undo(); refresh();
+                    check (state.tracks[0].id == first && launcher.groupColumnOf (groupAt (inner)) == 1, "one undo puts the group back");
+                    showArrangementView(); refresh();
+                }
                 // An emptied group keeps its header and column, as the reference's does.
                 check (session.moveTracks ({ first }, {}, {}).wasOk(), "move the first track out, emptying the inner group"); refresh();
                 const auto innerAt = [&] { for (int g = 0; g < (int) state.groups.size(); ++g) if (state.groups[(size_t) g].id == inner) return g; return -1; }();

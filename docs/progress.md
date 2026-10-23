@@ -2305,3 +2305,7 @@ Before, the parameter stayed where the automation last put it. Renders heard eit
 ## Tempo nudge — 2026-10-23
 
 Engine and UI areas. The Control Bar has the reference's momentary Nudge Down and Nudge Up buttons, after a static reading of its code. While one is held during playback, the tempo ramps away from the song tempo by up to 70% over six seconds, in 16th-note steps. The song keeps the beats it gained. The song tempo, the project and its history stay unchanged, and nothing happens while stopped or under external sync. Saving, rendering, undo and tempo edits let the nudge go first. Measured in the tempo suite through the synthetic device, and checked in the UI suite ([contract](research/tempo-nudge-contract.md)).
+
+## Session column drags — 2026-10-23
+
+UI area. After a static reading of the reference's Session header row, a track's or group's column title drags it sideways: before a column over its left half, after it over its right half. The height in the title picks the nesting level, 6 pixels a level from the top. Returns drag among the returns, or after the last over the Main column's left half. Both views now place drops with one rule taken from the reference's drop target. Pressing a track selected with others keeps them for the drag in either view; before, the press dropped the others, so only one track could be dragged. Checked in the UI suite ([contract](research/groups-contract.md#moving-tracks-2026-10-23)).
