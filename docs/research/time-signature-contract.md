@@ -89,7 +89,8 @@ The metronome suite matches every click and accent across a 3/4 marker cutting a
   - Bar numbers stand at the bars' starts through the markers, and a fragmentary bar is crosshatched.
   - The canvas's grid lines and Arrangement snapping run from each bar's start, so a 1/4 grid restarts at a marker and a grid of a bar or more falls on bar starts.
   - The loop brace's drags and its Shift-drag definition snap the same way.
-- **Positions.** The Control Bar's position and loop start read bars.beats.sixteenths through the markers, beats in each bar's meter. Typed positions read back the same way. The meter field shows and changes the meter at the playhead.
+- **Positions.** The Control Bar's position and loop start read bars.beats.sixteenths through the markers, beats in each bar's meter. Typed positions read back the same way.
+- **Meter field.** The Control Bar's meter field shows and changes the meter at the playhead. While the Arrangement has time signature changes, a red automation LED lights in its upper left corner, as the reference's fields show one.
 
 The UI suite inserts a 3/4 marker from the Create menu and types its meter. It then checks:
 - the lane appearing;
@@ -116,7 +117,7 @@ Evidence (`tests/TimeSignatureTests.cpp`):
 
 The UI suite completes a fragmentary bar from its menu.
 
-Not yet: the Control Bar's automation LED, importing a MIDI file's meters, clip editors' rulers (which keep the meter at the playhead), and scene meters with markers present.
+Not yet: importing a MIDI file's meters, clip editors' rulers (which keep the meter at the playhead), and scene meters with markers present.
 
 ## Not implemented
 

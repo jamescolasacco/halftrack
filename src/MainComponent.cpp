@@ -63,6 +63,22 @@ juce::Font font (float size = 12.0f, bool bold = false)
     return juce::Font (juce::FontOptions (size, bold ? juce::Font::bold : juce::Font::plain));
 }
 
+// A Control Bar field that shows an automation LED in its upper left corner while what it edits
+// changes along the Arrangement, as the reference's do.
+class AutomatedField final : public juce::Label
+{
+public:
+    void setAutomated (bool on) { if (on != automated) { automated = on; repaint(); } }
+    bool isAutomated() const noexcept { return automated; }
+    void paint (juce::Graphics& g) override
+    {
+        juce::Label::paint (g);
+        if (automated) { g.setColour (red); g.fillEllipse (2.0f, 2.0f, 4.0f, 4.0f); }
+    }
+private:
+    bool automated = false;
+};
+
 // Gives a component its children's mouse events too, as they reach each child. JUCE gives a component
 // that listens to itself its own events twice, directly and again as a listener, so this passes on
 // the children's only.
@@ -8499,7 +8515,8 @@ private:
                      sessionTab { "Session" }, arrangementTab { "Arrange" }, pianoTab { "Clip" }, importButton { "Import Audio" },
                      filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" }, previewButton { "Preview" },
                      zoomIn { "+" }, zoomOut { "-" }, fitButton { "Fit" };
-    juce::Label tempo, meterLabel, positionLabel, projectLabel, loopStartLabel, loopLengthLabel;
+    juce::Label tempo, positionLabel, projectLabel, loopStartLabel, loopLengthLabel;
+    AutomatedField meterLabel; // Lit while the Arrangement has time signature changes.
     juce::ComboBox quantisation;
     juce::TextButton backToArrangement { "Back to Arrangement" };
     juce::Rectangle<int> meterBounds, cpuBounds;
@@ -9823,6 +9840,7 @@ private:
         tempo.setTooltip (state.tempoMap.size() <= 1 ? "Tempo: 20–999 beats per minute. Double-click to edit."
                                                     : "The tempo is automated; this is the tempo at the playhead. Edit it in Automation > Main > Song Tempo.");
         if (! meterLabel.isBeingEdited()) meterLabel.setText (juce::String (state.timeSignature.numerator) + " / " + juce::String (state.timeSignature.denominator), juce::dontSendNotification);
+        meterLabel.setAutomated (meterLaneShown());
         const auto beatPosition = beatsAt (juce::jmax (0.0, state.position));
         positionLabel.setText (state.countInBeatsRemaining>0
             ? "Count in " + juce::String((int)std::ceil(state.countInBeatsRemaining))
@@ -16238,6 +16256,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         juce::MessageManager::getInstance()->runDispatchLoopUntil (50); refresh();
         check (state.timeSignatures[1].meter == Session::TimeSignature { 3, 4 } && ruler.getHeight() == rulerHeight + meterLaneHeight,
                "typing 3/4 sets its meter, and the ruler grows a lane for the markers");
+        check (meterLabel.isAutomated() && meterLabel.getText() == "3 / 4", "the Control Bar's meter field lights its automation LED and shows 3/4 at the insert marker");
         check (formatPosition (7) == "3. 2. 1" && formatPosition (5) == "2. 2. 1" && parsePosition ("3.2.1") == 7.0,
                "positions count on through the fragmentary second bar, then in 3/4 from the marker");
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
