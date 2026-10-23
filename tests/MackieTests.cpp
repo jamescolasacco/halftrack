@@ -89,6 +89,8 @@ int runMackieTests (const juce::File&)
         fromHalftrack->start();
         Session s (false, makeSyntheticTestDeviceType(), prefix);
         const auto settle = [&] (int ms = 300) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); };
+        // Waits for a result to arrive through the virtual ports, up to three seconds under load.
+        const auto settleUntil = [&] (const std::function<bool()>& done) { for (int waited = 0; waited < 3000 && ! done(); waited += 20) settle (20); };
         const auto send = [&] (const juce::MidiMessage& m) { toHalftrack->sendMessageNow (m); };
         for (int i = 0; i < 50 && s.midiInputPorts().isEmpty(); ++i) settle (20); // The system lists a new port a moment later.
         check (s.midiInputPorts() == juce::StringArray { prefix + " Out" }, "the Session sees only the test's surface port among MIDI inputs (" + s.midiInputPorts().joinIntoString (", ") + ")");
@@ -113,6 +115,7 @@ int runMackieTests (const juce::File&)
         for (const float p : { minusSix + .1f, minusSix + .05f, minusSix }) send (mackie::faderPosition (0, p));
         send (juce::MidiMessage::noteOn (1, 104, (juce::uint8) 0));
         settle();
+        settleUntil ([&] { return std::abs (s.snapshot().tracks[0].gainDb + 6) < .05f; });
         check (std::abs (s.snapshot().tracks[0].gainDb + 6) < .05f, "track 1's fader sets its volume to -6 dB (" + juce::String (s.snapshot().tracks[0].gainDb, 2) + ")");
         s.undo(); settle (100);
         check (std::abs (s.snapshot().tracks[0].gainDb) < .05f, "one undo restores 0 dB after the touched moves");
