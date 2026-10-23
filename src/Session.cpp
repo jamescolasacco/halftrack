@@ -3366,6 +3366,32 @@ struct Session::Impl
         });
         return result;
     }
+    // What grouping these would put in the new group, in visual order, or why they cannot be grouped.
+    // They are tracks or groups, as in the reference, and what is inside a chosen group moves with it.
+    Result groupable (const juce::StringArray& ids, juce::Array<te::Track*>& members) const
+    {
+        members.clear();
+        if (ids.isEmpty()) return Result::fail ("Select at least one track to group.");
+        std::set<String> wanted;
+        for (const auto& id : ids) if (! wanted.insert (id).second) return Result::fail ("Each track can be grouped once.");
+        for (auto* track : te::getAllTracks (*edit))
+            if (wanted.contains (track->itemID.toString()) && (dynamic_cast<te::AudioTrack*> (track) != nullptr || group (track->itemID.toString()) != nullptr))
+                members.add (track);
+        if ((size_t) members.size() != wanted.size()) return Result::fail ("Track not found.");
+        for (auto* track : members)
+            if (auto* audio = dynamic_cast<te::AudioTrack*> (track); audio != nullptr && isReturn (*audio)) return Result::fail ("Return tracks cannot be grouped.");
+        const auto all = members;
+        members.removeIf ([&all] (te::Track* track)
+        {
+            for (auto* other : all)
+                if (auto* folder = dynamic_cast<te::FolderTrack*> (other); folder != nullptr && other != track && inside (*track, *folder)) return true;
+            return false;
+        });
+        // As in the reference, grouping may empty only the group the new one goes into.
+        if (emptiedGroup (members, members.getFirst()->getParentFolderTrack()) != nullptr)
+            return Result::fail ("Grouping these would leave another group empty.");
+        return Result::ok();
+    }
     // A group, other than `keep`, that grouping these would leave empty, as the reference's Group Tracks never does.
     te::FolderTrack* emptiedGroup (const juce::Array<te::Track*>& moving, const te::FolderTrack* keep) const
     {
@@ -9427,32 +9453,17 @@ Result Session::unlinkTracks (const juce::StringArray& ids)
     impl->endSingleLinks (left);
     impl->changed(); return Result::ok();
 }
+bool Session::canGroupTracks (const juce::StringArray& ids) const
+{
+    juce::Array<te::Track*> members;
+    return impl->groupable (ids, members).wasOk();
+}
 Result Session::groupTracks (const juce::StringArray& ids, String& groupId)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before grouping tracks.");
-    if (ids.isEmpty()) return Result::fail ("Select at least one track to group.");
-    std::set<String> wanted;
-    for (const auto& id : ids) if (! wanted.insert (id).second) return Result::fail ("Each track can be grouped once.");
-    // Members keep their visual order regardless of the request order. They are tracks or groups,
-    // as in the reference; the new group goes where the first one is, inside its group if it is in one.
     juce::Array<te::Track*> members;
-    for (auto* track : te::getAllTracks (*impl->edit))
-        if (wanted.contains (track->itemID.toString()) && (dynamic_cast<te::AudioTrack*> (track) != nullptr || impl->group (track->itemID.toString()) != nullptr))
-            members.add (track);
-    if ((size_t) members.size() != wanted.size()) return Result::fail ("Track not found.");
-    for (auto* track : members)
-        if (auto* audio = dynamic_cast<te::AudioTrack*> (track); audio != nullptr && isReturn (*audio)) return Result::fail ("Return tracks cannot be grouped.");
-    // What is inside a chosen group moves with it.
-    members.removeIf ([&members] (te::Track* track)
-    {
-        for (auto* other : members)
-            if (auto* folder = dynamic_cast<te::FolderTrack*> (other); folder != nullptr && other != track && Impl::inside (*track, *folder)) return true;
-        return false;
-    });
-    // As in the reference, grouping may empty only the group the new one goes into.
-    if (impl->emptiedGroup (members, members.getFirst()->getParentFolderTrack()) != nullptr)
-        return Result::fail ("Grouping these would leave another group empty.");
+    if (auto result = impl->groupable (ids, members); result.failed()) return result;
     impl->transaction ("Group tracks");
     auto folder = impl->edit->insertNewFolderTrack (te::TrackInsertPoint (*members.getFirst(), true), nullptr, true);
     if (folder == nullptr) return Result::fail ("Could not create the group.");

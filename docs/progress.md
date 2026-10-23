@@ -2241,3 +2241,7 @@ Engine and UI areas. These follow a static reading of the reference's Delete and
 - **Display order.** The stem export and the export window list groups in display order: a group holding only a group now has its stem.
 
 Measured in the groups and stems suites, and checked in the UI suite ([contract](research/groups-contract.md#deleting-2026-10-23)).
+
+## Group menu rules — 2026-10-23
+
+Engine and UI areas. The Create menu now enables Group Tracks and Ungroup Tracks by the reference's rules. Group Tracks is enabled whenever `Session::canGroupTracks` allows the selection, a grouped track included, since grouping it makes a group inside. Ungroup Tracks is enabled only with a group selected. Checked in the groups and UI suites ([contract](research/groups-contract.md#nested-groups-2026-10-23)).

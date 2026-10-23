@@ -1450,14 +1450,18 @@ private:
         for (const auto& lane : lanes) if (y >= lane.y && y < lane.y + lane.height) return lane.group || lane.automation >= 0 || lane.take >= 0 ? -1 : lane.index;
         return lanes.empty() && y / trackHeight < (int) state.tracks.size() ? y / trackHeight : -1;
     }
-    void groupSelectedTracks()
+    // What Group Tracks groups: a selected group, with the tracks selected besides it, or the selected tracks.
+    juce::StringArray groupingSelection() const
     {
-        // A selected group groups too, with the tracks selected besides it.
         juce::StringArray ids;
         if (groupInfo (selectedChain) != nullptr) ids.add (selectedChain);
         for (const auto& track : state.tracks)
             if (multiSelectedTracks.contains (track.id) || (ids.isEmpty() && currentTrack() != nullptr && track.id == currentTrack()->id)) ids.add (track.id);
-        juce::String group; report (session.groupTracks (ids, group)); multiSelectedTracks.clear(); refresh();
+        return ids;
+    }
+    void groupSelectedTracks()
+    {
+        juce::String group; report (session.groupTracks (groupingSelection(), group)); multiSelectedTracks.clear(); refresh();
         if (group.isNotEmpty()) selectChain (group);
     }
     // Linked-track editing. The selected tracks, then Link Tracks: with Cmd/Ctrl held, the selection
@@ -1584,11 +1588,11 @@ private:
         return std::abs (clip.start - chosen.start) < .001 && std::abs (clip.start + clip.length - chosen.start - chosen.length) < .001;
     }
     juce::String hoveredLink; // The link whose indicator is under the pointer; its tracks are outlined.
+    // Ungroup Tracks acts on a selected group, as the reference's is enabled only with one selected.
     void ungroupSelectedTrack()
     {
-        // A selected group ungroups; otherwise the selected track's group does.
-        if (groupInfo (selectedChain) != nullptr) { report (session.ungroupTracks (selectedChain)); selectedChain.clear(); }
-        else if (const auto* track = currentTrack(); track != nullptr && track->groupId.isNotEmpty()) report (session.ungroupTracks (track->groupId));
+        if (groupInfo (selectedChain) == nullptr) return;
+        report (session.ungroupTracks (selectedChain)); selectedChain.clear();
         refresh();
     }
     static constexpr int minimumClipViewHeight = 340, dividerHeight = 5;
@@ -9885,8 +9889,9 @@ private:
             popup.addItem (36, "Move Selected Track Earlier", canMoveTrack (selectedTrack, -1));
             popup.addItem (37, "Move Selected Track Later", canMoveTrack (selectedTrack, 1));
             popup.addSeparator();
-            popup.addItem (72, "Group Tracks", currentTrack() != nullptr && ! currentTrack()->isReturn && currentTrack()->groupId.isEmpty());
-            popup.addItem (73, "Ungroup Tracks", currentTrack() != nullptr && currentTrack()->groupId.isNotEmpty());
+            // Enabled as the reference's are: grouping that would not empty another group, and ungrouping a selected group.
+            popup.addItem (72, "Group Tracks", session.canGroupTracks (groupingSelection()));
+            popup.addItem (73, "Ungroup Tracks", groupInfo (selectedChain) != nullptr);
             popup.addSeparator(); popup.addItem (32, "Add Plug-in...", currentTrack() != nullptr);
             popup.addSeparator();
             popup.addItem (88, "Consolidate Time to New Scene", timeSelection.active() && ! showSession && ! state.recording && state.scenes.size() < 256);
@@ -13459,8 +13464,20 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "folding hides the member lanes and their clips");
         fold->onClick(); refresh();
         check (! state.groups[0].folded && laneHeight (0) == trackHeight, "unfolding restores the member lanes");
-        selectTrack (0); menuItemSelected (73, 2);
-        check (state.groups.empty() && laneY (0) == 0, "the Create menu ungroups the selected track's group");
+        const auto createItem = [this] (int id)
+        {
+            const auto create = getMenuForIndex (2, {});
+            for (juce::PopupMenu::MenuItemIterator items (create); items.next();) if (items.getItem().itemID == id) return items.getItem().isEnabled;
+            return false;
+        };
+        selectTrack (0);
+        check (createItem (72) && ! createItem (73), "with a grouped track selected, Group Tracks is enabled (grouping it inside) and Ungroup Tracks is not");
+        menuItemSelected (73, 2);
+        check (state.groups.size() == 1, "and Ungroup Tracks does nothing then, as the reference's is disabled");
+        selectChain (state.groups[0].id);
+        check (createItem (73), "with the group selected, Ungroup Tracks is enabled");
+        menuItemSelected (73, 2);
+        check (state.groups.empty() && laneY (0) == 0, "the Create menu ungroups the selected group");
         session.undo(); session.undo(); refresh();
         check (state.groups.empty(), "undo leaves no group behind");
     }

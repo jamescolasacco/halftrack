@@ -897,6 +897,8 @@ public:
     // of them is: inside its group, if it is in one, as the reference nests groups. What is inside a
     // chosen group moves with it. Launching or stopping a group acts on every track inside it.
     juce::Result groupTracks (const juce::StringArray& trackAndGroupIds, juce::String& groupId);
+    // Whether groupTracks would group these, as the reference's Group Tracks command is enabled.
+    bool canGroupTracks (const juce::StringArray& trackAndGroupIds) const;
     juce::Result ungroupTracks (const juce::String& groupId);
     // Moves tracks and groups into a group (empty for the top level), before a track or group there
     // (empty for its end, before the returns), as dragging headers does in the reference. Their

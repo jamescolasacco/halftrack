@@ -35,6 +35,7 @@ From a static reading of the reference's code (Group Tracks 0x10260d478, its gro
   - The Session view shows each group's column before its contents.
   - A group lane summarises the clips of every track inside it.
   - With a group selected (by clicking its header or strip), Group Tracks groups it with the tracks selected besides it, and Ungroup Tracks ungroups it.
+  - The Create menu enables both commands by the reference's rules (0x10242a09c, 0x1024714a8). Group Tracks is enabled while `canGroupTracks` allows the selection: no returns, and no other group emptied. Ungroup Tracks is enabled only with a group selected, so a selected track no longer ungroups its group.
 
 Evidence (`tests/GroupTests.cpp`):
 - a grouped track grouped into an inner group, with the same mix and one undo;

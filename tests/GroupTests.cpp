@@ -199,7 +199,9 @@ int runGroupTests (const juce::File& artifacts)
                 const auto x = pair.snapshot().tracks[0].id, y = pair.snapshot().tracks[1].id;
                 juce::String first, second, both;
                 ok (pair.groupTracks ({ x }, first), "group x alone"); ok (pair.groupTracks ({ y }, second), "group y alone");
-                check (pair.groupTracks ({ x, y }, both).failed(), "grouping that would empty another group is refused, as in the reference");
+                check (pair.groupTracks ({ x, y }, both).failed() && ! pair.canGroupTracks ({ x, y }), "grouping that would empty another group is refused, as in the reference");
+                check (pair.canGroupTracks ({ x }) && pair.canGroupTracks ({ first, second }) && ! pair.canGroupTracks ({}) && ! pair.canGroupTracks ({ "missing" }),
+                       "a group's only track can be grouped inside it, and two groups together, but nothing and unknown tracks cannot");
                 ok (pair.moveTracks ({ y }, {}, {}), "move a group's only track out to the end");
                 const auto emptied = pair.snapshot();
                 const auto infoOf = [] (const Session::Snapshot& shot, const juce::String& id) { for (const auto& g : shot.groups) if (g.id == id) return g; return Session::GroupInfo {}; };
