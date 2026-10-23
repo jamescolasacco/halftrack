@@ -428,10 +428,7 @@ public:
         meterLabel.setTooltip ("Time signature, such as 3 / 4 or 6 / 8. Double-click to edit.");
         meterLabel.onTextChange = [this]
         {
-            const auto fields = juce::StringArray::fromTokens (meterLabel.getText(), "/", "");
-            if (fields.size() == 2 && fields[0].trim().containsOnly ("0123456789") && fields[1].trim().containsOnly ("0123456789")
-                && fields[0].trim().isNotEmpty() && fields[1].trim().isNotEmpty())
-                report (session.setTimeSignature (fields[0].getIntValue(), fields[1].getIntValue()));
+            if (const auto meter = parseMeter (meterLabel.getText())) report (session.setTimeSignature (meter->numerator, meter->denominator));
             refresh();
         };
         tapButton.setName("Tap tempo");tapButton.setTooltip("Tap a steady beat to set tempo. A pause over three seconds starts a new estimate.");
@@ -475,7 +472,7 @@ public:
         loopStartLabel.setEditable (false, true, false); loopLengthLabel.setEditable (false, true, false);
         loopStartLabel.onTextChange = [this]
         {
-            if (const auto beats = parseMusicalTime (loopStartLabel.getText(), true, state.timeSignature))
+            if (const auto beats = parsePosition (loopStartLabel.getText()))
             {
                 const auto start = secondsAt (*beats);
                 session.setLoop (state.looping, start, start + (state.loopEnd - state.loopStart));
@@ -484,7 +481,7 @@ public:
         };
         loopLengthLabel.onTextChange = [this]
         {
-            if (const auto beats = parseMusicalTime (loopLengthLabel.getText(), false, state.timeSignature); beats && *beats > 0)
+            if (const auto beats = parseMusicalTime (loopLengthLabel.getText(), false, barAt (beatsAt (state.loopStart)).meter); beats && *beats > 0)
                 session.setLoop (state.looping, state.loopStart, secondsAt (beatsAt (state.loopStart) + *beats));
             refresh();
         };
@@ -812,7 +809,7 @@ public:
         const auto foot = area.removeFromBottom (12);
         horizontalScroll.setBounds (foot.withTrimmedRight (trackWidth + 10));
         gridReadout.setBounds (foot.withTrimmedLeft (horizontalScroll.getWidth() + 6).withWidth (60).expanded (0, 1));
-        ruler.setBounds (area.removeFromTop (rulerHeight));
+        ruler.setBounds (area.removeFromTop (rulerHeight + (meterLaneShown() ? meterLaneHeight : 0)));
         viewport.setBounds (area);
         canvas.setSize (juce::jmax (1, viewport.getWidth() - 10), juce::jmax (area.getHeight(), lanesHeight));
         canvas.resized();
@@ -2918,17 +2915,25 @@ private:
                 }
                 g.setColour (line); g.drawHorizontalLine (lane.y + lane.height - 1, 0.0f, (float) tw);
             }
-            // A fine fixed grid draws every other line until they are 4 pixels apart.
-            auto grid = owner.gridBeats(); const auto barBeats = owner.state.timeSignature.beatsPerBar();
+            // The grid's lines run from each bar's start, through the time signature markers; a fine fixed
+            // grid draws every other line until they are 4 pixels apart.
+            auto grid = owner.gridBeats();
             while (grid * owner.gridPixelsPerBeat() < 4) grid *= 2;
             const auto end = owner.viewStart + tw / owner.pixelsPerSecond;
-            for (double b = std::floor (owner.beatsAt (owner.viewStart) / grid) * grid; ; b += grid)
+            const auto& markers = owner.state.timeSignatures;
+            const auto gridLine = [&] (double b, bool bar)
             {
-                const auto t = owner.secondsAt (b);
-                if (t > end) break;
-                const bool bar = std::abs (b / barBeats - std::round (b / barBeats)) < 0.001;
                 g.setColour (bar ? themes::colour (0xff4a4a4a) : themes::colour (0xff3a3a3a));
-                g.drawVerticalLine ((int) std::round ((t - owner.viewStart) * owner.pixelsPerSecond), 0.0f, (float) getHeight());
+                g.drawVerticalLine ((int) std::round ((owner.secondsAt (b) - owner.viewStart) * owner.pixelsPerSecond), 0.0f, (float) getHeight());
+            };
+            for (auto bar = Session::barAt (markers, owner.beatsAt (owner.viewStart)); owner.secondsAt (bar.start) <= end; bar = Session::barAt (markers, bar.start + bar.length))
+            {
+                if (grid >= bar.meter.beatsPerBar() - 1.0e-9)
+                {
+                    if (bar.number % juce::jmax (1, (int) std::round (grid / bar.meter.beatsPerBar())) == 0) gridLine (bar.start, true);
+                    continue;
+                }
+                for (double b = bar.start; b < bar.start + bar.length - 1.0e-9; b += grid) gridLine (b, b == bar.start);
             }
             if (owner.state.looping)
             {
@@ -3701,6 +3706,7 @@ private:
                 hasNext = hasNext || marker.position > owner.state.position+.001;
             }
             if (! exists) selected.clear();
+            if (selectedMeter >= (int) owner.state.timeSignatures.size()) selectedMeter = -1;
             const bool enabled = ! owner.session.isExporting();
             add.setEnabled (enabled); previous.setEnabled (enabled && hasPrevious); next.setEnabled (enabled && hasNext);
             automationMode.setToggleState (owner.automationMode, juce::dontSendNotification); repaint();
@@ -3726,8 +3732,27 @@ private:
                 [] (double time,const Session::LocatorInfo& item) {return time<item.position;});
             if (nextMarker!=owner.state.locators.end())
                 width=juce::jmin (width,(float)((nextMarker->position-marker.position)*owner.pixelsPerSecond)-3);
-            return {x,36,juce::jmax (12.0f,width),20};
+            return {x,(float) scrubTop()+1,juce::jmax (12.0f,width),20};
         }
+        // Where the locators' scrub area starts: under the bar numbers, and the time signature lane while it shows.
+        int scrubTop() const { return 35 + (owner.meterLaneShown() ? meterLaneHeight : 0); }
+        // A time signature marker's place in its lane, as wide as its meter's text or the room before the next.
+        juce::Rectangle<float> meterBounds (int index) const
+        {
+            const auto& markers = owner.state.timeSignatures;
+            const auto x = (float) ((owner.secondsAt (markers[(size_t) index].beat) - owner.viewStart) * owner.pixelsPerSecond);
+            float width = 40;
+            if (index + 1 < (int) markers.size()) width = juce::jmin (width, (float) ((owner.secondsAt (markers[(size_t) index + 1].beat) - owner.viewStart) * owner.pixelsPerSecond) - x - 2);
+            return { x, 35, juce::jmax (8.0f, width), (float) meterLaneHeight };
+        }
+        int hitMeter (juce::Point<float> point) const
+        {
+            if (! owner.meterLaneShown() || point.y < 35 || point.y >= 35 + meterLaneHeight || point.x < 0 || point.x >= owner.canvas.timelineWidth()) return -1;
+            for (int i = (int) owner.state.timeSignatures.size(); --i >= 0;) if (meterBounds (i).contains (point)) return i;
+            return -1;
+        }
+        int selectedMeter = -1;
+        void selectMeter (int index) { selectedMeter = index; selected.clear(); braceSelected = false; repaint(); }
         // The song's start, which the ruler marks with a small play triangle: a locator, or the loop's start.
         std::optional<double> songStartTime() const
         {
@@ -3771,34 +3796,64 @@ private:
             g.setColour (owner.state.looping?orange:muted.withAlpha (.55f));
             g.fillRect (x1,3.0f,juce::jmax (1.0f,x2-x1),3.0f);g.fillRect (x1,3.0f,2.0f,9.0f);g.fillRect (x2-2,3.0f,2.0f,9.0f);
             if (braceSelected) { g.setColour (ink);g.drawRect (juce::Rectangle<float> (x1-1,2.0f,juce::jmax (3.0f,x2-x1+2),11.0f),1.0f); }
-            // Bar numbers at the bars' times on the tempo map, spaced at least 48 pixels apart at the playhead's tempo.
-            const auto barBeats=owner.state.timeSignature.beatsPerBar(),barWidth=barBeats*60.0/owner.state.tempo*owner.pixelsPerSecond;
-            const auto stepBars=juce::jmax (1.0,std::pow (2.0,std::ceil (std::log2 (48.0/juce::jmax (1.0e-6,barWidth)))));
+            // Bar numbers at the bars' starts through the time signature markers and the tempo map, spaced
+            // at least 48 pixels apart at the playhead's tempo.
+            const auto& markers=owner.state.timeSignatures;
+            const auto firstBar=Session::barAt (markers,owner.beatsAt (owner.viewStart));
+            const auto barWidth=firstBar.meter.beatsPerBar()*60.0/owner.state.tempo*owner.pixelsPerSecond;
+            const auto stepBars=juce::jmax (1,(int)std::pow (2.0,std::ceil (std::log2 (48.0/juce::jmax (1.0e-6,barWidth)))));
             const auto end=owner.viewStart+width/owner.pixelsPerSecond;
+            const auto xAt=[this] (double beat) { return (int)std::round ((owner.secondsAt (beat)-owner.viewStart)*owner.pixelsPerSecond); };
             g.setFont (font (10.5f));
-            for (double bar=std::floor (owner.beatsAt (owner.viewStart)/barBeats/stepBars)*stepBars;;bar+=stepBars)
+            for (int bar=(int)std::floor ((double)firstBar.number/stepBars)*stepBars;;bar+=stepBars)
             {
-                const auto time=owner.secondsAt (bar*barBeats);
-                if (time>end) break;
-                const int x=(int)std::round ((time-owner.viewStart)*owner.pixelsPerSecond);
-                g.setColour (muted);g.drawText (juce::String ((int)std::round (bar)+1),x+5,15,55,19,juce::Justification::centredLeft);
+                const auto start=Session::barStart (markers,bar);
+                if (owner.secondsAt (start)>end) break;
+                const int x=xAt (start);
+                g.setColour (muted);g.drawText (juce::String (bar+1),x+5,15,55,19,juce::Justification::centredLeft);
                 g.setColour (themes::colour (0xff5d5d5d));g.drawVerticalLine (x,14.0f,34.0f);
             }
+            // A bar a marker cuts short is crosshatched, as the reference's fragmentary bars are.
+            for (size_t i=1;i<markers.size();++i)
+                if (const auto cut=Session::barAt (markers,markers[i].beat-1.0e-6); cut.fragmentary)
+                {
+                    const int x1=xAt (cut.start),x2=xAt (markers[i].beat);
+                    if (x2<0 || x1>width) continue;
+                    g.saveState();g.reduceClipRegion (juce::Rectangle<int> (x1,14,juce::jmax (1,x2-x1),21));
+                    g.setColour (themes::colour (0xff5d5d5d));
+                    for (int k=x1-20;k<x2;k+=5) g.drawLine ((float)k,35.0f,(float)k+20,14.0f);
+                    g.restoreState();
+                }
             g.setColour (background);g.fillRect (0,35,width,getHeight()-35);
+            // The time signature markers' lane, while the meter changes.
+            if (owner.meterLaneShown())
+            {
+                g.setColour (themes::colour (0xff2f2f2f));g.fillRect (0,35,width,meterLaneHeight);
+                for (int i=0;i<(int)markers.size();++i)
+                {
+                    const auto bounds=meterBounds (i);
+                    if (bounds.getRight()<0 || bounds.getX()>=width) continue;
+                    g.setColour (i==selectedMeter?orange:themes::colour (0xffb2b2b2));
+                    g.drawVerticalLine ((int)bounds.getX(),35.0f,35.0f+meterLaneHeight);
+                    g.setFont (font (10.0f,i==selectedMeter));
+                    g.drawText (Impl::meterText (markers[(size_t)i].meter),bounds.withTrimmedLeft (3),juce::Justification::centredLeft,false);
+                }
+            }
             for (const auto& marker : owner.state.locators)
             {
                 const auto bounds=locatorBounds (marker);
                 if (bounds.getRight()<0 || bounds.getX()>=width) continue;
                 g.setColour (marker.id==selected?orange:themes::colour (0xffb2b2b2));
-                juce::Path flag;flag.addTriangle (bounds.getX(),37,bounds.getX()+8,37,bounds.getX(),45);g.fillPath (flag);
-                g.drawVerticalLine ((int)bounds.getX(),37,56);
+                juce::Path flag;flag.addTriangle (bounds.getX(),bounds.getY()+1,bounds.getX()+8,bounds.getY()+1,bounds.getX(),bounds.getY()+9);g.fillPath (flag);
+                g.drawVerticalLine ((int)bounds.getX(),bounds.getY()+1,bounds.getBottom());
                 g.setFont (font (10.0f,marker.id==selected));
                 g.drawText (marker.name,bounds.withTrimmedLeft (11),juce::Justification::centredLeft,true);
             }
             if (const auto start=songStartTime())
             {
                 const auto sx=(float)((*start-owner.viewStart)*owner.pixelsPerSecond);
-                juce::Path play;play.addTriangle (sx+2,47,sx+2,55,sx+8,51);
+                const auto top=(float)scrubTop();
+                juce::Path play;play.addTriangle (sx+2,top+12,sx+2,top+20,sx+8,top+16);
                 g.setColour (ink);g.fillPath (play);
             }
             const auto px=(float)((owner.state.position-owner.viewStart)*owner.pixelsPerSecond);
@@ -3815,7 +3870,16 @@ private:
             grabKeyboardFocus(); dragId.clear();
             anchor=juce::jmax (0.0,owner.viewStart+event.x/owner.pixelsPerSecond);
             const auto hit=hitLocator (event.position);
-            if (event.mods.isPopupMenu()) { showMenu (hit,anchor);return; }
+            const auto meter=hitMeter (event.position);
+            if (event.mods.isPopupMenu()) { if (meter>=0) selectMeter (meter); showMenu (hit,anchor,meter);return; }
+            // A time signature marker: clicking selects it, and dragging moves it, but not the first.
+            if (owner.meterLaneShown() && event.y>=35 && event.y<35+meterLaneHeight)
+            {
+                selectMeter (meter);meterDrag=meter>0?meter:-1;downX=event.x;
+                if (meter>0) originalMeter=owner.state.timeSignatures[(size_t)meter].beat;
+                return;
+            }
+            selectedMeter=-1;
             definingLoop=event.mods.isShiftDown();
             braceDrag=definingLoop?BracePart::none:bracePart (event.position);
             braceSelected=braceDrag!=BracePart::none;
@@ -3837,19 +3901,33 @@ private:
         void mouseDoubleClick (const juce::MouseEvent& event) override
         {
             if (event.x>=owner.canvas.timelineWidth() || event.mods.isPopupMenu() || event.mods.isShiftDown()) return;
+            if (const auto meter=hitMeter (event.position); meter>=0) { owner.editMeterDialog (meter);return; }
             const auto hit=hitLocator (event.position);
             if (hit.isNotEmpty()) owner.editLocatorDialog (hit);
-            else if (event.y>=35) addAt (juce::jmax (0.0,owner.viewStart+event.x/owner.pixelsPerSecond));
+            else if (event.y>=scrubTop()) addAt (juce::jmax (0.0,owner.viewStart+event.x/owner.pixelsPerSecond));
         }
         void mouseDrag (const juce::MouseEvent& event) override
         {
             if (owner.session.isExporting()) return;
+            if (meterDrag>0)
+            {
+                if (! event.mouseWasDraggedSinceMouseDown()) return;
+                auto beat=originalMeter+owner.beatsAt (juce::jmax (0.0,owner.viewStart+event.x/owner.pixelsPerSecond))-owner.beatsAt (juce::jmax (0.0,owner.viewStart+downX/owner.pixelsPerSecond));
+                if (owner.snaps (event.mods)) beat=owner.gridLine (beat);
+                if (beat<=0) return;
+                const auto& markers=owner.state.timeSignatures;
+                for (int i=0;i<(int)markers.size();++i) if (i!=meterDrag && std::abs (markers[(size_t)i].beat-beat)<1.0/960) return; // Not onto another.
+                if (! meterGesture) { owner.session.beginEditGesture ("Move time signature change");meterGesture=true; }
+                owner.report (owner.session.moveTimeSignatureChange (meterDrag,beat));owner.refresh();
+                for (int i=0;i<(int)owner.state.timeSignatures.size();++i) if (std::abs (owner.state.timeSignatures[(size_t)i].beat-beat)<1.0e-9) selectedMeter=meterDrag=i;
+                return;
+            }
             if (braceDrag!=BracePart::none)
             {
                 if (! event.mouseWasDraggedSinceMouseDown()) return;
                 const auto at=[this] (int x) { return owner.beatsAt (juce::jmax (0.0,owner.viewStart+x/owner.pixelsPerSecond)); };
                 const auto grid=owner.gridBeats();const bool snap=owner.snaps (event.mods);
-                const auto snapped=[&] (double beat) { return snap ? std::round (beat/grid)*grid : beat; };
+                const auto snapped=[&] (double beat) { return snap ? owner.gridLine (beat) : beat; };
                 const auto least=snap ? grid : 1.0/64;
                 auto start=braceStart,end=braceEnd;
                 if (braceDrag==BracePart::bar) { start=juce::jmax (0.0,snapped (braceStart+at (event.x)-at (downX)));end=start+(braceEnd-braceStart); }
@@ -3859,9 +3937,10 @@ private:
             }
             if (definingLoop)
             {
-                const auto grid=owner.gridBeats(),cursor=juce::jmax (0.0,owner.viewStart+event.x/owner.pixelsPerSecond);
-                const auto first=std::floor (owner.beatsAt (juce::jmin (anchor,cursor))/grid)*grid;
-                const auto last=juce::jmax (first+grid,std::ceil (owner.beatsAt (juce::jmax (anchor,cursor))/grid)*grid);
+                const auto cursor=juce::jmax (0.0,owner.viewStart+event.x/owner.pixelsPerSecond);
+                const auto first=owner.gridLine (owner.beatsAt (juce::jmin (anchor,cursor)),-1);
+                auto last=owner.gridLine (owner.beatsAt (juce::jmax (anchor,cursor)),1);
+                if (last<=first+1.0e-9) last=owner.gridLine (first+1.0e-6,1);
                 owner.session.setLoop (true,owner.secondsAt (first),owner.secondsAt (last));owner.refresh();return;
             }
             if (dragId.isEmpty() || ! event.mouseWasDraggedSinceMouseDown()) return;
@@ -3883,12 +3962,31 @@ private:
                 owner.timeSelection={ owner.state.loopStart,owner.state.loopEnd,ids };owner.refresh();
             }
             if (locatorGesture)owner.session.endEditGesture();
-            definingLoop=false;locatorGesture=false;dragId.clear();braceDrag=BracePart::none;
+            if (meterGesture)owner.session.endEditGesture();
+            definingLoop=false;locatorGesture=false;meterGesture=false;meterDrag=-1;dragId.clear();braceDrag=BracePart::none;
         }
         void focusLost (FocusChangeType) override { if (braceSelected) { braceSelected=false;repaint(); } }
         bool keyPressed (const juce::KeyPress& key) override
         {
             if (owner.session.isExporting())return true;
+            // A selected time signature marker: Delete deletes it, the arrows move it by the grid, and
+            // Cmd/Ctrl+R types its meter, as the reference's Edit Time Signature.
+            if (juce::isPositiveAndBelow (selectedMeter,(int)owner.state.timeSignatures.size()))
+            {
+                const auto code=key.getKeyCode();
+                if (code=='R' && key.getModifiers().isCommandDown()) { owner.editMeterDialog (selectedMeter);return true; }
+                if (selectedMeter>0 && (code==juce::KeyPress::deleteKey || code==juce::KeyPress::backspaceKey))
+                { owner.report (owner.session.removeTimeSignatureChange (selectedMeter));selectedMeter=-1;owner.refresh();return true; }
+                if (selectedMeter>0 && (code==juce::KeyPress::leftKey || code==juce::KeyPress::rightKey))
+                {
+                    const auto beat=owner.state.timeSignatures[(size_t)selectedMeter].beat;
+                    const auto to=code==juce::KeyPress::rightKey ? owner.gridLine (beat+1.0e-6,1) : owner.gridLine (beat-1.0e-6,-1);
+                    if (to>0) owner.report (owner.session.moveTimeSignatureChange (selectedMeter,to));
+                    owner.refresh();
+                    for (int i=0;i<(int)owner.state.timeSignatures.size();++i) if (std::abs (owner.state.timeSignatures[(size_t)i].beat-to)<1.0e-9) selectedMeter=i;
+                    repaint();return true;
+                }
+            }
             if ((key.getKeyCode()==juce::KeyPress::deleteKey || key.getKeyCode()==juce::KeyPress::backspaceKey)&&selected.isNotEmpty())
             {owner.report (owner.session.removeLocator (selected));owner.refresh();return true;}
             // A selected brace, as the reference's: Left and Right move it by the grid, Up and Down by its
@@ -3921,14 +4019,17 @@ private:
         Impl& owner;
         juce::TextButton add {"Add locator"},previous {"<"},next {">"},automationMode {"Automation Mode"};
         juce::String selected,dragId;
-        double anchor=0,original=0,braceStart=0,braceEnd=0;int downX=0;
-        bool definingLoop=false,locatorGesture=false;
+        double anchor=0,original=0,braceStart=0,braceEnd=0,originalMeter=0;int downX=0,meterDrag=-1;
+        bool definingLoop=false,locatorGesture=false,meterGesture=false;
         BracePart braceDrag=BracePart::none;
     public:
         // The ruler's menu, and acting on a choice from it; the UI suite uses both.
-        juce::PopupMenu menuFor (const juce::String& id,double position) const
+        juce::PopupMenu menuFor (const juce::String& id,double position,int meter=-1) const
         {
             juce::PopupMenu menu;menu.addItem (1,"Add locator here");
+            // Time signature changes, as the reference's scrub area offers them.
+            menu.addItem (10,"Insert Time Signature Change");
+            if (meter>=0) { menu.addItem (11,"Edit Time Signature");menu.addItem (12,"Delete Time Signature Change",meter>0); }
             if (id.isNotEmpty())
             {
                 menu.addItem (2,"Edit locator...");menu.addItem (3,"Delete locator");
@@ -3943,9 +4044,12 @@ private:
             if (index>0)menu.addSubMenu ("Jump to locator",jumps);
             return menu;
         }
-        void choose (int choice,const juce::String& id,double position,const juce::StringArray& ids)
+        void choose (int choice,const juce::String& id,double position,const juce::StringArray& ids,int meter=-1)
         {
             if(choice==1)addAt(position);
+            if(choice==10)owner.insertMeterChange(owner.snaps({})?owner.gridLine(owner.beatsAt(position)):owner.beatsAt(position));
+            if(choice==11)owner.editMeterDialog(meter);
+            if(choice==12&&meter>0){owner.report(owner.session.removeTimeSignatureChange(meter));selectedMeter=-1;owner.refresh();}
             if(choice==2)owner.editLocatorDialog(id);
             if(choice==3){owner.report(owner.session.removeLocator(id));owner.refresh();}
             if(choice==4){owner.report(owner.session.setLoopIsSongStart(!owner.state.loopIsSongStart));owner.refresh();}
@@ -3955,11 +4059,11 @@ private:
             if(choice>=100&&choice-100<ids.size()){owner.report(owner.session.seekLocator(ids[choice-100]));owner.refresh();}
         }
     private:
-        void showMenu (const juce::String& id,double position)
+        void showMenu (const juce::String& id,double position,int meter)
         {
             juce::StringArray ids;for (const auto& marker:owner.state.locators)ids.add(marker.id);
             auto safe=juce::Component::SafePointer<Ruler> (this);
-            menuFor (id,position).showMenuAsync (juce::PopupMenu::Options(),[safe,id,position,ids](int choice) { if(safe!=nullptr)safe->choose(choice,id,position,ids); });
+            menuFor (id,position,meter).showMenuAsync (juce::PopupMenu::Options(),[safe,id,position,ids,meter](int choice) { if(safe!=nullptr)safe->choose(choice,id,position,ids,meter); });
         }
     };
 
@@ -8938,6 +9042,51 @@ private:
         const auto result = session.addMidiClipToSlot (currentTrack()->id, scene, 4.0); report (result); refresh();
         if (result.wasOk()) { selectLauncherSlot (track, scene); openPianoRoll(); pianoRoll.fit(); }
     }
+    // Time signature markers, as the reference's: a lane under the bar numbers shows them while the
+    // meter changes; Insert Time Signature Change adds one, and Edit Time Signature types its meter.
+    static constexpr int meterLaneHeight = 16;
+    bool meterLaneShown() const { return state.timeSignatures.size() > 1; }
+    Session::BarInfo barAt (double beat) const { return Session::barAt (state.timeSignatures, beat); }
+    // "3/4", "6 / 8": a meter as the Control Bar's field and the markers take it.
+    static std::optional<Session::TimeSignature> parseMeter (const juce::String& text)
+    {
+        auto fields = juce::StringArray::fromTokens (text, "/", ""); fields.trim();
+        if (fields.size() != 2 || fields[0].isEmpty() || fields[1].isEmpty() || ! fields[0].containsOnly ("0123456789") || ! fields[1].containsOnly ("0123456789"))
+            return std::nullopt;
+        return Session::TimeSignature { fields[0].getIntValue(), fields[1].getIntValue() };
+    }
+    static juce::String meterText (Session::TimeSignature m) { return juce::String (m.numerator) + "/" + juce::String (m.denominator); }
+    // A marker at a beat with the meter already there, whose meter is then typed; at the start the
+    // first marker's.
+    void insertMeterChange (double beat)
+    {
+        if (beat > 1.0e-9)
+        {
+            const auto result = session.insertTimeSignatureChange (beat, barAt (beat).meter);
+            report (result); refresh();
+            if (result.failed()) return;
+        }
+        int index = 0;
+        for (int i = 0; i < (int) state.timeSignatures.size(); ++i) if (state.timeSignatures[(size_t) i].beat <= beat + 1.0e-9) index = i;
+        ruler.selectMeter (index);
+        editMeterDialog (index);
+    }
+    void editMeterDialog (int index)
+    {
+        if (session.isExporting() || ! juce::isPositiveAndBelow (index, (int) state.timeSignatures.size())) return;
+        auto* dialog = new juce::AlertWindow ("Edit Time Signature", "Type the meter from this marker on, such as 3/4 or 7/8.", juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor ("meter", meterText (state.timeSignatures[(size_t) index].meter), "Time signature");
+        dialog->addButton ("Apply", 1, juce::KeyPress (juce::KeyPress::returnKey)); dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
+        auto safe = juce::Component::SafePointer<Impl> (this); auto safeDialog = juce::Component::SafePointer<juce::AlertWindow> (dialog);
+        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog, index] (int result)
+        {
+            if (safe == nullptr || safeDialog == nullptr || result != 1) return;
+            if (const auto meter = parseMeter (safeDialog->getTextEditorContents ("meter"))) safe->report (safe->session.setTimeSignatureChange (index, *meter));
+            else safe->report (juce::Result::fail ("Type a time signature such as 3/4."));
+            safe->refresh();
+        }), true);
+    }
     void editLocatorDialog (const juce::String& id)
     {
         if (session.isExporting()) return;
@@ -9472,8 +9621,26 @@ private:
     double secondsAt (double beats) const { return session.secondsAt (beats); }
     // The nearest grid line, or with snapping off the time itself.
     double snapSeconds (double seconds) const { return editGrid.snap ? toGrid (seconds) : juce::jmax (0.0, seconds); }
-    double toGrid (double seconds) const
-    { const auto grid = gridBeats(); return juce::jmax (0.0, secondsAt (std::round (beatsAt (juce::jmax (0.0, seconds)) / grid) * grid)); }
+    double toGrid (double seconds) const { return juce::jmax (0.0, secondsAt (gridLine (beatsAt (juce::jmax (0.0, seconds))))); }
+    // A grid line near a beat: the nearest (0), the one at or before (-1) or the one at or after (+1).
+    // The lines run from each bar's start, so they follow the time signature markers, as the
+    // reference's grid does; a grid of a bar or more falls on bar starts.
+    double gridLine (double beat, int direction = 0) const
+    {
+        const auto& markers = state.timeSignatures;
+        const auto grid = gridBeats();
+        const auto bar = Session::barAt (markers, beat);
+        const auto pick = [direction, beat] (double a, double b)
+        { return direction < 0 ? a : direction > 0 ? (beat - a < 1.0e-9 ? a : b) : (beat - a <= b - beat ? a : b); };
+        if (grid >= bar.meter.beatsPerBar() - 1.0e-9)
+        {
+            const int bars = juce::jmax (1, (int) std::round (grid / bar.meter.beatsPerBar()));
+            const int first = (int) std::floor ((double) bar.number / bars) * bars;
+            return pick (Session::barStart (markers, first), Session::barStart (markers, first + bars));
+        }
+        const auto a = bar.start + std::floor ((beat - bar.start) / grid + 1.0e-9) * grid;
+        return pick (a, juce::jmin (bar.start + bar.length, a + grid));
+    }
     // Freeze toggles the track's freeze; Flatten replaces a frozen track with its render.
     void freezeTrackFromUI (const juce::String& trackId, bool flatten)
     {
@@ -9555,6 +9722,24 @@ private:
         const int offset = position ? 1 : 0;
         return juce::String (bars + offset) + ". " + juce::String (beat + offset) + ". " + juce::String (sixteenth + offset);
     }
+    // A position through the time signature markers: bars counted on through fragmentary ones, and
+    // beats in each bar's meter.
+    juce::String formatPosition (double beats) const
+    {
+        const auto bar = barAt (beats);
+        return formatMusicalTime (bar.number * bar.meter.beatsPerBar() + (beats - bar.start), true, bar.meter);
+    }
+    std::optional<double> parsePosition (const juce::String& text) const
+    {
+        const auto number = juce::StringArray::fromTokens (text.trim(), ".", "")[0].trim();
+        if (number.isEmpty() || ! number.containsOnly ("0123456789") || number.getIntValue() < 1) return std::nullopt;
+        const int bar = number.getIntValue() - 1;
+        const auto start = Session::barStart (state.timeSignatures, bar);
+        const auto meter = barAt (start).meter;
+        const auto within = parseMusicalTime (text, true, meter);
+        if (! within) return std::nullopt;
+        return start + (*within - bar * meter.beatsPerBar());
+    }
     static std::optional<double> parseMusicalTime (const juce::String& text, bool position, Session::TimeSignature meter = {})
     {
         auto fields = juce::StringArray::fromTokens (text.trim(), ".", "");
@@ -9617,6 +9802,8 @@ private:
         const bool following = session.isExternalSync();
         extButton.setToggleState (following, juce::dontSendNotification);
         if (extButton.isVisible() != (session.hasSyncInputs() || following)) resized();
+        // The ruler grows by the time signature lane while the meter changes.
+        if ((previous.timeSignatures.size() > 1) != meterLaneShown()) resized();
         tempo.setEditable (false, state.tempoMap.size() <= 1 && ! following, false); tapButton.setEnabled (state.tempoMap.size() <= 1 && ! following);
         tempo.setTooltip (state.tempoMap.size() <= 1 ? "Tempo: 20–999 beats per minute. Double-click to edit."
                                                     : "The tempo is automated; this is the tempo at the playhead. Edit it in Automation > Main > Song Tempo.");
@@ -9624,9 +9811,9 @@ private:
         const auto beatPosition = beatsAt (juce::jmax (0.0, state.position));
         positionLabel.setText (state.countInBeatsRemaining>0
             ? "Count in " + juce::String((int)std::ceil(state.countInBeatsRemaining))
-            : formatMusicalTime (beatPosition, true, state.timeSignature), juce::dontSendNotification);
-        if (! loopStartLabel.isBeingEdited()) loopStartLabel.setText (formatMusicalTime (beatsAt (state.loopStart), true, state.timeSignature), juce::dontSendNotification);
-        if (! loopLengthLabel.isBeingEdited()) loopLengthLabel.setText (formatMusicalTime (beatsAt (state.loopEnd) - beatsAt (state.loopStart), false, state.timeSignature), juce::dontSendNotification);
+            : formatPosition (beatPosition), juce::dontSendNotification);
+        if (! loopStartLabel.isBeingEdited()) loopStartLabel.setText (formatPosition (beatsAt (state.loopStart)), juce::dontSendNotification);
+        if (! loopLengthLabel.isBeingEdited()) loopLengthLabel.setText (formatMusicalTime (beatsAt (state.loopEnd) - beatsAt (state.loopStart), false, barAt (beatsAt (state.loopStart)).meter), juce::dontSendNotification);
         projectLabel.setText (state.name + (state.dirty ? "  *" : ""), juce::dontSendNotification);
         if (state.tracks.size() != previous.tracks.size() || lanesHeight != canvas.getHeight() && lanesHeight > viewport.getHeight()) resized();
         for (int i = timeSelection.trackIds.size(); --i >= 0;) if (trackIndex (timeSelection.trackIds[i]) < 0) timeSelection.trackIds.remove (i);
@@ -9982,7 +10169,8 @@ private:
         }
         else if (index == 2)
         {
-            popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (35, "Insert Return Track"); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", currentTrack() != nullptr || groupInfo (selectedChain) != nullptr);
+            popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (35, "Insert Return Track");
+            popup.addItem (110, "Insert Time Signature Change", ! showSession && ! state.recording); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", currentTrack() != nullptr || groupInfo (selectedChain) != nullptr);
             popup.addSeparator();
             popup.addItem (38, "Duplicate Selected Track", currentTrack() != nullptr && !currentTrack()->isReturn);
             popup.addItem (39, "Insert Take Lane", currentTrack() != nullptr && ! currentTrack()->isReturn && ! showSession);
@@ -10107,6 +10295,7 @@ private:
             case 35: addReturnTrack(); break;
             case 34: if (showSession) createLauncherMidiClip(); else createMidiClip (state.insertMarker); break;
             case 31: deleteSelectedHeaders(); break;
+            case 110: insertMeterChange (beatsAt (state.insertMarker)); break;
             case 32: addPluginMenu(); break;
             case 36: case 37: if (const auto* track = currentTrack()) reorderTrack (track->id, id == 36 ? -1 : 1); break;
             case 38: if (const auto* track = currentTrack()) duplicateTrackFromUI (track->id); break;
@@ -16022,6 +16211,55 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(formatMusicalTime(4.5,true,{6,8})=="2. 4. 1"&&parseMusicalTime("2.4.1",true,{6,8})==4.5&&! parseMusicalTime("1.7.1",true,{6,8})
           &&formatMusicalTime(4.5,true)=="2. 1. 3","positions count bars and eighth-note beats in 6/8");
     meterLabel.setText("4/4",juce::sendNotificationSync);
+    {
+        // Time signature markers, as the reference's: Insert Time Signature Change at the insert marker,
+        // a lane under the bar numbers, and positions and the grid following them.
+        showArrangementView(); session.setTempo (120); refresh();
+        session.setInsertMarker (secondsAt (6)); refresh();
+        menuItemSelected (110, 2);
+        check (! alerts.empty() && alerts.back() != nullptr && alerts.back()->getTextEditor ("meter") != nullptr && state.timeSignatures.size() == 2 && state.timeSignatures[1].beat == 6,
+               "Insert Time Signature Change adds a marker at the insert marker and asks for its meter");
+        alerts.back()->getTextEditor ("meter")->setText ("3/4"); alerts.back()->exitModalState (1);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (50); refresh();
+        check (state.timeSignatures[1].meter == Session::TimeSignature { 3, 4 } && ruler.getHeight() == rulerHeight + meterLaneHeight,
+               "typing 3/4 sets its meter, and the ruler grows a lane for the markers");
+        check (formatPosition (7) == "3. 2. 1" && formatPosition (5) == "2. 2. 1" && parsePosition ("3.2.1") == 7.0,
+               "positions count on through the fragmentary second bar, then in 3/4 from the marker");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("arrangement-meters.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (createComponentSnapshot (getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        auto grid = editGrid; grid.fixed = true; grid.numerator = 1; grid.denominator = 4; grid.snap = true;
+        check (session.setEditGrid (grid).wasOk(), "a fixed 1/4 grid"); refresh();
+        check (std::abs (gridLine (5.6) - 6) < 1e-9 && std::abs (gridLine (5.4) - 5) < 1e-9 && std::abs (gridLine (6.4) - 6) < 1e-9,
+               "the grid runs from each bar's start: snapping finds the marker, and the beats of the fragmentary bar");
+        const auto now = juce::Time::getCurrentTime();
+        const auto rulerEvent = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged)
+        { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0, &ruler, &ruler, now, down, now, 1, dragged); };
+        const juce::Point<float> onMarker ((float) ((secondsAt (6) - viewStart) * pixelsPerSecond) + 4, 35 + 8);
+        ruler.mouseDown (rulerEvent (onMarker, onMarker, false));
+        check (ruler.selectedMeter == 1, "clicking the marker in its lane selects it");
+        const auto later = onMarker.translated ((float) ((secondsAt (8) - secondsAt (6)) * pixelsPerSecond), 0);
+        ruler.mouseDrag (rulerEvent (later, onMarker, true)); ruler.mouseUp (rulerEvent (later, onMarker, true)); refresh();
+        check (std::abs (state.timeSignatures[1].beat - 8) < 1e-6, "dragging it two beats right moves it to beat 8");
+        session.undo(); refresh(); check (std::abs (state.timeSignatures[1].beat - 6) < 1e-6, "one undo moves it back");
+        ruler.selectMeter (1);
+        check (ruler.keyPressed (juce::KeyPress (juce::KeyPress::rightKey)) && std::abs (state.timeSignatures[1].beat - 7) < 1e-6, "the right arrow moves it a grid step");
+        check (ruler.keyPressed (juce::KeyPress (juce::KeyPress::deleteKey)) && state.timeSignatures.size() == 1, "Delete deletes it");
+        refresh(); check (ruler.getHeight() == rulerHeight, "and the lane goes with the last change");
+        session.undo(); refresh(); check (state.timeSignatures.size() == 2 && ruler.getHeight() == rulerHeight + meterLaneHeight, "one undo brings it back, with its lane");
+        const auto menu = ruler.menuFor ({}, secondsAt (7), 1);
+        bool edit = false, remove = false;
+        for (juce::PopupMenu::MenuItemIterator items (menu); items.next();) { edit = edit || items.getItem().itemID == 11; remove = remove || (items.getItem().itemID == 12 && items.getItem().isEnabled); }
+        check (edit && remove, "the marker's menu offers Edit Time Signature and Delete Time Signature Change");
+        ruler.choose (12, {}, secondsAt (7), {}, 1); refresh();
+        check (state.timeSignatures.size() == 1, "which deletes it");
+        session.setInsertMarker (0); refresh();
+    }
     check(session.newProject().wasOk()&&session.importAudio(audioFixture,0).wasOk()&&session.addMidiTrack("Activation").wasOk(),"prepare clip activation controls");refresh();
     const auto activationAudio=state.tracks[0].clips[0].id,activationTrack=state.tracks[2].id;
     check(session.addMidiClip(activationTrack,0,4).wasOk(),"prepare activation MIDI clip");refresh();const auto activationMidi=state.tracks[2].clips[0].id;

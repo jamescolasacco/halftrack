@@ -2271,3 +2271,11 @@ Engine and root areas. The meter can change along the timeline at time signature
 - **Correction.** Until now a bar of 6/8 launched as six quarter notes, a 1/4 launch grid in 3/4 was three quarters of a beat, and plug-ins counted half the quarter notes in 6/8.
 
 Measured in the time-signature suite (launches through engine callbacks), the metronome suite (accents across a marker) and the plug-in timing suite ([contract](research/time-signature-contract.md#time-signature-markers-2026-10-23)). The markers' Arrangement interface is next.
+
+## Time signature markers in the Arrangement — 2026-10-23
+
+UI area. While the meter changes, the ruler shows a lane of time signature markers under the bar numbers, as the reference's does.
+- **Editing.** Insert Time Signature Change (Create menu and ruler menu) adds one and asks for its meter. Markers drag along the grid, move with the arrows, retype with Cmd/Ctrl+R or a double-click, and go with Delete.
+- **Following the markers.** Bar numbers stand at the bars' starts, and fragmentary bars are crosshatched. The grid and snapping run from each bar's start, and the position fields count bars through the markers.
+
+Checked in the UI suite ([contract](research/time-signature-contract.md#arrangement-interface)).

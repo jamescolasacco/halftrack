@@ -76,12 +76,35 @@ Evidence (`tests/TimeSignatureTests.cpp`):
 
 The metronome suite matches every click and accent across a 3/4 marker cutting a 4/4 bar short. The plug-in timing suite hears a probe plug-in count quarter notes in 6/8.
 
-Not yet: the Arrangement's marker lane below the beat-time ruler, with Insert Time Signature Change, Edit Time Signature (Cmd+R), dragging, the arrow keys and Delete. Also missing are the ruler and grid following the markers (they draw the meter at the playhead), crosshatched fragmentary bars, Delete Fragmentary Bar Time and Complete Fragmentary Bar, the Control Bar's automation LED, and importing a MIDI file's meters.
+### Arrangement interface
+
+- **The lane.** While the meter changes, the Arrangement ruler grows a lane just below the bar numbers, as the reference's does. It shows each marker's meter, the first included. The locators' scrub area moves below it, and the lane goes when the last change does.
+- **Inserting.** Insert Time Signature Change, in the Create menu and the ruler's context menu, adds a marker at the insert marker (from the menu) or at the clicked place on the grid. It takes the meter already there and asks for the new one. At the start it edits the first marker.
+- **Editing.**
+  - Clicking a marker selects it. Dragging moves it along the grid, as one undo step, but never onto another marker.
+  - The arrow keys move it a grid line, Delete deletes it, and Cmd/Ctrl+R (Edit Time Signature) or a double-click types its meter.
+  - The marker's context menu offers Edit Time Signature and Delete Time Signature Change.
+  - The first marker can be retyped but not moved or deleted.
+- **Bars and the grid.**
+  - Bar numbers stand at the bars' starts through the markers, and a fragmentary bar is crosshatched.
+  - The canvas's grid lines and Arrangement snapping run from each bar's start, so a 1/4 grid restarts at a marker and a grid of a bar or more falls on bar starts.
+  - The loop brace's drags and its Shift-drag definition snap the same way.
+- **Positions.** The Control Bar's position and loop start read bars.beats.sixteenths through the markers, beats in each bar's meter. Typed positions read back the same way. The meter field shows and changes the meter at the playhead.
+
+The UI suite inserts a 3/4 marker from the Create menu and types its meter. It then checks:
+- the lane appearing;
+- positions through the fragmentary bar;
+- snapping to the marker and inside the fragmentary bar;
+- selecting, dragging, undo, the right arrow, Delete with the lane going and coming back on undo, and the marker's menu.
+
+A snapshot (`arrangement-meters.png`) shows the hatched second bar and the lane.
+
+Not yet: Delete Fragmentary Bar Time and Complete Fragmentary Bar, the Control Bar's automation LED, importing a MIDI file's meters, clip editors' rulers (which keep the meter at the playhead), and scene meters with markers present.
 
 ## Not implemented
 
-- The Arrangement interface for time signature markers (above).
-- Scene meters.
+- Delete Fragmentary Bar Time and Complete Fragmentary Bar.
+- Scene meters while the Arrangement has markers.
 - Eighth-note click subdivision.
 - Importing a MIDI file's meter.
 - Any comparison with reference output.
