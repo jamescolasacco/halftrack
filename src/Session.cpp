@@ -4990,13 +4990,65 @@ struct Session::Impl
         const int t = trackIndexOf (parts[1]), scene = sceneIndexOf (parts[2]);
         return t >= 0 && scene >= 0 ? owner.releaseSlot (t, scene) : Result::ok();
     }
-    // A note or key switches a control between its mapping's ends: to whichever it is further from.
-    Result switchBetween (const String& target, float minimum, float maximum)
+    // A note or key on a control, as in the reference (static reading of its code): a switch
+    // toggles, a choice steps to the next and wraps from Max back to Min, and anything else goes to
+    // Min from at or above the midpoint of its mapping's range, in fader or knob position, and to
+    // Max below it.
+    Result noteOnControl (const String& target, float minimum, float maximum)
     {
         const auto value = targetValue (target);
         if (! value) return Result::ok();
-        const bool nearerMaximum = std::abs (*value - maximum) < std::abs (*value - minimum);
-        return applyValue (target, nearerMaximum ? minimum : maximum);
+        const auto parts = juce::StringArray::fromTokens (target, ":", "");
+        if (parts[0] == "device")
+            if (auto* device = nativeDevice (parts[1]))
+                if (const auto fields = effectParameters (device->getKind()); juce::isPositiveAndBelow (parts[2].getIntValue(), (int) fields.size()))
+                    if (const auto& field = fields[(size_t) parts[2].getIntValue()]; field.integer || field.choices != nullptr)
+                    {
+                        if (field.maximum - field.minimum <= 1) return applyValue (target, *value >= (field.minimum + field.maximum) * .5f ? field.minimum : field.maximum);
+                        const auto low = std::round (std::min (minimum, maximum)), high = std::round (std::max (minimum, maximum));
+                        const auto next = std::round (*value) + 1;
+                        return applyValue (target, next > high ? low : std::max (low, next));
+                    }
+        const auto lane = laneFor (target);
+        const auto position = [&] (float v) { return lane ? lane->proportion (v) : v; };
+        const auto from = position (minimum), to = position (maximum);
+        const bool upper = from == to || (position (*value) - from) / (to - from) >= .5f;
+        return applyValue (target, upper ? minimum : maximum);
+    }
+    // Buttons that hold a state: a controller sets them on at 64 and above and off below, as the
+    // reference's absolute controllers do, where it presses the others.
+    static bool isSwitchButton (const String& target)
+    {
+        const auto parts = juce::StringArray::fromTokens (target, ":", "");
+        return (parts[0] == "track" && parts[2] != "stop") || (parts[0] == "device" && parts[2] == "on")
+            || (parts[0] == "transport" && (parts[1] == "record" || parts[1] == "loop" || parts[1] == "metronome"));
+    }
+    // A switch button's state: on is an active track (its activator), a soloed or armed one, a
+    // switched-on device, and recording, looping or clicking.
+    Result setSwitchButton (const String& target, bool on)
+    {
+        const auto parts = juce::StringArray::fromTokens (target, ":", "");
+        const auto snapshot = owner.snapshot();
+        if (parts[0] == "transport")
+        {
+            const bool now = parts[1] == "record" ? (snapshot.recording || snapshot.recordWaiting) : parts[1] == "loop" ? snapshot.looping : snapshot.metronome.enabled;
+            return now == on ? Result::ok() : pressButton (target);
+        }
+        if (parts[0] == "track")
+        {
+            const int index = trackIndexOf (parts[1]);
+            if (index < 0) return Result::ok();
+            const auto& info = snapshot.tracks[(size_t) index];
+            if (parts[2] == "mute") return info.mute == ! on ? Result::ok() : owner.setTrackMute (index, ! on);
+            if (parts[2] == "solo") return info.solo == on ? Result::ok() : owner.setTrackSolo (index, on);
+            if (parts[2] == "arm") return info.armed == on ? Result::ok() : owner.setTrackArmed (index, on);
+        }
+        if (parts[0] == "device")
+        {
+            const auto [t, p] = devicePosition (parts[1]);
+            return t >= 0 && plugins (t)[p]->isEnabled() != on ? owner.setPluginEnabled (t, p, on) : Result::ok();
+        }
+        return Result::ok();
     }
     // Maps the learn target to a controller or note, replacing the target's mapping and the
     // controller's or note's: one undo step.
@@ -10945,12 +10997,14 @@ Result Session::handleMidiControl (int channel, int controller, int value)
     if (! mapping) return Result::ok();
     if (isButtonTarget (mapping->target))
     {
-        // The button is pressed as the controller rises above 63, and a clip slot released as it
+        if (! impl->buttonExists (mapping->target)) return Result::ok();
+        // A switch follows the controller: on at 64 and above, off below.
+        if (Impl::isSwitchButton (mapping->target)) return impl->setSwitchButton (mapping->target, value > 63);
+        // Anything else is pressed as the controller rises above 63, and a clip slot released as it
         // falls back, as the reference treats them as a note-on and a note-off.
         auto& last = impl->buttonValues.try_emplace (mapping->target, -1).first->second;
         const bool pressed = value > 63 && last <= 63, released = value <= 63 && last > 63;
         last = value;
-        if (! impl->buttonExists (mapping->target)) return Result::ok();
         return pressed ? impl->pressButton (mapping->target) : released ? impl->releaseButton (mapping->target) : Result::ok();
     }
     const auto lane = impl->laneFor (mapping->target);
@@ -10989,7 +11043,7 @@ Result Session::handleMidiNote (int channel, int note, int velocity)
     // A clip slot is pressed and released with the note; anything else acts on its note-on.
     if (velocity == 0) return impl->releaseButton (mapping->target);
     if (isButtonTarget (mapping->target)) return impl->pressButton (mapping->target);
-    return impl->switchBetween (mapping->target, mapping->minimum, mapping->maximum);
+    return impl->noteOnControl (mapping->target, mapping->minimum, mapping->maximum);
 }
 bool Session::isButtonTarget (const String& target)
 {
@@ -11047,7 +11101,7 @@ Result Session::handleMappedKey (juce::juce_wchar typed, bool& used)
     if (! mapping || ! isMappableTarget (mapping->target)) return Result::ok();
     used = true;
     if (isButtonTarget (mapping->target)) return impl->pressButton (mapping->target);
-    return impl->switchBetween (mapping->target, mapping->minimum, mapping->maximum);
+    return impl->noteOnControl (mapping->target, mapping->minimum, mapping->maximum);
 }
 Result Session::releaseMappedKey (juce::juce_wchar typed)
 {

@@ -1119,7 +1119,7 @@ public:
     // A note, as it arrives from a MIDI input; velocity 0 is its note-off. While learning, a note-on
     // maps the note as a controller would. As in the reference, a mapped note presses a clip slot
     // with its note-on and releases it with its note-off (following the clip's Launch Mode), presses
-    // any other button with its note-on, and switches a control between its mapping's ends. Mapped
+    // any other button with its note-on, and moves a control as a key does (see handleMappedKey). Mapped
     // notes and controllers, and every note and controller while one is being learned, stop acting
     // as track input.
     juce::Result handleMidiNote (int channel, int note, int velocity);
@@ -1128,16 +1128,20 @@ public:
     // Buttons can be mapped too, as in the reference: a track's activator, solo, arm and clip stop
     // ("track:<track>:mute", ":solo", ":arm", ":stop"), a clip slot ("slot:<track>:<scene id>"), a
     // scene ("scene:<scene id>"), a device's on/off ("device:<plugin>:on") and the transport
-    // ("transport:play", ":stop", ":record", ":loop", ":metronome", ":stopClips"). A controller
-    // presses its button each time its value rises above 63; a clip slot is released as it falls to
-    // 63 or below. Pressing toggles a switch, presses a clip slot's launch button (following the
-    // clip's Launch Mode) and launches or plays as a click would.
+    // ("transport:play", ":stop", ":record", ":loop", ":metronome", ":stopClips"). As in the
+    // reference, a controller sets a switch (an activator, solo, arm, device switch, Record, Loop or
+    // Metronome) on at 64 and above and off below, and presses any other button as its value rises
+    // above 63; a clip slot is released as it falls to 63 or below. A note or key presses: it
+    // toggles a switch, presses a clip slot's launch button (following the clip's Launch Mode) and
+    // launches or plays as a click would.
     static bool isButtonTarget (const juce::String& target);
     // Whether a target exists to be mapped: a control with a range, or a button.
     bool isMappableTarget (const juce::String& target) const;
     // Key Map Mode, after the reference: a computer key (a printable character other than a space,
-    // without case) drives one target, and a target has one key. A key presses its button, or
-    // switches a control between its minimum and maximum. While a key learn target is set, the next
+    // without case) drives one target, and a target has one key. A key presses its button. On a
+    // control it toggles a switch, steps a choice to the next (wrapping from the mapping's maximum
+    // to its minimum), and sends anything else to its minimum from at or above the midpoint of the
+    // mapping's range, in fader or knob position, or to its maximum below it. While a key learn target is set, the next
     // key maps to it (one undo step); an empty target ends learning.
     juce::Result setKeyLearnTarget (const juce::String& target);
     juce::Result removeKeyMapping (const juce::String& target);

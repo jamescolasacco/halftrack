@@ -137,22 +137,31 @@ int runKeyMapTests (const juce::File& artifacts)
             check (reopened.loadProject (damaged).failed() && reopened.snapshot().keyMappings == saved, "it is refused, keeping the open project");
         }
 
-        // A controller presses a button as its value rises above 63.
+        // A controller sets a switch on at 64 and above and off below, as the reference's do.
         ok (s.setMidiLearnTarget (mute), "learn the activator for a controller");
         ok (s.handleMidiControl (1, 40, 127), "move controller 40");
         ok (s.setMidiLearnTarget ({}), "leave learning");
         const auto mappings = s.snapshot().midiMappings; // One snapshot for both ends of the range.
         check (std::any_of (mappings.begin(), mappings.end(), [&] (const auto& m) { return m.target == mute && m.controller == 40; }),
                "the button has a controller mapping");
-        const bool before = track (0).mute;
-        ok (s.handleMidiControl (1, 40, 127), "press");
-        check (track (0).mute != before, "rising above 63 presses it");
-        ok (s.handleMidiControl (1, 40, 120), "stay high");
-        check (track (0).mute != before, "staying above 63 does not press again");
-        ok (s.handleMidiControl (1, 40, 0), "release");
-        ok (s.handleMidiControl (1, 40, 64), "press again");
-        check (track (0).mute == before, "rising again presses it again");
+        ok (s.setTrackMute (0, false), "start with the track on");
+        ok (s.handleMidiControl (1, 40, 10), "controller 40 at 10");
+        check (track (0).mute, "below 64 switches the activator off");
+        ok (s.handleMidiControl (1, 40, 30), "at 30");
+        check (track (0).mute, "and it stays off while the controller stays low");
+        ok (s.handleMidiControl (1, 40, 64), "at 64");
+        check (! track (0).mute, "64 switches it on");
+        ok (s.handleMidiControl (1, 40, 127), "at 127");
+        check (! track (0).mute, "and higher values keep it on");
         check (s.setMidiMappingRange (mute, 0, 1).failed(), "a button has no range to set");
+        // A button without a state, such as Play, is pressed as the controller rises above 63.
+        ok (s.setMidiLearnTarget ("transport:play"), "learn Play for a controller"); ok (s.handleMidiControl (1, 41, 0), "with controller 41");
+        ok (s.setMidiLearnTarget ({}), "leave learning");
+        ok (s.handleMidiControl (1, 41, 100), "controller 41 rises");
+        check (s.snapshot().playing, "rising above 63 presses Play");
+        ok (s.handleMidiControl (1, 41, 0), "it falls");
+        check (s.snapshot().playing, "falling presses nothing");
+        s.stop();
         std::cout << "Key map passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL key map: " << e.what() << std::endl; return 1; }

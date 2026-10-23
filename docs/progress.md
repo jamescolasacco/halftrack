@@ -2135,3 +2135,7 @@ Engine and UI areas. From a static reading of the reference's code (findings in 
 
 Engine and UI areas. From a static reading of the reference's code: its record arm and its solo/cue values carry the flag that keeps them out of the undo history, while the activator, renaming and colour stay undoable. Halftrack's track and group solo, cue and record arm are no longer undo steps; undo passes over them to the edit before. They still mark the project changed. Measured in the Session, sends, MIDI input and UI suites with the full gate ([contract](research/solo-arm-contract.md)).
 
+## Remote controls follow the reference's rules — 2026-10-23
+
+Engine area. From a static reading of the reference's remote-control code (findings in the ignored `artifacts/reverse-engineering/notemap/`): a note or key on a control now toggles a two-state switch, steps a choice to the next value and wraps, and sends anything else to Min from at or above the midpoint of its range, or to Max below it. A controller sets a switch (activator, solo, arm, device switch, Record, Loop, Metronome) on at 64 and above and off below, instead of toggling it as it rises. Measured in the MIDI mapping and key map suites.
+

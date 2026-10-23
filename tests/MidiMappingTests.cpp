@@ -179,9 +179,28 @@ int runMidiMappingTests (const juce::File& artifacts)
             check (volumeMapping != nullptr && volumeMapping->note && volumeMapping->controller == 62 && noteMappings.size() == 2,
                    "a target has one mapping: the note replaces the controller");
             ok (n.setMidiMappingRange (firstVolume, -12, 0), "range -12 to 0 dB");
-            check (n.handleMidiNote (1, 62, 30).wasOk() && near (n.snapshot().tracks[0].gainDb, -12), "a note sends the control to the end it is further from");
+            check (n.handleMidiNote (1, 62, 30).wasOk() && near (n.snapshot().tracks[0].gainDb, -12), "from at or above the range's midpoint a note sends the control to Min");
             check (n.handleMidiNote (1, 62, 0).wasOk() && near (n.snapshot().tracks[0].gainDb, -12), "its note-off leaves it there");
-            check (n.handleMidiNote (1, 62, 127).wasOk() && near (n.snapshot().tracks[0].gainDb, 0), "the next note sends it to the other end");
+            check (n.handleMidiNote (1, 62, 127).wasOk() && near (n.snapshot().tracks[0].gainDb, 0), "and from below it, to Max, whatever the velocity");
+            // A choice steps to the next and wraps; a two-state switch toggles.
+            ok (n.addNativeEffect (0, Session::EffectKind::equalizer), "add an Eight-band EQ");
+            const auto eight = n.snapshot().tracks[0].plugins.back().id;
+            const int bandType = effectParameterIndex (Session::EffectKind::equalizer, "band1Type");
+            const auto typeTarget = "device:" + eight + ":" + juce::String (bandType);
+            const auto bandValue = [&] { return n.snapshot().tracks[0].plugins.back().effect.values[(size_t) bandType]; };
+            ok (n.setMidiLearnTarget (typeTarget), "learn band 1's mode"); ok (n.handleMidiNote (1, 64, 100), "with E3"); ok (n.setMidiLearnTarget ({}), "end learning");
+            check (bandValue() == 1 && n.handleMidiNote (1, 64, 100).wasOk() && bandValue() == 2, "a note steps a choice to the next, from Bell to Low shelf");
+            ok (n.setMidiMappingRange (typeTarget, 1, 3), "a range of the second to fourth modes");
+            std::vector<float> steps;
+            for (int i = 0; i < 3; ++i) { ok (n.handleMidiNote (1, 64, 100), "step"); steps.push_back (bandValue()); }
+            check (steps == std::vector<float> { 3, 1, 2 }, "the steps run to Max and wrap back to Min");
+            ok (n.addNativeEffect (0, Session::EffectKind::channelEq), "add a Channel EQ");
+            const auto channel = n.snapshot().tracks[0].plugins.back().id;
+            const int highPass = effectParameterIndex (Session::EffectKind::channelEq, "highPass");
+            const auto hpTarget = "device:" + channel + ":" + juce::String (highPass);
+            const auto hpValue = [&] { return n.snapshot().tracks[0].plugins.back().effect.values[(size_t) highPass]; };
+            ok (n.setMidiLearnTarget (hpTarget), "learn HP 80 Hz"); ok (n.handleMidiNote (1, 65, 100), "with F3"); ok (n.setMidiLearnTarget ({}), "end learning");
+            check (n.handleMidiNote (1, 65, 100).wasOk() && hpValue() == 1 && n.handleMidiNote (1, 65, 100).wasOk() && hpValue() == 0, "a note toggles a two-state switch");
 
             // Clip slots follow the clip's Launch Mode: Gate plays while the note or controller is held.
             ok (n.addMidiTrack ("Keys"), "add a MIDI track");
