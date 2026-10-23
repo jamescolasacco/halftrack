@@ -1288,6 +1288,8 @@ public:
     juce::Result tapTempo (double monotonicSeconds); // Message-thread tap time, not project time.
     juce::Result setMetronome (const MetronomeSettings&);
     juce::Result setRecordQuantisation (RecordQuantisation);
+    // The Arrangement loop: its switch and brace. Saved with the project; as in the reference, not an
+    // undo step.
     void setLoop (bool enabled, double startSeconds, double endSeconds);
     juce::Result addLocator (double seconds, const juce::String& name, juce::String& createdId);
     juce::Result updateLocator (const juce::String& id, const juce::String& name, double seconds);

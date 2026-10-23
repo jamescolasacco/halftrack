@@ -12036,13 +12036,12 @@ void Session::setLoop (bool enabled, double start, double end)
     if (impl->exporting) return;
     if (! std::isfinite (start) || ! std::isfinite (end) || start < 0 || end <= start) return;
     auto& t = impl->edit->getTransport();
-    impl->transaction ("Loop range");
-    auto* undo = &impl->edit->getUndoManager();
-    // Transport defaults to non-undoable navigation. User-edited loop bounds
-    // are document edits, so supply the edit's undo manager explicitly.
-    t.loopPoint1.setValue (te::TimePosition::fromSeconds (start), undo);
-    t.loopPoint2.setValue (te::TimePosition::fromSeconds (end), undo);
-    t.looping.setValue (enabled, undo);
+    // As the reference's loop (static reading of its code: its loop members carry the flag that keeps
+    // them out of the undo history), the loop is a transport setting saved with the project but not
+    // an undo step, as the punch switches are.
+    t.loopPoint1.setValue (te::TimePosition::fromSeconds (start), nullptr);
+    t.loopPoint2.setValue (te::TimePosition::fromSeconds (end), nullptr);
+    t.looping.setValue (enabled, nullptr);
     impl->changed();
 }
 Result Session::addLocator (double seconds, const String& requestedName, String& createdId)

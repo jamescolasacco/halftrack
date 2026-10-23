@@ -669,11 +669,13 @@ int runSessionTests (const juce::File& requestedDirectory)
         success (session.moveClip (0, 0, 0.5), "finish clip drag");
         session.endEditGesture(); session.undo();
         require (std::abs (session.snapshot().tracks[0].clips[0].start) < 0.001, "one undo restores entire clip gesture");
-        session.beginEditGesture ("Loop range");
+        // The loop is not an undo step, as in the reference: the clip move just undone can still be redone.
+        const bool couldRedo = session.canRedo();
+        const auto loopBefore = session.snapshot();
         session.setLoop (true, 0.2, 0.8); session.setLoop (true, 0.3, 0.9);
-        session.endEditGesture(); session.undo();
-        require (session.snapshot().loopStart == 0 && session.snapshot().loopEnd == 8,
-                 "one undo restores entire loop range gesture");
+        require (couldRedo && session.canRedo() && session.snapshot().loopStart == 0.3 && session.snapshot().loopEnd == 0.9 && session.snapshot().looping,
+                 "loop range changes are not undo steps and leave the redo history");
+        session.setLoop (loopBefore.looping, loopBefore.loopStart, loopBefore.loopEnd);
         success (session.setTrackGain (0, -6.0206f), "set half gain");
         success (session.exportWav (root.getChildFile ("gain.wav")), "render changed gain");
         compare (read (root.getChildFile ("gain.wav")), unity, 0.5f, 0.5f, "gain");

@@ -778,3 +778,7 @@ Defaults where the reference's remote control is not followed ([MIDI mapping](re
 - **Learning over a mapping.** Learning a note or controller already mapped elsewhere moves it without the reference's confirmation.
 - **Solo and arm timing.** The reference gathers solo and arm presses from remote controls on a short timer and applies them together; Halftrack applies each at once.
 
+### The loop brace
+
+The reference's manual says Up and Down move a selected loop brace "in steps equal to its length" without naming a direction; Halftrack moves it earlier with Up and later with Down, and doubles it with Cmd/Ctrl+Up. A click on the brace selects the loop's time across every track as Select Loop; whether the reference's also selects the clips inside is not checked. Dragging a handle past the other end stops a grid step short ([contract](research/transport-contract.md)).
+

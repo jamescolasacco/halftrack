@@ -2162,3 +2162,7 @@ Engine, UI and root areas. From a static reading of the reference's code (findin
 - **Measured.** The launch-modes suite renders the levels within 2e-7 of an independent model of the scale and reads the MIDI velocities through a MIDI Monitor. The UI suite edits Velocity.
 - **Also.** The transport and external-sync suites allow for a loaded runner starting late after a jump or Continue.
 
+## The loop brace — 2026-10-23
+
+UI and engine areas. The Arrangement's loop brace now drags as the reference's manual describes. Its bar moves the loop and its handles move its ends, on the grid. A click selects the loop's time across the tracks. While it is selected, the arrow keys move it, and with Cmd/Ctrl resize, double or halve it. Loop changes are no longer undo steps, as the reference keeps its loop out of the undo history (static reading of its code). Measured in the UI and Session suites ([contract](research/transport-contract.md)).
+

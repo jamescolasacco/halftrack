@@ -14,6 +14,15 @@ Halftrack's Play, Stop, Continue and locate follow the reference's [Arrangement 
   - Shift reverses the preference, as the manual says ("holding Shift while pressing Arrangement Record will engage the opposite behavior").
   - `Session::recordButton (shift)` does all this; `Session::record` presses it without Shift; `Snapshot::recordWaiting` reports the wait.
 - **With the loop on** (static reading of the reference's code), Play and Record still start from the insert marker. From before the loop the play head rolls into it and loops once inside; from at or past its end it plays on and never loops. A jump while playing goes where it is asked and behaves the same way. Before, the engine jumped to the loop's start, and clamped jumps into the loop ([dependencies](../dependencies.md#tracktion-loop-playback-patch)).
+- **The loop brace**, as the reference's manual describes it (Arrangement View chapter, consulted 2026-10-23):
+  - Dragging its bar moves the whole loop and keeps its length.
+  - Dragging its start or end handle moves that end.
+  - Both drags snap to the grid unless the grid is bypassed (Cmd on a Mac), and a loop keeps at least one grid step.
+  - Clicking the brace selects the loop's time across every track, as the reference's Select Loop does, and selects the brace.
+  - While the brace is selected, Left and Right move it by a grid step and Up and Down by its length. With Cmd/Ctrl, Left and Right shorten and lengthen it by a grid step, and Up and Down double and halve its length.
+  - Shift-dragging the ruler still draws a new loop and turns it on.
+  - Moving or resizing the brace leaves the loop's switch as it was.
+  - None of this is an undo step: the reference keeps its loop out of the undo history (static reading of its code), as Halftrack keeps the punch switches. `Session::setLoop` changes the loop without an undo step and marks the project changed.
 - **Set Song Start Time Here**, in the loop brace's context menu (static reading of the reference's code). While it is on, Play and Record from a stop start at the loop's start, the loop on or off, leaving the insert marker where it is. It is kept with the project and each change is one undo step (`Session::setLoopIsSongStart`, `Snapshot::loopIsSongStart`).
 - **A locator as the song's start.** A locator's context menu offers its own Set Song Start Time Here (static reading of the reference's code). Play and Record from a stop then start at the locator. One thing holds the song's start at a time: setting it on a locator takes it from the loop brace or another locator, and the loop brace's item takes it from a locator. Moving the locator moves the song's start and deleting it clears it. It is kept with the project as `halftrackSongStart` on the locator, each change is one undo step, and a project with two song starts is refused (`Session::setLocatorSongStart`, `LocatorInfo::songStart`). The ruler marks the song's start with a small play triangle in the locator row.
 - **Stop** leaves the play position where playback stopped. **Shift+Space** continues from there.
@@ -45,6 +54,14 @@ Halftrack's Play, Stop, Continue and locate follow the reference's [Arrangement 
 
 `tests/TakeLanesTests.cpp` ends a loop recording with the Record button: playback carries on round the loop, and its 2.5 passes are cut into lanes as at Stop.
 
-The main UI suite checks lane clicks while stopped and playing, Space, Shift+Space, the second Stop and Home. It finds Set Song Start Time Here in the ruler's menu on the loop brace only, and switches it on and off; on a locator the menu offers the locator's own item instead, which makes the locator the song's start, marked in the ruler. The locator suite reopens a locator holding the song's start and refuses a project in which the loop holds it too. It presses the Record button: lit and waiting with Start Playback with Record off, then recording and playing, then ending the recording with playback running on.
+The main UI suite checks lane clicks while stopped and playing, Space, Shift+Space, the second Stop and Home. On a fixed quarter-note grid it checks:
+
+- dragging the loop brace's bar two beats later;
+- dragging its start and end handles to the nearest beats;
+- a click selecting the loop's time across the tracks;
+- Right, Down and Up moving the brace, and Cmd/Ctrl+Up, Down and Left doubling, halving and shortening it;
+- that none of these is an undo step, and that the loop's switch is unchanged.
+
+The Session suite checks that loop changes leave the redo history. It finds Set Song Start Time Here in the ruler's menu on the loop brace only, and switches it on and off; on a locator the menu offers the locator's own item instead, which makes the locator the song's start, marked in the ruler. The locator suite reopens a locator holding the song's start and refuses a project in which the loop holds it too. It presses the Record button: lit and waiting with Start Playback with Record off, then recording and playing, then ending the recording with playback running on.
 
 Missing: quantized scrub jumps, holding in the scrub area to loop, the marker shown only on the clicked track, and checks of sounding notes and delay tails across jumps.

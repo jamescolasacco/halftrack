@@ -3204,6 +3204,25 @@ private:
             if (owner.state.loopIsSongStart) return owner.state.loopStart;
             return std::nullopt;
         }
+        // The loop brace's handles and bar, which the reference drags: the start or end handle moves
+        // that end, the bar moves the whole loop.
+        enum class BracePart { none, start, end, bar };
+        BracePart bracePart (juce::Point<float> point) const
+        {
+            if (point.y >= 14 || point.x < 0 || point.x >= owner.canvas.timelineWidth()) return BracePart::none;
+            const auto x1 = (float) ((owner.state.loopStart - owner.viewStart) * owner.pixelsPerSecond);
+            const auto x2 = (float) ((owner.state.loopEnd - owner.viewStart) * owner.pixelsPerSecond);
+            if (std::abs (point.x - x1) <= 4) return BracePart::start;
+            if (std::abs (point.x - x2) <= 4) return BracePart::end;
+            return point.x > x1 && point.x < x2 ? BracePart::bar : BracePart::none;
+        }
+        // The brace once clicked: the arrow keys move and resize it, as the reference's.
+        bool braceSelected = false;
+        void moveBrace (double startBeat, double endBeat)
+        {
+            if (startBeat < 0) { endBeat -= startBeat; startBeat = 0; }
+            owner.session.setLoop (owner.state.looping, owner.secondsAt (startBeat), owner.secondsAt (endBeat)); owner.refresh();
+        }
         juce::String hitLocator (juce::Point<float> point) const
         {
             if (point.x < 0 || point.x >= owner.canvas.timelineWidth()) return {};
@@ -3220,6 +3239,7 @@ private:
             const auto x2=(float)((owner.state.loopEnd-owner.viewStart)*owner.pixelsPerSecond);
             g.setColour (owner.state.looping?orange:muted.withAlpha (.55f));
             g.fillRect (x1,3.0f,juce::jmax (1.0f,x2-x1),3.0f);g.fillRect (x1,3.0f,2.0f,9.0f);g.fillRect (x2-2,3.0f,2.0f,9.0f);
+            if (braceSelected) { g.setColour (ink);g.drawRect (juce::Rectangle<float> (x1-1,2.0f,juce::jmax (3.0f,x2-x1+2),11.0f),1.0f); }
             // Bar numbers at the bars' times on the tempo map, spaced at least 48 pixels apart at the playhead's tempo.
             const auto barBeats=owner.state.timeSignature.beatsPerBar(),barWidth=barBeats*60.0/owner.state.tempo*owner.pixelsPerSecond;
             const auto stepBars=juce::jmax (1.0,std::pow (2.0,std::ceil (std::log2 (48.0/juce::jmax (1.0e-6,barWidth)))));
@@ -3266,7 +3286,14 @@ private:
             const auto hit=hitLocator (event.position);
             if (event.mods.isPopupMenu()) { showMenu (hit,anchor);return; }
             definingLoop=event.mods.isShiftDown();
-            if (definingLoop) {owner.session.beginEditGesture ("Loop range");return;}
+            braceDrag=definingLoop?BracePart::none:bracePart (event.position);
+            braceSelected=braceDrag!=BracePart::none;
+            if (definingLoop) return;
+            if (braceDrag!=BracePart::none)
+            {
+                downX=event.x;braceStart=owner.beatsAt (owner.state.loopStart);braceEnd=owner.beatsAt (owner.state.loopEnd);
+                selected.clear();owner.refresh();return;
+            }
             if (hit.isNotEmpty())
             {
                 selected=hit;dragId=hit;downX=event.x;
@@ -3286,6 +3313,19 @@ private:
         void mouseDrag (const juce::MouseEvent& event) override
         {
             if (owner.session.isExporting()) return;
+            if (braceDrag!=BracePart::none)
+            {
+                if (! event.mouseWasDraggedSinceMouseDown()) return;
+                const auto at=[this] (int x) { return owner.beatsAt (juce::jmax (0.0,owner.viewStart+x/owner.pixelsPerSecond)); };
+                const auto grid=owner.gridBeats();const bool snap=owner.snaps (event.mods);
+                const auto snapped=[&] (double beat) { return snap ? std::round (beat/grid)*grid : beat; };
+                const auto least=snap ? grid : 1.0/64;
+                auto start=braceStart,end=braceEnd;
+                if (braceDrag==BracePart::bar) { start=juce::jmax (0.0,snapped (braceStart+at (event.x)-at (downX)));end=start+(braceEnd-braceStart); }
+                else if (braceDrag==BracePart::start) start=juce::jlimit (0.0,end-least,snapped (at (event.x)));
+                else end=juce::jmax (start+least,snapped (at (event.x)));
+                moveBrace (start,end);return;
+            }
             if (definingLoop)
             {
                 const auto grid=owner.gridBeats(),cursor=juce::jmax (0.0,owner.viewStart+event.x/owner.pixelsPerSecond);
@@ -3303,24 +3343,56 @@ private:
                 owner.report (owner.session.updateLocator (dragId,marker.name,time));owner.refresh();return;
             }
         }
-        void mouseUp (const juce::MouseEvent&) override
+        void mouseUp (const juce::MouseEvent& event) override
         {
-            if (definingLoop || locatorGesture)owner.session.endEditGesture();
-            definingLoop=false;locatorGesture=false;dragId.clear();
+            // Clicking the brace selects the loop's time across the tracks, as the reference's Select Loop.
+            if (braceDrag!=BracePart::none && ! event.mouseWasDraggedSinceMouseDown())
+            {
+                juce::StringArray ids;for (const auto& t:owner.state.tracks) ids.add (t.id);
+                owner.timeSelection={ owner.state.loopStart,owner.state.loopEnd,ids };owner.refresh();
+            }
+            if (locatorGesture)owner.session.endEditGesture();
+            definingLoop=false;locatorGesture=false;dragId.clear();braceDrag=BracePart::none;
         }
+        void focusLost (FocusChangeType) override { if (braceSelected) { braceSelected=false;repaint(); } }
         bool keyPressed (const juce::KeyPress& key) override
         {
             if (owner.session.isExporting())return true;
             if ((key.getKeyCode()==juce::KeyPress::deleteKey || key.getKeyCode()==juce::KeyPress::backspaceKey)&&selected.isNotEmpty())
             {owner.report (owner.session.removeLocator (selected));owner.refresh();return true;}
+            // A selected brace, as the reference's: Left and Right move it by the grid, Up and Down by its
+            // length; with Cmd/Ctrl, Left and Right shorten and lengthen it by the grid, and Up and Down
+            // double and halve it.
+            if (braceSelected)
+            {
+                const auto code=key.getKeyCode();
+                const bool horizontal=code==juce::KeyPress::leftKey || code==juce::KeyPress::rightKey, vertical=code==juce::KeyPress::upKey || code==juce::KeyPress::downKey;
+                if (horizontal || vertical)
+                {
+                    const auto start=owner.beatsAt (owner.state.loopStart),end=owner.beatsAt (owner.state.loopEnd),length=end-start,grid=owner.gridBeats();
+                    const bool later=code==juce::KeyPress::rightKey || code==juce::KeyPress::downKey;
+                    if (key.getModifiers().isCommandDown())
+                    {
+                        if (horizontal) moveBrace (start,juce::jmax (start+grid,end+(later?grid:-grid)));
+                        else moveBrace (start,code==juce::KeyPress::upKey ? start+length*2 : start+juce::jmax (length/2,1.0/64));
+                    }
+                    else
+                    {
+                        const auto step=horizontal?grid:length;
+                        moveBrace (start+(later?step:-step),end+(later?step:-step));
+                    }
+                    return true;
+                }
+            }
             return owner.handleKey (key);
         }
     private:
         Impl& owner;
         juce::TextButton add {"Add locator"},previous {"<"},next {">"},automationMode {"Automation Mode"};
         juce::String selected,dragId;
-        double anchor=0,original=0;int downX=0;
+        double anchor=0,original=0,braceStart=0,braceEnd=0;int downX=0;
         bool definingLoop=false,locatorGesture=false;
+        BracePart braceDrag=BracePart::none;
     public:
         // The ruler's menu, and acting on a choice from it; the UI suite uses both.
         juce::PopupMenu menuFor (const juce::String& id,double position) const
@@ -16052,6 +16124,57 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "without a default set, New starts from the built-in one, as the reference's does");
         check (session.newProject().wasOk(), "leave the template behind"); refresh();
         library.deleteRecursively();
+    }
+    {
+        // The loop brace, as the reference's: dragging its bar moves the loop and its handles move its
+        // ends, on the grid; a click selects the loop's time; arrow keys move and resize it; none of it
+        // is an undo step, and the loop's switch stays as it was.
+        check (session.newProject().wasOk(), "a new project for the loop brace"); refresh();
+        showArrangementView(); refresh();
+        Session::EditGrid quarters; quarters.fixed = true; quarters.numerator = 1; quarters.denominator = 4;
+        check (session.setEditGrid (quarters).wasOk(), "a fixed quarter-note grid"); refresh();
+        session.setLoop (false, 2, 4); refresh(); // Beats 4 to 8 at 120 BPM.
+        const bool couldUndo = session.canUndo();
+        const auto xAt = [&] (double seconds) { return (float) ((seconds - viewStart) * pixelsPerSecond); };
+        const auto mouse = [&] (float x, juce::Point<float> down, bool dragged)
+        {
+            const auto now = juce::Time::getCurrentTime();
+            return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { x, 6.0f }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f,
+                                     0, 0, 0, 0, &ruler, &ruler, now, down, now, 1, dragged);
+        };
+        const auto drag = [&] (double fromSeconds, double toSeconds)
+        {
+            const juce::Point<float> down { xAt (fromSeconds), 6.0f };
+            ruler.mouseDown (mouse (down.x, down, false)); ruler.mouseDrag (mouse (xAt (toSeconds), down, true)); ruler.mouseUp (mouse (xAt (toSeconds), down, true)); refresh();
+        };
+        const auto loopIs = [&] (double start, double end) { return std::abs (state.loopStart - start) < 1e-6 && std::abs (state.loopEnd - end) < 1e-6 && ! state.looping; };
+        drag (3, 4.1);
+        check (loopIs (3, 5), "dragging the brace's bar 1.1 s later moves the loop two beats, on the grid");
+        drag (3, 3.6);
+        check (loopIs (3.5, 5), "dragging its start handle moves its start to the nearest beat");
+        drag (5, 6.2);
+        check (loopIs (3.5, 6), "dragging its end handle moves its end");
+        {
+            const juce::Point<float> down { xAt (4.5), 6.0f };
+            ruler.mouseDown (mouse (down.x, down, false)); ruler.mouseUp (mouse (down.x, down, false)); refresh();
+        }
+        check (std::abs (timeSelection.start - 3.5) < 1e-6 && std::abs (timeSelection.end - 6) < 1e-6 && timeSelection.trackIds.size() == (int) state.tracks.size(),
+               "clicking the brace selects the loop's time across the tracks");
+        ruler.keyPressed (juce::KeyPress (juce::KeyPress::rightKey)); refresh();
+        check (loopIs (4, 6.5), "Right moves the selected brace a grid step later");
+        ruler.keyPressed (juce::KeyPress (juce::KeyPress::downKey)); refresh();
+        check (loopIs (6.5, 9), "Down moves it by its length");
+        ruler.keyPressed (juce::KeyPress (juce::KeyPress::upKey)); refresh();
+        check (loopIs (4, 6.5), "and Up back");
+        ruler.keyPressed (juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys::commandModifier, 0)); refresh();
+        check (loopIs (4, 9), "Cmd/Ctrl+Up doubles its length");
+        ruler.keyPressed (juce::KeyPress (juce::KeyPress::downKey, juce::ModifierKeys::commandModifier, 0)); refresh();
+        check (loopIs (4, 6.5), "Cmd/Ctrl+Down halves it");
+        ruler.keyPressed (juce::KeyPress (juce::KeyPress::leftKey, juce::ModifierKeys::commandModifier, 0)); refresh();
+        check (loopIs (4, 6), "Cmd/Ctrl+Left shortens it by a grid step");
+        check (session.canUndo() == couldUndo, "none of it is an undo step, as in the reference");
+        timeSelection = {};
+        check (session.newProject().wasOk(), "leave the loop brace project"); refresh();
     }
     {
         // Insert puts a track after the selected one and selects it alone, as the reference's does.
