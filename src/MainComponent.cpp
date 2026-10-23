@@ -8,6 +8,7 @@
 #include "BinaryData.h"
 #include "BuildInfo.h"
 #include "Collections.h"
+#include "MidiMonitor.h"
 #include "NativeEffects.h"
 #include "RackEditor.h"
 #include "SoundSimilarity.h"
@@ -4484,7 +4485,7 @@ private:
                 }
                 else
                     for (const auto& m : owner.state.midiMappings)
-                        if (m.target == t.key) g.drawFittedText (juce::String (m.channel) + "/" + juce::String (m.controller), r.toNearestInt(), juce::Justification::centred, 1);
+                        if (m.target == t.key) g.drawFittedText (juce::String (m.channel) + "/" + (m.note ? midimonitor::noteName (m.controller) : juce::String (m.controller)), r.toNearestInt(), juce::Justification::centred, 1);
                 if ((keys ? owner.state.keyLearnTarget : owner.state.midiLearnTarget) == t.key) { g.setColour (keys ? themes::colour (0xffffffff) : orange); g.drawRect (r.expanded (1), 2.0f); }
             }
         }
@@ -4534,6 +4535,9 @@ private:
                 g.drawFittedText ("Click a blue control, then move a knob or fader on your MIDI controller.", getLocalBounds().withTrimmedTop (24).reduced (8), juce::Justification::centredTop, 4);
             }
         }
+        // A mapping's controller or note, for the list: "Ch 1  CC 7" or "Ch 1  Note C3".
+        static juce::String controllerText (const Session::MidiMapping& m)
+        { return "Ch " + juce::String (m.channel) + (m.note ? "  Note " + midimonitor::noteName (m.controller) : "  CC " + juce::String (m.controller)); }
         // The control a target names, for the list.
         juce::String describe (const juce::String& target) const
         {
@@ -4618,10 +4622,10 @@ private:
             void paint (juce::Graphics& g) override
             {
                 g.setColour (ink); g.setFont (font (10.5f));
-                g.drawText (list.describe (target), 4, 0, getWidth() - 70, 18, juce::Justification::centredLeft, true);
+                g.drawText (list.describe (target), 4, 0, getWidth() - 94, 18, juce::Justification::centredLeft, true);
                 g.setColour (muted); g.setFont (font (10.0f));
                 g.drawText (forKey ? "Key " + juce::String::charToString (juce::CharacterFunctions::toUpperCase (keyMapping.key))
-                                   : "Ch " + juce::String (mapping.channel) + "  CC " + juce::String (mapping.controller), getWidth() - 70, 0, 66, 18, juce::Justification::centredRight);
+                                   : MappingList::controllerText (mapping), getWidth() - 90, 0, 86, 18, juce::Justification::centredRight);
                 g.setColour (line); g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
             }
         private:
@@ -6429,11 +6433,7 @@ private:
         {
             return { (float) (keysWidth + (note.startBeat - viewBeat) * pixelsPerBeat), (float) (gridTop + (topPitch - note.pitch) * rowHeight + 1), (float) juce::jmax (3.0, note.lengthBeats * pixelsPerBeat), (float) rowHeight - 2 };
         }
-        static juce::String pitchName (int pitch)
-        {
-            static const char* names[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
-            return juce::String (names[pitch % 12]) + juce::String (pitch / 12 - 1);
-        }
+        static juce::String pitchName (int pitch) { return midimonitor::noteName (pitch); } // C3 is note 60, as in the reference.
         const Session::MidiNoteInfo* selectedNote() const
         {
             if (const auto* clip = owner.currentMidiClip()) for (const auto& note : clip->notes) if (note.id == selectedNoteId) return &note;
@@ -7889,7 +7889,16 @@ private:
         for (const auto& event : computerKeys.release ([] (int code) { return juce::KeyPress::isKeyCurrentlyDown (code); }))
             session.computerKeyboardNote (event.note, 0, false);
     }
-    bool keyStateChanged (bool) override { releaseComputerKeys(); return false; }
+    bool keyStateChanged (bool) override { releaseComputerKeys(); releaseMappedKeys(); return false; }
+    // Mapped keys being held, by key code: a held key does not press again as it repeats, and its
+    // release releases a clip slot it pressed, as the reference's keys follow a clip's Launch Mode.
+    std::map<int, juce::juce_wchar> heldMappedKeys;
+    void releaseMappedKeys()
+    {
+        for (auto held = heldMappedKeys.begin(); held != heldMappedKeys.end();)
+            if (juce::KeyPress::isKeyCurrentlyDown (held->first)) ++held;
+            else { report (session.releaseMappedKey (held->second)); held = heldMappedKeys.erase (held); refresh(); }
+    }
     void setMidiMapMode (bool on)
     {
         if (on && keyMapMode) setKeyMapMode (false);
@@ -7924,9 +7933,11 @@ private:
             report (session.removeKeyMapping (state.keyLearnTarget)); refresh(); return true;
         }
         if (keyMapMode && state.keyLearnTarget.isEmpty()) return false;
+        if (heldMappedKeys.count (key.getKeyCode()) != 0) return true; // Repeating while held.
         bool used = false;
         const auto result = session.handleMappedKey (key.getTextCharacter(), used);
         if (! used) return false;
+        heldMappedKeys[key.getKeyCode()] = key.getTextCharacter();
         report (result); refresh(); return true;
     }
     GrooveBox clipGroove { *this };
@@ -11759,6 +11770,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.midiMappings.size() == 1 && state.midiMappings[0].controller == 7 && minimum != nullptr && minimum->isVisible() && mappingList.isVisible(), "it maps the fader and the list shows the mapping");
         minimum->setValue (-30, juce::sendNotificationSync);
         check (std::abs (state.midiMappings[0].minimum + 30) < 1e-3, "the list's Min edits the mapping");
+        report (session.setMidiLearnTarget ("track:" + state.tracks[0].id + ":solo"));
+        check (session.handleMidiNote (1, 60, 100).wasOk(), "a note arrives for the track's solo switch"); refresh();
+        check (state.midiMappings.size() == 2 && state.midiMappings[1].note && state.midiMappings[1].controller == 60, "the note maps the switch");
+        check (MappingList::controllerText (state.midiMappings[1]) == "Ch 1  Note C3" && MappingList::controllerText (state.midiMappings[0]) == "Ch 1  CC 7",
+               "the list names the note as the reference does, C3 for note 60, beside the controller");
+        report (session.removeMidiMapping ("track:" + state.tracks[0].id + ":solo")); refresh();
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
             {
@@ -11791,7 +11808,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         mapOverlay.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), centre, {}, 1.0f, 0, 0, 0, 0, &mapOverlay, &mapOverlay, now, centre, now, 1, false));
         refresh();
         check (state.keyLearnTarget == muteKey, "clicking it selects it");
-        handleKey (juce::KeyPress ('Q', {}, 'q')); refresh();
+        handleKey (juce::KeyPress ('Q', {}, 'q')); keyStateChanged (false); refresh();
         check (state.keyMappings.size() == 1 && state.keyMappings[0].target == muteKey && state.keyMappings[0].key == 'q' && findNamed (mappingList, "Remove mapping") != nullptr,
                "Q maps it, and the list shows it");
         keyMapButton.setToggleState (false, juce::dontSendNotification); keyMapButton.onClick(); refresh();
@@ -11799,7 +11816,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const bool muted = state.tracks[0].mute;
         handleKey (juce::KeyPress ('Q', {}, 'q')); refresh();
         check (state.tracks[0].mute != muted, "outside the mode, Q switches the track");
-        handleKey (juce::KeyPress ('Q', {}, 'q')); refresh();
+        check (handleKey (juce::KeyPress ('Q', {}, 'q')) && state.tracks[0].mute != muted, "holding Q does not switch it again as the key repeats");
+        keyStateChanged (false); // Q goes up.
+        handleKey (juce::KeyPress ('Q', {}, 'q')); keyStateChanged (false); refresh();
+        check (state.tracks[0].mute == muted, "pressed again after its release, Q switches it back");
         setKeyMapMode (true); report (session.setKeyLearnTarget (muteKey)); refresh();
         handleKey (juce::KeyPress (juce::KeyPress::backspaceKey)); refresh();
         check (state.keyMappings.empty(), "Backspace removes the selected control's mapping");

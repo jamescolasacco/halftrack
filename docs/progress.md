@@ -2116,3 +2116,14 @@ UI area. View > Mixer Controls shows and hides the Session mixer's In/Out, Sends
 
 Engine and UI areas. The global launch quantization offers the reference's grids: None, 8, 4, 2 and 1 Bars, 1/2, 1/2T, 1/4, 1/4T, 1/8, 1/8T, 1/16, 1/16T and 1/32. It offered only None, 1/4 and 1 Bar before. Clips' and the preferences' grids gain the same triplets. The launcher suite checks a launch on the eighth-triplet grid, and the UI suite checks the menu.
 - **Record quantization** gains the reference's combined 1/8 + 1/8T and 1/16 + 1/16T grids, each snapping a note to the nearer of its straight and triplet points. The Edit menu lists all of them in the reference's order and names. The MIDI input suite checks every grid against independent arithmetic.
+
+## MIDI note mappings — 2026-10-23
+
+Engine, UI and root areas (a new Tracktion patch). Following the reference manual's MIDI and Key Remote Control chapter:
+
+- **Notes map like controllers.** In MIDI Map Mode a note-on maps the note. A mapped note presses a clip slot with its note-on and releases it with its note-off, toggles a switch, and switches a control between its Min and Max. The list and overlay name notes as the reference does ("Ch 1  Note C3", C3 being note 60).
+- **Releases.** A clip slot follows its clip's Launch Mode whatever presses it: a controller releases it as it falls to 63 or below, and a computer key as it goes up, so Gate and Repeat clips play while held. A held mapped key no longer presses again as the key repeats.
+- **Track input.** Mapped notes and controllers, and every note and controller while one is being learned, stop acting as track input, so a note that launches a clip does not also play or record on an armed track. A new engine patch, `cmake/PatchRemoteMidi.cmake`, lets the Session's MIDI remote take messages before the input's tracks.
+- **Piano editor.** Its note names now put C3 at note 60, as the reference and the rest of Halftrack do.
+- **Measured.** The MIDI mapping, key map and UI suites, including a virtual controller feeding an armed MIDI track; with the remote passing everything through, the track-input check fails.
+

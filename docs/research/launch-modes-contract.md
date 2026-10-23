@@ -23,6 +23,8 @@ Legato starts the launched clip from the playing clip's position on that track i
 
 Repeat uses the engine launch handle's repeat loop (`LaunchHandle::setLooping`). The loop duration is one grid step at the play head, measured from the time-signature-aware grid. No UI timer runs, and the retrigger is sample-accurate in graph processing. Any launch, stop or transport cancellation on the track clears the loop. Held Gate/Repeat buttons are tracked per track and dropped when another launch replaces them, so a stale release cannot stop a different launch.
 
+A clip slot mapped to a MIDI note, a controller or a computer key is pressed and released the same way: by the note-on and note-off, by the controller rising above 63 and falling back, or by the key going down and up (see the [MIDI mapping](midi-mapping-contract.md) and [key map](key-map-contract.md) contracts).
+
 The interface sends a press on mouse down over a slot's launch triangle and a release on mouse up. Enter sends a press and ignores key repeat. It sends the release when the key goes up or keyboard focus leaves the launcher. The clip view shows a Launch box: between the Clip and Sample boxes for Session audio clips, and to the left of the note editor for Session MIDI clips.
 
 ## Engine correction
@@ -45,9 +47,7 @@ UI checks cover the Launch box controls, mouse and Enter press/release, and Togg
 
 ## Not implemented
 
-- Triplet grids.
 - Launch velocity amount.
-- Launch button MIDI/key mapping.
 - Gate/Repeat on scene launches.
 - Weighted follow actions in the Launch box.
 - Any comparison with reference launch timing.

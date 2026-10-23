@@ -767,3 +767,12 @@ Defaults where the reference does not map onto the engine ([contract](research/o
 - **Undo.** Changing the Master Out is kept with the project and marks it changed, but is not an undo step.
 - **Cue.** See [the cue](#cue).
 
+### MIDI and key mappings
+
+Defaults where the reference's remote control is not followed ([MIDI mapping](research/midi-mapping-contract.md), [key map](research/key-map-contract.md)):
+
+- **Remote switches.** Every MIDI input acts as a remote, except the computer keyboard and All MIDI Ins (whose sources already do). The reference has a Remote switch per input port.
+- **Note ranges.** A note maps alone. The reference can map a range of keys to a slot to play it chromatically, or spread a control's values across a range.
+- **Launch velocity.** A note's velocity does not change the launched clip's volume yet.
+- **Controller switches.** A controller presses a switch as it rises above 63 rather than setting it on at 64 and above and off below, and a switch control takes the nearest step along its range rather than turning on inside Min–Max.
+

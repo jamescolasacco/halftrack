@@ -7,8 +7,8 @@
 // keys pressing a track's activator, solo, arm and clip stop, a device's switch, clip slots,
 // scenes and the transport; a key switching a control between its ends; one key per target and
 // one target per key; unmapped and unprintable keys left alone; mappings removed, hidden with
-// their target, reopened and refused when damaged; and a controller pressing a button as its value
-// rises above 63.
+// their target, reopened and refused when damaged; a key's release ending a Gate clip; and a
+// controller pressing a button as its value rises above 63.
 namespace halftrack
 {
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
@@ -103,6 +103,13 @@ int runKeyMapTests (const juce::File& artifacts)
         check (press (s, 'g') && settle (false), "G stops the track's clip");
         check (press (s, 'h') && settle (true), "H launches the scene");
         press (s, 'g'); settle (false); s.stop();
+        // A key follows the clip's Launch Mode, as in the reference: a Gate clip plays while it is held.
+        ok (s.setClipLaunchSettings (track (keys).slots[0].clip.id, { Session::LaunchMode::gate, Session::ClipQuantisation::none, false }), "make the clip Gate");
+        check (press (s, 'j') && settle (true), "J launches the Gate clip");
+        ok (s.releaseMappedKey ('J'), "release J");
+        check (settle (false), "and its release stops it");
+        ok (s.releaseMappedKey ('x'), "releasing an unmapped key does nothing");
+        s.stop();
 
         // One key per target, one target per key; other keys are left alone.
         learn (s, "track:" + audio + ":solo", 'q');

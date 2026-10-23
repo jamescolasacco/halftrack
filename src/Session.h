@@ -532,13 +532,14 @@ public:
         float rhythm = 0;
         bool operator== (const MetronomeSettings&) const = default;
     };
-    // A MIDI mapping (see setMidiLearnTarget): a controller on a channel and the target it drives
-    // between minimum and maximum, in the target's own units.
+    // A MIDI mapping (see setMidiLearnTarget): a controller, or a note, on a channel and the target
+    // it drives between minimum and maximum, in the target's own units.
     struct MidiMapping
     {
         juce::String target;
-        int channel = 1, controller = 0;
+        int channel = 1, controller = 0; // A note mapping's controller is its note number.
         float minimum = 0, maximum = 1;
+        bool note = false;
         bool operator== (const MidiMapping&) const = default;
     };
     // A computer key and the target it drives in Key Map Mode (see setKeyLearnTarget).
@@ -1109,14 +1110,22 @@ public:
     // A controller change, as it arrives from a MIDI input. Moves from one controller are one undo step
     // until it rests for half a second.
     juce::Result handleMidiControl (int channel, int controller, int value);
+    // A note, as it arrives from a MIDI input; velocity 0 is its note-off. While learning, a note-on
+    // maps the note as a controller would. As in the reference, a mapped note presses a clip slot
+    // with its note-on and releases it with its note-off (following the clip's Launch Mode), presses
+    // any other button with its note-on, and switches a control between its mapping's ends. Mapped
+    // notes and controllers, and every note and controller while one is being learned, stop acting
+    // as track input.
+    juce::Result handleMidiNote (int channel, int note, int velocity);
     // A target's range in its own units, or nothing for an unknown target or a button.
     std::optional<std::pair<float, float>> midiTargetRange (const juce::String& target) const;
     // Buttons can be mapped too, as in the reference: a track's activator, solo, arm and clip stop
     // ("track:<track>:mute", ":solo", ":arm", ":stop"), a clip slot ("slot:<track>:<scene id>"), a
     // scene ("scene:<scene id>"), a device's on/off ("device:<plugin>:on") and the transport
     // ("transport:play", ":stop", ":record", ":loop", ":metronome", ":stopClips"). A controller
-    // presses its button each time its value rises above 63. Pressing toggles a switch, and launches
-    // or plays as a click would.
+    // presses its button each time its value rises above 63; a clip slot is released as it falls to
+    // 63 or below. Pressing toggles a switch, presses a clip slot's launch button (following the
+    // clip's Launch Mode) and launches or plays as a click would.
     static bool isButtonTarget (const juce::String& target);
     // Whether a target exists to be mapped: a control with a range, or a button.
     bool isMappableTarget (const juce::String& target) const;
@@ -1129,6 +1138,8 @@ public:
     // A key press: maps it while learning, or presses its target. used says whether the key was
     // taken (learning, or a mapped key); other keys are left for the computer keyboard and shortcuts.
     juce::Result handleMappedKey (juce::juce_wchar key, bool& used);
+    // A mapped key's release: releases a clip slot it pressed, for Gate and Repeat clips.
+    juce::Result releaseMappedKey (juce::juce_wchar key);
     // Knob-position mapping of a native control, used by automation editors; integer controls round.
     static float deviceAutomationValueToProportion (EffectKind, int parameter, float value);
     static float deviceAutomationProportionToValue (EffectKind, int parameter, float proportion);

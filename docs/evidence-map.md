@@ -121,7 +121,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | UX-003 | ui |  |
 | UX-004 | ui |  |
 | UX-005 | themes, ui |  |
-| UX-006 | key-map, ui |  |
+| UX-006 | key-map, midi-mapping, ui |  |
 | UX-008 | mackie, ui |  |
 | UX-009 | ui |  |
 | UX-010 | preferences, ui |  |

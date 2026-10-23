@@ -5,10 +5,12 @@
 #include <iostream>
 #include <stdexcept>
 
-// MIDI mappings. Learning maps the next controller to a control; mapped controllers then move
-// track volume and pan, the master and device controls along their fader or knob taper between
-// each mapping's ends, in one undo step per burst. Mappings reopen with the project, damaged ones
-// are rejected, and a virtual MIDI controller drives them through the real input path.
+// MIDI mappings. Learning maps the next controller or note to a control; mapped controllers then
+// move track volume and pan, the master and device controls along their fader or knob taper between
+// each mapping's ends, in one undo step per burst. Mapped notes press and release clip slots with
+// their note-on and note-off, toggle switches and switch controls between their ends. Mappings
+// reopen with the project, damaged ones are rejected, and a virtual MIDI controller drives them
+// through the real input path, where mapped notes stop acting as track input.
 namespace halftrack
 {
 namespace te = tracktion::engine;
@@ -142,9 +144,82 @@ int runMidiMappingTests (const juce::File& artifacts)
         corrupt ("Controller", [] (juce::XmlElement& m) { m.getFirstChildElement()->setAttribute ("controller", "seven"); });
         corrupt ("Target", [] (juce::XmlElement& m) { m.getFirstChildElement()->setAttribute ("target", "bogus"); });
         corrupt ("Shared", [] (juce::XmlElement& m) { m.addChildElement (new juce::XmlElement (*m.getFirstChildElement())); });
+        corrupt ("Note flag", [] (juce::XmlElement& m) { m.getFirstChildElement()->setAttribute ("note", 2); });
         // A deleted device's mappings drop out of the list and do nothing.
         ok (s.removePlugin (0, 0), "delete the Channel EQ");
         check (s.snapshot().tracks[0].plugins.empty() && s.snapshot().midiMappings.size() == 3 && s.handleMidiControl (3, 20, 0).wasOk(), "a deleted device's mappings drop out and are inert");
+
+        // Notes.
+        {
+            Session n (false, makeSyntheticTestDeviceType());
+            const auto first = n.snapshot().tracks[0].id;
+            const auto mute = "track:" + first + ":mute", firstVolume = "mixer:" + first + ":volume";
+            ok (n.setMidiLearnTarget (mute), "learn the activator");
+            ok (n.handleMidiNote (1, 60, 0), "a note-off while learning");
+            check (n.snapshot().midiMappings.empty(), "maps nothing: a note maps as it goes down");
+            ok (n.handleMidiNote (1, 60, 90), "play C3");
+            check (n.snapshot().midiMappings.size() == 1 && n.snapshot().midiMappings[0] == Session::MidiMapping { mute, 1, 60, 0, 1, true }
+                       && ! n.snapshot().tracks[0].mute, "C3 maps to the activator as a note and switches nothing while learning");
+            n.undo(); check (n.snapshot().midiMappings.empty(), "learning a note is one undo step"); n.redo();
+            ok (n.setMidiLearnTarget (firstVolume), "learn the volume");
+            ok (n.handleMidiControl (1, 60, 10), "with controller 60 on the same channel");
+            ok (n.setMidiLearnTarget ({}), "end learning");
+            check (n.snapshot().midiMappings.size() == 2, "a note and a controller with the same number are different mappings");
+            check (n.handleMidiNote (1, 60, 100).wasOk() && n.snapshot().tracks[0].mute, "the note-on switches the track off");
+            check (n.handleMidiNote (1, 60, 0).wasOk() && n.snapshot().tracks[0].mute, "the note-off leaves it");
+            check (n.handleMidiNote (1, 60, 100).wasOk() && ! n.snapshot().tracks[0].mute, "the next note-on switches it on again");
+            ok (n.handleMidiNote (2, 60, 100), "C3 on channel 2"); ok (n.handleMidiNote (1, 61, 100), "C#3 on channel 1");
+            check (! n.snapshot().tracks[0].mute, "other channels and notes switch nothing");
+            check (n.handleMidiNote (0, 60, 1).failed() && n.handleMidiNote (1, 128, 1).failed() && n.handleMidiNote (1, 60, 128).failed(), "malformed notes are refused");
+            ok (n.setMidiLearnTarget (firstVolume), "learn the volume again");
+            ok (n.handleMidiNote (1, 62, 100), "with D3");
+            ok (n.setMidiLearnTarget ({}), "end learning");
+            const auto noteMappings = n.snapshot().midiMappings;
+            const auto volumeMapping = find (noteMappings, firstVolume);
+            check (volumeMapping != nullptr && volumeMapping->note && volumeMapping->controller == 62 && noteMappings.size() == 2,
+                   "a target has one mapping: the note replaces the controller");
+            ok (n.setMidiMappingRange (firstVolume, -12, 0), "range -12 to 0 dB");
+            check (n.handleMidiNote (1, 62, 30).wasOk() && near (n.snapshot().tracks[0].gainDb, -12), "a note sends the control to the end it is further from");
+            check (n.handleMidiNote (1, 62, 0).wasOk() && near (n.snapshot().tracks[0].gainDb, -12), "its note-off leaves it there");
+            check (n.handleMidiNote (1, 62, 127).wasOk() && near (n.snapshot().tracks[0].gainDb, 0), "the next note sends it to the other end");
+
+            // Clip slots follow the clip's Launch Mode: Gate plays while the note or controller is held.
+            ok (n.addMidiTrack ("Keys"), "add a MIDI track");
+            const int keys = (int) n.snapshot().tracks.size() - 1;
+            const auto keysId = n.snapshot().tracks[(size_t) keys].id;
+            ok (n.addMidiClipToSlot (keysId, 0, 4), "a Session clip in the first scene");
+            ok (n.addMidiClipToSlot (keysId, 1, 4), "and in the second");
+            for (int scene : { 0, 1 })
+                ok (n.setClipLaunchSettings (n.snapshot().tracks[(size_t) keys].slots[(size_t) scene].clip.id, { Session::LaunchMode::gate, Session::ClipQuantisation::none, false }),
+                    "Gate, unquantized");
+            const auto scenes = n.snapshot().scenes;
+            ok (n.setMidiLearnTarget ("slot:" + keysId + ":" + scenes[0].id), "learn the first slot"); ok (n.handleMidiNote (1, 48, 100), "with C2");
+            ok (n.setMidiLearnTarget ("slot:" + keysId + ":" + scenes[1].id), "learn the second"); ok (n.handleMidiControl (1, 41, 127), "with controller 41");
+            ok (n.setMidiLearnTarget ({}), "end learning");
+            const auto playing = [&] (int scene) { return n.snapshot().tracks[(size_t) keys].slots[(size_t) scene].playing; };
+            const auto settle = [&] (int scene, bool want) { for (int i = 0; i < 2000 && playing (scene) != want; ++i) pumpSyntheticTestDevice (n, 1); return playing (scene) == want; };
+            check (n.handleMidiNote (1, 48, 100).wasOk() && settle (0, true), "C2's note-on launches the Gate clip");
+            check (n.handleMidiNote (1, 48, 0).wasOk() && settle (0, false), "and its note-off stops it");
+            check (n.handleMidiControl (1, 41, 100).wasOk() && settle (1, true), "controller 41 rising above 63 launches the other");
+            check (n.handleMidiControl (1, 41, 63).wasOk() && settle (1, false), "and falling to 63 stops it, as a note-off would");
+            n.stop();
+
+            // Reopening.
+            const auto project = root.getChildFile ("Notes").getChildFile ("Notes.halftrack");
+            ok (project.getParentDirectory().createDirectory(), "create the notes project folder");
+            const auto notes = n.snapshot().midiMappings;
+            ok (n.saveProject (project), "save the note mappings");
+            Session reopened (false);
+            ok (reopened.loadProject (project), "reopen them");
+            check (reopened.snapshot().midiMappings == notes, "note mappings reopen as notes");
+            const auto damaged = project.getSiblingFile ("Clash.halftrack");
+            auto xml = juce::XmlDocument::parse (project); check (xml != nullptr, "parse the notes project");
+            auto* map = xml->getChildByName ("EDIT")->getChildByName ("HALFTRACKMIDIMAP");
+            auto* clash = new juce::XmlElement (*map->getFirstChildElement());
+            clash->setAttribute ("target", "master"); map->addChildElement (clash);
+            check (xml->writeTo (damaged) && reopened.loadProject (damaged).failed() && reopened.snapshot().midiMappings == notes,
+                   "two mappings of one note are refused, keeping the open project");
+        }
 
         // A virtual controller through the real MIDI input path.
         {
@@ -173,6 +248,37 @@ int runMidiMappingTests (const juce::File& artifacts)
             ok (live.setMidiLearnTarget ({}), "end learning");
             send (127);
             check (near (live.snapshot().tracks[0].gainDb, 6), "its moves drive the fader");
+
+            // Mapped notes stop acting as track input; others still play the armed track.
+            ok (live.addMidiTrack ("Keys"), "add a MIDI track");
+            const int keys = (int) live.snapshot().tracks.size() - 1;
+            ok (live.setTrackInput (keys, name), "route the controller to it");
+            ok (live.setTrackArmed (keys, true), "arm it");
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (1200);
+            const auto note = [&] (int pitch, int velocity)
+            {
+                auto message = velocity > 0 ? juce::MidiMessage::noteOn (1, pitch, (juce::uint8) velocity) : juce::MidiMessage::noteOff (1, pitch);
+                message.setTimeStamp (devices.getCurrentStreamTime() + 256.0 / 48000 - midi->getAdjustSecs());
+                midi->handleIncomingMidiMessage (message, midi->getMPESourceID());
+                for (int i = 0; i < 10; ++i) pumpSyntheticTestDevice (live, 4);
+            };
+            const auto mute = "track:" + live.snapshot().tracks[0].id + ":mute";
+            ok (live.setMidiLearnTarget (mute), "learn the first track's activator");
+            note (62, 100); note (62, 0);
+            ok (live.setMidiLearnTarget ({}), "end learning");
+            const auto liveMappings = live.snapshot().midiMappings;
+            check (find (liveMappings, mute) != nullptr && find (liveMappings, mute)->note, "a played note maps through the input");
+            check (! live.hasCapturedMidi(), "the note played while learning did not reach the armed track");
+            note (62, 100); note (62, 0);
+            check (live.snapshot().tracks[0].mute && ! live.hasCapturedMidi(), "the mapped note switches the activator and does not reach the track");
+            note (60, 100); note (60, 0);
+            check (live.hasCapturedMidi(), "an unmapped note still plays the track");
+            juce::StringArray created;
+            ok (live.captureMidi (Session::CaptureDestination::arrangement, created), "capture what the track received");
+            const auto snapshot = live.snapshot();
+            std::vector<int> pitches;
+            for (const auto& clip : snapshot.tracks[(size_t) keys].clips) for (const auto& n : clip.notes) pitches.push_back (n.pitch);
+            check (pitches == std::vector<int> { 60 }, "the track received only the unmapped note");
             live.stop();
             devices.deleteVirtualMidiDevice (*midi); devices.rescanMidiDeviceListSynchronously();
         }
