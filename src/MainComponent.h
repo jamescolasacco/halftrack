@@ -20,6 +20,8 @@ public:
     void enableRecovery (const juce::File&);
     // The user library holds device presets (Presets/<device>/) and the default set for new projects.
     void setUserLibrary (const juce::File&);
+    // A new project, as File > New makes it: from the saved default set, else the built-in one.
+    void startNewProject();
    #if HALFTRACK_TESTS_ENABLED
     static int runInteractionTests();
     static int runExportInteractionTests();

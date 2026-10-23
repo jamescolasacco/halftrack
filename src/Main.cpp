@@ -978,9 +978,11 @@ public:
             return;
         }
         session = std::make_unique<Session>();
+        bool opened = false; // A project or files given at launch replace the new project.
         const int demo = args.indexOf ("--demo-dir");
         if (demo >= 0 && demo + 1 < args.size())
         {
+            opened = true;
             auto directory = juce::File (args[demo + 1]);
             auto files = directory.findChildFiles (juce::File::findFiles, false, "*.wav");
             std::sort (files.begin(), files.end(), [] (const auto& a, const auto& b)
@@ -1001,6 +1003,7 @@ public:
         }
         else if (args.size() == 1 && juce::File (args[0]).hasFileExtension ("halftrack"))
         {
+            opened = true;
             auto result = session->loadProject (juce::File (args[0]));
             if (result.failed())
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
@@ -1012,6 +1015,7 @@ public:
             if (auto scan = session->rescanPlugins(); scan.failed()) juce::Logger::writeToLog (scan.getErrorMessage());
         window = std::make_unique<Window> (*session);
         window->content->setUserLibrary (juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Halftrack").getChildFile ("User Library"));
+        if (! opened) window->content->startNewProject(); // As the reference starts, from the default set.
         window->content->enableRecovery (juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
                                              .getChildFile ("Halftrack").getChildFile ("Recovery").getChildFile ("Recovery.halftrack"));
     }

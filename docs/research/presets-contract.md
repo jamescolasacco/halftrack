@@ -18,6 +18,7 @@ Halftrack's own devices save presets into a user library that the browser lists,
 - A device's menu offers Save Preset..., which asks for a name and confirms before replacing a preset.
 - The browser lists each device's presets under it; search matches device or preset names. Choosing a preset loads it onto the selected track.
 - File > Save as Default Set saves the template. New Project and Cmd/Ctrl+N start from it when it exists.
+- Without a saved default set, the app starts, and New Project and Cmd/Ctrl+N make new projects, from a built-in one like the reference's built-in default Set, as read from its bundle on 2026-10-22 (`Session::newBuiltInDefaultProject`). It holds two MIDI tracks without instruments, two audio tracks, a return with Halftrack's reverb and one with its delay, eight scenes, and 120 BPM in 4/4. With automatic names these show 1-MIDI, 2-MIDI, 3-Audio, 4-Audio, A-Room Reverb and B-Stereo Delay; the reference's devices are named Reverb and Delay. A project or audio files named at launch replace it. `Session::newProject`, which the suites build on, keeps two audio tracks.
 
 ## Evidence
 
@@ -31,7 +32,7 @@ Halftrack's own devices save presets into a user library that the browser lists,
 - five damaged presets rejected;
 - a default set restoring tempo, tracks and mixer as an untitled, unchanged project without history.
 
-The UI suite saves a preset through its dialog, finds it under its device in the browser, loads it, and starts New from a saved default set.
+The UI suite saves a preset through its dialog, finds it under its device in the browser, loads it, and starts New from a saved default set, then without one from the built-in default set. The track-order suite checks the built-in default project's tracks, devices, names, scenes, tempo and meter, and that it is untitled, unchanged and without history.
 
 ## Not implemented
 

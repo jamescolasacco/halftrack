@@ -612,6 +612,12 @@ public:
     ~Session() override;
     Snapshot snapshot() const;
     juce::Result newProject();
+    // A new project like the reference's built-in default Set (read from its bundle, 2026-10-22):
+    // two MIDI tracks without instruments, two audio tracks, and returns with a reverb and a delay,
+    // so 1-MIDI, 2-MIDI, 3-Audio, 4-Audio, A- and B- named by their devices, with eight scenes at
+    // 120 BPM in 4/4. The interface starts and makes new projects from it unless a default set has
+    // been saved; newProject keeps the plainer project of two audio tracks the suites build on.
+    juce::Result newBuiltInDefaultProject();
     juce::Result loadProject (const juce::File&);
     juce::Result saveProject (const juce::File&);
     // Audio files and samples the project refers to that are not on disk. Opening and saving keep
@@ -1433,6 +1439,7 @@ public:
     void closePluginEditors();
 
 private:
+    juce::Result startProject (bool builtInDefaultSet);
     struct Impl;
     std::unique_ptr<Impl> impl;
     juce::Result beginRecording (bool waitForPlay);

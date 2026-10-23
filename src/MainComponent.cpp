@@ -983,6 +983,7 @@ public:
     }
     void clearRecovery() { if (recoveryFile != juce::File()) recoveryFile.deleteFile(); }
     void setUserLibrary (const juce::File& folder);
+    void startNewProjectFromLaunch() { startNewProject(); }
     void autosave()
     {
         if (recoveryFile == juce::File() || recoveryPending || session.isExporting() || state.recording) return;
@@ -8105,9 +8106,10 @@ private:
     }
     void startNewProject()
     {
-        // New projects start from the default set when one has been saved.
+        // New projects start from the default set when one has been saved, and otherwise from one like
+        // the reference's built-in default Set.
         const auto template_ = defaultSetFile();
-        report (template_.existsAsFile() ? session.newProjectFromDefaultSet (template_) : session.newProject()); resetView();
+        report (template_.existsAsFile() ? session.newProjectFromDefaultSet (template_) : session.newBuiltInDefaultProject()); resetView();
     }
     void savePresetDialog (const juce::String& pluginId, const juce::String& device)
     {
@@ -16025,7 +16027,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (library.getChildFile ("Default Set.halftrack").existsAsFile(), "Save as Default Set writes the template");
         startNewProject(); refresh();
         check (state.tempo == 97 && state.projectFile == juce::File() && ! state.dirty && state.tracks.size() == 3, "New starts from the default set, untitled and unchanged");
-        setUserLibrary ({}); check (session.newProject().wasOk(), "leave the template behind"); refresh();
+        setUserLibrary ({});
+        startNewProject(); refresh();
+        check (state.tracks.size() == 6 && state.tracks[0].name == "1-MIDI" && state.tracks[3].name == "4-Audio" && state.tracks[4].isReturn && ! state.dirty,
+               "without a default set, New starts from the built-in one, as the reference's does");
+        check (session.newProject().wasOk(), "leave the template behind"); refresh();
         library.deleteRecursively();
     }
     {
@@ -16372,4 +16378,5 @@ void MainComponent::Impl::setUserLibrary (const juce::File& folder)
     updateBrowser();
 }
 void MainComponent::setUserLibrary (const juce::File& folder) { impl->setUserLibrary (folder); }
+void MainComponent::startNewProject() { impl->startNewProjectFromLaunch(); }
 }

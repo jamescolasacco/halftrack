@@ -275,6 +275,21 @@ int runTrackOrderTests (const juce::File& artifacts)
             ok (s.saveProject (named), "save"); ok (s.loadProject (named), "reopen");
             check (names() == saved && ! s.snapshot().dirty, "the names reopen as they were, unchanged");
         }
+        {
+            // The built-in default project, like the reference's built-in default Set.
+            Session s (false);
+            ok (s.newBuiltInDefaultProject(), "a new project from the built-in default set");
+            const auto state = s.snapshot();
+            juce::StringArray names; for (const auto& t : state.tracks) names.add (t.name);
+            check (state.tracks.size() == 6 && names[0] == "1-MIDI" && names[1] == "2-MIDI" && names[2] == "3-Audio" && names[3] == "4-Audio"
+                       && state.tracks[0].isMidi && ! state.tracks[0].hasInstrument && state.tracks[1].isMidi && ! state.tracks[1].hasInstrument
+                       && state.tracks[4].isReturn && state.tracks[5].isReturn && state.tracks[4].plugins.size() == 1 && state.tracks[5].plugins.size() == 1
+                       && state.tracks[4].plugins[0].effect.kind == Session::EffectKind::reverb && state.tracks[5].plugins[0].effect.kind == Session::EffectKind::delay
+                       && names[4] == "A-" + state.tracks[4].plugins[0].name && names[5] == "B-" + state.tracks[5].plugins[0].name,
+                   "two MIDI tracks without instruments, two audio tracks, and returns with a reverb and a delay: " + names.joinIntoString (", "));
+            check (state.scenes.size() == 8 && std::abs (state.tempo - 120) < 1e-9 && state.timeSignature.numerator == 4 && state.timeSignature.denominator == 4
+                       && ! state.dirty && ! s.canUndo() && state.projectFile == juce::File(), "eight scenes, 120 BPM in 4/4, untitled, unchanged and without history");
+        }
         std::cout << "Track order tests passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL track order: " << e.what() << std::endl; return 1; }

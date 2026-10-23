@@ -5661,7 +5661,9 @@ Session::Snapshot Session::snapshot() const
     return s;
 }
 
-Result Session::newProject()
+Result Session::newProject() { return startProject (false); }
+Result Session::newBuiltInDefaultProject() { return startProject (true); }
+Result Session::startProject (bool builtInDefaultSet)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     endEditGesture();
@@ -5685,6 +5687,26 @@ Result Session::newProject()
     impl->edit->getTransport().setLoopRange ({ te::TimePosition::fromSeconds (0), te::TimePosition::fromSeconds (8) });
     for (auto* t : te::getAudioTracks (*impl->edit)) impl->edit->deleteTrack (t);
     addAudioTrack(); addAudioTrack(); // Automatic names: 1-Audio and 2-Audio.
+    if (builtInDefaultSet)
+    {
+        // As the reference's built-in default Set: two MIDI tracks without instruments before the
+        // audio tracks, then a return with a reverb and one with a delay. Building them here, before
+        // prepareEdit, leaves the new project unchanged and without history.
+        te::Track* previous = nullptr;
+        for (int i = 0; i < 2; ++i)
+        {
+            if (auto r = addMidiTrack(); r.failed()) return r;
+            auto* midi = impl->lastCreated;
+            if (auto r = removeTrackInstrument (midi->itemID.toString()); r.failed()) return r;
+            impl->edit->moveTrack (te::Track::Ptr (midi), previous == nullptr ? te::TrackInsertPoint (*impl->track (0), true) : te::TrackInsertPoint (*previous, false));
+            previous = midi;
+        }
+        for (const auto kind : { EffectKind::reverb, EffectKind::delay })
+        {
+            if (auto r = addReturnTrack(); r.failed()) return r;
+            if (auto r = addNativeEffect ((int) te::getAudioTracks (*impl->edit).size() - 1, kind); r.failed()) return r;
+        }
+    }
     impl->edit->getSceneList().ensureNumberOfScenes (8);
     for (auto* scene : impl->edit->getSceneList().getScenes())
     {

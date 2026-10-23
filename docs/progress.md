@@ -2148,3 +2148,7 @@ Engine and UI areas. From a static reading of the reference's code (findings in 
 - **Names.** Tracks without a name of their own show automatic names: their number and their MIDI instrument's name, their first clip's name, or Audio, MIDI or Group. Returns show their letter and their devices' names. Renaming to nothing, or to the automatic name, makes a name automatic again, and a leading # becomes the number. A new project's tracks, and imported audio and movie tracks, are named automatically.
 - **Measured.** The track-order, video and UI suites, with the full gate ([contract](research/track-names-contract.md)).
 
+## The built-in default set — 2026-10-23
+
+Engine, UI and root areas. Without a saved default set, the app starts, and File > New makes new projects, from a project like the reference's built-in default Set: 1-MIDI and 2-MIDI without instruments, 3-Audio, 4-Audio, a return with the reverb and one with the delay, eight scenes, 120 BPM in 4/4. A project or audio files named at launch replace it. The Session's plain new project of two audio tracks stays for the suites. Measured in the track-order and UI suites ([contract](research/presets-contract.md)).
+
