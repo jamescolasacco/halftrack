@@ -79,6 +79,26 @@ private:
     bool automated = false;
 };
 
+// A Nudge button in the Control Bar: a chevron pointing down (left) or up (right).
+class NudgeButton final : public juce::Button
+{
+public:
+    explicit NudgeButton (bool upward) : juce::Button (upward ? "Nudge up" : "Nudge down"), up (upward) {}
+    bool held = false; // As last reported, so a hold is reported once on the way down and once up.
+    void paintButton (juce::Graphics& g, bool over, bool down) override
+    {
+        g.setColour (down ? orange : over ? raised.brighter (0.08f) : raised); g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 2.0f);
+        const auto b = getLocalBounds().toFloat().reduced (3.5f, 7.0f);
+        juce::Path chevron;
+        chevron.startNewSubPath (up ? b.getX() : b.getRight(), b.getY());
+        chevron.lineTo (up ? b.getRight() : b.getX(), b.getCentreY());
+        chevron.lineTo (up ? b.getX() : b.getRight(), b.getBottom());
+        g.setColour (down ? themes::colour (0xff1a1a1a) : ink); g.strokePath (chevron, juce::PathStrokeType (1.5f));
+    }
+private:
+    bool up;
+};
+
 // Gives a component its children's mouse events too, as they reach each child. JUCE gives a component
 // that listens to itself its own events twice, directly and again as a listener, so this passes on
 // the children's only.
@@ -416,7 +436,7 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
+                 &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &nudgeDown, &nudgeUp, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &info, &ruler, &viewport,
                  &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain })
@@ -447,6 +467,15 @@ public:
             if (const auto meter = parseMeter (meterLabel.getText())) report (session.setTimeSignature (meter->numerator, meter->denominator));
             refresh();
         };
+        // Nudge Down and Up, as the reference's: held, playback's tempo ramps away from the song tempo.
+        for (auto* nudge : { &nudgeDown, &nudgeUp })
+        {
+            const bool up = nudge == &nudgeUp;
+            nudge->setTooltip (up ? "Nudge Up: hold to speed playback up, to line it up with another source. The song tempo stays."
+                                  : "Nudge Down: hold to slow playback down, to line it up with another source. The song tempo stays.");
+            nudge->setWantsKeyboardFocus (false);
+            nudge->onStateChange = [this, nudge, up] { if (nudge->isDown() != nudge->held) { nudge->held = nudge->isDown(); session.setNudge (up, nudge->held); refresh(); } };
+        }
         tapButton.setName("Tap tempo");tapButton.setTooltip("Tap a steady beat to set tempo. A pause over three seconds starts a new estimate.");
         // EXT, after the reference: shown once an input's Sync is on, it follows that input's MIDI Clock.
         extButton.setName ("External sync"); extButton.setClickingTogglesState (true);
@@ -714,7 +743,8 @@ public:
         extButton.setVisible (session.hasSyncInputs() || session.isExternalSync());
         if (extButton.isVisible()) { extButton.setBounds (bar.removeFromLeft (36)); bar.removeFromLeft (3); }
         tapButton.setBounds (bar.removeFromLeft (36)); bar.removeFromLeft (3);
-        tempo.setBounds (bar.removeFromLeft (58)); bar.removeFromLeft (3);
+        tempo.setBounds (bar.removeFromLeft (58)); bar.removeFromLeft (1);
+        nudgeDown.setBounds (bar.removeFromLeft (12)); nudgeUp.setBounds (bar.removeFromLeft (12)); bar.removeFromLeft (1);
         meterBounds = bar.removeFromLeft (40); bar.removeFromLeft (8); meterLabel.setBounds (meterBounds);
         clickButton.setBounds (bar.removeFromLeft (46)); clickSettingsButton.setBounds (bar.removeFromLeft (20));
         bar.removeFromLeft (8); quantisation.setBounds (bar.removeFromLeft (64));
@@ -8562,6 +8592,7 @@ private:
                      zoomIn { "+" }, zoomOut { "-" }, fitButton { "Fit" };
     juce::Label tempo, positionLabel, projectLabel, loopStartLabel, loopLengthLabel;
     AutomatedField meterLabel; // Lit while the Arrangement has time signature changes.
+    NudgeButton nudgeDown { false }, nudgeUp { true };
     juce::ComboBox quantisation;
     juce::TextButton backToArrangement { "Back to Arrangement" };
     juce::Rectangle<int> meterBounds, cpuBounds;
@@ -16315,6 +16346,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     applyMetronomeMenu(22);applyMetronomeMenu(1);applyMetronomeMenu(2);
     check(state.metronome.gain==.4f&&!state.metronome.accent&&state.metronome.recordingOnly,"native click menu controls update model");
     tempo.setText("999",juce::sendNotificationSync);check(state.tempo==999&&tempo.getText()=="999.00","native tempo editor reaches exact supported maximum");
+    nudgeUp.setState(juce::Button::buttonDown);
+    check(state.nudgeUpHeld&&!state.nudgeDownHeld&&nudgeUp.getName()=="Nudge up"&&nudgeUp.isVisible(),"holding Nudge Up tells the Session, as the reference's momentary button does");
+    nudgeUp.setState(juce::Button::buttonNormal);
+    check(!state.nudgeUpHeld&&state.nudging==0,"letting go releases it, and stopped nothing was nudged");
+    nudgeDown.setState(juce::Button::buttonDown);nudgeDown.setState(juce::Button::buttonNormal);
+    check(!state.nudgeDownHeld,"Nudge Down holds and lets go the same way");
     meterLabel.setText("6/8",juce::sendNotificationSync);
     check(state.timeSignature==Session::TimeSignature{6,8}&&meterLabel.getText()=="6 / 8","typing 6/8 in the meter field sets the time signature");
     meterLabel.setText("5/3",juce::sendNotificationSync);

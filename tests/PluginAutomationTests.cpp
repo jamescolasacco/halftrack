@@ -68,10 +68,23 @@ int runPluginAutomationTests (const juce::File& artifacts)
         check (at (ramped, .01) < .01f && std::abs (at (ramped, 1) - .25f) < .01f && std::abs (at (ramped, 1.5) - .375f) < .01f && std::abs (at (ramped, 3) - .5f) < .01f,
                "the render follows the ramp and holds its last value");
         s.undo();
+        // The engine leaves a plug-in where its automation last put it; Halftrack returns it to its
+        // value set by hand at once, so playback and renders agree whenever the plug-in's state was saved.
+        check (std::abs (s.pluginParameters (id)[0].value - .5f) < 1e-6f, "one undo returns Gain to its value set by hand at once");
         check (s.snapshot().tracks[0].plugins.back().automation.empty() && std::abs (at (render (s, root.getChildFile ("undone.wav")), 1) - .25f) < 1e-6f,
                "one undo removes the lane");
         s.redo();
+        check (s.snapshot().tracks[0].plugins.back().automation.size() == 1, "redo brings the lane back");
 
+        {
+            // Clearing the lane also returns Gain to its value set by hand.
+            render (s, root.getChildFile ("ramped-again.wav"));
+            ok (s.setDeviceAutomation (id, 0, {}), "clear the lane");
+            check (std::abs (s.pluginParameters (id)[0].value - .5f) < 1e-6f && std::abs (at (render (s, root.getChildFile ("cleared.wav")), 1) - .25f) < 1e-6f,
+                   "clearing it returns Gain to its value set by hand");
+            s.undo();
+            check (s.snapshot().tracks[0].plugins.back().automation.size() == 1, "one undo brings the cleared lane back");
+        }
         const auto project = root.getChildFile ("Plug-in automation").getChildFile ("Plug-in automation.halftrack");
         ok (s.saveProject (project), "save"); ok (s.loadProject (project), "reopen");
         const auto reopenedId = s.snapshot().tracks[0].plugins.back().id;

@@ -6,6 +6,8 @@
 
 namespace halftrack
 {
+std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
+float pumpSyntheticTestDevice (Session&, int blocks);
 namespace
 {
 void check(bool condition,const juce::String& message)
@@ -105,6 +107,41 @@ int runTempoTests(const juce::File& artifacts)
         session.setTempo(120);ok(session.saveProject(project),"save unchanged tap baseline");ok(session.loadProject(project),"reopen unchanged baseline");
         ok(session.tapTempo(600),"anchor unchanged tempo");ok(session.tapTempo(600.5),"tap existing 120 BPM");ok(session.tapTempo(601),"repeat existing tempo");
         check(!session.snapshot().dirty&&!session.canUndo(),"unchanged tap estimates do not dirty the project or add history");
+        {
+            // Nudge, as the reference's (static reading): held during playback, playback's tempo ramps
+            // from the song tempo by up to 70% of it over six seconds, in 16th-note steps, and the song
+            // keeps its tempo and the beats it gained. Blocks are 256 samples at 48 kHz.
+            Session live (false, makeSyntheticTestDeviceType());
+            ok (live.play(), "play at 120 BPM for the nudge");
+            pumpSyntheticTestDevice (live, 200); // The position settles once playback is under way.
+            const auto beat = [&live] { return live.beatsAt (live.snapshot().position); };
+            const auto start = beat();
+            live.setNudge (true, true);
+            pumpSyntheticTestDevice (live, 563); // About three seconds.
+            const auto nudged = live.snapshot();
+            check (nudged.nudging == 1 && std::abs (nudged.tempo - 120) < 1e-6 && nudged.tempoMap.size() == 1 && nudged.tempoMap[0].bpm == 120,
+                   "held, Nudge Up runs playback faster while the song tempo stays 120 BPM");
+            const auto gained = beat() - start;
+            check (gained > 6.85 && gained < 7.15, "over three seconds playback ramps toward 162 BPM, seven beats against six (" + juce::String (gained, 3) + ")");
+            live.setNudge (true, false);
+            pumpSyntheticTestDevice (live, 30);
+            const auto released = beat();
+            pumpSyntheticTestDevice (live, 375); // Two seconds.
+            check (live.snapshot().nudging == 0 && std::abs (beat() - released - 4) < .1,
+                   "after the release it plays at 120 BPM again, from the beats it gained (" + juce::String (beat() - released, 3) + ")");
+            check (! live.snapshot().dirty && ! live.canUndo(), "the nudge leaves the project unchanged and its history empty");
+            live.setNudge (true, true); live.setNudge (false, true);
+            const auto both = beat();
+            pumpSyntheticTestDevice (live, 188);
+            check (live.snapshot().nudging == 0 && std::abs (beat() - both - 2) < .1, "with both held nothing changes");
+            live.setNudge (true, false);
+            pumpSyntheticTestDevice (live, 188);
+            check (live.snapshot().nudging == -1, "letting go of Up leaves Down held, nudging down");
+            live.setNudge (false, false); pumpSyntheticTestDevice (live, 30);
+            live.stop(); live.setNudge (false, true); pumpSyntheticTestDevice (live, 100);
+            check (live.snapshot().nudging == 0 && live.snapshot().tempoMap[0].bpm == 120, "stopped, Nudge Down does nothing");
+            live.setNudge (false, false);
+        }
         std::cout<<"Tempo tests passed: "<<root.getFullPathName()<<std::endl;return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL tempo: "<<e.what()<<std::endl;return 1;}

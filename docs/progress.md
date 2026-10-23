@@ -2295,3 +2295,13 @@ Engine and UI areas. As the reference's drop rules keep returns and other tracks
 ## Group automation lanes — 2026-10-23
 
 UI area. In Automation Mode a group header's + moves its envelope into a lane below the header, as a track's does. The lane draws and edits it, and its header hides it. Checked in the UI suite ([contract](research/groups-contract.md#group-automation-and-mapping-2026-10-23)).
+
+## Plug-in values set by hand — 2026-10-23
+
+Engine area. A plug-in parameter now keeps its value set by hand beside its automation, as mixer controls do, and returns to it when its automation is undone or cleared. The plug-in's saved state is written then too, because renders start from it.
+
+Before, the parameter stayed where the automation last put it. Renders heard either value depending on when the engine's delayed save ran, which failed `plugin-automation-acceptance` once on Linux CI. Checked in the plug-in automation suite ([contract](research/plugin-automation-contract.md)).
+
+## Tempo nudge — 2026-10-23
+
+Engine and UI areas. The Control Bar has the reference's momentary Nudge Down and Nudge Up buttons, after a static reading of its code. While one is held during playback, the tempo ramps away from the song tempo by up to 70% over six seconds, in 16th-note steps. The song keeps the beats it gained. The song tempo, the project and its history stay unchanged, and nothing happens while stopped or under external sync. Saving, rendering, undo and tempo edits let the nudge go first. Measured in the tempo suite through the synthetic device, and checked in the UI suite ([contract](research/tempo-nudge-contract.md)).

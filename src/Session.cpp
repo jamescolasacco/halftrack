@@ -3769,6 +3769,66 @@ struct Session::Impl
     // remaps only the devices it lists itself.
     // A tempo change keeps rack devices' automation on its beats. Without an undo manager (as external
     // sync follows a clock) neither the tempo nor the moved points are undo steps.
+    // Nudge Down and Up, as the reference's (static reading): while one is held alone, playback's
+    // tempo ramps away from the song tempo by up to 70% of it over six seconds. It changes on 16th
+    // notes only, from the first after the press to the first after the release, and nothing makes up
+    // the beats gained or lost. The song tempo, its field and the project keep their values (the
+    // tempo points change outside history, and back), and nothing changes while stopped or following
+    // external sync.
+    struct NudgeTimer final : juce::Timer { std::function<void()> tick; void timerCallback() override { tick(); } } nudgeTimer;
+    bool nudgeHeld[2] {};                     // Down, up.
+    int nudgeWanted = 0, nudgeActive = 0;     // -1, 0 or +1: as the buttons ask, and as playback follows.
+    double nudgeSince = 0;                    // Stream time the wanted direction began.
+    std::optional<int64_t> nudgeStep;         // The last 16th note seen.
+    std::vector<std::pair<juce::ValueTree, double>> nudgeSong; // Each tempo point and its song tempo, while nudged.
+    double nudgeFactor = 1;
+    void setNudge (bool up, bool held)
+    {
+        nudgeHeld[up ? 1 : 0] = held;
+        const int wanted = nudgeHeld[0] == nudgeHeld[1] ? 0 : nudgeHeld[1] ? 1 : -1;
+        if (wanted != nudgeWanted) { nudgeWanted = wanted; nudgeSince = engine.getDeviceManager().getCurrentStreamTime(); }
+        if ((nudgeWanted != 0 || nudgeFactor != 1) && ! nudgeTimer.isTimerRunning())
+        {
+            nudgeStep.reset();
+            nudgeTimer.tick = [this] { stepNudge(); };
+            nudgeTimer.startTimer (5);
+        }
+    }
+    void stepNudge()
+    {
+        auto& transport = edit->getTransport();
+        if (! transport.isPlaying() || externalSync) { applyNudge (1); nudgeStep.reset(); if (nudgeWanted == 0) nudgeTimer.stopTimer(); return; }
+        auto beat = edit->tempoSequence.toBeats (transport.getPosition()).inBeats();
+        if (auto* context = transport.getCurrentPlaybackContext()) if (auto sync = context->getSyncPoint()) beat = sync->beat.inBeats();
+        const auto step = (int64_t) std::floor (beat * 4 + 1.0e-9);
+        const bool first = ! nudgeStep.has_value();
+        if (! first && *nudgeStep == step) return;
+        nudgeStep = step;
+        if (first) return; // Changes wait for the next 16th note.
+        nudgeActive = nudgeWanted;
+        const auto held = engine.getDeviceManager().getCurrentStreamTime() - nudgeSince;
+        applyNudge (nudgeActive == 0 ? 1.0 : 1.0 + nudgeActive * 0.7 * juce::jlimit (0.0, 6.0, held) / 6.0);
+        if (nudgeActive == 0) { nudgeTimer.stopTimer(); nudgeStep.reset(); }
+    }
+    // Playback's tempo as the song tempo times a factor, outside history; 1 puts the song tempo back.
+    void applyNudge (double factor)
+    {
+        if (factor == nudgeFactor) return;
+        if (nudgeSong.empty())
+            for (auto* t : edit->tempoSequence.getTempos()) nudgeSong.push_back ({ t->state, t->getBpm() });
+        for (int i = 0; i < (int) nudgeSong.size(); ++i)
+            if (auto* t = edit->tempoSequence.getTempo (i); t != nullptr && t->state == nudgeSong[(size_t) i].first)
+                changeTempo (*t, factor == 1 ? nudgeSong[(size_t) i].second : juce::jlimit (te::TempoSetting::minBPM, te::TempoSetting::maxBPM, nudgeSong[(size_t) i].second * factor), nullptr);
+        nudgeFactor = factor;
+        if (factor == 1) { nudgeSong.clear(); nudgeActive = 0; }
+        owner.sendChangeMessage();
+    }
+    // Before anything that keeps, renders or edits the tempo: the song tempo back, and the nudge let go.
+    void endNudge()
+    {
+        nudgeHeld[0] = nudgeHeld[1] = false; nudgeWanted = 0;
+        applyNudge (1); nudgeTimer.stopTimer(); nudgeStep.reset();
+    }
     void changeTempo (te::TempoSetting& tempo, double bpm, juce::UndoManager* undo)
     {
         struct Curve { te::AutomationCurve* curve; std::vector<te::BeatPosition> beats; };
@@ -4891,6 +4951,45 @@ struct Session::Impl
         return passes;
     }
     // An external plug-in parameter's lane, in 0-1 values; one undo step unless written internally.
+    // A plug-in parameter's value set by hand, kept as the mixer's is, so that taking its automation
+    // away returns it there rather than leaving it where the automation last put it.
+    static juce::Identifier manualParameterProperty (int index) { return juce::Identifier ("halftrackManualParameter" + String (index)); }
+    // A plug-in's state now, kept outside history: renders start plug-ins from it.
+    static void writePluginState (te::ExternalPlugin& plugin)
+    {
+        if (auto* instance = plugin.getAudioPluginInstance())
+        {
+            juce::MemoryBlock chunk; instance->getStateInformation (chunk);
+            if (chunk.getSize() > 0) plugin.state.setProperty (te::IDs::state, chunk.toBase64Encoding(), nullptr);
+        }
+    }
+    // The plug-in parameters that have automation points, by plug-in id and index.
+    std::set<std::pair<String, int>> automatedPluginParameters() const
+    {
+        std::set<std::pair<String, int>> result;
+        for (auto* plugin : edit->getPluginCache().getPlugins())
+            if (auto* external = dynamic_cast<te::ExternalPlugin*> (plugin))
+            {
+                const auto parameters = externalParameters (*external);
+                for (size_t i = 0; i < parameters.size(); ++i) if (parameters[i]->hasAutomationPoints()) result.insert ({ external->itemID.toString(), (int) i });
+            }
+        return result;
+    }
+    // Parameters that had automation and now have none return to their values set by hand.
+    void restoreManualPluginValues (const std::set<std::pair<String, int>>& automatedBefore)
+    {
+        std::set<te::ExternalPlugin*> changedPlugins;
+        for (const auto& [id, index] : automatedBefore)
+            if (auto* external = externalPlugin (id))
+            {
+                const auto parameters = externalParameters (*external);
+                const auto manual = manualParameterProperty (index);
+                if (! juce::isPositiveAndBelow (index, (int) parameters.size()) || parameters[(size_t) index]->hasAutomationPoints() || ! external->state.hasProperty (manual)) continue;
+                parameters[(size_t) index]->setNormalisedParameter (static_cast<float> (external->state[manual]), juce::sendNotificationSync);
+                changedPlugins.insert (external);
+            }
+        for (auto* external : changedPlugins) writePluginState (*external);
+    }
     Result setExternalAutomation (te::ExternalPlugin& plugin, int parameter, const AutomationLane& lane)
     {
         const auto parameters = externalParameters (plugin);
@@ -4914,12 +5013,16 @@ struct Session::Impl
         if (same) return Result::ok();
         if (! internalAutomationWrite) transaction ("Edit " + parameterObject->getParameterName() + " automation");
         auto* undo = &edit->getUndoManager();
+        // Its value before automation is its value set by hand.
+        const bool automatedBefore = curve.getNumPoints() > 0;
+        if (! automatedBefore && ! lane.points.empty()) plugin.state.setProperty (manualParameterProperty (parameter), parameterObject->getCurrentNormalisedValue(), nullptr);
         plugin.remapOnTempoChange = true;
         curve.clear (undo);
         curve.state.setProperty (te::IDs::bypass, ! lane.enabled, undo);
         for (const auto& point : lane.points) curve.addPoint (te::EditPosition (te::BeatPosition::fromBeats (point.beat)), point.value, point.curve, undo);
         parameterObject->updateStream();
         edit->dispatchPendingUpdatesSynchronously();
+        if (automatedBefore && lane.points.empty()) restoreManualPluginValues ({ { plugin.itemID.toString(), parameter } });
         changed(); return Result::ok();
     }
     void writeLane (const LaneAccess& lane, const AutomationLane& points)
@@ -6193,7 +6296,7 @@ Session::Snapshot Session::snapshot() const
     s.position = transport.getPosition().inSeconds();
     s.insertMarker = transport.startPosition.get().inSeconds();
     s.duration = e.getLength().inSeconds();
-    s.tempo = e.tempoSequence.getBpmAt (te::TimePosition::fromSeconds (juce::jmax (0.0, s.position)));
+    s.tempo = e.tempoSequence.getBpmAt (te::TimePosition::fromSeconds (juce::jmax (0.0, s.position))) / impl->nudgeFactor;
     s.tempoMap.clear();
     // A device as the snapshot shows it, in any chain.
     const auto describe = [] (te::Plugin& plugin)
@@ -6229,8 +6332,11 @@ Session::Snapshot Session::snapshot() const
         }
         return device;
     };
+    // While nudged, the song tempo, as the reference's field keeps showing it.
     for (int i = 0; i < e.tempoSequence.getNumTempos(); ++i)
-        if (auto* t = e.tempoSequence.getTempo (i)) s.tempoMap.push_back ({ t->startBeatNumber.get().inBeats(), t->getBpm() });
+        if (auto* t = e.tempoSequence.getTempo (i))
+            s.tempoMap.push_back ({ t->startBeatNumber.get().inBeats(), i < (int) impl->nudgeSong.size() ? impl->nudgeSong[(size_t) i].second : t->getBpm() });
+    s.nudging = impl->nudgeActive; s.nudgeDownHeld = impl->nudgeHeld[0]; s.nudgeUpHeld = impl->nudgeHeld[1];
     s.timeSignatures.clear();
     for (auto* meter : e.tempoSequence.getTimeSigs())
         s.timeSignatures.push_back ({ meter->startBeatNumber.get().inBeats(), { meter->numerator.get(), meter->denominator.get() } });
@@ -6449,6 +6555,7 @@ Result Session::newProject() { return startProject (false); }
 Result Session::newBuiltInDefaultProject() { return startProject (true); }
 Result Session::startProject (bool builtInDefaultSet)
 {
+    impl->endNudge();
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     endEditGesture();
     closePluginEditors();
@@ -6504,6 +6611,7 @@ Result Session::startProject (bool builtInDefaultSet)
 
 Result Session::loadProject (const File& file)
 {
+    impl->endNudge();
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto xml = juce::XmlDocument::parse (file);
     if (! xml || ! xml->hasTagName ("HALFTRACK") || xml->getIntAttribute ("version") != 1)
@@ -6641,6 +6749,7 @@ Result Session::loadProject (const File& file)
 
 Result Session::writeRecovery (const File& destination)
 {
+    impl->endNudge();
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Recovery copies wait until recording stops.");
     if (auto r = destination.getParentDirectory().createDirectory(); r.failed()) return r;
@@ -7150,6 +7259,7 @@ Result Session::recoverProject (const File& recovery, File& recoveredFrom)
 }
 Result Session::saveProject (const File& destination)
 {
+    impl->endNudge(); // The project keeps the song tempo.
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     impl->endAudition(); // The main lane is what is saved.
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before saving.");
@@ -9455,6 +9565,7 @@ Result Session::setMidiInputSync (const String& port, bool on)
 bool Session::isMidiInputSync (const String& port) const { return impl->syncOn (port); }
 Result Session::setExternalSync (bool on)
 {
+    impl->endNudge();
     if (on == impl->externalSync) return Result::ok();
     if (on && impl->edit->tempoSequence.getNumTempos() > 1) return Result::fail ("External Sync sets one tempo; remove the tempo map's changes first.");
     impl->externalSync = on; impl->clockRunning = false; impl->ticksSinceFollow = 0;
@@ -12098,6 +12209,7 @@ Result Session::setPluginParameterValue (const String& pluginId, int parameter, 
     const auto key = Impl::deviceKey (pluginId, parameter);
     if (impl->capturing()) impl->capture (key, value); else impl->overrideLane (key);
     target->setNormalisedParameter (value, juce::sendNotificationSync);
+    if (! impl->capturing()) external->state.setProperty (Impl::manualParameterProperty (parameter), value, nullptr);
     impl->changed(); return Result::ok();
 }
 std::optional<std::pair<float, float>> Session::midiTargetRange (const String& target) const
@@ -13017,6 +13129,7 @@ Result Session::completeFragmentaryBar (int index)
 }
 Result Session::setTempoMap (const std::vector<TempoPoint>& points)
 {
+    impl->endNudge();
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing the tempo.");
     if (points.empty() || points.size() > 4096 || points.front().beat != 0)
@@ -13110,9 +13223,11 @@ String Session::gridValueName (GridValue value, int tuplet)
 }
 double Session::beatsAt (double seconds) const { return impl->edit->tempoSequence.toBeats (te::TimePosition::fromSeconds (seconds)).inBeats(); }
 double Session::secondsAt (double beats) const { return impl->edit->tempoSequence.toTime (te::BeatPosition::fromBeats (beats)).inSeconds(); }
+void Session::setNudge (bool up, bool held) { impl->setNudge (up, held); }
 void Session::setTempo (double bpm)
 {
     if (impl->exporting) return;
+    impl->endNudge();
     if (impl->externalSync) return; // The clock sets the tempo.
     if (impl->edit->tempoSequence.getNumTempos() > 1) return;
     if (! std::isfinite (bpm)) return;
@@ -13124,6 +13239,7 @@ void Session::setTempo (double bpm)
 }
 Result Session::tapTempo(double seconds)
 {
+    impl->endNudge();
     if (impl->exporting) return Result::fail("Finish or cancel the current export first.");
     if (impl->edit->tempoSequence.getNumTempos() > 1) return Result::fail("The tempo is automated. Edit its points in the Song Tempo lane.");
     if (!std::isfinite(seconds) || seconds<0 || (impl->lastTap>=0 && seconds<impl->lastTap))
@@ -13261,10 +13377,13 @@ void Session::endEditGesture()
 void Session::undo()
 {
     if (impl->exporting || impl->anyRecording()) return;
+    impl->endNudge();
     impl->endAudition();
     const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
     impl->resetTapTempo();
+    const auto automated = impl->automatedPluginParameters();
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
+    impl->restoreManualPluginValues (automated); // Plug-in parameters whose automation went return to their values set by hand.
     impl->applyCue(); // A cue volume or switch undone, in either mode.
     impl->publishRemote(); // A mapping undone.
     impl->refreshFirstClipNames();
@@ -13273,9 +13392,11 @@ void Session::undo()
 void Session::redo()
 {
     if (impl->exporting || impl->anyRecording()) return;
+    impl->endNudge();
     impl->endAudition();
     const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
     impl->resetTapTempo();
+    const auto automated = impl->automatedPluginParameters();
     endEditGesture(); closePluginEditors();
     {
         auto& history = impl->edit->getUndoManager();
@@ -13287,6 +13408,7 @@ void Session::redo()
         history.redo();
     }
     impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
+    impl->restoreManualPluginValues (automated);
     impl->applyCue();
     impl->publishRemote();
     impl->refreshFirstClipNames();
@@ -13302,6 +13424,7 @@ Result Session::exportWav (const File& file, double rate, int bits, double tailS
 
 Result Session::exportStems (const File& folder, const AudioExportSettings& settings, juce::StringArray& written, bool overwrite)
 {
+    impl->endNudge();
     written.clear();
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->anyRecording()) return Result::fail ("Stop recording before exporting.");
@@ -13377,6 +13500,7 @@ Result Session::exportAudio (const File& file, ExportFormat format, double rate,
 Result Session::exportAudio (const File& file, const AudioExportSettings& settings)
 {
     impl->endAudition(); // Exports render the main lane.
+    impl->endNudge();    // And at the song tempo.
     const auto format = settings.format;
     const double rate = settings.sampleRate, tailSeconds = settings.tailSeconds;
     const int bits = settings.bitDepth;

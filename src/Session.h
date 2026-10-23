@@ -633,6 +633,8 @@ public:
         std::vector<TimeSignatureChange> timeSignatures { TimeSignatureChange {} };
         // The tempo map; one point at beat 0 for a constant tempo. `tempo` is the tempo at the playhead.
         std::vector<TempoPoint> tempoMap { TempoPoint {} };
+        int nudging = 0; // Nudge Down (-1) or Up (+1) in effect on playback's tempo; the song tempo above stays.
+        bool nudgeDownHeld = false, nudgeUpHeld = false; // The Nudge buttons, as the reference's transport keeps them.
         float masterPeakL = 0, masterPeakR = 0, masterGainDb = 0;
         std::vector<PluginInfo> mainPlugins; // The Main's audio devices, in chain order.
         float crossfader = 0; // -1 is fully A, +1 fully B.
@@ -1363,6 +1365,12 @@ public:
     void setInsertMarker (double seconds);
     void returnToStart();
     void setTempo (double bpm); // Constant tempo only; ignored while the tempo is automated.
+    // Nudge Down and Up, as the reference's momentary buttons: while one is held alone during playback,
+    // playback's tempo ramps from the song tempo by up to 70% of it over six seconds, changing on 16th
+    // notes, and the song keeps the beats it gained or lost. The song tempo and the project do not
+    // change, and nothing happens while stopped or following external sync. Saving, rendering,
+    // undo and tempo edits let the nudge go first.
+    void setNudge (bool up, bool held);
     // Replaces the tempo map in one undo step: the first point at beat 0, beats increasing, 20-999 BPM.
     // Clips, automation and the loop keep their beats. One point restores a constant tempo.
     juce::Result setTempoMap (const std::vector<TempoPoint>&);
