@@ -395,11 +395,11 @@ Result validateMixerAutomation (const juce::ValueTree& state, bool legacy)
             {
                 if (! point.hasType (te::IDs::POINT) || ! finiteProperty (point[te::IDs::t], 0, 3000000)
                     || ! finiteProperty (point[te::IDs::v], volume ? 0 : -1, 1)
-                    || ! finiteProperty (point.getProperty (te::IDs::c, 0), 0, 0)
+                    || ! finiteProperty (point.getProperty (te::IDs::c, 0), -1, 1)
                     || (volume && static_cast<double> (point[te::IDs::v]) > 0
                         && static_cast<double> (point[te::IDs::v]) < floor)
                     || static_cast<double> (point[te::IDs::t]) <= previous)
-                    return Result::fail ("Mixer automation needs ordered finite linear points.");
+                    return Result::fail ("Mixer automation needs ordered finite points with curves from -1 to 1.");
                 previous = static_cast<double> (point[te::IDs::t]);
             }
         }

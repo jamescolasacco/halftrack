@@ -2190,3 +2190,7 @@ UI area. A track's input is now the reference's two choosers. Audio From picks N
 ## Mixer laws — 2026-10-23
 
 Engine, UI and root areas. From a static reading of the reference's code, track, group, return, Main and cue volume now follow its volume scale: −70 to +6 dB, 0 dB at 0.85 of the travel, interpolated in amplitude between 101 levels, and silent at the bottom. Sends follow its send scale, −70 to 0 dB. A new engine patch, `cmake/PatchFaderLaws.cmake`, lets Session install both laws (`src/LevelScale.h`). Faders, knobs, automation, MIDI controllers and rack chain controls move along them, so CC 64 is −13.84 dB as in the reference. Projects saved before are converted on load and keep every level; projects are now saved with `halftrackFaderLaw="2"`. Measured in the new fader-laws suite: the model's levels, stored positions, a rendered fader and send, CC levels, and a generated legacy project rendering as the project it came from. The automation and rack suites render ramps along the law ([contract](research/mixer-laws-contract.md)).
+
+## Curved mixer automation reopens — 2026-10-23
+
+Engine area. Loading refused a project whose track or Main volume or pan automation had a curved segment, because validation still required straight points; it now accepts curves from −1 to 1, as editing does. The automation suite saves a curved volume segment, reopens it and renders it as before, and still refuses curves beyond ±1 ([contract](research/arrangement-automation-contract.md)).

@@ -192,7 +192,7 @@ void malformedLoads (const juce::File& root)
         if (mutation == 0) point->setAttribute ("t", "nan");
         if (mutation == 1) point->setAttribute ("v", "inf");
         if (mutation == 2) point->setAttribute ("v", "1.1");
-        if (mutation == 3) point->setAttribute ("c", ".5");
+        if (mutation == 3) point->setAttribute ("c", "1.5"); // Curves run from -1 to 1.
         if (mutation == 4) curve->getChildElement (1)->setAttribute ("t", "0");
         if (mutation == 5) curve->setAttribute ("bypass", ".5");
         if (mutation == 6) curve->setAttribute ("paramID", "unsupported");
@@ -609,7 +609,7 @@ void malformedMasterLoads (const juce::File& root)
         if (mutation == 6) { auto* obsolete = edit->createNewChildElement ("PLUGIN"); obsolete->setAttribute ("type", "volume"); }
         if (mutation == 7) master->setAttribute ("halftrackManualVolume", "nan");
         if (mutation == 8) curve->getChildElement (1)->setAttribute ("t", "2000000");
-        if (mutation == 9) point->setAttribute ("c", ".5");
+        if (mutation == 9) point->setAttribute ("c", "-1.5");
         if (mutation == 10) { master->setAttribute ("halftrackManualVolume", "0.000001"); edit->removeAttribute ("halftrackFaderLaw"); } // Legacy floor.
         if (mutation == 11) group->setAttribute ("right", "nan");
         if (mutation >= 12 && mutation <= 15)
@@ -696,6 +696,12 @@ void curveTests (const juce::File& root)
     check (s.setTrackAutomation (id, Target::volume, steep).failed(), "a curve beyond 1 is refused");
     s.undo();
     check (same (s.snapshot().tracks[0].volumeAutomation.points, straight.points), "one undo straightens it again");
+    s.redo();
+    const auto file = root.getChildFile ("automation-curved.halftrack");
+    ok (s.saveProject (file), "save the curved segment");
+    ok (s.loadProject (file), "reopen it");
+    check (same (s.snapshot().tracks[0].volumeAutomation.points, curved.points) && std::abs (halfway (render (s, root)) - bowed) < 1e-4 * bowed,
+           "it reopens with its curve, playing as before");
 }
 int runAutomationTests (const juce::File& artifacts)
 {

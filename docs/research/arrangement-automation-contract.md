@@ -44,7 +44,7 @@ The reference's manual: hold Alt (Win) / Option (Mac) and drag a line segment to
 
 Evidence:
 
-- **The automation suite.** It renders a constant source through a volume segment from -24 to 0 dB over three beats, straight and with curve 0.4. Halfway along, the curve plays 0.214 of the plateau, against 0.218 predicted from `curveProportion`. The straight segment plays 0.366, against 0.372 predicted; the 2% gaps match block-rate automation. The curve reads back, a curve beyond 1 is refused, and one undo straightens it.
+- **The automation suite.** It renders a constant source through a volume segment from -24 to 0 dB over three beats, straight and with curve 0.4. Halfway along, the curve plays 0.214 of the plateau, against 0.218 predicted from `curveProportion`. The straight segment plays 0.366, against 0.372 predicted; the 2% gaps match block-rate automation. The curve reads back, a curve beyond 1 is refused, and one undo straightens it. A saved project reopens with the curve and plays it as before; loading refused curved volume and pan points until 2026-10-23.
 - **The UI suite.** Option-dragging a rising segment up curves it, raising its middle without adding a breakpoint; one undo straightens it, and Option-double-clicking straightens it.
 
 The reference's curve shape is unmeasured: Halftrack's is the engine's quadratic Bézier.
