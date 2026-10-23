@@ -110,6 +110,11 @@ int runKeyMapTests (const juce::File& artifacts)
         check (settle (false), "and its release stops it");
         ok (s.releaseMappedKey ('x'), "releasing an unmapped key does nothing");
         s.stop();
+        // The Nudge buttons hold while their key does, as the reference's "Phase nudge" mappings.
+        learn (s, "transport:nudgeup", 'u');
+        check (press (s, 'u') && s.snapshot().nudgeUpHeld, "U holds Nudge Up");
+        ok (s.releaseMappedKey ('U'), "release U");
+        check (! s.snapshot().nudgeUpHeld && s.snapshot().nudging == 0, "and its release lets go, the transport stopped and nothing nudged");
 
         // One key per target, one target per key; other keys are left alone.
         learn (s, "track:" + audio + ":solo", 'q');

@@ -5882,7 +5882,7 @@ struct Session::Impl
     bool buttonExists (const String& target) const
     {
         const auto parts = juce::StringArray::fromTokens (target, ":", "");
-        if (parts[0] == "transport") return parts.size() == 2 && juce::StringArray { "play", "stop", "record", "loop", "metronome", "stopClips" }.contains (parts[1]);
+        if (parts[0] == "transport") return parts.size() == 2 && juce::StringArray { "play", "stop", "record", "loop", "metronome", "stopClips", "nudgedown", "nudgeup" }.contains (parts[1]);
         if (parts[0] == "track") { const auto* t = track (parts[1]); return parts.size() == 3 && t != nullptr && ! isReturn (*t) && juce::StringArray { "mute", "solo", "arm", "stop" }.contains (parts[2]); }
         if (parts[0] == "slot") { const auto* t = track (parts[1]); return parts.size() == 3 && t != nullptr && ! isReturn (*t) && sceneIndexOf (parts[2]) >= 0; }
         if (parts[0] == "scene") return parts.size() == 2 && sceneIndexOf (parts[1]) >= 0;
@@ -5897,6 +5897,8 @@ struct Session::Impl
         if (parts[0] == "transport")
         {
             if (parts[1] == "play") return snapshot.playing ? Result::ok() : owner.play();
+            // The Nudge buttons hold while their key, note or controller does, as the reference's "Phase nudge" mappings.
+            if (parts[1] == "nudgedown" || parts[1] == "nudgeup") { setNudge (parts[1] == "nudgeup", true); return Result::ok(); }
             if (parts[1] == "stop") { owner.stop(); return Result::ok(); }
             if (parts[1] == "record") return owner.recordButton();
             if (parts[1] == "loop") { owner.setLoop (! snapshot.looping, snapshot.loopStart, snapshot.loopEnd); return Result::ok(); }
@@ -5926,6 +5928,7 @@ struct Session::Impl
     Result releaseButton (const String& target)
     {
         const auto parts = juce::StringArray::fromTokens (target, ":", "");
+        if (target == "transport:nudgedown" || target == "transport:nudgeup") { setNudge (target == "transport:nudgeup", false); return Result::ok(); }
         if (parts[0] != "slot") return Result::ok();
         const int t = trackIndexOf (parts[1]), scene = sceneIndexOf (parts[2]);
         return t >= 0 && scene >= 0 ? owner.releaseSlot (t, scene) : Result::ok();

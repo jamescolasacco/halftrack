@@ -9,6 +9,7 @@ The Control Bar's Nudge Down and Nudge Up buttons follow a static reading of the
 - **Steps.** The tempo changes on 16th notes only, from the first after the press to the first after the release, then every 16th while the ramp runs. A release puts the song tempo back at the next 16th, and the song keeps the beats it gained or lost.
 - **Both held** nudge nothing. Letting go of one leaves the other nudging, its ramp starting again from 0.
 - **The song tempo stays.** The tempo field, `Snapshot::tempo` and `tempoMap` keep showing it, and the project, its saved state and its history do not change: the tempo points are moved outside history and put back. `Snapshot::nudging` says which way playback is nudged.
+- **Mapping.** Key and MIDI Map Modes map the buttons as `transport:nudgedown` and `transport:nudgeup`, as the reference maps "Phase nudge down" and "Phase nudge up" in its Transport group. A mapped key holds the button until it is let go; a note does so until its note-off, and a controller while it is above 63.
 - **Not while stopped**, nor while following external sync (EXT): the reference's scheduler ignores the nudged tempo when External Sync is on.
 - **Saving, rendering, undo and tempo edits let go first.** Before saving, writing recovery, exporting, undo and redo, a tempo or tempo-map edit, tap tempo, switching EXT, or opening or starting a project, Halftrack puts the song tempo back and releases the nudge. In the reference only the scheduler's tempo moves; Halftrack's engine plays the tempo map, which these act on.
 
@@ -22,10 +23,9 @@ Warped audio and MIDI follow the nudged tempo, and unwarped audio keeps its spee
 - both held nudge nothing, and letting go of Up leaves Down nudging;
 - stopped, Nudge Down changes nothing.
 
-The UI suite holds and lets go both Control Bar buttons and checks the Session sees them.
+The UI suite holds and lets go both Control Bar buttons and checks the Session sees them. The key-map suite holds Nudge Up with a mapped key and lets it go; MIDI notes and controllers go through the same press and release, untested for the nudge.
 
 ## Not implemented
 
-- Key and MIDI mapping of the buttons (the reference maps them as "Phase nudge up" and "Phase nudge down" in its Transport group).
 - Showing the nudged tempo (the reference shows it only with a debug option).
 - Link, which Halftrack does not have.

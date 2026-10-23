@@ -555,6 +555,7 @@ public:
         playButton.getProperties().set ("midiMapTarget", "transport:play"); stopButton.getProperties().set ("midiMapTarget", "transport:stop");
         recordButton.getProperties().set ("midiMapTarget", "transport:record"); loopButton.getProperties().set ("midiMapTarget", "transport:loop");
         clickButton.getProperties().set ("midiMapTarget", "transport:metronome");
+        nudgeDown.getProperties().set ("midiMapTarget", "transport:nudgedown"); nudgeUp.getProperties().set ("midiMapTarget", "transport:nudgeup");
         addAndMakeVisible (keysButton); keysButton.setName ("Computer MIDI Keyboard"); keysButton.setClickingTogglesState (true);
         keysButton.setTooltip ("Computer MIDI Keyboard: play notes from A to ' (black keys W to P), Z and X for the octave, C and V for the velocity  |  M");
         keysButton.setColour (juce::TextButton::buttonOnColourId, orange); keysButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
