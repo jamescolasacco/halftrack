@@ -588,9 +588,8 @@ public:
             if (effectShowsPercent (*f)) return juce::String (value * 100, 1) + "%";
             return juce::String (value, std::abs (value) >= 100 ? 0 : 2) + unit;
         }
-        if (target() == Session::AutomationTarget::volume) return value <= -99.99f ? juce::String ("Mute") : juce::String (value, 1) + " dB";
-        if (std::abs (value) < .001f) return "Centre";
-        return juce::String (std::abs (value) * 100, 0) + (value < 0 ? "% L" : "% R");
+        if (target() == Session::AutomationTarget::volume) return value <= -99.99f ? juce::String ("-inf dB") : juce::String (value, 1) + " dB";
+        return Session::panText (value);
     }
     void setError (juce::String message) { error = std::move (message); updateStatus(); }
     void updateStatus()

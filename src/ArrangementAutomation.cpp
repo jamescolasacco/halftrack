@@ -117,7 +117,7 @@ juce::String format (const Target& t, float value)
     switch (t.kind)
     {
         case Target::Kind::volume: case Target::Kind::send: return value <= -99.99f ? juce::String ("-inf dB") : juce::String (value, 1) + " dB";
-        case Target::Kind::pan: return std::abs (value) < .005f ? juce::String ("C") : juce::String (juce::roundToInt (std::abs (value) * 100)) + (value < 0 ? "L" : "R");
+        case Target::Kind::pan: return Session::panText (value);
         case Target::Kind::external: return juce::String (value * 100, 1) + "%";
         case Target::Kind::native:
         {

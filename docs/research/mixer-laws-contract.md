@@ -19,6 +19,7 @@ Each fader or knob has a position from 0 to 1, which is what the reference saves
   | dB | 0 | −6 | −12 | −20 | −24 | −30.2 | −40.4 | −54.6 |
 
 - **Silence.** The mixer silences any gain at or below 0.00032. That is below 0.000232 of the volume travel and 0.00167 of the send travel. Session reports silence as −100 dB.
+- **Pan text.** The reference's pan formatter (0x1012d8dec) writes C within 0.01 of the centre. Otherwise it writes |pan| × 50, rounded half away from zero, with L or R, so the sides read 50L and 50R. `Session::panText` and `panFromText` do the same for every pan in Halftrack's mixer, rack chains, Drum Rack pads and automation editors.
 - **Rack chains.** Chain volume and chain sends inside racks use the same laws. This is inferred: the reference's chains have the same mixer device as tracks, but their converters were not traced.
 
 `src/LevelScale.h` builds the tables the way the reference's builder does: in single precision, with its snap of near-zero levels and its correction of the last four entries. The reference's math library may round its powers of ten differently in the last place, so no bit-exact result is claimed.
@@ -46,6 +47,7 @@ Projects saved before this change hold positions by the engine's own law, where 
 
 - the model's levels both ways for volume and sends, and the silence thresholds;
 - the cue knob's −70 dB bottom;
+- pan text at the centre, near it and at the sides, and reading it back;
 - that a track at −14 dB is saved at 0.5 of its travel, and a send at −20 dB at 0.5 of its own;
 - that a rendered mix plays the track and a post-fader send at those levels;
 - CC values 1, 64, 100, 108 and 127 against the model;

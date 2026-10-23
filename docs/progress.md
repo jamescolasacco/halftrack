@@ -2198,3 +2198,7 @@ Engine area. Loading refused a project whose track or Main volume or pan automat
 ## Send automation — 2026-10-23
 
 Engine and UI areas. Sends have automation lanes, as the reference's Send parameter does: `Session::setSendAutomation` and `SendInfo::automation`, in decibels from Off to 0 dB, moving along the send law. Turning an automated send overrides its lane until Re-Enable Automation. Automation recording captures send moves, making a send that was Off. Sends are MIDI and key mapping targets. The level set by hand is kept as `halftrackManualSend`, and loading validates send lanes. In Automation Mode the Mixer offers each send, named for its return. Measured in the sends, automation-capture, midi-mapping and UI suites ([contract](research/arrangement-automation-contract.md#send-lanes-2026-10-23)).
+
+## Pan text — 2026-10-23
+
+UI area. From a static reading of the reference's pan formatter, pans read C within 0.01 of the centre and otherwise 1 to 50 L or R, so a hard pan reads 50L where Halftrack read 100L. This covers the track, group and automation editors' pans, rack chains and Drum Rack pads; typed values read back the same way. Clip envelopes name the mixer's pan Track Panning, the reference's parameter name. Checked in the fader-laws and UI suites ([contract](research/mixer-laws-contract.md)).

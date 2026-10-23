@@ -1561,8 +1561,8 @@ private:
             pan.setName ("Track pan"); pan.setRange (-1.0, 1.0, 0.01);
             pan.setTextBoxStyle (juce::Slider::TextBoxRight, false, 32, 18);
             pan.setDoubleClickReturnValue (true, 0);
-            pan.textFromValueFunction = [] (double v) { return std::abs (v) < 0.01 ? juce::String ("C") : juce::String ((int) std::round (std::abs (v) * 100.0)) + (v < 0 ? "L" : "R"); };
-            pan.valueFromTextFunction = [] (const juce::String& value) { if (value.trim().equalsIgnoreCase ("C")) return 0.0; return value.getDoubleValue() * 0.01 * (value.containsIgnoreCase ("L") ? -1.0 : 1.0); };
+            pan.textFromValueFunction = [] (double v) { return Session::panText ((float) v); };
+            pan.valueFromTextFunction = [] (const juce::String& value) { return (double) Session::panFromText (value); };
             pan.setTooltip ("Track pan. Double-click to center.");
             pan.onDragStart = [this] { owner.session.beginEditGesture ("Track pan"); };
             pan.onDragEnd = [this] { owner.session.endEditGesture(); };
@@ -2137,7 +2137,8 @@ private:
             gain.onValueChange = [this] { owner.report (owner.session.setGroupGain (groupId, (float) gain.getValue())); };
             pan.setName ("Group pan"); pan.setSliderStyle (juce::Slider::LinearHorizontal); pan.setRange (-1, 1, .01);
             pan.setTextBoxStyle (juce::Slider::TextBoxRight, false, 32, 16); pan.setDoubleClickReturnValue (true, 0);
-            pan.textFromValueFunction = [] (double v) { return std::abs (v) < 0.01 ? juce::String ("C") : juce::String ((int) std::round (std::abs (v) * 100.0)) + (v < 0 ? "L" : "R"); };
+            pan.textFromValueFunction = [] (double v) { return Session::panText ((float) v); };
+            pan.valueFromTextFunction = [] (const juce::String& value) { return (double) Session::panFromText (value); };
             pan.onDragStart = [this] { owner.session.beginEditGesture ("Group pan"); };
             pan.onDragEnd = [this] { owner.session.endEditGesture(); };
             pan.onValueChange = [this] { owner.report (owner.session.setGroupPan (groupId, (float) pan.getValue())); };
@@ -4841,7 +4842,7 @@ private:
             {
                 if (mode == Session::EnvelopeMode::automation && ! sessionClip) continue;
                 result.push_back ({ { {}, 0 }, mode, "Mixer", "Track Volume" });
-                result.push_back ({ { {}, 1 }, mode, "Mixer", "Track Pan" });
+                result.push_back ({ { {}, 1 }, mode, "Mixer", "Track Panning" });
                 auto devices = track.plugins;
                 if (track.instrument.isNativeEffect) devices.insert (devices.begin(), track.instrument);
                 for (const auto& device : devices)
@@ -7100,7 +7101,7 @@ private:
             knobs[2].setName ("Pad level"); knobs[2].setRange (0, 1, .001); knobs[2].setDoubleClickReturnValue (true, 1);
             knobs[2].textFromValueFunction = [] (double v) { return juce::String (v * 100, 1) + "%"; };
             knobs[3].setName ("Pad pan"); knobs[3].setRange (-1, 1, .01); knobs[3].setDoubleClickReturnValue (true, 0);
-            knobs[3].textFromValueFunction = [] (double v) { return std::abs (v) < .005 ? juce::String ("C") : juce::String ((int) std::round (std::abs (v) * 100)) + (v < 0 ? "L" : "R"); };
+            knobs[3].textFromValueFunction = [] (double v) { return Session::panText ((float) v); };
             for (auto& knob : knobs) knob.updateText();
             choke.setName ("Pad choke"); choke.setTooltip ("Pads in the same choke group silence each other");
             for (auto* text : { "No choke", "Choke 1", "Choke 2", "Choke 3", "Choke 4" }) choke.addItem (text, choke.getNumItems() + 1);
@@ -14407,7 +14408,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         selectedClip = 0; openPianoRoll(); refresh(); pianoRoll.fit();
         auto* laneBox = dynamic_cast<juce::ComboBox*> (findNamed (pianoRoll, "Lane"));
         auto* laneComponent = findNamed (pianoRoll, "Controller lane");
-        const int panItem = laneBox != nullptr ? findItem (*laneBox, "Envelope", "Track Pan") : 0;
+        const int panItem = laneBox != nullptr ? findItem (*laneBox, "Envelope", "Track Panning") : 0;
         check (laneBox != nullptr && laneComponent != nullptr && panItem > 0, "the piano roll's lane chooser offers clip envelopes");
         laneBox->setSelectedId (panItem, juce::sendNotificationSync);
         const auto plotTop = 6.0f, plotBottom = (float) laneComponent->getHeight() - 4;

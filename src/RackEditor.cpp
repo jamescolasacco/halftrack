@@ -21,7 +21,7 @@ juce::String noteName (int note)
 }
 juce::String sendName (int index) { return "Send " + juce::String::charToString ((juce::juce_wchar) ('A' + index)); }
 juce::String volumeText (double v) { return v <= -100 ? juce::String ("-inf") : juce::String (v, 1) + " dB"; }
-juce::String panText (double v) { return std::abs (v) < .005 ? juce::String ("C") : juce::String ((int) std::round (std::abs (v) * 50)) + (v < 0 ? "L" : "R"); }
+juce::String panText (double v) { return Session::panText ((float) v); }
 void quiet (juce::Component& c) { c.setWantsKeyboardFocus (false); c.setMouseClickGrabsKeyboardFocus (false); }
 
 class RackEditor;

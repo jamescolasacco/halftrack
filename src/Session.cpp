@@ -11169,6 +11169,19 @@ float Session::automationProportionToValue (AutomationTarget target, float propo
     return target == AutomationTarget::volume ? juce::jlimit (-100.0f, 6.0f, te::gainToDb (levelscale::volumeGain (proportion)))
         : proportion * 2 - 1;
 }
+juce::String Session::panText (float pan)
+{
+    const double value = pan;
+    if (! (value < -0.01 || value > 0.01)) return "C";
+    return String ((int) std::round (std::abs (value) * 50.0)) + (value < 0 ? "L" : "R");
+}
+float Session::panFromText (const String& text)
+{
+    const auto trimmed = text.trim();
+    if (trimmed.equalsIgnoreCase ("C")) return 0;
+    const auto steps = trimmed.retainCharacters ("0123456789.").getDoubleValue();
+    return juce::jlimit (-1.0f, 1.0f, (float) (steps / 50.0 * (trimmed.containsIgnoreCase ("L") || trimmed.startsWith ("-") ? -1.0 : 1.0)));
+}
 float Session::sendValueToProportion (float decibels)
 {
     if (! std::isfinite (decibels)) return 0;

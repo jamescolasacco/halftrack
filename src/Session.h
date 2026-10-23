@@ -201,6 +201,11 @@ public:
     // A send's knob position, 0 to 1, for a level in decibels (-100 for Off), and back, along the send law.
     static float sendValueToProportion (float decibels);
     static float sendProportionToValue (float proportion);
+    // A pan as the reference shows it (static reading of its pan formatter): C within 0.01 of the
+    // centre, otherwise 1 to 50 L or R, rounded. panFromText reads such text back, or a bare number
+    // as R, and C as the centre.
+    static juce::String panText (float pan);
+    static float panFromText (const juce::String&);
     // A level control's travel in decibels, as the reference's faders and knobs move: the position
     // along its volume law (to +6 dB) or its send law (to 0 dB). Silence, at the bottom, reads as
     // `silence`: -100, or the cue volume's -70.

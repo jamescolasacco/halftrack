@@ -71,6 +71,12 @@ void modelLevels()
                && fader.convertFrom0to1 (0) == -100 && near (fader.convertFrom0to1 (1), 6, 1e-4),
            "a fader's travel follows the volume law, with silence at the bottom");
     check (cue.convertTo0to1 (-70) == 0 && cue.convertFrom0to1 (0) == -70 && near (cue.convertTo0to1 (-6), .7, 1e-6), "the cue volume's knob bottoms out at -70 dB");
+    // Pan text, as the reference's pan formatter writes it: C within 0.01, else 1 to 50 L or R.
+    check (Session::panText (0) == "C" && Session::panText (.01f) == "C" && Session::panText (-.01f) == "C" && Session::panText (.0101f) == "1R"
+               && Session::panText (-1) == "50L" && Session::panText (1) == "50R" && Session::panText (-.5f) == "25L" && Session::panText (.1f) == "5R" && Session::panText (-.7f) == "35L",
+           "pans read C at the centre and 1 to 50 L or R at the sides");
+    check (Session::panFromText ("25L") == -.5f && Session::panFromText ("C") == 0 && Session::panFromText ("50R") == 1 && Session::panFromText ("10") == .2f
+               && Session::panFromText ("80L") == -1, "pan text reads back, a bare number as R, and stops at the sides");
 }
 
 void storedAndPlayed (const juce::File& root, const juce::File& signal)
