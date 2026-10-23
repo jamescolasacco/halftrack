@@ -188,7 +188,8 @@ int runTransportTests (const juce::File& artifacts)
             s.seek (7.5);
             started (7.5); // A loaded machine resumes a moment after the jump.
             const auto beyond = at (.25);
-            check (beyond > 7.5 && beyond < 8 + slack, "and a jump past it plays on (" + juce::String (beyond, 3) + " s)");
+            // Looping would bring it back inside [6, 7); a loaded machine can report the move late.
+            check (beyond > 7.5 && beyond < 9, "and a jump past it plays on (" + juce::String (beyond, 3) + " s)");
             s.stop(); s.setLoop (false, 6, 7); s.setInsertMarker (3);
             // The loop brace's Set Song Start Time Here: Play starts at the loop's start, loop on or off.
             check (! s.snapshot().loopIsSongStart, "the loop is not the song's start at first");
