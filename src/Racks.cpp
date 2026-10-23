@@ -161,16 +161,14 @@ std::optional<std::pair<float, float>> targetRange (Kind targetKind, bool chainT
 float chainValueToProportion (int parameter, float value) noexcept
 {
     if (parameter == 1) return std::clamp ((value + 1) * .5f, 0.0f, 1.0f);
-    // Volume and sends follow the track fader taper; sends top out at 0 dB.
-    const auto top = te::decibelsToVolumeFaderPosition (parameter == 0 ? 6.0f : 0.0f);
-    return std::clamp (te::decibelsToVolumeFaderPosition (value) / top, 0.0f, 1.0f);
+    // Volume and sends follow the track volume and send laws, which top out at +6 and 0 dB.
+    return std::clamp (parameter == 0 ? te::decibelsToVolumeFaderPosition (value) : te::decibelsToSendFaderPosition (value), 0.0f, 1.0f);
 }
 float chainProportionToValue (int parameter, float proportion) noexcept
 {
     proportion = std::clamp (proportion, 0.0f, 1.0f);
     if (parameter == 1) return proportion * 2 - 1;
-    const auto top = te::decibelsToVolumeFaderPosition (parameter == 0 ? 6.0f : 0.0f);
-    return std::clamp (te::volumeFaderPositionToDB (proportion * top), -100.0f, parameter == 0 ? 6.0f : 0.0f);
+    return std::clamp (parameter == 0 ? te::volumeFaderPositionToDB (proportion) : te::sendFaderPositionToDB (proportion), -100.0f, parameter == 0 ? 6.0f : 0.0f);
 }
 
 juce::Result validateRack (const juce::ValueTree& rack)

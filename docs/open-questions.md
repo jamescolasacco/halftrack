@@ -247,7 +247,7 @@ Duplicate Selection copies the selected tracks' automation with one-millisecond 
 
 ### Rack defaults
 
-An empty effect rack passes its input and an empty Instrument or Drum Rack is silent. Zone fades are linear: key and velocity fades scale the note's velocity; selector fades scale an Instrument or Audio Effect Rack chain's output and a MIDI Effect Rack chain's velocity. The chain selector moves in whole steps from 0 to 127. Gains ramp over 5 ms. Chain mute and solo act on a chain's output, except in MIDI Effect Racks, where they stop new notes. A choke fades the choked pad's instrument voices over 5 ms, and audio effects after the instrument keep ringing. Chain pan uses the track mixer's law. Macro mappings interpolate in knob position, so a volume mapping follows the fader taper. A macro's first mapping takes the control's current position, and removing a mapping leaves the control where the macro put it. Macro automation applies at block rate. Grouping copies built-in devices into a one-chain rack; third-party plug-ins cannot go in racks yet. Only one-chain Instrument, Audio Effect and MIDI Effect Racks can be ungrouped. Chain Selector MIDI controller filtering, macro variations, randomize, hot-swap, chain colors, Drum Rack pad routing to the project's returns, and extracting chains are not implemented. These are simplest-default choices pending reference measurement.
+An empty effect rack passes its input and an empty Instrument or Drum Rack is silent. Zone fades are linear: key and velocity fades scale the note's velocity; selector fades scale an Instrument or Audio Effect Rack chain's output and a MIDI Effect Rack chain's velocity. The chain selector moves in whole steps from 0 to 127. Gains ramp over 5 ms. Chain mute and solo act on a chain's output, except in MIDI Effect Racks, where they stop new notes. A choke fades the choked pad's instrument voices over 5 ms, and audio effects after the instrument keep ringing. Chain pan uses the track mixer's law. Macro mappings interpolate in knob position, so a volume mapping follows the volume law. A macro's first mapping takes the control's current position, and removing a mapping leaves the control where the macro put it. Macro automation applies at block rate. Grouping copies built-in devices into a one-chain rack; third-party plug-ins cannot go in racks yet. Only one-chain Instrument, Audio Effect and MIDI Effect Racks can be ungrouped. Chain Selector MIDI controller filtering, macro variations, randomize, hot-swap, chain colors, Drum Rack pad routing to the project's returns, and extracting chains are not implemented. These are simplest-default choices pending reference measurement.
 
 ### Time signature defaults
 
@@ -786,3 +786,15 @@ The reference's manual says Up and Down move a selected loop brace "in steps equ
 
 A Session take that starts the transport counts in, as the reference's does. Where the reference starts clips launched with a recording scene, and Session Record's overdubs, during a count-in is not read; Halftrack starts them with the count-in ([contract](research/session-recording-contract.md)).
 
+
+### Mixer laws
+
+Volume and sends follow the reference's level scales ([contract](research/mixer-laws-contract.md)). Defaults where the rest is not followed:
+
+- **Pan.** The reference's pan keeps a hard pan's far side at 1e-5 (−100 dB), not silence. Its split stereo mode is not built. Halftrack's mixer pan keeps its own law, unity at centre.
+- **Automation timing.** The reference plays volume, send and pan automation in ramps of 1/128 of the range, at least 256 samples long, and smooths over 4 ms. Halftrack's engine updates automation per block and smooths on its own schedule. Its end levels and its straight path along the travel match the reference.
+- **Display.** The reference's dB text reads −inf from −69.7 dB (medium confidence). Halftrack reads −inf only for silence, so a level just above it reads −69.9 dB.
+- **Rack chains.** Chain volume and chain sends take the track laws. That the reference's chains do too is inferred from their shared mixer, not traced.
+- **Volume modulation.** A clip's volume modulation scales the fader's position, now along the reference's law. Whether the reference's modulation scales the position or the gain is not read.
+- **Cue.** The cue volume stays in decibels, with −70 dB as silence, rather than the reference's 0.00032 gain floor.
+- **Older projects.** Projects saved before the change keep every level when they open. Levels below −70 dB become silence, and segments between automation points take the new law's shape.

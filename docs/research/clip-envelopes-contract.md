@@ -36,7 +36,7 @@ Native devices read a modulated control's value even when no curve sets it. See 
 
 `tests/ClipEnvelopeTests.cpp` renders a constant 0.5 clip at 120 BPM and checks:
 
-- a volume modulation step at beat 4, from the whole fader to half its position (0.2027 of the level). It is undoable and redoable, moves with its clip, and is kept by both halves of a split and by a duplicate;
+- a volume modulation step at beat 4, from the whole fader to half its position, along the [volume law](mixer-laws-contract.md). It is undoable and redoable, moves with its clip, and is kept by both halves of a split and by a duplicate;
 - the same step applied to −6 dB track automation, at half the automated position;
 - full right pan modulation silencing the left channel;
 - an unlinked four-beat envelope repeating where the linked one holds;

@@ -214,6 +214,9 @@ void malformedLoads (const juce::File& root)
         auto* mixer = findOwner (findOwner, *bad); check (mixer != nullptr, "locate mixer owning invalid curve");
         if (mutation == 13) mixer->setAttribute ("halftrackManualVolume", "0.000001");
         if (mutation == 14) mixer->setAttribute ("halftrackManualVolume", "nan");
+        // A tiny level is below the engine's own law's range in a project saved with it; under the
+        // reference's law, a project's tiny level is silence (see silentPositions).
+        if (mutation == 11 || mutation == 13) bad->getChildByName ("EDIT")->removeAttribute ("halftrackFaderLaw");
         if (mutation >= 15)
         {
             juce::MemoryOutputStream parameters;
@@ -228,6 +231,26 @@ void malformedLoads (const juce::File& root)
         const auto before = s.snapshot();
         check (s.loadProject (invalid).failed(), "reject malformed serialized automation " + juce::String (mutation));
         check (s.snapshot().projectGeneration == before.projectGeneration && equal (lane (s, Target::volume), before.tracks[0].volumeAutomation), "failed load preserves active project");
+    }
+    // Under the reference's law the bottom of the fader's travel is silence.
+    for (const bool manual : { false, true })
+    {
+        auto quiet = std::make_unique<juce::XmlElement> (*xml); auto* curve = findCurve (findCurve, *quiet);
+        if (manual)
+        {
+            const auto findOwner = [curve] (auto&& self, juce::XmlElement& node) -> juce::XmlElement*
+            {
+                for (auto* child : node.getChildIterator()) { if (child == curve) return &node; if (auto* owner = self (self, *child)) return owner; }
+                return nullptr;
+            };
+            findOwner (findOwner, *quiet)->setAttribute ("halftrackManualVolume", "0.000001");
+        }
+        else curve->getFirstChildElement()->setAttribute ("v", "0.000001");
+        const auto file = root.getChildFile (manual ? "automation-silent-manual.halftrack" : "automation-silent-point.halftrack");
+        check (quiet->writeTo (file), "write a tiny level");
+        ok (s.loadProject (file), manual ? "a tiny manual level loads" : "a tiny automation point loads");
+        if (manual) { ok (s.setTrackAutomation (id, Target::volume, {}), "clear the lane"); check (s.snapshot().tracks[0].gainDb == -100, "the tiny manual level is silence"); }
+        else check (lane (s, Target::volume).points.front().value == -100, "the tiny point is silence");
     }
 }
 void playbackModeRegressions (const juce::File& root)
@@ -378,7 +401,7 @@ void playbackPersistence (const juce::File& root)
         ok (s.setTrackAutomation (id, Target::volume, {}), "clear migrated volume lane");
         ok (s.setTrackAutomation (id, Target::pan, {}), "clear migrated pan lane");
         const auto migrated = s.snapshot().tracks[0];
-        const double expectedVolume = retainExplicitValues ? -4 : savedVolume > 0 ? 20*std::log(savedVolume)+6 : -100;
+        const double expectedVolume = retainExplicitValues ? -4 : Session::automationProportionToValue (Target::volume, (float) savedVolume);
         check (std::abs (migrated.gainDb - expectedVolume) < 2e-5 && std::abs (migrated.pan - (retainExplicitValues ? -.3 : savedPan)) < 1e-6,
             retainExplicitValues ? "legacy migration recovers original explicit manual values" : "legacy migration falls back to saved native values when original manual values are absent");
     }
@@ -545,7 +568,7 @@ void masterHistoryTests (const juce::File& root)
         master->setAttribute ("pan", -.25);
         if (explicitBaseline)
         {
-            juce::MemoryOutputStream values; values.writeString ("master volume"); values.writeFloat (std::exp (-10.0f/20));
+            juce::MemoryOutputStream values; values.writeString ("master volume"); values.writeFloat (Session::automationValueToProportion (Target::volume, -4));
             values.writeString ("master pan"); values.writeFloat (.625f);
             master->setAttribute ("base64:parameters", values.getMemoryBlock().toBase64Encoding());
         }
@@ -557,7 +580,7 @@ void masterHistoryTests (const juce::File& root)
         check (std::abs (nativeMaster->getPan() - (explicitBaseline ? .625f : -.25f)) < 1e-6f,
             "retiring a master volume parameter blob preserves its independent explicit pan value");
         ok (s.setMasterVolumeAutomation ({}), "clear migrated master envelope");
-        const double expected = explicitBaseline ? -4 : savedVolume > 0 ? 20 * std::log (savedVolume) + 6 : -100;
+        const double expected = explicitBaseline ? -4 : Session::automationProportionToValue (Target::volume, (float) savedVolume);
         check (std::abs (s.snapshot().masterGainDb - expected) < 2e-5, "master baseline migration uses explicit value or documented attached-value fallback");
     }
     ok (s.newProject(), "replace master-automated project");
@@ -587,7 +610,7 @@ void malformedMasterLoads (const juce::File& root)
         if (mutation == 7) master->setAttribute ("halftrackManualVolume", "nan");
         if (mutation == 8) curve->getChildElement (1)->setAttribute ("t", "2000000");
         if (mutation == 9) point->setAttribute ("c", ".5");
-        if (mutation == 10) master->setAttribute ("halftrackManualVolume", "0.000001");
+        if (mutation == 10) { master->setAttribute ("halftrackManualVolume", "0.000001"); edit->removeAttribute ("halftrackFaderLaw"); } // Legacy floor.
         if (mutation == 11) group->setAttribute ("right", "nan");
         if (mutation >= 12 && mutation <= 15)
         {
@@ -606,18 +629,17 @@ void malformedMasterLoads (const juce::File& root)
         check (s.loadProject (bad).failed() && s.snapshot().projectGeneration == generation && s.canRedo()
             && equal (s.snapshot().masterVolumeAutomation, original), "malformed master load preserves active project and redo " + juce::String (mutation));
     }
-    s.redo(); check (s.snapshot().masterVolumeAutomation.points.size() == 1 && s.snapshot().masterVolumeAutomation.points[0].value == -12,
+    s.redo(); check (s.snapshot().masterVolumeAutomation.points.size() == 1 && std::abs (s.snapshot().masterVolumeAutomation.points[0].value + 12) < 1e-4,
         "master redo remains functional after all rejected loads");
 }
 void interpolationTests (const juce::File& root)
 {
-    // Formula independent of Session's helper: native linear fader-coordinate
-    // interpolation is exponential in dB, and is not a linear amplitude ramp.
-    for (float db : {-100.f,-60.f,-18.f,-6.f,0.f,6.f})
+    // The reference's volume law at the research model's levels (docs/research/mixer-laws-contract.md).
+    const std::pair<float, float> levels[] { { -100.f, 0.f }, { -18.f, .4f }, { -14.f, .5f }, { -6.f, .7f }, { 0.f, .85f }, { 6.f, 1.f } };
+    for (const auto& [db, position] : levels)
     {
-        const auto expected = db <= -100 ? 0.0 : std::exp ((db - 6.0) / 20.0);
-        check (std::abs (Session::automationValueToProportion (Target::volume, db) - expected) < 1e-7, "editor coordinate matches independently computed fader taper");
-        check (std::abs (Session::automationProportionToValue (Target::volume, (float) expected) - db) < 2e-5, "fader coordinate round trip retains dB value");
+        check (std::abs (Session::automationValueToProportion (Target::volume, db) - position) < 1e-6, "editor coordinate matches the reference's volume law");
+        check (std::abs (Session::automationProportionToValue (Target::volume, position) - db) < 2e-5, "fader coordinate round trip retains dB value");
     }
     Session s (false); ok (s.importAudio (constantFile (root), 0), "import ramp source");
     ok (s.setTrackAutomation (s.snapshot().tracks[0].id, Target::volume, {true,{{0,-18},{4,0}}}), "create musical volume ramp");
@@ -625,14 +647,16 @@ void interpolationTests (const juce::File& root)
     // Native automation is updated by processing blocks and the mixer smooths
     // gain over 15 ms. Check that every middle sample remains near the analytic
     // curve; this allowance bounds its timing without claiming sample accuracy.
+    // The lane moves the fader straight along its travel, and the level follows the law.
+    const auto from = Session::automationValueToProportion (Target::volume, -18), to = Session::automationValueToProportion (Target::volume, 0);
     double error = 0;
     for (int n = 4800; n < 90000; ++n)
     {
-        const double fader = std::exp (-24.0/20) + (std::exp (-6.0/20) - std::exp (-24.0/20)) * n / 96000.0;
-        const double expected = .125 * std::pow (10.0, (20 * std::log (fader) + 6) / 20);
+        const auto fader = (float) (from + (to - from) * n / 96000.0);
+        const double expected = .125 * juce::Decibels::decibelsToGain (Session::automationProportionToValue (Target::volume, fader), -100.0f);
         error = std::max (error, std::abs (audio.getSample (0,n) - expected));
     }
-    check (error < .002, "rendered ramp follows native taper within block/smoothing bound; error=" + juce::String (error, 7));
+    check (error < .002, "rendered ramp follows the volume law within block/smoothing bound; error=" + juce::String (error, 7));
 }
 }
 // A curved segment: volume from -24 dB to 0 dB over three beats, bowed. It reads back with its

@@ -26,7 +26,7 @@ No physical surface has been measured.
 
 **What it does.** The eight strips show eight tracks from the bank's first:
 
-- **Fader:** volume, along the interface fader's taper.
+- **Fader:** volume, along the [volume law](mixer-laws-contract.md), as the interface's faders move.
 - **V-Pot:** pan, 0.02 a tick; pressing it centres.
 - **Rec, Solo and Mute:** switch arm, solo and mute.
 - **Master fader:** the master volume.

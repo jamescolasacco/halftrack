@@ -193,9 +193,13 @@ public:
         double loopBeats = 4; // An unlinked envelope's loop, 1 to 1024 beats.
         bool operator== (const ClipEnvelope&) const = default;
     };
-    // Coordinate mapping matches native interpolation, including the volume fader taper.
+    // Coordinate mapping matches native interpolation, including the volume law.
     static float automationValueToProportion (AutomationTarget, float value);
     static float automationProportionToValue (AutomationTarget, float proportion);
+    // A level control's travel in decibels, as the reference's faders and knobs move: the position
+    // along its volume law (to +6 dB) or its send law (to 0 dB). Silence, at the bottom, reads as
+    // `silence`: -100, or the cue volume's -70.
+    static juce::NormalisableRange<double> levelRange (bool send, double silence = -100);
     enum class NoteTransform { quantizeStarts, quantizeEnds, reverse, invertPitch, legato, halfTime, doubleTime, fixedLength };
     // Note tools after the reference's transformation and generative tools; settings follow each
     // tool's field table in NoteTools.h. Appended tools keep their value; never reorder.

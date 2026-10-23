@@ -80,6 +80,7 @@ int runDeviceSettingsTests (const juce::File&);
 int runCollectionsTests (const juce::File&);
 int runPluginPresetTests (const juce::File&);
 int runClipEnvelopeTests (const juce::File&);
+int runFaderLawTests (const juce::File&);
 int runWarpModeTests (const juce::File&);
 int runSliceTests (const juce::File&);
 int runMpeTests (const juce::File&);
@@ -581,6 +582,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-clip-envelopes");
             setApplicationReturnValue (runClipEnvelopeTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-fader-laws"))
+        {
+            const int i = args.indexOf ("--self-test-fader-laws");
+            setApplicationReturnValue (runFaderLawTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-plugin-presets"))

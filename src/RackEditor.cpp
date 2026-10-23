@@ -38,7 +38,7 @@ public:
         solo.setClickingTogglesState (true); solo.setColour (juce::TextButton::buttonOnColourId, blue);
         name.setName ("Chain name"); name.setEditable (false, true, false); name.setFont (font (10.5f)); name.setColour (juce::Label::textColourId, ink);
         name.setTooltip ("Double-click to rename");
-        volume.setName ("Chain volume"); volume.setSliderStyle (juce::Slider::LinearBar); volume.setRange (-100, 6, .1); volume.setSkewFactorFromMidPoint (-12);
+        volume.setName ("Chain volume"); volume.setSliderStyle (juce::Slider::LinearBar); volume.setNormalisableRange (Session::levelRange (false));
         volume.setDoubleClickReturnValue (true, 0); volume.textFromValueFunction = volumeText;
         volume.setColour (juce::Slider::trackColourId, themes::colour (0xff4f6d57));
         pan.setName ("Chain pan"); pan.setSliderStyle (juce::Slider::LinearBar); pan.setRange (-1, 1, .01); pan.setDoubleClickReturnValue (true, 0);
@@ -794,7 +794,7 @@ PadControls::PadControls (RackEditor& o) : owner (o)
     for (int i = 0; i < Session::maximumRackReturns; ++i)
     {
         auto& s = sends[(size_t) i];
-        s.setName (sendName (i)); s.setSliderStyle (juce::Slider::LinearBar); s.setRange (-100, 0, .1); s.setSkewFactorFromMidPoint (-18);
+        s.setName (sendName (i)); s.setSliderStyle (juce::Slider::LinearBar); s.setNormalisableRange (Session::levelRange (true));
         s.setDoubleClickReturnValue (true, -100); s.textFromValueFunction = [i] (double v) { return sendName (i) + "  " + (v <= -100 ? juce::String ("Off") : juce::String (v, 1) + " dB"); };
         s.onDragStart = [this] { if (! gesture) { owner.session.beginEditGesture ("Pad send"); gesture = true; } };
         s.onDragEnd = [this] { if (gesture) { gesture = false; owner.session.endEditGesture(); } };

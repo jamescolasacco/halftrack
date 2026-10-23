@@ -139,6 +139,14 @@ const juce::Identifier returnModeProperty { "halftrackReturnSendMode" };
 const juce::Identifier sendReturnProperty { "halftrackSendReturnID" };
 
 const juce::Identifier manualVolumeProperty { "halftrackManualVolume" };
+// Fader positions follow the reference's laws (LevelScale.h), which Session installs in the engine:
+// its volume scale for mixers and its send scale for sends. Projects saved before have no marker
+// and hold positions by the engine's own law, which loading converts to the same gains.
+const juce::Identifier faderLawProperty { "halftrackFaderLaw" };
+constexpr int faderLaw = 2;
+// The engine's own law, which served volume and sends alike: 0 dB at e^-0.3, +6 dB at the top.
+float legacyFaderPosition (float db) { return db > -100.0f ? std::exp ((db - 6.0f) * (1.0f / 20.0f)) : 0.0f; }
+float legacyFaderGain (float position) { return position > 0.0f ? std::pow (10.0f, (20.0f * std::log (position) + 6.0f) * (1.0f / 20.0f)) : 0.0f; }
 const juce::Identifier crossfadeProperty { "halftrackCrossfade" };
 const juce::Identifier crossfaderProperty { "halftrackCrossfader" };
 const juce::Identifier manualPanProperty { "halftrackManualPan" };
@@ -323,7 +331,9 @@ const char* mixerParameterID (const juce::ValueTree& state, Session::AutomationT
     return target == Session::AutomationTarget::volume ? (master ? "master volume" : "volume")
         : (master ? "master pan" : "pan");
 }
-Result readStoredManualParameters (const juce::ValueTree& state, std::map<String, float>& values)
+// Below this, a legacy project's volume position is out of the engine's own law's range.
+const double legacyVolumeFloor = std::exp (-106.0 / 20.0) - 1e-9;
+Result readStoredManualParameters (const juce::ValueTree& state, std::map<String, float>& values, double floor = 0)
 {
     if (! state.hasProperty (te::IDs::parameters)) return Result::ok();
     const auto* data = state[te::IDs::parameters].getBinaryData();
@@ -338,14 +348,16 @@ Result readStoredManualParameters (const juce::ValueTree& state, std::map<String
             return Result::fail ("Invalid stored mixer parameter entry.");
         const float value = stream.readFloat();
         if (! std::isfinite (value) || value < (key == "volume" ? 0.0f : -1.0f) || value > 1
-            || (key == "volume" && value > 0 && value < std::exp (-106.0f / 20.0f) - 1e-9f))
+            || (key == "volume" && value > 0 && value < floor))
             return Result::fail ("Invalid stored manual mixer level.");
         values.emplace (key, value);
     }
     return Result::ok();
 }
-Result validateMixerAutomation (const juce::ValueTree& state)
+// A legacy project's volume positions are checked against the engine's own law's floor.
+Result validateMixerAutomation (const juce::ValueTree& state, bool legacy)
 {
+    const double floor = legacy ? legacyVolumeFloor : 0;
     if (isMixerState (state))
     {
         // The fader's own level and pan, which the engine would otherwise load out of range and save back.
@@ -353,11 +365,11 @@ Result validateMixerAutomation (const juce::ValueTree& state)
             || (state.hasProperty (te::IDs::pan) && ! finiteProperty (state[te::IDs::pan], -1, 1)))
             return Result::fail ("Invalid mixer level or pan.");
         std::map<String, float> explicitValues;
-        if (auto result = readStoredManualParameters (state, explicitValues); result.failed()) return result;
+        if (auto result = readStoredManualParameters (state, explicitValues, floor); result.failed()) return result;
         for (const auto& key : { manualVolumeProperty, manualPanProperty })
             if (state.hasProperty (key) && (! finiteProperty (state[key], key == manualVolumeProperty ? 0 : -1, 1)
                 || (key == manualVolumeProperty && static_cast<double> (state[key]) > 0
-                    && static_cast<double> (state[key]) < std::exp (-106.0 / 20.0) - 1e-9)))
+                    && static_cast<double> (state[key]) < floor)))
                 return Result::fail ("Invalid stored manual mixer level.");
         std::set<String> targets;
         for (const auto& curve : state)
@@ -375,7 +387,7 @@ Result validateMixerAutomation (const juce::ValueTree& state)
             {
                 const auto saved = state.getProperty (volume ? te::IDs::volume : te::IDs::pan, volume ? te::decibelsToVolumeFaderPosition (0) : 0);
                 if (! finiteProperty (saved, volume ? 0 : -1, 1)
-                    || (volume && static_cast<double> (saved) > 0 && static_cast<double> (saved) < std::exp (-106.0 / 20.0) - 1e-9))
+                    || (volume && static_cast<double> (saved) > 0 && static_cast<double> (saved) < floor))
                     return Result::fail ("Invalid legacy mixer automation baseline.");
             }
             double previous = -1;
@@ -385,14 +397,14 @@ Result validateMixerAutomation (const juce::ValueTree& state)
                     || ! finiteProperty (point[te::IDs::v], volume ? 0 : -1, 1)
                     || ! finiteProperty (point.getProperty (te::IDs::c, 0), 0, 0)
                     || (volume && static_cast<double> (point[te::IDs::v]) > 0
-                        && static_cast<double> (point[te::IDs::v]) < std::exp (-106.0 / 20.0) - 1e-9)
+                        && static_cast<double> (point[te::IDs::v]) < floor)
                     || static_cast<double> (point[te::IDs::t]) <= previous)
                     return Result::fail ("Mixer automation needs ordered finite linear points.");
                 previous = static_cast<double> (point[te::IDs::t]);
             }
         }
     }
-    for (const auto& child : state) if (auto result = validateMixerAutomation (child); result.failed()) return result;
+    for (const auto& child : state) if (auto result = validateMixerAutomation (child, legacy); result.failed()) return result;
     return Result::ok();
 }
 void restoreManualMixerState (juce::ValueTree state)
@@ -430,6 +442,68 @@ void restoreManualMixerState (juce::ValueTree state)
             state.setProperty (te::IDs::remapOnTempoChange, true, nullptr);
     }
     for (auto child : state) restoreManualMixerState (child);
+}
+// Converts a validated legacy project's fader positions to the installed laws, keeping each gain:
+// mixers' levels, manual levels, stored parameters and volume automation; sends' levels, stored
+// parameters and automation; and Session clips' volume automation envelopes. Volume modulation
+// scales a position, so it has nothing to convert.
+void migrateFaderLaw (juce::ValueTree edit)
+{
+    const auto converted = [] (double position, bool send)
+    {
+        const auto gain = legacyFaderGain (static_cast<float> (position));
+        return send ? levelscale::sendPosition (gain) : levelscale::volumePosition (gain);
+    };
+    const auto convert = [&] (juce::ValueTree node, const juce::Identifier& key, bool send)
+    {
+        if (node.hasProperty (key) && finiteProperty (node[key], 0, 1))
+            node.setProperty (key, converted (static_cast<double> (node[key]), send), nullptr);
+    };
+    const auto convertCurve = [&] (juce::ValueTree curve, bool send)
+    { for (auto point : curve) if (point.hasType (te::IDs::POINT)) convert (point, te::IDs::v, send); };
+    const auto convertStored = [&] (juce::ValueTree plugin, const String& parameter, bool send)
+    {
+        const auto* data = plugin[te::IDs::parameters].getBinaryData();
+        if (data == nullptr) return;
+        juce::MemoryInputStream in (*data, false);
+        juce::MemoryOutputStream out;
+        while (! in.isExhausted())
+        {
+            const auto key = in.readString();
+            if (in.getNumBytesRemaining() < 4) return; // Malformed data stays as it was.
+            auto value = in.readFloat();
+            if (key == parameter && std::isfinite (value) && value >= 0 && value <= 1) value = static_cast<float> (converted (value, send));
+            out.writeString (key); out.writeFloat (value);
+        }
+        plugin.setProperty (te::IDs::parameters, out.getMemoryBlock(), nullptr);
+    };
+    std::set<String> mixers;
+    const std::function<void (const juce::ValueTree&)> gather = [&] (const juce::ValueTree& node)
+    {
+        if (isMixerState (node) && node.hasProperty (te::IDs::id)) mixers.insert (node[te::IDs::id].toString());
+        for (const auto& child : node) gather (child);
+    };
+    gather (edit);
+    const std::function<void (juce::ValueTree)> visit = [&] (juce::ValueTree node)
+    {
+        const bool mixer = isMixerState (node);
+        const bool send = node.hasType (te::IDs::PLUGIN) && node[te::IDs::type].toString() == te::AuxSendPlugin::xmlTypeName;
+        if (mixer || send)
+        {
+            const String parameter = mixer ? mixerParameterID (node, Session::AutomationTarget::volume) : "send level";
+            if (mixer) { convert (node, te::IDs::volume, false); convert (node, manualVolumeProperty, false); }
+            else convert (node, te::IDs::auxSendSliderPos, true);
+            convertStored (node, parameter, send);
+            for (auto curve : node)
+                if (curve.hasType (te::IDs::AUTOMATIONCURVE) && curve[te::IDs::paramID].toString() == parameter) convertCurve (curve, send);
+        }
+        if (node.hasType (te::IDs::AUTOMATIONCURVEMODIFIER) && node[te::IDs::paramID].toString() == "volume"
+            && mixers.contains (node[te::IDs::source].toString()))
+            for (auto curve : node)
+                if (curve.hasType (te::IDs::AUTOMATIONCURVE) && curve[te::IDs::type].toString() == "absolute") convertCurve (curve, false);
+        for (auto child : node) visit (child);
+    };
+    visit (edit);
 }
 
 bool isReturn (const te::AudioTrack& track) { return track.state.getProperty (returnProperty, false); }
@@ -480,7 +554,7 @@ private:
 
 // Validate routing before constructing native objects, so invalid projects cannot
 // replace the active edit, load hidden media, or change its undo history.
-Result validateRouting (const juce::ValueTree& state)
+Result validateRouting (const juce::ValueTree& state, bool legacyFaders)
 {
     struct Destination { int bus; Session::SendMode mode; };
     std::map<String, Destination> destinations;
@@ -586,7 +660,7 @@ Result validateRouting (const juce::ValueTree& state)
                     || ! canonicalID (plugin[te::IDs::id])
                     || ! number (plugin[te::IDs::busNum], 0, 2147483646, true)
                     || static_cast<int> (plugin[te::IDs::busNum]) != found->second.bus
-                    || ! number (plugin[te::IDs::auxSendSliderPos], 0, te::decibelsToVolumeFaderPosition (0.0f))
+                    || ! number (plugin[te::IDs::auxSendSliderPos], 0, legacyFaders ? legacyFaderPosition (0) : 1)
                     || static_cast<bool> (plugin.getProperty (te::IDs::phase, false))
                     || ((index < mixer) != (found->second.mode == Session::SendMode::pre)))
                     return Result::fail ("The project has an invalid send route or tap position.");
@@ -2543,6 +2617,11 @@ struct Session::Impl
         : owner (s), engine (settingsStorage (devices), std::make_unique<UIBehaviour> (s, devices),
                             std::make_unique<Behaviour> (devices, midiPortPrefix)), useDevices (devices), portPrefix (midiPortPrefix)
     {
+        // The reference's volume and send laws, before any Edit exists; the audio thread reads them,
+        // so their tables are built here.
+        levelscale::volume(); levelscale::send();
+        te::setVolumeFaderLaw ({ &levelscale::volumeGain, &levelscale::volumePosition });
+        te::setSendFaderLaw ({ &levelscale::sendGain, &levelscale::sendPosition });
         // A Session with audio devices asks the system about input permission; one without needs none.
         if (devices)
         {
@@ -4453,6 +4532,7 @@ struct Session::Impl
     void resetTapTempo() { lastTap=-1; numTapIntervals=nextTapInterval=0; }
     void prepareEdit()
     {
+        edit->state.setProperty (faderLawProperty, faderLaw, nullptr); // Its positions follow the installed laws.
         refreshCrossfade(); // Loaded and new projects apply their saved crossfade gains.
         resetTapTempo();
         edit->editFileRetriever = [this] { return editLocation(); };
@@ -5809,8 +5889,12 @@ Result Session::loadProject (const File& file)
     if (auto result = validateRecordQuantisation (state); result.failed()) return result;
     if (auto result = validateCrossfade (state); result.failed()) return result;
     if (auto result = validateMasterVolume (state); result.failed()) return result;
-    if (auto result = validateMixerAutomation (state); result.failed()) return result;
-    if (auto result = validateRouting (state); result.failed()) return result;
+    // A project's fader law is the current one, or absent for a project saved before it.
+    if (state.hasProperty (faderLawProperty) && state[faderLawProperty].toString().trim() != String (faderLaw))
+        return Result::fail ("This project's fader levels are from an unsupported version.");
+    const bool legacyFaders = ! state.hasProperty (faderLawProperty);
+    if (auto result = validateMixerAutomation (state, legacyFaders); result.failed()) return result;
+    if (auto result = validateRouting (state, legacyFaders); result.failed()) return result;
     if (auto result = UtilityPlugin::validateState (state); result.failed()) return result;
     if (auto result = NativeEffectPlugin::validateState (state); result.failed()) return result;
     if (auto result = validateRackIdentities (state); result.failed()) return result;
@@ -5835,6 +5919,7 @@ Result Session::loadProject (const File& file)
     for (const auto& property : { punchInProperty, punchOutProperty })
         if (state.hasProperty (property) && state[property].toString().trim() != "0" && state[property].toString().trim() != "1")
             return Result::fail ("The project's punch settings are invalid.");
+    if (legacyFaders) migrateFaderLaw (state);
     restoreManualMixerState (state);
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
@@ -10918,18 +11003,35 @@ float Session::curveProportion (float from, float to, float curve, double along)
     if (along >= x2) return to;
     return (float) tracktion::core::getBezierYFromX (along, x1, y1, bx, by, x2, y2);
 }
+// The volume law directly, as the engine reads it once a Session installs it, so that these need no Session.
 float Session::automationValueToProportion (AutomationTarget target, float value)
 {
     if (! std::isfinite (value)) return 0;
-    return target == AutomationTarget::volume ? te::decibelsToVolumeFaderPosition (juce::jlimit (-100.0f, 6.0f, value))
-        : (juce::jlimit (-1.0f, 1.0f, value) + 1) * .5f;
+    if (target != AutomationTarget::volume) return (juce::jlimit (-1.0f, 1.0f, value) + 1) * .5f;
+    value = juce::jlimit (-100.0f, 6.0f, value);
+    return value > -100.0f ? levelscale::volumePosition (te::dbToGain (value)) : 0.0f;
 }
 float Session::automationProportionToValue (AutomationTarget target, float proportion)
 {
     if (! std::isfinite (proportion)) proportion = 0;
     proportion = juce::jlimit (0.0f, 1.0f, proportion);
-    return target == AutomationTarget::volume ? juce::jlimit (-100.0f, 6.0f, te::volumeFaderPositionToDB (proportion))
+    return target == AutomationTarget::volume ? juce::jlimit (-100.0f, 6.0f, te::gainToDb (levelscale::volumeGain (proportion)))
         : proportion * 2 - 1;
+}
+juce::NormalisableRange<double> Session::levelRange (bool send, double silence)
+{
+    return { silence, send ? 0.0 : 6.0,
+             [send, silence] (double, double, double position)
+             {
+                 const auto gain = send ? levelscale::sendGain ((float) position) : levelscale::volumeGain ((float) position);
+                 return gain > 0 ? juce::jmax (silence, 20.0 * std::log10 ((double) gain)) : silence;
+             },
+             [send, silence] (double, double, double decibels)
+             {
+                 if (! (decibels > silence)) return 0.0;
+                 const auto gain = (float) std::pow (10.0, decibels / 20.0);
+                 return (double) (send ? levelscale::sendPosition (gain) : levelscale::volumePosition (gain));
+             } };
 }
 Result Session::setTrackAutomation (const String& trackId, AutomationTarget target, const AutomationLane& lane)
 {

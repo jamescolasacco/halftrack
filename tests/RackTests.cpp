@@ -581,10 +581,11 @@ void macroTests (const juce::File& root)
     check (error (render (s, out), scaled (0), start, end) < 1e-6 && peak (render (s, out), 0, frames) == 0, "macro at 0 closes the chain volume");
     setMacro (0, 63.5f);
     const auto halfway = render (s, out);
-    // The fader taper puts dB at 20 ln(position) + 6, so halfway between silence and 0 dB
-    // (position e^-0.3) is 20 ln(0.5) dB.
-    const auto halfVolume = 20 * std::log (.5);
-    check (error (halfway, scaled (gainOf (-12) * gainOf (halfVolume)), start, end) < 1e-5, "the chain volume follows the fader taper between its limits");
+    // The chain volume moves along the volume law: halfway between silence and 0 dB (0.85 of the
+    // fader's travel) is 0.425 of its travel.
+    using Target = Session::AutomationTarget;
+    const auto halfVolume = Session::automationProportionToValue (Target::volume, .5f * Session::automationValueToProportion (Target::volume, 0));
+    check (error (halfway, scaled (gainOf (-12) * gainOf (halfVolume)), start, end) < 1e-5, "the chain volume follows the volume law between its limits");
     ok (s.removeRackMacroMapping (rack, 0, chain, 0), "unmap the chain volume");
     check (std::abs (chainOf (s, rack, chain).settings.volumeDb - halfVolume) < 1e-3
            && difference (render (s, out), halfway) < 1e-6, "unmapping leaves the chain at the volume the macro gave it");

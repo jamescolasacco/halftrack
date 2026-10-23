@@ -8,8 +8,9 @@
 // decibels, descending from an upper to a lower bound, built in single precision as it builds them,
 // and the amplitudes they give, ascending. A position from 0 to 1 interpolates linearly between
 // adjacent amplitudes. Scale 3, from -70 to +24 dB, is the one its clip gain uses, and its launch
-// velocity scales a clip's gain along it. Halftrack's own implementation; the reference's math
-// library may round its powers of ten differently in the last place.
+// velocity scales a clip's gain along it; scales 1 and 0 are its mixer's volume and sends (static
+// reading, 2026-10-23). Halftrack's own implementation; the reference's math library may round its
+// powers of ten differently in the last place.
 namespace halftrack::levelscale
 {
 struct Scale
@@ -47,6 +48,20 @@ inline const Scale& clipGain()
     static const auto scale = make (-70, 24, 0.4000000059604645f, 0.03999999910593033f);
     return scale;
 }
+// Scale 1: -70 to +6 dB, 0 dB at 0.85, the reference's track, group, return and Main volume.
+inline const Scale& volume()
+{
+    static const auto scale = make (-70, 6, 0.4000000059604645f, 0.03999999910593033f);
+    return scale;
+}
+// Scale 0: -70 to 0 dB, the reference's sends.
+inline const Scale& send()
+{
+    static const auto scale = make (-70, 0, 0.4000000059604645f, 0.03999999910593033f);
+    return scale;
+}
+// The reference's mixer silences any gain at or below this (float bits 0x39a7c5ac).
+inline constexpr float mixerSilence = 0.00032f;
 
 // The amplitude at a position from 0 to 1.
 inline float amplitudeAt (const Scale& scale, double position)
@@ -69,6 +84,19 @@ inline double positionOf (const Scale& scale, float amplitude)
     const double low = scale.amplitude[index], high = scale.amplitude[index + 1];
     return (static_cast<double> (index) + (high > low ? (amplitude - low) / (high - low) : 0.0)) / 100.0;
 }
+
+// A mixer fader's gain at a position, silent at the bottom as the reference's mixer is, and the
+// position of a gain (0 for silence). These are the laws Halftrack installs in the engine.
+inline float mixerGain (const Scale& scale, float position)
+{
+    const auto gain = amplitudeAt (scale, position);
+    return gain <= mixerSilence ? 0.0f : gain;
+}
+inline float mixerPosition (const Scale& scale, float gain) { return gain > 0 ? static_cast<float> (positionOf (scale, gain)) : 0.0f; }
+inline float volumeGain (float position) { return mixerGain (volume(), position); }
+inline float volumePosition (float gain) { return mixerPosition (volume(), gain); }
+inline float sendGain (float position) { return mixerGain (send(), position); }
+inline float sendPosition (float gain) { return mixerPosition (send(), gain); }
 
 // The reference's launch velocity (static reading of its code): a launch's velocity, from 0 to 1
 // (a note's velocity over 127, otherwise 1), blends with the clip's amount into a factor that

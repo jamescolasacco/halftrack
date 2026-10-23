@@ -19,7 +19,7 @@ A mapping is a controller (a CC number on a channel) or a note (a note number on
 - the master volume (`master`);
 - a native device or rack control (`device:<plugin>:<index>`).
 
-Buttons are targets too (see the [key map contract](key-map-contract.md)). Each controller or note drives at most one target, and each target has at most one controller or note. A note and a controller with the same number are different. Mapping a controller, note or target again moves the mapping. The controller's 0–127 moves the control's fader or knob position (the same taper as automation) linearly from minimum to maximum. An inverted range turns the other way, and switches and choices take the nearest step.
+Buttons are targets too (see the [key map contract](key-map-contract.md)). Each controller or note drives at most one target, and each target has at most one controller or note. A note and a controller with the same number are different. Mapping a controller, note or target again moves the mapping. The controller's 0–127 moves the control's fader or knob position (the same [law](mixer-laws-contract.md) as automation) linearly from minimum to maximum, so with the full range CC 64 is −13.84 dB, as in the reference. An inverted range turns the other way, and switches and choices take the nearest step.
 
 Mappings are saved in the project (`HALFTRACKMIDIMAP`). A note's mapping carries `note="1"`, and a controller's has no flag, so projects with only controller mappings are unchanged. Loading rejects these and keeps the open project:
 
@@ -59,7 +59,7 @@ The UI suite checks the switch and Cmd/Ctrl+M, the overlay's targets, learning a
 `tests/MidiMappingTests.cpp` (`midi-mapping-acceptance`) checks:
 
 - **Learning.** Learning creates a full-range mapping without moving the control, and a controller or target can be remapped.
-- **Mixer moves.** Volume follows the fader taper from silence to +6 dB, and pan reaches both sides. Other channels and controllers do nothing, and malformed messages are refused.
+- **Mixer moves.** Volume follows the volume law from silence to +6 dB, and pan reaches both sides. Other channels and controllers do nothing, and malformed messages are refused.
 - **Ranges.** A range limits volume to −24–0 dB, an inverted range reverses pan, and out-of-range ends are refused.
 - **Undo.** A five-message burst is one undo step.
 - **Device controls.** A Channel EQ Mid control moves from −12 to +12 dB, its HP switch switches, and the master follows its controller.

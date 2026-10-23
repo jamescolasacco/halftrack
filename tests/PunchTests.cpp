@@ -207,8 +207,8 @@ int runPunchTests (const juce::File& artifacts)
         s.stop();
         check (movedAt[0] < 1 && movedAt[1] > 1 && movedAt[1] < 2 && movedAt[2] > 2, "the moves fall before, inside and after the brace");
         const auto lane = s.snapshot().tracks[0].volumeAutomation;
-        check (lane.points.size() == 2 && std::abs (lane.points[0].beat - 2 * movedAt[1]) < 1e-6 && lane.points[0].value == -10
-               && std::abs (lane.points[1].beat - 4) < 1e-6 && lane.points[1].value == -10, "automation records only inside the brace and ends at its end");
+        check (lane.points.size() == 2 && std::abs (lane.points[0].beat - 2 * movedAt[1]) < 1e-6 && std::abs (lane.points[0].value + 10) < 1e-4
+               && std::abs (lane.points[1].beat - 4) < 1e-6 && std::abs (lane.points[1].value + 10) < 1e-4, "automation records only inside the brace and ends at its end");
         std::cout << "Punch passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL punch: " << e.what() << std::endl; return 1; }

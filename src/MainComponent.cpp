@@ -553,7 +553,7 @@ public:
         previewButton.setWantsKeyboardFocus (false); previewButton.setMouseClickGrabsKeyboardFocus (false);
         previewButton.onClick = [this] { if (! previewButton.getToggleState()) session.stopPreview(); else previewSelectedSample(); };
         previewVolume.setName ("Preview volume"); previewVolume.setSliderStyle (juce::Slider::LinearBar);
-        previewVolume.setRange (-70, 6, .1); previewVolume.setValue (0, juce::dontSendNotification); previewVolume.setDoubleClickReturnValue (true, 0);
+        previewVolume.setNormalisableRange (Session::levelRange (false, -70)); previewVolume.setValue (0, juce::dontSendNotification); previewVolume.setDoubleClickReturnValue (true, 0);
         previewVolume.setColour (juce::Slider::trackColourId, themes::colour (0xff4a4a4a)); previewVolume.setColour (juce::Slider::textBoxTextColourId, ink);
         previewVolume.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " dB"; };
         previewVolume.valueFromTextFunction = [] (const juce::String& t) { return t.retainCharacters ("-.0123456789").getDoubleValue(); };
@@ -1542,8 +1542,7 @@ private:
             };
             arm.setColour (juce::TextButton::buttonOnColourId, red);
             gain.setSliderStyle (juce::Slider::LinearHorizontal);
-            gain.setName ("Track volume"); gain.setRange (-100.0, 6.0, 0.1);
-            gain.setSkewFactorFromMidPoint (-12);
+            gain.setName ("Track volume"); gain.setNormalisableRange (Session::levelRange (false));
             gain.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 18);
             gain.setDoubleClickReturnValue (true, 0);
             gain.textFromValueFunction = [] (double value) { return value <= -100 ? juce::String ("-inf") : juce::String (value, 1) + " dB"; };
@@ -1889,7 +1888,7 @@ private:
                 {
                     auto knob = std::make_unique<juce::Slider> (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox);
                     knob->setName ("Send " + juce::String::charToString ((juce::juce_wchar) ('A' + i)));
-                    knob->setRange (-100, 6, .1); knob->setSkewFactorFromMidPoint (-12); knob->setDoubleClickReturnValue (true, -100);
+                    knob->setNormalisableRange (Session::levelRange (true)); knob->setDoubleClickReturnValue (true, -100);
                     knob->setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
                     knob->textFromValueFunction = [] (double v) { return v <= -99.95 ? juce::String ("-inf dB") : juce::String (v, 1) + " dB"; };
                     knob->onDragStart = [this] { owner.session.beginEditGesture ("Send level"); };
@@ -2129,7 +2128,7 @@ private:
             solo.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff57a7ff)); solo.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             activator.onClick = [this] { owner.report (owner.session.setGroupMute (groupId, ! activator.getToggleState())); owner.refresh(); };
             solo.onClick = [this] { owner.soloFromUI (-1, groupId, solo.getToggleState(), juce::ModifierKeys::getCurrentModifiers().isCommandDown()); };
-            gain.setName ("Group volume"); gain.setSliderStyle (juce::Slider::LinearHorizontal); gain.setRange (-100, 6, .1); gain.setSkewFactorFromMidPoint (-12);
+            gain.setName ("Group volume"); gain.setSliderStyle (juce::Slider::LinearHorizontal); gain.setNormalisableRange (Session::levelRange (false));
             gain.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 16); gain.setDoubleClickReturnValue (true, 0);
             gain.textFromValueFunction = [] (double v) { return v <= -100 ? juce::String ("-inf") : juce::String (v, 1) + " dB"; };
             gain.onDragStart = [this] { owner.session.beginEditGesture ("Group volume"); };
@@ -4058,7 +4057,7 @@ private:
             {
                 setName ("Session master strip");
                 gain.setName ("Session master volume"); gain.setSliderStyle (juce::Slider::LinearVertical);
-                gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 16); gain.setRange (-100, 6, .1); gain.setSkewFactorFromMidPoint (-12);
+                gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 16); gain.setNormalisableRange (Session::levelRange (false));
                 gain.setDoubleClickReturnValue (true, 0);
                 gain.textFromValueFunction = [] (double v) { return v <= -100 ? juce::String ("-inf dB") : juce::String (v, 1) + " dB"; };
                 gain.onDragStart = [this] { owner.session.beginEditGesture ("Main volume"); };
@@ -4096,7 +4095,7 @@ private:
                 soloCue.onClick = [this] { owner.report (owner.session.setCueMode (! owner.state.cueMode)); owner.refresh(); };
                 addAndMakeVisible (soloCue);
                 cueVolume.setName ("Cue volume"); cueVolume.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-                cueVolume.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0); cueVolume.setRange (-70, 6, .1); cueVolume.setSkewFactorFromMidPoint (-12);
+                cueVolume.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0); cueVolume.setNormalisableRange (Session::levelRange (false, -70));
                 cueVolume.setDoubleClickReturnValue (true, -6);
                 cueVolume.textFromValueFunction = [] (double v) { return v <= -70 ? juce::String ("-inf dB") : juce::String (v, 1) + " dB"; };
                 cueVolume.onDragStart = [this] { owner.session.beginEditGesture ("Cue volume"); };
@@ -7356,7 +7355,7 @@ private:
                 addAndMakeVisible (label); addAndMakeVisible (level);
                 label.setFont (font (10.5f));
                 level.setSliderStyle (juce::Slider::LinearHorizontal);
-                level.setRange (-100, 0, 0.1); level.setSkewFactorFromMidPoint (-18);
+                level.setNormalisableRange (Session::levelRange (true));
                 level.setTextBoxStyle (juce::Slider::TextBoxRight, false, 55, 21);
                 level.textFromValueFunction = [] (double v) { return v <= -100 ? juce::String ("Off") : juce::String (v, 1) + " dB"; };
                 level.valueFromTextFunction = [] (const juce::String& v) { return v.trim().equalsIgnoreCase ("Off") ? -100.0 : v.getDoubleValue(); };
@@ -7753,7 +7752,7 @@ private:
             automationButton.setTooltip ("Draw track volume, track pan, or master volume changes across the arrangement.");
             automationButton.onClick = [this] { owner.showAutomation(); };
             addAndMakeVisible(masterGain);masterGain.setName("Main volume");
-            masterGain.setSliderStyle(juce::Slider::LinearVertical);masterGain.setRange(-100,6,.1);masterGain.setSkewFactorFromMidPoint(-12);
+            masterGain.setSliderStyle(juce::Slider::LinearVertical);masterGain.setNormalisableRange(Session::levelRange(false));
             masterGain.setTextBoxStyle(juce::Slider::TextBoxBelow,false,49,20);masterGain.setDoubleClickReturnValue(true,0);
             masterGain.setTooltip("Main output level. Double-click for 0 dB. The bottom of the fader is silence.");
             masterGain.textFromValueFunction=[](double value){return value<=-100?juce::String("-inf dB"):juce::String(value,1)+" dB";};
@@ -11984,6 +11983,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const int previousTrack = selectedTrack;
         selectTrack (0); refresh();
         auto* gain = findNamed (*canvas.getChildComponent (0), "Track volume");
+        auto* fader = dynamic_cast<juce::Slider*> (gain);
+        check (fader != nullptr && std::abs (fader->proportionOfLengthToValue (.5) + 14) < 1e-3 && std::abs (fader->valueToProportionOfLength (0) - .85) < 1e-6
+                   && std::abs (fader->proportionOfLengthToValue (1) - 6) < 1e-3 && fader->proportionOfLengthToValue (0) <= -100,
+               "the track fader moves along the volume law: 0 dB at 0.85 of its travel, -14 dB halfway, silence at the bottom");
         const auto key = gain->getProperties()["midiMapTarget"].toString();
         const auto targets = mapOverlay.targets();
         check (key == "mixer:" + state.tracks[0].id + ":volume" && std::any_of (targets.begin(), targets.end(), [&] (const auto& t) { return t.key == key; })
@@ -15646,6 +15649,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (session.addReturnTrack ("Echo").wasOk(), "add a return for the Session sends"); refresh();
         auto* sendA = dynamic_cast<juce::Slider*> (findNamed (launcher, "Send A"));
         check (sendA != nullptr && sendA->isVisible() && launcher.mixerHeight() == heightWithoutSends + 40, "track strips gain a send knob for the return, a row taller");
+        check (std::abs (sendA->proportionOfLengthToValue (.5) + 20) < 1e-3 && std::abs (sendA->valueToProportionOfLength (-6) - .85) < 1e-3
+                   && std::abs (sendA->getMaximum()) < 1e-9, "the send knob turns along the send law, from silence to 0 dB with -20 dB halfway");
         sendA->setValue (-6, juce::sendNotificationSync); refresh();
         const auto echo = state.tracks.back().id;
         bool sent = false;

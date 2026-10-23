@@ -50,7 +50,7 @@ The rack's chains, returns, devices, mappings, visible-macro count and macro nam
 - MIDI Effect Rack chains in parallel, filtering by key, selector fades and deactivation;
 - Drum Rack pads playing only their notes and exact samples, the play note, pad volume, pan and solo, pad swaps, All Notes, a choke fading linearly over 240 frames at 48 kHz, separate choke groups, and post-fader sends through returns and their removal;
 - save, move and reopen of a Drum Rack rendering identically, and duplication with new identities;
-- macro mapping ranges, inversion, remapping, chain-volume taper, unmapping, undo, macro automation over time, and save/reopen;
+- macro mapping ranges, inversion, remapping, chain volume along the volume law, unmapping, undo, macro automation over time, and save/reopen;
 - rejection of eight malformed project files;
 - no heap calls in 36 blocks of note floods, chokes, sends and macro-driven controls, nor in adopting a new layout.
 
