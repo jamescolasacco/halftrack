@@ -2279,3 +2279,7 @@ UI area. While the meter changes, the ruler shows a lane of time signature marke
 - **Following the markers.** Bar numbers stand at the bars' starts, and fragmentary bars are crosshatched. The grid and snapping run from each bar's start, and the position fields count bars through the markers.
 
 Checked in the UI suite ([contract](research/time-signature-contract.md#arrangement-interface)).
+
+## Fragmentary bar commands — 2026-10-23
+
+Engine and UI areas. As the reference's manual describes, Delete Fragmentary Bar Time and Complete Fragmentary Bar fix a bar a marker cuts short. Each deletes or inserts its missing time across the Arrangement, so the marker falls on a bar line; they are offered in the ruler's menu. Insert Silence and Delete Time now move time signature markers too, and Delete Time removes those inside it. Measured in the time-signature suite with a clip moving with the marker, and checked in the UI suite ([contract](research/time-signature-contract.md#fragmentary-bars-and-time-edits)).

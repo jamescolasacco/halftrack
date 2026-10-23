@@ -99,11 +99,27 @@ The UI suite inserts a 3/4 marker from the Create menu and types its meter. It t
 
 A snapshot (`arrangement-meters.png`) shows the hatched second bar and the lane.
 
-Not yet: Delete Fragmentary Bar Time and Complete Fragmentary Bar, the Control Bar's automation LED, importing a MIDI file's meters, clip editors' rulers (which keep the meter at the playhead), and scene meters with markers present.
+### Fragmentary bars and time edits
+
+As the reference's manual describes, right-clicking a fragmentary bar or the marker after it offers two commands. Each acts across the whole Arrangement as one undo step.
+- **Delete Fragmentary Bar Time** (`deleteFragmentaryBarTime`) deletes the short bar's time, so the marker moves to where that bar started.
+- **Complete Fragmentary Bar** (`completeFragmentaryBar`) inserts the time the bar lacks at its start, so the marker falls on the next bar line.
+
+They are Delete Time and Insert Silence over that time, which now move the time signature markers after them as they move clips and locators. Delete Time removes markers inside the deleted time; the first marker stays at the start. Like those commands, they need a constant tempo.
+
+Evidence (`tests/TimeSignatureTests.cpp`):
+- completing a two-beat fragment moves the marker and a later clip two beats later, leaving the bar whole, and one undo puts both back;
+- deleting the fragment's time moves them two beats earlier;
+- Insert Silence moves the marker a beat later;
+- Delete Time over the marker removes it;
+- the first marker, unknown markers and whole bars are refused.
+
+The UI suite completes a fragmentary bar from its menu.
+
+Not yet: the Control Bar's automation LED, importing a MIDI file's meters, clip editors' rulers (which keep the meter at the playhead), and scene meters with markers present.
 
 ## Not implemented
 
-- Delete Fragmentary Bar Time and Complete Fragmentary Bar.
 - Scene meters while the Arrangement has markers.
 - Eighth-note click subdivision.
 - Importing a MIDI file's meter.

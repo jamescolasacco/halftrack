@@ -1376,6 +1376,12 @@ public:
     juce::Result setTimeSignatureChange (int index, TimeSignature);
     juce::Result moveTimeSignatureChange (int index, double beat);
     juce::Result removeTimeSignatureChange (int index);
+    // A marker inside a bar leaves that bar short, a fragmentary bar. As the reference's commands:
+    // Delete Fragmentary Bar Time deletes its time, and Complete Fragmentary Bar inserts the time it
+    // lacks at its start, across the whole Arrangement, so the marker falls on the next bar line.
+    // Insert and Delete Time move the markers after them, as everything else.
+    juce::Result deleteFragmentaryBarTime (int markerIndex);
+    juce::Result completeFragmentaryBar (int markerIndex);
     static constexpr int narrowestGrid = 8; // Pixels between the closest lines an adaptive grid draws.
     // The Arrangement's grid.
     EditGrid editGrid() const;

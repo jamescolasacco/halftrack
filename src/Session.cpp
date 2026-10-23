@@ -4322,6 +4322,22 @@ struct Session::Impl
         edit->dispatchPendingUpdatesSynchronously();
         changed(); return Result::ok();
     }
+    // Time signature markers from a beat on move by a number of beats, as time is inserted or deleted;
+    // with `removeFrom`, those from it to the beat go, as the deleted time held them. The first stays
+    // at the start. Part of the caller's undo step.
+    void shiftTimeSignatures (double fromBeat, double deltaBeats, std::optional<double> removeFrom)
+    {
+        auto* um = &edit->getUndoManager();
+        auto state = edit->state.getChildWithName (te::IDs::TEMPOSEQUENCE);
+        std::vector<juce::ValueTree> markers;
+        for (const auto& child : state) if (child.hasType (te::IDs::TIMESIG)) markers.push_back (child);
+        for (size_t i = 1; i < markers.size(); ++i)
+        {
+            const double beat = markers[i][te::IDs::startBeat];
+            if (removeFrom && beat >= *removeFrom - 1.0e-9 && beat < fromBeat - 1.0e-9) state.removeChild (markers[i], um);
+            else if (beat >= fromBeat - 1.0e-9) markers[i].setProperty (te::IDs::startBeat, beat + deltaBeats, um);
+        }
+    }
     // What can send to the returns: tracks other than returns, and groups, in order.
     juce::Array<te::Track*> sendSources() const
     {
@@ -11078,6 +11094,7 @@ Result Session::insertTime (double start, double length)
     }
     for (auto* marker : impl->edit->getMarkerManager().getMarkers())
         if (marker->getPosition().getStart() >= from) marker->setStart (marker->getPosition().getStart() + delta, false, true);
+    impl->shiftTimeSignatures (impl->edit->tempoSequence.toBeats (from).inBeats(), deltaBeats.inBeats(), std::nullopt);
     for (auto* curve : arrangementCurves (*impl->edit)) shiftCurve (*curve, *impl->edit, from, delta, std::nullopt, undo);
     impl->refreshParameterValues();
     impl->changed(); return Result::ok();
@@ -11172,6 +11189,10 @@ Result Session::deleteTime (double start, double length)
         const auto at = marker->getPosition().getStart();
         if (at >= from && at < to) marker->removeFromParent();
         else if (at >= to) marker->setStart (at - delta, false, true);
+    }
+    {
+        const auto cut = tempo.toBeats (from).inBeats(), cutEnd = tempo.toBeats (to).inBeats();
+        impl->shiftTimeSignatures (cutEnd, cut - cutEnd, cut);
     }
     for (auto* curve : arrangementCurves (*impl->edit)) shiftCurve (*curve, *impl->edit, to, te::TimeDuration() - delta, te::TimeRange (from, to), undo);
     impl->refreshParameterValues();
@@ -12943,6 +12964,25 @@ Result Session::removeTimeSignatureChange (int index)
     impl->transaction ("Delete time signature change");
     impl->edit->state.getChildWithName (te::IDs::TEMPOSEQUENCE).removeChild (marker->state, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
+}
+Result Session::deleteFragmentaryBarTime (int index)
+{
+    const auto markers = snapshot().timeSignatures;
+    if (! juce::isPositiveAndBelow (index, (int) markers.size()) || index == 0) return Result::fail ("Time signature not found.");
+    const auto bar = barAt (markers, markers[(size_t) index].beat - 1.0e-6);
+    if (! bar.fragmentary) return Result::fail ("The bar before this time signature is complete.");
+    // Removing the short bar's time brings the marker to where that bar starts.
+    return deleteTime (secondsAt (bar.start), secondsAt (markers[(size_t) index].beat) - secondsAt (bar.start));
+}
+Result Session::completeFragmentaryBar (int index)
+{
+    const auto markers = snapshot().timeSignatures;
+    if (! juce::isPositiveAndBelow (index, (int) markers.size()) || index == 0) return Result::fail ("Time signature not found.");
+    const auto bar = barAt (markers, markers[(size_t) index].beat - 1.0e-6);
+    if (! bar.fragmentary) return Result::fail ("The bar before this time signature is complete.");
+    // Time inserted at the short bar's start makes it whole, so the marker falls on the next bar line.
+    const auto missing = bar.meter.beatsPerBar() - bar.length;
+    return insertTime (secondsAt (bar.start), secondsAt (bar.start + missing) - secondsAt (bar.start));
 }
 Result Session::setTempoMap (const std::vector<TempoPoint>& points)
 {

@@ -144,6 +144,34 @@ int runTimeSignatureTests (const juce::File& artifacts)
             check (meters == juce::StringArray { "4/4@0.00", "6/8@2.00" }, "4/4 at its start, and 6/8 two beats in: " + meters.joinIntoString (", "));
         }
 
+        // Fragmentary bars, as the reference's commands correct them, and time edits moving the markers.
+        {
+            Session f (false);
+            ok (f.addMidiTrack ("Keys"), "a MIDI track for the fragment");
+            const auto keys = f.snapshot().tracks.back().id;
+            ok (f.addMidiClip (keys, 8, 2), "a clip at beat 8");
+            ok (f.insertTimeSignatureChange (6, { 3, 4 }), "a 3/4 marker at beat 6, cutting the second bar to two beats");
+            const auto clipStart = [&f] { return f.snapshot().tracks.back().clips.at (0).start; };
+            check (f.completeFragmentaryBar (0).failed() && f.deleteFragmentaryBarTime (5).failed(), "the first marker and unknown markers have no fragmentary bar to fix");
+            ok (f.completeFragmentaryBar (1), "Complete Fragmentary Bar");
+            auto shot = f.snapshot();
+            check (std::abs (shot.timeSignatures[1].beat - 8) < 1e-6 && std::abs (clipStart() - f.secondsAt (10)) < 1e-6 && ! Session::barAt (shot.timeSignatures, 7).fragmentary,
+                   "two beats go in at the bar's start: the marker and the clip move two beats later, and the bar is whole");
+            check (f.completeFragmentaryBar (1).failed(), "a whole bar is not fragmentary");
+            f.undo(); check (std::abs (f.snapshot().timeSignatures[1].beat - 6) < 1e-6 && std::abs (clipStart() - f.secondsAt (8)) < 1e-6, "one undo puts both back");
+            ok (f.deleteFragmentaryBarTime (1), "Delete Fragmentary Bar Time");
+            shot = f.snapshot();
+            check (std::abs (shot.timeSignatures[1].beat - 4) < 1e-6 && std::abs (clipStart() - f.secondsAt (6)) < 1e-6 && ! Session::barAt (shot.timeSignatures, 3).fragmentary,
+                   "the bar's two beats go: the marker moves to where the bar started, and the clip two beats earlier");
+            f.undo();
+            ok (f.insertTime (f.secondsAt (2), f.secondsAt (3) - f.secondsAt (2)), "insert a beat of silence at beat 2");
+            check (std::abs (f.snapshot().timeSignatures[1].beat - 7) < 1e-6, "Insert Silence moves the marker a beat later");
+            f.undo();
+            ok (f.deleteTime (f.secondsAt (5), f.secondsAt (7) - f.secondsAt (5)), "delete beats 5 to 7, which hold the marker");
+            check (f.snapshot().timeSignatures.size() == 1, "the marker goes with the deleted time");
+            f.undo(); check (f.snapshot().timeSignatures.size() == 2, "undo brings it back");
+        }
+
         // A launch on the bar grid in 3/4 waits for beat 3.
         {
             std::unique_ptr<choc::buffer::InterleavedBuffer<float>> buffer; // Outlives the session and its graph readers.

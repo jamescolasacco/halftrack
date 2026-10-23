@@ -3753,6 +3753,16 @@ private:
         }
         int selectedMeter = -1;
         void selectMeter (int index) { selectedMeter = index; selected.clear(); braceSelected = false; repaint(); }
+        // The marker after a fragmentary bar: the bar a time is in, or the one before a marker; 0 if none.
+        int fragmentMarker (double seconds,int meter) const
+        {
+            const auto& markers=owner.state.timeSignatures;
+            if (meter>0 && meter<(int)markers.size() && Session::barAt (markers,markers[(size_t)meter].beat-1.0e-6).fragmentary) return meter;
+            const auto bar=Session::barAt (markers,owner.beatsAt (seconds));
+            if (! bar.fragmentary) return 0;
+            for (int i=1;i<(int)markers.size();++i) if (std::abs (markers[(size_t)i].beat-(bar.start+bar.length))<1.0e-9) return i;
+            return 0;
+        }
         // The song's start, which the ruler marks with a small play triangle: a locator, or the loop's start.
         std::optional<double> songStartTime() const
         {
@@ -4030,6 +4040,8 @@ private:
             // Time signature changes, as the reference's scrub area offers them.
             menu.addItem (10,"Insert Time Signature Change");
             if (meter>=0) { menu.addItem (11,"Edit Time Signature");menu.addItem (12,"Delete Time Signature Change",meter>0); }
+            // A fragmentary bar, clicked or before the marker clicked, and the reference's two fixes.
+            if (fragmentMarker (position,meter)>0) { menu.addItem (13,"Delete Fragmentary Bar Time");menu.addItem (14,"Complete Fragmentary Bar"); }
             if (id.isNotEmpty())
             {
                 menu.addItem (2,"Edit locator...");menu.addItem (3,"Delete locator");
@@ -4050,6 +4062,9 @@ private:
             if(choice==10)owner.insertMeterChange(owner.snaps({})?owner.gridLine(owner.beatsAt(position)):owner.beatsAt(position));
             if(choice==11)owner.editMeterDialog(meter);
             if(choice==12&&meter>0){owner.report(owner.session.removeTimeSignatureChange(meter));selectedMeter=-1;owner.refresh();}
+            if(choice==13||choice==14)
+                if(const auto marker=fragmentMarker(position,meter);marker>0)
+                {owner.report(choice==13?owner.session.deleteFragmentaryBarTime(marker):owner.session.completeFragmentaryBar(marker));owner.refresh();}
             if(choice==2)owner.editLocatorDialog(id);
             if(choice==3){owner.report(owner.session.removeLocator(id));owner.refresh();}
             if(choice==4){owner.report(owner.session.setLoopIsSongStart(!owner.state.loopIsSongStart));owner.refresh();}
@@ -16252,6 +16267,16 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (ruler.keyPressed (juce::KeyPress (juce::KeyPress::deleteKey)) && state.timeSignatures.size() == 1, "Delete deletes it");
         refresh(); check (ruler.getHeight() == rulerHeight, "and the lane goes with the last change");
         session.undo(); refresh(); check (state.timeSignatures.size() == 2 && ruler.getHeight() == rulerHeight + meterLaneHeight, "one undo brings it back, with its lane");
+        {
+            // The fragmentary second bar's menu completes it, moving the marker to the next bar line.
+            const auto inFragment = ruler.menuFor ({}, secondsAt (5), -1);
+            bool fixes = false;
+            for (juce::PopupMenu::MenuItemIterator items (inFragment); items.next();) fixes = fixes || items.getItem().itemID == 14;
+            check (fixes, "the fragmentary bar's menu offers Delete Fragmentary Bar Time and Complete Fragmentary Bar");
+            ruler.choose (14, {}, secondsAt (5), {}, -1); refresh();
+            check (std::abs (state.timeSignatures[1].beat - 8) < 1e-6 && ! barAt (7).fragmentary, "Complete Fragmentary Bar moves the marker to beat 8, the next bar line");
+            session.undo(); refresh();
+        }
         const auto menu = ruler.menuFor ({}, secondsAt (7), 1);
         bool edit = false, remove = false;
         for (juce::PopupMenu::MenuItemIterator items (menu); items.next();) { edit = edit || items.getItem().itemID == 11; remove = remove || (items.getItem().itemID == 12 && items.getItem().isEnabled); }
