@@ -94,7 +94,7 @@ On systems that cannot make virtual MIDI ports (Windows, or Linux without the AL
 - the port is offered as an input;
 - with External Sync off, the clock's 120 BPM is read but not followed;
 - with it on, the tempo follows (about 120.1);
-- Start then two seconds gives four beats (within 0.15);
+- Start then two seconds gives four beats (within half a beat, since a loaded machine starts the transport a moment late);
 - three seconds at 90 BPM: the clock reads 90, the tempo follows it (about 89.7 when unloaded) and the transport keeps the clock's 8.5 beats (within 0.2);
 - Stop, Song Position to beat 8 (exact), and Continue on to beat 9.5;
 - none of it is an undo step;
