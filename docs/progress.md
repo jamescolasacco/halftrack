@@ -2253,3 +2253,12 @@ Engine and UI areas. Groups have a send per return, as the reference's group mix
 A soloed group now counts as soloed sources. Under Solo in Place the returns stay open, fed by the group's and its tracks' sends; before, soloing a group muted them.
 
 Measured in the groups suite with renders, and checked in the UI suite ([contract](research/groups-contract.md#group-sends-2026-10-23)).
+
+## Group automation and mapping — 2026-10-23
+
+Engine and UI areas. A group's mixer is automated and mapped as a track's, as the reference's group mixer is the ordinary track mixer.
+- `setTrackAutomation` takes a group's id, and `GroupInfo` reports the lanes.
+- The `mixer:<group>:…` keys are mapping targets, and moving an automated group control overrides its lane.
+- In Automation Mode a group's header shows the device and control choosers. Its lane draws and edits the envelope: its volume, pans, sends and devices.
+
+Measured in the groups suite with renders, an override and a reopen, and in the automation-capture suite recording a group's pan and send; checked in the UI suite ([contract](research/groups-contract.md#group-automation-and-mapping-2026-10-23)).

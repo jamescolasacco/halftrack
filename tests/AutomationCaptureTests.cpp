@@ -167,6 +167,26 @@ int runAutomationCaptureTests (const juce::File& artifacts)
                && undone.tracks[0].sends.at (0).gainDb == -100, "undo restores the lanes before recording, and the send to Off");
         ok (live.setAutomationArm (false), "turn off Automation Arm");
         check (! live.snapshot().automationArm, "Automation Arm is off");
+        {
+            // A group's controls record as a track's.
+            juce::String bus; ok (live.groupTracks ({ trackId }, bus), "group the track");
+            ok (live.setAutomationArm (true), "Automation Arm on again");
+            pumpSyntheticTestDevice (live, 8);
+            ok (live.record(), "record the group's automation");
+            pumpSyntheticTestDevice (live, 188);
+            const auto groupStart = beatNow (live);
+            ok (live.setGroupPan (bus, -.5f), "move the group's pan while recording");
+            ok (live.setGroupSendGain (bus, echo, -12), "and turn its send up");
+            pumpSyntheticTestDevice (live, 188);
+            live.stop();
+            const auto grouped = live.snapshot();
+            const auto& groupPan = grouped.groups.at (0).panAutomation;
+            check (groupPan.enabled && groupPan.points.size() == 2 && std::abs (groupPan.points[0].beat - groupStart) < .05 && groupPan.points[0].value == -.5f,
+                   "moving the group's pan records its lane");
+            const auto& groupSend = grouped.groups.at (0).sends.at (0).automation;
+            check (groupSend.points.size() == 2 && std::abs (groupSend.points[0].value + 12) < 1e-3, "and turning its send records the send's lane");
+            ok (live.setAutomationArm (false), "Automation Arm off");
+        }
         std::cout << "Automation capture passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL automation capture: " << e.what() << std::endl; return 1; }

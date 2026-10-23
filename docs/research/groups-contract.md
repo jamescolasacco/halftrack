@@ -123,7 +123,7 @@ The reference's group mixer is the ordinary track mixer, with a send per return 
 
 - **API.** `setGroupSendGain(groupId, returnId, dB)` sets a group's send from Off (−100 dB) to 0 dB along the send law, as `setTrackSendGain` does for a track. It is one undo step, and `GroupInfo::sends` lists one send per return.
 - **Taps.** A group's send taps the group's sum before or after its fader, as the return's Pre/Post setting decides for every send. Changing that setting moves the groups' sends too.
-- **Automation and mapping.** The send keys `send:<group>:<return>` work for groups. `setSendAutomation` takes a group's id, and the send is a MIDI and key mapping target. Automation recording goes through the same key but is not yet tested for groups. The Arrangement does not show group automation lanes yet.
+- **Automation and mapping.** The send keys `send:<group>:<return>` work for groups. `setSendAutomation` takes a group's id, and the send is a MIDI and key mapping target that automation recording captures. The group's lane in Automation Mode shows and edits its sends' envelopes, as below.
 - **Solo and mute.**
   - A soloed group now counts as a soloed source. Solo in Place keeps the returns open, fed only by the soloed group's sends and its tracks' sends, as for soloed tracks.
   - A track's send counts as soloed when a group around it is soloed. A group's send counts as soloed when the group, a group around it, or a track inside it is soloed.
@@ -145,4 +145,25 @@ Evidence (`tests/GroupTests.cpp`):
 
 The UI suite turns a group strip's send knob, checks its mapping target and undoes it.
 
-Not reproduced: group automation lanes in the Arrangement, and selection linking for group controls. How group mute should act on its tracks' own sends is undetermined (see [open questions](../open-questions.md)).
+Not reproduced: selection linking for group controls. How group mute should act on its tracks' own sends is undetermined (see [open questions](../open-questions.md)).
+
+## Group automation and mapping (2026-10-23)
+
+The reference automates a group's mixer and devices as a track's: its group mixer is the ordinary track mixer ([group findings](#moving-tracks-2026-10-23)). Halftrack's groups now do too.
+
+- **Session API.**
+  - `setTrackAutomation` takes a group's id for its volume, pan and split pans.
+  - `GroupInfo` reports `volumeAutomation`, `panAutomation`, `leftSplitAutomation` and `rightSplitAutomation`, as `TrackInfo` does.
+  - The mixer keys `mixer:<group>:volume|pan|leftsplit|rightsplit` are MIDI and key mapping targets, and the group's faders and pans carry them.
+- **Overrides.** Moving an automated group control overrides its lane, as on tracks, until Re-Enable Automation. Automation recording captures group moves through the same keys.
+- **Interface.** In Automation Mode a group's header shows the device and control choosers in place of its fader and pan, and its lane draws the chosen envelope and edits it as a track's: the mixer's Track Volume and Track Panning, its sends named for their returns, and its devices' controls. The envelopes are drawn over the clip overview.
+  - The choosers are now one `AutomationChoosers` shared by track and group headers.
+  - A group still has no lanes below it for more envelopes.
+
+Evidence (`tests/GroupTests.cpp`):
+- a group's volume automated at −6 dB plays its track 6 dB down, and reopens playing the same;
+- moving the group's fader overrides the lane, and the group plays at the fader's level until Re-Enable Automation;
+- the group's pan lane;
+- the group's volume, pan and split pans as mapping targets, and an unknown group's refused.
+
+The automation-capture suite records a group's pan and send through the synthetic device. The UI suite checks a nested group's choosers in Automation Mode, a double-click adding a breakpoint to its volume, and undo.

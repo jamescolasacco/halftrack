@@ -540,6 +540,7 @@ public:
         int position = 0;
         std::vector<PluginInfo> plugins; // Its audio devices, in chain order.
         std::vector<SendInfo> sends;     // One per return, as a track's.
+        AutomationLane volumeAutomation, panAutomation, leftSplitAutomation, rightSplitAutomation; // As a track's.
     };
     // A point on the tempo map: the tempo ramps linearly from each point to the next and holds after the last.
     struct TempoPoint

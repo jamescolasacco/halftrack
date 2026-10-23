@@ -242,6 +242,32 @@ int runGroupTests (const juce::File& artifacts)
             n.undo(); check (n.snapshot().tracks.size() == 3, "one undo restores both");
         }
         {
+            // Group automation and mapping: a group's mixer is automated and mapped as a track's.
+            Session m (false);
+            ok (m.importAudio (a, 0), "import a for group automation");
+            const auto dry = render (m, mix);
+            juce::String bus; ok (m.groupTracks ({ m.snapshot().tracks[0].id }, bus), "group it");
+            Session::AutomationLane lane; lane.points = { { 0, -6.0206f, 0 }, { 64, -6.0206f, 0 } };
+            ok (m.setTrackAutomation (bus, Session::AutomationTarget::volume, lane), "automate the group's volume at -6 dB");
+            check (m.snapshot().groups[0].volumeAutomation.points.size() == 2 && m.snapshot().groups[0].volumeAutomation.enabled, "the group's volume lane holds its points");
+            check (difference (render (m, mix), dry, .5f, .5f) < 1e-4, "the automated group plays its member 6 dB down");
+            const auto project = root.getChildFile ("GroupAutomation.halftrack"); ok (m.saveProject (project), "save");
+            Session reopened (false); ok (reopened.loadProject (project), "reopen the group's automation");
+            check (reopened.snapshot().groups[0].volumeAutomation.points.size() == 2 && difference (render (reopened, mix), dry, .5f, .5f) < 1e-4, "and it plays as before");
+            ok (m.setGroupGain (bus, 0), "move the automated group fader");
+            check (! m.snapshot().groups[0].volumeAutomation.enabled && m.snapshot().automationOverridden, "moving it overrides the lane, as the reference does");
+            check (difference (render (m, mix), dry) < 1e-4, "and the group plays at the fader's level");
+            ok (m.reEnableAutomation(), "re-enable automation");
+            check (m.snapshot().groups[0].volumeAutomation.enabled && difference (render (m, mix), dry, .5f, .5f) < 1e-4, "the lane plays again");
+            Session::AutomationLane pans; pans.points = { { 0, -1, 0 }, { 64, -1, 0 } };
+            ok (m.setTrackAutomation (bus, Session::AutomationTarget::pan, pans), "automate the group's pan hard left");
+            check (m.snapshot().groups[0].panAutomation.points.size() == 2, "the group's pan lane holds its points");
+            ok (m.setTrackAutomation (bus, Session::AutomationTarget::pan, {}), "clear it");
+            for (const auto* control : { "volume", "pan", "leftsplit", "rightsplit" })
+                check (m.isMappableTarget ("mixer:" + bus + ":" + control), juce::String ("the group's ") + control + " is a MIDI and key mapping target");
+            check (! m.isMappableTarget ("mixer:missing:volume"), "an unknown group's is not");
+        }
+        {
             // Group sends, as the reference's group mixers have one per return: the group's sum feeds the return.
             Session g (false);
             ok (g.importAudio (a, 0), "import a for the group send"); ok (g.addReturnTrack ("Room"), "add a return");

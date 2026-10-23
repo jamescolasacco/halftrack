@@ -1076,7 +1076,23 @@ private:
     juce::String shownKey (const Session::TrackInfo& t) const
     { const auto found = shownAutomation.find (t.id); return found != shownAutomation.end() ? found->second : arrangementAutomation::volumeKey (t); }
     std::optional<arrangementAutomation::Target> automationTarget (const juce::String& trackId, const juce::String& key)
-    { for (const auto& t : state.tracks) if (t.id == trackId) return arrangementAutomation::find (session, t, state.tracks, key); return std::nullopt; }
+    {
+        for (const auto& t : state.tracks) if (t.id == trackId) return arrangementAutomation::find (session, t, state.tracks, key);
+        for (const auto& g : state.groups) if (g.id == trackId) return arrangementAutomation::find (session, automationView (g), state.tracks, key);
+        return std::nullopt;
+    }
+    // A group as the automation choosers and envelopes see a track: its mixer, sends and devices, as
+    // the reference's group lanes automate them.
+    static Session::TrackInfo automationView (const Session::GroupInfo& g)
+    {
+        Session::TrackInfo t;
+        t.id = g.id; t.name = g.name; t.colour = g.colour;
+        t.gainDb = g.gainDb; t.pan = g.pan; t.splitPan = g.splitPan; t.leftSplitPan = g.leftSplitPan; t.rightSplitPan = g.rightSplitPan;
+        t.volumeAutomation = g.volumeAutomation; t.panAutomation = g.panAutomation;
+        t.leftSplitAutomation = g.leftSplitAutomation; t.rightSplitAutomation = g.rightSplitAutomation;
+        t.sends = g.sends; t.plugins = g.plugins;
+        return t;
+    }
     void setAutomationMode (bool on) { automationMode = on; refresh(); resized(); canvas.repaint(); }
     // An envelope's context menu: Simplify Envelope over the time selection, as the reference's.
     void envelopeMenu (const arrangementAutomation::Target& target)
@@ -1722,6 +1738,70 @@ private:
         juce::TextButton in { "In" }, automatic { "Auto" }, off { "Off" };
         Session::MonitorMode mode = Session::MonitorMode::off;
     };
+    // Automation Mode's device and control choosers, in a track's header or a group's: the mixer or
+    // device whose envelope the lane shows, and its control. A dot marks the automated ones.
+    struct AutomationChoosers
+    {
+        AutomationChoosers (Impl& o, juce::Component& parent) : owner (o)
+        {
+            parent.addChildComponent (device); parent.addChildComponent (control);
+            device.setName ("Automation device"); control.setName ("Automation control");
+            device.setTooltip ("The mixer or device whose automation this track shows");
+            control.setTooltip ("The control whose envelope this track shows; a dot marks automated controls");
+            control.onChange = [this]
+            {
+                const auto item = control.getSelectedId() - 1;
+                if (juce::isPositiveAndBelow (item, (int) controlKeys.size())) owner.showAutomationKey (id, controlKeys[(size_t) item]);
+            };
+        }
+        void setVisible (bool visible) { device.setVisible (visible); control.setVisible (visible); }
+        // Fills the choosers for a track, or a group seen as one; whether an envelope is shown.
+        bool sync (const Session::TrackInfo& view)
+        {
+            id = view.id;
+            targets = arrangementAutomation::targets (owner.session, view, owner.state.tracks);
+            shownKey = owner.shownKey (view);
+            const arrangementAutomation::Target* shown = nullptr;
+            for (const auto& t : targets) if (t.key == shownKey) shown = &t;
+            juce::StringArray devices; std::set<juce::String> automatedDevices;
+            for (const auto& t : targets) { devices.addIfNotAlreadyThere (t.device); if (! t.lane.points.empty()) automatedDevices.insert (t.device); }
+            const auto shownDevice = shown != nullptr ? shown->device : juce::String ("None");
+            juce::String signature; for (const auto& d : devices) signature << d << (automatedDevices.count (d) ? "*" : "") << ";";
+            if (signature != deviceSignature)
+            {
+                deviceSignature = signature; device.clear (juce::dontSendNotification);
+                for (int i = 0; i < devices.size(); ++i) device.addItem ((automatedDevices.count (devices[i]) ? juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xa2 ")) : juce::String()) + devices[i], i + 1);
+                device.addItem ("None", devices.size() + 1);
+            }
+            const auto deviceIndex = devices.indexOf (shownDevice);
+            device.setSelectedId (deviceIndex >= 0 ? deviceIndex + 1 : devices.size() + 1, juce::dontSendNotification);
+            // The chooser's text carries the automated dot, so match the plain name when it changes.
+            device.onChange = [this, devices]
+            {
+                const auto item = device.getSelectedId() - 1;
+                if (! juce::isPositiveAndBelow (item, devices.size())) { owner.showAutomationKey (id, "none"); return; }
+                for (const auto& t : targets) if (t.device == devices[item]) { owner.showAutomationKey (id, t.key); return; }
+            };
+            std::vector<juce::String> keys; juce::StringArray labels;
+            for (const auto& t : targets)
+                if (t.device == shownDevice) { keys.push_back (t.key); labels.add ((t.lane.points.empty() ? juce::String() : juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xa2 "))) + t.control); }
+            if (keys != controlKeys || labels != controlLabels)
+            {
+                controlKeys = keys; controlLabels = labels; control.clear (juce::dontSendNotification);
+                for (int i = 0; i < labels.size(); ++i) control.addItem (labels[i], i + 1);
+            }
+            const auto at = std::find (controlKeys.begin(), controlKeys.end(), shownKey);
+            control.setSelectedId (at != controlKeys.end() ? (int) std::distance (controlKeys.begin(), at) + 1 : 0, juce::dontSendNotification);
+            control.setEnabled (shown != nullptr);
+            return shown != nullptr;
+        }
+        Impl& owner;
+        juce::ComboBox device, control;
+        std::vector<arrangementAutomation::Target> targets;
+        std::vector<juce::String> controlKeys;
+        juce::StringArray controlLabels;
+        juce::String shownKey, deviceSignature, id;
+    };
     class TrackRow final : public juce::Component
     {
     public:
@@ -1878,19 +1958,11 @@ private:
             inputDetail.setTooltip ("The input's channels, the source track's tap, or the MIDI channel to take");
             if (! columnLayout)
             {
-                // Automation Mode's device and control choosers, and the button that moves the envelope into a lane.
-                for (auto* c : std::initializer_list<juce::Component*> { &automationDevice, &automationControl, &automationLane }) addChildComponent (c);
-                automationDevice.setName ("Automation device"); automationControl.setName ("Automation control"); automationLane.setName ("Show automation in lane");
-                automationDevice.setTooltip ("The mixer or device whose automation this track shows");
-                automationControl.setTooltip ("The control whose envelope this track shows; a dot marks automated controls");
+                // Automation Mode's choosers, and the button that moves the envelope into a lane.
+                addChildComponent (automationLane); automationLane.setName ("Show automation in lane");
                 automationLane.setTooltip ("Move this envelope into its own lane below the track");
                 automationLane.setWantsKeyboardFocus (false);
-                automationControl.onChange = [this]
-                {
-                    const auto item = automationControl.getSelectedId() - 1;
-                    if (juce::isPositiveAndBelow (item, (int) controlKeys.size())) owner.showAutomationKey (trackId, controlKeys[(size_t) item]);
-                };
-                automationLane.onClick = [this] { owner.addAutomationLane (trackId, shownKey); };
+                automationLane.onClick = [this] { owner.addAutomationLane (trackId, choosers.shownKey); };
             }
         }
         const juce::String& getTrackId() const { return trackId; }
@@ -2030,44 +2102,11 @@ private:
         void syncAutomation (const Session::TrackInfo& track)
         {
             const bool automating = owner.automationMode;
-            for (auto* c : std::initializer_list<juce::Component*> { &automationDevice, &automationControl, &automationLane }) c->setVisible (automating);
+            choosers.setVisible (automating); automationLane.setVisible (automating);
             if (automating) { for (auto* c : std::initializer_list<juce::Component*> { &input, &inputDetail, &monitor, &gain, &sendMode }) c->setVisible (false); showPans (false); }
             else { gain.setVisible (true); showPans (true); inputDetail.setVisible (! returnTrack && inputDetailShown); }
             if (! automating) return;
-            automationTargets = arrangementAutomation::targets (owner.session, track, owner.state.tracks);
-            shownKey = owner.shownKey (track);
-            const arrangementAutomation::Target* shown = nullptr;
-            for (const auto& t : automationTargets) if (t.key == shownKey) shown = &t;
-            juce::StringArray devices; std::set<juce::String> automatedDevices;
-            for (const auto& t : automationTargets) { devices.addIfNotAlreadyThere (t.device); if (! t.lane.points.empty()) automatedDevices.insert (t.device); }
-            const auto device = shown != nullptr ? shown->device : juce::String ("None");
-            juce::String signature; for (const auto& d : devices) signature << d << (automatedDevices.count (d) ? "*" : "") << ";";
-            if (signature != deviceSignature)
-            {
-                deviceSignature = signature; automationDevice.clear (juce::dontSendNotification);
-                for (int i = 0; i < devices.size(); ++i) automationDevice.addItem ((automatedDevices.count (devices[i]) ? juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xa2 ")) : juce::String()) + devices[i], i + 1);
-                automationDevice.addItem ("None", devices.size() + 1);
-            }
-            const auto deviceIndex = devices.indexOf (device);
-            automationDevice.setSelectedId (deviceIndex >= 0 ? deviceIndex + 1 : devices.size() + 1, juce::dontSendNotification);
-            // The chooser's text carries the automated dot, so match the plain name when it changes.
-            automationDevice.onChange = [this, devices]
-            {
-                const auto item = automationDevice.getSelectedId() - 1;
-                if (! juce::isPositiveAndBelow (item, devices.size())) { owner.showAutomationKey (trackId, "none"); return; }
-                for (const auto& t : automationTargets) if (t.device == devices[item]) { owner.showAutomationKey (trackId, t.key); return; }
-            };
-            std::vector<juce::String> keys; juce::StringArray labels;
-            for (const auto& t : automationTargets)
-                if (t.device == device) { keys.push_back (t.key); labels.add ((t.lane.points.empty() ? juce::String() : juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xa2 "))) + t.control); }
-            if (keys != controlKeys || labels != controlLabels)
-            {
-                controlKeys = keys; controlLabels = labels; automationControl.clear (juce::dontSendNotification);
-                for (int i = 0; i < labels.size(); ++i) automationControl.addItem (labels[i], i + 1);
-            }
-            const auto at = std::find (controlKeys.begin(), controlKeys.end(), shownKey);
-            automationControl.setSelectedId (at != controlKeys.end() ? (int) std::distance (controlKeys.begin(), at) + 1 : 0, juce::dontSendNotification);
-            automationControl.setEnabled (shown != nullptr); automationLane.setEnabled (shown != nullptr);
+            automationLane.setEnabled (choosers.sync (track));
         }
         // Returns play into Master and grouped tracks into their group; other tracks choose Master,
         // Sends Only or one of the tracks they may play into.
@@ -2260,8 +2299,8 @@ private:
             // The split pans share the pan's place, Left beside Right.
             const int pans = w - 44 - half;
             leftSplit.setBounds (40 + half, 49, pans / 2 - 1, 20); rightSplit.setBounds (41 + half + pans / 2, 49, pans - pans / 2 - 1, 20);
-            automationDevice.setBounds (58, 27, w - 62, 18);
-            automationControl.setBounds (58, 49, w - 90, 18); automationLane.setBounds (w - 28, 49, 24, 18);
+            choosers.device.setBounds (58, 27, w - 62, 18);
+            choosers.control.setBounds (58, 49, w - 90, 18); automationLane.setBounds (w - 28, 49, 24, 18);
         }
         // The split line under an Arrangement header drags the track's height.
         bool onSplitLine (juce::Point<int> at) const { return ! columnLayout && at.y >= getHeight() - 4; }
@@ -2345,13 +2384,10 @@ private:
             leftSplit.setVisible (visible && splitPan); rightSplit.setVisible (visible && splitPan);
             leftLabel.setVisible (visible && splitPan && columnLayout && getWidth() >= 93); rightLabel.setVisible (leftLabel.isVisible());
         }
-        juce::ComboBox input, sendMode, automationDevice, automationControl, output;
+        juce::ComboBox input, sendMode, output;
         MonitorSwitch monitor;
         juce::TextButton automationLane { "+" };
-        std::vector<arrangementAutomation::Target> automationTargets;
-        std::vector<juce::String> controlKeys;
-        juce::StringArray controlLabels;
-        juce::String shownKey, deviceSignature;
+        AutomationChoosers choosers { owner, *this };
         juce::StringArray inputNames, sendReturnIds, outputIds, outputLabels, inputSourceIds, inputSourceLabels, inputDetailItems;
         juce::ComboBox inputDetail;
         juce::String sourceTrack, lastExternalInput;
@@ -2485,6 +2521,9 @@ private:
             if (! leftSplit.isMouseButtonDown()) leftSplit.setValue (g->leftSplitPan, juce::dontSendNotification);
             if (! rightSplit.isMouseButtonDown()) rightSplit.setValue (g->rightSplitPan, juce::dontSendNotification);
             splitPan = g->splitPan;
+            // MIDI and key mapping targets, as on tracks.
+            gain.getProperties().set ("midiMapTarget", "mixer:" + groupId + ":volume"); pan.getProperties().set ("midiMapTarget", "mixer:" + groupId + ":pan");
+            leftSplit.getProperties().set ("midiMapTarget", "mixer:" + groupId + ":leftsplit"); rightSplit.getProperties().set ("midiMapTarget", "mixer:" + groupId + ":rightsplit");
             bool mixerShown = true;
             if (columnLayout)
             {
@@ -2495,6 +2534,14 @@ private:
                 for (auto& send : sends) send->setVisible (shown.sends);
                 mixerShown = shown.mixer;
                 if (shown != laidOut) { laidOut = shown; resized(); }
+            }
+            else
+            {
+                // In Automation Mode the choosers take the mixer's line, as on tracks.
+                const bool automating = owner.automationMode;
+                choosers.setVisible (automating); gain.setVisible (! automating);
+                mixerShown = ! automating;
+                if (automating) choosers.sync (Impl::automationView (*g));
             }
             pan.setVisible (mixerShown && ! splitPan); leftSplit.setVisible (mixerShown && splitPan); rightSplit.setVisible (mixerShown && splitPan);
             repaint();
@@ -2551,6 +2598,7 @@ private:
             fold.setBounds (2, 2, 18, 18); name.setBounds (20, 1, w - 80, 20);
             activator.setBounds (w - 56, 2, 26, 18); solo.setBounds (w - 28, 2, 26, 18);
             gain.setBounds (24, 21, (w - 30) / 2 + 10, 17); pan.setBounds (24 + (w - 30) / 2 + 14, 21, w - 38 - (w - 30) / 2 - 10, 17);
+            choosers.device.setBounds (gain.getBounds()); choosers.control.setBounds (pan.getBounds());
             const int pans = w - 38 - (w - 30) / 2 - 10, x = 24 + (w - 30) / 2 + 14;
             leftSplit.setBounds (x, 21, pans / 2 - 1, 17); rightSplit.setBounds (x + pans / 2 + 1, 21, pans - pans / 2 - 1, 17);
         }
@@ -2620,6 +2668,7 @@ private:
         bool splitPan = false, dragArmed = false, headerDrag = false;
         std::vector<std::unique_ptr<juce::Slider>> sends;
         juce::StringArray sendReturnIds;
+        AutomationChoosers choosers { owner, *this };
         ChildMouseEvents childMouse { *this };
     };
 
@@ -2761,6 +2810,16 @@ private:
         bool envelopeAt (int y, juce::String& trackId, juce::String& key, juce::Rectangle<float>& area) const
         {
             const auto* lane = owner.laneAt (y);
+            // A group's lane shows its own envelope.
+            if (lane != nullptr && lane->group && lane->automation < 0 && juce::isPositiveAndBelow (lane->index, (int) owner.state.groups.size()))
+            {
+                const auto& group = owner.state.groups[(size_t) lane->index];
+                key = owner.shownKey (Impl::automationView (group));
+                if (key == "none") return false;
+                trackId = group.id;
+                area = { 0.0f, (float) lane->y + 5, (float) timelineWidth(), (float) juce::jmax (4, lane->height - 10) };
+                return true;
+            }
             if (lane == nullptr || lane->group || lane->take >= 0 || ! juce::isPositiveAndBelow (lane->index, (int) owner.state.tracks.size())) return false;
             const auto& track = owner.state.tracks[(size_t) lane->index];
             if (lane->automation >= 0)
@@ -3094,7 +3153,7 @@ private:
             if (owner.automationMode)
                 for (const auto& lane : owner.lanes)
                 {
-                    if (lane.group || lane.height == 0) continue;
+                    if (lane.height == 0) continue;
                     if (lane.automation >= 0)
                     {
                         g.setColour (themes::colour (0xff262626)); g.fillRect (0, lane.y, tw, lane.height);
@@ -16250,6 +16309,24 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 const auto now2 = juce::Time::getCurrentTime();
                 headerFocusWatcher.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { 10.0f, 10.0f }, {}, 1.0f, 0, 0, 0, 0, &canvas, &canvas, now2, { 10.0f, 10.0f }, now2, 1, false));
                 check (! headerFocus, "a click in the lanes takes the focus from the headers");
+                // Automation Mode: a group's header offers its mixer, as a track's does, and its lane draws and edits the envelope.
+                setAutomationMode (true); refresh();
+                const auto automated = groupLane (inner);
+                juce::Component* header = canvas.getComponentAt (canvas.timelineWidth() + 60, automated.y + 28);
+                while (header != nullptr && header->getParentComponent() != &canvas) header = header->getParentComponent();
+                auto* device = header != nullptr ? dynamic_cast<juce::ComboBox*> (findNamed (*header, "Automation device")) : nullptr;
+                auto* control = header != nullptr ? dynamic_cast<juce::ComboBox*> (findNamed (*header, "Automation control")) : nullptr;
+                check (device && control && device->isVisible() && device->getText() == "Mixer" && control->getText() == "Track Volume" && ! findNamed (*header, "Group volume")->isVisible(),
+                       "the group's header offers its mixer's Track Volume in place of its fader");
+                const auto empty = juce::Point<float> ((float) ((secondsAt (4) - viewStart) * pixelsPerSecond), (float) automated.y + 9);
+                const auto when = juce::Time::getCurrentTime();
+                canvas.mouseDoubleClick (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), empty, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                                           &canvas, &canvas, when, empty, when, 2, false));
+                refresh();
+                const auto lane = groupInfo (inner)->volumeAutomation;
+                check (lane.points.size() == 1 && std::abs (lane.points[0].beat - 4) < .26 && lane.points[0].value > 0, "double-clicking the group's lane adds a breakpoint to its volume");
+                session.undo(); setAutomationMode (false); refresh();
+                check (groupInfo (inner)->volumeAutomation.points.empty() && findNamed (*header, "Group volume")->isVisible(), "one undo removes it, and the fader returns with the mode off");
             }
             showSessionView(); refresh();
             selectChain (inner); ungroupSelectedTrack(); refresh();
