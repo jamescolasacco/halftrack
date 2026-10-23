@@ -632,11 +632,18 @@ bool isReturn (const te::AudioTrack& track) { return track.state.getProperty (re
 Session::SendMode sendMode (const te::AudioTrack& track)
 { return static_cast<Session::SendMode> (static_cast<int> (track.state.getProperty (returnModeProperty, 1))); }
 
-te::AuxSendPlugin* findSend (te::AudioTrack& source, const String& destination)
+te::AuxSendPlugin* findSend (te::Track& source, const String& destination)
 {
     for (auto* plugin : source.pluginList.getPlugins())
         if (auto* send = dynamic_cast<te::AuxSendPlugin*> (plugin))
             if (send->state.getProperty (sendReturnProperty).toString() == destination) return send;
+    return nullptr;
+}
+// A track's or group's mixer.
+te::VolumeAndPanPlugin* volumeOf (te::Track& track)
+{
+    if (auto* audio = dynamic_cast<te::AudioTrack*> (&track)) return audio->getVolumePlugin();
+    if (auto* folder = dynamic_cast<te::FolderTrack*> (&track)) return folder->getVolumePlugin();
     return nullptr;
 }
 
@@ -698,7 +705,8 @@ Result validateRouting (const juce::ValueTree& state, bool legacyFaders)
     };
     const auto collect = [&] (auto&& self, const juce::ValueTree& node) -> void
     {
-        if (node.hasType (te::IDs::TRACK)) tracks.push_back (node);
+        // Groups send as tracks do.
+        if (node.hasType (te::IDs::TRACK) || node.hasType (te::IDs::FOLDERTRACK)) tracks.push_back (node);
         if (node.hasType (te::IDs::PLUGIN)
             && (node[te::IDs::type].toString() == te::AuxSendPlugin::xmlTypeName
                 || node[te::IDs::type].toString() == te::AuxReturnPlugin::xmlTypeName)) routePlugins.push_back (node);
@@ -795,7 +803,7 @@ Result validateRouting (const juce::ValueTree& state, bool legacyFaders)
         }
         if (returned && returns != 1) return Result::fail ("The return track is missing its input.");
     }
-    if (validated.size() != routePlugins.size()) return Result::fail ("Auxiliary routing is only supported directly on audio tracks.");
+    if (validated.size() != routePlugins.size()) return Result::fail ("Auxiliary routing is only supported directly on audio tracks and groups.");
     const auto checkInputs = [&] (auto&& self, const juce::ValueTree& node) -> bool
     {
         if (node.hasType (te::IDs::INPUTDEVICEDESTINATION) && returnInputTargets.contains (te::EditItemID::fromVar (node[te::IDs::targetID]).toString())) return false;
@@ -4187,6 +4195,7 @@ struct Session::Impl
         // Derived gates are published through native graph updates on the message
         // thread. They never replace user send levels or create undo actions.
         const auto tracks = te::getAudioTracks (*edit);
+        const auto sources = sendSources();
         bool anySolo = false, anySourceSolo = false, anyReturnSolo = false;
         for (auto* t : tracks)
         {
@@ -4194,21 +4203,28 @@ struct Session::Impl
             anySourceSolo = anySourceSolo || (! isReturn (*t) && t->isSolo (false));
             anyReturnSolo = anyReturnSolo || (isReturn (*t) && t->isSolo (false));
         }
+        // A soloed group solos what is in it, as soloing its tracks would.
+        for (auto* t : sources) if (dynamic_cast<te::FolderTrack*> (t) != nullptr && t->isSolo (false)) anySolo = anySourceSolo = true;
+        // Whether a source is heard under solo: soloed itself or by a group around it, or, for a
+        // group, through a track or group inside it.
+        const auto soloed = [] (te::Track& source)
+        {
+            for (te::Track* t = &source; t != nullptr; t = t->getParentFolderTrack()) if (t->isSolo (false)) return true;
+            auto* folder = dynamic_cast<te::FolderTrack*> (&source);
+            return folder != nullptr && folder->isSolo (true);
+        };
         // Solo in Place, as the reference's: soloing keeps the returns audible unless one is soloed.
         const bool inPlace = edit->state.getProperty (soloInPlaceProperty, true);
         for (auto* destination : tracks)
         {
             if (! isReturn (*destination)) continue;
-            for (auto* source : tracks)
-            {
-                if (isReturn (*source)) continue;
+            for (auto* source : sources)
                 if (auto* send = findSend (*source, destination->itemID.toString()))
                 {
-                    const bool selected = ! anySolo || source->isSolo (false) || destination->isSolo (false);
+                    const bool selected = ! anySolo || soloed (*source) || destination->isSolo (false);
                     const bool audible = sendMode (*destination) == SendMode::pre || ! source->isMuted (false);
                     send->state.setProperty (te::IDs::enabled, selected && audible, nullptr);
                 }
-            }
             // Solo in Place keeps every return output open, including effect tails left by
             // sources whose feeds are now Off or solo-suppressed, unless a return is soloed.
             destination->state.setProperty (te::IDs::soloIsolate, anySourceSolo && inPlace && ! anyReturnSolo, nullptr);
@@ -4301,9 +4317,26 @@ struct Session::Impl
         edit->dispatchPendingUpdatesSynchronously();
         changed(); return Result::ok();
     }
-    // A new send from a track to a return, Off, before or after the track's mixer as the return's
+    // What can send to the returns: tracks other than returns, and groups, in order.
+    juce::Array<te::Track*> sendSources() const
+    {
+        juce::Array<te::Track*> result;
+        for (auto* t : te::getAllTracks (*edit))
+        {
+            auto* audio = dynamic_cast<te::AudioTrack*> (t);
+            if (audio != nullptr ? ! isReturn (*audio) : group (t->itemID.toString()) != nullptr) result.add (t);
+        }
+        return result;
+    }
+    // A track or group that can send, by id.
+    te::Track* sendSource (const String& id) const
+    {
+        if (auto* t = track (id)) return isReturn (*t) ? nullptr : t;
+        return group (id);
+    }
+    // A new send from a track or group to a return, Off, before or after its mixer as the return's
     // sends tap; part of the caller's undo step.
-    te::AuxSendPlugin* createSend (te::AudioTrack& source, te::AudioTrack& destination)
+    te::AuxSendPlugin* createSend (te::Track& source, te::AudioTrack& destination)
     {
         auto plugin = edit->getPluginCache().createNewPlugin (te::AuxSendPlugin::xmlTypeName, {});
         auto* send = dynamic_cast<te::AuxSendPlugin*> (plugin.get());
@@ -4311,11 +4344,34 @@ struct Session::Impl
         send->state.setProperty (sendReturnProperty, destination.itemID.toString(), &edit->getUndoManager());
         send->busNumber = static_cast<int> (destination.state[returnBusProperty]);
         send->setGainDb (-100.0f);
-        const auto mixer = source.pluginList.indexOf (source.getVolumePlugin());
+        const auto mixer = source.pluginList.indexOf (volumeOf (source));
         source.pluginList.insertPlugin (plugin, mixer + (sendMode (destination) == SendMode::post ? 1 : 0), nullptr);
         return send;
     }
-    Result setSendAutomation (te::AudioTrack& source, te::AudioTrack& destination, const AutomationLane& lane)
+    // A track's or group's send level, as setTrackSendGain describes; selected tracks' sends follow a track's.
+    Result setSendGain (te::Track& source, te::AudioTrack& destination, float decibels)
+    {
+        if (! std::isfinite (decibels) || decibels < -100.0f || decibels > 0)
+            return Result::fail ("Send gain must be between Off (-100 dB) and 0 dB.");
+        const auto destinationID = destination.itemID.toString();
+        const auto key = sendKey (source.itemID.toString(), destinationID);
+        auto* send = findSend (source, destinationID);
+        const auto before = send != nullptr ? send->gain->getCurrentValue() : 0.0f, after = te::decibelsToSendFaderPosition (decibels);
+        auto* audio = dynamic_cast<te::AudioTrack*> (&source);
+        const auto link = [&] { if (audio != nullptr) moveLinked (*audio, Linked::send, destinationID, before, after); };
+        if (capturing()) { capture (key, decibels); link(); changed(); return Result::ok(); }
+        if (! send && decibels == -100.0f) { link(); return Result::ok(); }
+        transaction ("Send level");
+        if (! send && (send = createSend (source, destination)) == nullptr) return Result::fail ("Could not create the send.");
+        overrideLane (key);
+        if (! send->state.hasProperty (manualSendProperty))
+            send->state.setProperty (manualSendProperty, send->gain->getCurrentExplicitValue(), nullptr);
+        send->setGainDb (decibels);
+        send->state.setProperty (manualSendProperty, after, &edit->getUndoManager());
+        link();
+        refreshRouting(); changed(); return Result::ok();
+    }
+    Result setSendAutomation (te::Track& source, te::AudioTrack& destination, const AutomationLane& lane)
     {
         if (exporting || (edit->getTransport().isRecording() && ! internalAutomationWrite))
             return Result::fail ("Stop recording or finish exporting before editing automation.");
@@ -4540,13 +4596,13 @@ struct Session::Impl
                 if (const auto target = targetNamed (parts[2]); target && automationParameter (*mixer, *target) != nullptr)
                     return mixerLane (*mixer, *target);
         if (parts[0] == "send")
-            if (auto* t = track (parts[1]); t != nullptr && ! isReturn (*t))
+            if (sendSource (parts[1]) != nullptr)
                 if (auto* destination = track (parts[2]); destination != nullptr && isReturn (*destination))
                 {
                     const auto trackId = parts[1], returnId = parts[2];
                     return LaneAccess { [this, trackId, returnId]
                                         {
-                                            auto* source = track (trackId); auto* send = source != nullptr ? findSend (*source, returnId) : nullptr;
+                                            auto* source = sendSource (trackId); auto* send = source != nullptr ? findSend (*source, returnId) : nullptr;
                                             return send != nullptr ? sendLane (*send) : AutomationLane {};
                                         },
                                         [this, trackId, returnId] (const AutomationLane& lane) { return owner.setSendAutomation (trackId, returnId, lane); },
@@ -4847,14 +4903,13 @@ struct Session::Impl
         const auto off = [] (const AutomationLane& lane) { return ! lane.enabled && ! lane.points.empty(); };
         if (off (automationLane (*edit->getMasterVolumePlugin(), AutomationTarget::volume))) keys.add ("master");
         for (auto* t : te::getAudioTracks (*edit))
-        {
             if (auto* mixer = t->getVolumePlugin())
                 for (const auto target : mixerTargets)
                     if (off (automationLane (*mixer, target))) keys.add (mixerKey (*t, target));
+        for (auto* t : sendSources())
             for (auto* plugin : t->pluginList.getPlugins())
                 if (auto* send = dynamic_cast<te::AuxSendPlugin*> (plugin); send != nullptr && off (sendLane (*send)))
                     keys.add (sendKey (t->itemID.toString(), send->state[sendReturnProperty].toString()));
-        }
         visitDevices ([&] (te::Track*, NativeEffectPlugin& d)
         { for (const auto& a : deviceAutomation (d)) if (off (a.lane)) keys.add (deviceKey (d.itemID.toString(), a.parameter)); });
         for (auto [t, list] : chains())
@@ -5839,7 +5894,7 @@ struct Session::Impl
                 if (auto* parameter = target ? automationParameter (*mixer, *target) : nullptr) return parameter->getCurrentValue();
             }
         if (parts[0] == "send")
-            if (auto* t = track (parts[1])) { auto* send = findSend (*t, parts[2]); return send != nullptr ? send->getGainDb() : -100.0f; }
+            if (auto* t = sendSource (parts[1])) { auto* send = findSend (*t, parts[2]); return send != nullptr ? send->getGainDb() : -100.0f; }
         if (parts[0] == "device")
         {
             if (auto* device = nativeDevice (parts[1])) return device->readSettings().values[(size_t) juce::jlimit (0, (int) device->readSettings().values.size() - 1, parts[2].getIntValue())];
@@ -5863,6 +5918,7 @@ struct Session::Impl
         }
         if (parts[0] == "send")
         {
+            if (group (parts[1]) != nullptr) return owner.setGroupSendGain (parts[1], parts[2], value);
             const int index = trackIndexOf (parts[1]);
             return index < 0 ? Result::ok() : owner.setTrackSendGain (index, parts[2], value);
         }
@@ -6313,6 +6369,13 @@ Session::Snapshot Session::snapshot() const
             if (auto* mixer = dynamic_cast<TrackMixer*> (folder->getVolumePlugin()))
             { group.splitPan = mixer->splitPan(); group.leftSplitPan = mixer->leftSplit->getCurrentValue(); group.rightSplitPan = mixer->rightSplit->getCurrentValue(); }
             for (auto* p : Impl::devicesIn (folder->pluginList)) group.plugins.push_back (describe (*p));
+            for (auto* destination : te::getAudioTracks (e))
+                if (isReturn (*destination))
+                {
+                    const auto id = destination->itemID.toString();
+                    auto* send = findSend (*folder, id);
+                    group.sends.push_back ({ id, send ? send->getGainDb() : -100.0f, send ? sendLane (*send) : AutomationLane {} });
+                }
             if (auto* level = folder->pluginList.findFirstPluginOfType<te::LevelMeterPlugin>())
             {
                 auto& m = impl->meter (group.id, level->measurer);
@@ -7316,28 +7379,20 @@ Result Session::setTrackSendGain (int index, const String& destinationID, float 
     auto* source = impl->track (index); auto* destination = impl->track (destinationID);
     if (! source || isReturn (*source) || ! destination || ! isReturn (*destination))
         return Result::fail ("Sends must connect an audio or MIDI track to a return track.");
-    if (! std::isfinite (decibels) || decibels < -100.0f || decibels > 0)
-        return Result::fail ("Send gain must be between Off (-100 dB) and 0 dB.");
-    const auto key = Impl::sendKey (source->itemID.toString(), destinationID);
-    auto* send = findSend (*source, destinationID);
-    const auto before = send != nullptr ? send->gain->getCurrentValue() : 0.0f, after = te::decibelsToSendFaderPosition (decibels);
-    if (impl->capturing()) { impl->capture (key, decibels); impl->moveLinked (*source, Impl::Linked::send, destinationID, before, after); impl->changed(); return Result::ok(); }
-    if (! send && decibels == -100.0f) { impl->moveLinked (*source, Impl::Linked::send, destinationID, before, after); return Result::ok(); }
-    impl->transaction ("Send level");
-    if (! send && (send = impl->createSend (*source, *destination)) == nullptr) return Result::fail ("Could not create the send.");
-    impl->overrideLane (key);
-    if (! send->state.hasProperty (manualSendProperty))
-        send->state.setProperty (manualSendProperty, send->gain->getCurrentExplicitValue(), nullptr);
-    send->setGainDb (decibels);
-    send->state.setProperty (manualSendProperty, after, &impl->edit->getUndoManager());
-    impl->moveLinked (*source, Impl::Linked::send, destinationID, before, after);
-    impl->refreshRouting(); impl->changed(); return Result::ok();
+    return impl->setSendGain (*source, *destination, decibels);
+}
+Result Session::setGroupSendGain (const String& groupId, const String& destinationID, float decibels)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* source = impl->group (groupId); auto* destination = impl->track (destinationID);
+    if (! source || ! destination || ! isReturn (*destination)) return Result::fail ("Sends must connect a group to a return track.");
+    return impl->setSendGain (*source, *destination, decibels);
 }
 Result Session::setSendAutomation (const String& trackId, const String& returnTrackId, const AutomationLane& lane)
 {
-    auto* source = impl->track (trackId); auto* destination = impl->track (returnTrackId);
-    if (! source || isReturn (*source) || ! destination || ! isReturn (*destination))
-        return Result::fail ("Sends must connect an audio or MIDI track to a return track.");
+    auto* source = impl->sendSource (trackId); auto* destination = impl->track (returnTrackId);
+    if (! source || ! destination || ! isReturn (*destination))
+        return Result::fail ("Sends must connect an audio or MIDI track or a group to a return track.");
     if (source->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze the track before editing automation.");
     return impl->setSendAutomation (*source, *destination, lane);
 }
@@ -7350,12 +7405,12 @@ Result Session::setReturnSendMode (const String& destinationID, SendMode mode)
     if (mode == sendMode (*destination)) return Result::ok();
     impl->transaction ("Return send mode");
     destination->state.setProperty (returnModeProperty, static_cast<int> (mode), &impl->edit->getUndoManager());
-    for (auto* source : te::getAudioTracks (*impl->edit))
+    for (auto* source : impl->sendSources())
         if (auto* send = findSend (*source, destinationID))
         {
             te::Plugin::Ptr keepAlive (send);
             send->deleteFromParent();
-            const auto mixer = source->pluginList.indexOf (source->getVolumePlugin());
+            const auto mixer = source->pluginList.indexOf (volumeOf (*source));
             source->pluginList.insertPlugin (keepAlive, mixer + (mode == SendMode::post ? 1 : 0), nullptr);
         }
     impl->refreshRouting(); impl->changed(); return Result::ok();
@@ -9750,7 +9805,7 @@ Result Session::removeTracks (const juce::StringArray& ids)
     for (auto* t : going)
     {
         if (isReturn (*t))
-            for (auto* source : te::getAudioTracks (*impl->edit))
+            for (auto* source : impl->sendSources())
                 if (auto* send = findSend (*source, t->itemID.toString())) send->deleteFromParent();
         // Plug-ins taking their sidechain from it keep their sidechain, without a source.
         for (auto* p : impl->edit->getPluginCache().getPlugins())
@@ -11952,9 +12007,8 @@ std::optional<std::pair<float, float>> Session::midiTargetRange (const String& t
             if (auto* mixer = impl->track (parts[1])->getVolumePlugin(); mixer != nullptr && mixer->getAutomatableParameterByID (leftSplitParameterID) != nullptr)
                 return std::pair { -1.0f, 1.0f };
     }
-    if (parts.size() == 3 && parts[0] == "send")
-        if (auto* t = impl->track (parts[1]); t != nullptr && ! isReturn (*t))
-            if (auto* destination = impl->track (parts[2]); destination != nullptr && isReturn (*destination)) return std::pair { -100.0f, 0.0f };
+    if (parts.size() == 3 && parts[0] == "send" && impl->sendSource (parts[1]) != nullptr)
+        if (auto* destination = impl->track (parts[2]); destination != nullptr && isReturn (*destination)) return std::pair { -100.0f, 0.0f };
     if (parts.size() == 3 && parts[0] == "device" && parts[2].containsOnly ("0123456789"))
         if (auto* device = impl->nativeDevice (parts[1]))
         {

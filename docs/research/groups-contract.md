@@ -116,3 +116,33 @@ Evidence (`tests/GroupTests.cpp`):
 The UI suite clicks a nested group's name and presses Delete. The group goes with its track, the next track is selected, and one undo brings both back. After a click in the lanes, the headers no longer have the focus.
 
 Not reproduced: the reference's Delete in the Session view's column headers. Halftrack's Session view still clears the selected slot.
+
+## Group sends (2026-10-23)
+
+The reference's group mixer is the ordinary track mixer, with a send per return (its Set schema; [group findings](#moving-tracks-2026-10-23)). Halftrack's groups now have sends too.
+
+- **API.** `setGroupSendGain(groupId, returnId, dB)` sets a group's send from Off (−100 dB) to 0 dB along the send law, as `setTrackSendGain` does for a track. It is one undo step, and `GroupInfo::sends` lists one send per return.
+- **Taps.** A group's send taps the group's sum before or after its fader, as the return's Pre/Post setting decides for every send. Changing that setting moves the groups' sends too.
+- **Automation and mapping.** The send keys `send:<group>:<return>` work for groups. `setSendAutomation` takes a group's id, and the send is a MIDI and key mapping target. Automation recording goes through the same key but is not yet tested for groups. The Arrangement does not show group automation lanes yet.
+- **Solo and mute.**
+  - A soloed group now counts as a soloed source. Solo in Place keeps the returns open, fed only by the soloed group's sends and its tracks' sends, as for soloed tracks.
+  - A track's send counts as soloed when a group around it is soloed. A group's send counts as soloed when the group, a group around it, or a track inside it is soloed.
+  - A muted group's post-fader sends are silent.
+- **Saving.** Group sends are saved with the group, and loading validates them as it validates track sends.
+- **Deleting a return** removes the groups' sends to it as well.
+- **Interface.** The Session mixer's group strips show a send knob per return, A, B, C, level with the tracks' knobs. The knobs are mapping targets and follow the Sends section switch.
+
+Correction: soloing a group used to mute the returns, and left every track's sends open, because only soloed tracks counted.
+
+Evidence (`tests/GroupTests.cpp`):
+- a group's send at half level adding half its sum through a return, and one undo;
+- refused unknown groups, non-return destinations and levels above 0 dB;
+- a pre-fader send feeding the return with the group's fader down;
+- a soloed group silencing an outside track while its return stays audible;
+- a muted group's post-fader send being silent;
+- the send being a mapping target, automatable, reopening and playing as before;
+- the send going with a deleted return and coming back with one undo.
+
+The UI suite turns a group strip's send knob, checks its mapping target and undoes it.
+
+Not reproduced: group automation lanes in the Arrangement, and selection linking for group controls. How group mute should act on its tracks' own sends is undetermined (see [open questions](../open-questions.md)).

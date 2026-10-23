@@ -539,6 +539,7 @@ public:
         // An empty group has a place too.
         int position = 0;
         std::vector<PluginInfo> plugins; // Its audio devices, in chain order.
+        std::vector<SendInfo> sends;     // One per return, as a track's.
     };
     // A point on the tempo map: the tempo ramps linearly from each point to the next and holds after the last.
     struct TempoPoint
@@ -679,6 +680,8 @@ public:
     juce::Result addMidiTrack (juce::String name = {}, const juce::String& after = {});
     juce::Result addReturnTrack (juce::String name = {}, const juce::String& after = {});
     juce::Result setTrackSendGain (int sourceTrackIndex, const juce::String& returnTrackId, float decibels);
+    // A group's send, as a track's: the reference's group mixers have one per return.
+    juce::Result setGroupSendGain (const juce::String& groupId, const juce::String& returnTrackId, float decibels);
     // A send's automation, as the reference's Send lanes: beat points in decibels from -100 (Off) to
     // 0, the send's knob moving straight along the send law between them, curved as track automation
     // is. Empty points restore the send's manual level; points on a send that is Off make it, Off.

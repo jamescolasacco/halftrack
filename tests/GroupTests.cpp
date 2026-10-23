@@ -241,6 +241,50 @@ int runGroupTests (const juce::File& artifacts)
             check (n.snapshot().tracks.size() == 1 && n.snapshot().tracks[0].id == ids[1] && n.snapshot().groups.size() == 3, "b and the groups stay, the inner group empty");
             n.undo(); check (n.snapshot().tracks.size() == 3, "one undo restores both");
         }
+        {
+            // Group sends, as the reference's group mixers have one per return: the group's sum feeds the return.
+            Session g (false);
+            ok (g.importAudio (a, 0), "import a for the group send"); ok (g.addReturnTrack ("Room"), "add a return");
+            const auto dry = render (g, mix);
+            const auto aId = g.snapshot().tracks[0].id, room = g.snapshot().tracks.back().id;
+            juce::String bus; ok (g.groupTracks ({ aId }, bus), "group a");
+            check (g.snapshot().groups[0].sends.size() == 1 && g.snapshot().groups[0].sends[0].returnTrackId == room && g.snapshot().groups[0].sends[0].gainDb <= -100,
+                   "the group has a send to the return, Off");
+            ok (g.setGroupSendGain (bus, room, -6.0206f), "send the group to the return at half level");
+            check (std::abs (g.snapshot().groups[0].sends[0].gainDb + 6.0206f) < 1e-3, "the send keeps its level");
+            check (difference (render (g, mix), dry, 1.5f, 1.5f) < 1e-5, "the mix gains the group's sum at half level, through the return");
+            g.undo(); check (g.snapshot().groups[0].sends[0].gainDb <= -100, "one undo turns it Off"); g.redo();
+            check (g.setGroupSendGain ("missing", room, -6).failed() && g.setGroupSendGain (bus, aId, -6).failed() && g.setGroupSendGain (bus, room, 3).failed(),
+                   "unknown groups, a track that is not a return and levels above 0 dB are refused");
+            ok (g.setReturnSendMode (room, Session::SendMode::pre), "make the return's sends pre-fader");
+            ok (g.setGroupGain (bus, -100), "pull the group's fader down");
+            check (difference (render (g, mix), dry, .5f, .5f) < 1e-5, "the pre-fader send still feeds the return");
+            ok (g.setGroupGain (bus, 0), "the group's fader back up"); ok (g.setReturnSendMode (room, Session::SendMode::post), "post-fader again");
+            ok (g.importAudio (b, -1), "add an outside track, b");
+            const auto withOutside = render (g, mix);
+            ok (g.setGroupSolo (bus, true), "solo the group");
+            check (difference (render (g, mix), dry, 1.5f, 1.5f) < 1e-5,
+                   "soloing the group silences the outside track and keeps the return the group feeds audible, as Solo in Place does for tracks");
+            ok (g.setGroupSolo (bus, false), "unsolo it");
+            ok (g.setGroupMute (bus, true), "mute the group");
+            ok (g.setGroupSendGain (bus, room, -100), "and turn its send Off, for b alone");
+            const auto bAlone = render (g, mix);
+            ok (g.setGroupSendGain (bus, room, -6.0206f), "turn the send back on");
+            check (difference (render (g, mix), bAlone) < 1e-6, "a muted group's post-fader send is silent");
+            ok (g.setGroupMute (bus, false), "unmute the group");
+            check (g.isMappableTarget ("send:" + bus + ":" + room), "the group's send is a MIDI and key mapping target");
+            Session::AutomationLane lane; lane.points = { { 0, -100, 0 }, { 4, 0, 0 } };
+            ok (g.setSendAutomation (bus, room, lane), "automate the group's send");
+            check (g.snapshot().groups[0].sends[0].automation.points.size() == 2, "the group's send has its automation");
+            ok (g.setSendAutomation (bus, room, {}), "clear it");
+            const auto project = root.getChildFile ("GroupSend.halftrack"); ok (g.saveProject (project), "save");
+            Session reopened (false); ok (reopened.loadProject (project), "reopen the group's send");
+            check (std::abs (reopened.snapshot().groups[0].sends[0].gainDb + 6.0206f) < 1e-3, "the group's send reopens");
+            check (difference (render (reopened, mix), withOutside) < 1e-5, "and plays as before");
+            ok (g.removeTracks ({ room }), "delete the return");
+            check (g.snapshot().groups[0].sends.empty() && difference (render (g, mix), bAlone, 1, 1) > 1e-3, "the group's send goes with it, the group still playing");
+            g.undo(); check (g.snapshot().groups[0].sends.size() == 1 && std::abs (g.snapshot().groups[0].sends[0].gainDb + 6.0206f) < 1e-3, "one undo brings the return and the send back");
+        }
         std::cout << "Groups passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL groups: " << e.what() << std::endl; return 1; }

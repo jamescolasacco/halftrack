@@ -14,6 +14,8 @@ Halftrack's cue follows a static reading of the reference's code and bundled def
 
 The reference keeps Solo in Place with the Set, on at first and not an undo step, and offers it as a menu command (static reading). With it on, soloing tracks keeps the returns audible, fed by the soloed tracks' sends, unless a return is soloed, which mutes the others. With it off, soloed tracks are heard without the returns.
 
+A soloed group counts as soloed sources: the returns stay open, fed by the group's sends and its tracks' ([group sends](groups-contract.md#group-sends-2026-10-23)).
+
 Halftrack does the same: `Session::setSoloInPlace`, kept with the project and not an undo step, from the View menu's Solo in Place (where Halftrack keeps the reference's Options items). `tests/SendReturnTests.cpp` renders, sample by sample:
 
 - a soloed source heard with its return, and without it once Solo in Place is off;

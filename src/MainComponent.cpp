@@ -2488,21 +2488,58 @@ private:
             bool mixerShown = true;
             if (columnLayout)
             {
+                syncSends (*g);
                 // The Mixer section, lined up with the tracks' as the In/Out section moves it.
                 const auto& shown = owner.state.mixerSections;
                 for (auto* c : std::initializer_list<juce::Component*> { &gain, &activator, &solo }) c->setVisible (shown.mixer);
+                for (auto& send : sends) send->setVisible (shown.sends);
                 mixerShown = shown.mixer;
                 if (shown != laidOut) { laidOut = shown; resized(); }
             }
             pan.setVisible (mixerShown && ! splitPan); leftSplit.setVisible (mixerShown && splitPan); rightSplit.setVisible (mixerShown && splitPan);
             repaint();
         }
+        // The Session mixer's sends: one knob per return, A, B, C, as on the tracks' strips.
+        void syncSends (const Session::GroupInfo& group)
+        {
+            juce::StringArray ids;
+            for (const auto& send : group.sends) ids.add (send.returnTrackId);
+            if (ids != sendReturnIds)
+            {
+                sendReturnIds = ids; sends.clear();
+                for (int i = 0; i < ids.size(); ++i)
+                {
+                    auto knob = std::make_unique<juce::Slider> (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox);
+                    knob->setName ("Group send " + juce::String::charToString ((juce::juce_wchar) ('A' + i)));
+                    knob->setNormalisableRange (Session::levelRange (true));
+                    knob->setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
+                    knob->setDoubleClickReturnValue (true, -100);
+                    knob->textFromValueFunction = [] (double v) { return v <= -99.95 ? juce::String ("-inf dB") : juce::String (v, 1) + " dB"; };
+                    knob->onDragStart = [this] { owner.session.beginEditGesture ("Send level"); };
+                    knob->onDragEnd = [this] { owner.session.endEditGesture(); };
+                    knob->onValueChange = [this, i]
+                    { owner.report (owner.session.setGroupSendGain (groupId, sendReturnIds[i], (float) sends[(size_t) i]->getValue())); };
+                    addAndMakeVisible (*knob); sends.push_back (std::move (knob));
+                }
+                resized();
+            }
+            for (size_t i = 0; i < sends.size(); ++i)
+            {
+                sends[i]->getProperties().set ("midiMapTarget", "send:" + groupId + ":" + sendReturnIds[(int) i]);
+                if (! sends[i]->isMouseButtonDown()) sends[i]->setValue (group.sends[i].gainDb, juce::dontSendNotification);
+                for (const auto& other : owner.state.tracks) if (other.id == sendReturnIds[(int) i]) sends[i]->setTooltip ("Send to " + other.name + ": " + sends[i]->getTextFromValue (sends[i]->getValue()));
+                sends[i]->setEnabled (! owner.session.isExporting());
+            }
+        }
         void resized() override
         {
             if (columnLayout)
             {
                 const auto& shown = owner.state.mixerSections;
-                const int top = shown.inOut ? TrackRow::inOutHeight : 4;
+                int top = shown.inOut ? TrackRow::inOutHeight : 4;
+                for (size_t i = 0; i < sends.size(); ++i)
+                    sends[i]->setBounds (8 + (int) (i % 3) * 36, top + (int) (i / 3) * 40, 34, 28);
+                if (shown.sends && ! sends.empty()) top += (int) ((sends.size() + 2) / 3) * 40;
                 pan.setBounds ((getWidth() - 46) / 2, top + 2, 46, 50);
                 leftSplit.setBounds (5, top + 8, getWidth() - 10, 16); rightSplit.setBounds (5, top + 27, getWidth() - 10, 16);
                 gain.setBounds (6, top + 58, 54, juce::jmax (20, getHeight() - 34 - (top + 58)));
@@ -2543,6 +2580,8 @@ private:
                 g.fillAll (themes::colour (0xff383838));
                 g.setColour (colour); g.fillRect (0, 0, 4, getHeight() - 1);
                 g.setColour (muted); g.setFont (font (9.0f, true)); g.drawText ("GROUP", 6, 8, getWidth() - 12, 16, juce::Justification::centred);
+                for (size_t i = 0; i < sends.size() && sends[i]->isVisible(); ++i)
+                    g.drawText (juce::String::charToString ((juce::juce_wchar) ('A' + (int) i)), sends[i]->getBounds().withY (sends[i]->getBottom()).withHeight (11), juce::Justification::centred);
                 const juce::Rectangle<int> meter { 66, gain.getY() + 4, 10, juce::jmax (10, gain.getBottom() - 20 - gain.getY()) };
                 for (int channel = 0; channel < 2 && gain.isVisible(); ++channel)
                 {
@@ -2579,6 +2618,8 @@ private:
         juce::Label name;
         juce::Slider gain, pan, leftSplit, rightSplit;
         bool splitPan = false, dragArmed = false, headerDrag = false;
+        std::vector<std::unique_ptr<juce::Slider>> sends;
+        juce::StringArray sendReturnIds;
         ChildMouseEvents childMouse { *this };
     };
 
@@ -16234,6 +16275,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (sent, "a Session send knob edits the real send level");
         const auto sendTarget = sendA->getProperties()["midiMapTarget"].toString();
         check (sendTarget.startsWith ("send:") && sendTarget.endsWith (":" + echo) && session.isMappableTarget (sendTarget), "the send knob is a MIDI and key mapping target");
+        {
+            // The group's strip has a send per return too, lined up with the tracks' sends.
+            auto* groupSend = dynamic_cast<juce::Slider*> (findNamed (launcher, "Group send A"));
+            check (groupSend != nullptr && groupSend->isVisible() && groupSend->getY() == sendA->getY(), "the group's strip has a send knob for the return, level with the tracks'");
+            groupSend->setValue (-6, juce::sendNotificationSync); refresh();
+            check (state.groups.size() == 1 && state.groups[0].sends.size() == 1 && std::abs (state.groups[0].sends[0].gainDb + 6) < 1e-3, "it edits the group's send");
+            const auto groupTarget = groupSend->getProperties()["midiMapTarget"].toString();
+            check (groupTarget == "send:" + state.groups[0].id + ":" + echo && session.isMappableTarget (groupTarget), "and is a mapping target");
+            session.undo(); refresh();
+            check (state.groups[0].sends[0].gainDb <= -100 && groupSend->getValue() <= -99.9, "one undo turns it Off");
+        }
         {
             // Split Stereo pan mode, from the pan's menu: Left over Right sliders in place of the knob.
             const auto first = state.tracks[0].id;

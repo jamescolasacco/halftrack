@@ -2245,3 +2245,11 @@ Measured in the groups and stems suites, and checked in the UI suite ([contract]
 ## Group menu rules — 2026-10-23
 
 Engine and UI areas. The Create menu now enables Group Tracks and Ungroup Tracks by the reference's rules. Group Tracks is enabled whenever `Session::canGroupTracks` allows the selection, a grouped track included, since grouping it makes a group inside. Ungroup Tracks is enabled only with a group selected. Checked in the groups and UI suites ([contract](research/groups-contract.md#nested-groups-2026-10-23)).
+
+## Group sends — 2026-10-23
+
+Engine and UI areas. Groups have a send per return, as the reference's group mixers do (`Session::setGroupSendGain`, `GroupInfo::sends`). The sends tap before or after the group's fader as the return's Pre/Post setting decides. They are automatable and mappable, saved and validated on load, and removed with their return. The Session mixer's group strips show their knobs.
+
+A soloed group now counts as soloed sources. Under Solo in Place the returns stay open, fed by the group's and its tracks' sends; before, soloing a group muted them.
+
+Measured in the groups suite with renders, and checked in the UI suite ([contract](research/groups-contract.md#group-sends-2026-10-23)).

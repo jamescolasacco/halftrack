@@ -511,6 +511,7 @@ These are simplest defaults pending a comparison with the reference:
   - A static reading of the reference shows more choices ([group findings](research/groups-contract.md#moving-tracks-2026-10-23)). A grouped track's Audio To defaults to Group and also offers Main, Sends Only, Ext. Out and other tracks. A group's Audio To defaults to Main, or Group inside another group. Moving a track in or out of a group switches Main and Group.
   - Halftrack's engine always sums a group's tracks into it, so these need a graph-builder patch.
   - How group solo and mute act on a member playing outside its group is undetermined.
+- **Group mute and its tracks' sends.** Muting a group silences the group's own post-fader sends. Its tracks' sends stay open, since only their own activators gate them. The reference's propagation of a group's mute to its members was not determined. Default: keep the members' sends open.
 
 ### Scene tempo and time signature
 
