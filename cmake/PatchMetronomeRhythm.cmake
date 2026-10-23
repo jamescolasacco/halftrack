@@ -99,9 +99,10 @@ function(halftrack_patch_metronome_rhythm source_dir)
     set(before1_4 [=[    tempoPosition.set (startTime);]=])
     set(after1_4 [=[    tempoPosition.set (startTime);
     tickSetting = static_cast<double> (edit.state.getProperty ("halftrackMetronomeTick", 0.0)); // Halftrack.]=])
+    set(downstream1 "8321bcd0ec19e6e80ed52ef5af28c6d168c13cacbc984784fc77eb7e0be45ad3") # The later bars patch.
     foreach(index RANGE 0 1)
         file(SHA256 "${source${index}}" hash)
-        if(hash STREQUAL "${patched${index}}")
+        if(hash STREQUAL "${patched${index}}" OR (DEFINED downstream${index} AND hash IN_LIST downstream${index}))
             set(write${index} FALSE)
             continue()
         endif()

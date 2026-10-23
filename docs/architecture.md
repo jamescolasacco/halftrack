@@ -429,7 +429,7 @@ Tracks carry an undoable `halftrackCrossfade` side (0 none, 1 A, 2 B) and the ed
 
 ## Time signature
 
-The meter is the engine tempo sequence's first `TimeSigSetting`; `setTimeSignature` edits it in one transaction and `validateProjectTempo` rejects meter maps. The engine behaviour reports that a beat does not depend on the meter, so every Halftrack beat stays a quarter note. The UI derives bar lengths from `Snapshot::timeSignature`. See the [time signature contract](research/time-signature-contract.md).
+The meters are the engine tempo sequence's `TimeSigSetting`s, one per time signature marker, kept in beat order in its state; the marker commands edit them in one transaction each and `validateProjectTempo` checks the order and meters. The engine behaviour reports that a beat does not depend on the meter, so every Halftrack beat stays a quarter note, and `cmake/PatchMeterBars.cmake` makes the engine's bars numerator × 4 / denominator beats, each marker starting one. `Session::barAt` and `barStart` count the same bars from `Snapshot::timeSignatures` without the engine. The UI still derives bar lengths from `Snapshot::timeSignature`, the meter at the playhead. See the [time signature contract](research/time-signature-contract.md).
 
 ## MIDI note tools
 

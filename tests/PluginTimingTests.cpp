@@ -109,6 +109,18 @@ int runPluginTimingTests (const juce::File& artifacts)
             check (sign < 0, "and it says it renders offline");
         }
         s.setTempo (120);
+        // In 6/8 the host still counts quarter notes to plug-ins, as beats are quarter notes in every
+        // meter (the engine told them half as many).
+        ok (s.setTimeSignature (6, 8), "choose 6/8");
+        {
+            const auto x = render (s, root.getChildFile ("offline-6-8.wav"));
+            float sign = 0;
+            const auto reported = beatsIn (x, sign);
+            bool aligned = reported.size() >= 15;
+            for (const auto n : reported) aligned = aligned && within (n, std::round (n / 24000.0) * 24000.0);
+            check (aligned, "in 6/8 the host's quarter notes fall every half second at 120 BPM (" + juce::String ((int) reported.size()) + " beats)");
+        }
+        ok (s.setTimeSignature (4, 4), "back to 4/4");
 
         // Live through the synthetic device, at two block sizes.
         for (const int block : { 256, 128 })

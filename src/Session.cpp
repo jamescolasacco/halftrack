@@ -1305,18 +1305,23 @@ Result validateProjectTempo (const juce::ValueTree& state)
                 return Result::fail ("The project's tempo map needs a first point at beat 0 and increasing beats.");
             previous = static_cast<double> (beat);
         }
-    // One meter at the start: numerator 1-99 over 1, 2, 4, 8 or 16.
-    int meters = 0;
+    // Time signature markers: the first at beat 0, then increasing beats, each numerator 1-99 over 1,
+    // 2, 4, 8 or 16.
+    int meters = 0; double previousMeter = -1;
     for (const auto& meter : state.getChildWithName (te::IDs::TEMPOSEQUENCE))
         if (meter.hasType (te::IDs::TIMESIG))
         {
             const auto numerator = meter.getProperty (te::IDs::numerator, 4), denominator = meter.getProperty (te::IDs::denominator, 4);
+            const auto beat = meter.getProperty (te::IDs::startBeat, 0);
             const int d = denominator;
-            if (++meters > 1 || ! finiteProperty (numerator, 1, 99) || static_cast<double> (numerator) != std::floor (static_cast<double> (numerator))
+            if (++meters > Session::maximumTimeSignatures || ! finiteProperty (numerator, 1, 99) || static_cast<double> (numerator) != std::floor (static_cast<double> (numerator))
                 || ! finiteProperty (denominator, 1, 16) || static_cast<double> (denominator) != d || (d & (d - 1)) != 0
-                || ! finiteProperty (meter.getProperty (te::IDs::startBeat, 0), 0, 0))
-                return Result::fail ("The project needs one time signature of 1 to 99 over 1, 2, 4, 8 or 16.");
+                || ! finiteProperty (beat, 0, 1000000) || (previousMeter < 0 && static_cast<double> (beat) != 0)
+                || (previousMeter >= 0 && static_cast<double> (beat) - previousMeter < 1.0 / 960 - 1e-12))
+                return Result::fail ("The project's time signatures need a first one at beat 0, increasing beats, and 1 to 99 over 1, 2, 4, 8 or 16.");
+            previousMeter = static_cast<double> (beat);
         }
+    if (meters == 0) return Result::fail ("The project needs a time signature.");
     return Result::ok();
 }
 constexpr std::array<te::FollowAction, 10> nativeFollowActions {
@@ -6207,7 +6212,14 @@ Session::Snapshot Session::snapshot() const
     };
     for (int i = 0; i < e.tempoSequence.getNumTempos(); ++i)
         if (auto* t = e.tempoSequence.getTempo (i)) s.tempoMap.push_back ({ t->startBeatNumber.get().inBeats(), t->getBpm() });
-    if (auto* meter = e.tempoSequence.getTimeSig (0)) s.timeSignature = { meter->numerator.get(), meter->denominator.get() };
+    s.timeSignatures.clear();
+    for (auto* meter : e.tempoSequence.getTimeSigs())
+        s.timeSignatures.push_back ({ meter->startBeatNumber.get().inBeats(), { meter->numerator.get(), meter->denominator.get() } });
+    {
+        // The meter at the playhead.
+        const auto here = e.tempoSequence.toBeats (te::TimePosition::fromSeconds (juce::jmax (0.0, s.position))).inBeats();
+        for (const auto& change : s.timeSignatures) if (change.beat <= here + 1e-9 || &change == &s.timeSignatures.front()) s.timeSignature = change.meter;
+    }
     s.masterGainDb=e.getMasterVolumePlugin()->getVolumeDb();
     s.masterVolumeAutomation = automationLane (*e.getMasterVolumePlugin(), AutomationTarget::volume);
     s.metronome = {e.clickTrackEnabled.get(),e.clickTrackEmphasiseBars.get(),e.clickTrackRecordingOnly.get(),
@@ -7550,7 +7562,14 @@ Result Session::exportMidiClip (const String& id, const File& destination)
         for(const auto& point:snapshot().tempoMap)
             if(point.beat>origin+1e-9&&point.beat<origin+span-1e-9) add(juce::MidiMessage::tempoMetaEvent((int)std::round(60000000.0/point.bpm)),point.beat-origin);
     }
-    {const auto meter=snapshot().timeSignature;add(juce::MidiMessage::timeSignatureMetaEvent(meter.numerator,meter.denominator),0);}
+    // The meter at the clip's start, then each time signature marker inside the clip, as the tempo.
+    {
+        const auto origin=clip->getStartBeat().inBeats(),span=clip->getLengthInBeats().inBeats();
+        const auto markers=snapshot().timeSignatures;const auto meter=barAt(markers,origin).meter;
+        add(juce::MidiMessage::timeSignatureMetaEvent(meter.numerator,meter.denominator),0);
+        for(const auto& marker:markers)
+            if(marker.beat>origin+1e-9&&marker.beat<origin+span-1e-9) add(juce::MidiMessage::timeSignatureMetaEvent(marker.meter.numerator,marker.meter.denominator),marker.beat-origin);
+    }
     double end=clip->getLengthInBeats().inBeats();
     for(auto* event:clip->getSequence().getSysexEvents())
     {
@@ -12804,15 +12823,125 @@ void Session::setInsertMarker (double seconds)
 void Session::returnToStart() { setInsertMarker (0); }
 Result Session::setTimeSignature (int numerator, int denominator)
 {
+    // The marker in effect at the playhead.
+    const auto markers = snapshot().timeSignatures;
+    const auto here = impl->edit->tempoSequence.toBeats (impl->edit->getTransport().getPosition()).inBeats();
+    int index = 0;
+    for (int i = 0; i < (int) markers.size(); ++i) if (markers[(size_t) i].beat <= here + 1e-9) index = i;
+    return setTimeSignatureChange (index, { numerator, denominator });
+}
+namespace
+{
+bool validMeter (Session::TimeSignature m)
+{ return m.numerator >= 1 && m.numerator <= 99 && m.denominator >= 1 && m.denominator <= 16 && (m.denominator & (m.denominator - 1)) == 0; }
+}
+Session::BarInfo Session::barAt (const std::vector<TimeSignatureChange>& changes, double beat)
+{
+    BarInfo bar;
+    int number = 0;
+    for (size_t i = 0; i < changes.size(); ++i)
+    {
+        const auto& change = changes[i];
+        const auto length = std::max (1.0e-6, change.meter.beatsPerBar());
+        const bool last = i + 1 == changes.size();
+        const auto end = last ? 0.0 : changes[i + 1].beat;
+        // As the engine counts: the bars from this marker, the last of them cut short by the next.
+        const int bars = last ? 0 : (int) std::ceil ((end - change.beat) / length - 1.0e-5);
+        if (last || beat < end || i == 0 && beat < change.beat)
+        {
+            const auto k = (int) std::floor ((beat - change.beat) / length);
+            bar.number = number + k; bar.start = change.beat + k * length; bar.meter = change.meter;
+            bar.length = last ? length : std::min (length, end - bar.start);
+            bar.fragmentary = bar.length < length - 1.0e-9;
+            return bar;
+        }
+        number += bars;
+    }
+    bar.number = (int) std::floor (beat / 4); bar.start = bar.number * 4.0;
+    return bar;
+}
+double Session::barStart (const std::vector<TimeSignatureChange>& changes, int bar)
+{
+    int number = 0;
+    for (size_t i = 0; i < changes.size(); ++i)
+    {
+        const auto& change = changes[i];
+        const auto length = std::max (1.0e-6, change.meter.beatsPerBar());
+        const bool last = i + 1 == changes.size();
+        const int bars = last ? 0 : (int) std::ceil ((changes[i + 1].beat - change.beat) / length - 1.0e-5);
+        if (last || bar < number + bars) return change.beat + (bar - number) * length;
+        number += bars;
+    }
+    return bar * 4.0;
+}
+Result Session::insertTimeSignatureChange (double beat, TimeSignature meter)
+{
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing the time signature.");
-    if (numerator < 1 || numerator > 99 || denominator < 1 || denominator > 16 || (denominator & (denominator - 1)) != 0)
-        return Result::fail ("Choose a time signature of 1 to 99 over 1, 2, 4, 8 or 16.");
-    auto* meter = impl->edit->tempoSequence.getTimeSig (0);
-    if (meter == nullptr) return Result::fail ("The project has no time signature.");
-    if (meter->numerator.get() == numerator && meter->denominator.get() == denominator) return Result::ok();
+    if (! validMeter (meter)) return Result::fail ("Choose a time signature of 1 to 99 over 1, 2, 4, 8 or 16.");
+    if (! std::isfinite (beat) || beat <= 0 || beat > 1000000) return Result::fail ("Time signature changes go after the start of the Arrangement.");
+    const auto markers = snapshot().timeSignatures;
+    for (int i = 0; i < (int) markers.size(); ++i)
+        if (std::abs (markers[(size_t) i].beat - beat) < 1.0 / 960) return setTimeSignatureChange (i, meter);
+    if ((int) markers.size() >= maximumTimeSignatures) return Result::fail ("The project holds at most " + String (maximumTimeSignatures) + " time signatures.");
+    // A copy of the marker before it, in its place among the markers, so the engine reads them in order.
+    auto state = impl->edit->state.getChildWithName (te::IDs::TEMPOSEQUENCE);
+    juce::ValueTree previous; int at = -1;
+    for (int i = 0; i < state.getNumChildren(); ++i)
+        if (const auto child = state.getChild (i); child.hasType (te::IDs::TIMESIG) && static_cast<double> (child[te::IDs::startBeat]) < beat) { previous = child; at = i; }
+    if (! previous.isValid()) return Result::fail ("The project has no time signature.");
+    impl->transaction ("Insert time signature change");
+    auto marker = previous.createCopy();
+    marker.setProperty (te::IDs::startBeat, beat, nullptr);
+    marker.setProperty (te::IDs::numerator, meter.numerator, nullptr); marker.setProperty (te::IDs::denominator, meter.denominator, nullptr);
+    state.addChild (marker, at + 1, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::setTimeSignatureChange (int index, TimeSignature meter)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing the time signature.");
+    if (! validMeter (meter)) return Result::fail ("Choose a time signature of 1 to 99 over 1, 2, 4, 8 or 16.");
+    auto* marker = impl->edit->tempoSequence.getTimeSig (index);
+    if (marker == nullptr) return Result::fail ("Time signature not found.");
+    if (marker->numerator.get() == meter.numerator && marker->denominator.get() == meter.denominator) return Result::ok();
     impl->transaction ("Time signature");
-    meter->numerator = numerator; meter->denominator = denominator;
+    marker->numerator = meter.numerator; marker->denominator = meter.denominator;
+    impl->changed(); return Result::ok();
+}
+Result Session::moveTimeSignatureChange (int index, double beat)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing the time signature.");
+    auto* marker = impl->edit->tempoSequence.getTimeSig (index);
+    if (marker == nullptr) return Result::fail ("Time signature not found.");
+    if (index == 0) return Result::fail ("The first time signature stays at the start.");
+    if (! std::isfinite (beat) || beat <= 0 || beat > 1000000) return Result::fail ("Time signature changes go after the start of the Arrangement.");
+    const auto markers = snapshot().timeSignatures;
+    for (int i = 0; i < (int) markers.size(); ++i)
+        if (i != index && std::abs (markers[(size_t) i].beat - beat) < 1.0 / 960) return Result::fail ("Another time signature is there.");
+    if (std::abs (markers[(size_t) index].beat - beat) < 1e-12) return Result::ok();
+    impl->transaction ("Move time signature change");
+    auto state = impl->edit->state.getChildWithName (te::IDs::TEMPOSEQUENCE);
+    auto tree = marker->state;
+    tree.setProperty (te::IDs::startBeat, beat, &impl->edit->getUndoManager());
+    // Back in order among the markers, so the engine reads them in order.
+    int from = state.indexOf (tree), to = -1;
+    for (int i = 0; i < state.getNumChildren(); ++i)
+        if (const auto child = state.getChild (i); child != tree && child.hasType (te::IDs::TIMESIG) && static_cast<double> (child[te::IDs::startBeat]) < beat) to = i;
+    to = to < from ? to + 1 : to;
+    if (to != from) state.moveChild (from, to, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::removeTimeSignatureChange (int index)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing the time signature.");
+    auto* marker = impl->edit->tempoSequence.getTimeSig (index);
+    if (marker == nullptr) return Result::fail ("Time signature not found.");
+    if (index == 0) return Result::fail ("The first time signature stays at the start.");
+    impl->transaction ("Delete time signature change");
+    impl->edit->state.getChildWithName (te::IDs::TEMPOSEQUENCE).removeChild (marker->state, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
 Result Session::setTempoMap (const std::vector<TempoPoint>& points)

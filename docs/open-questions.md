@@ -253,7 +253,7 @@ An empty effect rack passes its input and an empty Instrument or Drum Rack is si
 
 ### Time signature defaults
 
-The project has one meter, and beats are quarter notes at every meter, so the tempo counts quarter notes and 6/8 has three beats per bar. The metronome clicks quarter notes and accents bars. Importing a MIDI file does not change the project meter. These are simplest-default choices pending reference measurement.
+Beats are quarter notes at every meter, so the tempo counts quarter notes and 6/8 has three beats per bar. Time signature markers start bars where they are, and the bar before one inside it is fragmentary, as the reference's manual describes. The metronome clicks the meter's note value and accents each bar. Importing a MIDI file does not change the project's meters. A marker within 1e-5 of a bar's length after a bar line leaves no fragmentary bar, as the engine rounds such slivers away; the reference's handling of them is unmeasured. These are simplest-default choices pending reference measurement.
 
 ### MIDI note tool defaults
 

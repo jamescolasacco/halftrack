@@ -123,6 +123,25 @@ void playback(const juce::File& root)
     settings.rhythm=0;ok(session.setMetronome(settings),"back to Auto");
     settings.rhythm=.25f;ok(session.setMetronome(settings),"sixteenths");session.undo();
     check(session.snapshot().metronome.rhythm==0,"choosing a rhythm is one undo step");
+    // Time signature markers start bars where they are, as the reference's do: the accent falls on
+    // each, and a marker inside a bar cuts that bar short.
+    ok(session.insertTimeSignatureChange(6,{3,4}),"a 3/4 marker at beat 6, cutting the second bar to two beats");
+    session.seek(0);ok(session.play(),"play across the marker");
+    {
+        const auto audio=captureSyntheticTestDevice(session,2000);session.stop();
+        const auto markers=session.snapshot().timeSignatures;
+        juce::AudioBuffer<float> expected(2,audio.getNumSamples());expected.clear();
+        int accents=0;
+        for(int beat=0;beat*24000<audio.getNumSamples();++beat)
+        {
+            const bool first=Session::barAt(markers,beat).start==beat;accents+=first;
+            for(int c=0;c<2;++c)expected.setSample(c,beat*24000,first?.5f:.25f);
+        }
+        double worst=0;
+        for(int c=0;c<2;++c)for(int n=0;n<audio.getNumSamples();++n)worst=std::max(worst,(double)std::abs(audio.getSample(c,n)-expected.getSample(c,n)));
+        check(accents>=4&&worst<2e-6,"the accents fall on beats 0, 4, 6 and 9, the marker's among them; error="+juce::String(worst,8));
+    }
+    ok(session.removeTimeSignatureChange(1),"delete the marker");
 }
 // The Rhythm list and how it resolves, from the reference's code.
 void rhythms()

@@ -404,6 +404,26 @@ public:
         double beatsPerBar() const noexcept { return numerator * 4.0 / denominator; }
         bool operator== (const TimeSignature&) const = default;
     };
+    // A time signature marker, as the reference's: from its beat the bars are of its meter, the first
+    // of them starting there. One that falls inside a bar leaves that bar short, a fragmentary bar.
+    struct TimeSignatureChange
+    {
+        double beat = 0;
+        TimeSignature meter;
+        bool operator== (const TimeSignatureChange&) const = default;
+    };
+    // The bar a beat is in, counted from 0 at the project's start: its start and length in beats,
+    // its meter, and whether a marker after it cuts it short.
+    struct BarInfo
+    {
+        int number = 0;
+        double start = 0, length = 4;
+        TimeSignature meter;
+        bool fragmentary = false;
+    };
+    // Bars through time signature markers (in beat order, the first at beat 0), as playback counts them.
+    static BarInfo barAt (const std::vector<TimeSignatureChange>&, double beat);
+    static double barStart (const std::vector<TimeSignatureChange>&, int bar);
     // A scene's tempo and meter, when set, become the project's as the scene launches.
     struct SceneInfo
     {
@@ -608,7 +628,9 @@ public:
         bool recordWaiting = false; // Record was pressed with Start Playback with Record off, and waits for Play.
         double position = 0, duration = 0, tempo = 120, loopStart = 0, loopEnd = 8, cpu = 0;
         double insertMarker = 0; // Seconds: where Play starts.
-        TimeSignature timeSignature;
+        TimeSignature timeSignature; // The meter at the playhead.
+        // The time signature markers in beat order, the first at beat 0.
+        std::vector<TimeSignatureChange> timeSignatures { TimeSignatureChange {} };
         // The tempo map; one point at beat 0 for a constant tempo. `tempo` is the tempo at the playhead.
         std::vector<TempoPoint> tempoMap { TempoPoint {} };
         float masterPeakL = 0, masterPeakR = 0, masterGainDb = 0;
@@ -1342,8 +1364,18 @@ public:
     // Conversions through the tempo map.
     double beatsAt (double seconds) const;
     double secondsAt (double beats) const;
-    // One project meter: numerator 1-99 over 1, 2, 4, 8 or 16. Tempo stays in quarter notes per minute.
+    // The meter at the playhead, as the reference's Control Bar fields change it: numerator 1-99 over
+    // 1, 2, 4, 8 or 16. Tempo stays in quarter notes per minute.
     juce::Result setTimeSignature (int numerator, int denominator);
+    // Time signature markers, as the reference's. Inserting one at a beat after the start gives it a
+    // meter, or changes the meter of one already there. A marker's meter can change and every marker
+    // but the first, which stays at beat 0, can move or go. Each is one undo step. Indices are into
+    // Snapshot::timeSignatures.
+    static constexpr int maximumTimeSignatures = 4096;
+    juce::Result insertTimeSignatureChange (double beat, TimeSignature);
+    juce::Result setTimeSignatureChange (int index, TimeSignature);
+    juce::Result moveTimeSignatureChange (int index, double beat);
+    juce::Result removeTimeSignatureChange (int index);
     static constexpr int narrowestGrid = 8; // Pixels between the closest lines an adaptive grid draws.
     // The Arrangement's grid.
     EditGrid editGrid() const;

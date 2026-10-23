@@ -2262,3 +2262,12 @@ Engine and UI areas. A group's mixer is automated and mapped as a track's, as th
 - In Automation Mode a group's header shows the device and control choosers. Its lane draws and edits the envelope: its volume, pans, sends and devices.
 
 Measured in the groups suite with renders, an override and a reopen, and in the automation-capture suite recording a group's pan and send; checked in the UI suite ([contract](research/groups-contract.md#group-automation-and-mapping-2026-10-23)).
+
+## Time signature markers and bars — 2026-10-23
+
+Engine and root areas. The meter can change along the timeline at time signature markers, as in the reference's Arrangement.
+- **API.** Session inserts, re-meters, moves and deletes markers, each one undo step. `Session::barAt` and `barStart` count bars through them. Projects keep them, and MIDI clip files carry them.
+- **Engine patch.** `cmake/PatchMeterBars.cmake` makes a bar numerator × 4 / denominator quarter notes, and lets each marker start a bar where it is, leaving the bar before it fragmentary.
+- **Correction.** Until now a bar of 6/8 launched as six quarter notes, a 1/4 launch grid in 3/4 was three quarters of a beat, and plug-ins counted half the quarter notes in 6/8.
+
+Measured in the time-signature suite (launches through engine callbacks), the metronome suite (accents across a marker) and the plug-in timing suite ([contract](research/time-signature-contract.md#time-signature-markers-2026-10-23)). The markers' Arrangement interface is next.

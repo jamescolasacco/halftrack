@@ -86,7 +86,63 @@ int runTimeSignatureTests (const juce::File& artifacts)
         };
         corrupt ("ZeroBeats", [] (juce::XmlElement& t) { t.getChildByName ("TIMESIG")->setAttribute ("numerator", 0); });
         corrupt ("OddDenominator", [] (juce::XmlElement& t) { t.getChildByName ("TIMESIG")->setAttribute ("denominator", 3); });
-        corrupt ("TwoMeters", [] (juce::XmlElement& t) { auto* copy = new juce::XmlElement (*t.getChildByName ("TIMESIG")); copy->setAttribute ("startBeat", 8); t.addChildElement (copy); });
+        corrupt ("TwoAtTheStart", [] (juce::XmlElement& t) { t.addChildElement (new juce::XmlElement (*t.getChildByName ("TIMESIG"))); });
+        corrupt ("LateFirst", [] (juce::XmlElement& t) { t.getChildByName ("TIMESIG")->setAttribute ("startBeat", 4); });
+
+        // Time signature markers, as the reference's: each starts a bar of its meter where it is.
+        {
+            Session m (false);
+            ok (m.insertTimeSignatureChange (8, { 3, 4 }), "a 3/4 marker at beat 8, the start of the third bar");
+            auto markers = m.snapshot().timeSignatures;
+            check (markers.size() == 2 && markers[1] == Session::TimeSignatureChange { 8, { 3, 4 } }, "the project has two markers");
+            auto bar = Session::barAt (markers, 9);
+            check (bar.number == 2 && bar.start == 8 && bar.length == 3 && bar.meter == Session::TimeSignature { 3, 4 } && ! bar.fragmentary,
+                   "beat 9 is in the third bar, of 3/4 from beat 8");
+            check (Session::barAt (markers, 11.5).number == 3 && Session::barStart (markers, 3) == 11 && Session::barStart (markers, 1) == 4, "the fourth bar starts at beat 11");
+            ok (m.moveTimeSignatureChange (1, 6), "move it to beat 6, inside the second bar");
+            markers = m.snapshot().timeSignatures;
+            bar = Session::barAt (markers, 5);
+            check (bar.number == 1 && bar.start == 4 && bar.length == 2 && bar.fragmentary, "the second bar is cut to two beats, a fragmentary bar");
+            check (Session::barAt (markers, 6).number == 2 && Session::barStart (markers, 2) == 6, "and the third starts at the marker");
+            m.undo(); check (m.snapshot().timeSignatures[1].beat == 8, "one undo moves it back"); m.redo();
+            ok (m.setTimeSignatureChange (1, { 7, 8 }), "change it to 7/8");
+            check (Session::barStart (m.snapshot().timeSignatures, 4) == 13, "7/8 bars are three and a half beats: the fifth bar starts at beat 13");
+            ok (m.insertTimeSignatureChange (6, { 5, 4 }), "insert a 5/4 marker where the marker is");
+            check (m.snapshot().timeSignatures.size() == 2 && m.snapshot().timeSignatures[1].meter == Session::TimeSignature { 5, 4 }, "which changes its meter");
+            ok (m.insertTimeSignatureChange (20, { 2, 4 }), "a third marker at beat 20");
+            ok (m.moveTimeSignatureChange (2, 3), "move it before the second");
+            markers = m.snapshot().timeSignatures;
+            check (markers.size() == 3 && markers[1] == Session::TimeSignatureChange { 3, { 2, 4 } } && markers[2].beat == 6, "the markers keep their beat order");
+            check (m.moveTimeSignatureChange (0, 2).failed() && m.removeTimeSignatureChange (0).failed() && m.moveTimeSignatureChange (1, 6).failed()
+                       && m.insertTimeSignatureChange (0, { 3, 4 }).failed() && m.insertTimeSignatureChange (-1, { 3, 4 }).failed()
+                       && m.insertTimeSignatureChange (4, { 0, 4 }).failed() && m.removeTimeSignatureChange (9).failed(),
+                   "the first marker stays at the start, markers do not share a beat, and invalid meters and markers are refused");
+            // The Control Bar's fields change the meter at the playhead.
+            m.setInsertMarker (m.secondsAt (7));
+            ok (m.setTimeSignature (6, 8), "type 6/8 with the playhead at beat 7");
+            markers = m.snapshot().timeSignatures;
+            check (markers[2].meter == Session::TimeSignature { 6, 8 } && markers[0].meter == Session::TimeSignature {} && m.snapshot().timeSignature == Session::TimeSignature { 6, 8 },
+                   "it changes the marker at beat 6, the one in effect there");
+            const auto saved = root.getChildFile ("Markers").getChildFile ("Markers.halftrack");
+            ok (saved.getParentDirectory().createDirectory(), "create the markers' folder");
+            ok (m.saveProject (saved), "save the markers");
+            Session reopened (false); ok (reopened.loadProject (saved), "reopen");
+            check (reopened.snapshot().timeSignatures == markers, "the markers reopen");
+            ok (m.removeTimeSignatureChange (1), "delete the marker at beat 3");
+            check (m.snapshot().timeSignatures.size() == 2 && m.snapshot().timeSignatures[1].beat == 6, "it is gone");
+            // A MIDI clip's file carries the meter at its start and the markers inside it.
+            ok (m.addMidiTrack ("Keys"), "a MIDI track for the markers");
+            ok (m.addMidiClip (m.snapshot().tracks.back().id, 4, 8), "a clip from beat 4 to 12, across the marker at beat 6");
+            const auto file = root.getChildFile ("markers.mid");
+            ok (m.exportMidiClip (m.snapshot().tracks.back().clips[0].id, file), "export it as a MIDI file");
+            juce::FileInputStream in (file); juce::MidiFile parsed; check (parsed.readFrom (in), "read the MIDI file");
+            juce::StringArray meters;
+            for (int t = 0; t < parsed.getNumTracks(); ++t)
+                for (auto* e : *parsed.getTrack (t))
+                    if (e->message.isTimeSignatureMetaEvent())
+                    { int n = 0, d = 0; e->message.getTimeSignatureInfo (n, d); meters.add (juce::String (n) + "/" + juce::String (d) + "@" + juce::String (e->message.getTimeStamp() / parsed.getTimeFormat(), 2)); }
+            check (meters == juce::StringArray { "4/4@0.00", "6/8@2.00" }, "4/4 at its start, and 6/8 two beats in: " + meters.joinIntoString (", "));
+        }
 
         // A launch on the bar grid in 3/4 waits for beat 3.
         {
@@ -114,6 +170,33 @@ int runTimeSignatureTests (const juce::File& artifacts)
             ok (live.launchSlot (0, 0), "launch the clip after a tenth of a second");
             const auto out = player.process (90000);
             check (std::abs (onset (out, .01f) - (3 * beat - 4800)) <= 256, "the clip starts on the 3/4 bar at beat 3 (onset " + juce::String (onset (out, .01f) + 4800) + ")");
+            // As the reference's: a bar of 7/8 is three and a half quarter notes, and a 1/4 grid is a
+            // quarter note in any meter (the engine counted seven beats and three quarters of a bar).
+            const auto relaunch = [&] (int numerator, int denominator, Session::LaunchQuantisation grid)
+            {
+                live.stop(); live.returnToStart(); player.process (2400);
+                ok (live.setTimeSignature (numerator, denominator), "choose " + juce::String (numerator) + "/" + juce::String (denominator));
+                ok (live.setLaunchQuantisation (grid), "choose the launch grid");
+                ok (live.play(), "start the transport again");
+                player.process (4800);
+                ok (live.launchSlot (0, 0), "launch the clip after a tenth of a second");
+                return onset (player.process (200000), .01f) + 4800;
+            };
+            const auto sevenEight = relaunch (7, 8, Session::LaunchQuantisation::bar);
+            check (std::abs (sevenEight - 3.5 * beat) <= 256, "a launch on the bar grid in 7/8 waits for beat 3.5 (onset " + juce::String (sevenEight) + ")");
+            const auto quarter = relaunch (3, 4, Session::LaunchQuantisation::beat);
+            check (std::abs (quarter - beat) <= 256, "a launch on the 1/4 grid in 3/4 waits one quarter note (onset " + juce::String (quarter) + ")");
+            // A marker inside a bar starts the next bar there, as the reference's do.
+            live.stop(); player.process (2400);
+            ok (live.setTimeSignature (4, 4), "back to 4/4");
+            ok (live.setLaunchQuantisation (Session::LaunchQuantisation::bar), "launch on bars");
+            ok (live.insertTimeSignatureChange (6, { 3, 4 }), "a 3/4 marker at beat 6, cutting the second bar to two beats");
+            live.setInsertMarker (live.secondsAt (4));
+            ok (live.play(), "play from beat 4");
+            player.process (4800);
+            ok (live.launchSlot (0, 0), "launch the clip a tenth of a second in");
+            const auto fragment = onset (player.process (200000), .01f) + 4800;
+            check (std::abs (fragment - 2 * beat) <= 256, "the clip starts at the marker, where the fragmentary bar ends (onset " + juce::String (fragment) + ")");
             live.stop();
         }
         std::cout << "Time signature passed: " << root.getFullPathName() << std::endl; return 0;
