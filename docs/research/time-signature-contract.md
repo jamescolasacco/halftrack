@@ -131,5 +131,4 @@ Not yet: clip editors' rulers (which keep the meter at the playhead), and scene 
 
 - Scene meters while the Arrangement has markers.
 - Eighth-note click subdivision.
-- Importing a MIDI file's meter.
 - Any comparison with reference output.
