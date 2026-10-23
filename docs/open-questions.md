@@ -797,6 +797,7 @@ Volume and sends follow the reference's level scales ([contract](research/mixer-
 - **Rack chains.** Chain volume and chain sends take the track laws. That the reference's chains do too is inferred from their shared mixer, not traced.
 - **Volume modulation.** A clip's volume modulation scales the fader's position, now along the reference's law. Whether the reference's modulation scales the position or the gain is not read.
 - **Cue.** The cue volume stays in decibels, with −70 dB as silence, rather than the reference's 0.00032 gain floor.
+- **Selection linking.** How the reference groups linked moves into undo steps is not read; Halftrack makes each move one step with its linked moves. Groups, the Main, rack chains and device XY editors are linked in the reference but not yet in Halftrack. In the Session view a selection of several tracks is made in the Arrangement's headers.
 - **Older projects.** Projects saved before the change keep every level when they open. Levels below −70 dB become silence, and segments between automation points take the new law's shape.
 
 ### Send automation

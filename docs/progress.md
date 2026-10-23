@@ -2206,3 +2206,7 @@ UI area. From a static reading of the reference's pan formatter, pans read C wit
 ## Split Stereo pan mode — 2026-10-23
 
 Engine and UI areas. From a static reading of the reference's code, tracks and groups pan through its panner. In Stereo mode a hard pan keeps the far side at 1e-5 rather than silence. Split Stereo Pan Mode, from the pan's context menu, pans each input channel with Left Split Stereo and Right Split Stereo, blending over 75 samples. The switch is one undo step for every selected track. The split pans are automatable, mappable and clip-envelope targets, and the Session strip, Arrangement header and group strips show them in the pan's place. Measured in the fader-laws suite with a two-level stereo source, and checked in the UI suite ([contract](research/mixer-laws-contract.md#pan-modes)).
+
+## Selection linking — 2026-10-23
+
+Engine and UI areas. From a static reading of the reference's code: with several tracks selected, moving one's volume, pan, split pans, a send or its activator moves the others'. Volume and sends keep their decibel offsets along their scales, pans their travel offsets among tracks in the same pan mode, and activators copy. A track held at an end gets its offset back. Mouse, MIDI, key and capture moves all link, in one undo step, and a double-click resets every linked control to its default. Measured in the fader-laws suite and checked in the UI suite ([contract](research/mixer-laws-contract.md#selection-linking)).

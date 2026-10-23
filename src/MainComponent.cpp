@@ -1565,7 +1565,6 @@ private:
             gain.setSliderStyle (juce::Slider::LinearHorizontal);
             gain.setName ("Track volume"); gain.setNormalisableRange (Session::levelRange (false));
             gain.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 18);
-            gain.setDoubleClickReturnValue (true, 0);
             gain.textFromValueFunction = [] (double value) { return value <= -100 ? juce::String ("-inf") : juce::String (value, 1) + " dB"; };
             gain.valueFromTextFunction = [this] (juce::String text)
             {
@@ -1581,7 +1580,6 @@ private:
             pan.setSliderStyle (juce::Slider::LinearHorizontal);
             pan.setName ("Track pan"); pan.setRange (-1.0, 1.0, 0.01);
             pan.setTextBoxStyle (juce::Slider::TextBoxRight, false, 32, 18);
-            pan.setDoubleClickReturnValue (true, 0);
             pan.textFromValueFunction = [] (double v) { return Session::panText ((float) v); };
             pan.valueFromTextFunction = [] (const juce::String& value) { return (double) Session::panFromText (value); };
             pan.setTooltip ("Track pan. Double-click to center.");
@@ -1595,7 +1593,6 @@ private:
                 const bool right = split == &rightSplit;
                 split->setName (right ? "Right split pan" : "Left split pan");
                 split->setSliderStyle (juce::Slider::LinearBar); split->setRange (-1.0, 1.0, 0.01);
-                split->setDoubleClickReturnValue (true, right ? 1 : -1);
                 split->setColour (juce::Slider::trackColourId, themes::colour (0xff4a4a4a));
                 split->textFromValueFunction = [] (double v) { return Session::panText ((float) v); };
                 split->valueFromTextFunction = [] (const juce::String& value) { return (double) Session::panFromText (value); };
@@ -1936,7 +1933,7 @@ private:
                 {
                     auto knob = std::make_unique<juce::Slider> (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox);
                     knob->setName ("Send " + juce::String::charToString ((juce::juce_wchar) ('A' + i)));
-                    knob->setNormalisableRange (Session::levelRange (true)); knob->setDoubleClickReturnValue (true, -100);
+                    knob->setNormalisableRange (Session::levelRange (true));
                     knob->setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
                     knob->textFromValueFunction = [] (double v) { return v <= -99.95 ? juce::String ("-inf dB") : juce::String (v, 1) + " dB"; };
                     knob->onDragStart = [this] { owner.session.beginEditGesture ("Send level"); };
@@ -2069,12 +2066,33 @@ private:
             owner.setTrackHeights (e.mods.isAltDown() ? owner.allArrangementTracks() : juce::StringArray { trackId }, pixels);
         }
         void mouseUp (const juce::MouseEvent&) override { heightAtDown = 0; }
+        // Double-clicking a mixer control resets it, and the controls linked to it (see Session::resetTrackControl).
+        void mouseDoubleClick (const juce::MouseEvent& e) override
+        {
+            juce::String control;
+            if (e.originalComponent == &gain) control = "volume";
+            else if (e.originalComponent == &pan) control = "pan";
+            else if (e.originalComponent == &leftSplit) control = "leftsplit";
+            else if (e.originalComponent == &rightSplit) control = "rightsplit";
+            else for (size_t i = 0; i < sends.size(); ++i) if (e.originalComponent == sends[i].get()) control = "send:" + sendReturnIds[(int) i];
+            if (control.isNotEmpty()) { owner.report (owner.session.resetTrackControl (index, control)); owner.refresh(); }
+        }
         void mouseDown (const juce::MouseEvent& e) override
         {
             heightAtDown = onSplitLine (e.getPosition()) && ! folded && ! e.mods.isPopupMenu() ? getHeight() : 0;
             if (heightAtDown > 0) return;
             if (! columnLayout && ! e.mods.isPopupMenu() && e.x < 18 && e.y < 22)
             { owner.selectTrack (index); owner.foldTracks (e.mods.isAltDown() ? owner.allArrangementTracks() : juce::StringArray { trackId }, ! folded); return; }
+            const auto within = [&e] (juce::Component& c) { return e.originalComponent == &c || c.isParentOf (e.originalComponent); };
+            // A control of a selected track keeps the selection, so the other selected tracks move with
+            // it, as the reference links them.
+            bool onControl = within (gain) || within (pan) || within (leftSplit) || within (rightSplit) || within (mute);
+            for (const auto& knob : sends) onControl = onControl || within (*knob);
+            if (onControl && ! e.mods.isPopupMenu() && (owner.selectedTrack == index || owner.multiSelectedTracks.contains (trackId)))
+            {
+                if (const auto* current = owner.currentTrack(); current != nullptr && current->id != trackId) owner.multiSelectedTracks.insert (current->id);
+                owner.selectTrack (index); return;
+            }
             if (! columnLayout && e.mods.isShiftDown() && ! e.mods.isPopupMenu())
             {
                 if (const auto* current = owner.currentTrack(); current != nullptr && current->id != trackId) owner.multiSelectedTracks.insert (current->id);
@@ -2082,7 +2100,6 @@ private:
             }
             else if (! e.mods.isPopupMenu()) owner.multiSelectedTracks.clear();
             owner.selectTrack (index);
-            const auto within = [&e] (juce::Component& c) { return e.originalComponent == &c || c.isParentOf (e.originalComponent); };
             // The pan controls' menu switches the pan mode, as the reference's does.
             if (e.mods.isPopupMenu() && (within (pan) || within (leftSplit) || within (rightSplit))) { owner.panModeMenu (trackId, ! splitPan); return; }
             if (e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name))
@@ -9178,6 +9195,7 @@ private:
         newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
         canvas.repaint(); deviceChain.sync();
         for (int i = 0; i < canvas.getNumChildComponents(); ++i) canvas.getChildComponent (i)->repaint();
+        session.setSelectedTracks (selectedTrackIds()); // Selected tracks' mixer controls move together.
     }
     // Bars.beats.sixteenths, counting beats in the meter's note value (eighths in 6/8). Positions count
     // from 1; lengths count from 0. Beats here are quarter notes.
@@ -9209,6 +9227,7 @@ private:
         const auto previous = state;
         const auto selectedId = currentTrack() != nullptr ? currentTrack()->id : juce::String();
         state = session.snapshot(); editGrid = session.editGrid();
+        session.setSelectedTracks (selectedTrackIds());
         std::erase_if (selectedSlots, [this] (const Session::SlotRef& ref)
         { return ! juce::isPositiveAndBelow (ref.track, (int) state.tracks.size()) || ! juce::isPositiveAndBelow (ref.scene, (int) state.scenes.size()); });
         if (selectedSlots.size() < 2) selectedSlots.clear();
@@ -15841,6 +15860,25 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             choosePanMode (first, false); refresh();
             check (! state.tracks[0].splitPan && ! headerLeft->isVisible() && arrangementAutomation::find (session, state.tracks[0], state.tracks, "mixer:" + first + ":pan").has_value(),
                    "Stereo Pan Mode brings the pan back");
+            // Selected tracks' mixer controls move together, and a double-click resets them all.
+            const auto second = state.tracks[1].id;
+            auto* firstFader = dynamic_cast<juce::Slider*> (withTarget (canvas, "mixer:" + first + ":volume"));
+            auto* firstRow = firstFader != nullptr ? firstFader->getParentComponent() : nullptr;
+            check (firstFader != nullptr && firstRow != nullptr && std::abs (state.tracks[1].gainDb) < 1e-4, "find track 1's header fader, with track 2 at 0 dB");
+            const auto onFader = [&] (int clicks)
+            {
+                const auto now = juce::Time::getCurrentTime();
+                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { 6.0f, 6.0f }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                         firstFader, firstFader, now, { 6.0f, 6.0f }, now, clicks, false);
+            };
+            multiSelectedTracks = { second }; selectTrack (0); refresh();
+            firstRow->mouseDown (onFader (1));
+            check (selectedTrackIds().size() == 2, "pressing a selected track's fader keeps both tracks selected");
+            firstFader->setValue (-6, juce::sendNotificationSync); refresh();
+            check (std::abs (state.tracks[1].gainDb + 6) < .01, "moving it moves the other selected track's fader by the same decibels");
+            firstRow->mouseDoubleClick (onFader (2)); refresh();
+            check (std::abs (state.tracks[0].gainDb) < 1e-4 && std::abs (state.tracks[1].gainDb) < 1e-4, "a double-click resets both to 0 dB");
+            multiSelectedTracks.clear(); selectTrack (0); refresh();
             showSessionView(); refresh();
         }
         // The mixer's sections, as the reference's View menu has them: its default Set shows In/Out,

@@ -36,6 +36,21 @@ The reference's panner, from a static reading of its code (kernel 0x10198be9c, m
 - **Older mixers.** Mixers from projects older than Halftrack's own track mixer, and the Main's, have no split pans and refuse the switch.
 - **Interface.** As in the reference, each pan control's context menu has one item: Split Stereo Pan Mode on the pan, Stereo Pan Mode on the split pans. In Split Stereo the Session strip shows a Left slider above a Right one in place of the knob, labelled L and R on strips at least 93 px wide. The Arrangement and group headers show the two side by side in the pan's place. The Mixer's automation and clip envelope choosers offer the pans of the current mode only.
 
+## Selection linking
+
+From a static reading of the reference's code, its linked groups are rebuilt from the selection (`AMixerLinkedTimeableGroups`, 0x102370080), and its value rule is at 0x101949210. Halftrack follows them.
+
+- **Rule.** With two or more tracks selected, moving one selected track's mixer control moves the same control on the other selected tracks.
+  - Volume keeps its decibel offset along the volume scale, and sends (per return) along the send scale.
+  - The pans keep their offset in travel. They move only among tracks in the same pan mode, and Left and Right Split Stereo move separately.
+  - The activator copies the new state.
+- **Offsets.** Offsets count from where each control stood at its first linked move since the selection changed. A track held at an end of its travel gets its offset back, and two controls at the same place move as one.
+- **Every route.** Linking acts in Session's setters, so mouse, MIDI, key and control-surface moves all link, and automation recording captures every linked track. Automation playback does not link.
+- **Undo.** The moved control and the linked ones are one undo step (the reference's grouping is not read).
+- **Resets.** Double-clicking a control resets it (`Session::resetTrackControl`), and every linked control takes exactly the same default, as the reference's reset to default does.
+- **Selection.** Pressing a control of a selected track keeps the selection. The interface reports its selection with `Session::setSelectedTracks`.
+- **Not linked.** Groups, the Main, rack chains and device editors are not linked in Halftrack yet. Solo, arm, monitoring and the pan mode are not linked by this rule in the reference either; the pan mode switches every selected track through its own menu.
+
 ## Engine and Session
 
 - **Engine patch.** `cmake/PatchFaderLaws.cmake` lets the host install a volume law and a send law in the engine (see [dependencies](../dependencies.md#tracktion-fader-laws-patch)). Session installs both before any Edit exists. The engine's volume plug-in, aux sends and their automation then read positions through them, on the audio thread too.
@@ -74,6 +89,19 @@ The suite's pan checks render a source with 0.5 on the left and 0.25 on the righ
 - two tracks switched in one undo step, a split pan move as one undo step, and Stereo mode playing its pan again;
 - a reopen playing as before, and refusals of a bad pan mode, a split pan out of range and a pan mode on the Main;
 - a left split pan's lane sweeping it across, which the render follows, and a hand move overriding the lane.
+
+The suite's linking checks select two of three tracks. They check:
+
+- a −6 dB move giving the other selected track −18 from −12, with the unselected one left alone, and one undo for both;
+- a track held at the bottom and getting its offset back;
+- no linking with one track selected;
+- pans moving by the same amount, a Split Stereo track keeping its pans, and split pans moving together;
+- an Off send following to −6 dB and sends keeping −14 dB apart;
+- activators copying;
+- resets giving every linked fader 0 dB and every linked send Off;
+- a mapped controller's move linking too.
+
+The UI suite checks that pressing a selected track's fader keeps both selected, that dragging it moves the other, and that a double-click resets both.
 
 The UI suite checks the pan menus' items, Left over Right in the Session strip and side by side in the Arrangement header, the split pans' text, the automation choosers, and undo.
 

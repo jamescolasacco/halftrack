@@ -320,6 +320,62 @@ void panModes (const juce::File& root)
     ok (s.setTrackSplitPan (0, false, -1), "move the left split pan by hand");
     check (! track().leftSplitAutomation.enabled && s.snapshot().automationOverridden, "moving it overrides its lane");
 }
+
+// Selection linking, as the reference's: the selected tracks' mixer controls move together.
+void selectionLinking()
+{
+    Session s (false);
+    ok (s.addAudioTrack(), "a third track"); ok (s.addReturnTrack ("Echo"), "a return");
+    const auto t = [&s] (int i) { return s.snapshot().tracks[(size_t) i]; };
+    const auto a = t (0).id, b = t (1).id, echo = s.snapshot().tracks.back().id;
+    ok (s.setTrackGain (1, -12), "track 2 at -12 dB, alone");
+    s.setSelectedTracks ({ a, b });
+    ok (s.setTrackGain (0, -6), "move track 1 to -6 dB with tracks 1 and 2 selected");
+    check (near (t (1).gainDb, -18, .01) && t (2).gainDb == 0, "the other selected track moves by the same decibels, and an unselected one stays");
+    s.undo(); check (near (t (0).gainDb, 0, 1e-4) && near (t (1).gainDb, -12, 1e-4), "one undo restores both");
+    s.redo();
+    ok (s.setTrackGain (0, -66), "track 1 far down");
+    check (t (1).gainDb == -100, "track 2 stops at the bottom of its travel");
+    ok (s.setTrackGain (0, -3), "track 1 back up");
+    check (near (t (1).gainDb, -15, .01), "track 2 gets its offset back");
+    s.setSelectedTracks ({ a });
+    ok (s.setTrackGain (0, 0), "one selected track moves alone");
+    check (near (t (1).gainDb, -15, .01), "and the other stays");
+
+    s.setSelectedTracks ({}); ok (s.setTrackPan (1, -.5f), "track 2 at 25L, alone");
+    s.setSelectedTracks ({ a, b });
+    ok (s.setTrackPan (0, .25f), "pan track 1 to 13R");
+    check (near (t (1).pan, -.25, 1e-6), "the other's pan moves by the same amount");
+    ok (s.setPanMode ({ b }, true), "track 2 to Split Stereo");
+    ok (s.setTrackPan (0, -.5f), "pan track 1 again");
+    check (near (t (1).pan, -.25, 1e-6) && t (1).leftSplitPan == -1, "a track in the other pan mode keeps its pans");
+    ok (s.setPanMode ({ a }, true), "track 1 to Split Stereo too");
+    ok (s.setTrackSplitPan (0, false, 0), "track 1's left channel to the centre");
+    check (t (1).leftSplitPan == 0 && t (1).rightSplitPan == 1, "the split pans move together, each with its own");
+
+    ok (s.setTrackSendGain (0, echo, -6), "track 1's send to -6 dB");
+    check (near (t (1).sends.at (0).gainDb, -6, .01), "the other's send, Off as it was, follows to -6 dB");
+    s.setSelectedTracks ({}); ok (s.setTrackSendGain (1, echo, -20), "track 2's send to -20 dB, alone"); s.setSelectedTracks ({ a, b });
+    ok (s.setTrackSendGain (0, echo, -12), "track 1's send to -12 dB");
+    check (near (t (1).sends.at (0).gainDb, -26, .01), "sends keep their decibel offset along the send law");
+    ok (s.setTrackMute (0, true), "turn track 1's activator off");
+    check (t (1).mute && ! t (2).mute, "the other selected track's activator takes the same state");
+    ok (s.setTrackMute (0, false), "and on");
+    check (! t (1).mute, "and back");
+
+    ok (s.resetTrackControl (0, "volume"), "reset track 1's volume");
+    check (near (t (0).gainDb, 0, 1e-4) && near (t (1).gainDb, 0, 1e-4), "a reset sets every linked fader to the default");
+    ok (s.resetTrackControl (1, "send:" + echo), "reset track 2's send");
+    check (t (0).sends.at (0).gainDb == -100 && t (1).sends.at (0).gainDb == -100, "and every linked send Off");
+    check (s.resetTrackControl (0, "width").failed(), "an unknown control is refused");
+
+    // A mapped controller moves the linked tracks too.
+    s.setSelectedTracks ({}); ok (s.setTrackGain (1, -10), "track 2 at -10 dB, alone"); s.setSelectedTracks ({ a, b });
+    ok (s.setMidiLearnTarget ("mixer:" + a + ":volume"), "learn track 1's volume"); ok (s.handleMidiControl (1, 7, 0), "with CC 7");
+    ok (s.setMidiLearnTarget ({}), "end learning");
+    ok (s.handleMidiControl (1, 7, 108), "CC 7 to 108, about 0 dB");
+    check (near (t (1).gainDb, -10 + t (0).gainDb, .05), "a controller's move links as a mouse move does");
+}
 }
 
 int runFaderLawTests (const juce::File& artifacts)
@@ -332,6 +388,7 @@ int runFaderLawTests (const juce::File& artifacts)
         storedAndPlayed (root, signal);
         legacyProjects (root, signal);
         panModes (root);
+        selectionLinking();
         std::cout << "Fader laws passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL fader laws: " << e.what() << std::endl; return 1; }

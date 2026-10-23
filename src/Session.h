@@ -1120,6 +1120,19 @@ public:
     juce::Result setPanMode (const juce::StringArray& trackOrGroupIds, bool split);
     juce::Result setTrackSplitPan (int trackIndex, bool right, float pan);
     juce::Result setGroupSplitPan (const juce::String& groupId, bool right, float pan);
+    // Selection linking, after the reference's (static reading of its code): with two or more
+    // tracks selected, moving one selected track's volume, pan, split pans, a send or its activator
+    // moves the same control of the other selected tracks, from the interface, MIDI, keys or a
+    // control surface alike. Volume and sends move by the same decibels, the pans by the same
+    // amount (among tracks in the same pan mode), and the activator takes the same state. Offsets
+    // count from where the controls stood at their first linked move since the selection changed,
+    // so a control held at an end of its travel gets its offset back. The moves are one undo step.
+    // Automation playback is not linked. The interface reports its selection here.
+    void setSelectedTracks (const juce::StringArray& trackIds);
+    // A track's mixer control back to its default, as a double-click resets it: "volume" (0 dB),
+    // "pan" (the centre), "leftsplit" and "rightsplit" (hard left and right) or "send:<return>"
+    // (Off). Every linked track takes the same default.
+    juce::Result resetTrackControl (int trackIndex, const juce::String& control);
     // Atomic, strictly ordered beat points. Empty points restore manual control.
     juce::Result setTrackAutomation (const juce::String& trackId, AutomationTarget, const AutomationLane&);
     // Routes a track's output. Return tracks and tracks in a group play into Master or their group;

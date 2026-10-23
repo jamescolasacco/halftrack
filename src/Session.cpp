@@ -4254,6 +4254,89 @@ struct Session::Impl
         changed(); return Result::ok();
     }
     static String sendKey (const String& trackId, const String& returnId) { return "send:" + trackId + ":" + returnId; }
+    // Selection linking (see Session::setSelectedTracks): the selection, and where each linked
+    // control stood, 0 to 1, at its first linked move since the selection changed.
+    juce::StringArray linkedSelection;
+    std::map<String, std::map<String, float>> linkSnapshots;
+    bool linkedMove = false, linkReset = false;
+    enum class Linked { volume, pan, leftSplit, rightSplit, send, activator };
+    // Where a track's control stands, 0 to 1: its fader or knob position, or 1 for an activator on.
+    // None when the track has no such control, or its pans are the other mode's.
+    std::optional<float> linkedPosition (te::AudioTrack& t, Linked control, const String& returnId)
+    {
+        auto* mixer = t.getVolumePlugin();
+        if (mixer == nullptr) return std::nullopt;
+        auto* own = dynamic_cast<TrackMixer*> (mixer);
+        const bool split = own != nullptr && own->splitPan();
+        switch (control)
+        {
+            case Linked::volume: return mixer->volParam->getCurrentValue();
+            case Linked::pan: if (split) return std::nullopt; return (mixer->getPan() + 1) / 2;
+            case Linked::leftSplit: if (! split) return std::nullopt; return (own->leftSplit->getCurrentValue() + 1) / 2;
+            case Linked::rightSplit: if (! split) return std::nullopt; return (own->rightSplit->getCurrentValue() + 1) / 2;
+            case Linked::send:
+            {
+                if (isReturn (t) || track (returnId) == nullptr) return std::nullopt;
+                auto* send = findSend (t, returnId);
+                return send != nullptr ? send->gain->getCurrentValue() : 0.0f;
+            }
+            case Linked::activator: return t.isMuted (false) ? 0.0f : 1.0f;
+        }
+        return std::nullopt;
+    }
+    // The reference's rule for a linked control (0x101949210): volume and sends keep their decibel
+    // offset along their scale, the pans their offset in travel, and the activator copies.
+    static float linkedValue (Linked control, float otherOld, float movedOld, float movedNew)
+    {
+        switch (control)
+        {
+            case Linked::activator: return movedNew;
+            case Linked::volume: case Linked::send:
+            {
+                if (otherOld == movedOld) return movedNew;
+                const auto& scale = control == Linked::send ? levelscale::send() : levelscale::volume();
+                const auto db = [&scale] (float position) { const auto a = levelscale::amplitudeAt (scale, position); return a > 0 ? 20.0f * std::log10 (a) : -140.0f; };
+                const auto amplitude = std::pow (10.0f, ((db (otherOld) - db (movedOld)) + db (movedNew)) * 0.05f);
+                return juce::jlimit (0.0f, 1.0f, (float) levelscale::positionOf (scale, amplitude));
+            }
+            case Linked::pan: case Linked::leftSplit: case Linked::rightSplit: break;
+        }
+        return juce::jlimit (0.0f, 1.0f, (otherOld - movedOld) + movedNew);
+    }
+    void applyLinked (te::AudioTrack& member, Linked control, const String& returnId, float position)
+    {
+        const int index = trackIndexOf (member.itemID.toString());
+        switch (control)
+        {
+            case Linked::volume: owner.setTrackGain (index, juce::jlimit (-100.0f, 6.0f, te::gainToDb (levelscale::volumeGain (position)))); break;
+            case Linked::pan: owner.setTrackPan (index, position * 2 - 1); break;
+            case Linked::leftSplit: case Linked::rightSplit: owner.setTrackSplitPan (index, control == Linked::rightSplit, position * 2 - 1); break;
+            case Linked::send: owner.setTrackSendGain (index, returnId, Session::sendProportionToValue (position)); break;
+            case Linked::activator: owner.setTrackMute (index, position < .5f); break;
+        }
+    }
+    // After a selected track's control moved from `before` to `after`, moves the same control of the
+    // other selected tracks, in the move's undo step. A reset gives them all `after`.
+    void moveLinked (te::AudioTrack& moved, Linked control, const String& returnId, float before, float after)
+    {
+        const auto movedId = moved.itemID.toString();
+        if (linkedMove || linkedSelection.size() < 2 || ! linkedSelection.contains (movedId)) return;
+        if (! linkedPosition (moved, control, returnId)) return;
+        auto& snapshots = linkSnapshots[String ((int) control) + ":" + returnId];
+        if (! snapshots.contains (movedId)) snapshots[movedId] = before;
+        const juce::ScopedValueSetter<bool> guard (linkedMove, true), oneStep (composite, true);
+        for (const auto& id : linkedSelection)
+        {
+            auto* member = track (id);
+            if (member == nullptr || member == &moved) continue;
+            const auto position = linkedPosition (*member, control, returnId);
+            if (! position) continue;
+            if (! snapshots.contains (id)) snapshots[id] = *position;
+            applyLinked (*member, control, returnId, linkReset ? after : linkedValue (control, snapshots[id], snapshots[movedId], after));
+            if (linkReset) snapshots[id] = after;
+        }
+        if (linkReset) snapshots[movedId] = after;
+    }
     // Automation capture and override. Lanes are named by key ("mixer:<track>:volume|pan", "master",
     // "send:<track>:<return>", "device:<plugin>:<parameter>") and resolved again at each use, so a
     // pass never holds a device.
@@ -7120,16 +7203,18 @@ Result Session::setTrackSendGain (int index, const String& destinationID, float 
     if (! std::isfinite (decibels) || decibels < -100.0f || decibels > 0)
         return Result::fail ("Send gain must be between Off (-100 dB) and 0 dB.");
     const auto key = Impl::sendKey (source->itemID.toString(), destinationID);
-    if (impl->capturing()) { impl->capture (key, decibels); impl->changed(); return Result::ok(); }
     auto* send = findSend (*source, destinationID);
-    if (! send && decibels == -100.0f) return Result::ok();
+    const auto before = send != nullptr ? send->gain->getCurrentValue() : 0.0f, after = te::decibelsToSendFaderPosition (decibels);
+    if (impl->capturing()) { impl->capture (key, decibels); impl->moveLinked (*source, Impl::Linked::send, destinationID, before, after); impl->changed(); return Result::ok(); }
+    if (! send && decibels == -100.0f) { impl->moveLinked (*source, Impl::Linked::send, destinationID, before, after); return Result::ok(); }
     impl->transaction ("Send level");
     if (! send && (send = impl->createSend (*source, *destination)) == nullptr) return Result::fail ("Could not create the send.");
     impl->overrideLane (key);
     if (! send->state.hasProperty (manualSendProperty))
         send->state.setProperty (manualSendProperty, send->gain->getCurrentExplicitValue(), nullptr);
     send->setGainDb (decibels);
-    send->state.setProperty (manualSendProperty, te::decibelsToSendFaderPosition (decibels), &impl->edit->getUndoManager());
+    send->state.setProperty (manualSendProperty, after, &impl->edit->getUndoManager());
+    impl->moveLinked (*source, Impl::Linked::send, destinationID, before, after);
     impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::setSendAutomation (const String& trackId, const String& returnTrackId, const AutomationLane& lane)
@@ -11314,11 +11399,13 @@ Result Session::setTrackGain (int index, float value)
     auto* volume = t->getVolumePlugin();
     value = juce::jlimit (-100.0f, 6.0f, value);
     const auto key = Impl::mixerKey (*t, AutomationTarget::volume);
-    if (impl->capturing()) { impl->capture (key, value); impl->changed(); return Result::ok(); }
+    const auto before = volume->volParam->getCurrentValue(), after = te::decibelsToVolumeFaderPosition (value);
+    if (impl->capturing()) { impl->capture (key, value); impl->moveLinked (*t, Impl::Linked::volume, {}, before, after); impl->changed(); return Result::ok(); }
     if (! volume->state.hasProperty (manualVolumeProperty))
         volume->state.setProperty (manualVolumeProperty, volume->volParam->getCurrentExplicitValue(), nullptr);
     impl->transaction ("Track gain"); impl->overrideLane (key); volume->setVolumeDb (value);
-    volume->state.setProperty (manualVolumeProperty, te::decibelsToVolumeFaderPosition (value), &impl->edit->getUndoManager());
+    volume->state.setProperty (manualVolumeProperty, after, &impl->edit->getUndoManager());
+    impl->moveLinked (*t, Impl::Linked::volume, {}, before, after);
     impl->changed(); return Result::ok();
 }
 Result Session::setTrackPan (int index, float value)
@@ -11329,11 +11416,13 @@ Result Session::setTrackPan (int index, float value)
     auto* volume = t->getVolumePlugin();
     value = juce::jlimit (-1.0f, 1.0f, value);
     const auto key = Impl::mixerKey (*t, AutomationTarget::pan);
-    if (impl->capturing()) { impl->capture (key, value); impl->changed(); return Result::ok(); }
+    const auto before = (volume->getPan() + 1) / 2, after = (value + 1) / 2;
+    if (impl->capturing()) { impl->capture (key, value); impl->moveLinked (*t, Impl::Linked::pan, {}, before, after); impl->changed(); return Result::ok(); }
     if (! volume->state.hasProperty (manualPanProperty))
         volume->state.setProperty (manualPanProperty, volume->panParam->getCurrentExplicitValue(), nullptr);
     impl->transaction ("Track pan"); impl->overrideLane (key); volume->setPan (value);
     volume->state.setProperty (manualPanProperty, value, &impl->edit->getUndoManager());
+    impl->moveLinked (*t, Impl::Linked::pan, {}, before, after);
     impl->changed(); return Result::ok();
 }
 Result Session::setPanMode (const juce::StringArray& ids, bool split)
@@ -11365,13 +11454,16 @@ Result Session::setTrackSplitPan (int index, bool right, float value)
     value = juce::jlimit (-1.0f, 1.0f, value);
     const auto target = right ? AutomationTarget::rightSplitPan : AutomationTarget::leftSplitPan;
     const auto key = Impl::mixerKey (*t, target);
-    if (impl->capturing()) { impl->capture (key, value); impl->changed(); return Result::ok(); }
     auto* parameter = right ? mixer->rightSplit : mixer->leftSplit;
+    const auto linked = right ? Impl::Linked::rightSplit : Impl::Linked::leftSplit;
+    const auto before = (parameter->getCurrentValue() + 1) / 2, after = (value + 1) / 2;
+    if (impl->capturing()) { impl->capture (key, value); impl->moveLinked (*t, linked, {}, before, after); impl->changed(); return Result::ok(); }
     const auto& property = manualAutomationProperty (target);
     if (! mixer->state.hasProperty (property)) mixer->state.setProperty (property, parameter->getCurrentExplicitValue(), nullptr);
     impl->transaction (right ? "Right split pan" : "Left split pan"); impl->overrideLane (key);
     parameter->setParameter (value, juce::sendNotification);
     mixer->state.setProperty (property, value, &impl->edit->getUndoManager());
+    impl->moveLinked (*t, linked, {}, before, after);
     impl->changed(); return Result::ok();
 }
 Result Session::setGroupSplitPan (const String& groupId, bool right, float value)
@@ -11388,6 +11480,21 @@ Result Session::setGroupSplitPan (const String& groupId, bool right, float value
     parameter->setParameter (value, juce::sendNotification);
     mixer->state.setProperty (property, value, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
+}
+void Session::setSelectedTracks (const juce::StringArray& ids)
+{
+    if (ids == impl->linkedSelection) return;
+    impl->linkedSelection = ids; impl->linkSnapshots.clear();
+}
+Result Session::resetTrackControl (int index, const String& control)
+{
+    auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
+    const juce::ScopedValueSetter<bool> reset (impl->linkReset, true);
+    if (control == "volume") return setTrackGain (index, 0);
+    if (control == "pan") return setTrackPan (index, 0);
+    if (control == "leftsplit" || control == "rightsplit") return setTrackSplitPan (index, control == "rightsplit", control == "rightsplit" ? 1.0f : -1.0f);
+    if (control.startsWith ("send:")) return setTrackSendGain (index, control.fromFirstOccurrenceOf (":", false, false), -100);
+    return Result::fail ("Unknown mixer control.");
 }
 float Session::curveProportion (float from, float to, float curve, double along)
 {
@@ -11995,8 +12102,10 @@ Result Session::setTrackMute (int index, bool value)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
+    const float before = t->isMuted (false) ? 0.0f : 1.0f;
     impl->transaction ("Track mute");
     t->state.setProperty (te::IDs::mute, value, &impl->edit->getUndoManager());
+    impl->moveLinked (*t, Impl::Linked::activator, {}, before, value ? 0.0f : 1.0f);
     impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::setTrackSolo (int index, bool value)
