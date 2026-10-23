@@ -1116,11 +1116,10 @@ private:
     std::set<juce::String> multiSelectedTracks;
     // Solo and arm are exclusive by default, as in the reference: a plain click releases every other
     // track (and, for solo, group); Cmd/Ctrl-click adds to them. With exclusivity off in the
-    // preferences, the two swap. Each click is one undo step.
+    // preferences, the two swap. As in the reference, neither is an undo step.
     void soloFromUI (int trackIndex, const juce::String& groupId, bool on, bool additive)
     {
         const auto current = session.snapshot();
-        session.beginEditGesture ("Solo");
         // Exclusive, as the reference's: the others go, so a plain click on an engaged switch clears every one.
         if (additive != session.preferences().exclusiveSolo)
         {
@@ -1128,18 +1127,17 @@ private:
             for (const auto& g : current.groups) if (g.id != groupId && g.solo) session.setGroupSolo (g.id, false);
         }
         const auto result = groupId.isNotEmpty() ? session.setGroupSolo (groupId, on) : session.setTrackSolo (trackIndex, on);
-        session.endEditGesture(); report (result); refresh();
+        report (result); refresh();
     }
     void armFromUI (int trackIndex, bool on, bool additive)
     {
         const auto current = session.snapshot();
-        session.beginEditGesture ("Arm");
         juce::Result result = juce::Result::ok();
         if (on && additive != session.preferences().exclusiveArm)
             for (int t = 0; t < (int) current.tracks.size() && result.wasOk(); ++t)
                 if (t != trackIndex && current.tracks[(size_t) t].armed) result = session.setTrackArmed (t, false);
         if (result.wasOk()) result = session.setTrackArmed (trackIndex, on);
-        session.endEditGesture(); report (result); refresh();
+        report (result); refresh();
     }
     // The Arrangement time selection: a range over a run of tracks; empty when end <= start.
     struct TimeSelection
@@ -16001,16 +15999,16 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         library.deleteRecursively();
     }
     {
-        // Exclusive solo and arm: a plain click releases the others, Cmd/Ctrl-click adds, one undo each.
+        // Exclusive solo and arm: a plain click releases the others, Cmd/Ctrl-click adds; neither is an undo step.
         check (session.newProject().wasOk() && session.addAudioTrack ("Third").wasOk(), "three tracks for solo and arm"); refresh();
         soloFromUI (0, {}, true, false); soloFromUI (1, {}, true, false);
         check (! state.tracks[0].solo && state.tracks[1].solo, "soloing a second track releases the first");
         soloFromUI (2, {}, true, true);
         check (state.tracks[1].solo && state.tracks[2].solo, "Cmd/Ctrl-click adds a solo");
+        const auto tracksBefore = state.tracks.size();
         session.undo(); refresh();
-        check (state.tracks[1].solo && ! state.tracks[2].solo, "one undo removes the added solo");
-        session.undo(); refresh();
-        check (state.tracks[0].solo && ! state.tracks[1].solo, "another undo restores the first solo, in one step");
+        check (state.tracks.size() == tracksBefore - 1 && state.tracks[1].solo, "solos are not undo steps, as in the reference: undo takes back the added track instead");
+        session.redo(); refresh();
         soloFromUI (2, {}, true, true); soloFromUI (0, {}, false, false); refresh();
         check (! state.tracks[0].solo && ! state.tracks[2].solo, "a plain click on a soloed track releases every solo, as the reference's does");
         soloFromUI (0, {}, false, false); refresh();

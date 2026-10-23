@@ -145,8 +145,10 @@ void routing (const juce::File& root, const Fixture& a, const Fixture& b)
     check (s.snapshot().soloInPlace, "Solo in Place starts on");
     ok (s.setSoloInPlace (false), "switch Solo in Place off");
     render (s, root, "source-solo-not-in-place", mix (a, b, 1, 1));
+    const auto sendBefore = sendGain (s.snapshot().tracks[1], returnID);
     s.undo();
-    check (! s.snapshot().soloInPlace && ! s.snapshot().tracks[0].solo, "switching it is not an undo step: undo takes back the solo");
+    check (! s.snapshot().soloInPlace && s.snapshot().tracks[0].solo && sendGain (s.snapshot().tracks[1], returnID) != sendBefore,
+           "neither the switch nor the solo is an undo step: undo takes back the second source's send");
     s.redo(); ok (s.setSoloInPlace (true), "Solo in Place on again");
     ok (s.setTrackSolo (2, true), "also solo return under documented combined-solo default");
     render (s, root, "combined-source-return-solo", mix (a, b, 1.25, 1.25, 0.5, 0.5));

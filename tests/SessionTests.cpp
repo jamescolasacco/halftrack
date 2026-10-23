@@ -281,14 +281,14 @@ void panLawTests (const juce::File& root)
     success (session.setTrackSolo (0, true), "solo panned channel");
     comparePan (0.6, 1, "panned solo excludes second source");
     session.undo();
-    require (! session.snapshot().tracks[0].solo, "undo restores solo state");
+    require (session.snapshot().tracks[0].solo && session.snapshot().tracks[1].clips.empty(), "solo is not an undo step, as in the reference: undo takes back the second source, leaving the solo");
+    session.redo();
+    require (session.snapshot().tracks[0].solo && ! session.snapshot().tracks[1].clips.empty(), "redo brings the second source back");
+    comparePan (0.6, 1, "the solo still excludes it");
+    success (session.setTrackSolo (0, false), "clear panned solo");
     const double soloTheta = 1.6 * juce::MathConstants<double>::pi / 4.0;
     compareMatrix (1 + std::sqrt (2.0) * std::cos (soloTheta),
-                   1 + std::sqrt (2.0) * std::sin (soloTheta), "undo solo restores both tracks");
-    session.redo();
-    require (session.snapshot().tracks[0].solo, "redo restores solo state");
-    comparePan (0.6, 1, "redo solo excludes second source");
-    success (session.setTrackSolo (0, false), "clear panned solo");
+                   1 + std::sqrt (2.0) * std::sin (soloTheta), "clearing the solo restores both tracks");
     success (session.removeClip (1, 0), "remove second matrix source");
     success (session.setTrackPan (0, -0.3f), "change pan before undo");
     session.undo();

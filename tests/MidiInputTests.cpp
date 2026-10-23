@@ -438,11 +438,11 @@ void immediateMonitoringTransitions()
     ok (f.session.setTrackArmed (2, true), "arm Auto input without waiting for timers");
     f.controller.sendNow (juce::MidiMessage::noteOn (16, 69, (juce::uint8) 96));
     check (pumpSyntheticTestDevice (f.session, 20) > .001f, "first key after arming Auto monitoring is audible");
-    f.session.undo(); pumpSyntheticTestDevice (f.session, 40);
-    check (pumpSyntheticTestDevice (f.session, 20) < 1e-7f, "immediate Auto arm undo releases its voice");
-    f.session.redo();
+    ok (f.session.setTrackArmed (2, false), "disarm the Auto input"); pumpSyntheticTestDevice (f.session, 40);
+    check (pumpSyntheticTestDevice (f.session, 20) < 1e-7f, "immediate Auto disarm releases its voice");
+    ok (f.session.setTrackArmed (2, true), "arm it again");
     f.controller.sendNow (juce::MidiMessage::noteOn (16, 69, (juce::uint8) 96));
-    check (pumpSyntheticTestDevice (f.session, 20) > .001f, "first key after Auto arm redo is audible");
+    check (pumpSyntheticTestDevice (f.session, 20) > .001f, "first key after arming Auto again is audible");
 }
 
 void selectionAndMonitoring()
@@ -461,10 +461,13 @@ void selectionAndMonitoring()
     check (f.note() < 1e-7f, "Auto suppresses an unarmed track");
     ok (session.setTrackArmed(2,true), "arm MIDI track");
     check (f.note() > .001f, "Auto monitors the armed MIDI track");
-    session.undo(); check (!session.snapshot().tracks[2].armed, "record-arm undo restores model state");
-    check (f.note() < 1e-7f, "record-arm undo also disables Auto monitoring");
-    session.redo(); check (session.snapshot().tracks[2].armed, "record-arm redo restores model state");
-    check (f.note() > .001f, "record-arm redo restores Auto monitoring");
+    session.undo();
+    check (session.snapshot().tracks[2].armed && session.snapshot().tracks[2].monitor == Session::MonitorMode::on, "arming is not an undo step, as in the reference: undo takes back the monitor change");
+    session.redo(); check (session.snapshot().tracks[2].monitor == Session::MonitorMode::automatic, "redo restores Auto");
+    ok (session.setTrackArmed(2,false), "disarm MIDI track");
+    check (f.note() < 1e-7f, "disarming also disables Auto monitoring");
+    ok (session.setTrackArmed(2,true), "arm MIDI track again");
+    check (f.note() > .001f, "arming again restores Auto monitoring");
     ok(session.setTrackMonitor(2,Session::MonitorMode::off),"disable monitored MIDI");
     session.undo(); check (session.snapshot().tracks[2].monitor == Session::MonitorMode::automatic, "monitor undo restores model state");
     check (f.note() > .001f, "monitor undo restores actual MIDI routing");
@@ -525,8 +528,8 @@ void selectionAndMonitoring()
     ok(session.setTrackMonitor(2,Session::MonitorMode::on),"enable input for undo release");held(1,false);session.undo();released("monitor undo");
     session.redo();ok(session.setTrackMonitor(2,Session::MonitorMode::automatic),"prepare armed Auto monitoring");held(1,true);
     ok(session.setTrackArmed(2,false),"disarm sustained Auto input");released("disarming Auto input");
-    session.undo();held(16,false);session.redo();released("record-arm redo");
-    ok(session.setTrackArmed(2,true),"arm Auto input again");held(1,false);session.undo();released("record-arm undo");
+    ok(session.setTrackArmed(2,true),"arm sustained Auto input again");held(16,false);ok(session.setTrackArmed(2,false),"disarm it on channel 16");released("disarming Auto input on channel 16");
+    ok(session.setTrackArmed(2,true),"arm Auto input again");held(1,false);ok(session.setTrackArmed(2,false),"and disarm it");released("disarming Auto input again");
     ok(session.setTrackMonitor(2,Session::MonitorMode::on),"In remains active without arm");held(1,false);
     ok(session.setTrackGain(2,-3),"change unrelated mixer gain");session.undo();
     check(pumpSyntheticTestDevice(session,20)>.001f,"unrelated gain undo does not stop monitored notes");

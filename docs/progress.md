@@ -2131,3 +2131,7 @@ Engine, UI and root areas (a new Tracktion patch). Following the reference manua
 
 Engine and UI areas. From a static reading of the reference's code (findings in the ignored `artifacts/reverse-engineering/tracks/`). A locator's menu offers Set Song Start Time Here: Play then starts at the locator, which takes the song's start from the loop brace or another locator. Moving the locator moves it and deleting it clears it; it is one undo step and kept with the project. The ruler marks the song's start. Measured in the transport, locator and UI suites ([contract](research/transport-contract.md)).
 
+## Solo and arm leave the undo history — 2026-10-23
+
+Engine and UI areas. From a static reading of the reference's code: its record arm and its solo/cue values carry the flag that keeps them out of the undo history, while the activator, renaming and colour stay undoable. Halftrack's track and group solo, cue and record arm are no longer undo steps; undo passes over them to the edit before. They still mark the project changed. Measured in the Session, sends, MIDI input and UI suites with the full gate ([contract](research/solo-arm-contract.md)).
+

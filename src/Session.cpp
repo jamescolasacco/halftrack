@@ -8657,8 +8657,7 @@ Result Session::setGroupSolo (const String& groupId, bool value)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* folder = impl->group (groupId); if (! folder) return Result::fail ("Group not found.");
     if (impl->cueActive()) return Result::fail ("Groups cannot be cued; cue their tracks.");
-    impl->transaction ("Group solo");
-    folder->state.setProperty (te::IDs::solo, value, &impl->edit->getUndoManager());
+    folder->state.setProperty (te::IDs::solo, value, nullptr); // Not an undo step, as in the reference.
     impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::setGroupFolded (const String& groupId, bool folded)
@@ -11215,10 +11214,9 @@ Result Session::setTrackSolo (int index, bool value)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
-    // In Cue mode the switch cues the track.
+    // In Cue mode the switch cues the track. Neither is an undo step, as in the reference.
     const bool cueing = impl->cueActive();
-    impl->transaction (cueing ? "Track cue" : "Track solo");
-    t->state.setProperty (cueing ? cueProperty : te::IDs::solo, value, &impl->edit->getUndoManager());
+    t->state.setProperty (cueing ? cueProperty : te::IDs::solo, value, nullptr);
     impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 
@@ -11314,8 +11312,8 @@ Result Session::setTrackArmed (int index, bool value)
     }
     if (changing.empty()) return Result::ok();
     const auto monitored=impl->monitoredMidiTracks();
-    impl->transaction ("Record arm");
-    for (auto* track : changing) te::getDestination (*impl->input (*track), *track, 0)->recordEnabled.setValue (value, &impl->edit->getUndoManager());
+    // Not an undo step, as in the reference.
+    for (auto* track : changing) te::getDestination (*impl->input (*track), *track, 0)->recordEnabled.setValue (value, nullptr);
     impl->finishInputChange(monitored);impl->changed(); return Result::ok();
 }
 juce::String Session::takeDeviceNotice() { return std::exchange (impl->deviceNotice, {}); }

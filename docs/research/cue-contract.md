@@ -17,7 +17,7 @@ The reference keeps Solo in Place with the Set, on at first and not an undo step
 Halftrack does the same: `Session::setSoloInPlace`, kept with the project and not an undo step, from the View menu's Solo in Place (where Halftrack keeps the reference's Options items). `tests/SendReturnTests.cpp` renders, sample by sample:
 
 - a soloed source heard with its return, and without it once Solo in Place is off;
-- that undo then takes back the solo, not the switch;
+- that undo then takes back neither the switch nor the solo, but the edit before them;
 - that soloing a return beside a source mutes the other return.
 
 The UI suite switches it from the View menu.
@@ -60,5 +60,5 @@ The UI suite switches it from the View menu.
 These are recorded in the [open questions](../open-questions.md#cue):
 
 - cueing groups;
-- undo for Cue Out, and no undo for the switches, as the reference probably has them;
+- undo for Cue Out, as the reference probably has it;
 - the reference's ramp length, and the cue of a MIDI track's own MIDI.
