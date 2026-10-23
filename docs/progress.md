@@ -2170,3 +2170,7 @@ UI and engine areas. The Arrangement's loop brace now drags as the reference's m
 
 UI area. Insert MIDI Track (Cmd/Ctrl+Shift+T, the Create menu and + MIDI) makes a MIDI track without an instrument, as the reference's does, shown as n-MIDI until an instrument is dropped on it, in one undo step. The UI suite's editor checks give their tracks the built-in synth themselves ([contract](research/track-names-contract.md)).
 
+## Monitoring switches — 2026-10-23
+
+UI area. A track's input monitoring is now the reference's three switches, In, Auto and Off, with the current one lit, in the Session mixer's In/Out section and the Arrangement track header, where it was a menu. The UI suite switches a MIDI track to Auto and In with them.
+

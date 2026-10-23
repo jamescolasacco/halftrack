@@ -1455,6 +1455,45 @@ private:
         void mouseExit (const juce::MouseEvent&) override { if (onHover) onHover (false); repaint(); }
         void mouseUp (const juce::MouseEvent& e) override { if (onClick != nullptr && getLocalBounds().contains (e.getPosition())) onClick(); }
     };
+    // Input monitoring, as the reference's mixer shows it: three switches, In, Auto and Off, one lit.
+    class MonitorSwitch final : public juce::Component
+    {
+    public:
+        MonitorSwitch()
+        {
+            setName ("Track monitoring");
+            const std::array<std::pair<juce::TextButton*, Session::MonitorMode>, 3> choices { { { &in, Session::MonitorMode::on }, { &automatic, Session::MonitorMode::automatic }, { &off, Session::MonitorMode::off } } };
+            for (const auto& [button, choice] : choices)
+            {
+                addAndMakeVisible (button); button->setWantsKeyboardFocus (false); button->setMouseClickGrabsKeyboardFocus (false);
+                button->setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); button->setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
+                button->onClick = [this, choice = choice] { if (choice != mode && onChange) onChange (choice); };
+            }
+            in.setName ("Monitor In"); automatic.setName ("Monitor Auto"); off.setName ("Monitor Off");
+            in.setTooltip ("Monitor In: always hear the track's input");
+            automatic.setTooltip ("Monitor Auto: hear the input while the track is armed and no clip plays");
+            off.setTooltip ("Monitor Off: never hear the input; record it only");
+        }
+        std::function<void (Session::MonitorMode)> onChange;
+        void setMode (Session::MonitorMode m)
+        {
+            mode = m;
+            in.setToggleState (m == Session::MonitorMode::on, juce::dontSendNotification);
+            automatic.setToggleState (m == Session::MonitorMode::automatic, juce::dontSendNotification);
+            off.setToggleState (m == Session::MonitorMode::off, juce::dontSendNotification);
+        }
+        Session::MonitorMode getMode() const noexcept { return mode; }
+        void setEnabledSwitches (bool enabled) { for (auto* b : { &in, &automatic, &off }) b->setEnabled (enabled); }
+        void resized() override
+        {
+            auto area = getLocalBounds();
+            const int width = area.getWidth() / 3;
+            in.setBounds (area.removeFromLeft (width)); automatic.setBounds (area.removeFromLeft (width)); off.setBounds (area);
+        }
+    private:
+        juce::TextButton in { "In" }, automatic { "Auto" }, off { "Off" };
+        Session::MonitorMode mode = Session::MonitorMode::off;
+    };
     class TrackRow final : public juce::Component
     {
     public:
@@ -1489,7 +1528,7 @@ private:
             mute.setName ("Track activator"); solo.setName ("Track solo");
             mute.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); mute.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             solo.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff57a7ff)); solo.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
-            arm.setName ("Record arm"); input.setName ("Track audio input"); monitor.setName ("Track monitoring");
+            arm.setName ("Record arm"); input.setName ("Track audio input");
             sendMode.setName ("Return send position");
             sendMode.addItem ("Pre-fader", 1); sendMode.addItem ("Post-fader", 2);
             sendMode.setTooltip ("All sends into this return are taken before or after their source track volume fader.");
@@ -1568,13 +1607,7 @@ private:
                 name.setVisible (false); // The column title bar names the track.
             }
             gain.updateText(); pan.updateText(); // Text boxes predate their formatters.
-            monitor.addItem ("Off", 1); monitor.addItem ("Auto", 2); monitor.addItem ("In", 3);
-            monitor.onChange = [this]
-            {
-                auto mode = monitor.getSelectedId() == 3 ? Session::MonitorMode::on : monitor.getSelectedId() == 2 ? Session::MonitorMode::automatic : Session::MonitorMode::off;
-                owner.report (owner.session.setTrackMonitor (index, mode));
-            };
-            monitor.setTooltip ("Input monitoring: Off, Auto while armed, or always In");
+            monitor.onChange = [this] (Session::MonitorMode mode) { owner.report (owner.session.setTrackMonitor (index, mode)); owner.refresh(); };
             input.onChange = [this]
             {
                 // Tracks follow the devices, from item firstSourceItem on, three taps to a track.
@@ -1671,7 +1704,7 @@ private:
             if (track.inputTrackId.isNotEmpty() && sources.contains (track.inputTrackId))
                 input.setSelectedId (firstSourceItem + sources.indexOf (track.inputTrackId) * 3 + static_cast<int> (track.inputTap), juce::dontSendNotification);
             if (track.inputName.isEmpty() && track.inputTrackId.isEmpty()) input.setSelectedId (1, juce::dontSendNotification);
-            monitor.setSelectedId (track.monitor == Session::MonitorMode::on ? 3 : track.monitor == Session::MonitorMode::automatic ? 2 : 1, juce::dontSendNotification);
+            monitor.setMode (track.monitor);
             if (columnLayout) { syncSends (track); syncOutput (track); }
             if (! columnLayout) syncAutomation (track);
             if (columnLayout)
@@ -1975,7 +2008,8 @@ private:
         LinkIndicator link;
         juce::TextButton mute { "M" }, solo { "S" }, arm { "R" };
         juce::Slider gain, pan, delay;
-        juce::ComboBox input, monitor, sendMode, automationDevice, automationControl, output;
+        juce::ComboBox input, sendMode, automationDevice, automationControl, output;
+        MonitorSwitch monitor;
         juce::TextButton automationLane { "+" };
         std::vector<arrangementAutomation::Target> automationTargets;
         std::vector<juce::String> controlKeys;
@@ -11987,7 +12021,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     {
         refresh(); auto* row = canvas.getChildComponent(selectedTrack);
         auto* input = dynamic_cast<juce::ComboBox*>(findNamed(*row,"Track MIDI input"));
-        auto* monitor = dynamic_cast<juce::ComboBox*>(findNamed(*row,"Track monitoring"));
+        auto* monitor = dynamic_cast<juce::Button*>(findNamed(*row,"Monitor Auto"));
         auto* arm = dynamic_cast<juce::Button*>(findNamed(*row,"Record arm"));
         check(input && monitor && arm && input->isVisible() && monitor->isVisible() && arm->isVisible(),
             "MIDI row exposes controller, monitoring and recording controls");
@@ -11995,10 +12029,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check(inputId>1,"generated controller appears in the MIDI input chooser");
         input->setSelectedId(inputId,juce::sendNotificationSync); refresh();
         check(currentTrack()->inputName==controller && !currentTrack()->armed,"MIDI chooser assigns the real native input without arming");
-        monitor->setSelectedId(2,juce::sendNotificationSync);
+        monitor->onClick(); // Auto, one of the three monitoring switches, as the reference's mixer has them.
         arm->setToggleState(true,juce::dontSendNotification); arm->onClick(); refresh();
         check(currentTrack()->armed && currentTrack()->monitor==Session::MonitorMode::automatic,
             "native MIDI arm and Auto controls update engine capture state");
+        {
+            auto* in = dynamic_cast<juce::Button*>(findNamed(*row,"Monitor In"));
+            auto* off = dynamic_cast<juce::Button*>(findNamed(*row,"Monitor Off"));
+            check(in && off && monitor->getToggleState() && ! in->getToggleState() && ! off->getToggleState() && in->getButtonText()=="In" && off->getButtonText()=="Off",
+                "monitoring is three switches, In, Auto and Off, with Auto lit");
+            in->onClick(); refresh();
+            check(currentTrack()->monitor==Session::MonitorMode::on && in->getToggleState() && ! monitor->getToggleState(), "In switches monitoring on");
+            monitor->onClick(); refresh();
+        }
         arm->setToggleState(false,juce::dontSendNotification); arm->onClick();
         input->setSelectedId(1,juce::sendNotificationSync); refresh();
         check(!currentTrack()->armed && currentTrack()->inputName.isEmpty(),"MIDI input chooser disconnects the controller");
