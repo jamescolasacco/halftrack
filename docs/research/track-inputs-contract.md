@@ -10,6 +10,14 @@ A track's input section follows the reference's mixer In/Out section (manual, [R
 - **Changes.** A change is one undo step, and undo and redo apply too. It is refused on audio tracks and returns, for channels outside 0 to 16, and while recording. The new channel applies once the playback graph is rebuilt, which the change starts.
 - **Saving.** The channel is saved as the track's `halftrackMidiInputChannel`; All Channels leaves it out. On load, a channel outside 1 to 16, or one on a track that is not a MIDI track, is refused and the open project is kept.
 
+## The interface
+
+The Session mixer's In/Out section and the Arrangement track header show the reference's two choosers:
+
+- **Audio tracks.** Audio From offers No Input, Ext. In (the audio interface's inputs) and the tracks the track may take audio from. Under it, Ext. In's chooser picks the input (the engine's names for the interface's channels, such as Left + Right), and a source track's chooser picks its tap: Pre FX, Post FX or Post Mixer. Choosing a track takes it Post Mixer at first. Choosing Ext. In takes the input used last, or else the first.
+- **MIDI tracks.** MIDI From offers No Input and the MIDI inputs, the engine's All MIDI Ins shown as the reference's All Ins. Under it, the channel chooser offers All Channels and Ch. 1 to Ch. 16.
+- **Layout.** The chooser under the source is hidden while there is no input. In the Session strip it is the In/Out section's second row, above the monitoring switches and Audio To; the Main strip's Cue Out and Main Out line up with those two. In the Arrangement header it sits beside the source and shares its width.
+
 ## Engine
 
 `cmake/PatchMidiInputChannel.cmake` adds `MidiInputDevice::getInputChannelFor (edit, target)` (see [dependencies](../dependencies.md#tracktion-midi-input-channel-patch)). It reads the channel from the track a target names, or from a clip slot's track. A track's MIDI input node reads it when the graph is built and drops other channels' messages on the MIDI thread. Each MIDI recording context reads it when the recording is prepared and records only that channel. Capture MIDI applies the same filter in Halftrack's own code.
@@ -25,7 +33,9 @@ A track's input section follows the reference's mixer In/Out section (manual, [R
 - that a recording keeps only channel 5's note;
 - that the channel reopens, and that a project holding channel 17 is refused.
 
+The UI suite chooses a MIDI track's channel (Ch. 5, then All Channels) and finds the chooser offering seventeen items. It takes an audio track's input from another track: Audio From offers Ext. In and the track, choosing the track shows Post Mixer under it, choosing Post FX changes the tap, and two undo steps restore the earlier input.
+
 ## Not yet covered
 
-- The interface's MIDI From channel chooser.
+- The reference's channel names for Ext. In (1/2, 1, 2, ...) and its Resampling source.
 - The reference's handling of MPE input with a channel set.

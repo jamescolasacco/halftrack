@@ -1500,6 +1500,7 @@ private:
         TrackRow (Impl& o, int i, bool verticalLayout = false) : owner (o), index (i), trackId (o.state.tracks[(size_t)i].id), columnLayout (verticalLayout)
         {
             for (auto* c : std::initializer_list<juce::Component*> { &name, &mute, &solo, &arm, &gain, &pan, &input, &monitor, &sendMode }) addAndMakeVisible (c);
+            addChildComponent (inputDetail); inputDetail.setName ("Track input channel");
             name.setName ("Track name");
             name.setFont (font (11.5f, true));
             if (! columnLayout) name.setColour (juce::Label::textColourId, themes::colour (0xff141414));
@@ -1608,16 +1609,30 @@ private:
             }
             gain.updateText(); pan.updateText(); // Text boxes predate their formatters.
             monitor.onChange = [this] (Session::MonitorMode mode) { owner.report (owner.session.setTrackMonitor (index, mode)); owner.refresh(); };
+            // As the reference's In/Out section: Audio From or MIDI From chooses the source (No Input,
+            // the audio interface's inputs as Ext. In, a MIDI input, or another track), and the chooser
+            // under it its channel, a source track's tap, or the MIDI channel.
             input.onChange = [this]
             {
-                // Tracks follow the devices, from item firstSourceItem on, three taps to a track.
-                const int item = input.getSelectedId(), source = (item - firstSourceItem) / 3;
-                if (item >= firstSourceItem && source < inputSourceIds.size())
-                    owner.report (owner.session.setTrackInputTrack (trackId, inputSourceIds[source], static_cast<Session::InputTap> ((item - firstSourceItem) % 3)));
-                else owner.report (owner.session.setTrackInput (index, item == 1 ? juce::String() : input.getText()));
+                const int item = input.getSelectedId();
+                if (item >= firstSourceItem && item - firstSourceItem < inputSourceIds.size())
+                    owner.report (owner.session.setTrackInputTrack (trackId, inputSourceIds[item - firstSourceItem], Session::InputTap::postMixer));
+                else if (item <= 1) owner.report (owner.session.setTrackInput (index, {}));
+                else if (! midi) owner.report (owner.session.setTrackInput (index, inputNames.contains (lastExternalInput) ? lastExternalInput : inputNames[0])); // Ext. In
+                else owner.report (owner.session.setTrackInput (index, inputNames[item - 2]));
+                owner.refresh();
+            };
+            inputDetail.onChange = [this]
+            {
+                const int item = inputDetail.getSelectedId();
+                if (item <= 0) return;
+                if (midi) owner.report (owner.session.setTrackInputChannel (index, item - 1));
+                else if (sourceTrack.isNotEmpty()) owner.report (owner.session.setTrackInputTrack (trackId, sourceTrack, static_cast<Session::InputTap> (item - 1)));
+                else owner.report (owner.session.setTrackInput (index, inputNames[item - 2]));
                 owner.refresh();
             };
             input.setTooltip ("Choose an input before arming. Each input is assigned to one track; choosing it here moves its previous assignment.");
+            inputDetail.setTooltip ("The input's channels, the source track's tap, or the MIDI channel to take");
             if (! columnLayout)
             {
                 // Automation Mode's device and control choosers, and the button that moves the envelope into a lane.
@@ -1647,6 +1662,7 @@ private:
             if (linkId != track.linkId) { linkId = track.linkId; resized(); }
             link.setVisible (! columnLayout && linkId.isNotEmpty());
             input.setVisible (! returnTrack); monitor.setVisible (! returnTrack); arm.setVisible (! returnTrack);
+            inputDetail.setVisible (! returnTrack && inputDetailShown);
             input.setName (midi ? "Track MIDI input" : "Track audio input");
             sendMode.setVisible (returnTrack);
             sendMode.setSelectedId (track.sendMode == Session::SendMode::pre ? 1 : 2, juce::dontSendNotification);
@@ -1683,27 +1699,44 @@ private:
             if (! midi && ! returnTrack)
                 for (const auto& id : owner.session.inputSources (track.id))
                     for (const auto& other : owner.state.tracks) if (other.id == id) { sources.add (id); sourceLabels.add (other.name); }
-            if (names != inputNames || sourceLabels != inputSourceLabels)
+            if (names != inputNames || sourceLabels != inputSourceLabels || midi != inputIsMidi)
             {
-                inputNames = names; inputSourceLabels = sourceLabels;
+                inputNames = names; inputSourceLabels = sourceLabels; inputIsMidi = midi;
                 input.clear (juce::dontSendNotification);
-                input.addItem ("No input", 1);
-                for (int n = 0; n < inputNames.size(); ++n) input.addItem (inputNames[n], n + 2);
-                if (! sourceLabels.isEmpty()) input.addSectionHeading ("Tracks");
-                for (int n = 0; n < sourceLabels.size(); ++n)
-                {
-                    juce::PopupMenu taps;
-                    for (int tap = 0; tap < 3; ++tap)
-                        taps.addItem (firstSourceItem + n * 3 + tap, sourceLabels[n] + " | " + juce::StringArray { "Pre FX", "Post FX", "Post Mixer" }[tap]);
-                    input.getRootMenu()->addSubMenu (sourceLabels[n], taps);
-                }
+                input.addItem ("No Input", 1);
+                // The engine's All MIDI Ins is the reference's All Ins.
+                if (midi) for (int n = 0; n < inputNames.size(); ++n) input.addItem (inputNames[n] == "All MIDI Ins" ? juce::String ("All Ins") : inputNames[n], n + 2);
+                else if (! inputNames.isEmpty()) input.addItem ("Ext. In", 2);
+                for (int n = 0; n < sourceLabels.size(); ++n) input.addItem (sourceLabels[n], firstSourceItem + n);
             }
             inputSourceIds = sources;
-            if (input.getNumItems() == 0) input.addItem ("No input", 1);
-            input.setSelectedId (inputNames.indexOf (track.inputName) + 2, juce::dontSendNotification);
-            if (track.inputTrackId.isNotEmpty() && sources.contains (track.inputTrackId))
-                input.setSelectedId (firstSourceItem + sources.indexOf (track.inputTrackId) * 3 + static_cast<int> (track.inputTap), juce::dontSendNotification);
-            if (track.inputName.isEmpty() && track.inputTrackId.isEmpty()) input.setSelectedId (1, juce::dontSendNotification);
+            sourceTrack = track.inputTrackId.isNotEmpty() && sources.contains (track.inputTrackId) ? track.inputTrackId : juce::String();
+            int selected = 1;
+            if (sourceTrack.isNotEmpty()) selected = firstSourceItem + sources.indexOf (sourceTrack);
+            else if (track.inputName.isNotEmpty() && inputNames.contains (track.inputName)) selected = midi ? inputNames.indexOf (track.inputName) + 2 : 2;
+            if (! midi && selected == 2) lastExternalInput = track.inputName;
+            input.setSelectedId (selected, juce::dontSendNotification);
+            // The chooser under it, rebuilt only when what it offers changes.
+            const juce::StringArray detailItems = midi ? juce::StringArray { "All Channels", "Ch. 1", "Ch. 2", "Ch. 3", "Ch. 4", "Ch. 5", "Ch. 6", "Ch. 7", "Ch. 8",
+                                                                             "Ch. 9", "Ch. 10", "Ch. 11", "Ch. 12", "Ch. 13", "Ch. 14", "Ch. 15", "Ch. 16" }
+                                                 : sourceTrack.isNotEmpty() ? juce::StringArray { "Pre FX", "Post FX", "Post Mixer" } : inputNames;
+            const int detailFirst = ! midi && sourceTrack.isEmpty() ? 2 : 1;
+            if (detailItems != inputDetailItems)
+            {
+                inputDetailItems = detailItems;
+                inputDetail.clear (juce::dontSendNotification);
+                for (int n = 0; n < detailItems.size(); ++n) inputDetail.addItem (detailItems[n], n + detailFirst);
+            }
+            if (midi) inputDetail.setSelectedId (track.inputChannel + 1, juce::dontSendNotification);
+            else if (sourceTrack.isNotEmpty()) inputDetail.setSelectedId (static_cast<int> (track.inputTap) + 1, juce::dontSendNotification);
+            else inputDetail.setSelectedId (inputNames.indexOf (track.inputName) + 2, juce::dontSendNotification);
+            const bool detailWanted = selected != 1;
+            if (detailWanted != inputDetailShown)
+            {
+                inputDetailShown = detailWanted;
+                inputDetail.setVisible (inputDetailShown && ! returnTrack && (! columnLayout || owner.state.mixerSections.inOut) && ! owner.automationMode);
+                resized();
+            }
             monitor.setMode (track.monitor);
             if (columnLayout) { syncSends (track); syncOutput (track); }
             if (! columnLayout) syncAutomation (track);
@@ -1732,6 +1765,7 @@ private:
                 // The mixer's sections, as its View menu shows them.
                 const auto& shown = owner.state.mixerSections;
                 input.setVisible (shown.inOut && ! returnTrack); monitor.setVisible (shown.inOut && ! returnTrack);
+                inputDetail.setVisible (shown.inOut && ! returnTrack && inputDetailShown);
                 sendMode.setVisible (shown.inOut && returnTrack); output.setVisible (shown.inOut);
                 for (auto& send : sends) send->setVisible (shown.sends);
                 for (auto* c : std::initializer_list<juce::Component*> { &pan, &gain, &mute, &solo }) c->setVisible (shown.mixer);
@@ -1746,8 +1780,8 @@ private:
         {
             const bool automating = owner.automationMode;
             for (auto* c : std::initializer_list<juce::Component*> { &automationDevice, &automationControl, &automationLane }) c->setVisible (automating);
-            if (automating) for (auto* c : std::initializer_list<juce::Component*> { &input, &monitor, &gain, &pan, &sendMode }) c->setVisible (false);
-            else { gain.setVisible (true); pan.setVisible (true); }
+            if (automating) for (auto* c : std::initializer_list<juce::Component*> { &input, &inputDetail, &monitor, &gain, &pan, &sendMode }) c->setVisible (false);
+            else { gain.setVisible (true); pan.setVisible (true); inputDetail.setVisible (! returnTrack && inputDetailShown); }
             if (! automating) return;
             automationTargets = arrangementAutomation::targets (owner.session, track);
             shownKey = owner.shownKey (track);
@@ -1935,10 +1969,10 @@ private:
                 // crossfader assignment above the Mixer's activator / solo / arm.
                 const auto& shown = owner.state.mixerSections;
                 name.setBounds (6, 2, getWidth() - 12, 18);
-                input.setBounds (5, 4, getWidth() - 10, 19); monitor.setBounds (5, 25, getWidth() - 10, 19);
-                output.setBounds (5, 46, getWidth() - 10, 19);
+                input.setBounds (5, 4, getWidth() - 10, 19); inputDetail.setBounds (5, 25, getWidth() - 10, 19);
+                monitor.setBounds (5, 46, getWidth() - 10, 19); output.setBounds (5, 67, getWidth() - 10, 19);
                 sendMode.setBounds (5, 4, getWidth() - 10, 19);
-                int top = shown.inOut ? 48 + outputRow : 4;
+                int top = shown.inOut ? inOutHeight : 4;
                 for (size_t i = 0; i < sends.size(); ++i)
                     sends[i]->setBounds (8 + (int) (i % 3) * 36, top + (int) (i / 3) * 40, 34, 28);
                 if (shown.sends) top += sendOffset();
@@ -1962,7 +1996,9 @@ private:
             name.setBounds (18, 2, w - (linkId.isNotEmpty() ? 124 : 104), 20);
             link.setBounds (w - 106, 3, 20, 18);
             mute.setBounds (w - 84, 3, 26, 18); solo.setBounds (w - 56, 3, 26, 18); arm.setBounds (w - 28, 3, 26, 18);
-            input.setBounds (36, 27, half, 18); monitor.setBounds (40 + half, 27, w - 44 - half, 18);
+            // The source takes the whole width unless the chooser under it is shown beside it.
+            input.setBounds (36, 27, inputDetailShown ? half / 2 - 1 : half, 18); inputDetail.setBounds (37 + half / 2, 27, half - half / 2 - 1, 18);
+            monitor.setBounds (40 + half, 27, w - 44 - half, 18);
             sendMode.setBounds (76, 27, w - 80, 18);
             gain.setBounds (32, 49, half + 4, 20); pan.setBounds (40 + half, 49, w - 44 - half, 20);
             automationDevice.setBounds (58, 27, w - 62, 18);
@@ -2015,7 +2051,10 @@ private:
         std::vector<juce::String> controlKeys;
         juce::StringArray controlLabels;
         juce::String shownKey, deviceSignature;
-        juce::StringArray inputNames, sendReturnIds, outputIds, outputLabels, inputSourceIds, inputSourceLabels;
+        juce::StringArray inputNames, sendReturnIds, outputIds, outputLabels, inputSourceIds, inputSourceLabels, inputDetailItems;
+        juce::ComboBox inputDetail;
+        juce::String sourceTrack, lastExternalInput;
+        bool inputIsMidi = false, inputDetailShown = false;
         juce::StringArray outputPorts; // MIDI To: the ports offered, by item.
         bool midiTo = false;
         static constexpr int firstPortItem = 1000;
@@ -2028,6 +2067,8 @@ private:
     public:
         // The Session mixer's Audio To row, which every strip leaves room for so their faders line up.
         static constexpr int outputRow = 21;
+        // The In/Out section's height: Audio or MIDI From and its channel, monitoring and Audio To.
+        static constexpr int inOutHeight = 48 + outputRow + 21;
     };
 
     bool syncTrackRows (juce::Component& parent, std::vector<std::unique_ptr<TrackRow>>& rows, bool vertical)
@@ -2135,7 +2176,7 @@ private:
             if (columnLayout)
             {
                 const auto& shown = owner.state.mixerSections;
-                const int top = shown.inOut ? 48 + TrackRow::outputRow : 4;
+                const int top = shown.inOut ? TrackRow::inOutHeight : 4;
                 pan.setBounds ((getWidth() - 46) / 2, top + 2, 46, 50);
                 gain.setBounds (6, top + 58, 54, juce::jmax (20, getHeight() - 34 - (top + 58)));
                 const int buttons = getHeight() - 28, half = (getWidth() - 12) / 2;
@@ -3990,7 +4031,7 @@ private:
         }
     public:
         static constexpr int headerHeight = 22, gridTop = headerHeight, columnWidth = 120, rowHeight = 24,
-                             sceneWidth = 132, baseMixerHeight = 252 + TrackRow::outputRow, stopHeight = 22, scrollSize = 10;
+                             sceneWidth = 132, baseMixerHeight = 252 + TrackRow::inOutHeight - 48, stopHeight = 22, scrollSize = 10;
         // The mixer grows by a row of send knobs for every three returns.
         // The strips' height, from the mixer's sections shown: all of them make the base height.
         int mixerHeight() const
@@ -3998,7 +4039,7 @@ private:
             const auto& shown = owner.state.mixerSections;
             if (! shown.shown) return 0; // View > Mixer hides it, the grid taking its place.
             int returns = 0; for (const auto& track : owner.state.tracks) returns += track.isReturn;
-            return (shown.inOut ? 48 + TrackRow::outputRow : 4) + (shown.sends ? (returns + 2) / 3 * 40 : 0)
+            return (shown.inOut ? TrackRow::inOutHeight : 4) + (shown.sends ? (returns + 2) / 3 * 40 : 0)
                  + (shown.mixer ? 158 : 4) + (shown.trackDelay ? 22 : 0) + (shown.crossfader ? 24 : 0);
         }
         // The Master column follows the last track column, or the right edge once tracks scroll.
@@ -4100,9 +4141,9 @@ private:
                 // In line with the tracks' monitor and Audio To rows, and their pan knobs, as the
                 // mixer's sections are shown.
                 const auto& shown = owner.state.mixerSections;
-                const int top = shown.inOut ? 48 + TrackRow::outputRow : 4;
-                cueOutput.setBounds (5, 25, getWidth() - 10, 19);
-                output.setBounds (5, 46, getWidth() - 10, 19);
+                const int top = shown.inOut ? TrackRow::inOutHeight : 4;
+                cueOutput.setBounds (5, 46, getWidth() - 10, 19);
+                output.setBounds (5, 67, getWidth() - 10, 19);
                 soloCue.setBounds (5, top + 9, 44, 18); cueVolume.setBounds (getWidth() - 39, top + 3, 32, 32);
                 const int bottom = getHeight() - (shown.crossfader ? 56 : 34);
                 gain.setBounds (6, top + 58, 54, juce::jmax (20, bottom - (top + 58))); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22);
@@ -12025,10 +12066,18 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         auto* arm = dynamic_cast<juce::Button*>(findNamed(*row,"Record arm"));
         check(input && monitor && arm && input->isVisible() && monitor->isVisible() && arm->isVisible(),
             "MIDI row exposes controller, monitoring and recording controls");
+        auto* channel = dynamic_cast<juce::ComboBox*>(findNamed(*row,"Track input channel"));
+        check(channel != nullptr && channel->isVisible() == currentTrack()->inputName.isNotEmpty(), "the MIDI channel chooser shows while the track has an input");
         int inputId=0; for(int i=0;i<input->getNumItems();++i)if(input->getItemText(i)==controller)inputId=input->getItemId(i);
         check(inputId>1,"generated controller appears in the MIDI input chooser");
         input->setSelectedId(inputId,juce::sendNotificationSync); refresh();
         check(currentTrack()->inputName==controller && !currentTrack()->armed,"MIDI chooser assigns the real native input without arming");
+        check(channel->isVisible() && channel->getText()=="All Channels" && channel->getNumItems()==17,
+            "the chooser under it offers All Channels and channels 1 to 16, as the reference's MIDI From does");
+        channel->setSelectedId(6,juce::sendNotificationSync); refresh();
+        check(currentTrack()->inputChannel==5 && channel->getText()=="Ch. 5","choosing Ch. 5 takes only channel 5");
+        channel->setSelectedId(1,juce::sendNotificationSync); refresh();
+        check(currentTrack()->inputChannel==0,"and All Channels every channel again");
         monitor->onClick(); // Auto, one of the three monitoring switches, as the reference's mixer has them.
         arm->setToggleState(true,juce::dontSendNotification); arm->onClick(); refresh();
         check(currentTrack()->armed && currentTrack()->monitor==Session::MonitorMode::automatic,
@@ -15614,7 +15663,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                    "the View menu's Mixer Controls show the Crossfader and Track Delay, the strips taller to hold them");
             auto* input = findNamed (launcher, "Track audio input");
             menuItemSelected (103, 3); refresh();
-            check (! state.mixerSections.inOut && input != nullptr && ! input->isVisible() && launcher.mixerHeight() == heightWithoutSends + 40 + 46 - 65,
+            check (! state.mixerSections.inOut && input != nullptr && ! input->isVisible() && launcher.mixerHeight() == heightWithoutSends + 40 + 46 - (TrackRow::inOutHeight - 4),
                    "hiding In/Out hides the routing choosers and shortens the strips");
             menuItemSelected (103, 3); refresh();
             check (state.mixerSections.inOut && input->isVisible(), "and showing it brings them back");
@@ -15775,16 +15824,21 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (state.tracks[(size_t) lane].hasInstrument && midiTo->getItemText (0) == "Main", "the built-in synth comes back, with Audio To");
             check (session.removeTrack (lane).wasOk(), "remove the MIDI To track"); refresh();
         }
-        // Audio From another track, from the input chooser's Tracks section.
+        // Audio From another track, as the reference's: the track in Audio From, its tap in the chooser under it.
         auto* inputChooser = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Track audio input"));
-        check (inputChooser != nullptr && inputChooser->indexOfItemId (1002) >= 0 && inputChooser->getItemText (inputChooser->indexOfItemId (1002)) == state.tracks[1].name + " | Post Mixer",
-               "the input chooser lists the other track's taps");
+        auto* tapChooser = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Track input channel"));
+        check (inputChooser != nullptr && tapChooser != nullptr && inputChooser->indexOfItemId (2) >= 0 && inputChooser->getItemText (inputChooser->indexOfItemId (2)) == "Ext. In"
+                   && inputChooser->indexOfItemId (1000) >= 0 && inputChooser->getItemText (inputChooser->indexOfItemId (1000)) == state.tracks[1].name,
+               "Audio From offers Ext. In and the other track");
         const int inputBefore = inputChooser->getSelectedId();
-        inputChooser->setSelectedId (1001, juce::sendNotificationSync); refresh();
-        check (state.tracks[0].inputTrackId == state.tracks[1].id && state.tracks[0].inputTap == Session::InputTap::postFX
-               && inputChooser->getText() == state.tracks[1].name + " | Post FX", "choosing one takes that track's audio at that tap");
-        session.undo(); refresh();
-        check (state.tracks[0].inputTrackId.isEmpty() && inputChooser->getSelectedId() == inputBefore, "undo returns the chooser to the earlier input");
+        inputChooser->setSelectedId (1000, juce::sendNotificationSync); refresh();
+        check (state.tracks[0].inputTrackId == state.tracks[1].id && state.tracks[0].inputTap == Session::InputTap::postMixer
+               && inputChooser->getText() == state.tracks[1].name && tapChooser->isVisible() && tapChooser->getText() == "Post Mixer",
+               "choosing the track takes its audio Post Mixer, the tap shown under it");
+        tapChooser->setSelectedId (2, juce::sendNotificationSync); refresh();
+        check (state.tracks[0].inputTap == Session::InputTap::postFX && tapChooser->getText() == "Post FX", "the chooser under it picks the tap");
+        session.undo(); session.undo(); refresh();
+        check (state.tracks[0].inputTrackId.isEmpty() && inputChooser->getSelectedId() == inputBefore, "undo returns the choosers to the earlier input");
         // Scene tempo and time signature, from the scene menu's dialogs.
         const auto answer = [&] (const juce::String& text)
         {

@@ -16,7 +16,7 @@ The reference's View menu shows and hides the Session mixer's sections, and its 
 ## Halftrack
 
 - **The sections.** View > Mixer Controls shows and hides six of them; `Session::setMixerSections` sets them. Each strip lays out only the sections shown, and the strips are as tall as those sections need.
-  - **In/Out:** the tracks' input chooser, their monitoring as the reference's three switches (In, Auto and Off, one lit), their Audio To chooser, and the Main strip's Cue Out and Main Out.
+  - **In/Out:** the tracks' Audio From or MIDI From chooser and the channel or tap chooser under it ([track inputs](track-inputs-contract.md)), their monitoring as the reference's three switches (In, Auto and Off, one lit), their Audio To chooser, and the Main strip's Cue Out and Main Out in line with the last two.
   - **Sends:** the send knobs.
   - **Returns:** the return tracks' columns.
   - **Mixer:** pan, volume with its meter, and the activator, solo and arm switches. On the Main strip, the Solo/Cue switch, the cue volume and the volume.
