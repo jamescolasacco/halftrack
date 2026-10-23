@@ -12,7 +12,7 @@ Where Insert puts a new track, and how tracks name themselves, follow a static r
 
 `addReturnTrack (name, after)` puts a return right after the return `after` names, otherwise after the other returns. Each insertion is one undo step.
 
-The interface's Insert Audio Track (Cmd/Ctrl+T), Insert MIDI Track (Cmd/Ctrl+Shift+T) and Insert Return Track (Cmd/Ctrl+Option/Alt+T) pass the last selected track in track order. The reference uses the last entry of its selection in the same way. The new track is then selected alone. Insert MIDI Track makes an empty MIDI track, as the reference's does; Insert MIDI Clip adds a clip. Before, Halftrack's Insert MIDI Track also made and opened a clip. A new MIDI track still gets Halftrack's built-in synth, where the reference's has no instrument.
+The interface's Insert Audio Track (Cmd/Ctrl+T), Insert MIDI Track (Cmd/Ctrl+Shift+T) and Insert Return Track (Cmd/Ctrl+Option/Alt+T) pass the last selected track in track order. The reference uses the last entry of its selection in the same way. The new track is then selected alone. Insert MIDI Track makes an empty MIDI track, as the reference's does: no clip (Insert MIDI Clip adds one) and no instrument until one is dropped on it, so it shows n-MIDI. It is one undo step. Before, Halftrack's Insert MIDI Track also made and opened a clip and gave the track the built-in synth. `Session::addMidiTrack`, which the suites and imports use, still gives the track the built-in synth.
 
 ## Names
 
@@ -50,7 +50,7 @@ A new project's two tracks, imported audio and imported movies get automatic nam
 
 Moving tracks renumbers automatic names, so the track-order suite's identity checks compare names of their own. The video suite finds an imported movie's track named by its clip. The linked-track and parameter-identity suites find duplicates keeping the source's name. The stems suite names a return's stem with its letter, and the sends suite checks a return's rename and its undo with the letter. The UI suite checks:
 
-- Insert MIDI Track making an empty track, and Insert MIDI Clip adding the clip;
+- Insert MIDI Track making an empty track without an instrument, named n-MIDI, as one undo step, and Insert MIDI Clip adding the clip;
 - Insert Audio Track after the selected track, selected, with the tracks after it renumbered;
 - Cmd/Ctrl+Option/Alt+T inserting a return named A-Return;
 - a return renamed from its label shown after its letter, and editing the shown name not repeating the letter.

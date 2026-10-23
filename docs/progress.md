@@ -2166,3 +2166,7 @@ Engine, UI and root areas. From a static reading of the reference's code (findin
 
 UI and engine areas. The Arrangement's loop brace now drags as the reference's manual describes. Its bar moves the loop and its handles move its ends, on the grid. A click selects the loop's time across the tracks. While it is selected, the arrow keys move it, and with Cmd/Ctrl resize, double or halve it. Loop changes are no longer undo steps, as the reference keeps its loop out of the undo history (static reading of its code). Measured in the UI and Session suites ([contract](research/transport-contract.md)).
 
+## Empty MIDI tracks — 2026-10-23
+
+UI area. Insert MIDI Track (Cmd/Ctrl+Shift+T, the Create menu and + MIDI) makes a MIDI track without an instrument, as the reference's does, shown as n-MIDI until an instrument is dropped on it, in one undo step. The UI suite's editor checks give their tracks the built-in synth themselves ([contract](research/track-names-contract.md)).
+

@@ -535,7 +535,7 @@ public:
         arrangementTab.onClick = [this] { showArrangementView(); };
         pianoTab.onClick = [this] { if (showPiano) closeClipView(); else openPianoRoll(); };
         pianoTab.setTooltip ("Show the selected clip's editor in the detail view  |  Shift+Tab");
-        addMidiButton.setTooltip ("Insert a MIDI track with the Halftrack synthesizer | Cmd/Ctrl+Shift+T");
+        addMidiButton.setTooltip ("Insert an empty MIDI track | Cmd/Ctrl+Shift+T");
         newMidiClipButton.setTooltip ("Create a four-bar MIDI clip at the playhead");
         addTrackButton.setTooltip ("Insert audio track  |  Cmd/Ctrl+T");
         importButton.onClick = [this] { importDialog(); };
@@ -8783,11 +8783,17 @@ private:
         for (int i = (int) state.tracks.size(); --i >= 0;) if (! state.tracks[(size_t) i].isReturn) return i;
         return -1;
     }
-    // Insert MIDI Track makes an empty MIDI track, as the reference's does; Insert MIDI Clip adds a clip.
+    // Insert MIDI Track makes an empty MIDI track, as the reference's does: no clip, and no instrument
+    // until one is dropped on it, so it shows n-MIDI. One undo step. Insert MIDI Clip adds a clip.
     void addMidiTrack()
     {
         const auto before = trackIds();
-        const auto result = session.addMidiTrack ({}, insertionPoint (false)); report (result); refresh();
+        session.beginEditGesture ("Insert MIDI Track");
+        auto result = session.addMidiTrack ({}, insertionPoint (false));
+        refresh();
+        const int created = createdTrack (before);
+        if (result.wasOk() && created >= 0) result = session.removeTrackInstrument (state.tracks[(size_t) created].id);
+        session.endEditGesture(); report (result); refresh();
         if (result.wasOk()) { multiSelectedTracks.clear(); selectTrack (createdTrack (before)); }
     }
     GridPlace arrangementGrid() const { return { {}, gridPixelsPerBeat(), visibleBeats(), canvas.timelineWidth() }; }
@@ -11541,8 +11547,28 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     // User-facing note/synth edits use production handlers. The bounded fixture
     // at the end also establishes a facade-valid length below the mouse minimum.
     menuItemSelected (33, 2);
-    check (currentTrack() != nullptr && currentTrack()->isMidi && currentTrack()->clips.empty() && currentMidiClip() == nullptr,
-           "Insert MIDI Track makes an empty MIDI track, as the reference's does");
+    check (currentTrack() != nullptr && currentTrack()->isMidi && currentTrack()->clips.empty() && currentMidiClip() == nullptr && ! currentTrack()->hasInstrument
+               && currentTrack()->name.endsWith ("-MIDI"),
+           "Insert MIDI Track makes an empty MIDI track without an instrument, named n-MIDI, as the reference's does");
+    {
+        const auto insertedId = currentTrack()->id;
+        const auto inserted = [&] { for (const auto& t : state.tracks) if (t.id == insertedId) return true; return false; };
+        session.undo(); refresh();
+        check (! inserted(), "undo removes the inserted track in one step");
+        session.redo(); refresh();
+        check (inserted(), "and redo brings it back");
+        for (int i = 0; i < (int) state.tracks.size(); ++i) if (state.tracks[(size_t) i].id == insertedId) selectTrack (i);
+        // The editor and synth checks below play it through the built-in synth.
+        check (session.setTrackInstrument (insertedId, std::nullopt).wasOk(), "give it the built-in synth"); refresh();
+    }
+    // Insert MIDI Track, given the built-in synth, then Insert MIDI Clip: the editor checks play their
+    // notes through the synth.
+    const auto insertSynthTrackAndClip = [&]
+    {
+        menuItemSelected (33, 2);
+        if (const auto* track = currentTrack()) report (session.setTrackInstrument (track->id, std::nullopt));
+        refresh(); menuItemSelected (34, 2);
+    };
     menuItemSelected (34, 2);
     check (currentMidiClip() != nullptr && currentMidiClip()->lengthBeats == 16.0 && showPiano,
            "Insert MIDI Clip creates and opens a four-bar editor");
@@ -12937,7 +12963,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     menuItemSelected (31, 2);
     menuItemSelected (20, 1);
     menuItemSelected (21, 1);
-    menuItemSelected (33, 2); menuItemSelected (34, 2); fixNoteGrid();
+    insertSynthTrackAndClip(); fixNoteGrid();
     check (currentMidiClip() != nullptr && currentMidiClip()->notes.empty(),
            "delete, undo, redo and new track leave the piano editor attached to live state");
     menuItemSelected (45, 3);
@@ -13272,7 +13298,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (sendIs (sourceTrack, firstReturnId, -100) && sendIs (sourceTrack, secondReturnId, 0),
            "turning one send Off leaves the other route unchanged");
     roomSend->setValue (-9, juce::sendNotificationSync);
-    menuItemSelected (33, 2); menuItemSelected (34, 2); fixNoteGrid();
+    insertSynthTrackAndClip(); fixNoteGrid();
     const auto midiSourceId = currentTrack()->id;
     check (sendSlider ("Room Return")->getValue() == -100 && sendSlider ("Echo Return")->getValue() == -100,
            "new MIDI source exposes its own independent send levels");
@@ -13369,7 +13395,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     }
     // Multi-note regression: all edits enter through the production piano mouse,
     // key, menu and slider callbacks. Fixture notes are drawn by the mouse handler.
-    menuItemSelected (43, 3); menuItemSelected (33, 2); menuItemSelected (34, 2); pianoRoll.fit(); fixNoteGrid();
+    menuItemSelected (43, 3); insertSynthTrackAndClip(); pianoRoll.fit(); fixNoteGrid();
     const auto groupClipId = currentMidiClip()->id;
     const auto groupTrack = selectedTrack;
     const auto groupBeatWidth = (pianoRoll.getWidth() - 66.0) / 16.0;
@@ -13520,7 +13546,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     pianoRoll.keyPressed (undo); menuItemSelected (44, 3);
     check (currentMidiClip() != nullptr && currentMidiClip()->id == groupClipId && ! pianoRoll.hasSelectedNote(), "clip creation undo resolves live clip identity without stale selection");
 
-    menuItemSelected (33, 2); menuItemSelected (34, 2); pianoRoll.fit(); fixNoteGrid();
+    insertSynthTrackAndClip(); pianoRoll.fit(); fixNoteGrid();
     groupClick (groupPoint (0.1, 60)); const auto lowId = currentMidiClip()->notes.back().id;
     edge = groupPoint (1, 60) - juce::Point<float> (2, 0);
     groupDrag (edge, edge + juce::Point<float> ((float) groupBeatWidth, 0));
@@ -13594,7 +13620,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
 
     // The facade also accepts notes shorter than the mouse editor's 1/32-beat
     // floor. Establish that valid fixture directly, then use real UI handlers.
-    menuItemSelected (33, 2); menuItemSelected (34, 2); pianoRoll.fit(); fixNoteGrid();
+    insertSynthTrackAndClip(); pianoRoll.fit(); fixNoteGrid();
     groupClick (groupPoint (1.1, 60)); const auto shortId = currentMidiClip()->notes.back().id;
     groupClick (groupPoint (15.1, 64)); const auto endId = currentMidiClip()->notes.back().id;
     check (session.updateMidiNote (currentMidiClip()->id, shortId, 60, 1, 1.0 / 64, 0.8f).wasOk(),
@@ -13606,7 +13632,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
            "group resize preserves valid sub-grid notes without an inverted interval or partial edit");
     // A bounded, preexisting dense clip exercises Select All across notes outside
     // the current viewport. This checks correctness without a timing threshold.
-    menuItemSelected (33, 2); menuItemSelected (34, 2); pianoRoll.fit(); fixNoteGrid();
+    insertSynthTrackAndClip(); pianoRoll.fit(); fixNoteGrid();
     const auto denseTrackId = currentTrack()->id, denseClipId = currentMidiClip()->id;
     const auto denseProject = noteLoad.directory.getChildFile ("Dense notes.halftrack");
     check (session.saveProject (denseProject).wasOk(), "save generated dense-note project fixture");
@@ -13660,7 +13686,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
 
     // Clipboard commands use copied values and exact IDs returned by the facade.
     // All note edits below enter through the production mouse/key handlers.
-    menuItemSelected (33, 2); menuItemSelected (34, 2); pianoRoll.fit(); fixNoteGrid();
+    insertSynthTrackAndClip(); pianoRoll.fit(); fixNoteGrid();
     const auto clipboardTrackId = currentTrack()->id, clipboardClipId = currentMidiClip()->id;
     const auto commandKey = [] (char key) { return juce::KeyPress (key, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0); };
     const auto copyNotes = commandKey ('C'), cutNotes = commandKey ('X'), pasteNotes = commandKey ('V'), duplicateNotes = commandKey ('D');
@@ -13935,7 +13961,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
 
     // A project can contain ambiguous note IDs. Neither Cut nor Delete may
     // remove a valid first note before rejecting a later ambiguous identity.
-    menuItemSelected (33, 2); menuItemSelected (34, 2); pianoRoll.fit(); fixNoteGrid();
+    insertSynthTrackAndClip(); pianoRoll.fit(); fixNoteGrid();
     groupClick (groupPoint (1.1, 60)); const auto uniqueCutId = currentMidiClip()->notes.back().id;
     groupClick (groupPoint (3.1, 64)); const auto ambiguousCutId = currentMidiClip()->notes.back().id;
     groupClick (groupPoint (5.1, 67)); const auto repeatedCutId = currentMidiClip()->notes.back().id;
