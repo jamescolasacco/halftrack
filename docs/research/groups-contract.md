@@ -76,6 +76,8 @@ This follows a static reading of the reference's code: its track move (0x10242f8
   - With no nesting level picked, the innermost is used.
   - A picked group gives the group one level outward of it, or the outermost if the picked group is not offered there.
   - A folded group's header puts the tracks inside it, first.
+- **Nesting strips.** Arrangement headers start after a 5-pixel strip for each group around them, in the groups' colours, outermost first, with their automation and take lanes. Over the lower half of a header, the pointer over a strip picks that group's level, as the reference's arranger picks one level for every 5 pixels from the header's left edge (0x103834258; pixel layout medium). So below a group's last member, moving onto the group's strip takes the track out of the group. The line showing the drop starts after the strips of the groups the place is in.
+- **Correction.** A group's header moved onto its last automation lane when its envelope opened in a lane below it. It stays on its own lane now.
 - **Session columns.** As the reference's Session header row places them (0x103a51318, read in this pass; the hit test is 0x10178fe0c):
   - The title of a track's or group's column drags it, sideways. Over a column's left half the drop goes before it, over its right half after it. A group's title also selects the group.
   - The height in the title picks the nesting level (0x103a525a8): the groups around the column's track, outermost first, one for every 6 pixels from the title's top. Below those levels nothing is picked. So near the top of the last member's right half, a track leaves the group, and lower down it stays at the group's end.
@@ -101,6 +103,7 @@ The UI suite drags headers:
 - A group's header shows no drop over its own lower half, and dropping it after a track moves it with its contents.
 - A return's header shows no drop over an ordinary track, and dropping it on the first return's upper half puts it first among the returns.
 - Two tracks selected with Shift drag together below every lane and come back with one undo; pressing one of them without a drag then selects it alone.
+- A doubly nested track's header starts after two strips, in the outer and inner groups' colours. Below the first track, right of its strips, a drop goes to the inner group's end, and over its outer strip after the inner group. Below the second track a drop stays at the outer group's end, the line starting after that group's strip, and over the strip it goes to the top level's end. Dropping there takes the track out, and one undo puts it back. A group's header stays on its own lane when an automation lane opens below it.
 - In the Session view, the second track's title shows the drop before the first track (with the line), at the inner group's end, after the inner group when the outer group is picked, at the outer group's end, and at the top level's end from the top 6 pixels. Dropping there takes the track out of the groups.
 - The inner group's title selects it, shows no drop over its own right half, and drops after the second track with its track.
 - A return's title drops before the other return, but not over an ordinary track or the Main column's right half. Over the Main column's left half it would go after the last return.
@@ -109,7 +112,7 @@ The UI suite drags headers:
 The stems suite exports a group holding only a group, before the group inside it.
 
 Not reproduced:
-- **Choosing the nesting level in the Arrangement.** There the reference picks the level from the pointer's horizontal position, one level per 5 pixels from the header's left edge (0x103834258; pixel layout medium). Its headers make room for the deepest nesting (LSong +0x800). Halftrack's Arrangement headers have no nesting strips yet, so it always takes the innermost group, the reference's choice when no level is picked. The Session view picks levels as the reference's does.
+- **The strips' look.** The reference keeps the deepest nesting for its arranger layout (LSong +0x800); how it draws the strips was not read. Halftrack's strips are its own.
 - **After a move.** Afterwards the reference reveals the place, unfolding folded groups (0x10242a5fc, medium).
 - **Audio To.** Moving a track into or out of a group switches its Audio To between Main and Group in the reference, leaving other destinations (0x1024bdbf8). Halftrack's grouped tracks always play into their group.
 - **Other gestures.** Copying by drag, the reference's modifier rules for selecting several headers (not read; Halftrack's Shift adds or removes one track), and scrolling during a drag.

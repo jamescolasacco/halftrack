@@ -1398,11 +1398,18 @@ private:
         const auto inNext = next.indexOf (into);
         return TrackDrop { into, inNext > 0 ? next[inNext - 1] : juce::String() };
     }
+    // Arrangement headers start after a strip for each group around them, outermost first, as the
+    // reference's do. The strips pick a drop's nesting level.
+    static constexpr int nestingStrip = 5;
+    juce::String laneItemId (const Lane& lane) const { return lane.group ? state.groups[(size_t) lane.index].id : state.tracks[(size_t) lane.index].id; }
     // Where dragged headers would land in the Arrangement, as the reference places them: over the
-    // upper half of a track or group before it, over the lower half after it (see dropBeside). Below
-    // every lane they go after the last track. A track's automation and take lanes count as the track.
-    std::optional<TrackDrop> trackDropAt (int y, bool returns = false) const
+    // upper half of a track or group before it, over the lower half after it (see dropBeside). The
+    // pointer over a strip picks that group's level (0x103834258): one group around the item for
+    // every 5 pixels from the headers' left edge. Below every lane they go after the last track. A
+    // track's automation and take lanes count as the track.
+    std::optional<TrackDrop> trackDropAt (juce::Point<int> at, bool returns = false) const
     {
+        const int y = at.y, x = at.x - canvas.timelineWidth();
         const auto item = [] (const Lane& lane) { return lane.automation < 0 && lane.take < 0; };
         int returnsY = lanesHeight;
         for (const auto& lane : lanes) if (item (lane) && ! lane.group && state.tracks[(size_t) lane.index].isReturn) { returnsY = lane.y; break; }
@@ -1416,7 +1423,10 @@ private:
             if (y >= bottom) continue;
             if (y < lane.y) return std::nullopt;
             const bool after = y >= (lane.y + bottom) / 2;
-            auto drop = dropBeside (lane.group ? state.groups[(size_t) lane.index].id : state.tracks[(size_t) lane.index].id, after, {}, returns);
+            const auto id = laneItemId (lane);
+            juce::String level;
+            if (const auto around = groupsAround (id); ! returns && x > -nestingStrip && x / nestingStrip < around.size()) level = around[x / nestingStrip];
+            auto drop = dropBeside (id, after, level, returns);
             if (drop) drop->lineY = after ? bottom : lane.y;
             return drop;
         }
@@ -1443,10 +1453,10 @@ private:
             if (drop && (drop->groupId == dragged || groupInside (drop->groupId, dragged))) drop.reset();
         trackDrop = drop;
     }
-    void dragTracks (const juce::String& id, int y)
+    void dragTracks (const juce::String& id, juce::Point<int> at)
     {
         const auto returns = draggedReturns (id);
-        aimTrackDrop (returns ? trackDropAt (y, *returns) : std::nullopt); canvas.repaint();
+        aimTrackDrop (returns ? trackDropAt (at, *returns) : std::nullopt); canvas.repaint();
     }
     // Pressing a track's header: with Shift the track joins or leaves the selected tracks. Where a
     // drag can start, pressing a track selected with others keeps them all for the drag, and the
@@ -2424,7 +2434,7 @@ private:
             if (heightAtDown <= 0)
             {
                 // Dragging the header by its name or background moves the track, or the selected tracks.
-                if (dragArmed && e.getDistanceFromDragStart() > 6) { headerDrag = true; owner.dragTracks (trackId, e.getEventRelativeTo (&owner.canvas).getPosition().y); }
+                if (dragArmed && e.getDistanceFromDragStart() > 6) { headerDrag = true; owner.dragTracks (trackId, e.getEventRelativeTo (&owner.canvas).getPosition()); }
                 return;
             }
             const auto pixels = heightAtDown + e.getDistanceFromDragStartY();
@@ -2734,7 +2744,7 @@ private:
         // Dragging the header by its name or background moves the group, with everything in it.
         void mouseDrag (const juce::MouseEvent& e) override
         {
-            if (dragArmed && e.getDistanceFromDragStart() > 6) { headerDrag = true; owner.dragTracks (groupId, e.getEventRelativeTo (&owner.canvas).getPosition().y); }
+            if (dragArmed && e.getDistanceFromDragStart() > 6) { headerDrag = true; owner.dragTracks (groupId, e.getEventRelativeTo (&owner.canvas).getPosition()); }
         }
         void mouseUp (const juce::MouseEvent&) override
         {
@@ -2968,19 +2978,25 @@ private:
         int timelineWidth() const { return getWidth() - trackWidth; }
         void resized() override
         {
-            for (size_t i = 0; i < rows.size(); ++i)
+            // Each header after its strips.
+            const auto indent = [this] (const juce::String& id) { return (int) owner.groupsAround (id).size() * Impl::nestingStrip; };
+            for (size_t i = 0; i < rows.size() && i < owner.state.tracks.size(); ++i)
             {
-                const int height = owner.laneHeight ((int) i);
-                rows[i]->setVisible (height > 0); rows[i]->setBounds (timelineWidth(), owner.laneY ((int) i), trackWidth, juce::jmax (1, height));
+                const int height = owner.laneHeight ((int) i), x = indent (owner.state.tracks[i].id);
+                rows[i]->setVisible (height > 0); rows[i]->setBounds (timelineWidth() + x, owner.laneY ((int) i), trackWidth - x, juce::jmax (1, height));
             }
             for (const auto& lane : owner.lanes)
-                if (lane.group && juce::isPositiveAndBelow (lane.index, (int) groupHeaders.size()))
-                    groupHeaders[(size_t) lane.index]->setBounds (timelineWidth(), lane.y, trackWidth, lane.height);
+                if (lane.group && lane.automation < 0 && juce::isPositiveAndBelow (lane.index, (int) groupHeaders.size()))
+                {
+                    const int x = indent (owner.laneItemId (lane));
+                    groupHeaders[(size_t) lane.index]->setBounds (timelineWidth() + x, lane.y, trackWidth - x, lane.height);
+                }
             size_t header = 0, takeHeader = 0;
             for (const auto& lane : owner.lanes)
             {
-                if (lane.automation >= 0 && header < laneHeaders.size()) laneHeaders[header++]->setBounds (timelineWidth(), lane.y, trackWidth, lane.height);
-                if (lane.take >= 0 && takeHeader < takeHeaders.size()) takeHeaders[takeHeader++]->setBounds (timelineWidth(), lane.y, trackWidth, lane.height);
+                const int x = lane.automation >= 0 || lane.take >= 0 ? indent (owner.laneItemId (lane)) : 0;
+                if (lane.automation >= 0 && header < laneHeaders.size()) laneHeaders[header++]->setBounds (timelineWidth() + x, lane.y, trackWidth - x, lane.height);
+                if (lane.take >= 0 && takeHeader < takeHeaders.size()) takeHeaders[takeHeader++]->setBounds (timelineWidth() + x, lane.y, trackWidth - x, lane.height);
             }
         }
         juce::Rectangle<float> clipBounds (const Session::ClipInfo& clip, int track) const
@@ -3010,16 +3026,27 @@ private:
             if (bounds.getRight()-point.x <= 6) return 2;
             return 0;
         }
-        // Where dragged headers would land, as a line across the headers.
+        // Where dragged headers would land, as a line across the headers from the strips of the groups
+        // the place is in.
         void paintOverChildren (juce::Graphics& g) override
         {
             if (! owner.trackDrop) return;
-            g.setColour (orange); g.fillRect (timelineWidth(), juce::jlimit (0, juce::jmax (0, getHeight() - 2), owner.trackDrop->lineY - 1), trackWidth, 2);
+            const int x = (int) owner.groupPath (owner.trackDrop->groupId).size() * Impl::nestingStrip;
+            g.setColour (orange); g.fillRect (timelineWidth() + x, juce::jlimit (0, juce::jmax (0, getHeight() - 2), owner.trackDrop->lineY - 1), trackWidth - x, 2);
         }
         void paint (juce::Graphics& g) override
         {
             g.fillAll (panel);
             const auto tw = timelineWidth();
+            // Each header's strips, one in the colour of each group around it, outermost first.
+            for (const auto& lane : owner.lanes)
+            {
+                if (lane.height <= 0) continue;
+                const auto around = owner.groupsAround (owner.laneItemId (lane));
+                for (int k = 0; k < around.size(); ++k)
+                    if (const auto* group = owner.groupInfo (around[k]))
+                    { g.setColour (group->colour); g.fillRect (tw + k * Impl::nestingStrip, lane.y, Impl::nestingStrip - 1, lane.height - 1); }
+            }
             g.saveState();
             g.reduceClipRegion (0, 0, tw, getHeight());
             for (const auto& lane : owner.lanes)
@@ -16871,6 +16898,51 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 release (laneY (indexOf (first)) + 10);
                 check (multiSelectedTracks.empty() && selectedTrackIds() == juce::StringArray { first }, "releasing without a drag selects it alone");
                 {
+                    // Nested headers start after a strip for each group around them, outermost first, and
+                    // the strips pick a drop's nesting level, 5 pixels a level, as the reference's do.
+                    auto* firstHeader = canvas.getComponentAt (canvas.timelineWidth() + 60, laneY (indexOf (first)) + 30);
+                    while (firstHeader != nullptr && firstHeader->getParentComponent() != &canvas) firstHeader = firstHeader->getParentComponent();
+                    check (firstHeader != nullptr && firstHeader->getX() == canvas.timelineWidth() + 2 * nestingStrip && firstHeader->getRight() == canvas.getWidth(),
+                           "the first track's header starts after two strips");
+                    const auto strips = canvas.createComponentSnapshot ({ canvas.timelineWidth(), laneY (indexOf (first)) + 4, 2 * nestingStrip, 1 }, true);
+                    check (strips.getPixelAt (1, 0) == groupInfo (group)->colour && strips.getPixelAt (nestingStrip + 1, 0) == groupInfo (inner)->colour,
+                           "in the outer group's colour, then the inner group's");
+                    if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+                        if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+                        {
+                            juce::PNGImageFormat png; const auto output = directory.getChildFile ("arrangement-nesting.png");
+                            if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                                && png.writeImageToStream (canvas.createComponentSnapshot ({ canvas.timelineWidth() - 200, 0, trackWidth + 200, lanesHeight }, true, 1.0f), *stream))
+                                std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                        }
+                    const auto dragAt = [&] (int canvasX, int canvasY)
+                    {
+                        const auto down = juce::Point<float> (10.0f, 8.0f);
+                        const auto at = label->getLocalPoint (&canvas, juce::Point<int> (canvasX, canvasY)).toFloat();
+                        label->getParentComponent()->mouseDrag (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier),
+                                                                                  1.0f, 0, 0, 0, 0, label, label, now, down, now, 1, true));
+                    };
+                    const auto lowerHalf = [&] (const juce::String& id) { return laneY (indexOf (id)) + laneHeight (indexOf (id)) * 3 / 4; };
+                    const int left = canvas.timelineWidth();
+                    check (grab (laneY (indexOf (second)) + 10, "Track name"), "press the second track's name");
+                    dragAt (left + 2 * nestingStrip + 1, lowerHalf (first));
+                    check (trackDrop && trackDrop->groupId == inner && trackDrop->beforeId.isEmpty(), "below the first track, right of its strips, it would go at the inner group's end");
+                    dragAt (left + 1, lowerHalf (first));
+                    check (trackDrop && trackDrop->groupId == group && trackDrop->beforeId == second, "over its outer strip, after the inner group, before the second track");
+                    dragAt (left + 40, lowerHalf (second));
+                    check (trackDrop && trackDrop->groupId == group && trackDrop->beforeId.isEmpty(), "below itself, right of its strip, at the outer group's end");
+                    const auto inGroup = canvas.createComponentSnapshot ({ left, trackDrop->lineY - 1, trackWidth, 1 }, true);
+                    check (inGroup.getPixelAt (1, 0) != orange.get() && inGroup.getPixelAt (nestingStrip + 1, 0) == orange.get(), "the line starting after the outer group's strip");
+                    dragAt (left + 2, lowerHalf (second));
+                    check (trackDrop && trackDrop->groupId.isEmpty() && trackDrop->beforeId.isEmpty(), "over the outer group's strip it would leave the group, for the end");
+                    const auto atTop = canvas.createComponentSnapshot ({ left, trackDrop->lineY - 1, trackWidth, 1 }, true);
+                    check (atTop.getPixelAt (1, 0) == orange.get(), "the line then running from the headers' left edge");
+                    release (lowerHalf (second));
+                    check (state.tracks[1].id == second && state.tracks[1].groupId.isEmpty(), "dropping it there takes it out of the groups");
+                    session.undo(); refresh();
+                    check (state.tracks[1].groupId == group, "one undo puts it back");
+                }
+                {
                     // In the Session view a column's title drags the same way, sideways: over a column's
                     // left half before it, over its right half after it, the height in the title
                     // picking the nesting level, 6 pixels a level from the top, outermost first.
@@ -16978,6 +17050,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (automationLanes[inner].size() == 1 && below != nullptr && below->height == automationLaneHeight && below->y == groupLane (inner).y + groupLane (inner).height
                            && shownKey (automationView (*groupInfo (inner))) == "none",
                        "it opens a lane under the group's header, and the group's own lane shows no envelope");
+                check (header->getY() == groupLane (inner).y && header->getHeight() == groupLane (inner).height, "the group's header stays on its own lane");
                 const auto inLane = juce::Point<float> ((float) ((secondsAt (6) - viewStart) * pixelsPerSecond), (float) below->y + below->height - 8);
                 canvas.mouseDoubleClick (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), inLane, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
                                                            &canvas, &canvas, when, inLane, when, 2, false));
