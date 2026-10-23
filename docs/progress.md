@@ -2174,3 +2174,7 @@ UI area. Insert MIDI Track (Cmd/Ctrl+Shift+T, the Create menu and + MIDI) makes 
 
 UI area. A track's input monitoring is now the reference's three switches, In, Auto and Off, with the current one lit, in the Session mixer's In/Out section and the Arrangement track header, where it was a menu. The UI suite switches a MIDI track to Auto and In with them.
 
+## Count-in for Session takes — 2026-10-23
+
+Engine area. From a static reading of the reference's code: a Session take that starts the transport now counts in, as an Arrangement recording does. The transport starts on the bar line nearest the count-in's bars before the take, clicks from there to the take's start with the metronome on or off, and the take starts where the transport stood. Measured in the session-record suite: a one-bar count-in from bar 2 starts at 0 s with four beats to count, clicks at once, and the take holds only the note played after it ([contract](research/session-recording-contract.md)).
+

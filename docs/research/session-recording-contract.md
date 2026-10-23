@@ -21,7 +21,8 @@ Session recording follows the reference workflow of recording into an empty clip
 - New Project ends takes in the replaced project, as Open does.
 - Seeking, including locator navigation, ends every take where the play head was and stops the transport, as during Arrangement recording. Each take keeps its keys and stays silent.
 - The recording track cannot be disarmed during its take ("End this track's Session recording before disarming it."). Arming, disarming and monitoring other tracks, and monitoring the recording track itself, keep the take.
-- Changing the recording track's instrument keeps the take. Arrangement clip edits (trim, reverse, split, duplicate, cut, copy, paste and move) and Insert or Delete Time keep it too, on any track. So do track, device and master automation, follow actions, count-in and recording quantization. Count-in and recording quantization do not apply to Session takes.
+- Changing the recording track's instrument keeps the take. Arrangement clip edits (trim, reverse, split, duplicate, cut, copy, paste and move) and Insert or Delete Time keep it too, on any track. So do track, device and master automation, follow actions, count-in and recording quantization. Recording quantization does not apply to Session takes.
+- **Count-in.** A Session take that starts the transport counts in first, as the reference's does (static reading of its code: its count-in comes when a Session slot would record). With a count-in set in the Preferences or the metronome's menu, the transport starts on the bar line nearest the count-in's bars before the take. It clicks from there up to the take's start whether or not the metronome is on, and the take starts where the transport stood. The control bar counts the beats down. Several takes started together (Session Record, Start Recording on Scene Launch) share one count-in.
 - An audio-device stop (an Audio Settings change, a driver restart, a removed device) ends Session and Arrangement takes where the device stopped, keeps them and stops the transport, as Stop does. Before this, the engine's device rebuild discarded the takes.
 
 The finished take:
@@ -115,7 +116,7 @@ The reference's Record, Warp & Launch option of this name is off by default. Its
 
 - Audio overdub, and recording into the next empty slot when the scene's slot is full.
 - Fixed-length recording.
-- Count-in for slot recording.
+- A count-in for Session Record's overdubs and for the clips a recording scene launch starts with its takes: these start with the count-in rather than after it.
 - Recording while the transport loops.
 - Recording quantization of slot takes.
 - Any comparison with reference recording timing.

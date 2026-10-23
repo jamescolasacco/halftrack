@@ -154,6 +154,33 @@ int runSessionRecordTests (const juce::File& artifacts)
         check (slot (keys, 3).hasClip && slot (keys, 3).clip.notes.size() == 1 && slot (keys, 3).clip.notes[0].pitch == 65,
                "the MIDI take started with the audio one and holds the note played at once (" + juce::String ((int) slot (keys, 3).clip.notes.size()) + " notes)");
         s.stop();
+
+        // A count-in before a Session take, as the reference's (static reading of its code): from a
+        // stopped transport the take waits for the count-in, which clicks from the bar line nearest
+        // its bars before, and starts where the transport stood.
+        {
+            auto metronome = s.snapshot().metronome; metronome.countInBars = 1;
+            ok (s.setMetronome (metronome), "a one-bar count-in");
+            ok (s.setTrackArmed (0, false), "only the MIDI track records");
+            s.setInsertMarker (2); // Beat 4: bar 2 at 120 BPM.
+            ok (s.recordSlot (keys, 5), "record into an empty slot from a stopped transport");
+            check (pumpSyntheticTestDevice (s, blocksPerSecond / 8) > .01f, "the count-in clicks at once, the metronome off");
+            auto counting = s.snapshot();
+            check (counting.playing && ! counting.metronome.enabled && counting.position < .3 && counting.countInBeatsRemaining > 3.4,
+                   "the transport starts a bar early, counting in (" + juce::String (counting.position, 3) + " s, " + juce::String (counting.countInBeatsRemaining, 2) + " beats to go)");
+            controller.play (60, .25); // During the count-in.
+            for (int i = 0; i < 800 && s.snapshot().position < 2.25; ++i) pumpSyntheticTestDevice (s, 1);
+            counting = s.snapshot();
+            check (counting.countInBeatsRemaining == 0, "the count-in is over once the take starts");
+            controller.play (67, .25); // In the take, about half a beat in.
+            pumpSyntheticTestDevice (s, blocksPerSecond / 2);
+            s.stop();
+            const auto take = slot (keys, 5);
+            check (take.hasClip && take.clip.notes.size() == 1 && take.clip.notes[0].pitch == 67 && take.clip.notes[0].startBeat > .25 && take.clip.notes[0].startBeat < 1,
+                   "the take starts after the count-in, without the note played during it (" + juce::String ((int) take.clip.notes.size()) + " notes"
+                       + (take.clip.notes.empty() ? juce::String() : ", the first at beat " + juce::String (take.clip.notes[0].startBeat, 3)) + ")");
+            metronome.countInBars = 0; ok (s.setMetronome (metronome), "no count-in again");
+        }
         std::cout << "Session record passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL session record: " << e.what() << std::endl; return 1; }

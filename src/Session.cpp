@@ -3710,6 +3710,21 @@ struct Session::Impl
             if (static_cast<bool> (marker->state.getProperty (locatorSongStartProperty, false))) return marker->getPosition().getStart();
         return static_cast<bool> (edit->state.getProperty (loopIsSongStartProperty, false)) ? transport.getLoopRange().getStart() : transport.startPosition.get();
     }
+    // As the reference's (static reading of its code), a Session take that starts the transport counts
+    // in first, as an Arrangement recording does: the transport starts on the bar line nearest the
+    // count-in's bars before the take, and clicks from there up to the take's start whether or not
+    // the metronome is on (the click's range). Stopping clears the range. Nothing without a count-in.
+    std::optional<te::TimePosition> countInStart (te::TimePosition start) const
+    {
+        const int bars = prefs.countInBars;
+        if (bars <= 0) return std::nullopt;
+        const auto& tempo = edit->tempoSequence;
+        const auto& sig = *tempo.getTimeSig (0);
+        const double bar = sig.numerator * 4.0 / sig.denominator;
+        const double from = std::round ((tempo.toBeats (start).inBeats() - bars * bar) * 3843840.0) / 3843840.0;
+        const auto preroll = tempo.toTime (te::BeatPosition::fromBeats (std::round (from / bar) * bar));
+        return preroll < start ? std::optional (preroll) : std::nullopt;
+    }
     // Takes the song's start from every locator, inside the current transaction.
     void clearLocatorSongStarts()
     {
@@ -5478,7 +5493,7 @@ Session::Snapshot Session::snapshot() const
     s.metronome.rhythm=static_cast<float>(static_cast<double>(e.state.getProperty(metronomeTickProperty,0.0)));
     s.recordQuantisation=static_cast<RecordQuantisation>(static_cast<int>(e.state.getProperty(recordQuantisationProperty,0)));
     const auto clickRange=e.getClickTrackRange();
-    if(s.recording && s.metronome.countInBars>0 && !clickRange.isEmpty())
+    if((s.recording || ! impl->slotRecordings.empty()) && s.metronome.countInBars>0 && !clickRange.isEmpty())
         s.countInBeatsRemaining=std::max(0.0,
             e.tempoSequence.toBeats(clickRange.getEnd()).inBeats()-e.tempoSequence.toBeats(transport.getPosition()).inBeats());
     s.loopStart = transport.getLoopRange().getStart().inSeconds();
@@ -7781,9 +7796,14 @@ Result Session::recordSlot (int trackIndex, int sceneIndex)
     auto [contexts, errors] = te::extract (input->prepareToRecord (params));
     if (! errors.isEmpty()) { [[maybe_unused]] auto removed = input->removeTarget (slot->itemID, nullptr); return Result::fail (errors[0]); }
     // The track's other clips stop where the take begins.
+    // A take that starts the transport counts in first. Starting the recording plays the transport,
+    // and playing clears the click's range, so the position moves before and the range is set after.
+    const auto preroll = transport.isPlaying() ? std::nullopt : impl->countInStart (start);
+    if (preroll) transport.setPosition (*preroll);
     impl->queueTrack (*track, nullptr, boundary);
     input->startRecording (std::move (contexts));
     if (! transport.isPlaying()) transport.play (false);
+    if (preroll) impl->edit->setClickTrackRange ({ *preroll, start });
     impl->slotRecordings.push_back ({ trackId, slot->itemID, start });
     sendChangeMessage(); return Result::ok();
 }
