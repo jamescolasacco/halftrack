@@ -2202,3 +2202,7 @@ Engine and UI areas. Sends have automation lanes, as the reference's Send parame
 ## Pan text — 2026-10-23
 
 UI area. From a static reading of the reference's pan formatter, pans read C within 0.01 of the centre and otherwise 1 to 50 L or R, so a hard pan reads 50L where Halftrack read 100L. This covers the track, group and automation editors' pans, rack chains and Drum Rack pads; typed values read back the same way. Clip envelopes name the mixer's pan Track Panning, the reference's parameter name. Checked in the fader-laws and UI suites ([contract](research/mixer-laws-contract.md)).
+
+## Split Stereo pan mode — 2026-10-23
+
+Engine and UI areas. From a static reading of the reference's code, tracks and groups pan through its panner. In Stereo mode a hard pan keeps the far side at 1e-5 rather than silence. Split Stereo Pan Mode, from the pan's context menu, pans each input channel with Left Split Stereo and Right Split Stereo, blending over 75 samples. The switch is one undo step for every selected track. The split pans are automatable, mappable and clip-envelope targets, and the Session strip, Arrangement header and group strips show them in the pan's place. Measured in the fader-laws suite with a two-level stereo source, and checked in the UI suite ([contract](research/mixer-laws-contract.md#pan-modes)).

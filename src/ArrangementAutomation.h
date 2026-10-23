@@ -15,9 +15,9 @@ namespace halftrack::arrangementAutomation
 {
 struct Target
 {
-    enum class Kind { volume, pan, send, native, external };
+    enum class Kind { volume, pan, leftSplit, rightSplit, send, native, external };
     Kind kind = Kind::volume;
-    juce::String key;           // The Session lane key: "mixer:<track>:volume|pan", "send:<track>:<return>" or "device:<plugin>:<parameter>".
+    juce::String key;           // The Session lane key: "mixer:<track>:volume|pan|leftsplit|rightsplit", "send:<track>:<return>" or "device:<plugin>:<parameter>".
     juce::String device, control; // Chooser labels, such as "Mixer" and "Volume".
     juce::String trackId, pluginId, returnId; // A send's return track.
     int parameter = 0;

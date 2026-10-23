@@ -244,13 +244,13 @@ void panLawTests (const juce::File& root)
         require (gainL == 0 && gainR == 0 ? maxError == 0 : maxError < 0.000002,
                  label + " complete-window matrix max error " + juce::String (maxError, 9));
     };
-    // Independent mathematical specification: theta=(pan+1)*pi/4,
-    // gains=sqrt(2)*[cos(theta),sin(theta)] times the user volume gain.
+    // Independent mathematical specification, the reference's balance law: theta=(pan+1)*pi/4,
+    // gains=max(sqrt(2)*[cos(theta),sin(theta)], 1e-5) times the user volume gain.
     auto comparePan = [&] (double pan, double gain, const juce::String& label)
     {
         const double theta = (pan + 1.0) * juce::MathConstants<double>::pi / 4.0;
-        compareMatrix (gain * std::sqrt (2.0) * std::cos (theta),
-                       gain * std::sqrt (2.0) * std::sin (theta), label);
+        compareMatrix (gain * std::max (std::sqrt (2.0) * std::cos (theta), 1.0e-5),
+                       gain * std::max (std::sqrt (2.0) * std::sin (theta), 1.0e-5), label);
     };
     for (int step = -10; step <= 10; ++step)
     {

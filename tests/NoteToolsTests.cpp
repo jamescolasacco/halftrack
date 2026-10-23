@@ -135,7 +135,9 @@ void playingNoteActivationTests()
                 if(!std::isfinite(left)||!std::isfinite(right))throw std::runtime_error("nonfinite note transition");
                 error=std::max(error,std::abs(double(left)-(sibling?right:0.0)));
             }
-            check(audio.getMagnitude(1,0,audio.getNumSamples())>.01&&(sibling?error<2e-6:error==0),
+            // Hard pans leak into the other side at the balance law's 1e-5 floor.
+            const auto leak=1e-5*audio.getMagnitude(1,0,audio.getNumSamples());
+            check(audio.getMagnitude(1,0,audio.getNumSamples())>.01&&error<(sibling?2e-6:0.0)+leak,
                 "only selected held voice releases; remaining note matches independent channel; error="+juce::String(error,12));
         };
         verifyRelease(after);

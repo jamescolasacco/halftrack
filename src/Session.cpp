@@ -155,13 +155,68 @@ const juce::Identifier manualPanProperty { "halftrackManualPan" };
 const juce::Identifier automationArmProperty { "halftrackAutomationArm" };
 const juce::Identifier punchInProperty { "halftrackPunchIn" }, punchOutProperty { "halftrackPunchOut" };
 
+// Split Stereo pan mode (0 Stereo, 1 Split Stereo) and the split pans, on Halftrack's track mixers;
+// the split pans' levels set by hand are kept as the volume's and pan's are.
+const juce::Identifier panModeProperty { "halftrackPanMode" }, splitLeftProperty { "halftrackSplitLeft" }, splitRightProperty { "halftrackSplitRight" };
+const juce::Identifier manualSplitLeftProperty { "halftrackManualSplitLeft" }, manualSplitRightProperty { "halftrackManualSplitRight" };
+constexpr const char* leftSplitParameterID = "left split stereo";
+constexpr const char* rightSplitParameterID = "right split stereo";
+constexpr std::array<Session::AutomationTarget, 4> mixerTargets { Session::AutomationTarget::volume, Session::AutomationTarget::pan,
+                                                                  Session::AutomationTarget::leftSplitPan, Session::AutomationTarget::rightSplitPan };
+bool isSplitTarget (Session::AutomationTarget target)
+{ return target == Session::AutomationTarget::leftSplitPan || target == Session::AutomationTarget::rightSplitPan; }
 const juce::Identifier& manualAutomationProperty (Session::AutomationTarget target)
-{ return target == Session::AutomationTarget::volume ? manualVolumeProperty : manualPanProperty; }
-te::AutomatableParameter& automationParameter (te::VolumeAndPanPlugin& plugin, Session::AutomationTarget target)
-{ return *(target == Session::AutomationTarget::volume ? plugin.volParam : plugin.panParam); }
+{
+    switch (target)
+    {
+        case Session::AutomationTarget::volume: return manualVolumeProperty;
+        case Session::AutomationTarget::leftSplitPan: return manualSplitLeftProperty;
+        case Session::AutomationTarget::rightSplitPan: return manualSplitRightProperty;
+        case Session::AutomationTarget::pan: break;
+    }
+    return manualPanProperty;
+}
+// The property the engine keeps a mixer control's value in, and its value with nothing set.
+const juce::Identifier& mixerValueProperty (Session::AutomationTarget target)
+{
+    switch (target)
+    {
+        case Session::AutomationTarget::volume: return te::IDs::volume;
+        case Session::AutomationTarget::leftSplitPan: return splitLeftProperty;
+        case Session::AutomationTarget::rightSplitPan: return splitRightProperty;
+        case Session::AutomationTarget::pan: break;
+    }
+    return te::IDs::pan;
+}
+float mixerInitialValue (Session::AutomationTarget target)
+{
+    switch (target)
+    {
+        case Session::AutomationTarget::volume: return te::decibelsToVolumeFaderPosition (0);
+        case Session::AutomationTarget::leftSplitPan: return -1;
+        case Session::AutomationTarget::rightSplitPan: return 1;
+        case Session::AutomationTarget::pan: break;
+    }
+    return 0;
+}
+// A mixer's control, or none for a split pan on a mixer without them (the Main's, or an older
+// project's engine mixer).
+te::AutomatableParameter* automationParameter (te::VolumeAndPanPlugin& plugin, Session::AutomationTarget target)
+{
+    switch (target)
+    {
+        case Session::AutomationTarget::volume: return plugin.volParam.get();
+        case Session::AutomationTarget::leftSplitPan: return plugin.getAutomatableParameterByID (leftSplitParameterID).get();
+        case Session::AutomationTarget::rightSplitPan: return plugin.getAutomatableParameterByID (rightSplitParameterID).get();
+        case Session::AutomationTarget::pan: break;
+    }
+    return plugin.panParam.get();
+}
 Session::AutomationLane automationLane (te::VolumeAndPanPlugin& plugin, Session::AutomationTarget target)
 {
-    auto& curve = automationParameter (plugin, target).getCurve();
+    auto* parameter = automationParameter (plugin, target);
+    if (parameter == nullptr) return {};
+    auto& curve = parameter->getCurve();
     Session::AutomationLane lane; lane.enabled = ! curve.bypass.get();
     for (int i = 0; i < curve.getNumPoints(); ++i)
     {
@@ -325,10 +380,7 @@ bool validLane (const Session::AutomationLane& lane, float low, float high)
     return true;
 }
 bool validAutomationLane (Session::AutomationTarget target, const Session::AutomationLane& lane)
-{
-    if (target != Session::AutomationTarget::volume && target != Session::AutomationTarget::pan) return false;
-    return target == Session::AutomationTarget::volume ? validLane (lane, -100.0f, 6.0f) : validLane (lane, -1.0f, 1.0f);
-}
+{ return target == Session::AutomationTarget::volume ? validLane (lane, -100.0f, 6.0f) : validLane (lane, -1.0f, 1.0f); }
 bool finiteProperty (const juce::var& property, double lower, double upper)
 {
     const auto text = property.toString().trim().toStdString(); char* end = nullptr;
@@ -343,9 +395,18 @@ bool isMixerState (const juce::ValueTree& state)
 const char* mixerParameterID (const juce::ValueTree& state, Session::AutomationTarget target)
 {
     const bool master = state.getParent().hasType (te::IDs::MASTERVOLUME);
-    return target == Session::AutomationTarget::volume ? (master ? "master volume" : "volume")
-        : (master ? "master pan" : "pan");
+    switch (target)
+    {
+        case Session::AutomationTarget::volume: return master ? "master volume" : "volume";
+        case Session::AutomationTarget::leftSplitPan: return leftSplitParameterID;
+        case Session::AutomationTarget::rightSplitPan: return rightSplitParameterID;
+        case Session::AutomationTarget::pan: break;
+    }
+    return master ? "master pan" : "pan";
 }
+// A mixer that has split pans: Halftrack's track and group mixers.
+bool splitPanMixerState (const juce::ValueTree& state)
+{ return state.hasType (te::IDs::PLUGIN) && state[te::IDs::type].toString() == "halftrack-mixer"; }
 // Below this, a legacy project's volume position is out of the engine's own law's range.
 const double legacyVolumeFloor = std::exp (-106.0 / 20.0) - 1e-9;
 Result readStoredManualParameters (const juce::ValueTree& state, std::map<String, float>& values, double floor = 0)
@@ -357,13 +418,16 @@ Result readStoredManualParameters (const juce::ValueTree& state, std::map<String
     while (! stream.isExhausted())
     {
         const auto nativeKey = stream.readString();
-        const String key = nativeKey == mixerParameterID (state, Session::AutomationTarget::volume) ? "volume"
-            : nativeKey == mixerParameterID (state, Session::AutomationTarget::pan) ? "pan" : "";
+        std::optional<Session::AutomationTarget> target;
+        for (const auto t : mixerTargets)
+            if ((! isSplitTarget (t) || splitPanMixerState (state)) && nativeKey == mixerParameterID (state, t)) target = t;
+        // Values are kept by the property each control's value lives in.
+        const String key = target ? mixerValueProperty (*target).toString() : String();
         if (key.isEmpty() || stream.getNumBytesRemaining() < 4 || values.contains (key))
             return Result::fail ("Invalid stored mixer parameter entry.");
         const float value = stream.readFloat();
-        if (! std::isfinite (value) || value < (key == "volume" ? 0.0f : -1.0f) || value > 1
-            || (key == "volume" && value > 0 && value < floor))
+        const bool volume = *target == Session::AutomationTarget::volume;
+        if (! std::isfinite (value) || value < (volume ? 0.0f : -1.0f) || value > 1 || (volume && value > 0 && value < floor))
             return Result::fail ("Invalid stored manual mixer level.");
         values.emplace (key, value);
     }
@@ -375,10 +439,17 @@ Result validateMixerAutomation (const juce::ValueTree& state, bool legacy)
     const double floor = legacy ? legacyVolumeFloor : 0;
     if (isMixerState (state))
     {
-        // The fader's own level and pan, which the engine would otherwise load out of range and save back.
+        // The fader's own level and pans, which the engine would otherwise load out of range and save
+        // back, and the pan mode, on the mixers that have split pans.
+        const bool split = splitPanMixerState (state);
         if ((state.hasProperty (te::IDs::volume) && ! finiteProperty (state[te::IDs::volume], 0, 1))
             || (state.hasProperty (te::IDs::pan) && ! finiteProperty (state[te::IDs::pan], -1, 1)))
             return Result::fail ("Invalid mixer level or pan.");
+        for (const auto& key : { splitLeftProperty, splitRightProperty, manualSplitLeftProperty, manualSplitRightProperty })
+            if (state.hasProperty (key) && (! split || ! finiteProperty (state[key], -1, 1)))
+                return Result::fail ("Invalid split stereo pan.");
+        if (state.hasProperty (panModeProperty) && (! split || (state[panModeProperty].toString().trim() != "0" && state[panModeProperty].toString().trim() != "1")))
+            return Result::fail ("Invalid pan mode.");
         std::map<String, float> explicitValues;
         if (auto result = readStoredManualParameters (state, explicitValues, floor); result.failed()) return result;
         for (const auto& key : { manualVolumeProperty, manualPanProperty })
@@ -391,16 +462,17 @@ Result validateMixerAutomation (const juce::ValueTree& state, bool legacy)
         {
             if (! curve.hasType (te::IDs::AUTOMATIONCURVE)) continue;
             const auto id = curve[te::IDs::paramID].toString();
-            const bool volume = id == mixerParameterID (state, Session::AutomationTarget::volume);
-            const bool pan = id == mixerParameterID (state, Session::AutomationTarget::pan);
-            if ((! volume && ! pan) || ! targets.insert (id).second || curve.getNumChildren() > 4096
+            std::optional<Session::AutomationTarget> target;
+            for (const auto t : mixerTargets) if ((! isSplitTarget (t) || split) && id == mixerParameterID (state, t)) target = t;
+            const bool volume = target == Session::AutomationTarget::volume;
+            if (! target || ! targets.insert (id).second || curve.getNumChildren() > 4096
                 || ! finiteProperty (curve.getProperty (te::IDs::bypass, 0), 0, 1)
                 || static_cast<double> (curve.getProperty (te::IDs::bypass, 0)) != std::floor (static_cast<double> (curve.getProperty (te::IDs::bypass, 0))))
                 return Result::fail ("Invalid mixer automation lane.");
-            if (curve.getNumChildren() > 0 && ! state.hasProperty (volume ? manualVolumeProperty : manualPanProperty)
-                && ! explicitValues.contains (volume ? "volume" : "pan"))
+            if (curve.getNumChildren() > 0 && ! state.hasProperty (manualAutomationProperty (*target))
+                && ! explicitValues.contains (mixerValueProperty (*target).toString()))
             {
-                const auto saved = state.getProperty (volume ? te::IDs::volume : te::IDs::pan, volume ? te::decibelsToVolumeFaderPosition (0) : 0);
+                const auto saved = state.getProperty (mixerValueProperty (*target), mixerInitialValue (*target));
                 if (! finiteProperty (saved, volume ? 0 : -1, 1)
                     || (volume && static_cast<double> (saved) > 0 && static_cast<double> (saved) < floor))
                     return Result::fail ("Invalid legacy mixer automation baseline.");
@@ -454,25 +526,26 @@ void restoreManualMixerState (juce::ValueTree state)
         std::map<String, float> explicitValues;
         if (readStoredManualParameters (state, explicitValues).failed()) return; // Validation precedes staged load.
         bool owned = false;
-        for (const auto& pair : { std::pair { manualVolumeProperty, te::IDs::volume }, std::pair { manualPanProperty, te::IDs::pan } })
+        for (const auto target : mixerTargets)
         {
-            const auto curve = state.getChildWithProperty (te::IDs::paramID, mixerParameterID (state,
-                pair.second == te::IDs::volume ? Session::AutomationTarget::volume : Session::AutomationTarget::pan));
-            if (state.hasProperty (pair.first) || (curve.isValid() && curve.getNumChildren() > 0))
+            if (isSplitTarget (target) && ! splitPanMixerState (state)) continue;
+            const auto& manual = manualAutomationProperty (target);
+            const auto& value = mixerValueProperty (target);
+            const auto curve = state.getChildWithProperty (te::IDs::paramID, mixerParameterID (state, target));
+            if (state.hasProperty (manual) || (curve.isValid() && curve.getNumChildren() > 0))
             {
-                if (! state.hasProperty (pair.first))
+                if (! state.hasProperty (manual))
                 {
-                    const auto found = explicitValues.find (pair.second.toString());
-                    state.setProperty (pair.first, found != explicitValues.end() ? juce::var (found->second)
-                        : state.getProperty (pair.second, pair.second == te::IDs::volume ? te::decibelsToVolumeFaderPosition (0) : 0), nullptr);
+                    const auto found = explicitValues.find (value.toString());
+                    state.setProperty (manual, found != explicitValues.end() ? juce::var (found->second) : state.getProperty (value, mixerInitialValue (target)), nullptr);
                 }
-                state.setProperty (pair.second, state[pair.first], nullptr); owned = true;
+                state.setProperty (value, state[manual], nullptr); owned = true;
             }
-            else if (const auto found = explicitValues.find (pair.second.toString()); found != explicitValues.end())
+            else if (const auto found = explicitValues.find (value.toString()); found != explicitValues.end())
             {
                 // Retiring a shared parameter blob must also retain a sibling
                 // parameter that has no owned curve or manual metadata yet.
-                state.setProperty (pair.second, found->second, nullptr);
+                state.setProperty (value, found->second, nullptr);
             }
         }
         // Construct parameters from manual values before the native single-point
@@ -734,9 +807,14 @@ Result validateRouting (const juce::ValueTree& state, bool legacyFaders)
     return Result::ok();
 }
 
-// Keep the engine's automation, smoothing and gain range, but normalize its
-// sine/cosine law to unity at center. A distinct type preserves older projects'
-// serialized linear mixers rather than silently changing their sound.
+// Halftrack's track and group mixer: the engine's volume plug-in, with its automation and gain
+// range, playing through the reference's panner (static reading of its code; see
+// docs/research/mixer-laws-contract.md). In Stereo pan mode the pan is a balance law: the left
+// channel scaled by sqrt 2 cos, and the right by sqrt 2 sin, of (pan + 1) pi/4, neither below 1e-5.
+// In Split Stereo mode each input channel pans on its own, with plain cos and sin of (its pan + 1)
+// pi/4. Switching modes blends the two over 75 samples, moves are smoothed over the engine
+// mixer's 15 ms, and the A/B crossfade gain follows. A distinct type keeps older projects' engine
+// mixers sounding as they did.
 class TrackMixer final : public te::VolumeAndPanPlugin
 {
 public:
@@ -744,24 +822,104 @@ public:
     explicit TrackMixer (te::PluginCreationInfo info) : VolumeAndPanPlugin (info)
     {
         setPanLaw (te::PanLaw3dBCenter);
+        auto* um = getUndoManager();
+        panMode.referTo (state, panModeProperty, um, 0);
+        leftValue.referTo (state, splitLeftProperty, um, -1.0f);
+        rightValue.referTo (state, splitRightProperty, um, 1.0f);
+        const auto text = [] (float v) { return Session::panText (v); };
+        const auto parse = [] (const juce::String& t) { return Session::panFromText (t); };
+        leftSplit = addParam (leftSplitParameterID, TRANS ("Left Split Stereo"), { -1.0f, 1.0f }, text, parse);
+        rightSplit = addParam (rightSplitParameterID, TRANS ("Right Split Stereo"), { -1.0f, 1.0f }, text, parse);
+        leftSplit->attachToCurrentValue (leftValue);
+        rightSplit->attachToCurrentValue (rightValue);
+        split.store (panMode.get() != 0, std::memory_order_relaxed);
     }
+    ~TrackMixer() override { leftSplit->detachFromCurrentValue(); rightSplit->detachFromCurrentValue(); }
     juce::String getPluginType() override { return xmlTypeName; }
+    void restorePluginStateFromValueTree (const juce::ValueTree& v) override
+    {
+        te::copyPropertiesToCachedValues (v, panMode, leftValue, rightValue);
+        VolumeAndPanPlugin::restorePluginStateFromValueTree (v);
+        split.store (panMode.get() != 0, std::memory_order_relaxed);
+    }
+    bool splitPan() const { return panMode.get() != 0; }
     // The crossfade gain is set on the message thread and ramped across each block.
     std::atomic<float> crossfade { 1.0f };
+    juce::CachedValue<int> panMode;
+    juce::CachedValue<float> leftValue, rightValue;
+    te::AutomatableParameter* leftSplit = nullptr;
+    te::AutomatableParameter* rightSplit = nullptr;
     void initialise (const te::PluginInitialisationInfo& info) override
-    { VolumeAndPanPlugin::initialise (info); appliedCrossfade = crossfade.load (std::memory_order_relaxed); }
+    {
+        VolumeAndPanPlugin::initialise (info);
+        appliedCrossfade = crossfade.load (std::memory_order_relaxed);
+        modeAmount = split.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
+        for (auto* matrix : { &stereo, &splitting }) for (auto& gain : *matrix) gain.reset (info.sampleRate, smoothingRampTimeSeconds);
+        setTargets (true);
+    }
     void applyToBuffer (const te::PluginRenderContext& context) override
     {
-        VolumeAndPanPlugin::applyToBuffer (context);
-        const auto target = crossfade.load (std::memory_order_relaxed);
-        if (isEnabled() && context.destBuffer != nullptr)
-            for (int channel = 0; channel < juce::jmin (2, context.destBuffer->getNumChannels()); ++channel)
-                context.destBuffer->applyGainRamp (channel, context.bufferStartSample, context.bufferNumSamples,
-                                                   1.4142135623730951f * appliedCrossfade, 1.4142135623730951f * target);
-        appliedCrossfade = target;
+        auto* buffer = context.destBuffer;
+        const auto fade = crossfade.load (std::memory_order_relaxed);
+        if (! isEnabled() || buffer == nullptr || buffer->getNumChannels() < 1 || context.bufferNumSamples <= 0) { appliedCrossfade = fade; return; }
+        setTargets (false);
+        const int start = context.bufferStartSample, count = context.bufferNumSamples, channels = buffer->getNumChannels();
+        auto* left = buffer->getWritePointer (0, start);
+        auto* right = channels > 1 ? buffer->getWritePointer (1, start) : nullptr;
+        const float mode = split.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
+        const float fadeStep = (fade - appliedCrossfade) / (float) count;
+        float fadeGain = appliedCrossfade;
+        for (int n = 0; n < count; ++n)
+        {
+            if (modeAmount < mode) modeAmount = std::min (mode, modeAmount + modeStep);
+            else if (modeAmount > mode) modeAmount = std::max (mode, modeAmount - modeStep);
+            float g[4];
+            for (size_t k = 0; k < 4; ++k) g[k] = (1.0f - modeAmount) * stereo[k].getNextValue() + modeAmount * splitting[k].getNextValue();
+            fadeGain += fadeStep;
+            // A mono input feeds both of the panner's inputs.
+            const float l = left[n], r = right != nullptr ? right[n] : l;
+            left[n] = (g[0] * l + g[2] * r) * fadeGain;
+            if (right != nullptr) right[n] = (g[1] * l + g[3] * r) * fadeGain;
+        }
+        // Channels beyond a stereo pair take the volume alone.
+        const float volume = te::volumeFaderPositionToGain (volParam->getCurrentValue());
+        for (int channel = 2; channel < channels; ++channel)
+            buffer->applyGainRamp (channel, start, count, appliedVolume * appliedCrossfade, volume * fade);
+        appliedVolume = volume; appliedCrossfade = fade;
     }
 private:
-    float appliedCrossfade = 1.0f;
+    // Each mode's matrix: left to left, left to right, right to left and right to right.
+    std::array<juce::SmoothedValue<float>, 4> stereo, splitting;
+    std::atomic<bool> split { false };
+    float modeAmount = 0;                                   // From 0 (Stereo) to 1 (Split Stereo).
+    static constexpr float modeStep = 1.0f / 75.0f;         // The reference's ramp, in samples.
+    float appliedCrossfade = 1.0f, appliedVolume = 1.0f;
+    void setTargets (bool immediately)
+    {
+        constexpr double quarterPi = 0.7853981633974483, halfPi = 1.5707963267948966, root2 = 1.4142135623730951;
+        const float volume = te::volumeFaderPositionToGain (volParam->getCurrentValue());
+        const double c = panParam->getCurrentValue() * quarterPi + quarterPi;
+        const double a = leftSplit->getCurrentValue() * quarterPi + quarterPi, b = rightSplit->getCurrentValue() * quarterPi + quarterPi;
+        const std::array<float, 4> stereoTargets { volume * std::max ((float) (root2 * std::cos (c)), 1.0e-5f), 0.0f,
+                                                   0.0f, volume * std::max ((float) (root2 * std::cos (halfPi - c)), 1.0e-5f) };
+        const std::array<float, 4> splitTargets { volume * (float) std::cos (a), volume * (float) std::cos (halfPi - a),
+                                                  volume * (float) std::cos (b), volume * (float) std::cos (halfPi - b) };
+        for (size_t k = 0; k < 4; ++k)
+        {
+            if (immediately) { stereo[k].setCurrentAndTargetValue (stereoTargets[k]); splitting[k].setCurrentAndTargetValue (splitTargets[k]); }
+            else { stereo[k].setTargetValue (stereoTargets[k]); splitting[k].setTargetValue (splitTargets[k]); }
+        }
+        if (immediately) appliedVolume = volume;
+    }
+    void valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& id) override
+    {
+        if (tree == state && id == panModeProperty)
+        {
+            panMode.forceUpdateOfCachedValue();
+            split.store (panMode.get() != 0, std::memory_order_relaxed);
+        }
+        VolumeAndPanPlugin::valueTreePropertyChanged (tree, id);
+    }
 };
 
 // Track Delay. A positive delay holds the track's audio back through a preallocated ring.
@@ -1695,9 +1853,10 @@ te::AutomatableParameter* envelopeParameter (te::AudioTrack& track, const Sessio
 {
     if (target.pluginId.isEmpty())
     {
+        // The mixer's 0 volume, 1 pan, and 2 and 3 split pans.
         auto* mixer = track.getVolumePlugin();
-        if (mixer == nullptr || (target.parameter != 0 && target.parameter != 1)) return nullptr;
-        return &automationParameter (*mixer, target.parameter == 0 ? Session::AutomationTarget::volume : Session::AutomationTarget::pan);
+        if (mixer == nullptr || ! juce::isPositiveAndBelow (target.parameter, (int) mixerTargets.size())) return nullptr;
+        return automationParameter (*mixer, mixerTargets[(size_t) target.parameter]);
     }
     for (auto* p : track.pluginList.getPlugins())
         if (p->itemID.toString() == target.pluginId)
@@ -1741,8 +1900,9 @@ std::optional<Session::EnvelopeTarget> envelopeTargetOf (te::AudioTrack& track, 
 {
     if (auto* mixer = track.getVolumePlugin(); mixer != nullptr && mixer->itemID == id.automatableEditItemID)
     {
-        if (id.paramID == mixer->volParam->paramID) return Session::EnvelopeTarget { {}, 0 };
-        if (id.paramID == mixer->panParam->paramID) return Session::EnvelopeTarget { {}, 1 };
+        for (size_t i = 0; i < mixerTargets.size(); ++i)
+            if (auto* parameter = automationParameter (*mixer, mixerTargets[i]); parameter != nullptr && id.paramID == parameter->paramID)
+                return Session::EnvelopeTarget { {}, (int) i };
         return std::nullopt;
     }
     for (auto* p : track.pluginList.getPlugins())
@@ -3997,7 +4157,9 @@ struct Session::Impl
             if (! std::isfinite (time) || time <= previousTime) return Result::fail ("Automation points are too close to represent at the project tempo.");
             previousTime = time;
         }
-        auto& parameter = automationParameter (plugin, target); auto& curve = parameter.getCurve();
+        auto* parameter = automationParameter (plugin, target);
+        if (parameter == nullptr) return Result::fail ("This mixer has no split stereo pans.");
+        auto& curve = parameter->getCurve();
         const auto nativeValue = [target] (float value) { return target == AutomationTarget::volume ? te::decibelsToVolumeFaderPosition (value) : value; };
         bool same = lane.enabled == ! curve.bypass.get() && lane.points.size() == static_cast<size_t> (curve.getNumPoints());
         for (size_t i = 0; same && i < lane.points.size(); ++i)
@@ -4006,12 +4168,12 @@ struct Session::Impl
         if (same) return Result::ok();
         if (! internalAutomationWrite)
             transaction (plugin.isMasterVolAndPan() ? "Edit master volume automation"
-                : target == AutomationTarget::volume ? "Edit volume automation" : "Edit pan automation");
+                : target == AutomationTarget::volume ? "Edit volume automation" : isSplitTarget (target) ? "Edit split pan automation" : "Edit pan automation");
         auto* undo = &edit->getUndoManager();
         const auto& property = manualAutomationProperty (target);
         // This baseline must survive Undo of the first envelope. Native automation
         // asynchronously overwrites its attached display property during playback.
-        if (! plugin.state.hasProperty (property)) plugin.state.setProperty (property, parameter.getCurrentExplicitValue(), nullptr);
+        if (! plugin.state.hasProperty (property)) plugin.state.setProperty (property, parameter->getCurrentExplicitValue(), nullptr);
         plugin.remapOnTempoChange = true;
         // Keep the native curve container attached across Undo, including empty lanes,
         // because AutomatableParameter caches that exact tree for its lifetime.
@@ -4020,7 +4182,7 @@ struct Session::Impl
         curve.state.setProperty (te::IDs::bypass, ! lane.enabled, undo);
         for (const auto& point : lane.points)
             curve.addPoint (te::EditPosition (te::BeatPosition::fromBeats (point.beat)), nativeValue (point.value), point.curve, undo);
-        if (lane.points.empty()) parameter.setParameter (static_cast<float> (plugin.state[property]), juce::dontSendNotification);
+        if (lane.points.empty()) parameter->setParameter (static_cast<float> (plugin.state[property]), juce::dontSendNotification);
         // Attaching a curve invalidates sibling parameter streams as well.
         // Native streams omit one-point curves: follow their static values on
         // this message-thread edit boundary, preserving explicit manual values.
@@ -4104,8 +4266,24 @@ struct Session::Impl
     };
     struct CapturePass { std::vector<AutomationPoint> original, recorded; bool touch = false; };
     std::map<String, CapturePass> captures;
-    static String mixerKey (const te::AudioTrack& t, AutomationTarget target)
-    { return "mixer:" + t.itemID.toString() + (target == AutomationTarget::volume ? ":volume" : ":pan"); }
+    static String mixerKey (const te::AudioTrack& t, AutomationTarget target) { return "mixer:" + t.itemID.toString() + ":" + targetName (target); }
+    // A mixer control's name in lane keys and mapping targets.
+    static const char* targetName (AutomationTarget target)
+    {
+        switch (target)
+        {
+            case AutomationTarget::volume: return "volume";
+            case AutomationTarget::leftSplitPan: return "leftsplit";
+            case AutomationTarget::rightSplitPan: return "rightsplit";
+            case AutomationTarget::pan: break;
+        }
+        return "pan";
+    }
+    static std::optional<AutomationTarget> targetNamed (const String& name)
+    {
+        for (const auto target : mixerTargets) if (name == targetName (target)) return target;
+        return std::nullopt;
+    }
     static String deviceKey (const String& pluginId, int parameter) { return "device:" + pluginId + ":" + String (parameter); }
     // A hosted plug-in parameter's own ID for its "device:" key, or empty for any other target.
     String externalParameterId (const String& target) const
@@ -4169,7 +4347,8 @@ struct Session::Impl
         if (parts[0] == "master") return mixerLane (*edit->getMasterVolumePlugin(), AutomationTarget::volume);
         if (parts[0] == "mixer")
             if (auto* t = track (parts[1])) if (auto* mixer = t->getVolumePlugin())
-                return mixerLane (*mixer, parts[2] == "pan" ? AutomationTarget::pan : AutomationTarget::volume);
+                if (const auto target = targetNamed (parts[2]); target && automationParameter (*mixer, *target) != nullptr)
+                    return mixerLane (*mixer, *target);
         if (parts[0] == "send")
             if (auto* t = track (parts[1]); t != nullptr && ! isReturn (*t))
                 if (auto* destination = track (parts[2]); destination != nullptr && isReturn (*destination))
@@ -4480,7 +4659,7 @@ struct Session::Impl
         for (auto* t : te::getAudioTracks (*edit))
         {
             if (auto* mixer = t->getVolumePlugin())
-                for (const auto target : { AutomationTarget::volume, AutomationTarget::pan })
+                for (const auto target : mixerTargets)
                     if (off (automationLane (*mixer, target))) keys.add (mixerKey (*t, target));
             for (auto* plugin : t->pluginList.getPlugins())
                 if (auto* send = dynamic_cast<te::AuxSendPlugin*> (plugin); send != nullptr && off (sendLane (*send)))
@@ -4638,13 +4817,13 @@ struct Session::Impl
             auto* mixer = dynamic_cast<te::VolumeAndPanPlugin*> (&plugin);
             for (auto* parameter : plugin.getAutomatableParameters())
             {
-                const auto target = mixer && parameter == mixer->volParam.get() ? AutomationTarget::volume : AutomationTarget::pan;
-                const auto& property = manualAutomationProperty (target);
-                if (mixer && plugin.state.hasProperty (property))
+                std::optional<AutomationTarget> target;
+                if (mixer != nullptr) for (const auto t : mixerTargets) if (automationParameter (*mixer, t) == parameter) target = t;
+                if (target && plugin.state.hasProperty (manualAutomationProperty (*target)))
                 {
                     if (! parameter->hasAutomationPoints())
                     {
-                        plugin.state.setProperty (target == AutomationTarget::volume ? te::IDs::volume : te::IDs::pan, plugin.state[property], nullptr);
+                        plugin.state.setProperty (mixerValueProperty (*target), plugin.state[manualAutomationProperty (*target)], nullptr);
                         parameter->updateFromAttachedValue();
                     }
                     parameter->updateStream();
@@ -5463,7 +5642,12 @@ struct Session::Impl
         const auto parts = juce::StringArray::fromTokens (target, ":", "");
         if (target == "master") return edit->getMasterVolumePlugin()->getVolumeDb();
         if (parts[0] == "mixer")
-            if (auto* t = track (parts[1])) if (auto* mixer = t->getVolumePlugin()) return parts[2] == "pan" ? mixer->getPan() : mixer->getVolumeDb();
+            if (auto* t = track (parts[1])) if (auto* mixer = t->getVolumePlugin())
+            {
+                const auto target = targetNamed (parts[2]);
+                if (target == AutomationTarget::volume) return mixer->getVolumeDb();
+                if (auto* parameter = target ? automationParameter (*mixer, *target) : nullptr) return parameter->getCurrentValue();
+            }
         if (parts[0] == "send")
             if (auto* t = track (parts[1])) { auto* send = findSend (*t, parts[2]); return send != nullptr ? send->getGainDb() : -100.0f; }
         if (parts[0] == "device")
@@ -5483,7 +5667,9 @@ struct Session::Impl
         if (parts[0] == "mixer")
         {
             const int index = trackIndexOf (parts[1]);
-            return index < 0 ? Result::ok() : parts[2] == "pan" ? owner.setTrackPan (index, value) : owner.setTrackGain (index, value);
+            if (index < 0) return Result::ok();
+            if (parts[2] == "leftsplit" || parts[2] == "rightsplit") return owner.setTrackSplitPan (index, parts[2] == "rightsplit", value);
+            return parts[2] == "pan" ? owner.setTrackPan (index, value) : owner.setTrackGain (index, value);
         }
         if (parts[0] == "send")
         {
@@ -5810,6 +5996,13 @@ Session::Snapshot Session::snapshot() const
             info.gainDb = v->getVolumeDb(); info.pan = v->getPan();
             info.volumeAutomation = automationLane (*v, AutomationTarget::volume);
             info.panAutomation = automationLane (*v, AutomationTarget::pan);
+            if (auto* mixer = dynamic_cast<TrackMixer*> (v))
+            {
+                info.splitPan = mixer->splitPan();
+                info.leftSplitPan = mixer->leftSplit->getCurrentValue(); info.rightSplitPan = mixer->rightSplit->getCurrentValue();
+                info.leftSplitAutomation = automationLane (*v, AutomationTarget::leftSplitPan);
+                info.rightSplitAutomation = automationLane (*v, AutomationTarget::rightSplitPan);
+            }
         }
         if (auto* input = impl->input (*t))
         {
@@ -5920,6 +6113,8 @@ Session::Snapshot Session::snapshot() const
             group.mute = folder->isMuted (false); group.solo = folder->isSolo (false) || static_cast<bool> (folder->state.getProperty (cueProperty, false));
             group.folded = folder->state.getProperty (groupFoldedProperty, false);
             if (auto* v = folder->getVolumePlugin()) { group.gainDb = v->getVolumeDb(); group.pan = v->getPan(); }
+            if (auto* mixer = dynamic_cast<TrackMixer*> (folder->getVolumePlugin()))
+            { group.splitPan = mixer->splitPan(); group.leftSplitPan = mixer->leftSplit->getCurrentValue(); group.rightSplitPan = mixer->rightSplit->getCurrentValue(); }
             if (auto* level = folder->pluginList.findFirstPluginOfType<te::LevelMeterPlugin>())
             {
                 auto& m = impl->meter (group.id, level->measurer);
@@ -6077,7 +6272,7 @@ Result Session::loadProject (const File& file)
     if (! candidate) return Result::fail ("This project could not be loaded.");
     for (auto* track : te::getAudioTracks (*candidate))
         if (auto* mixer = track->getVolumePlugin())
-            for (const auto target : { AutomationTarget::volume, AutomationTarget::pan })
+            for (const auto target : mixerTargets)
                 if (! validAutomationLane (target, automationLane (*mixer, target)))
                     return Result::fail ("Mixer automation exceeds the supported beat or value range.");
     for (const auto target : { AutomationTarget::volume, AutomationTarget::pan })
@@ -9172,19 +9367,20 @@ Result Session::duplicateTrack (const String& id, String& duplicateId)
     // same duplication transaction, after construction has completed.
     if (auto* sourceMixer = source->getVolumePlugin())
         if (auto* copiedMixer = track->getVolumePlugin())
-            for (const auto target : { AutomationTarget::volume, AutomationTarget::pan })
+            for (const auto target : mixerTargets)
             {
-                auto& original = automationParameter (*sourceMixer, target).getCurve();
-                if (original.getNumPoints() == 0) continue;
-                auto& parameter = automationParameter (*copiedMixer, target); auto& copiedCurve = parameter.getCurve();
+                auto* from = automationParameter (*sourceMixer, target);
+                auto* parameter = automationParameter (*copiedMixer, target);
+                if (from == nullptr || parameter == nullptr || from->getCurve().getNumPoints() == 0) continue;
+                auto& original = from->getCurve(); auto& copiedCurve = parameter->getCurve();
                 copiedCurve.clear (undo);
                 for (int i = 0; i < original.getNumPoints(); ++i)
                 {
                     const auto point = original.getPoint (i);
                     copiedCurve.addPoint (point.time, point.value, point.curve, undo);
                 }
-                parameter.updateStream();
-                parameter.updateFromAutomationSources (impl->edit->getTransport().getPosition());
+                parameter->updateStream();
+                parameter->updateFromAutomationSources (impl->edit->getTransport().getPosition());
             }
     renewMidiNoteIDs (track->state, undo);
     track->state.removeProperty (linkProperty, undo); // A duplicate starts unlinked.
@@ -11140,6 +11336,59 @@ Result Session::setTrackPan (int index, float value)
     volume->state.setProperty (manualPanProperty, value, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
+Result Session::setPanMode (const juce::StringArray& ids, bool split)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (ids.isEmpty()) return Result::fail ("Choose a track to switch.");
+    std::vector<TrackMixer*> mixers;
+    for (const auto& id : ids)
+    {
+        TrackMixer* mixer = nullptr;
+        if (auto* t = impl->track (id)) mixer = dynamic_cast<TrackMixer*> (t->getVolumePlugin());
+        else if (auto* g = impl->group (id)) mixer = dynamic_cast<TrackMixer*> (g->getVolumePlugin());
+        else return Result::fail ("Track not found.");
+        if (mixer == nullptr) return Result::fail ("A mixer from an older project cannot switch its pan mode.");
+        mixers.push_back (mixer);
+    }
+    if (std::all_of (mixers.begin(), mixers.end(), [split] (const TrackMixer* m) { return m->splitPan() == split; })) return Result::ok();
+    impl->transaction ("Pan mode");
+    for (auto* mixer : mixers) mixer->panMode = split ? 1 : 0;
+    impl->changed(); return Result::ok();
+}
+Result Session::setTrackSplitPan (int index, bool right, float value)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
+    if (! std::isfinite (value)) return Result::fail ("Invalid pan.");
+    auto* mixer = dynamic_cast<TrackMixer*> (t->getVolumePlugin());
+    if (mixer == nullptr) return Result::fail ("A mixer from an older project has no split stereo pans.");
+    value = juce::jlimit (-1.0f, 1.0f, value);
+    const auto target = right ? AutomationTarget::rightSplitPan : AutomationTarget::leftSplitPan;
+    const auto key = Impl::mixerKey (*t, target);
+    if (impl->capturing()) { impl->capture (key, value); impl->changed(); return Result::ok(); }
+    auto* parameter = right ? mixer->rightSplit : mixer->leftSplit;
+    const auto& property = manualAutomationProperty (target);
+    if (! mixer->state.hasProperty (property)) mixer->state.setProperty (property, parameter->getCurrentExplicitValue(), nullptr);
+    impl->transaction (right ? "Right split pan" : "Left split pan"); impl->overrideLane (key);
+    parameter->setParameter (value, juce::sendNotification);
+    mixer->state.setProperty (property, value, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::setGroupSplitPan (const String& groupId, bool right, float value)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* folder = impl->group (groupId); auto* mixer = folder ? dynamic_cast<TrackMixer*> (folder->getVolumePlugin()) : nullptr;
+    if (! mixer) return Result::fail ("Group not found.");
+    if (! std::isfinite (value)) return Result::fail ("Invalid pan.");
+    value = juce::jlimit (-1.0f, 1.0f, value);
+    auto* parameter = right ? mixer->rightSplit : mixer->leftSplit;
+    const auto& property = manualAutomationProperty (right ? AutomationTarget::rightSplitPan : AutomationTarget::leftSplitPan);
+    if (! mixer->state.hasProperty (property)) mixer->state.setProperty (property, parameter->getCurrentExplicitValue(), nullptr);
+    impl->transaction (right ? "Group right split pan" : "Group left split pan");
+    parameter->setParameter (value, juce::sendNotification);
+    mixer->state.setProperty (property, value, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
 float Session::curveProportion (float from, float to, float curve, double along)
 {
     // The curve as the engine plays it (AutomationIterator::setPosition) over a unit segment. Its
@@ -11266,7 +11515,7 @@ Result Session::setClipEnvelope (const String& clipId, const ClipEnvelope& envel
     // modulated level into the fader's stored value while the clip plays.
     if (auto* mixer = dynamic_cast<te::VolumeAndPanPlugin*> (&parameter->automatableEditElement))
     {
-        const auto& property = manualAutomationProperty (envelope.target.parameter == 0 ? AutomationTarget::volume : AutomationTarget::pan);
+        const auto& property = manualAutomationProperty (mixerTargets[(size_t) envelope.target.parameter]);
         if (! mixer->state.hasProperty (property)) mixer->state.setProperty (property, parameter->getCurrentExplicitValue(), nullptr);
     }
     parameter->updateStream();
@@ -11417,6 +11666,9 @@ std::optional<std::pair<float, float>> Session::midiTargetRange (const String& t
     {
         if (parts[2] == "volume") return std::pair { -100.0f, 6.0f };
         if (parts[2] == "pan") return std::pair { -1.0f, 1.0f };
+        if (parts[2] == "leftsplit" || parts[2] == "rightsplit")
+            if (auto* mixer = impl->track (parts[1])->getVolumePlugin(); mixer != nullptr && mixer->getAutomatableParameterByID (leftSplitParameterID) != nullptr)
+                return std::pair { -1.0f, 1.0f };
     }
     if (parts.size() == 3 && parts[0] == "send")
         if (auto* t = impl->track (parts[1]); t != nullptr && ! isReturn (*t))

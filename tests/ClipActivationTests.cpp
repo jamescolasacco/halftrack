@@ -169,7 +169,8 @@ void trackIsolation()
     s.play();dispatch();auto both=player.process(12000);
     check(both.getMagnitude(0,0,12000)>.01&&both.getMagnitude(1,0,12000)>.01,"both independent instruments hold notes");
     ok(s.setClipActive(s.snapshot().tracks[2].clips[0].id,false),"disable first instrument clip");dispatch();player.process(2048);auto remaining=player.process(4096);
-    check(remaining.getMagnitude(0,0,4096)<1e-7&&remaining.getMagnitude(1,0,4096)>.01,"deactivation releases only the target track's voice");s.stop();
+    // The other track, panned hard right, leaks into the left at the balance law's 1e-5 floor.
+    check(remaining.getMagnitude(0,0,4096)<1e-5*remaining.getMagnitude(1,0,4096)&&remaining.getMagnitude(1,0,4096)>.01,"deactivation releases only the target track's voice");s.stop();
 }
 }
 int runClipActivationTests(const juce::File& artifacts)

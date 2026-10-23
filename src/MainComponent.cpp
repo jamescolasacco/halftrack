@@ -1333,6 +1333,27 @@ private:
         for (const auto& track : state.tracks) if (multiSelectedTracks.contains (track.id) || (currentTrack() != nullptr && track.id == currentTrack()->id)) ids.add (track.id);
         return ids;
     }
+    // The pan controls' context menu, as the reference's: one item, switching the pan mode of every
+    // selected track when the clicked one is among them.
+    static juce::PopupMenu panModeItems (bool split)
+    {
+        juce::PopupMenu menu;
+        menu.addItem (1, split ? "Split Stereo Pan Mode" : "Stereo Pan Mode");
+        return menu;
+    }
+    void panModeMenu (const juce::String& trackId, bool split)
+    { panModeItems (split).showMenuAsync (juce::PopupMenu::Options(), [this, trackId, split] (int chosen) { if (chosen == 1) choosePanMode (trackId, split); }); }
+    void groupPanModeMenu (const juce::String& groupId, bool split)
+    {
+        panModeItems (split).showMenuAsync (juce::PopupMenu::Options(), [this, groupId, split] (int chosen)
+        { if (chosen == 1) { report (session.setPanMode ({ groupId }, split)); refresh(); } });
+    }
+    void choosePanMode (const juce::String& trackId, bool split)
+    {
+        auto ids = selectedTrackIds();
+        if (! ids.contains (trackId)) ids = { trackId };
+        report (session.setPanMode (ids, split)); refresh();
+    }
     void linkSelectedTracks (bool joinClickedLink)
     {
         auto ids = selectedTrackIds();
@@ -1567,6 +1588,24 @@ private:
             pan.onDragStart = [this] { owner.session.beginEditGesture ("Track pan"); };
             pan.onDragEnd = [this] { owner.session.endEditGesture(); };
             pan.onValueChange = [this] { owner.report (owner.session.setTrackPan (index, (float) pan.getValue())); };
+            // In Split Stereo pan mode two sliders pan the left and right channels in place of the pan.
+            for (auto* split : { &leftSplit, &rightSplit })
+            {
+                addChildComponent (*split);
+                const bool right = split == &rightSplit;
+                split->setName (right ? "Right split pan" : "Left split pan");
+                split->setSliderStyle (juce::Slider::LinearBar); split->setRange (-1.0, 1.0, 0.01);
+                split->setDoubleClickReturnValue (true, right ? 1 : -1);
+                split->setColour (juce::Slider::trackColourId, themes::colour (0xff4a4a4a));
+                split->textFromValueFunction = [] (double v) { return Session::panText ((float) v); };
+                split->valueFromTextFunction = [] (const juce::String& value) { return (double) Session::panFromText (value); };
+                split->updateText();
+                split->onDragStart = [this, right] { owner.session.beginEditGesture (right ? "Right split pan" : "Left split pan"); };
+                split->onDragEnd = [this] { owner.session.endEditGesture(); };
+                split->onValueChange = [this, split, right] { owner.report (owner.session.setTrackSplitPan (index, right, (float) split->getValue())); };
+            }
+            for (auto* label : { &leftLabel, &rightLabel })
+            { addChildComponent (*label); label->setFont (font (9.5f)); label->setJustificationType (juce::Justification::centred); label->setColour (juce::Label::textColourId, muted); }
             if (columnLayout)
             {
                 // Track Delay, in milliseconds; negative values play the track early.
@@ -1669,7 +1708,15 @@ private:
             if (! name.isBeingEdited()) name.setText (track.name, juce::dontSendNotification);
             if (! gain.isMouseButtonDown()) gain.setValue (track.gainDb, juce::dontSendNotification);
             if (! pan.isMouseButtonDown()) pan.setValue (track.pan, juce::dontSendNotification);
+            if (! leftSplit.isMouseButtonDown()) leftSplit.setValue (track.leftSplitPan, juce::dontSendNotification);
+            if (! rightSplit.isMouseButtonDown()) rightSplit.setValue (track.rightSplitPan, juce::dontSendNotification);
+            if (splitPan != track.splitPan) { splitPan = track.splitPan; showPans (pan.isVisible() || leftSplit.isVisible()); resized(); }
             gain.setEnabled (! owner.session.isExporting()); pan.setEnabled (! owner.session.isExporting());
+            leftSplit.setEnabled (! owner.session.isExporting()); rightSplit.setEnabled (! owner.session.isExporting());
+            leftSplit.getProperties().set ("midiMapTarget", "mixer:" + track.id + ":leftsplit"); rightSplit.getProperties().set ("midiMapTarget", "mixer:" + track.id + ":rightsplit");
+            showAutomationState (leftSplit, track.leftSplitAutomation, "Left Split Stereo: pans the left channel. Double-click for hard left.", "Left Split Stereo");
+            showAutomationState (rightSplit, track.rightSplitAutomation, "Right Split Stereo: pans the right channel. Double-click for hard right.", "Right Split Stereo");
+            leftSplit.setTitle (track.name + " left split stereo pan"); rightSplit.setTitle (track.name + " right split stereo pan");
             showAutomationState (gain, track.volumeAutomation, "Track volume. Double-click to reset to 0 dB.", "Volume");
             gain.getProperties().set ("midiMapTarget", "mixer:" + track.id + ":volume"); pan.getProperties().set ("midiMapTarget", "mixer:" + track.id + ":pan");
             showAutomationState (pan, track.panAutomation, "Track pan. Double-click to center.", "Pan");
@@ -1767,7 +1814,8 @@ private:
                 inputDetail.setVisible (shown.inOut && ! returnTrack && inputDetailShown);
                 sendMode.setVisible (shown.inOut && returnTrack); output.setVisible (shown.inOut);
                 for (auto& send : sends) send->setVisible (shown.sends);
-                for (auto* c : std::initializer_list<juce::Component*> { &pan, &gain, &mute, &solo }) c->setVisible (shown.mixer);
+                for (auto* c : std::initializer_list<juce::Component*> { &gain, &mute, &solo }) c->setVisible (shown.mixer);
+                showPans (shown.mixer);
                 arm.setVisible (shown.mixer && ! returnTrack);
                 delay.setVisible (shown.trackDelay); sideA->setVisible (shown.crossfader); sideB->setVisible (shown.crossfader);
                 if (shown != laidOut) { laidOut = shown; resized(); }
@@ -1779,8 +1827,8 @@ private:
         {
             const bool automating = owner.automationMode;
             for (auto* c : std::initializer_list<juce::Component*> { &automationDevice, &automationControl, &automationLane }) c->setVisible (automating);
-            if (automating) for (auto* c : std::initializer_list<juce::Component*> { &input, &inputDetail, &monitor, &gain, &pan, &sendMode }) c->setVisible (false);
-            else { gain.setVisible (true); pan.setVisible (true); inputDetail.setVisible (! returnTrack && inputDetailShown); }
+            if (automating) { for (auto* c : std::initializer_list<juce::Component*> { &input, &inputDetail, &monitor, &gain, &sendMode }) c->setVisible (false); showPans (false); }
+            else { gain.setVisible (true); showPans (true); inputDetail.setVisible (! returnTrack && inputDetailShown); }
             if (! automating) return;
             automationTargets = arrangementAutomation::targets (owner.session, track, owner.state.tracks);
             shownKey = owner.shownKey (track);
@@ -1989,6 +2037,10 @@ private:
                 delay.setBounds (5, bottom - 22, getWidth() - 10, 19);
                 if (shown.trackDelay) bottom -= 22;
                 pan.setBounds ((getWidth() - 46) / 2, top + 2, 46, 50);
+                // The split pans stack Left over Right, labelled when the strip is wide enough.
+                const int labels = getWidth() >= 93 ? 14 : 0;
+                leftLabel.setBounds (5, top + 8, labels, 16); rightLabel.setBounds (5, top + 27, labels, 16);
+                leftSplit.setBounds (5 + labels, top + 8, getWidth() - 10 - labels, 16); rightSplit.setBounds (5 + labels, top + 27, getWidth() - 10 - labels, 16);
                 gain.setBounds (6, top + 58, 54, juce::jmax (20, bottom - 4 - (top + 58)));
                 return;
             }
@@ -2001,6 +2053,9 @@ private:
             monitor.setBounds (40 + half, 27, w - 44 - half, 18);
             sendMode.setBounds (76, 27, w - 80, 18);
             gain.setBounds (32, 49, half + 4, 20); pan.setBounds (40 + half, 49, w - 44 - half, 20);
+            // The split pans share the pan's place, Left beside Right.
+            const int pans = w - 44 - half;
+            leftSplit.setBounds (40 + half, 49, pans / 2 - 1, 20); rightSplit.setBounds (41 + half + pans / 2, 49, pans - pans / 2 - 1, 20);
             automationDevice.setBounds (58, 27, w - 62, 18);
             automationControl.setBounds (58, 49, w - 90, 18); automationLane.setBounds (w - 28, 49, 24, 18);
         }
@@ -2027,6 +2082,9 @@ private:
             }
             else if (! e.mods.isPopupMenu()) owner.multiSelectedTracks.clear();
             owner.selectTrack (index);
+            const auto within = [&e] (juce::Component& c) { return e.originalComponent == &c || c.isParentOf (e.originalComponent); };
+            // The pan controls' menu switches the pan mode, as the reference's does.
+            if (e.mods.isPopupMenu() && (within (pan) || within (leftSplit) || within (rightSplit))) { owner.panModeMenu (trackId, ! splitPan); return; }
             if (e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name))
                 if (const auto* track = owner.currentTrack()) owner.showTrackOrderMenu (track->id, columnLayout);
         }
@@ -2043,7 +2101,16 @@ private:
         juce::Label name;
         LinkIndicator link;
         juce::TextButton mute { "M" }, solo { "S" }, arm { "R" };
-        juce::Slider gain, pan, delay;
+        juce::Slider gain, pan, delay, leftSplit, rightSplit;
+        juce::Label leftLabel { {}, "L" }, rightLabel { {}, "R" };
+        bool splitPan = false;
+        // The pan, or in Split Stereo mode the split pans, as the section showing them is shown.
+        void showPans (bool visible)
+        {
+            pan.setVisible (visible && ! splitPan);
+            leftSplit.setVisible (visible && splitPan); rightSplit.setVisible (visible && splitPan);
+            leftLabel.setVisible (visible && splitPan && columnLayout && getWidth() >= 93); rightLabel.setVisible (leftLabel.isVisible());
+        }
         juce::ComboBox input, sendMode, automationDevice, automationControl, output;
         MonitorSwitch monitor;
         juce::TextButton automationLane { "+" };
@@ -2142,6 +2209,23 @@ private:
             pan.onDragStart = [this] { owner.session.beginEditGesture ("Group pan"); };
             pan.onDragEnd = [this] { owner.session.endEditGesture(); };
             pan.onValueChange = [this] { owner.report (owner.session.setGroupPan (groupId, (float) pan.getValue())); };
+            // Split Stereo pan mode, as on tracks.
+            for (auto* split : { &leftSplit, &rightSplit })
+            {
+                addChildComponent (*split);
+                const bool right = split == &rightSplit;
+                split->setName (right ? "Group right split pan" : "Group left split pan");
+                split->setSliderStyle (juce::Slider::LinearBar); split->setRange (-1.0, 1.0, 0.01);
+                split->setDoubleClickReturnValue (true, right ? 1 : -1);
+                split->setColour (juce::Slider::trackColourId, themes::colour (0xff4a4a4a));
+                split->textFromValueFunction = [] (double v) { return Session::panText ((float) v); };
+                split->valueFromTextFunction = [] (const juce::String& value) { return (double) Session::panFromText (value); };
+                split->updateText();
+                split->onDragStart = [this, right] { owner.session.beginEditGesture (right ? "Group right split pan" : "Group left split pan"); };
+                split->onDragEnd = [this] { owner.session.endEditGesture(); };
+                split->onValueChange = [this, split, right] { owner.report (owner.session.setGroupSplitPan (groupId, right, (float) split->getValue())); };
+            }
+            addMouseListener (this, true);
             if (columnLayout)
             {
                 // Session mixer strip: the grid column header names and folds the group.
@@ -2163,13 +2247,19 @@ private:
             activator.setButtonText (g->numberLabel); // A group's number, as the reference's shows.
             if (! gain.isMouseButtonDown()) gain.setValue (g->gainDb, juce::dontSendNotification);
             if (! pan.isMouseButtonDown()) pan.setValue (g->pan, juce::dontSendNotification);
+            if (! leftSplit.isMouseButtonDown()) leftSplit.setValue (g->leftSplitPan, juce::dontSendNotification);
+            if (! rightSplit.isMouseButtonDown()) rightSplit.setValue (g->rightSplitPan, juce::dontSendNotification);
+            splitPan = g->splitPan;
+            bool mixerShown = true;
             if (columnLayout)
             {
                 // The Mixer section, lined up with the tracks' as the In/Out section moves it.
                 const auto& shown = owner.state.mixerSections;
-                for (auto* c : std::initializer_list<juce::Component*> { &pan, &gain, &activator, &solo }) c->setVisible (shown.mixer);
+                for (auto* c : std::initializer_list<juce::Component*> { &gain, &activator, &solo }) c->setVisible (shown.mixer);
+                mixerShown = shown.mixer;
                 if (shown != laidOut) { laidOut = shown; resized(); }
             }
+            pan.setVisible (mixerShown && ! splitPan); leftSplit.setVisible (mixerShown && splitPan); rightSplit.setVisible (mixerShown && splitPan);
             repaint();
         }
         void resized() override
@@ -2179,6 +2269,7 @@ private:
                 const auto& shown = owner.state.mixerSections;
                 const int top = shown.inOut ? TrackRow::inOutHeight : 4;
                 pan.setBounds ((getWidth() - 46) / 2, top + 2, 46, 50);
+                leftSplit.setBounds (5, top + 8, getWidth() - 10, 16); rightSplit.setBounds (5, top + 27, getWidth() - 10, 16);
                 gain.setBounds (6, top + 58, 54, juce::jmax (20, getHeight() - 34 - (top + 58)));
                 const int buttons = getHeight() - 28, half = (getWidth() - 12) / 2;
                 activator.setBounds (5, buttons, half, 22); solo.setBounds (7 + half, buttons, half, 22);
@@ -2188,6 +2279,14 @@ private:
             fold.setBounds (2, 2, 18, 18); name.setBounds (20, 1, w - 80, 20);
             activator.setBounds (w - 56, 2, 26, 18); solo.setBounds (w - 28, 2, 26, 18);
             gain.setBounds (24, 21, (w - 30) / 2 + 10, 17); pan.setBounds (24 + (w - 30) / 2 + 14, 21, w - 38 - (w - 30) / 2 - 10, 17);
+            const int pans = w - 38 - (w - 30) / 2 - 10, x = 24 + (w - 30) / 2 + 14;
+            leftSplit.setBounds (x, 21, pans / 2 - 1, 17); rightSplit.setBounds (x + pans / 2 + 1, 21, pans - pans / 2 - 1, 17);
+        }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            // The pan controls' menu switches the group's pan mode, as on tracks.
+            const auto within = [&e] (juce::Component& c) { return e.originalComponent == &c || c.isParentOf (e.originalComponent); };
+            if (e.mods.isPopupMenu() && (within (pan) || within (leftSplit) || within (rightSplit))) owner.groupPanModeMenu (groupId, ! splitPan);
         }
         void paint (juce::Graphics& g) override
         {
@@ -2230,7 +2329,8 @@ private:
         juce::TextButton activator { "G" }, solo { "S" };
         Session::MixerSections laidOut;
         juce::Label name;
-        juce::Slider gain, pan;
+        juce::Slider gain, pan, leftSplit, rightSplit;
+        bool splitPan = false;
     };
 
     // The header of an automation lane: what it shows, and a button that hides it.
@@ -4842,7 +4942,9 @@ private:
             {
                 if (mode == Session::EnvelopeMode::automation && ! sessionClip) continue;
                 result.push_back ({ { {}, 0 }, mode, "Mixer", "Track Volume" });
-                result.push_back ({ { {}, 1 }, mode, "Mixer", "Track Panning" });
+                // The pans of the track's pan mode, as the reference's chooser offers them.
+                if (! track.splitPan) result.push_back ({ { {}, 1 }, mode, "Mixer", "Track Panning" });
+                else { result.push_back ({ { {}, 2 }, mode, "Mixer", "Left Split Stereo" }); result.push_back ({ { {}, 3 }, mode, "Mixer", "Right Split Stereo" }); }
                 auto devices = track.plugins;
                 if (track.instrument.isNativeEffect) devices.insert (devices.begin(), track.instrument);
                 for (const auto& device : devices)
@@ -15694,6 +15796,53 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (sent, "a Session send knob edits the real send level");
         const auto sendTarget = sendA->getProperties()["midiMapTarget"].toString();
         check (sendTarget.startsWith ("send:") && sendTarget.endsWith (":" + echo) && session.isMappableTarget (sendTarget), "the send knob is a MIDI and key mapping target");
+        {
+            // Split Stereo pan mode, from the pan's menu: Left over Right sliders in place of the knob.
+            const auto first = state.tracks[0].id;
+            std::function<juce::Component* (juce::Component&, const juce::String&)> withTarget = [&] (juce::Component& parent, const juce::String& target) -> juce::Component*
+            {
+                for (auto* child : parent.getChildren())
+                {
+                    if (child->getProperties()["midiMapTarget"].toString() == target) return child;
+                    if (auto* found = withTarget (*child, target)) return found;
+                }
+                return nullptr;
+            };
+            const auto itemText = [] (const juce::PopupMenu& menu) { juce::PopupMenu::MenuItemIterator it (menu); return it.next() ? it.getItem().text : juce::String(); };
+            auto* knob = withTarget (launcher, "mixer:" + first + ":pan");
+            check (knob != nullptr && knob->isVisible() && itemText (panModeItems (true)) == "Split Stereo Pan Mode" && itemText (panModeItems (false)) == "Stereo Pan Mode",
+                   "the pan knob's menu offers Split Stereo Pan Mode, and the split pans' Stereo Pan Mode");
+            choosePanMode (first, true); refresh();
+            auto* left = dynamic_cast<juce::Slider*> (withTarget (launcher, "mixer:" + first + ":leftsplit"));
+            auto* right = dynamic_cast<juce::Slider*> (withTarget (launcher, "mixer:" + first + ":rightsplit"));
+            check (state.tracks[0].splitPan && left != nullptr && right != nullptr && left->isVisible() && right->isVisible() && ! knob->isVisible()
+                       && left->getY() < right->getY() && left->getX() == right->getX(), "Split Stereo Pan Mode shows the Left slider over the Right in place of the knob");
+            check (left->getTextFromValue (left->getValue()) == "50L" && right->getTextFromValue (right->getValue()) == "50R", "the split pans start hard left and hard right");
+            left->setValue (0, juce::sendNotificationSync); refresh();
+            check (std::abs (state.tracks[0].leftSplitPan) < 1e-6 && left->getTextFromValue (left->getValue()) == "C", "the Left slider pans the left channel");
+            if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+                if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+                {
+                    juce::PNGImageFormat png; const auto output = directory.getChildFile ("session-split-pan.png");
+                    if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                        && png.writeImageToStream (createComponentSnapshot (getLocalBounds(), true, 1.0f), *stream))
+                        std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                }
+            session.undo(); refresh();
+            check (state.tracks[0].leftSplitPan == -1, "one undo restores it");
+            check (session.isMappableTarget ("mixer:" + first + ":leftsplit"), "the split pans are mapping targets");
+            showArrangementView(); refresh();
+            auto* headerLeft = withTarget (canvas, "mixer:" + first + ":leftsplit"); auto* headerRight = withTarget (canvas, "mixer:" + first + ":rightsplit");
+            check (headerLeft != nullptr && headerRight != nullptr && headerLeft->isVisible() && headerLeft->getY() == headerRight->getY() && headerLeft->getRight() < headerRight->getX(),
+                   "the Arrangement header shows them side by side");
+            const auto lanes = arrangementAutomation::targets (session, state.tracks[0], state.tracks);
+            const auto offers = [&] (const juce::String& control) { return std::any_of (lanes.begin(), lanes.end(), [&] (const auto& t) { return t.control == control; }); };
+            check (offers ("Left Split Stereo") && offers ("Right Split Stereo") && ! offers ("Track Panning"), "the Mixer's automation offers the split pans in place of Track Panning");
+            choosePanMode (first, false); refresh();
+            check (! state.tracks[0].splitPan && ! headerLeft->isVisible() && arrangementAutomation::find (session, state.tracks[0], state.tracks, "mixer:" + first + ":pan").has_value(),
+                   "Stereo Pan Mode brings the pan back");
+            showSessionView(); refresh();
+        }
         // The mixer's sections, as the reference's View menu has them: its default Set shows In/Out,
         // Sends and the Mixer, and hides Track Delay and the Crossfader.
         {

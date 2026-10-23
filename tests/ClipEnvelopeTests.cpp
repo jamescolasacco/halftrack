@@ -133,7 +133,7 @@ int runClipEnvelopeTests (const juce::File& artifacts)
         check (s.setClipEnvelope (clipId, { { {}, 1 }, Mode::modulation, { { 1, 0 }, { 1, .5f } } }).failed(), "unordered points are refused");
         check (s.setClipEnvelope (clipId, { { {}, 0 }, Mode::automation, { { 0, -6 } } }).failed(), "automation envelopes are refused on Arrangement clips");
         check (s.setClipEnvelope (clipId, { { "missing", 0 }, Mode::modulation, { { 0, 0 } } }).failed(), "a control off the clip's track is refused");
-        check (s.setClipEnvelope (clipId, { { {}, 2 }, Mode::modulation, { { 0, 0 } } }).failed(), "an unknown mixer control is refused");
+        check (s.setClipEnvelope (clipId, { { {}, 4 }, Mode::modulation, { { 0, 0 } } }).failed(), "an unknown mixer control is refused");
         check (s.setClipEnvelope (clipId, { { {}, 0 }, Mode::modulation, { { 0, 1 } }, true, .5 }).failed(), "a loop shorter than a beat is refused");
         check (s.setClipEnvelope ("nothing", volume).failed() && s.snapshot().tracks[0].clips[0].envelopes.empty(), "an unknown clip is refused");
 

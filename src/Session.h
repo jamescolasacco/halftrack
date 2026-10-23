@@ -149,11 +149,13 @@ public:
         float tempoBpm = 120; // Derived project tempo, never a separate stored device setting.
         bool operator== (const EffectSettings&) const = default;
     };
-    enum class AutomationTarget { volume, pan };
+    // A mixer's automatable controls. The split pans belong to track and group mixers, and sound in
+    // Split Stereo pan mode (see setPanMode); the Main has volume and pan.
+    enum class AutomationTarget { volume, pan, leftSplitPan, rightSplitPan };
     struct AutomationPoint
     {
         double beat = 0;
-        float value = 0; // Decibels for volume, -1..1 for pan.
+        float value = 0; // Decibels for volume, -1..1 for the pans.
         // The shape of the segment to the next point, as the engine plays it: 0 straight, otherwise a
         // curve, -0.5 to 0.5 bowing it (positive changing late), and beyond to ±1 bowing it further
         // with its ends held.
@@ -492,6 +494,8 @@ public:
         juce::String id, name, userName, numberLabel;
         juce::Colour colour;
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
+        bool splitPan = false; // Split Stereo pan mode, with these pans of the left and right channels.
+        float leftSplitPan = -1, rightSplitPan = 1;
         bool mute = false, solo = false, armed = false, isMidi = false, isReturn = false;
         int inputChannel = 0; // A MIDI track's MIDI From channel, 1 to 16; 0 for All Channels.
         bool frozen = false; // Plays a render of its clips and devices; devices and clips are locked.
@@ -502,7 +506,7 @@ public:
         SendMode sendMode = SendMode::post;
         std::vector<SendInfo> sends;
         SynthSettings synth;
-        AutomationLane volumeAutomation, panAutomation;
+        AutomationLane volumeAutomation, panAutomation, leftSplitAutomation, rightSplitAutomation;
         std::vector<TakeLaneInfo> takeLanes; // Top to bottom.
         juce::String auditionLane; // The take lane playing in place of the main lane, if any.
         TrackOutput output;
@@ -526,6 +530,8 @@ public:
         juce::String id, name, userName, numberLabel; // As TrackInfo's.
         juce::Colour colour;
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
+        bool splitPan = false; // As TrackInfo's.
+        float leftSplitPan = -1, rightSplitPan = 1;
         bool mute = false, solo = false, folded = false;
         juce::StringArray memberIds; // Track order.
     };
@@ -1105,6 +1111,15 @@ public:
     juce::Result setMasterVolumeAutomation (const AutomationLane&);
     juce::Result setTrackGain (int trackIndex, float decibels);
     juce::Result setTrackPan (int trackIndex, float pan);
+    // Split Stereo pan mode, after the reference's (static reading of its code): a track's or group's
+    // mixer pans its left and right input channels on their own, with Left Split Stereo and Right
+    // Split Stereo (-1 to 1, at first hard left and hard right) in place of its pan. Switching blends
+    // the two over 75 samples. The ids name tracks or groups, all switched in one undo step, as the
+    // reference switches every selected track. Mixers from projects older than Halftrack's own mixer
+    // cannot switch.
+    juce::Result setPanMode (const juce::StringArray& trackOrGroupIds, bool split);
+    juce::Result setTrackSplitPan (int trackIndex, bool right, float pan);
+    juce::Result setGroupSplitPan (const juce::String& groupId, bool right, float pan);
     // Atomic, strictly ordered beat points. Empty points restore manual control.
     juce::Result setTrackAutomation (const juce::String& trackId, AutomationTarget, const AutomationLane&);
     // Routes a track's output. Return tracks and tracks in a group play into Master or their group;

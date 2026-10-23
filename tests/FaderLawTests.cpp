@@ -2,6 +2,7 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 // The reference's fader laws (docs/research/mixer-laws-contract.md): track, group, return, Main
@@ -215,6 +216,110 @@ void legacyProjects (const juce::File& root, const juce::File& signal)
     const auto generation = reopened.snapshot().projectGeneration;
     check (reopened.loadProject (unknown).failed() && reopened.snapshot().projectGeneration == generation, "a project with an unknown fader law is refused");
 }
+
+// The reference's panner: a balance law in Stereo mode, and in Split Stereo mode each input
+// channel panned on its own, from a source with 0.5 on its left and 0.25 on its right.
+juce::File stereoSignal (const juce::File& root)
+{
+    const auto file = root.getChildFile ("left-right.wav");
+    juce::AudioBuffer<float> x (2, 4 * 48000);
+    for (int n = 0; n < x.getNumSamples(); ++n) { x.setSample (0, n, .5f); x.setSample (1, n, .25f); }
+    juce::WavAudioFormat format; std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+    auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (2).withBitsPerSample (32));
+    check (writer && writer->writeFromAudioSampleBuffer (x, 0, x.getNumSamples()), "write a 4 s signal, 0.5 left and 0.25 right");
+    return file;
+}
+// A channel's mean over a tenth of a second around a time.
+double meanAt (const juce::AudioBuffer<float>& x, int channel, double seconds)
+{
+    const int from = (int) ((seconds - .05) * 48000), to = (int) ((seconds + .05) * 48000);
+    double sum = 0; for (int n = from; n < to; ++n) sum += x.getSample (channel, n);
+    return sum / (to - from);
+}
+void panModes (const juce::File& root)
+{
+    constexpr double pi = 3.141592653589793;
+    Session s (false);
+    ok (s.importAudio (stereoSignal (root), 0), "put the signal on track 1");
+    const auto trackId = s.snapshot().tracks[0].id, other = s.snapshot().tracks[1].id;
+    const auto file = root.getChildFile ("pans.wav");
+    const auto play = [&] (double at = 1.5) { const auto x = render (s, file); return std::pair { meanAt (x, 0, at), meanAt (x, 1, at) }; };
+    const auto track = [&] { return s.snapshot().tracks[0]; };
+    auto [l, r] = play();
+    check (near (l, .5, 1e-6) && near (r, .25, 1e-6), "at the centre each side plays at unity");
+    ok (s.setTrackPan (0, -1), "pan hard left");
+    std::tie (l, r) = play();
+    check (near (l, .5 * std::sqrt (2.0), 1e-5) && near (r, .25e-5, 1e-8), "hard left lifts the left side 3 dB and keeps the right at 1e-5 of its level, not silence");
+    ok (s.setTrackPan (0, .5f), "pan halfway right");
+    std::tie (l, r) = play();
+    const double c = .5 * pi / 4 + pi / 4;
+    check (near (l, .5 * std::sqrt (2.0) * std::cos (c), 1e-5) && near (r, .25 * std::sqrt (2.0) * std::sin (c), 1e-5), "halfway right is the balance law's");
+
+    check (! track().splitPan && track().leftSplitPan == -1 && track().rightSplitPan == 1, "a track starts in Stereo mode, its split pans hard left and hard right");
+    ok (s.setPanMode ({ trackId, other }, true), "switch two tracks to Split Stereo");
+    check (track().splitPan && s.snapshot().tracks[1].splitPan, "both switch");
+    s.undo(); check (! track().splitPan && ! s.snapshot().tracks[1].splitPan, "in one undo step");
+    s.redo(); check (track().splitPan, "and redo");
+    std::tie (l, r) = play();
+    check (near (l, .5, 1e-6) && near (r, .25, 1e-6), "the split defaults keep the channels as they are, with the pan out of play");
+    ok (s.setTrackSplitPan (0, false, 1), "the left channel hard right"); ok (s.setTrackSplitPan (0, true, -1), "the right channel hard left");
+    std::tie (l, r) = play();
+    check (near (l, .25, 1e-6) && near (r, .5, 1e-6), "panning each channel across swaps them");
+    ok (s.setTrackSplitPan (0, false, 0), "the left channel at the centre"); ok (s.setTrackSplitPan (0, true, 0), "the right channel at the centre");
+    std::tie (l, r) = play();
+    check (near (l, .75 * std::cos (pi / 4), 1e-6) && near (r, .75 * std::cos (pi / 4), 1e-6), "both at the centre mix the channels 3 dB down each, without the balance law's lift");
+    s.undo(); check (track().rightSplitPan == -1, "a split pan move is one undo step");
+    s.redo();
+    ok (s.setPanMode ({ trackId }, false), "back to Stereo");
+    std::tie (l, r) = play();
+    check (near (l, .5 * std::sqrt (2.0) * std::cos (c), 1e-5) && near (r, .25 * std::sqrt (2.0) * std::sin (c), 1e-5), "Stereo mode plays its pan again");
+    check (s.setTrackSplitPan (0, false, std::numeric_limits<float>::quiet_NaN()).failed() && s.setPanMode ({ "missing" }, true).failed(), "a bad pan or track is refused");
+
+    // Saved, reopened, and refused when malformed.
+    ok (s.setPanMode ({ trackId }, true), "Split Stereo again");
+    ok (s.setTrackSplitPan (0, false, -.5f), "left at 25L"); ok (s.setTrackSplitPan (0, true, .5f), "right at 25R");
+    const auto saved = play();
+    const auto project = root.getChildFile ("Split.halftrack");
+    ok (s.saveProject (project), "save");
+    Session reopened (false);
+    ok (reopened.loadProject (project), "reopen");
+    const auto again = reopened.snapshot().tracks[0];
+    check (again.splitPan && again.leftSplitPan == -.5f && again.rightSplitPan == .5f, "the mode and split pans reopen");
+    const auto replayed = render (reopened, file);
+    check (near (meanAt (replayed, 0, 1.5), saved.first, 1e-6) && near (meanAt (replayed, 1, 1.5), saved.second, 1e-6), "and play as before");
+    auto xml = juce::XmlDocument::parse (project); check (xml != nullptr, "read the project");
+    std::function<juce::XmlElement* (juce::XmlElement&, const juce::String&)> find = [&] (juce::XmlElement& e, const juce::String& type) -> juce::XmlElement*
+    {
+        if (e.hasTagName ("PLUGIN") && e.getStringAttribute ("type") == type) return &e;
+        for (auto* child : e.getChildIterator()) if (auto* found = find (*child, type)) return found;
+        return nullptr;
+    };
+    for (int mutation = 0; mutation < 3; ++mutation)
+    {
+        auto bad = std::make_unique<juce::XmlElement> (*xml);
+        auto* mixer = find (*bad, "halftrack-mixer"); auto* main = find (*bad, "volume");
+        check (mixer != nullptr && main != nullptr, "find the track's mixer and the Main's");
+        if (mutation == 0) mixer->setAttribute ("halftrackPanMode", "2");
+        if (mutation == 1) mixer->setAttribute ("halftrackSplitLeft", "1.5");
+        if (mutation == 2) main->setAttribute ("halftrackPanMode", "1");
+        const auto broken = root.getChildFile ("Bad split.halftrack");
+        check (bad->writeTo (broken), "write a malformed pan mode");
+        const auto generation = reopened.snapshot().projectGeneration;
+        check (reopened.loadProject (broken).failed() && reopened.snapshot().projectGeneration == generation, "a malformed pan mode or split pan is refused (" + juce::String (mutation) + ")");
+    }
+
+    // A split pan's automation and mapping, as any mixer control's.
+    ok (s.setTrackSplitPan (0, true, 1), "right back hard right");
+    check (s.midiTargetRange ("mixer:" + trackId + ":leftsplit") == std::pair { -1.0f, 1.0f }, "a split pan maps from -1 to 1");
+    ok (s.setTrackAutomation (trackId, Session::AutomationTarget::leftSplitPan, { true, { { 0, -1 }, { 8, 1 } } }), "the left split pan sweeps from hard left to hard right over 8 beats");
+    check (track().leftSplitAutomation.points.size() == 2, "its lane reads back");
+    const auto swept = render (s, file);
+    // Halfway (2 s) the left channel sits at the centre, half its power on each side, give or take
+    // the block-rate automation and the mixer's 15 ms smoothing.
+    check (near (meanAt (swept, 0, 2), .5 * std::cos (pi / 4), 3e-3) && near (meanAt (swept, 1, 2), .5 * std::sin (pi / 4) + .25, 3e-3), "the render follows the lane (" + juce::String (meanAt (swept, 0, 2), 5) + ", " + juce::String (meanAt (swept, 1, 2), 5) + ")");
+    ok (s.setTrackSplitPan (0, false, -1), "move the left split pan by hand");
+    check (! track().leftSplitAutomation.enabled && s.snapshot().automationOverridden, "moving it overrides its lane");
+}
 }
 
 int runFaderLawTests (const juce::File& artifacts)
@@ -226,6 +331,7 @@ int runFaderLawTests (const juce::File& artifacts)
         modelLevels();
         storedAndPlayed (root, signal);
         legacyProjects (root, signal);
+        panModes (root);
         std::cout << "Fader laws passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL fader laws: " << e.what() << std::endl; return 1; }

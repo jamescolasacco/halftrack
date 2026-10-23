@@ -791,7 +791,7 @@ A Session take that starts the transport counts in, as the reference's does. Whe
 
 Volume and sends follow the reference's level scales ([contract](research/mixer-laws-contract.md)). Defaults where the rest is not followed:
 
-- **Pan.** The reference's pan keeps a hard pan's far side at 1e-5 (−100 dB), not silence. Its split stereo mode is not built. Halftrack's mixer pan keeps its own law, unity at centre.
+- **Pan modes.** The reference's menu wording ("Split Stereo Pan Mode", "Stereo Pan Mode") is inferred from its message keys and a test phrase. The English text is in its encrypted language file, which was not decrypted. The Main's pan mode is not built, because Halftrack's Main pan is not yet in the interface. Automation of the pans of the other mode keeps playing, inaudibly, as the reference's probably does.
 - **Automation timing.** The reference plays volume, send and pan automation in ramps of 1/128 of the range, at least 256 samples long, and smooths over 4 ms. Halftrack's engine updates automation per block and smooths on its own schedule. Its end levels and its straight path along the travel match the reference.
 - **Display.** The reference's dB text reads −inf from −69.7 dB (medium confidence). Halftrack reads −inf only for silence, so a level just above it reads −69.9 dB.
 - **Rack chains.** Chain volume and chain sends take the track laws. That the reference's chains do too is inferred from their shared mixer, not traced.

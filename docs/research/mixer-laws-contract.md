@@ -24,6 +24,18 @@ Each fader or knob has a position from 0 to 1, which is what the reference saves
 
 `src/LevelScale.h` builds the tables the way the reference's builder does: in single precision, with its snap of near-zero levels and its correction of the last four entries. The reference's math library may round its powers of ten differently in the last place, so no bit-exact result is claimed.
 
+## Pan modes
+
+The reference's panner, from a static reading of its code (kernel 0x10198be9c, mode handling 0x1024ccc38 and 0x1024cd228), plays in Halftrack's track and group mixer.
+
+- **Stereo.** The pan is a balance law. The left channel is scaled by √2·cos and the right by √2·sin of (pan + 1)·π/4, and neither falls below 1e-5. The centre is unity on each side. A hard pan lifts its side 3 dB and keeps the other at −100 dB, not silence.
+- **Split Stereo.** Each input channel pans on its own, with plain cos and sin of (its pan + 1)·π/4 and no lift or floor. Left Split Stereo and Right Split Stereo start hard left and hard right, which keeps the channels as they are. With both at the centre, each side carries the two channels 3 dB down. A mono input feeds both of the panner's inputs.
+- **Switching.** Switching blends the two matrices linearly over 75 samples, the reference's default ramp. Parameter moves are smoothed over the engine mixer's 15 ms.
+- **The mode.** The mode is a mixer setting, not a control: it cannot be automated or mapped. Each switch is one undo step, and it applies to every selected track when the switched track is among them. It is saved as `halftrackPanMode` (1 for Split Stereo), with `halftrackSplitLeft` and `halftrackSplitRight` beside it.
+- **Split pans.** The split pans are controls like the pan. They are automatable (`AutomationTarget::leftSplitPan` and `rightSplitPan`, lane keys `mixer:<track>:leftsplit` and `:rightsplit`), MIDI- and key-mappable, and clip envelopes can drive them (mixer controls 2 and 3). Their text is the pan's.
+- **Older mixers.** Mixers from projects older than Halftrack's own track mixer, and the Main's, have no split pans and refuse the switch.
+- **Interface.** As in the reference, each pan control's context menu has one item: Split Stereo Pan Mode on the pan, Stereo Pan Mode on the split pans. In Split Stereo the Session strip shows a Left slider above a Right one in place of the knob, labelled L and R on strips at least 93 px wide. The Arrangement and group headers show the two side by side in the pan's place. The Mixer's automation and clip envelope choosers offer the pans of the current mode only.
+
 ## Engine and Session
 
 - **Engine patch.** `cmake/PatchFaderLaws.cmake` lets the host install a volume law and a send law in the engine (see [dependencies](../dependencies.md#tracktion-fader-laws-patch)). Session installs both before any Edit exists. The engine's volume plug-in, aux sends and their automation then read positions through them, on the audio thread too.
@@ -55,6 +67,16 @@ Projects saved before this change hold positions by the engine's own law, where 
 - that the legacy project renders as the project it was made from, within 1e-7 of full scale;
 - that it is converted once when saved again, and that an unknown marker is refused.
 
+The suite's pan checks render a source with 0.5 on the left and 0.25 on the right. They check:
+
+- the balance law at the centre, hard left (√2 and 1e-5) and halfway right;
+- the split defaults keeping the channels, swapped split pans swapping them, and both at the centre mixing them 3 dB down;
+- two tracks switched in one undo step, a split pan move as one undo step, and Stereo mode playing its pan again;
+- a reopen playing as before, and refusals of a bad pan mode, a split pan out of range and a pan mode on the Main;
+- a left split pan's lane sweeping it across, which the render follows, and a hand move overriding the lane.
+
+The UI suite checks the pan menus' items, Left over Right in the Session strip and side by side in the Arrangement header, the split pans' text, the automation choosers, and undo.
+
 `tests/AutomationTests.cpp` checks:
 
 - the law's coordinates;
@@ -66,7 +88,6 @@ Projects saved before this change hold positions by the engine's own law, where 
 
 ## Not yet covered
 
-- The reference's pan law floor: it keeps the far side of a hard pan at 1e-5, not silence. Halftrack's mixer pan keeps its own normalized law.
 - The reference's automation chunking (ramps of 1/128 of the range, at least 256 samples) and its 4 ms smoothing. Halftrack's engine smooths on its own schedule.
 - The reference's dB text shows −inf from −69.7 dB (medium confidence); Halftrack shows −inf only for silence.
 - The clip gain knob's travel along the reference's scale 3.

@@ -51,7 +51,17 @@ std::vector<Target> targets (Session& session, const Session::TrackInfo& track, 
     volume.device = "Mixer"; volume.control = "Track Volume"; volume.lane = track.volumeAutomation; volume.manual = track.gainDb;
     Target pan = volume; pan.kind = Target::Kind::pan; pan.key = "mixer:" + track.id + ":pan"; pan.control = "Track Panning";
     pan.lane = track.panAutomation; pan.manual = track.pan;
-    result.push_back (volume); result.push_back (pan);
+    result.push_back (volume);
+    // As the reference's choosers, the pans of the track's pan mode only.
+    if (! track.splitPan) result.push_back (pan);
+    else
+    {
+        Target left = pan; left.kind = Target::Kind::leftSplit; left.key = "mixer:" + track.id + ":leftsplit"; left.control = "Left Split Stereo";
+        left.lane = track.leftSplitAutomation; left.manual = track.leftSplitPan;
+        Target right = pan; right.kind = Target::Kind::rightSplit; right.key = "mixer:" + track.id + ":rightsplit"; right.control = "Right Split Stereo";
+        right.lane = track.rightSplitAutomation; right.manual = track.rightSplitPan;
+        result.push_back (left); result.push_back (right);
+    }
     // The mixer's sends, each named for its return.
     if (! track.isReturn)
         for (const auto& send : track.sends)
@@ -92,7 +102,8 @@ float toProportion (const Target& t, float value)
     switch (t.kind)
     {
         case Target::Kind::volume: return Session::automationValueToProportion (Session::AutomationTarget::volume, value);
-        case Target::Kind::pan: return Session::automationValueToProportion (Session::AutomationTarget::pan, value);
+        case Target::Kind::pan: case Target::Kind::leftSplit: case Target::Kind::rightSplit:
+            return Session::automationValueToProportion (Session::AutomationTarget::pan, value);
         case Target::Kind::send: return Session::sendValueToProportion (value);
         case Target::Kind::native: return Session::deviceAutomationValueToProportion (t.effect, t.parameter, value);
         case Target::Kind::external: return value;
@@ -105,7 +116,8 @@ float fromProportion (const Target& t, float proportion)
     switch (t.kind)
     {
         case Target::Kind::volume: return Session::automationProportionToValue (Session::AutomationTarget::volume, proportion);
-        case Target::Kind::pan: return Session::automationProportionToValue (Session::AutomationTarget::pan, proportion);
+        case Target::Kind::pan: case Target::Kind::leftSplit: case Target::Kind::rightSplit:
+            return Session::automationProportionToValue (Session::AutomationTarget::pan, proportion);
         case Target::Kind::send: return Session::sendProportionToValue (proportion);
         case Target::Kind::native: return Session::deviceAutomationProportionToValue (t.effect, t.parameter, proportion);
         case Target::Kind::external: return proportion;
@@ -117,7 +129,7 @@ juce::String format (const Target& t, float value)
     switch (t.kind)
     {
         case Target::Kind::volume: case Target::Kind::send: return value <= -99.99f ? juce::String ("-inf dB") : juce::String (value, 1) + " dB";
-        case Target::Kind::pan: return Session::panText (value);
+        case Target::Kind::pan: case Target::Kind::leftSplit: case Target::Kind::rightSplit: return Session::panText (value);
         case Target::Kind::external: return juce::String (value * 100, 1) + "%";
         case Target::Kind::native:
         {
@@ -141,6 +153,8 @@ juce::Result write (Session& session, const Target& t, const Session::Automation
     {
         case Target::Kind::volume: return session.setTrackAutomation (t.trackId, Session::AutomationTarget::volume, lane);
         case Target::Kind::pan: return session.setTrackAutomation (t.trackId, Session::AutomationTarget::pan, lane);
+        case Target::Kind::leftSplit: return session.setTrackAutomation (t.trackId, Session::AutomationTarget::leftSplitPan, lane);
+        case Target::Kind::rightSplit: return session.setTrackAutomation (t.trackId, Session::AutomationTarget::rightSplitPan, lane);
         case Target::Kind::send: return session.setSendAutomation (t.trackId, t.returnId, lane);
         case Target::Kind::native: case Target::Kind::external: return session.setDeviceAutomation (t.pluginId, t.parameter, lane);
     }
