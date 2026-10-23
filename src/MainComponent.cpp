@@ -1327,6 +1327,33 @@ private:
     // Linked-track editing. The selected tracks, then Link Tracks: with Cmd/Ctrl held, the selection
     // joins the clicked track's link. Selecting time or a clip on a linked track selects the same on
     // the tracks linked to it.
+    // The device chain the device view shows: a group's or the Main's (Session::mainChain) once
+    // one is clicked, else the selected track's.
+    juce::String selectedChain;
+    juce::String deviceChainId() const
+    {
+        if (selectedChain.isNotEmpty()) return selectedChain;
+        const auto* track = currentTrack(); return track != nullptr ? track->id : juce::String();
+    }
+    const std::vector<Session::PluginInfo>* chainDevices() const
+    {
+        if (selectedChain == Session::mainChain) return &state.mainPlugins;
+        if (selectedChain.isNotEmpty()) { const auto* g = groupInfo (selectedChain); return g != nullptr ? &g->plugins : nullptr; }
+        const auto* track = currentTrack(); return track != nullptr ? &track->plugins : nullptr;
+    }
+    juce::String chainTitle() const
+    {
+        if (selectedChain == Session::mainChain) return "Main";
+        if (selectedChain.isNotEmpty()) { const auto* g = groupInfo (selectedChain); return g != nullptr ? g->name : juce::String(); }
+        const auto* track = currentTrack(); return track != nullptr ? track->name : juce::String();
+    }
+    // Shows a group's or the Main's chain in the device view, as clicking its header or strip does.
+    void selectChain (const juce::String& id)
+    {
+        if (id != Session::mainChain && groupInfo (id) == nullptr) return;
+        selectedChain = id; selectedDevices.clear();
+        deviceChain.sync(); deviceChain.repaint(); canvas.repaint();
+    }
     juce::StringArray selectedTrackIds() const
     {
         juce::StringArray ids;
@@ -2303,7 +2330,9 @@ private:
         {
             // The pan controls' menu switches the group's pan mode, as on tracks.
             const auto within = [&e] (juce::Component& c) { return e.originalComponent == &c || c.isParentOf (e.originalComponent); };
-            if (e.mods.isPopupMenu() && (within (pan) || within (leftSplit) || within (rightSplit))) owner.groupPanModeMenu (groupId, ! splitPan);
+            if (e.mods.isPopupMenu() && (within (pan) || within (leftSplit) || within (rightSplit))) { owner.groupPanModeMenu (groupId, ! splitPan); return; }
+            // Clicking the group shows its device chain.
+            if (! e.mods.isPopupMenu()) owner.selectChain (groupId);
         }
         void paint (juce::Graphics& g) override
         {
@@ -4175,6 +4204,7 @@ private:
             explicit MasterStrip (Impl& o) : owner (o)
             {
                 setName ("Session master strip");
+                addMouseListener (this, true); // A click anywhere on the strip shows the Main's chain.
                 gain.setName ("Session master volume"); gain.setSliderStyle (juce::Slider::LinearVertical);
                 gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 16); gain.setNormalisableRange (Session::levelRange (false));
                 gain.setDoubleClickReturnValue (true, 0);
@@ -4266,6 +4296,7 @@ private:
                 const int bottom = getHeight() - (shown.crossfader ? 56 : 34);
                 gain.setBounds (6, top + 58, 54, juce::jmax (20, bottom - (top + 58))); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22);
             }
+            void mouseDown (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) owner.selectChain (Session::mainChain); }
             void paint (juce::Graphics& g) override
             {
                 g.fillAll (themes::colour (0xff383838));
@@ -7519,7 +7550,7 @@ private:
         ~SendsPanel() override { viewport.setViewedComponent (nullptr, false); }
         void sync()
         {
-            const auto* source = owner.currentTrack();
+            const auto* source = owner.selectedChain.isEmpty() ? owner.currentTrack() : nullptr;
             setVisible (source != nullptr && ! source->isReturn);
             if (! isVisible()) return;
             std::vector<const Session::TrackInfo*> returns;
@@ -7740,9 +7771,9 @@ private:
             power.setTooltip ("Turn this device on or off (bypass)");
             power.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); power.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             open.setTooltip ("Open this device in its own window"); remove.setTooltip ("Remove this device");
-            power.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.setPluginEnabled (owner.selectedTrack, p, power.getToggleState())); owner.refresh(); };
-            open.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.showPluginEditor (owner.selectedTrack, p)); };
-            remove.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.removePlugin (owner.selectedTrack, p)); owner.refresh(); };
+            power.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.setPluginEnabled (owner.deviceChainId(), p, power.getToggleState())); owner.refresh(); };
+            open.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.showPluginEditor (owner.deviceChainId(), p)); };
+            remove.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.removePlugin (owner.deviceChainId(), p)); owner.refresh(); };
             if (native)
             {
                 const auto automation = [safe = juce::Component::SafePointer<Impl> (&owner)] (const juce::String& id, int parameter) { if (safe != nullptr) safe->showAutomation (false, id, parameter); };
@@ -7807,47 +7838,48 @@ private:
             if (e.y > titleHeight) return;
             // Clicking the title selects the device: Shift extends the selection, Cmd/Ctrl toggles it.
             if (! e.mods.isPopupMenu()) { owner.selectDevice (pluginId, e.mods); grabKeyboardFocus(); return; }
-            const int p = index(); const auto* track = owner.currentTrack(); if (p < 0 || track == nullptr) return;
+            const int p = index(); const auto* devices = owner.chainDevices(); if (p < 0 || devices == nullptr) return;
             if (! owner.selectedDevices.contains (pluginId)) owner.selectDevice (pluginId, {});
+            const bool trackChain = owner.selectedChain.isEmpty();
             juce::PopupMenu menu;
-            menu.addItem (1, "Move left", p > 0); menu.addItem (2, "Move right", p + 1 < (int) track->plugins.size());
+            menu.addItem (1, "Move left", p > 0); menu.addItem (2, "Move right", p + 1 < (int) devices->size());
             menu.addSeparator(); menu.addItem (3, enabled ? "Deactivate" : "Activate");
-            menu.addItem (5, "Group", native); if (rack) menu.addItem (6, "Ungroup", chains <= 1);
-            const auto& info = track->plugins[(size_t) p];
-            menu.addItem (7, "Save Preset...", owner.userLibrary != juce::File() && ((info.isNativeEffect && ! rack) || info.isUtility || (! info.isNativeEffect && ! info.missing)));
+            // Grouping into racks, and presets, act on tracks' chains.
+            menu.addItem (5, "Group", native && trackChain); if (rack) menu.addItem (6, "Ungroup", chains <= 1 && trackChain);
+            const auto& info = (*devices)[(size_t) p];
+            menu.addItem (7, "Save Preset...", trackChain && owner.userLibrary != juce::File() && ((info.isNativeEffect && ! rack) || info.isUtility || (! info.isNativeEffect && ! info.missing)));
             menu.addItem (4, "Delete");
-            const auto trackId = track->id, id = pluginId;
+            const auto chainId = owner.deviceChainId(), id = pluginId;
             juce::Component::SafePointer<Impl> safe (&owner);
-            menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe, trackId, id] (int choice)
+            menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe, chainId, id] (int choice)
             {
                 if (! safe || choice == 0) return;
-                const auto snapshot = safe->session.snapshot();
-                for (int t = 0; t < (int) snapshot.tracks.size(); ++t)
-                    if (snapshot.tracks[(size_t) t].id == trackId)
-                        for (int p = 0; p < (int) snapshot.tracks[(size_t) t].plugins.size(); ++p)
-                            if (snapshot.tracks[(size_t) t].plugins[(size_t) p].id == id)
-                            {
-                                if (choice <= 2) safe->report (safe->session.movePlugin (t, p, p + (choice == 1 ? -1 : 1)));
-                                else if (choice == 3) safe->report (safe->session.setPluginEnabled (t, p, ! snapshot.tracks[(size_t) t].plugins[(size_t) p].enabled));
-                                else if (choice == 5) safe->groupSelectedDevices();
-                                else if (choice == 6) { safe->report (safe->session.ungroupRack (id)); safe->selectedDevices.clear(); }
-                                else if (choice == 7)
-                                {
-                                    const auto& d = snapshot.tracks[(size_t) t].plugins[(size_t) p];
-                                    safe->savePresetDialog (id, d.isUtility ? juce::String ("Utility") : d.isNativeEffect ? juce::String (effectName (d.effect.kind)) : d.name);
-                                    return;
-                                }
-                                else safe->report (safe->session.removePlugin (t, p));
-                                safe->refresh(); return;
-                            }
+                const auto* now = safe->chainDevices();
+                if (now == nullptr || safe->deviceChainId() != chainId) return;
+                for (int p = 0; p < (int) now->size(); ++p)
+                    if ((*now)[(size_t) p].id == id)
+                    {
+                        const auto device = (*now)[(size_t) p];
+                        if (choice <= 2) safe->report (safe->session.movePlugin (chainId, p, p + (choice == 1 ? -1 : 1)));
+                        else if (choice == 3) safe->report (safe->session.setPluginEnabled (chainId, p, ! device.enabled));
+                        else if (choice == 5) safe->groupSelectedDevices();
+                        else if (choice == 6) { safe->report (safe->session.ungroupRack (id)); safe->selectedDevices.clear(); }
+                        else if (choice == 7)
+                        {
+                            safe->savePresetDialog (id, device.isUtility ? juce::String ("Utility") : device.isNativeEffect ? juce::String (effectName (device.effect.kind)) : device.name);
+                            return;
+                        }
+                        else safe->report (safe->session.removePlugin (chainId, p));
+                        safe->refresh(); return;
+                    }
             });
         }
         static constexpr int titleHeight = 22;
     private:
         int index() const
         {
-            if (const auto* track = owner.currentTrack())
-                for (int p = 0; p < (int) track->plugins.size(); ++p) if (track->plugins[(size_t) p].id == pluginId) return p;
+            if (const auto* devices = owner.chainDevices())
+                for (int p = 0; p < (int) devices->size(); ++p) if ((*devices)[(size_t) p].id == pluginId) return p;
             return -1;
         }
         Impl& owner;
@@ -7917,7 +7949,9 @@ private:
         }
         void sync()
         {
-            const auto* track = owner.currentTrack();
+            // A group's or the Main's chain has audio devices only; a track's has its instrument too.
+            const auto* track = owner.selectedChain.isEmpty() ? owner.currentTrack() : nullptr;
+            const auto* devices = owner.chainDevices();
             sendsPanel.sync();
             const bool projectChanged = masterProjectGeneration != owner.state.projectGeneration;
             if (projectChanged) masterGain.hideTextBox (true);
@@ -7927,24 +7961,24 @@ private:
             showAutomationState (masterGain, owner.state.masterVolumeAutomation, "Main output level. Double-click for 0 dB. The bottom of the fader is silence.", "Master volume");
             masterGain.getProperties().set ("midiMapTarget", "master");
             automationButton.setEnabled (! owner.session.isExporting());
-            addButton.setEnabled (track != nullptr);
+            addButton.setEnabled (devices != nullptr);
             // Rebuild panels only when the device list itself changes.
             std::vector<juce::String> ids;
-            if (track != nullptr) for (const auto& p : track->plugins) ids.push_back (p.id);
+            if (devices != nullptr) for (const auto& p : *devices) ids.push_back (p.id);
             bool same = ids.size() == panels.size();
             for (size_t i = 0; same && i < ids.size(); ++i) same = panels[i]->getId() == ids[i];
             if (! same)
             {
                 panels.clear();
-                if (track != nullptr) for (const auto& p : track->plugins) { panels.push_back (std::make_unique<DevicePanel> (owner, p)); chain.addAndMakeVisible (*panels.back()); }
+                if (devices != nullptr) for (const auto& p : *devices) { panels.push_back (std::make_unique<DevicePanel> (owner, p)); chain.addAndMakeVisible (*panels.back()); }
             }
-            else if (track != nullptr) for (size_t i = 0; i < panels.size(); ++i) panels[i]->sync (track->plugins[i]);
+            else if (devices != nullptr) for (size_t i = 0; i < panels.size(); ++i) panels[i]->sync ((*devices)[i]);
             synthPanel.sync(); layoutChain();
             // A frozen track's devices play from its render and cannot change until it is unfrozen.
             const bool frozen = track != nullptr && track->frozen;
             for (auto* c : std::initializer_list<juce::Component*> { &chain, &synthPanel })
             { c->setEnabled (! frozen); c->setAlpha (frozen ? .45f : 1.0f); }
-            addButton.setEnabled (track != nullptr && ! frozen);
+            addButton.setEnabled (devices != nullptr && ! frozen);
             repaint();
         }
         void paint (juce::Graphics& g) override
@@ -7952,15 +7986,17 @@ private:
             g.fillAll (themes::colour (0xff262626));
             g.setColour (line); g.drawHorizontalLine (0, 0.0f, (float) getWidth());
             g.setColour (muted); g.setFont (font (10.0f, true));
-            const auto* track = owner.currentTrack();
-            auto title = track == nullptr ? juce::String ("DEVICES") : "DEVICES  /  " + track->name.toUpperCase();
+            const auto* track = owner.selectedChain.isEmpty() ? owner.currentTrack() : nullptr;
+            const auto* devices = owner.chainDevices();
+            const auto chainName = owner.chainTitle();
+            auto title = chainName.isEmpty() ? juce::String ("DEVICES") : "DEVICES  /  " + chainName.toUpperCase();
             g.drawText (title, 14, 5, juce::jmax (150, getWidth() - 455), 22, juce::Justification::centredLeft);
-            if (track == nullptr || (! track->isMidi && track->plugins.empty()))
+            if (devices == nullptr || ((track == nullptr || ! track->isMidi) && devices->empty()))
             {
                 const auto hint = chainView.getBounds().reduced (6, 8);
                 g.setColour (themes::colour (0xff3a3a3a)); g.drawRect (hint);
                 g.setColour (muted); g.setFont (font (12.0f));
-                g.drawText (track == nullptr ? "Select a track to view its devices." : "Drop Audio Effects Here", hint.withTrimmedBottom (24), juce::Justification::centred);
+                g.drawText (devices == nullptr ? "Select a track to view its devices." : "Drop Audio Effects Here", hint.withTrimmedBottom (24), juce::Justification::centred);
                 g.setFont (font (10.5f));
                 g.drawText ("Use + Device or the browser. Audio flows left to right.", hint.withTrimmedTop (30), juce::Justification::centred);
             }
@@ -7981,7 +8017,7 @@ private:
         // MIDI effects, then the instrument, then audio devices, left to right.
         void layoutChain()
         {
-            const auto* track = owner.currentTrack();
+            const auto* track = owner.selectedChain.isEmpty() ? owner.currentTrack() : nullptr;
             const int height = juce::jmax (1, chainView.getHeight() - 10);
             int x = 4;
             auto place = [&] (juce::Component& c, int width) { c.setBounds (x, 2, width, height); x += width + 4; };
@@ -9188,6 +9224,7 @@ private:
     void selectTrack (int track)
     {
         if (selectedTrack != track) { selectedClip = -1; selectedLauncherClipId.clear(); }
+        selectedChain.clear(); // The track's own chain shows.
         selectedTrack = track;
         // Auto-Arm follows the selection to MIDI tracks.
         session.autoArmTrack (juce::isPositiveAndBelow (track, (int) state.tracks.size()) ? state.tracks[(size_t) track].id : juce::String());
@@ -10977,14 +11014,17 @@ private:
     }
     void addPluginMenu()
     {
-        if (selectedTrack < 0 || selectedTrack >= static_cast<int> (state.tracks.size())) return;
+        const auto chainId = deviceChainId();
+        if (chainId.isEmpty()) return;
         auto types = session.knownPlugins().getTypes();
         juce::PopupMenu popup;
         popup.addItem (100001, "Utility  (Built-in)");
         juce::StringArray categories;
-        const bool midiTrack = state.tracks[static_cast<size_t> (selectedTrack)].isMidi;
+        // A group's or the Main's chain takes audio effects only.
+        const bool trackChain = selectedChain.isEmpty(), midiTrack = trackChain && currentTrack() != nullptr && currentTrack()->isMidi;
         for (int i = 0; i < Session::deviceKindCount; ++i)
-            if (! Session::isRackKind (static_cast<Session::EffectKind> (i)) && (midiTrack || ! effectIsMidi (static_cast<Session::EffectKind> (i))))
+            if (! Session::isRackKind (static_cast<Session::EffectKind> (i)) && (midiTrack || ! effectIsMidi (static_cast<Session::EffectKind> (i)))
+                && (trackChain || ! effectIsInstrument (static_cast<Session::EffectKind> (i))))
                 categories.addIfNotAlreadyThere (effectCategory (static_cast<Session::EffectKind> (i)));
         for (const auto& category : categories)
         {
@@ -11002,18 +11042,18 @@ private:
             popup.addSubMenu ("Racks  (Built-in)", group);
         }
         popup.addSeparator();
-        for (int i = 0; i < types.size(); ++i) popup.addItem (i + 1, types[i].name + "  (" + types[i].pluginFormatName + ")");
+        for (int i = 0; i < types.size(); ++i)
+            if (trackChain || ! types[i].isInstrument) popup.addItem (i + 1, types[i].name + "  (" + types[i].pluginFormatName + ")");
         popup.addSeparator(); popup.addItem (100000, "Plug-Ins Settings...");
         auto safe = juce::Component::SafePointer<Impl> (this);
-        const auto track = state.tracks[static_cast<size_t> (selectedTrack)].id;
         const auto generation = state.projectGeneration;
-        popup.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&deviceChain), [safe, types, track, generation] (int choice)
+        popup.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&deviceChain), [safe, types, chainId, generation] (int choice)
         {
             if (safe == nullptr) return;
-            safe->insertDeviceSelection (generation, track, choice, types);
+            safe->insertDeviceSelection (generation, chainId, choice, types);
         });
     }
-    void insertDeviceSelection (uint64_t generation, const juce::String& trackId, int choice, const juce::Array<juce::PluginDescription>& types)
+    void insertDeviceSelection (uint64_t generation, const juce::String& chainId, int choice, const juce::Array<juce::PluginDescription>& types)
     {
         if (choice == 100000) { showPlugins(); return; }
         const bool native = choice >= 100001 && choice < 100002 + Session::deviceKindCount;
@@ -11021,15 +11061,15 @@ private:
         const auto current = session.snapshot();
         if (current.projectGeneration != generation)
         { report (juce::Result::fail ("That project's device menu is no longer current.")); refresh(); return; }
-        const auto found = std::find_if (current.tracks.begin(), current.tracks.end(),
-            [&] (const auto& item) { return item.id == trackId; });
-        if (found == current.tracks.end())
+        const bool exists = chainId == Session::mainChain
+            || std::any_of (current.tracks.begin(), current.tracks.end(), [&] (const auto& item) { return item.id == chainId; })
+            || std::any_of (current.groups.begin(), current.groups.end(), [&] (const auto& item) { return item.id == chainId; });
+        if (! exists)
         { report (juce::Result::fail ("The selected track is no longer available.")); refresh(); return; }
-        const int track = static_cast<int> (found - current.tracks.begin());
-        if (choice == 100001) { report (session.addUtility (track)); refresh(); }
+        if (choice == 100001) { report (session.addUtility (chainId)); refresh(); }
         else if (choice >= 100002 && choice < 100002 + Session::deviceKindCount)
-        { report (session.addNativeEffect (track, static_cast<Session::EffectKind> (choice-100002))); refresh(); }
-        else if (choice > 0 && choice <= types.size()) { report (session.addPlugin (track, types[choice-1])); refresh(); }
+        { report (session.addNativeEffect (chainId, static_cast<Session::EffectKind> (choice-100002))); refresh(); }
+        else if (choice > 0 && choice <= types.size()) { report (session.addPlugin (chainId, types[choice-1])); refresh(); }
     }
     void startBrowserScan()
     {
@@ -11413,6 +11453,8 @@ private:
                 for (const auto& type : session.knownPlugins().getTypes())
                     if (type.createIdentifierString() == item.pluginId)
                     {
+                        // A group's or the Main's chain takes an effect plug-in.
+                        if (selectedChain.isNotEmpty() && ! type.isInstrument) { report (session.addPlugin (selectedChain, type)); refresh(); return; }
                         // An instrument needs a MIDI track: the selected one, or a new one.
                         const auto* track = currentTrack();
                         if (type.isInstrument && (track == nullptr || ! track->isMidi)) { addMidiTrack(); refresh(); }
@@ -11424,6 +11466,12 @@ private:
             if (item.groove >= 0) { useGrooveFromUI (Session::grooveLibrary()[(size_t) item.groove], true); return; }
             if (item.grooveFile != juce::File()) { useGrooveFileFromUI (item.grooveFile, true); return; }
             const bool needsMidi = item.kind == -2 || (item.kind >= 0 && (effectIsInstrument ((Session::EffectKind) item.kind) || effectIsMidi ((Session::EffectKind) item.kind)));
+            // A group's or the Main's chain takes audio effects.
+            if (selectedChain.isNotEmpty() && ! needsMidi && item.preset == juce::File())
+            {
+                report (item.kind == -3 ? session.addUtility (selectedChain) : session.addNativeEffect (selectedChain, (Session::EffectKind) item.kind));
+                refresh(); return;
+            }
             const auto* track = currentTrack();
             if (needsMidi && (track == nullptr || ! track->isMidi))
             {
@@ -15775,6 +15823,30 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (std::abs (state.groups[0].gainDb + 6) < 1e-4, "the group mixer strip edits the group volume");
         session.undo(); refresh();
         check (std::abs (state.groups[0].gainDb) < 1e-4 && std::abs (strip->getValue()) < 1e-3, "undo restores the group volume and its fader");
+        {
+            // A group's device chain: clicking its strip shows it, and devices added go to it.
+            auto* stripComponent = strip->getParentComponent();
+            const auto now = juce::Time::getCurrentTime();
+            stripComponent->mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { 20.0f, 30.0f }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f,
+                                                         0, 0, 0, 0, stripComponent, stripComponent, now, { 20.0f, 30.0f }, now, 1, false));
+            refresh();
+            check (selectedChain == group && deviceChainId() == group && chainTitle() == state.groups[0].name, "clicking the group's strip shows its device chain");
+            insertDeviceSelection (state.projectGeneration, deviceChainId(), 100001, {}); refresh();
+            check (state.groups[0].plugins.size() == 1 && state.groups[0].plugins[0].isUtility && state.tracks[0].plugins.empty() && findNamed (deviceChain, "Device on") != nullptr,
+                   "+ Device adds a Utility to the group's chain, which the device view shows");
+            auto* masterStrip = findNamed (launcher, "Session master strip");
+            check (masterStrip != nullptr, "find the Main strip");
+            masterStrip->mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { 10.0f, 10.0f }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f,
+                                                      0, 0, 0, 0, masterStrip, masterStrip, now, { 10.0f, 10.0f }, now, 1, false));
+            refresh();
+            check (selectedChain == Session::mainChain && chainTitle() == "Main" && findNamed (deviceChain, "Device on") == nullptr, "clicking the Main's strip shows its empty chain");
+            insertDeviceSelection (state.projectGeneration, deviceChainId(), 100002 + (int) Session::EffectKind::channelEq, {}); refresh();
+            check (state.mainPlugins.size() == 1 && state.groups[0].plugins.size() == 1, "and devices added go to the Main");
+            selectTrack (0); refresh();
+            check (selectedChain.isEmpty() && deviceChainId() == state.tracks[0].id, "selecting a track shows its own chain again");
+            session.undo(); session.undo(); refresh();
+            check (state.mainPlugins.empty() && state.groups[0].plugins.empty(), "two undo steps remove both devices");
+        }
         launcher.mouseDown (groupEvent (launcher.groupLaunchPoint (0, 0))); launcher.mouseUp (groupEvent (launcher.groupLaunchPoint (0, 0)));
         pumpSyntheticTestDevice (session, 8); refresh();
         check (state.tracks[0].slots[0].playing && state.tracks[1].slots[0].playing, "the group slot launches every member's clip in its row");

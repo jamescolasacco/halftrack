@@ -534,6 +534,7 @@ public:
         float leftSplitPan = -1, rightSplitPan = 1;
         bool mute = false, solo = false, folded = false;
         juce::StringArray memberIds; // Track order.
+        std::vector<PluginInfo> plugins; // Its audio devices, in chain order.
     };
     // A point on the tempo map: the tempo ramps linearly from each point to the next and holds after the last.
     struct TempoPoint
@@ -605,6 +606,7 @@ public:
         // The tempo map; one point at beat 0 for a constant tempo. `tempo` is the tempo at the playhead.
         std::vector<TempoPoint> tempoMap { TempoPoint {} };
         float masterPeakL = 0, masterPeakR = 0, masterGainDb = 0;
+        std::vector<PluginInfo> mainPlugins; // The Main's audio devices, in chain order.
         float crossfader = 0; // -1 is fully A, +1 fully B.
         AutomationLane masterVolumeAutomation;
         std::vector<TrackInfo> tracks;
@@ -1498,6 +1500,18 @@ public:
     juce::Result addPlugin (int trackIndex, const juce::PluginDescription&);
     juce::Result setPluginEnabled (int trackIndex, int pluginIndex, bool);
     juce::Result removePlugin (int trackIndex, int pluginIndex);
+    // Device chains, as the reference's tracks each have one: a track's (by its id), a group's (by
+    // its id) or the Main's (mainChain). A group's or the Main's takes audio effects only, before its
+    // mixer: native audio effects, the Utility and effect plug-ins. These take a chain's id; on a
+    // track's chain they act as the track-index commands do.
+    static constexpr const char* mainChain = "main";
+    juce::Result addNativeEffect (const juce::String& chainId, EffectKind);
+    juce::Result addUtility (const juce::String& chainId);
+    juce::Result addPlugin (const juce::String& chainId, const juce::PluginDescription&);
+    juce::Result movePlugin (const juce::String& chainId, int pluginIndex, int destinationIndex);
+    juce::Result setPluginEnabled (const juce::String& chainId, int pluginIndex, bool);
+    juce::Result removePlugin (const juce::String& chainId, int pluginIndex);
+    juce::Result showPluginEditor (const juce::String& chainId, int pluginIndex);
     juce::Result setPluginParameter (int trackIndex, int pluginIndex, int parameterIndex, float normalisedValue);
     juce::Result showPluginEditor (int trackIndex, int pluginIndex);
     void closePluginEditors();

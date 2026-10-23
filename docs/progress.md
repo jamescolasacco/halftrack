@@ -2210,3 +2210,7 @@ Engine and UI areas. From a static reading of the reference's code, tracks and g
 ## Selection linking — 2026-10-23
 
 Engine and UI areas. From a static reading of the reference's code: with several tracks selected, moving one's volume, pan, split pans, a send or its activator moves the others'. Volume and sends keep their decibel offsets along their scales, pans their travel offsets among tracks in the same pan mode, and activators copy. A track held at an end gets its offset back. Mouse, MIDI, key and capture moves all link, in one undo step, and a double-click resets every linked control to its default. Measured in the fader-laws suite and checked in the UI suite ([contract](research/mixer-laws-contract.md#selection-linking)).
+
+## Group and Main device chains — 2026-10-23
+
+Engine and UI areas. Groups and the Main have device chains of audio effects, as the reference's tracks do: a group's process its members' sum and the Main's the whole mix, before their faders. Session's device commands take a chain id (a track's, a group's or `Session::mainChain`), and device lookups by id search every chain. Clicking a group's strip or the Main's strip shows its chain, and + Device and the browser add to it. Measured in the groups suite with a Utility at −6 dB on a group and on the Main, with refusals, reordering, undo and a reopen; the UI suite adds a device to each ([contract](research/groups-contract.md#device-chains-2026-10-23)).

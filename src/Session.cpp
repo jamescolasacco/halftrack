@@ -3401,12 +3401,35 @@ struct Session::Impl
     }
     juce::Array<te::Plugin*> plugins (int index) const
     {
+        if (auto* t = track (index)) return devicesIn (t->pluginList);
+        return {};
+    }
+    // A chain's devices: its native devices but an instrument, its plug-ins and its Utilities.
+    static juce::Array<te::Plugin*> devicesIn (te::PluginList& list)
+    {
         juce::Array<te::Plugin*> result;
-        if (auto* t = track (index))
-            for (auto* p : t->pluginList.getPlugins())
-                if (auto* native = dynamic_cast<NativeEffectPlugin*> (p); native != nullptr ? ! effectIsInstrument (native->getKind())
-                        : dynamic_cast<te::ExternalPlugin*> (p) != nullptr || dynamic_cast<UtilityPlugin*> (p) != nullptr) result.add (p);
+        for (auto* p : list.getPlugins())
+            if (auto* native = dynamic_cast<NativeEffectPlugin*> (p); native != nullptr ? ! effectIsInstrument (native->getKind())
+                    : dynamic_cast<te::ExternalPlugin*> (p) != nullptr || dynamic_cast<UtilityPlugin*> (p) != nullptr) result.add (p);
         return result;
+    }
+    // Opens a device's own window, a plug-in's editor or a native device's.
+    Result showEditor (te::Plugin&);
+    // A group's or the Main's chain, by its id.
+    te::PluginList* effectChain (const String& id) const
+    {
+        if (id == Session::mainChain) return &edit->getMasterPluginList();
+        if (auto* folder = group (id)) return &folder->pluginList;
+        return nullptr;
+    }
+    // Where a device goes at the end of a group's or the Main's chain: before its mixer and meter.
+    static int listEnd (te::PluginList& list)
+    {
+        for (int i = 0; i < list.size(); ++i)
+            if (auto* p = list[i]; dynamic_cast<te::VolumeAndPanPlugin*> (p) != nullptr || dynamic_cast<te::AuxSendPlugin*> (p) != nullptr
+                                   || dynamic_cast<te::LevelMeterPlugin*> (p) != nullptr)
+                return i;
+        return list.size();
     }
     te::Plugin* plugin (int trackIndex, int pluginIndex) const
     {
@@ -3482,8 +3505,21 @@ struct Session::Impl
     }
     te::Track* trackOfPlugin (const String& pluginId) const
     {
-        for (auto* t : te::getAudioTracks (*edit)) for (auto* p : t->pluginList.getPlugins()) if (p->itemID.toString() == pluginId) return t;
+        for (auto [t, list] : chains()) if (t != nullptr) for (auto* p : list->getPlugins()) if (p->itemID.toString() == pluginId) return t;
         return nullptr;
+    }
+    // Every device chain, as the reference's tracks each have one: each track's and group's, with
+    // its track, and the Main's, without one.
+    std::vector<std::pair<te::Track*, te::PluginList*>> chains() const
+    {
+        std::vector<std::pair<te::Track*, te::PluginList*>> result;
+        for (auto* t : te::getAllTracks (*edit))
+        {
+            auto* folder = dynamic_cast<te::FolderTrack*> (t);
+            if (dynamic_cast<te::AudioTrack*> (t) != nullptr || (folder != nullptr && folder->isSubmixFolder())) result.push_back ({ t, &t->pluginList });
+        }
+        result.push_back ({ nullptr, &edit->getMasterPluginList() });
+        return result;
     }
     // Every native device on the tracks, including devices inside racks, depth first.
     static void visitDevices (NativeEffectPlugin& device, const std::function<void (NativeEffectPlugin&)>& visit)
@@ -3491,17 +3527,18 @@ struct Session::Impl
         visit (device);
         if (auto* engine = device.rackEngine()) for (auto* inner : engine->devices()) visitDevices (*inner, visit);
     }
-    void visitDevices (const std::function<void (te::AudioTrack&, NativeEffectPlugin&)>& visit) const
+    // Each native device in every chain, with the track or group holding it (none for the Main's).
+    void visitDevices (const std::function<void (te::Track*, NativeEffectPlugin&)>& visit) const
     {
-        for (auto* t : te::getAudioTracks (*edit))
-            for (auto* p : t->pluginList.getPlugins())
-                if (auto* native = dynamic_cast<NativeEffectPlugin*> (p)) visitDevices (*native, [&] (NativeEffectPlugin& d) { visit (*t, d); });
+        for (auto [t, list] : chains())
+            for (auto* p : list->getPlugins())
+                if (auto* native = dynamic_cast<NativeEffectPlugin*> (p)) visitDevices (*native, [&, holder = t] (NativeEffectPlugin& d) { visit (holder, d); });
     }
-    // A native device on a track or inside a rack, and the track that holds it.
-    NativeEffectPlugin* nativeDevice (const String& id, te::AudioTrack** owner = nullptr) const
+    // A native device in a chain or inside a rack, and the track or group that holds it.
+    NativeEffectPlugin* nativeDevice (const String& id, te::Track** owner = nullptr) const
     {
         NativeEffectPlugin* found = nullptr;
-        visitDevices ([&] (te::AudioTrack& t, NativeEffectPlugin& d) { if (! found && d.itemID.toString() == id) { found = &d; if (owner) *owner = &t; } });
+        visitDevices ([&] (te::Track* t, NativeEffectPlugin& d) { if (! found && d.itemID.toString() == id) { found = &d; if (owner) *owner = t; } });
         return found;
     }
     // A loaded external plug-in on a track, by id.
@@ -3524,51 +3561,51 @@ struct Session::Impl
         track.getOutput().setOutputToDefaultDevice (false);
         track.state.removeProperty (midiOutChannelProperty, &edit->getUndoManager());
     }
-    te::ExternalPlugin* externalPlugin (const String& id, te::AudioTrack** owner = nullptr) const
+    te::ExternalPlugin* externalPlugin (const String& id, te::Track** owner = nullptr) const
     {
-        for (auto* t : te::getAudioTracks (*edit))
-            for (auto* p : t->pluginList.getPlugins())
+        for (auto [t, list] : chains())
+            for (auto* p : list->getPlugins())
                 if (auto* external = dynamic_cast<te::ExternalPlugin*> (p); external != nullptr && p->itemID.toString() == id)
                 { if (owner) *owner = t; return external; }
         return nullptr;
     }
-    NativeEffectPlugin* rack (const String& id, te::AudioTrack** owner = nullptr) const
+    NativeEffectPlugin* rack (const String& id, te::Track** owner = nullptr) const
     {
         auto* device = nativeDevice (id, owner);
         return device != nullptr && device->rackEngine() != nullptr ? device : nullptr;
     }
     // A chain or return chain of a rack, with that rack and the track holding it.
-    struct ChainRef { NativeEffectPlugin* rack = nullptr; juce::ValueTree state; te::AudioTrack* track = nullptr; bool isReturn = false; };
+    struct ChainRef { NativeEffectPlugin* rack = nullptr; juce::ValueTree state; te::Track* track = nullptr; bool isReturn = false; };
     ChainRef chain (const String& id) const
     {
         ChainRef result;
-        visitDevices ([&] (te::AudioTrack& t, NativeEffectPlugin& d)
+        visitDevices ([&] (te::Track* t, NativeEffectPlugin& d)
         {
             if (result.rack != nullptr || d.rackEngine() == nullptr) return;
             for (auto child : d.state)
                 if ((child.hasType (racks::chainType) || child.hasType (racks::returnType)) && child[te::IDs::id].toString() == id)
-                { result = { &d, child, &t, child.hasType (racks::returnType) }; return; }
+                { result = { &d, child, t, child.hasType (racks::returnType) }; return; }
         });
         return result;
     }
     // A device inside a rack: the rack directly holding it and the chain it is in.
-    struct RackDeviceRef { te::Plugin* device = nullptr; NativeEffectPlugin* native = nullptr; NativeEffectPlugin* rack = nullptr; juce::ValueTree chain; te::AudioTrack* track = nullptr; };
+    struct RackDeviceRef { te::Plugin* device = nullptr; NativeEffectPlugin* native = nullptr; NativeEffectPlugin* rack = nullptr; juce::ValueTree chain; te::Track* track = nullptr; };
     RackDeviceRef rackDevice (const String& id) const
     {
         RackDeviceRef result;
-        visitDevices ([&] (te::AudioTrack& t, NativeEffectPlugin& d)
+        visitDevices ([&] (te::Track* t, NativeEffectPlugin& d)
         {
             if (result.device != nullptr || d.rackEngine() == nullptr) return;
             for (auto* inner : d.rackEngine()->plugins())
-                if (inner->itemID.toString() == id) { result = { inner, dynamic_cast<NativeEffectPlugin*> (inner), &d, inner->state.getParent(), &t }; return; }
+                if (inner->itemID.toString() == id) { result = { inner, dynamic_cast<NativeEffectPlugin*> (inner), &d, inner->state.getParent(), t }; return; }
         });
         return result;
     }
-    // A Utility on a track or inside a rack.
-    UtilityPlugin* utility (const String& id, te::AudioTrack** owner = nullptr) const
+    // A Utility in a chain or inside a rack.
+    UtilityPlugin* utility (const String& id, te::Track** owner = nullptr) const
     {
-        for (auto* t : te::getAudioTracks (*edit))
-            for (auto* p : t->pluginList.getPlugins())
+        for (auto [t, list] : chains())
+            for (auto* p : list->getPlugins())
                 if (auto* found = dynamic_cast<UtilityPlugin*> (p); found && found->itemID.toString() == id) { if (owner) *owner = t; return found; }
         const auto ref = rackDevice (id);
         if (auto* found = dynamic_cast<UtilityPlugin*> (ref.device)) { if (owner) *owner = ref.track; return found; }
@@ -3670,7 +3707,7 @@ struct Session::Impl
         for (auto& entry : curves)
             for (int point = (int) entry.beats.size(); --point >= 0;)
                 entry.curve->setPointPosition (point, edit->tempoSequence.toTime (entry.beats[(size_t) point]), undo);
-        if (! curves.empty()) visitDevices ([] (te::AudioTrack&, NativeEffectPlugin& d) { d.refreshAutomation(); });
+        if (! curves.empty()) visitDevices ([] (te::Track*, NativeEffectPlugin& d) { d.refreshAutomation(); });
     }
     // Preferences, read when the Session starts.
     Preferences prefs;
@@ -4748,10 +4785,10 @@ struct Session::Impl
                 if (auto* send = dynamic_cast<te::AuxSendPlugin*> (plugin); send != nullptr && off (sendLane (*send)))
                     keys.add (sendKey (t->itemID.toString(), send->state[sendReturnProperty].toString()));
         }
-        visitDevices ([&] (te::AudioTrack&, NativeEffectPlugin& d)
+        visitDevices ([&] (te::Track*, NativeEffectPlugin& d)
         { for (const auto& a : deviceAutomation (d)) if (off (a.lane)) keys.add (deviceKey (d.itemID.toString(), a.parameter)); });
-        for (auto* t : te::getAudioTracks (*edit))
-            for (auto* p : t->pluginList.getPlugins())
+        for (auto [t, list] : chains())
+            for (auto* p : list->getPlugins())
                 if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
                     for (const auto& a : externalAutomation (*external)) if (off (a.lane)) keys.add (deviceKey (external->itemID.toString(), a.parameter));
         return keys;
@@ -5997,6 +6034,40 @@ Session::Snapshot Session::snapshot() const
     s.duration = e.getLength().inSeconds();
     s.tempo = e.tempoSequence.getBpmAt (te::TimePosition::fromSeconds (juce::jmax (0.0, s.position)));
     s.tempoMap.clear();
+    // A device as the snapshot shows it, in any chain.
+    const auto describe = [] (te::Plugin& plugin)
+    {
+        auto* p = &plugin;
+        PluginInfo device { p->itemID.toString(), p->getName(), p->isEnabled() };
+        if (auto* utility = dynamic_cast<UtilityPlugin*> (p)) { device.isUtility = true; device.utility = utility->readSettings(); }
+        if (auto* effect = dynamic_cast<NativeEffectPlugin*> (p)) device = describeDevice (*effect);
+        if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
+        {
+            device.isInstrument = static_cast<bool> (external->state.getProperty (hostedInstrumentProperty, false));
+            device.automation = externalAutomation (*external);
+            const auto parameters = externalParameters (*external);
+            for (const auto& configured : external->state.getChildWithName (configureType))
+                for (size_t i = 0; i < parameters.size(); ++i)
+                    if (parameters[i]->paramID == configured[te::IDs::id].toString()) { device.configured.push_back ((int) i); break; }
+            if (external->getAudioPluginInstance() != nullptr)
+            {
+                const auto buses = external->getBusses();
+                for (const auto& bus : buses.inputs) device.inputBuses.push_back (bus.getNumChannels());
+                for (const auto& bus : buses.outputs) device.outputBuses.push_back (bus.getNumChannels());
+                device.canSidechain = hasSidechainInput (*external);
+            }
+            device.sidechain = sidechainSettings (*external);
+        }
+        if (auto* external = dynamic_cast<te::ExternalPlugin*> (p); external && ! external->isInitialisingAsync() && external->getAudioPluginInstance() == nullptr)
+        {
+            device.missing = true; device.loadError = external->getLoadError();
+            // The engine's generic message says nothing useful.
+            if (device.loadError.isEmpty() || device.loadError.containsIgnoreCase ("couldn't be loaded")) device.loadError = "It is not installed, or has not been scanned.";
+            if (juce::File::isAbsolutePath (external->desc.fileOrIdentifier))
+                if (const auto problem = pluginbinary::architectureProblem (juce::File (external->desc.fileOrIdentifier), device.name); problem.isNotEmpty()) device.loadError = problem;
+        }
+        return device;
+    };
     for (int i = 0; i < e.tempoSequence.getNumTempos(); ++i)
         if (auto* t = e.tempoSequence.getTempo (i)) s.tempoMap.push_back ({ t->startBeatNumber.get().inBeats(), t->getBpm() });
     if (auto* meter = e.tempoSequence.getTimeSig (0)) s.timeSignature = { meter->numerator.get(), meter->denominator.get() };
@@ -6153,38 +6224,7 @@ Session::Snapshot Session::snapshot() const
             }
             info.slots.push_back (std::move (slotInfo));
         }
-        for (auto* p : impl->plugins (index++))
-        {
-            PluginInfo device { p->itemID.toString(), p->getName(), p->isEnabled() };
-            if (auto* utility = dynamic_cast<UtilityPlugin*> (p)) { device.isUtility = true; device.utility = utility->readSettings(); }
-            if (auto* effect = dynamic_cast<NativeEffectPlugin*> (p)) device = describeDevice (*effect);
-            if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
-            {
-                device.isInstrument = static_cast<bool> (external->state.getProperty (hostedInstrumentProperty, false));
-                device.automation = externalAutomation (*external);
-                const auto parameters = externalParameters (*external);
-                for (const auto& configured : external->state.getChildWithName (configureType))
-                    for (size_t i = 0; i < parameters.size(); ++i)
-                        if (parameters[i]->paramID == configured[te::IDs::id].toString()) { device.configured.push_back ((int) i); break; }
-                if (external->getAudioPluginInstance() != nullptr)
-                {
-                    const auto buses = external->getBusses();
-                    for (const auto& bus : buses.inputs) device.inputBuses.push_back (bus.getNumChannels());
-                    for (const auto& bus : buses.outputs) device.outputBuses.push_back (bus.getNumChannels());
-                    device.canSidechain = hasSidechainInput (*external);
-                }
-                device.sidechain = sidechainSettings (*external);
-            }
-            if (auto* external = dynamic_cast<te::ExternalPlugin*> (p); external && ! external->isInitialisingAsync() && external->getAudioPluginInstance() == nullptr)
-            {
-                device.missing = true; device.loadError = external->getLoadError();
-                // The engine's generic message says nothing useful.
-                if (device.loadError.isEmpty() || device.loadError.containsIgnoreCase ("couldn't be loaded")) device.loadError = "It is not installed, or has not been scanned.";
-                if (juce::File::isAbsolutePath (external->desc.fileOrIdentifier))
-                    if (const auto problem = pluginbinary::architectureProblem (juce::File (external->desc.fileOrIdentifier), device.name); problem.isNotEmpty()) device.loadError = problem;
-            }
-            info.plugins.push_back (std::move (device));
-        }
+        for (auto* p : impl->plugins (index++)) info.plugins.push_back (describe (*p));
         s.tracks.push_back (std::move (info));
     }
     for (auto* track : te::getAllTracks (e))
@@ -6198,6 +6238,7 @@ Session::Snapshot Session::snapshot() const
             if (auto* v = folder->getVolumePlugin()) { group.gainDb = v->getVolumeDb(); group.pan = v->getPan(); }
             if (auto* mixer = dynamic_cast<TrackMixer*> (folder->getVolumePlugin()))
             { group.splitPan = mixer->splitPan(); group.leftSplitPan = mixer->leftSplit->getCurrentValue(); group.rightSplitPan = mixer->rightSplit->getCurrentValue(); }
+            for (auto* p : Impl::devicesIn (folder->pluginList)) group.plugins.push_back (describe (*p));
             if (auto* level = folder->pluginList.findFirstPluginOfType<te::LevelMeterPlugin>())
             {
                 auto& m = impl->meter (group.id, level->measurer);
@@ -6206,6 +6247,7 @@ Session::Snapshot Session::snapshot() const
             for (auto* member : te::getAudioTracks (e)) if (member->getParentFolderTrack() == folder) group.memberIds.add (member->itemID.toString());
             s.groups.push_back (std::move (group));
         }
+    for (auto* p : Impl::devicesIn (e.getMasterPluginList())) s.mainPlugins.push_back (describe (*p));
     if (auto* output = impl->engine.getDeviceManager().getDefaultWaveOutDevice())
     {
         auto& m = impl->meter ("master", output->levelMeasurer);
@@ -11632,7 +11674,7 @@ Result Session::setClipEnvelope (const String& clipId, const ClipEnvelope& envel
 }
 Result Session::setDeviceAutomation (const String& pluginId, int parameter, const AutomationLane& lane)
 {
-    te::AudioTrack* owner = nullptr;
+    te::Track* owner = nullptr;
     auto* device = impl->nativeDevice (pluginId, &owner);
     if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
     if (impl->exporting || (impl->edit->getTransport().isRecording() && ! impl->internalAutomationWrite))
@@ -11689,7 +11731,7 @@ std::vector<Session::PluginParameterInfo> Session::pluginParameters (const Strin
 Result Session::setPluginConfiguration (const String& pluginId, const std::vector<int>& chosen)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    te::AudioTrack* owner = nullptr;
+    te::Track* owner = nullptr;
     auto* external = impl->externalPlugin (pluginId, &owner);
     if (external == nullptr || external->getAudioPluginInstance() == nullptr) return Result::fail ("Configure a loaded plug-in.");
     if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
@@ -11719,17 +11761,18 @@ Result Session::setPluginConfiguration (const String& pluginId, const std::vecto
 juce::StringArray Session::sidechainSources (const String& pluginId) const
 {
     juce::StringArray result;
-    te::AudioTrack* owner = nullptr;
+    te::Track* owner = nullptr;
     auto* external = impl->externalPlugin (pluginId, &owner);
-    if (external == nullptr || owner == nullptr) return result;
+    auto* holder = dynamic_cast<te::AudioTrack*> (owner); // Sidechains feed plug-ins on tracks.
+    if (external == nullptr || holder == nullptr) return result;
     for (auto* t : te::getAudioTracks (*impl->edit))
-        if (t != owner && ! isReturn (*t) && ! impl->feeds (*owner, *t)) result.add (t->itemID.toString());
+        if (t != holder && ! isReturn (*t) && ! impl->feeds (*holder, *t)) result.add (t->itemID.toString());
     return result;
 }
 Result Session::setPluginSidechain (const String& pluginId, const SidechainSettings& settings)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    te::AudioTrack* owner = nullptr;
+    te::Track* owner = nullptr;
     auto* external = impl->externalPlugin (pluginId, &owner);
     if (external == nullptr) return Result::fail ("Plug-in not found.");
     if (! hasSidechainInput (*external)) return Result::fail ("This plug-in has no sidechain input.");
@@ -11751,7 +11794,7 @@ Result Session::setPluginSidechain (const String& pluginId, const SidechainSetti
 Result Session::setPluginParameterValue (const String& pluginId, int parameter, float value)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    te::AudioTrack* owner = nullptr;
+    te::Track* owner = nullptr;
     auto* external = impl->externalPlugin (pluginId, &owner);
     if (external == nullptr || external->getAudioPluginInstance() == nullptr || ! std::isfinite (value)) return Result::fail ("Plug-in parameter not found.");
     if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
@@ -13135,7 +13178,7 @@ Result Session::addNativeEffect (int index, EffectKind kind)
 }
 Result Session::setNativeEffectSettings (const String& id, const EffectSettings& settings)
 {
-    te::AudioTrack* owner = nullptr;
+    te::Track* owner = nullptr;
     auto* effect = impl->nativeDevice (id, &owner);
     if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -13171,7 +13214,7 @@ Result Session::addUtility (int index)
 }
 Result Session::setUtilitySettings (const String& id, const UtilitySettings& settings)
 {
-    te::AudioTrack* owner = nullptr;
+    te::Track* owner = nullptr;
     auto* utility = impl->utility (id, &owner);
     if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -13217,7 +13260,7 @@ juce::ValueTree newDeviceState (te::Edit& edit, Session::EffectKind kind)
 }
 Result Session::addRackChain (const String& rackId, const String& name, String& chainId, int index)
 {
-    te::AudioTrack* track = nullptr;
+    te::Track* track = nullptr;
     auto* rack = impl->rack (rackId, &track);
     if (rack == nullptr) return Result::fail ("Rack not found.");
     if (auto r = impl->editable (track); r.failed()) return r;
@@ -13418,7 +13461,7 @@ Result Session::setRackDeviceSample (const String& deviceId, const File& sample)
 }
 Result Session::setRackMacroMapping (const String& rackId, const MacroMapping& mapping)
 {
-    te::AudioTrack* track = nullptr;
+    te::Track* track = nullptr;
     auto* rack = impl->rack (rackId, &track);
     if (rack == nullptr) return Result::fail ("Rack not found.");
     if (auto r = impl->editable (track); r.failed()) return r;
@@ -13482,7 +13525,7 @@ Result Session::setRackMacroMapping (const String& rackId, const MacroMapping& m
 }
 Result Session::removeRackMacroMapping (const String& rackId, int macro, const String& targetId, int parameter)
 {
-    te::AudioTrack* track = nullptr;
+    te::Track* track = nullptr;
     auto* rack = impl->rack (rackId, &track);
     if (rack == nullptr) return Result::fail ("Rack not found.");
     if (auto r = impl->editable (track); r.failed()) return r;
@@ -13534,7 +13577,7 @@ Result Session::setRackVisibleMacros (const String& rackId, int count)
 }
 Result Session::setRackMacroName (const String& rackId, int macro, const String& name)
 {
-    te::AudioTrack* track = nullptr;
+    te::Track* track = nullptr;
     auto* rack = impl->rack (rackId, &track);
     if (rack == nullptr) return Result::fail ("Rack not found.");
     if (auto r = impl->editable (track); r.failed()) return r;
@@ -13549,7 +13592,7 @@ Result Session::setRackMacroName (const String& rackId, int macro, const String&
 }
 Result Session::setDrumRackPadSample (const String& rackId, int note, const File& sample, String& chainId)
 {
-    te::AudioTrack* track = nullptr;
+    te::Track* track = nullptr;
     auto* rack = impl->rack (rackId, &track);
     if (rack == nullptr || rack->getKind() != EffectKind::drumRack) return Result::fail ("Drum Rack not found.");
     if (auto r = impl->editable (track); r.failed()) return r;
@@ -13595,7 +13638,7 @@ Result Session::setDrumRackPadSample (const String& rackId, int note, const File
 }
 Result Session::swapDrumRackPads (const String& rackId, int note, int other)
 {
-    te::AudioTrack* track = nullptr;
+    te::Track* track = nullptr;
     auto* rack = impl->rack (rackId, &track);
     if (rack == nullptr || rack->getKind() != EffectKind::drumRack) return Result::fail ("Drum Rack not found.");
     if (auto r = impl->editable (track); r.failed()) return r;
@@ -13615,7 +13658,7 @@ Result Session::swapDrumRackPads (const String& rackId, int note, int other)
 }
 Result Session::addRackReturn (const String& rackId, const String& name, String& returnId)
 {
-    te::AudioTrack* track = nullptr;
+    te::Track* track = nullptr;
     auto* rack = impl->rack (rackId, &track);
     if (rack == nullptr || rack->getKind() != EffectKind::drumRack) return Result::fail ("Return chains belong to Drum Racks.");
     if (auto r = impl->editable (track); r.failed()) return r;
@@ -13687,7 +13730,7 @@ Result Session::groupDevices (int trackIndex, const juce::StringArray& ids, Stri
 }
 Result Session::ungroupRack (const String& rackId)
 {
-    te::AudioTrack* track = nullptr;
+    te::Track* track = nullptr;
     auto* rack = impl->rack (rackId, &track);
     if (rack == nullptr || track == nullptr || rack->state.getParent() != track->state) return Result::fail ("Ungroup a rack on a track.");
     if (auto r = impl->editable (track); r.failed()) return r;
@@ -13836,6 +13879,97 @@ Result Session::removePlugin (int t, int p)
     auto* plugin = impl->plugin (t, p); if (! plugin) return Result::fail ("Plug-in not found.");
     plugin->windowState->closeWindowExplicitly(); impl->transaction ("Remove plug-in"); plugin->deleteFromParent(); impl->changed(); return Result::ok();
 }
+namespace
+{
+// A group's or the Main's chain takes audio effects only.
+Result audioEffectsOnly (Session::EffectKind kind)
+{
+    if (effectIsInstrument (kind)) return Result::fail ("Instruments go on MIDI tracks.");
+    if (effectIsMidi (kind)) return Result::fail ("MIDI effects go on MIDI tracks.");
+    return Result::ok();
+}
+}
+Result Session::addNativeEffect (const String& chainId, EffectKind kind)
+{
+    if (const int index = impl->trackIndexOf (chainId); index >= 0) return addNativeEffect (index, kind);
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* list = impl->effectChain (chainId); if (list == nullptr) return Result::fail ("Device chain not found.");
+    if (! juce::isPositiveAndBelow (static_cast<int> (kind), deviceKindCount)) return Result::fail ("Unknown native effect.");
+    if (auto result = audioEffectsOnly (kind); result.failed()) return result;
+    if (! list->canInsertPlugin()) return Result::fail ("This device chain is full.");
+    juce::ValueTree state (te::IDs::PLUGIN);
+    state.setProperty (te::IDs::type, NativeEffectPlugin::xmlTypeName, nullptr);
+    state.setProperty ("effectKind", static_cast<int> (kind), nullptr);
+    auto plugin = impl->edit->getPluginCache().createNewPlugin (state);
+    if (! plugin) return Result::fail ("The native effect could not be created.");
+    impl->transaction ("Add " + String (effectName (kind)));
+    list->insertPlugin (plugin, Impl::listEnd (*list), nullptr);
+    impl->changed(); return Result::ok();
+}
+Result Session::addUtility (const String& chainId)
+{
+    if (const int index = impl->trackIndexOf (chainId); index >= 0) return addUtility (index);
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* list = impl->effectChain (chainId); if (list == nullptr) return Result::fail ("Device chain not found.");
+    if (! list->canInsertPlugin()) return Result::fail ("This device chain is full.");
+    auto plugin = impl->edit->getPluginCache().createNewPlugin (UtilityPlugin::xmlTypeName, {});
+    if (! plugin) return Result::fail ("The channel utility could not be created.");
+    impl->transaction ("Add channel utility");
+    list->insertPlugin (plugin, Impl::listEnd (*list), nullptr);
+    impl->changed(); return Result::ok();
+}
+Result Session::addPlugin (const String& chainId, const juce::PluginDescription& description)
+{
+    if (const int index = impl->trackIndexOf (chainId); index >= 0) return addPlugin (index, description);
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* list = impl->effectChain (chainId); if (list == nullptr) return Result::fail ("Device chain not found.");
+    if (! list->canInsertPlugin()) return Result::fail ("This device chain is full.");
+    const auto role = pluginRole (description);
+    if (role == PluginRole::instrument) return Result::fail ("Instrument plug-ins go on MIDI tracks.");
+    if (role == PluginRole::midiEffect) return Result::fail ("MIDI effect plug-ins go on MIDI tracks.");
+    if (juce::File::isAbsolutePath (description.fileOrIdentifier))
+        if (const auto problem = pluginbinary::architectureProblem (juce::File (description.fileOrIdentifier), description.name); problem.isNotEmpty())
+            return Result::fail (problem);
+    impl->transaction ("Add plug-in");
+    knownPlugins().addType (description);
+    auto plugin = impl->edit->getPluginCache().createNewPlugin (te::ExternalPlugin::xmlTypeName, description);
+    auto* external = dynamic_cast<te::ExternalPlugin*> (plugin.get());
+    if (! external || (! external->getAudioPluginInstance() && ! external->isInitialisingAsync()))
+        return Result::fail (external ? external->getLoadError() : "The plug-in could not be instantiated.");
+    list->insertPlugin (plugin, Impl::listEnd (*list), nullptr);
+    impl->changed(); return Result::ok();
+}
+Result Session::movePlugin (const String& chainId, int p, int destination)
+{
+    if (const int index = impl->trackIndexOf (chainId); index >= 0) return movePlugin (index, p, destination);
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* list = impl->effectChain (chainId); if (list == nullptr) return Result::fail ("Device chain not found.");
+    const auto devices = Impl::devicesIn (*list);
+    if (! juce::isPositiveAndBelow (p, devices.size()) || ! juce::isPositiveAndBelow (destination, devices.size())) return Result::fail ("Device position not found.");
+    if (p == destination) return Result::ok();
+    auto state = devices[p]->state; auto parent = state.getParent();
+    impl->transaction ("Move device");
+    parent.moveChild (parent.indexOf (state), parent.indexOf (devices[destination]->state), &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::setPluginEnabled (const String& chainId, int p, bool enabled)
+{
+    if (const int index = impl->trackIndexOf (chainId); index >= 0) return setPluginEnabled (index, p, enabled);
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* list = impl->effectChain (chainId); if (list == nullptr) return Result::fail ("Device chain not found.");
+    const auto devices = Impl::devicesIn (*list);
+    if (! juce::isPositiveAndBelow (p, devices.size())) return Result::fail ("Plug-in not found.");
+    impl->transaction ("Bypass plug-in"); devices[p]->setEnabled (enabled); impl->changed(); return Result::ok();
+}
+Result Session::removePlugin (const String& chainId, int p)
+{
+    if (const int index = impl->trackIndexOf (chainId); index >= 0) return removePlugin (index, p);
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* list = impl->effectChain (chainId); if (list == nullptr) return Result::fail ("Device chain not found.");
+    const auto devices = Impl::devicesIn (*list);
+    if (! juce::isPositiveAndBelow (p, devices.size())) return Result::fail ("Plug-in not found.");
+    devices[p]->windowState->closeWindowExplicitly(); impl->transaction ("Remove plug-in"); devices[p]->deleteFromParent(); impl->changed(); return Result::ok();
+}
 Result Session::setPluginParameter (int t, int p, int parameter, float value)
 {
     if (auto frozen = impl->unfrozen (impl->track (t)); frozen.failed()) return frozen;
@@ -13849,10 +13983,23 @@ Result Session::setPluginParameter (int t, int p, int parameter, float value)
     param->beginChangeGesture(); param->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, value)); param->endChangeGesture();
     impl->edit->pluginChanged (*plugin); impl->changed(); return Result::ok();
 }
+Result Session::showPluginEditor (const String& chainId, int p)
+{
+    if (const int index = impl->trackIndexOf (chainId); index >= 0) return showPluginEditor (index, p);
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* list = impl->effectChain (chainId); if (list == nullptr) return Result::fail ("Device chain not found.");
+    const auto devices = Impl::devicesIn (*list);
+    return juce::isPositiveAndBelow (p, devices.size()) ? impl->showEditor (*devices[p]) : Result::fail ("Plug-in not found.");
+}
 Result Session::showPluginEditor (int t, int p)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* plugin = impl->plugin (t, p); if (! plugin) return Result::fail ("Plug-in not found.");
+    return impl->showEditor (*plugin);
+}
+Result Session::Impl::showEditor (te::Plugin& device)
+{
+    auto* plugin = &device;
     if (auto* external = dynamic_cast<te::ExternalPlugin*> (plugin))
     {
         if (external->isInitialisingAsync())

@@ -10,4 +10,16 @@ Session view: a group column precedes its members, with the group colour and nam
 
 Correction: group gain and pan were not undoable. The parameter write alone is not recorded, and the manual-level properties that track faders keep were missing. Group commands now record them, and the post-undo refresh includes group mixers; `groups-acceptance` checks undo and redo of both.
 
-Not implemented: nested groups, group devices/sends, moving tracks between groups, per-clip launch modes through group slots, and any comparison with reference group summing.
+## Device chains (2026-10-23)
+
+As each of the reference's tracks has one, a group and the Main have device chains. Their devices play before the mixer: a group's on its members' sum, and the Main's on the whole mix before its fader.
+
+- **Contents.** The chains take audio effects only: native audio effects, the Utility and effect plug-ins. Instruments and MIDI effects are refused, and the menus leave them out.
+- **Session API.** Devices are addressed by chain: a track's id, a group's id or `Session::mainChain`. `addNativeEffect`, `addUtility`, `addPlugin`, `movePlugin`, `setPluginEnabled`, `removePlugin` and `showPluginEditor` all take a chain id, and on a track's chain they act as the track-index commands do. `GroupInfo::plugins` and `Snapshot::mainPlugins` list the devices.
+- **Device commands by id.** Commands that address a device by its own id, such as settings, automation and MIDI mapping, find it in any chain.
+- **Saving.** The devices are saved with the project (a group's in its plug-in list, the Main's in the engine's master plug-ins), with undo for each edit.
+- **Interface.** Clicking a group's strip or header shows its chain in the device view, and clicking the Main's Session strip shows the Main's. Selecting a track shows its own chain again. + Device and the browser add to the chain shown.
+
+Evidence (`tests/GroupTests.cpp`): a group's Utility at −6 dB plays its members 6 dB down. The Main's adds another 6 dB before its fader, and a switched-off device passes the sound. Instruments, MIDI effects and unknown chains are refused. A Channel EQ moves before the Utility, and one undo puts it back. The chains reopen and play as before, and removal works. The UI suite clicks a group strip and the Main's strip, adds a device to each, returns to a track's chain and undoes both.
+
+Not implemented: nested groups, group sends, moving tracks between groups, presets and racks on group or Main chains, sidechains into group or Main plug-ins, per-clip launch modes through group slots, and any comparison with reference group summing.

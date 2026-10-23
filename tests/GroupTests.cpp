@@ -112,6 +112,45 @@ int runGroupTests (const juce::File& artifacts)
         const auto alone = render (midi, mix);
         ok (midi.groupTracks ({ keys }, group), "group the MIDI track");
         check (difference (render (midi, mix), alone) < 1e-6 && peak (alone) > .01, "an instrument renders identically through its group");
+        {
+            // Device chains on a group and on the Main, as the reference's tracks have them: audio
+            // effects only, before the mixer.
+            Session d (false);
+            ok (d.importAudio (a, 0), "import a member"); ok (d.importAudio (b, 1), "import another");
+            const auto plain = render (d, mix);
+            juce::String chained;
+            ok (d.groupTracks ({ d.snapshot().tracks[0].id, d.snapshot().tracks[1].id }, chained), "group them");
+            check (d.snapshot().groups[0].plugins.empty() && d.snapshot().mainPlugins.empty(), "the group's and the Main's chains start empty");
+            ok (d.addUtility (chained), "add a Utility to the group");
+            const auto groupUtility = d.snapshot().groups[0].plugins.at (0);
+            check (groupUtility.isUtility && d.snapshot().tracks[0].plugins.empty(), "the group lists its Utility, and its members do not");
+            auto settings = groupUtility.utility; settings.gainDb = -6;
+            ok (d.setUtilitySettings (groupUtility.id, settings), "turn the group's Utility down 6 dB");
+            const auto sixDown = std::pow (10.0, -6.0 / 20);
+            check (difference (render (d, mix), plain, (float) sixDown, (float) sixDown) < 1e-5, "the group's chain plays its members 6 dB down");
+            ok (d.addUtility (Session::mainChain), "add a Utility to the Main");
+            const auto mainUtility = d.snapshot().mainPlugins.at (0);
+            settings = mainUtility.utility; settings.gainDb = -6;
+            ok (d.setUtilitySettings (mainUtility.id, settings), "turn the Main's Utility down 6 dB");
+            check (difference (render (d, mix), plain, (float) (sixDown * sixDown), (float) (sixDown * sixDown)) < 1e-5, "the Main's chain follows, before its fader");
+            ok (d.setPluginEnabled (Session::mainChain, 0, false), "switch the Main's Utility off");
+            check (difference (render (d, mix), plain, (float) sixDown, (float) sixDown) < 1e-5 && ! d.snapshot().mainPlugins[0].enabled, "a switched-off device passes the sound");
+            check (d.addNativeEffect (chained, Session::EffectKind::arpeggiator).failed() && d.addNativeEffect (Session::mainChain, Session::EffectKind::sampler).failed()
+                       && d.addUtility ("missing").failed(), "MIDI effects, instruments and unknown chains are refused");
+            ok (d.addNativeEffect (chained, Session::EffectKind::channelEq), "add a Channel EQ to the group");
+            check (d.snapshot().groups[0].plugins.size() == 2, "after the Utility");
+            ok (d.movePlugin (chained, 1, 0), "move the Channel EQ first");
+            check (! d.snapshot().groups[0].plugins[0].isUtility && d.snapshot().groups[0].plugins[1].isUtility, "the group's devices reorder");
+            d.undo(); check (d.snapshot().groups[0].plugins[0].isUtility, "one undo puts it back");
+            const auto project = root.getChildFile ("Chains.halftrack");
+            ok (d.saveProject (project), "save");
+            Session reopened (false);
+            ok (reopened.loadProject (project), "reopen");
+            check (reopened.snapshot().groups.at (0).plugins.size() == 2 && reopened.snapshot().mainPlugins.size() == 1, "the group's and the Main's devices reopen");
+            check (difference (render (reopened, mix), plain, (float) sixDown, (float) sixDown) < 1e-5, "and play as before");
+            ok (reopened.removePlugin (Session::mainChain, 0), "remove the Main's Utility");
+            check (reopened.snapshot().mainPlugins.empty(), "it is gone");
+        }
         std::cout << "Groups passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL groups: " << e.what() << std::endl; return 1; }
