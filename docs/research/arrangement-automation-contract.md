@@ -66,3 +66,29 @@ Evidence, from the UI suite:
 - one undo restores them.
 
 Missing: segment selection without Shift (the reference also selects a segment by clicking near it), multi-breakpoint selection, Edit Value, Draw Mode, saving the shown lanes, clip envelopes, and fine checks of the chooser's per-device "show automated only" filter.
+
+## Send lanes (2026-10-23)
+
+The reference automates sends like any mixer control: its Send parameter takes the same automation settings as volume and pan (static reading, see the [mixer laws](mixer-laws-contract.md)). Halftrack's Mixer device offers a send lane for each return, after Track Volume and Track Panning.
+
+- **Model.** `Session::setSendAutomation (trackId, returnTrackId, lane)` takes beat points in decibels from −100 (Off) to 0. `SendInfo::automation` reports them. Between points the send's knob moves straight along the send law, curved as other lanes are. Points on a send that is Off make the send, at Off, in the same undo step. Edits are refused on returns, on frozen tracks, while recording (except automation recording) and while exporting.
+- **The level set by hand.** The engine plays automation into the send's stored level, so Session keeps the level set by hand as `halftrackManualSend`. Clearing the lane returns the send to that level, and saving keeps it. On load, a send's lane must hold at most 4096 ordered finite points, from Off to 0 dB, with curves from −1 to 1. The level set by hand must be in range too. Otherwise the project is refused and the open one is kept.
+- **Override and capture.** Turning an automated send's knob, by mouse, MIDI or a key mapping, switches its lane off until Re-Enable Automation, as for the mixer. With Automation Arm on, recording writes the knob's moves into the lane. That includes a send that was Off, which the first move makes.
+- **Mapping.** A send is a MIDI and key mapping target (`send:<track>:<return>`), moving from Off to 0 dB along the send law; CC 64 is −19.84 dB.
+- **Interface.** In Automation Mode the Mixer's Control chooser names each send for its return (for example A-Echo); its envelope draws and edits along the send law. The Session mixer's send knobs and the Sends panel's sliders carry their mapping targets for MIDI and Key Map Mode.
+
+Evidence:
+
+- **The sends suite.** It renders a send rising from Off at beat 0 to 0 dB at beat 4, within 0.3% of the send law at three times (−20 dB halfway). It also checks:
+  - one undo removing the lane and the send it made, and redo;
+  - a −20 dB lane playing over a −6 dB level set by hand;
+  - a knob move overriding the lane, and the render following the knob;
+  - Re-Enable Automation;
+  - refusals above 0 dB and from a return;
+  - a reopen keeping the lane and the level set by hand;
+  - three malformed saved lanes refused.
+- **The automation capture suite.** A send that was Off is recorded at −12 dB from its first move while recording, and undo turns it Off again.
+- **The MIDI mapping suite.** A mapped send's range is Off to 0 dB. CC 64 gives −19.84 dB, 127 gives 0 dB, and 0 gives Off.
+- **The UI suite.** The Mixer's controls offer the send named for its return. Double-clicking halfway up its lane adds a −20 dB breakpoint, one undo removes it, and the Session send knob is a mapping target.
+
+Not read in the reference: how its choosers name a send (Halftrack uses the return's name), and whether it allows mixer automation edits on a frozen track (Halftrack refuses them, as for volume and pan).

@@ -1057,7 +1057,7 @@ private:
     juce::String shownKey (const Session::TrackInfo& t) const
     { const auto found = shownAutomation.find (t.id); return found != shownAutomation.end() ? found->second : arrangementAutomation::volumeKey (t); }
     std::optional<arrangementAutomation::Target> automationTarget (const juce::String& trackId, const juce::String& key)
-    { for (const auto& t : state.tracks) if (t.id == trackId) return arrangementAutomation::find (session, t, key); return std::nullopt; }
+    { for (const auto& t : state.tracks) if (t.id == trackId) return arrangementAutomation::find (session, t, state.tracks, key); return std::nullopt; }
     void setAutomationMode (bool on) { automationMode = on; refresh(); resized(); canvas.repaint(); }
     // An envelope's context menu: Simplify Envelope over the time selection, as the reference's.
     void envelopeMenu (const arrangementAutomation::Target& target)
@@ -1782,7 +1782,7 @@ private:
             if (automating) for (auto* c : std::initializer_list<juce::Component*> { &input, &inputDetail, &monitor, &gain, &pan, &sendMode }) c->setVisible (false);
             else { gain.setVisible (true); pan.setVisible (true); inputDetail.setVisible (! returnTrack && inputDetailShown); }
             if (! automating) return;
-            automationTargets = arrangementAutomation::targets (owner.session, track);
+            automationTargets = arrangementAutomation::targets (owner.session, track, owner.state.tracks);
             shownKey = owner.shownKey (track);
             const arrangementAutomation::Target* shown = nullptr;
             for (const auto& t : automationTargets) if (t.key == shownKey) shown = &t;
@@ -1901,6 +1901,7 @@ private:
             }
             for (size_t i = 0; i < sends.size(); ++i)
             {
+                sends[i]->getProperties().set ("midiMapTarget", "send:" + track.id + ":" + sendReturnIds[(int) i]);
                 if (! sends[i]->isMouseButtonDown()) sends[i]->setValue (track.sends[i].gainDb, juce::dontSendNotification);
                 for (const auto& other : owner.state.tracks) if (other.id == sendReturnIds[(int) i]) sends[i]->setTooltip ("Send to " + other.name + ": " + sends[i]->getTextFromValue (sends[i]->getValue()));
                 sends[i]->setEnabled (! owner.session.isExporting());
@@ -7372,6 +7373,7 @@ private:
             void sync (const Session::TrackInfo& source, const Session::TrackInfo& destination, float value)
             {
                 if (! gesture) sourceId = source.id;
+                level.getProperties().set ("midiMapTarget", "send:" + sourceId + ":" + destination.id);
                 label.setText (destination.name + (destination.sendMode == Session::SendMode::pre ? "  |  Pre" : "  |  Post"), juce::dontSendNotification);
                 level.setName ("Send to " + destination.name);
                 level.setTooltip ("Send to " + destination.name + ". Off to 0 dB. Double-click to turn off.");
@@ -12738,6 +12740,39 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (hide != nullptr, "the lane can be hidden"); hide->onClick(); refresh();
         check (automationLanes[trackId].isEmpty() && volume().points.size() == 2, "hiding the lane keeps its automation");
         check (handleKey (juce::KeyPress ('a')) && ! automationMode && findNamed (*row, "Track volume")->isVisible() && ! device->isVisible(), "A again returns to the mixer controls");
+        {
+            // A send has a lane too, named for its return and moving along the send law.
+            check (session.addReturnTrack ("Echo").wasOk(), "add a return for a send lane"); refresh();
+            const auto echo = state.tracks.back().id; const juce::String sendKey = "send:" + trackId + ":" + echo;
+            juce::String echoName; for (const auto& track : state.tracks) if (track.id == echo) echoName = track.name;
+            check (handleKey (juce::KeyPress ('a')) && automationMode, "A turns Automation Mode on again"); refresh();
+            row = canvas.getComponentAt (canvas.timelineWidth() + 120, laneY (t) + 4);
+            while (row != nullptr && row->getParentComponent() != &canvas) row = row->getParentComponent();
+            device = row != nullptr ? dynamic_cast<juce::ComboBox*> (findNamed (*row, "Automation device")) : nullptr;
+            control = row != nullptr ? dynamic_cast<juce::ComboBox*> (findNamed (*row, "Automation control")) : nullptr;
+            check (device != nullptr && control != nullptr, "find the track's automation choosers again");
+            showAutomationKey (trackId, "mixer:" + trackId + ":volume"); refresh();
+            int item = 0;
+            for (int i = 0; i < control->getNumItems(); ++i) if (control->getItemText (i).endsWith (echoName)) item = control->getItemId (i);
+            check (device->getText().endsWith ("Mixer") && item > 0, "the Mixer's controls offer the send, named for its return");
+            control->setSelectedId (item, juce::sendNotificationSync); refresh();
+            check (shownKey (state.tracks[(size_t) t]) == sendKey, "choosing it shows the send's envelope");
+            const auto sendLane = [&]
+            {
+                for (const auto& send : state.tracks[(size_t) t].sends) if (send.returnTrackId == echo) return send.automation;
+                return Session::AutomationLane {};
+            };
+            const auto lane = area (laneY (t), laneHeight (t));
+            const auto half = juce::Point<float> (xOf (3), lane.getBottom() - .5f * lane.getHeight());
+            canvas.mouseDoubleClick (event (half, half, false, 2)); refresh();
+            check (sendLane().points.size() == 1 && std::abs (sendLane().points[0].value + 20) < 1,
+                   "double-clicking halfway up the send's lane adds a breakpoint at -20 dB, along the send law");
+            session.undo(); refresh();
+            check (sendLane().points.empty(), "one undo removes it");
+            showAutomationKey (trackId, "none");
+            check (handleKey (juce::KeyPress ('a')) && ! automationMode, "A turns Automation Mode off"); refresh();
+            check (session.removeTrack ((int) state.tracks.size() - 1).wasOk(), "remove the return"); refresh();
+        }
         check (session.removeTrack (t).wasOk(), "remove the envelope track"); refresh();
     }
     {
@@ -15656,6 +15691,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         bool sent = false;
         for (const auto& track : state.tracks) for (const auto& send : track.sends) sent = sent || (send.returnTrackId == echo && std::abs (send.gainDb + 6) < 1e-3);
         check (sent, "a Session send knob edits the real send level");
+        const auto sendTarget = sendA->getProperties()["midiMapTarget"].toString();
+        check (sendTarget.startsWith ("send:") && sendTarget.endsWith (":" + echo) && session.isMappableTarget (sendTarget), "the send knob is a MIDI and key mapping target");
         // The mixer's sections, as the reference's View menu has them: its default Set shows In/Out,
         // Sends and the Mixer, and hides Track Delay and the Crossfader.
         {

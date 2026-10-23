@@ -155,7 +155,10 @@ void legacyProjects (const juce::File& root, const juce::File& signal)
                     for (auto* point : curve->getChildIterator()) { point->setAttribute ("v", fader (point->getDoubleAttribute ("v"))); ++converted; }
         }
         if (e.hasTagName ("PLUGIN") && type == "auxsend")
-        { e.setAttribute ("auxSendSliderPos", legacyPosition (sendLaw.convertFrom0to1 (e.getDoubleAttribute ("auxSendSliderPos")))); ++converted; }
+        {
+            e.setAttribute ("auxSendSliderPos", legacyPosition (sendLaw.convertFrom0to1 (e.getDoubleAttribute ("auxSendSliderPos")))); ++converted;
+            e.removeAttribute ("halftrackManualSend"); // Newer than the fader law.
+        }
         if (envelope && e.hasTagName ("AUTOMATIONCURVE") && type == "absolute")
             for (auto* point : e.getChildIterator()) { point->setAttribute ("v", fader (point->getDoubleAttribute ("v"))); ++converted; }
         const bool volumeEnvelope = e.hasTagName ("AUTOMATIONCURVEMODIFIER") && e.getStringAttribute ("paramID") == "volume";

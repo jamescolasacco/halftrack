@@ -2194,3 +2194,7 @@ Engine, UI and root areas. From a static reading of the reference's code, track,
 ## Curved mixer automation reopens — 2026-10-23
 
 Engine area. Loading refused a project whose track or Main volume or pan automation had a curved segment, because validation still required straight points; it now accepts curves from −1 to 1, as editing does. The automation suite saves a curved volume segment, reopens it and renders it as before, and still refuses curves beyond ±1 ([contract](research/arrangement-automation-contract.md)).
+
+## Send automation — 2026-10-23
+
+Engine and UI areas. Sends have automation lanes, as the reference's Send parameter does: `Session::setSendAutomation` and `SendInfo::automation`, in decibels from Off to 0 dB, moving along the send law. Turning an automated send overrides its lane until Re-Enable Automation. Automation recording captures send moves, making a send that was Off. Sends are MIDI and key mapping targets. The level set by hand is kept as `halftrackManualSend`, and loading validates send lanes. In Automation Mode the Mixer offers each send, named for its return. Measured in the sends, automation-capture, midi-mapping and UI suites ([contract](research/arrangement-automation-contract.md#send-lanes-2026-10-23)).

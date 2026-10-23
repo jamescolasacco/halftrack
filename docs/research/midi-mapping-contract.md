@@ -16,6 +16,7 @@ Halftrack follows the reference's MIDI Map Mode, described in the manual's [MIDI
 A mapping is a controller (a CC number on a channel) or a note (a note number on a channel) and a target, with a minimum and maximum in the target's own units. `MidiMapping::note` marks a note's mapping, whose `controller` is its note number. The targets are:
 
 - a track's volume or pan (`mixer:<track>:volume` or `:pan`);
+- a track's send to a return (`send:<track>:<return>`), from Off to 0 dB along the send law;
 - the master volume (`master`);
 - a native device or rack control (`device:<plugin>:<index>`).
 
@@ -64,6 +65,7 @@ The UI suite checks the switch and Cmd/Ctrl+M, the overlay's targets, learning a
 - **Undo.** A five-message burst is one undo step.
 - **Device controls.** A Channel EQ Mid control moves from −12 to +12 dB, its HP switch switches, and the master follows its controller.
 - **Automation.** A controller overrides playing automation.
+- **Sends.** A send's range is Off to 0 dB, and a return has none to itself. CC 64 gives −19.84 dB along the send law, 127 gives 0 dB, and 0 gives Off. The send's MIDI and key mappings reopen with the project and still move it.
 - **Removal and projects.** Removal works, mappings reopen with the project, five damaged projects are rejected (a bad note flag among them), and a deleted device's mappings are inert.
 - **Notes.** A note-off while learning maps nothing; C3 maps to the activator as a note, as one undo step, beside controller 60 on the same channel. Its note-on toggles the activator and its note-off does nothing; other channels and notes do nothing; malformed notes are refused. A note replaces a target's controller. A note on the volume, with a −12–0 dB range, switches it between the ends. Through the synthetic device, a note launches a Gate clip and its note-off stops it, and a controller does the same rising above 63 and falling to 63. Note mappings reopen as notes, and a note mapped twice is refused.
 - **Real input.** A virtual MIDI controller, created through the engine's device manager, is learned and then drives a fader through the real input path. A note played into it while learning maps the activator without reaching the armed MIDI track it feeds; the mapped note then switches the activator without reaching the track, while an unmapped note still does, and Capture MIDI keeps only the unmapped note.

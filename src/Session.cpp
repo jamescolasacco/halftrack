@@ -139,6 +139,8 @@ const juce::Identifier returnModeProperty { "halftrackReturnSendMode" };
 const juce::Identifier sendReturnProperty { "halftrackSendReturnID" };
 
 const juce::Identifier manualVolumeProperty { "halftrackManualVolume" };
+// A send's level set by hand, kept while its automation plays over the engine's stored level.
+const juce::Identifier manualSendProperty { "halftrackManualSend" };
 // Fader positions follow the reference's laws (LevelScale.h), which Session installs in the engine:
 // its volume scale for mixers and its send scale for sends. Projects saved before have no marker
 // and hold positions by the engine's own law, which loading converts to the same gains.
@@ -167,6 +169,15 @@ Session::AutomationLane automationLane (te::VolumeAndPanPlugin& plugin, Session:
         lane.points.push_back ({ plugin.edit.tempoSequence.toBeats (curve.getPointTime (i)).inBeats(),
             target == Session::AutomationTarget::volume ? te::volumeFaderPositionToDB (value) : value, curve.getPointCurve (i) });
     }
+    return lane;
+}
+// A send's automation lane, in decibels along the send law.
+Session::AutomationLane sendLane (te::AuxSendPlugin& send)
+{
+    auto& curve = send.gain->getCurve();
+    Session::AutomationLane lane; lane.enabled = ! curve.bypass.get();
+    for (int i = 0; i < curve.getNumPoints(); ++i)
+        lane.points.push_back ({ send.edit.tempoSequence.toBeats (curve.getPointTime (i)).inBeats(), te::sendFaderPositionToDB (curve.getPointValue (i)), curve.getPointCurve (i) });
     return lane;
 }
 // An external plug-in's own automatable parameters, in order; the engine's dry and wet levels are left out.
@@ -299,20 +310,24 @@ Result validateRackIdentities (const juce::ValueTree& state)
     if (! check (check, state, false)) return Result::fail ("The project contains a rack device or chain whose identity is not unique.");
     return Result::ok();
 }
-bool validAutomationLane (Session::AutomationTarget target, const Session::AutomationLane& lane)
+// At most 4096 strictly ordered beat points with values from low to high and curves from -1 to 1.
+bool validLane (const Session::AutomationLane& lane, float low, float high)
 {
-    if (target != Session::AutomationTarget::volume && target != Session::AutomationTarget::pan) return false;
     if (lane.points.size() > 4096) return false;
     double previous = -1;
     for (const auto& point : lane.points)
     {
         if (! std::isfinite (point.beat) || point.beat < 0 || point.beat > 1000000 || point.beat <= previous
             || (previous >= 0 && point.beat - previous < 0.999e-6)
-            || ! std::isfinite (point.value) || point.value < (target == Session::AutomationTarget::volume ? -100.0f : -1.0f)
-            || point.value > (target == Session::AutomationTarget::volume ? 6.0f : 1.0f) || ! (std::abs (point.curve) <= 1)) return false;
+            || ! std::isfinite (point.value) || point.value < low || point.value > high || ! (std::abs (point.curve) <= 1)) return false;
         previous = point.beat;
     }
     return true;
+}
+bool validAutomationLane (Session::AutomationTarget target, const Session::AutomationLane& lane)
+{
+    if (target != Session::AutomationTarget::volume && target != Session::AutomationTarget::pan) return false;
+    return target == Session::AutomationTarget::volume ? validLane (lane, -100.0f, 6.0f) : validLane (lane, -1.0f, 1.0f);
 }
 bool finiteProperty (const juce::var& property, double lower, double upper)
 {
@@ -404,6 +419,31 @@ Result validateMixerAutomation (const juce::ValueTree& state, bool legacy)
             }
         }
     }
+    if (state.hasType (te::IDs::PLUGIN) && state[te::IDs::type].toString() == te::AuxSendPlugin::xmlTypeName)
+    {
+        // A send's level set by hand and its automation, in positions up to its top (0 dB).
+        const double top = legacy ? legacyFaderPosition (0) : 1;
+        if (state.hasProperty (manualSendProperty) && ! finiteProperty (state[manualSendProperty], 0, top))
+            return Result::fail ("Invalid stored manual send level.");
+        bool lane = false;
+        for (const auto& curve : state)
+        {
+            if (! curve.hasType (te::IDs::AUTOMATIONCURVE)) continue;
+            if (curve[te::IDs::paramID].toString() != "send level" || std::exchange (lane, true) || curve.getNumChildren() > 4096
+                || ! finiteProperty (curve.getProperty (te::IDs::bypass, 0), 0, 1)
+                || static_cast<double> (curve.getProperty (te::IDs::bypass, 0)) != std::floor (static_cast<double> (curve.getProperty (te::IDs::bypass, 0))))
+                return Result::fail ("Invalid send automation lane.");
+            double previous = -1;
+            for (const auto& point : curve)
+            {
+                if (! point.hasType (te::IDs::POINT) || ! finiteProperty (point[te::IDs::t], 0, 3000000)
+                    || ! finiteProperty (point[te::IDs::v], 0, top) || ! finiteProperty (point.getProperty (te::IDs::c, 0), -1, 1)
+                    || static_cast<double> (point[te::IDs::t]) <= previous)
+                    return Result::fail ("Send automation needs ordered finite points with curves from -1 to 1.");
+                previous = static_cast<double> (point[te::IDs::t]);
+            }
+        }
+    }
     for (const auto& child : state) if (auto result = validateMixerAutomation (child, legacy); result.failed()) return result;
     return Result::ok();
 }
@@ -438,6 +478,15 @@ void restoreManualMixerState (juce::ValueTree state)
         // Construct parameters from manual values before the native single-point
         // editing path can confuse those values with envelope edits.
         if (owned) state.removeProperty (te::IDs::parameters, nullptr);
+        if (state.getChildWithName (te::IDs::AUTOMATIONCURVE).isValid())
+            state.setProperty (te::IDs::remapOnTempoChange, true, nullptr);
+    }
+    if (state.hasType (te::IDs::PLUGIN) && state[te::IDs::type].toString() == te::AuxSendPlugin::xmlTypeName && state.hasProperty (manualSendProperty))
+    {
+        // The engine loads the level set by hand, not the one its automation last played; the stored
+        // parameter data holds only that level, so it goes too.
+        state.setProperty (te::IDs::auxSendSliderPos, state[manualSendProperty], nullptr);
+        state.removeProperty (te::IDs::parameters, nullptr);
         if (state.getChildWithName (te::IDs::AUTOMATIONCURVE).isValid())
             state.setProperty (te::IDs::remapOnTempoChange, true, nullptr);
     }
@@ -492,7 +541,7 @@ void migrateFaderLaw (juce::ValueTree edit)
         {
             const String parameter = mixer ? mixerParameterID (node, Session::AutomationTarget::volume) : "send level";
             if (mixer) { convert (node, te::IDs::volume, false); convert (node, manualVolumeProperty, false); }
-            else convert (node, te::IDs::auxSendSliderPos, true);
+            else { convert (node, te::IDs::auxSendSliderPos, true); convert (node, manualSendProperty, true); }
             convertStored (node, parameter, send);
             for (auto curve : node)
                 if (curve.hasType (te::IDs::AUTOMATIONCURVE) && curve[te::IDs::paramID].toString() == parameter) convertCurve (curve, send);
@@ -2383,7 +2432,7 @@ juce::juce_wchar mappableKey (juce::juce_wchar key)
 bool knownTargetKind (const String& target)
 {
     const auto kind = target.upToFirstOccurrenceOf (":", false, false);
-    return target == "master" || kind == "mixer" || kind == "device" || kind == "track" || kind == "slot" || kind == "scene" || kind == "transport";
+    return target == "master" || kind == "mixer" || kind == "send" || kind == "device" || kind == "track" || kind == "slot" || kind == "scene" || kind == "transport";
 }
 // A hosted plug-in's configured parameters, by the plug-in's own IDs, in the order shown.
 const juce::Identifier configureType { "HALFTRACKCONFIGURE" }, configuredType { "PARAMETER" };
@@ -3983,8 +4032,69 @@ struct Session::Impl
         edit->dispatchPendingUpdatesSynchronously();
         changed(); return Result::ok();
     }
+    // A new send from a track to a return, Off, before or after the track's mixer as the return's
+    // sends tap; part of the caller's undo step.
+    te::AuxSendPlugin* createSend (te::AudioTrack& source, te::AudioTrack& destination)
+    {
+        auto plugin = edit->getPluginCache().createNewPlugin (te::AuxSendPlugin::xmlTypeName, {});
+        auto* send = dynamic_cast<te::AuxSendPlugin*> (plugin.get());
+        if (! send) return nullptr;
+        send->state.setProperty (sendReturnProperty, destination.itemID.toString(), &edit->getUndoManager());
+        send->busNumber = static_cast<int> (destination.state[returnBusProperty]);
+        send->setGainDb (-100.0f);
+        const auto mixer = source.pluginList.indexOf (source.getVolumePlugin());
+        source.pluginList.insertPlugin (plugin, mixer + (sendMode (destination) == SendMode::post ? 1 : 0), nullptr);
+        return send;
+    }
+    Result setSendAutomation (te::AudioTrack& source, te::AudioTrack& destination, const AutomationLane& lane)
+    {
+        if (exporting || (edit->getTransport().isRecording() && ! internalAutomationWrite))
+            return Result::fail ("Stop recording or finish exporting before editing automation.");
+        if (! validLane (lane, -100.0f, 0.0f)) return Result::fail ("Automation requires up to 4096 ordered beat points, and sends from -100 to 0 dB.");
+        double previousTime = -1;
+        for (const auto& point : lane.points)
+        {
+            const double time = edit->tempoSequence.toTime (te::BeatPosition::fromBeats (point.beat)).inSeconds();
+            if (! std::isfinite (time) || time <= previousTime) return Result::fail ("Automation points are too close to represent at the project tempo.");
+            previousTime = time;
+        }
+        auto* send = findSend (source, destination.itemID.toString());
+        if (send == nullptr && lane.points.empty()) return Result::ok();
+        if (send != nullptr)
+        {
+            auto& curve = send->gain->getCurve();
+            bool same = lane.enabled == ! curve.bypass.get() && lane.points.size() == static_cast<size_t> (curve.getNumPoints());
+            for (size_t i = 0; same && i < lane.points.size(); ++i)
+                same = std::abs (edit->tempoSequence.toBeats (curve.getPointTime ((int) i)).inBeats() - lane.points[i].beat) < 1e-9
+                    && std::abs (curve.getPointValue ((int) i) - te::decibelsToSendFaderPosition (lane.points[i].value)) < 1e-6f
+                    && curve.getPointCurve ((int) i) == lane.points[i].curve;
+            if (same) return Result::ok();
+        }
+        if (! internalAutomationWrite) transaction ("Edit send automation");
+        auto* undo = &edit->getUndoManager();
+        const bool created = send == nullptr;
+        if (created && (send = createSend (source, destination)) == nullptr) return Result::fail ("Could not create the send.");
+        auto& parameter = *send->gain; auto& curve = parameter.getCurve();
+        // As for the mixer, the level set by hand survives automation, which the engine plays into
+        // the stored level, and Undo of the first lane.
+        if (! send->state.hasProperty (manualSendProperty)) send->state.setProperty (manualSendProperty, parameter.getCurrentExplicitValue(), nullptr);
+        send->remapOnTempoChange = true;
+        if (! curve.state.getParent().isValid()) send->state.addChild (curve.state, -1, nullptr);
+        curve.clear (undo);
+        curve.state.setProperty (te::IDs::bypass, ! lane.enabled, undo);
+        for (const auto& point : lane.points)
+            curve.addPoint (te::EditPosition (te::BeatPosition::fromBeats (point.beat)), te::decibelsToSendFaderPosition (point.value), point.curve, undo);
+        if (lane.points.empty()) parameter.setParameter (static_cast<float> (send->state[manualSendProperty]), juce::dontSendNotification);
+        parameter.updateStream();
+        parameter.updateToFollowCurve (edit->getTransport().getPosition());
+        if (created) refreshRouting();
+        edit->dispatchPendingUpdatesSynchronously();
+        changed(); return Result::ok();
+    }
+    static String sendKey (const String& trackId, const String& returnId) { return "send:" + trackId + ":" + returnId; }
     // Automation capture and override. Lanes are named by key ("mixer:<track>:volume|pan", "master",
-    // "device:<plugin>:<parameter>") and resolved again at each use, so a pass never holds a device.
+    // "send:<track>:<return>", "device:<plugin>:<parameter>") and resolved again at each use, so a
+    // pass never holds a device.
     bool internalAutomationWrite = false, captureTransaction = false;
     struct LaneAccess
     {
@@ -4060,6 +4170,20 @@ struct Session::Impl
         if (parts[0] == "mixer")
             if (auto* t = track (parts[1])) if (auto* mixer = t->getVolumePlugin())
                 return mixerLane (*mixer, parts[2] == "pan" ? AutomationTarget::pan : AutomationTarget::volume);
+        if (parts[0] == "send")
+            if (auto* t = track (parts[1]); t != nullptr && ! isReturn (*t))
+                if (auto* destination = track (parts[2]); destination != nullptr && isReturn (*destination))
+                {
+                    const auto trackId = parts[1], returnId = parts[2];
+                    return LaneAccess { [this, trackId, returnId]
+                                        {
+                                            auto* source = track (trackId); auto* send = source != nullptr ? findSend (*source, returnId) : nullptr;
+                                            return send != nullptr ? sendLane (*send) : AutomationLane {};
+                                        },
+                                        [this, trackId, returnId] (const AutomationLane& lane) { return owner.setSendAutomation (trackId, returnId, lane); },
+                                        [] (float v) { return Session::sendValueToProportion (v); },
+                                        [] (float p) { return Session::sendProportionToValue (p); } };
+                }
         if (parts[0] == "device")
             if (auto* device = nativeDevice (parts[1]))
             {
@@ -4354,9 +4478,14 @@ struct Session::Impl
         const auto off = [] (const AutomationLane& lane) { return ! lane.enabled && ! lane.points.empty(); };
         if (off (automationLane (*edit->getMasterVolumePlugin(), AutomationTarget::volume))) keys.add ("master");
         for (auto* t : te::getAudioTracks (*edit))
+        {
             if (auto* mixer = t->getVolumePlugin())
                 for (const auto target : { AutomationTarget::volume, AutomationTarget::pan })
                     if (off (automationLane (*mixer, target))) keys.add (mixerKey (*t, target));
+            for (auto* plugin : t->pluginList.getPlugins())
+                if (auto* send = dynamic_cast<te::AuxSendPlugin*> (plugin); send != nullptr && off (sendLane (*send)))
+                    keys.add (sendKey (t->itemID.toString(), send->state[sendReturnProperty].toString()));
+        }
         visitDevices ([&] (te::AudioTrack&, NativeEffectPlugin& d)
         { for (const auto& a : deviceAutomation (d)) if (off (a.lane)) keys.add (deviceKey (d.itemID.toString(), a.parameter)); });
         for (auto* t : te::getAudioTracks (*edit))
@@ -4495,6 +4624,17 @@ struct Session::Impl
         const auto refresh = [this] (te::Plugin& plugin)
         {
             if (auto* native = dynamic_cast<NativeEffectPlugin*> (&plugin)) { native->refreshAutomation(); return; }
+            if (auto* send = dynamic_cast<te::AuxSendPlugin*> (&plugin); send != nullptr && send->state.hasProperty (manualSendProperty))
+            {
+                if (! send->gain->hasAutomationPoints())
+                {
+                    send->state.setProperty (te::IDs::auxSendSliderPos, send->state[manualSendProperty], nullptr);
+                    send->gain->updateFromAttachedValue();
+                }
+                send->gain->updateStream();
+                send->gain->updateToFollowCurve (edit->getTransport().getPosition());
+                return;
+            }
             auto* mixer = dynamic_cast<te::VolumeAndPanPlugin*> (&plugin);
             for (auto* parameter : plugin.getAutomatableParameters())
             {
@@ -5324,6 +5464,8 @@ struct Session::Impl
         if (target == "master") return edit->getMasterVolumePlugin()->getVolumeDb();
         if (parts[0] == "mixer")
             if (auto* t = track (parts[1])) if (auto* mixer = t->getVolumePlugin()) return parts[2] == "pan" ? mixer->getPan() : mixer->getVolumeDb();
+        if (parts[0] == "send")
+            if (auto* t = track (parts[1])) { auto* send = findSend (*t, parts[2]); return send != nullptr ? send->getGainDb() : -100.0f; }
         if (parts[0] == "device")
         {
             if (auto* device = nativeDevice (parts[1])) return device->readSettings().values[(size_t) juce::jlimit (0, (int) device->readSettings().values.size() - 1, parts[2].getIntValue())];
@@ -5342,6 +5484,11 @@ struct Session::Impl
         {
             const int index = trackIndexOf (parts[1]);
             return index < 0 ? Result::ok() : parts[2] == "pan" ? owner.setTrackPan (index, value) : owner.setTrackGain (index, value);
+        }
+        if (parts[0] == "send")
+        {
+            const int index = trackIndexOf (parts[1]);
+            return index < 0 ? Result::ok() : owner.setTrackSendGain (index, parts[2], value);
         }
         if (externalPlugin (parts[1]) != nullptr) return owner.setPluginParameterValue (parts[1], parts[2].getIntValue(), value);
         auto* device = nativeDevice (parts[1]);
@@ -5653,7 +5800,7 @@ Session::Snapshot Session::snapshot() const
             {
                 const auto id = destination->itemID.toString();
                 auto* send = findSend (*t, id);
-                info.sends.push_back ({ id, send ? send->getGainDb() : -100.0f });
+                info.sends.push_back ({ id, send ? send->getGainDb() : -100.0f, send ? sendLane (*send) : AutomationLane {} });
             }
         if (auto* parent = t->getParentFolderTrack()) info.groupId = parent->itemID.toString();
         if (auto* synth = Impl::synth (*t)) info.synth = synth->getSettings();
@@ -6777,22 +6924,26 @@ Result Session::setTrackSendGain (int index, const String& destinationID, float 
         return Result::fail ("Sends must connect an audio or MIDI track to a return track.");
     if (! std::isfinite (decibels) || decibels < -100.0f || decibels > 0)
         return Result::fail ("Send gain must be between Off (-100 dB) and 0 dB.");
+    const auto key = Impl::sendKey (source->itemID.toString(), destinationID);
+    if (impl->capturing()) { impl->capture (key, decibels); impl->changed(); return Result::ok(); }
     auto* send = findSend (*source, destinationID);
     if (! send && decibels == -100.0f) return Result::ok();
     impl->transaction ("Send level");
-    if (! send)
-    {
-        auto plugin = impl->edit->getPluginCache().createNewPlugin (te::AuxSendPlugin::xmlTypeName, {});
-        send = dynamic_cast<te::AuxSendPlugin*> (plugin.get());
-        if (! send) return Result::fail ("Could not create the send.");
-        send->state.setProperty (sendReturnProperty, destinationID, &impl->edit->getUndoManager());
-        send->busNumber = static_cast<int> (destination->state[returnBusProperty]);
-        send->setGainDb (-100.0f);
-        const auto mixer = source->pluginList.indexOf (source->getVolumePlugin());
-        source->pluginList.insertPlugin (plugin, mixer + (sendMode (*destination) == SendMode::post ? 1 : 0), nullptr);
-    }
+    if (! send && (send = impl->createSend (*source, *destination)) == nullptr) return Result::fail ("Could not create the send.");
+    impl->overrideLane (key);
+    if (! send->state.hasProperty (manualSendProperty))
+        send->state.setProperty (manualSendProperty, send->gain->getCurrentExplicitValue(), nullptr);
     send->setGainDb (decibels);
+    send->state.setProperty (manualSendProperty, te::decibelsToSendFaderPosition (decibels), &impl->edit->getUndoManager());
     impl->refreshRouting(); impl->changed(); return Result::ok();
+}
+Result Session::setSendAutomation (const String& trackId, const String& returnTrackId, const AutomationLane& lane)
+{
+    auto* source = impl->track (trackId); auto* destination = impl->track (returnTrackId);
+    if (! source || isReturn (*source) || ! destination || ! isReturn (*destination))
+        return Result::fail ("Sends must connect an audio or MIDI track to a return track.");
+    if (source->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze the track before editing automation.");
+    return impl->setSendAutomation (*source, *destination, lane);
 }
 Result Session::setReturnSendMode (const String& destinationID, SendMode mode)
 {
@@ -11018,6 +11169,17 @@ float Session::automationProportionToValue (AutomationTarget target, float propo
     return target == AutomationTarget::volume ? juce::jlimit (-100.0f, 6.0f, te::gainToDb (levelscale::volumeGain (proportion)))
         : proportion * 2 - 1;
 }
+float Session::sendValueToProportion (float decibels)
+{
+    if (! std::isfinite (decibels)) return 0;
+    decibels = juce::jlimit (-100.0f, 0.0f, decibels);
+    return decibels > -100.0f ? levelscale::sendPosition (te::dbToGain (decibels)) : 0.0f;
+}
+float Session::sendProportionToValue (float proportion)
+{
+    if (! std::isfinite (proportion)) proportion = 0;
+    return juce::jlimit (-100.0f, 0.0f, te::gainToDb (levelscale::sendGain (juce::jlimit (0.0f, 1.0f, proportion))));
+}
 juce::NormalisableRange<double> Session::levelRange (bool send, double silence)
 {
     return { silence, send ? 0.0 : 6.0,
@@ -11243,6 +11405,9 @@ std::optional<std::pair<float, float>> Session::midiTargetRange (const String& t
         if (parts[2] == "volume") return std::pair { -100.0f, 6.0f };
         if (parts[2] == "pan") return std::pair { -1.0f, 1.0f };
     }
+    if (parts.size() == 3 && parts[0] == "send")
+        if (auto* t = impl->track (parts[1]); t != nullptr && ! isReturn (*t))
+            if (auto* destination = impl->track (parts[2]); destination != nullptr && isReturn (*destination)) return std::pair { -100.0f, 0.0f };
     if (parts.size() == 3 && parts[0] == "device" && parts[2].containsOnly ("0123456789"))
         if (auto* device = impl->nativeDevice (parts[1]))
         {

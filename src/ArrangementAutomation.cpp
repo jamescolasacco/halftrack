@@ -44,7 +44,7 @@ void addNative (std::vector<Target>& result, const Session::PluginInfo& plugin)
 
 juce::String volumeKey (const Session::TrackInfo& track) { return "mixer:" + track.id + ":volume"; }
 
-std::vector<Target> targets (Session& session, const Session::TrackInfo& track)
+std::vector<Target> targets (Session& session, const Session::TrackInfo& track, const std::vector<Session::TrackInfo>& tracks)
 {
     std::vector<Target> result;
     Target volume; volume.kind = Target::Kind::volume; volume.trackId = track.id; volume.key = volumeKey (track);
@@ -52,6 +52,16 @@ std::vector<Target> targets (Session& session, const Session::TrackInfo& track)
     Target pan = volume; pan.kind = Target::Kind::pan; pan.key = "mixer:" + track.id + ":pan"; pan.control = "Track Panning";
     pan.lane = track.panAutomation; pan.manual = track.pan;
     result.push_back (volume); result.push_back (pan);
+    // The mixer's sends, each named for its return.
+    if (! track.isReturn)
+        for (const auto& send : track.sends)
+        {
+            Target t = volume; t.kind = Target::Kind::send; t.returnId = send.returnTrackId; t.key = "send:" + track.id + ":" + send.returnTrackId;
+            t.control = send.returnTrackId;
+            for (const auto& other : tracks) if (other.id == send.returnTrackId) t.control = other.name;
+            t.lane = send.automation; t.manual = send.gainDb;
+            result.push_back (std::move (t));
+        }
     if (track.instrument.isNativeEffect) addNative (result, track.instrument);
     for (const auto& plugin : track.plugins)
     {
@@ -71,9 +81,9 @@ std::vector<Target> targets (Session& session, const Session::TrackInfo& track)
     return result;
 }
 
-std::optional<Target> find (Session& session, const Session::TrackInfo& track, const juce::String& key)
+std::optional<Target> find (Session& session, const Session::TrackInfo& track, const std::vector<Session::TrackInfo>& tracks, const juce::String& key)
 {
-    for (auto& t : targets (session, track)) if (t.key == key) return t;
+    for (auto& t : targets (session, track, tracks)) if (t.key == key) return t;
     return std::nullopt;
 }
 
@@ -83,6 +93,7 @@ float toProportion (const Target& t, float value)
     {
         case Target::Kind::volume: return Session::automationValueToProportion (Session::AutomationTarget::volume, value);
         case Target::Kind::pan: return Session::automationValueToProportion (Session::AutomationTarget::pan, value);
+        case Target::Kind::send: return Session::sendValueToProportion (value);
         case Target::Kind::native: return Session::deviceAutomationValueToProportion (t.effect, t.parameter, value);
         case Target::Kind::external: return value;
     }
@@ -95,6 +106,7 @@ float fromProportion (const Target& t, float proportion)
     {
         case Target::Kind::volume: return Session::automationProportionToValue (Session::AutomationTarget::volume, proportion);
         case Target::Kind::pan: return Session::automationProportionToValue (Session::AutomationTarget::pan, proportion);
+        case Target::Kind::send: return Session::sendProportionToValue (proportion);
         case Target::Kind::native: return Session::deviceAutomationProportionToValue (t.effect, t.parameter, proportion);
         case Target::Kind::external: return proportion;
     }
@@ -104,7 +116,7 @@ juce::String format (const Target& t, float value)
 {
     switch (t.kind)
     {
-        case Target::Kind::volume: return value <= -99.99f ? juce::String ("-inf dB") : juce::String (value, 1) + " dB";
+        case Target::Kind::volume: case Target::Kind::send: return value <= -99.99f ? juce::String ("-inf dB") : juce::String (value, 1) + " dB";
         case Target::Kind::pan: return std::abs (value) < .005f ? juce::String ("C") : juce::String (juce::roundToInt (std::abs (value) * 100)) + (value < 0 ? "L" : "R");
         case Target::Kind::external: return juce::String (value * 100, 1) + "%";
         case Target::Kind::native:
@@ -129,6 +141,7 @@ juce::Result write (Session& session, const Target& t, const Session::Automation
     {
         case Target::Kind::volume: return session.setTrackAutomation (t.trackId, Session::AutomationTarget::volume, lane);
         case Target::Kind::pan: return session.setTrackAutomation (t.trackId, Session::AutomationTarget::pan, lane);
+        case Target::Kind::send: return session.setSendAutomation (t.trackId, t.returnId, lane);
         case Target::Kind::native: case Target::Kind::external: return session.setDeviceAutomation (t.pluginId, t.parameter, lane);
     }
     return juce::Result::fail ("Unknown automation destination.");

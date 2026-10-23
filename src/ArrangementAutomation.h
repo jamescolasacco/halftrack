@@ -3,8 +3,8 @@
 #include "Session.h"
 #include <functional>
 
-// The Arrangement's automation envelopes. A track offers its mixer's Volume and Pan, every control
-// of its native devices (racks' inner devices included) and its plug-ins' parameters. Envelope
+// The Arrangement's automation envelopes. A track offers its mixer's Volume, Pan and sends, every
+// control of its native devices (racks' inner devices included) and its plug-ins' parameters. Envelope
 // draws one of them across a lane and edits its breakpoints as the reference does: clicking a
 // segment adds a breakpoint, double-clicking empty space adds one there, clicking a breakpoint
 // deletes it and dragging moves it. Option-dragging a segment (Alt elsewhere) curves it, and
@@ -15,19 +15,20 @@ namespace halftrack::arrangementAutomation
 {
 struct Target
 {
-    enum class Kind { volume, pan, native, external };
+    enum class Kind { volume, pan, send, native, external };
     Kind kind = Kind::volume;
-    juce::String key;           // The Session lane key: "mixer:<track>:volume|pan" or "device:<plugin>:<parameter>".
+    juce::String key;           // The Session lane key: "mixer:<track>:volume|pan", "send:<track>:<return>" or "device:<plugin>:<parameter>".
     juce::String device, control; // Chooser labels, such as "Mixer" and "Volume".
-    juce::String trackId, pluginId;
+    juce::String trackId, pluginId, returnId; // A send's return track.
     int parameter = 0;
     Session::EffectKind effect {};
     Session::AutomationLane lane;
     float manual = 0;           // The destination's value without automation, in its own units.
 };
 
-std::vector<Target> targets (Session&, const Session::TrackInfo&);
-std::optional<Target> find (Session&, const Session::TrackInfo&, const juce::String& key);
+// A send is named for its return, as `tracks` (the project's tracks) shows it.
+std::vector<Target> targets (Session&, const Session::TrackInfo&, const std::vector<Session::TrackInfo>& tracks);
+std::optional<Target> find (Session&, const Session::TrackInfo&, const std::vector<Session::TrackInfo>& tracks, const juce::String& key);
 juce::String volumeKey (const Session::TrackInfo&);
 float toProportion (const Target&, float value);
 float fromProportion (const Target&, float proportion);

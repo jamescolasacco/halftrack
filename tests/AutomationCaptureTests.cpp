@@ -118,6 +118,8 @@ int runAutomationCaptureTests (const juce::File& artifacts)
         ok (live.setTrackAutomation (trackId, Target::volume, { true, { { 0, -20 }, { 64, -20 } } }), "an existing volume lane at -20 dB");
         ok (live.addNativeEffect (0, Session::EffectKind::channelEq), "add a Channel EQ");
         const auto eqId = live.snapshot().tracks[0].plugins.back().id;
+        ok (live.addReturnTrack ("Echo"), "add a return, with the send Off");
+        const auto echo = live.snapshot().tracks.back().id;
         const int midDb = effectParameterIndex (Session::EffectKind::channelEq, "midDb");
         ok (live.setAutomationArm (true), "turn on Automation Arm");
         check (live.snapshot().automationArm, "the snapshot reports Automation Arm");
@@ -136,6 +138,7 @@ int runAutomationCaptureTests (const juce::File& artifacts)
         const auto latchStart = beatNow (live); ok (live.setTrackPan (0, .5f), "move pan without a gesture");
         auto eq = live.snapshot().tracks[0].plugins.back().effect; eq.values[(size_t) midDb] = 6;
         ok (live.setNativeEffectSettings (eqId, eq), "turn the Channel EQ's Mid while recording");
+        ok (live.setTrackSendGain (0, echo, -12), "turn the send up while recording");
         pumpSyntheticTestDevice (live, 188);
         const auto stopBeat = beatNow (live); live.stop();
         const auto recorded = live.snapshot();
@@ -152,12 +155,16 @@ int runAutomationCaptureTests (const juce::File& artifacts)
         const auto devices = recorded.tracks[0].plugins.back().automation;
         check (devices.size() == 1 && devices[0].parameter == midDb && devices[0].lane.points.size() == 2 && devices[0].lane.points[0].value == 6,
                "turning a device control records its lane");
+        const auto& send = recorded.tracks[0].sends.at (0).automation;
+        check (send.enabled && send.points.size() == 2 && std::abs (send.points[0].beat - latchStart) < .05 && std::abs (send.points[0].value + 12) < 1e-3
+               && std::abs (send.points[1].value + 12) < 1e-3, "turning a send that was Off makes it and records its lane");
         check (! recorded.recording && ! recorded.automationOverridden && recorded.tracks[0].clips.empty(), "nothing is overridden and no take is created");
         // Undo removes the recorded automation, then the touch pass.
         for (int step = 0; step < 4 && (live.snapshot().tracks[0].panAutomation.points.size() || live.snapshot().tracks[0].volumeAutomation.points.size() != 2); ++step) live.undo();
         const auto undone = live.snapshot();
         check (undone.tracks[0].panAutomation.points.empty() && undone.tracks[0].plugins.back().automation.empty() && undone.tracks[0].volumeAutomation.points.size() == 2
-               && std::abs (undone.tracks[0].volumeAutomation.points[0].value + 20) < 1e-3, "undo restores the lanes before recording");
+               && std::abs (undone.tracks[0].volumeAutomation.points[0].value + 20) < 1e-3 && undone.tracks[0].sends.at (0).automation.points.empty()
+               && undone.tracks[0].sends.at (0).gainDb == -100, "undo restores the lanes before recording, and the send to Off");
         ok (live.setAutomationArm (false), "turn off Automation Arm");
         check (! live.snapshot().automationArm, "Automation Arm is off");
         std::cout << "Automation capture passed: " << root.getFullPathName() << std::endl; return 0;

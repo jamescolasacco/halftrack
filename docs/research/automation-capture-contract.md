@@ -11,7 +11,7 @@ The arithmetic of recorded points is Halftrack's own.
 
 ## Override
 
-Moving a control whose lane plays automation overrides that lane. This covers a track's volume or pan, the master volume, and any native device or rack control. The lane keeps its points and stops reading: playback follows the moved control, and the control keeps moving freely. Re-Enable Automation switches every overridden lane back on in one undo step. An override joins the move's own undo step.
+Moving a control whose lane plays automation overrides that lane. This covers a track's volume, pan or sends, the master volume, and any native device or rack control ([send lanes](arrangement-automation-contract.md#send-lanes-2026-10-23)). The lane keeps its points and stops reading: playback follows the moved control, and the control keeps moving freely. Re-Enable Automation switches every overridden lane back on in one undo step. An override joins the move's own undo step.
 
 Previously an automated fader was locked until its points were cleared. The Read switch in the automation editor shows the same state as an override.
 

@@ -798,3 +798,11 @@ Volume and sends follow the reference's level scales ([contract](research/mixer-
 - **Volume modulation.** A clip's volume modulation scales the fader's position, now along the reference's law. Whether the reference's modulation scales the position or the gain is not read.
 - **Cue.** The cue volume stays in decibels, with −70 dB as silence, rather than the reference's 0.00032 gain floor.
 - **Older projects.** Projects saved before the change keep every level when they open. Levels below −70 dB become silence, and segments between automation points take the new law's shape.
+
+### Send automation
+
+Send lanes follow the reference's automatable Send parameter ([contract](research/arrangement-automation-contract.md#send-lanes-2026-10-23)). Defaults where its details are not read:
+
+- **Names.** The automation chooser names a send for its return (for example A-Echo). How the reference's choosers name sends is not read.
+- **Frozen tracks.** Editing a frozen track's send lane is refused, as for its volume and pan lanes. Whether the reference allows mixer automation edits on a frozen track is not read.
+- **Off sends.** Points on a send that is Off make the send in the same undo step; the reference has every send all along.

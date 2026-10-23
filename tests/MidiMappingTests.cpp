@@ -301,6 +301,32 @@ int runMidiMappingTests (const juce::File& artifacts)
             live.stop();
             devices.deleteVirtualMidiDevice (*midi); devices.rescanMidiDeviceListSynchronously();
         }
+        {
+            // A send maps too, moving its knob along the send law from Off to 0 dB.
+            Session sends (false);
+            ok (sends.addReturnTrack ("Echo"), "add a return");
+            const auto echo = sends.snapshot().tracks.back().id;
+            const auto target = "send:" + sends.snapshot().tracks[0].id + ":" + echo;
+            check (sends.midiTargetRange (target) == std::pair { -100.0f, 0.0f } && ! sends.midiTargetRange ("send:" + echo + ":" + echo),
+                   "a send's range is Off to 0 dB, and a return has no send to itself");
+            ok (sends.setMidiLearnTarget (target), "learn the send"); ok (sends.handleMidiControl (1, 12, 0), "with CC 12"); ok (sends.setMidiLearnTarget ({}), "end learning");
+            const auto level = [&] { return sends.snapshot().tracks[0].sends.at (0).gainDb; };
+            ok (sends.handleMidiControl (1, 12, 64), "CC 12 at 64");
+            check (near (level(), Session::sendProportionToValue (64 / 127.0f)) && level() > -21 && level() < -19, "the middle follows the send law (" + juce::String (level(), 2) + " dB)");
+            ok (sends.handleMidiControl (1, 12, 127), "CC 12 at 127"); check (near (level(), 0), "full scale is 0 dB");
+            ok (sends.handleMidiControl (1, 12, 0), "CC 12 at 0"); check (level() == -100, "zero turns the send Off");
+            ok (sends.setKeyLearnTarget (target), "learn the send for a key"); bool used = false; ok (sends.handleMappedKey ('j', used), "with J");
+            ok (sends.setKeyLearnTarget ({}), "end key learning");
+            const auto project = root.getChildFile ("Mapped send").getChildFile ("Mapped send.halftrack");
+            ok (sends.saveProject (project), "save the send's mappings");
+            Session reopened (false);
+            ok (reopened.loadProject (project), "reopen them");
+            check (reopened.snapshot().midiMappings.size() == 1 && reopened.snapshot().midiMappings[0].target == target
+                       && reopened.snapshot().keyMappings.size() == 1 && reopened.snapshot().keyMappings[0].target == target,
+                   "the send's MIDI and key mappings reopen");
+            ok (reopened.handleMidiControl (1, 12, 127), "CC 12 at 127 after reopening");
+            check (near (reopened.snapshot().tracks[0].sends.at (0).gainDb, 0), "the reopened mapping moves the send");
+        }
         std::cout << "MIDI mapping passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL MIDI mapping: " << e.what() << std::endl; return 1; }

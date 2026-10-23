@@ -71,7 +71,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | MID-013 | key-map, midi-mapping, midi-ports, ui |  |
 | MIX-001 | fader-laws, master-volume, session |  |
 | MIX-002 | preferences, ui |  |
-| MIX-003 | fader-laws, sends |  |
+| MIX-003 | automation-capture, fader-laws, midi-mapping, sends, ui |  |
 | MIX-004 | audio-from, routing, ui |  |
 | MIX-005 | crossfade |  |
 | MIX-006 | audio-from, ui |  |

@@ -460,6 +460,115 @@ void runningGraph (const juce::File& root)
     level (player.process (1024), 512, 512, 0.0625f, "running undo restores return and feed");
     s.stop();
 }
+// Send automation, as the reference's Send lanes: the send's knob moves straight along the send law
+// between points, moving the knob overrides the lane, and the lane is saved and reopened.
+juce::File constantSource (const juce::File& root)
+{
+    const auto file = root.getChildFile ("constant.wav");
+    juce::AudioBuffer<float> x (2, 4 * 48000);
+    for (int c = 0; c < 2; ++c) for (int n = 0; n < x.getNumSamples(); ++n) x.setSample (c, n, .5f);
+    juce::WavAudioFormat format; std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+    auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (2).withBitsPerSample (32));
+    check (writer && writer->writeFromAudioSampleBuffer (x, 0, x.getNumSamples()), "write a constant source");
+    return file;
+}
+juce::AudioBuffer<float> renderAll (Session& s, const juce::File& file)
+{
+    ok (s.exportWav (file, 48000, 32, 0), "render");
+    juce::AudioFormatManager formats; formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    check (reader != nullptr, "read the render");
+    juce::AudioBuffer<float> x (2, (int) reader->lengthInSamples);
+    reader->read (&x, 0, x.getNumSamples(), 0, true, true);
+    return x;
+}
+// The mean of the left channel over a tenth of a second around a time.
+double meanAt (const juce::AudioBuffer<float>& x, double seconds)
+{
+    const int from = (int) ((seconds - .05) * 48000), to = (int) ((seconds + .05) * 48000);
+    double sum = 0; for (int n = from; n < to; ++n) sum += x.getSample (0, n);
+    return sum / (to - from);
+}
+void automation (const juce::File& root)
+{
+    using Lane = Session::AutomationLane;
+    Session s (false);
+    ok (s.importAudio (constantSource (root), 0), "a constant 0.5 on track 1");
+    ok (s.addReturnTrack ("Echo"), "a return");
+    const auto trackId = s.snapshot().tracks[0].id, echo = s.snapshot().tracks.back().id;
+    const auto sendOf = [] (Session& session) { return session.snapshot().tracks[0].sends.at (0); };
+    const auto same = [] (const Lane& a, const Lane& b)
+    {
+        bool equal = a.enabled == b.enabled && a.points.size() == b.points.size();
+        for (size_t i = 0; equal && i < a.points.size(); ++i)
+            equal = std::abs (a.points[i].beat - b.points[i].beat) < 1e-9 && std::abs (a.points[i].value - b.points[i].value) < 1e-3f && a.points[i].curve == b.points[i].curve;
+        return equal;
+    };
+    check (sendOf (s).gainDb == -100 && sendOf (s).automation.points.empty(), "the send starts Off without a lane");
+    // From Off at beat 0 to 0 dB at beat 4, two seconds at 120 BPM: halfway along its travel is -20 dB.
+    const Lane rise { true, { { 0, -100 }, { 4, 0 } } };
+    ok (s.setSendAutomation (trackId, echo, rise), "automate the send");
+    check (same (sendOf (s).automation, rise), "the lane reads back");
+    const auto played = renderAll (s, root.getChildFile ("send-rise.wav"));
+    // Post-fader at unity: the track's 0.5, and the return's copy at the send's gain.
+    const auto law = Session::levelRange (true);
+    double worst = 0;
+    for (const double t : { .5, 1.0, 1.5 })
+    {
+        double expected = 0;
+        for (int k = 0; k < 4800; ++k)
+            expected += .5 * (1 + juce::Decibels::decibelsToGain (law.convertFrom0to1 ((t - .05 + k / 48000.0) / 2), -100.0)) / 4800;
+        worst = std::max (worst, std::abs (meanAt (played, t) - expected) / expected);
+    }
+    check (worst < .01 && std::abs (meanAt (played, 3) - 1) < 1e-4,
+           "the send rises along the send law, -20 dB halfway, and holds 0 dB after (" + juce::String (worst * 100, 3) + "% off)");
+    s.undo(); check (sendOf (s).automation.points.empty() && sendOf (s).gainDb == -100, "one undo removes the lane and the send it made");
+    s.redo(); check (same (sendOf (s).automation, rise), "redo restores them");
+
+    // The level set by hand comes back when the lane goes; turning the knob overrides the lane.
+    ok (s.setSendAutomation (trackId, echo, {}), "clear the lane");
+    ok (s.setTrackSendGain (0, echo, -6), "the send at -6 dB by hand");
+    const Lane step { true, { { 0, -20 }, { 8, -20 } } };
+    ok (s.setSendAutomation (trackId, echo, step), "a -20 dB lane");
+    check (std::abs (meanAt (renderAll (s, root.getChildFile ("send-step.wav")), 1) - .55) < 1e-4, "the lane plays over the level set by hand");
+    ok (s.setTrackSendGain (0, echo, -12), "turn the knob while the lane plays");
+    check (! sendOf (s).automation.enabled && sendOf (s).automation.points.size() == 2 && std::abs (sendOf (s).gainDb + 12) < 1e-3 && s.snapshot().automationOverridden,
+           "turning the knob overrides the lane");
+    check (std::abs (meanAt (renderAll (s, root.getChildFile ("send-override.wav")), 1) - .5 * (1 + std::pow (10.0, -12.0 / 20))) < 1e-4, "the render follows the knob");
+    ok (s.reEnableAutomation(), "Re-Enable Automation");
+    check (sendOf (s).automation.enabled && std::abs (meanAt (renderAll (s, root.getChildFile ("send-again.wav")), 1) - .55) < 1e-4, "the lane plays again");
+    check (s.setSendAutomation (trackId, echo, { true, { { 0, 3 } } }).failed() && s.setSendAutomation (echo, echo, step).failed(),
+           "a level above 0 dB and a send from a return are refused");
+
+    // Saving keeps the lane and the level set by hand.
+    const auto file = root.getChildFile ("Send automation.halftrack");
+    ok (s.saveProject (file), "save");
+    Session reopened (false);
+    ok (reopened.loadProject (file), "reopen");
+    check (same (sendOf (reopened).automation, step), "the lane reopens");
+    ok (reopened.setSendAutomation (trackId, echo, {}), "clear the reopened lane");
+    check (std::abs (sendOf (reopened).gainDb + 12) < 1e-3, "the send returns to the level set by hand");
+    // A project with a malformed send lane is refused, keeping the open one.
+    auto xml = juce::XmlDocument::parse (file); check (xml != nullptr, "read the project");
+    std::function<juce::XmlElement* (juce::XmlElement&)> curveOf = [&] (juce::XmlElement& e) -> juce::XmlElement*
+    {
+        if (e.hasTagName ("AUTOMATIONCURVE") && e.getStringAttribute ("paramID") == "send level") return &e;
+        for (auto* child : e.getChildIterator()) if (auto* found = curveOf (*child)) return found;
+        return nullptr;
+    };
+    for (int mutation = 0; mutation < 3; ++mutation)
+    {
+        auto bad = std::make_unique<juce::XmlElement> (*xml);
+        auto* curve = curveOf (*bad); check (curve != nullptr && curve->getFirstChildElement() != nullptr, "find the saved send lane");
+        if (mutation == 0) curve->getFirstChildElement()->setAttribute ("v", "1.5");
+        if (mutation == 1) curve->setAttribute ("paramID", "unknown");
+        if (mutation == 2) curve->getFirstChildElement()->setAttribute ("c", "2");
+        const auto badFile = root.getChildFile ("Bad send automation.halftrack");
+        check (bad->writeTo (badFile), "write a malformed send lane");
+        const auto generation = reopened.snapshot().projectGeneration;
+        check (reopened.loadProject (badFile).failed() && reopened.snapshot().projectGeneration == generation, "a malformed send lane is refused (" + juce::String (mutation) + ")");
+    }
+}
 }
 int runSendReturnTests (const juce::File& destination)
 {
@@ -477,6 +586,7 @@ int runSendReturnTests (const juce::File& destination)
         const auto shortA = fixture (root, "short-a", 1, 64), shortB = fixture (root, "short-b", 9, 64);
         latency (root, shortA, shortB, "64-frame-");
         midi (root);
+        automation (root);
         std::cout << "Send/return acceptance passed. Artifacts: " << root.getFullPathName() << std::endl;
         return 0;
     }

@@ -850,8 +850,11 @@ Mixer and native-device setters check `Impl::capturing()` (Automation Arm while 
 Lanes are named by key and resolved again at each use, so a pass never holds a device pointer:
 
 - `mixer:<track>:volume|pan`;
+- `send:<track>:<return>`;
 - `master`;
 - `device:<plugin>:<parameter>`.
+
+Send lanes are the aux send's own engine parameter ("send level"). `Impl::setSendAutomation` writes them like the mixer's lanes: it makes the send when points arrive for one that is Off (`Impl::createSend`, shared with `setTrackSendGain`), and keeps the level set by hand as `halftrackManualSend`, because the engine plays automation into `auxSendSliderPos`. `restoreManualMixerState` loads that level and drops the send's stored parameter data; `refreshParameterValues` restores it after Undo when no points remain.
 
 A pass keeps the lane's original points and its recorded points, and rewrites the whole lane through the ordinary lane writers with `internalAutomationWrite` set. Touch passes end in `endEditGesture`, and every pass ends in `stop()`. `overriddenLanes()` feeds `Snapshot::automationOverridden` and `reEnableAutomation`.
 

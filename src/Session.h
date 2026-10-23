@@ -73,7 +73,6 @@ public:
         double chanceA = 1;
         bool operator== (const FollowSettings&) const = default;
     };
-    struct SendInfo { juce::String returnTrackId; float gainDb = -100.0f; };
     struct SynthSettings
     {
         float cutoffHz = 5000, resonance = 0.15f, attackSeconds = 0.01f, decaySeconds = 0.12f;
@@ -170,6 +169,9 @@ public:
         std::vector<AutomationPoint> points;
         bool operator== (const AutomationLane&) const = default;
     };
+    // A send to a return track: its level, from -100 (Off) to 0 dB, and its automation in the same
+    // decibels (see setSendAutomation).
+    struct SendInfo { juce::String returnTrackId; float gainDb = -100.0f; AutomationLane automation; };
     // Clip envelopes, after the reference's: while a clip plays it changes a control of its track's
     // mixer or of a device on that track. Modulation moves the control from its value: volume as a
     // fraction (0-1) of the fader position, pan by -1 to +1, a device control by -1 to +1 halves of
@@ -196,6 +198,9 @@ public:
     // Coordinate mapping matches native interpolation, including the volume law.
     static float automationValueToProportion (AutomationTarget, float value);
     static float automationProportionToValue (AutomationTarget, float proportion);
+    // A send's knob position, 0 to 1, for a level in decibels (-100 for Off), and back, along the send law.
+    static float sendValueToProportion (float decibels);
+    static float sendProportionToValue (float proportion);
     // A level control's travel in decibels, as the reference's faders and knobs move: the position
     // along its volume law (to +6 dB) or its send law (to 0 dB). Silence, at the bottom, reads as
     // `silence`: -100, or the cue volume's -70.
@@ -657,6 +662,11 @@ public:
     juce::Result addMidiTrack (juce::String name = {}, const juce::String& after = {});
     juce::Result addReturnTrack (juce::String name = {}, const juce::String& after = {});
     juce::Result setTrackSendGain (int sourceTrackIndex, const juce::String& returnTrackId, float decibels);
+    // A send's automation, as the reference's Send lanes: beat points in decibels from -100 (Off) to
+    // 0, the send's knob moving straight along the send law between them, curved as track automation
+    // is. Empty points restore the send's manual level; points on a send that is Off make it, Off.
+    // One undo step; refused while recording, except automation recording, or exporting.
+    juce::Result setSendAutomation (const juce::String& trackId, const juce::String& returnTrackId, const AutomationLane&);
     juce::Result setReturnSendMode (const juce::String& returnTrackId, SendMode);
     juce::Result importMidiFile (const juce::File&, double startBeat, std::vector<juce::String>& clipIds);
     juce::Result exportMidiClip (const juce::String& clipId, const juce::File&);
@@ -1141,7 +1151,8 @@ public:
     juce::Result setPunchOut (bool);
     // MIDI mappings, after the reference's MIDI Map Mode. A controller (a CC on a channel) drives one
     // target and a target has at most one controller: a track's volume or pan ("mixer:<track>:volume"
-    // or ":pan"), the master volume ("master") or a native device control ("device:<plugin>:<index>").
+    // or ":pan"), a send ("send:<track>:<return>"), the master volume ("master") or a native device
+    // control ("device:<plugin>:<index>").
     // The controller's 0-127 moves the control's fader or knob position between minimum and maximum,
     // in the control's own units. Every enabled MIDI input acts as a remote control.
     // While a learn target is set, the next controller maps to it (replacing the target's mapping and
