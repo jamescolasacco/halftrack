@@ -186,7 +186,8 @@ int runTransportTests (const juce::File& artifacts)
             const auto back = at (1.5);
             check (back >= 6 && back < 7, "a jump before the loop rolls into it again (" + juce::String (back, 3) + " s)");
             s.seek (7.5);
-            const auto beyond = at (.5);
+            started (7.5); // A loaded machine resumes a moment after the jump.
+            const auto beyond = at (.25);
             check (beyond > 7.5 && beyond < 8 + slack, "and a jump past it plays on (" + juce::String (beyond, 3) + " s)");
             s.stop(); s.setLoop (false, 6, 7); s.setInsertMarker (3);
             // The loop brace's Set Song Start Time Here: Play starts at the loop's start, loop on or off.
