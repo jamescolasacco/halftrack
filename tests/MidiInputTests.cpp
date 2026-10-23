@@ -562,6 +562,59 @@ juce::AudioBuffer<float> readAudio (const juce::File& file)
     check(reader->read(&audio,0,audio.getNumSamples(),0,true,true),"decode complete recording render"); return audio;
 }
 
+// A MIDI track's MIDI From channel, as the reference's: All Channels takes every channel, and a
+// channel lets only that one in, for monitoring and recording; one undo step, kept with the project.
+void inputChannels (const juce::File& root)
+{
+    GeneratedInput f; auto& session = f.session;
+    const auto project = root.getChildFile ("Channels").getChildFile ("Channels.halftrack");
+    ok (project.getParentDirectory().createDirectory(), "create the channels project folder");
+    ok (session.saveProject (project), "save a recording destination");
+    ok (session.setTrackMonitor (2, Session::MonitorMode::on), "monitor the generated input");
+    check (session.snapshot().tracks[2].inputChannel == 0, "a MIDI track takes All Channels at first");
+    const auto level = [&] (int channel)
+    {
+        pumpSyntheticTestDevice (session, 8); // The graph follows a channel change.
+        f.controller.sendNow (juce::MidiMessage::noteOn (channel, 72, (juce::uint8) 96));
+        const auto peak = pumpSyntheticTestDevice (session, 20);
+        f.controller.sendNow (juce::MidiMessage::noteOff (channel, 72));
+        pumpSyntheticTestDevice (session, 30);
+        return peak;
+    };
+    check (level (3) > .001f, "All Channels plays channel 3");
+    ok (session.setTrackInputChannel (2, 5), "take channel 5 only");
+    check (session.snapshot().tracks[2].inputChannel == 5, "the channel is reported");
+    check (level (3) < 1e-6f, "channel 3 is left out");
+    check (level (5) > .001f, "channel 5 plays");
+    session.undo();
+    check (session.snapshot().tracks[2].inputChannel == 0 && level (3) > .001f, "one undo returns All Channels");
+    session.redo();
+    check (session.snapshot().tracks[2].inputChannel == 5 && level (3) < 1e-6f, "and redo channel 5");
+    check (session.setTrackInputChannel (2, 17).failed() && session.setTrackInputChannel (2, -1).failed() && session.setTrackInputChannel (0, 2).failed(),
+           "channels outside 1 to 16, or on an audio track, are refused");
+    ok (session.setTrackArmed (2, true), "arm it");
+    session.seek (0); ok (session.record(), "record");
+    check (session.setTrackInputChannel (2, 0).failed(), "the channel cannot change while recording");
+    const auto origin = f.devices.getCurrentStreamTime() + 256.0 / 48000;
+    pumpSyntheticTestDevice (session, 4);
+    f.send (juce::MidiMessage::noteOn (5, 60, (juce::uint8) 96), origin + .1); f.send (juce::MidiMessage::noteOff (5, 60), origin + .3);
+    f.send (juce::MidiMessage::noteOn (2, 67, (juce::uint8) 96), origin + .4); f.send (juce::MidiMessage::noteOff (2, 67), origin + .6);
+    pumpSyntheticTestDevice (session, 160); session.stop();
+    const auto recorded = session.snapshot().tracks[2].clips;
+    check (recorded.size() == 1 && recorded[0].notes.size() == 1 && recorded[0].notes[0].pitch == 60,
+           "a recording keeps only channel 5's notes (" + juce::String (recorded.empty() ? 0 : (int) recorded[0].notes.size()) + " notes)");
+    ok (session.setTrackArmed (2, false), "disarm it");
+    ok (session.saveProject (project), "save the channel");
+    {
+        Session reopened (false);
+        ok (reopened.loadProject (project), "reopen it");
+        check (reopened.snapshot().tracks[2].inputChannel == 5, "the channel reopens");
+        const auto damaged = project.getSiblingFile ("Damaged.halftrack");
+        check (damaged.replaceWithText (project.loadFileAsString().replace ("halftrackMidiInputChannel=\"5\"", "halftrackMidiInputChannel=\"17\"")), "write a channel 17");
+        check (reopened.loadProject (damaged).failed() && reopened.snapshot().tracks[2].inputChannel == 5, "it is refused, keeping the open project");
+    }
+}
+
 void recording (const juce::File& root)
 {
     GeneratedInput f; auto& session = f.session; const auto project = root.getChildFile("recorded.halftrack");
@@ -1495,7 +1548,7 @@ int runMidiInputTests(const juce::File& artifacts)
     try
     {
         const auto root=artifacts.getChildFile("midi-input-"+juce::Uuid().toString()); ok(root.createDirectory(),"create isolated fixtures");
-        selectionAndMonitoring(); recording(root); recordingExits(); countInRecording(); recordingQuantisation(root); controllersAndOverdub(root); sessionRecording(); inputChangesKeepPlaying(); sessionTakesSurviveDeviceChanges(); editsDuringSessionTakes(root); playbackAndArrangementEditsDuringSessionTakes(root);
+        selectionAndMonitoring(); inputChannels(root); recording(root); recordingExits(); countInRecording(); recordingQuantisation(root); controllersAndOverdub(root); sessionRecording(); inputChangesKeepPlaying(); sessionTakesSurviveDeviceChanges(); editsDuringSessionTakes(root); playbackAndArrangementEditsDuringSessionTakes(root);
         std::cout<<"MIDI input tests passed: "<<root.getFullPathName()<<std::endl; return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL MIDI input: "<<e.what()<<std::endl;return 1;}

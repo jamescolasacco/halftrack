@@ -132,6 +132,8 @@ const juce::Identifier sidechainTapProperty { "halftrackSidechainTap" }, sidecha
 // A MIDI track playing to a MIDI port: the channel (1-16) its MIDI goes out on. The engine's node
 // builder applies it (see cmake/PatchMidiPorts.cmake); its presence marks the output as a port.
 const juce::Identifier midiOutChannelProperty { "halftrackMidiOutChannel" };
+// A MIDI track's MIDI From channel, 1 to 16; absent for All Channels. The engine reads it too.
+const juce::Identifier midiInputChannelProperty { "halftrackMidiInputChannel" };
 const juce::Identifier returnBusProperty { "halftrackReturnBus" };
 const juce::Identifier returnModeProperty { "halftrackReturnSendMode" };
 const juce::Identifier sendReturnProperty { "halftrackSendReturnID" };
@@ -1246,6 +1248,20 @@ Result validateMidiPortOutputs (const juce::ValueTree& state)
             return Result::fail ("The project contains an invalid MIDI port output.");
     }
     for (const auto& child : state) if (auto result = validateMidiPortOutputs (child); result.failed()) return result;
+    return Result::ok();
+}
+// A MIDI track's input channel is 1-16, on a MIDI track.
+Result validateMidiInputChannels (const juce::ValueTree& state)
+{
+    if (state.hasProperty (midiInputChannelProperty))
+    {
+        const auto& value = state[midiInputChannelProperty];
+        const int channel = static_cast<int> (value);
+        if (! state.hasType (te::IDs::TRACK) || ! static_cast<bool> (state.getProperty (midiTrackProperty, false)) || ! (value.isInt() || value.isInt64() || value.toString().containsOnly ("0123456789"))
+            || channel < 1 || channel > 16)
+            return Result::fail ("The project contains an invalid MIDI input channel.");
+    }
+    for (const auto& child : state) if (auto result = validateMidiInputChannels (child); result.failed()) return result;
     return Result::ok();
 }
 // A sidechain names an audio or MIDI track of the project, other than a return, with a known tap.
@@ -2404,7 +2420,7 @@ private:
     }
     void restart() { if (edit != nullptr && edit->state == state) edit->restartPlayback(); }
     void valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& id) override
-    { if (id == clipGrooveProperty || id == sidechainTapProperty || id == sidechainOffProperty || id == metronomeTickProperty || id == cueProperty || inPool (v)) restart(); }
+    { if (id == clipGrooveProperty || id == sidechainTapProperty || id == sidechainOffProperty || id == metronomeTickProperty || id == cueProperty || id == midiInputChannelProperty || inPool (v)) restart(); }
     void valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child) override { if (inPool (parent) || child.hasType (groovePoolType)) restart(); }
     void valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int) override { if (inPool (parent) || child.hasType (groovePoolType)) restart(); }
 };
@@ -4671,6 +4687,8 @@ struct Session::Impl
         {
             auto* t = dynamic_cast<te::AudioTrack*> (te::findTrackForID (*edit, target));
             if (t == nullptr || ! static_cast<bool> (t->state.getProperty (midiTrackProperty))) continue;
+            // A track taking one MIDI channel keeps only that channel's notes.
+            if (const int channel = t->state.getProperty (midiInputChannelProperty, 0); channel > 0 && m.getChannel() != channel) continue;
             const bool monitored = static_cast<int> (t->state.getProperty (monitorProperty, 0)) == static_cast<int> (MonitorMode::on);
             const bool keeping = in.isRecordingEnabled (target) || monitored;
             if (in.isRecordingEnabled (target))
@@ -5545,6 +5563,7 @@ Session::Snapshot Session::snapshot() const
         info.autoArmed = info.id == impl->autoArmed;
         info.mute = t->isMuted (false); info.solo = t->isSolo (false) || static_cast<bool> (t->state.getProperty (cueProperty, false));
         info.isMidi = t->state.getProperty (midiTrackProperty, false);
+        info.inputChannel = info.isMidi ? juce::jlimit (0, 16, static_cast<int> (t->state.getProperty (midiInputChannelProperty, 0))) : 0;
         info.isReturn = isReturn (*t);
         if (const int height = t->state.getProperty (trackHeightProperty, 0); height >= Session::minimumTrackHeight && height <= Session::maximumTrackHeight) info.height = height;
         info.folded = t->state.getProperty (trackFoldedProperty, false);
@@ -5805,6 +5824,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateHostedInstruments (state); result.failed()) return result;
     if (auto result = validateSidechains (state); result.failed()) return result;
     if (auto result = validateMidiPortOutputs (state); result.failed()) return result;
+    if (auto result = validateMidiInputChannels (state); result.failed()) return result;
     if (auto result = validateClipScales (state); result.failed()) return result;
     if (auto result = validateGroovePool (state); result.failed()) return result;
     if (auto result = validateMidiMappings (state); result.failed()) return result;
@@ -11457,6 +11477,20 @@ Result Session::setTrackSolo (int index, bool value)
     impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 
+Result Session::setTrackInputChannel (int index, int channel)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* t = impl->track (index); if (! t) return Result::fail ("Track not found.");
+    if (! static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) || isReturn (*t)) return Result::fail ("Only MIDI tracks take a MIDI channel from their input.");
+    if (channel < 0 || channel > 16) return Result::fail ("Choose All Channels or a channel from 1 to 16.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before changing inputs.");
+    if (static_cast<int> (t->state.getProperty (midiInputChannelProperty, 0)) == channel) return Result::ok();
+    impl->transaction ("MIDI input channel");
+    // The engine reads it when the graph is built, which the change restarts (see GrooveWatcher).
+    if (channel == 0) t->state.removeProperty (midiInputChannelProperty, &impl->edit->getUndoManager());
+    else t->state.setProperty (midiInputChannelProperty, channel, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
 juce::StringArray Session::inputNames (bool midi) const
 {
     juce::StringArray names;

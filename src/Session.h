@@ -479,6 +479,7 @@ public:
         juce::Colour colour;
         float gainDb = 0, pan = 0, peakL = 0, peakR = 0;
         bool mute = false, solo = false, armed = false, isMidi = false, isReturn = false;
+        int inputChannel = 0; // A MIDI track's MIDI From channel, 1 to 16; 0 for All Channels.
         bool frozen = false; // Plays a render of its clips and devices; devices and clips are locked.
         int height = 0;      // Its Arrangement height in pixels, or 0 for the default.
         bool folded = false; // Folded in the Arrangement to its header strip.
@@ -1223,6 +1224,10 @@ public:
     // repeated note-on or a note-off for a note not held does nothing.
     juce::Result computerKeyboardNote (int note, float velocity, bool on);
     juce::Result setTrackInput (int trackIndex, const juce::String& inputName);
+    // A MIDI track's MIDI From channel, as the reference's: 0 (All Channels) takes every channel from
+    // its input, 1 to 16 only that one, for monitoring, playing, recording and Capture MIDI. One undo
+    // step, kept with the project; refused while recording.
+    juce::Result setTrackInputChannel (int trackIndex, int channel);
     juce::Result setTrackArmed (int trackIndex, bool);
     // Audio inputs need the system's permission: macOS asks once and keeps the answer in System
     // Settings. Without it a hardware input records silence, so arming, monitoring or recording

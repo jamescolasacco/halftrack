@@ -2178,3 +2178,7 @@ UI area. A track's input monitoring is now the reference's three switches, In, A
 
 Engine area. From a static reading of the reference's code: a Session take that starts the transport now counts in, as an Arrangement recording does. The transport starts on the bar line nearest the count-in's bars before the take, clicks from there to the take's start with the metronome on or off, and the take starts where the transport stood. Measured in the session-record suite: a one-bar count-in from bar 2 starts at 0 s with four beats to count, clicks at once, and the take holds only the note played after it ([contract](research/session-recording-contract.md)).
 
+## MIDI From channels — 2026-10-23
+
+Engine and root areas. A MIDI track can take one MIDI channel from its input, as the reference's MIDI From channel chooser does, for monitoring, recording, Capture MIDI and overdubs (`Session::setTrackInputChannel`). It is one undo step and saved with the project. A new engine patch, `cmake/PatchMidiInputChannel.cmake`, filters the track's input node and recordings. Measured in the MIDI input suite ([contract](research/track-inputs-contract.md)).
+

@@ -11,6 +11,13 @@ function(halftrack_patch_midi_input_activation source_dir)
     set(previous_cpp "b417dbcd6f6dafba3078eaa408b0074d0cd6ba50e7e43f123d5a4f283b4af4a2")
     set(accurate_receipt_cpp "b0e8e73a5ab9f5dd1d13e96c2adc84313ed3a579ddb8ca7d80b6564a2c497000")
     set(accurate_receipt_h "6103673d444ed07506ab92f96fbfb835639ececeb834c5b936d6bd0838d146ef")
+    # The later MIDI input channel patch builds on this patch's results.
+    file(SHA256 "${base}.cpp" current_cpp)
+    file(SHA256 "${base}.h" current_h)
+    if(current_cpp STREQUAL "7f8dd4ed48893d3ba46e4b09a44404dd9bcf334f772aa09be98a06573892cd74"
+       AND current_h STREQUAL "90dec853c902a4349a64b450007f314c7380b5f414494d482385c5f6b33cacde")
+        return()
+    endif()
     # Preflight every source before transforming or writing either file.
     foreach(ext IN ITEMS cpp h)
         file(SHA256 "${base}.${ext}" hash_${ext})

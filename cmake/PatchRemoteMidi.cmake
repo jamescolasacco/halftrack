@@ -138,6 +138,8 @@ bool MidiInputDevice::sendMessageToInstances (const juce::MidiMessage& message, 
         // Halftrack: what the remote control took is not track input anywhere.
         if (! takenByRemote)
             engine.getDeviceManager().broadcastMessageToAllVirtualDevices (*this, m);]=])
+    set(downstream0 "b35855d978d2444c773834360c345c8df19d70451adc4f5c28a9ffd50c926dbe") # The later MIDI input channel patch.
+    set(downstream1 "c5181f604c9fd59d45712fd68c454645d36e3aae26f29d870038222fbb84eec4")
     foreach(index RANGE 0 2)
         file(SHA256 "${source${index}}" hash)
         if(hash STREQUAL "${patched${index}}" OR (DEFINED downstream${index} AND hash IN_LIST downstream${index}))

@@ -115,6 +115,8 @@ include(cmake/PatchRemoteMidi.cmake)
 halftrack_patch_remote_midi("${tracktion_SOURCE_DIR}")
 include(cmake/PatchLaunchVelocity.cmake)
 halftrack_patch_launch_velocity("${tracktion_SOURCE_DIR}")
+include(cmake/PatchMidiInputChannel.cmake)
+halftrack_patch_midi_input_channel("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"
