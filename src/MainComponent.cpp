@@ -1476,7 +1476,20 @@ private:
     }
     void dropTracks()
     {
-        if (trackDrop && ! draggedTracks.isEmpty()) report (session.moveTracks (draggedTracks, trackDrop->groupId, trackDrop->beforeId));
+        if (trackDrop && ! draggedTracks.isEmpty())
+        {
+            const auto result = session.moveTracks (draggedTracks, trackDrop->groupId, trackDrop->beforeId);
+            report (result);
+            // The reference's move selects the selected track again (0x10242a5fc), which opens the
+            // folded group it is in, though not one folded around that.
+            if (result.wasOk())
+            {
+                refresh();
+                const auto* group = groupInfo (selectedChain);
+                const auto parent = group != nullptr ? group->parentId : currentTrack() != nullptr ? currentTrack()->groupId : juce::String();
+                if (const auto* around = groupInfo (parent); around != nullptr && around->folded) session.setGroupFolded (parent, false);
+            }
+        }
         draggedTracks.clear(); trackDrop.reset(); refresh(); canvas.repaint();
     }
     void buildLanes()
@@ -16942,6 +16955,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     session.undo(); refresh();
                     check (state.tracks[1].groupId == group, "one undo puts it back");
                 }
+                // Dropping a track into a folded group opens the group, as the reference's move does.
+                check (session.setGroupFolded (inner, true).wasOk(), "fold the inner group"); refresh();
+                check (grab (laneY (indexOf (second)) + 10, "Track name"), "press the second track's name");
+                move (groupLane (inner).y + groupLane (inner).height * 3 / 4);
+                check (trackDrop && trackDrop->groupId == inner && trackDrop->beforeId == first, "over the folded group's lower half it would go in, first");
+                release (groupLane (inner).y + groupLane (inner).height * 3 / 4);
+                check (state.tracks[0].id == second && state.tracks[0].groupId == inner && ! groupInfo (inner)->folded && laneHeight (0) > 0, "dropping it there opens the group");
+                session.undo(); refresh();
+                check (state.tracks[1].id == second && state.tracks[1].groupId == group && ! groupInfo (inner)->folded, "one undo moves it back, leaving the group open");
                 {
                     // In the Session view a column's title drags the same way, sideways: over a column's
                     // left half before it, over its right half after it, the height in the title
