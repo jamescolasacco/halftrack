@@ -25,7 +25,7 @@ The reference's Arrangement menu, with what Halftrack shows:
 
 | Reference item | When | Halftrack |
 |---|---|---|
-| Cut, Copy, Paste | track clipboard | not yet: left out |
+| Cut, Copy, Paste | Copy for tracks and groups that are not Main nor in a frozen group; Cut when Copy and Delete can act; Paste with tracks copied | the same over the tracks Halftrack copies (`copyTracks`, `cutTracks`, `pasteTracks`; returns and frozen tracks not yet). Paste puts the copies after the selected tracks, in the last one's group, as Duplicate does, and selects them. After a header or title click, Cmd+C, Cmd+X and Cmd+V do the same |
 | Duplicate | see the [groups contract](groups-contract.md#duplicating-2026-10-23) | Duplicate, when `canDuplicateTracks` |
 | Delete | see [deleting](groups-contract.md#deleting-2026-10-23) | Delete, when `canRemoveTracks` |
 | Clear All Envelopes | Automation Mode | not yet: left out |
@@ -52,6 +52,7 @@ Right-clicking a header selects its track or group unless it is selected, keepin
 
 The UI suite checks:
 - the exact items, order and separators of a nested track's Arrangement menu, its Session title menu, and a group's;
+- Cmd+C and Cmd+V after a header click, pasting a copy after the copied track in its group, and Paste appearing in the menu once tracks are copied;
 - that Delete is left out where it would empty a group;
 - that the colour grid colours two selected tracks in one undo step and marks the colour in use;
 - that Rename edits the clicked track's name in its header, and Select Content selects its clip's time on its track;
@@ -64,5 +65,6 @@ The groups suite checks the return limit.
 - English labels.
 - Whether right-clicking an unselected header changes the selection.
 - Where Insert Audio/MIDI/Return Track insert in the reference; Halftrack inserts after the selected track, as its Create menu does.
+- Where the reference's Paste inserts (0x103274b38 picks the place; not decoded). Halftrack pastes as Duplicate places its copies. The reference keeps one clipboard for clips and tracks; Halftrack's track clipboard is its own.
 - Delete Unused Take Lanes' notion of unused: a take lane none of whose clips share an id with a main-lane clip (0x1024b6770, 0x102481d98), the id itself not decoded.
 - Select Content for groups, and the meaning of the Session flag that drops Select Content and Assign colour.

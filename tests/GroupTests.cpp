@@ -277,6 +277,35 @@ int runGroupTests (const juce::File& artifacts)
                 check (n.duplicateTracks ({ "missing" }, kept).failed() && n.duplicateTracks ({}, kept).failed() && kept == juce::StringArray { "keep" } && n.canRedo(),
                        "unknown and empty duplications are refused, leaving the result and redo alone");
                 check (n.snapshot().tracks.size() == 3 && n.snapshot().groups.size() == 3, "and the tree as it was");
+                // Copy, Cut and Paste, as the reference's headers have them: Paste puts the copies after
+                // the chosen tracks, as Duplicate places its copies.
+                check (! n.hasTrackClipboard(), "nothing is copied at first");
+                ok (n.copyTracks ({ outer }), "copy the outer group");
+                check (n.hasTrackClipboard() && n.snapshot().tracks.size() == 3 && n.snapshot().groups.size() == 3, "copying changes nothing in the project");
+                juce::StringArray pasted;
+                ok (n.pasteTracks ({ ids[2] }, pasted), "paste after c");
+                const auto after = n.snapshot();
+                const auto parentOf = [&after] (const juce::String& id) { for (const auto& g : after.groups) if (g.id == id) return g.parentId; return juce::String ("?"); };
+                check (pasted.size() == 1 && after.tracks.size() == 5 && after.tracks[2].id == ids[2] && after.tracks[4].groupId == pasted[0] && parentOf (pasted[0]) == top
+                           && parentOf (after.tracks[3].groupId) == pasted[0],
+                       "the copy of the outer group goes after c, in the top group, with copies of what was inside");
+                ok (n.setGroupMute (outer, true), "mute the original");
+                check (difference (render (n, mix), plain) < 1e-6, "the pasted tracks play as the originals did");
+                n.undo(); n.undo();
+                check (n.snapshot().tracks.size() == 3, "two undo steps remove the mute and the paste");
+                ok (n.pasteTracks ({}, pasted), "paste with nothing chosen");
+                check (n.snapshot().tracks.size() == 5 && parentOf (pasted[0]) == "?" && [&] { for (const auto& g : n.snapshot().groups) if (g.id == pasted[0]) return g.parentId.isEmpty(); return false; }(),
+                       "it goes after the other tracks, at the top level");
+                n.undo();
+                check (n.cutTracks ({ ids[0] }).failed() && ! n.canCutTracks ({ ids[0] }) && n.snapshot().tracks.size() == 3, "a, the inner group's only track, cannot be cut");
+                ok (n.cutTracks ({ ids[1] }), "cut b");
+                check (n.snapshot().tracks.size() == 2 && n.snapshot().tracks[1].id == ids[2], "b goes");
+                ok (n.pasteTracks ({ ids[2] }, pasted), "paste it after c");
+                check (n.snapshot().tracks.size() == 3 && n.snapshot().tracks[2].id == pasted[0] && n.snapshot().tracks[2].groupId == top
+                           && n.snapshot().tracks[2].userName == tree.tracks[1].userName && n.snapshot().tracks[2].clips.size() == tree.tracks[1].clips.size(),
+                       "b's copy comes back after c, with its own name (automatic, numbered by its place) and clip: " + n.snapshot().tracks[2].name + " / " + tree.tracks[1].name);
+                n.undo(); n.undo();
+                check (n.snapshot().tracks.size() == 3 && n.snapshot().tracks[1].id == ids[1], "two undo steps undo the paste and the cut");
             }
         }
         {

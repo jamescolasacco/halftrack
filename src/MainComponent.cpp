@@ -903,8 +903,9 @@ public:
             if (code == 'L' && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (79); return true; }
             if (code == 'J' && ! shift && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (80); return true; }
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
-            // After a click on a header, Duplicate duplicates the selected tracks, as the reference's headers do.
+            // After a click on a header, Duplicate, Cut, Copy and Paste act on the selected tracks, as the reference's headers do.
             if (code == 'D' && ! shift && ! key.getModifiers().isAltDown() && headerFocus) { duplicateSelectedHeaders(); return true; }
+            if ((code == 'C' || code == 'X' || code == 'V') && ! shift && ! key.getModifiers().isAltDown() && headerFocus) { trackClipboardCommand ((char) code); return true; }
             if (! shift && ! showSession && ! showPiano && timeSelection.active() && (code == 'E' || code == 'D' || code == 'C' || code == 'X'))
             { selectionCommand (code == 'E' ? 76 : code == 'D' ? 77 : code == 'C' ? 81 : 82); return true; }
             // A copied time selection pastes at the insert marker from the selected track.
@@ -4811,6 +4812,7 @@ private:
             if (const auto mods = key.getModifiers(); mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown() && (code == 'C' || code == 'X' || code == 'V' || code == 'D'))
             {
                 if (code == 'D' && owner.headerFocus) { owner.duplicateSelectedHeaders(); return true; } // After a click on a title.
+                if (owner.headerFocus) { owner.trackClipboardCommand ((char) code); return true; }
                 return owner.slotCommand (code == 'X' ? 84 : code == 'C' ? 85 : code == 'V' ? 86 : 87);
             }
             if (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey || code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
@@ -9928,7 +9930,11 @@ private:
     void duplicateFromUI (const juce::StringArray& ids)
     {
         juce::StringArray copies; const auto result = session.duplicateTracks (ids, copies); report (result); refresh();
-        if (result.failed() || copies.isEmpty()) return;
+        if (result.wasOk()) selectCopies (copies);
+    }
+    void selectCopies (const juce::StringArray& copies)
+    {
+        if (copies.isEmpty()) return;
         multiSelectedTracks.clear(); selectedClip = -1; selectedLauncherClipId.clear(); showPiano = false;
         const auto* group = groupInfo (copies[0]);
         const auto first = trackIndex (copies[0]);
@@ -9943,6 +9949,22 @@ private:
         resized();
     }
     void duplicateTrackFromUI (const juce::String& trackId) { duplicateFromUI ({ trackId }); }
+    // The headers' Cut, Copy and Paste: Paste puts the copied tracks after the selected ones, as
+    // Duplicate does, and selects them; Cut leaves the selection as Delete does.
+    void trackClipboardCommand (char command)
+    {
+        const auto ids = headerSelection();
+        if (command == 'C') { if (session.canDuplicateTracks (ids)) report (session.copyTracks (ids)); return; }
+        if (command == 'X')
+        {
+            if (! session.canCutTracks (ids)) return;
+            if (auto copied = session.copyTracks (ids); copied.failed()) { report (copied); return; }
+            deleteSelectedHeaders(); return;
+        }
+        if (! session.hasTrackClipboard()) return;
+        juce::StringArray pasted; const auto result = session.pasteTracks (ids, pasted); report (result); refresh();
+        if (result.wasOk()) selectCopies (pasted);
+    }
     // The headers' Duplicate: the selected group, or the selected tracks.
     void duplicateSelectedHeaders() { if (const auto ids = headerSelection(); session.canDuplicateTracks (ids)) duplicateFromUI (ids); }
     void reorderTrack (const juce::String& trackId, int direction)
@@ -10098,7 +10120,7 @@ private:
     // that cannot act there is left out, and a separator only comes between items. The Arrangement's
     // has the take lane and link items; the Session view's titles do not. A colour picked in the grid
     // is put in `colour`.
-    enum HeaderItem { headerDuplicate = 1, headerDelete, headerRename, headerFreeze, headerFlatten, headerInsertAudio, headerInsertMidi, headerInsertReturn,
+    enum HeaderItem { headerCut = 100, headerCopy, headerPaste, headerDuplicate = 1, headerDelete, headerRename, headerFreeze, headerFlatten, headerInsertAudio, headerInsertMidi, headerInsertReturn,
                       headerGroup, headerUngroup, headerSelectContent, headerInsertTakeLane, headerShowTakeLanes, headerDeleteTakeLanes, headerLink, headerUnlink, headerColour };
     juce::PopupMenu headerMenu (const juce::String& id, bool arrangement, std::shared_ptr<int> colour, bool join) const
     {
@@ -10108,6 +10130,9 @@ private:
         const auto item = [&] (int result, const juce::String& text, bool enabled = true, bool ticked = false)
         { if (pending) menu.addSeparator(); pending = false; menu.addItem (result, text, enabled, ticked); };
         const auto separator = [&pending] { pending = true; };
+        if (session.canCutTracks (ids)) item (headerCut, "Cut");
+        if (session.canDuplicateTracks (ids)) item (headerCopy, "Copy");
+        if (session.hasTrackClipboard()) item (headerPaste, "Paste");
         if (session.canDuplicateTracks (ids)) item (headerDuplicate, "Duplicate");
         if (session.canRemoveTracks (ids)) item (headerDelete, "Delete");
         separator();
@@ -10158,6 +10183,7 @@ private:
         const auto ids = headerSelection();
         switch (result)
         {
+            case headerCut: case headerCopy: case headerPaste: trackClipboardCommand (result == headerCut ? 'X' : result == headerCopy ? 'C' : 'V'); return;
             case headerDuplicate: duplicateFromUI (ids); return;
             case headerDelete: deleteSelectedHeaders(); return;
             case headerRename: renameHeader (id, arrangement); return;
@@ -17321,18 +17347,26 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     const auto colour = std::make_shared<int> (-1);
                     check (selectForHeaderMenu (second) && selectedTrackIds() == juce::StringArray { second }, "right-clicking the second track selects it");
                     const bool clips = ! state.tracks[(size_t) indexOf (second)].clips.empty();
-                    const auto expected = juce::String ("Duplicate|Delete|-|Rename|-|") + (clips ? "Freeze Track|-|" : "")
+                    const auto expected = juce::String ("Cut|Copy|Duplicate|Delete|-|Rename|-|") + (clips ? "Freeze Track|-|" : "")
                         + "Insert Audio Track|Insert MIDI Track|Insert Return Track|Group Tracks|-|Select Content" + (clips ? "" : " (off)")
                         + "|-|Insert Take Lane|Show Take Lanes|Delete All Take Lanes (off)|-|Link Tracks (off)|Unlink Tracks (off)|-|[colours]";
                     check (listed (headerMenu (second, true, colour, false)) == expected, "a track's menu: " + listed (headerMenu (second, true, colour, false)));
                     check (listed (headerMenu (second, false, colour, false)) == expected.upToFirstOccurrenceOf ("Select Content", true, false) + "|-|[colours]",
                            "a Session title's has no take lane or link items, and Select Content for its audio or MIDI track: " + listed (headerMenu (second, false, colour, false)));
                     check (selectForHeaderMenu (inner) && selectedChain == inner, "right-clicking the inner group selects it");
-                    check (listed (headerMenu (inner, true, colour, false)) == "Duplicate|Delete|-|Rename|-|Insert Audio Track|Insert MIDI Track|Insert Return Track|Group Tracks|Ungroup Tracks|-|Select Content"
+                    check (listed (headerMenu (inner, true, colour, false)) == "Cut|Copy|Duplicate|Delete|-|Rename|-|Insert Audio Track|Insert MIDI Track|Insert Return Track|Group Tracks|Ungroup Tracks|-|Select Content"
                                    + juce::String (state.tracks[(size_t) indexOf (first)].clips.empty() ? " (off)" : "") + "|-|[colours]",
                            "a group's: Ungroup Tracks, no take lane or link items: " + listed (headerMenu (inner, true, colour, false)));
                     check (selectForHeaderMenu (first) && selectedTrackIds() == juce::StringArray { first } && selectedChain.isEmpty(), "right-clicking the first track selects it alone");
-                    check (! listed (headerMenu (first, true, colour, false)).contains ("Delete|"), "its menu leaves Delete out, as the inner group keeps its only track");
+                    check (listed (headerMenu (first, true, colour, false)).startsWith ("Copy|Duplicate|-|Rename"), "its menu leaves Cut and Delete out, as the inner group keeps its only track");
+                    // Cmd+C and Cmd+V after a click on a header copy the selection and paste it after the selected track.
+                    headerFocus = true;
+                    check (handleKey (juce::KeyPress ('C', juce::ModifierKeys::commandModifier, 0)) && session.hasTrackClipboard() && state.tracks.size() == 2, "Cmd+C copies the first track");
+                    check (listed (headerMenu (first, true, colour, false)).startsWith ("Copy|Paste|Duplicate"), "and the menu then offers Paste");
+                    check (handleKey (juce::KeyPress ('V', juce::ModifierKeys::commandModifier, 0)), "Cmd+V is handled"); refresh();
+                    check (state.tracks.size() == 3 && state.tracks[1].groupId == inner && state.tracks[1].id != first && selectedTrack == 1,
+                           "it pastes a copy after the first track, in the inner group, and selects it");
+                    session.undo(); refresh(); selectForHeaderMenu (first);
                     // The colour grid colours the selected tracks, and marks the colour in use.
                     multiSelectedTracks.insert (second); refresh();
                     check (selectForHeaderMenu (second) && selectedTrackIds() == juce::StringArray { first, second }, "right-clicking a selected track keeps the selection");
