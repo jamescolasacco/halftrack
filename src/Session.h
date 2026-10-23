@@ -711,7 +711,11 @@ public:
     // One undo step; refused while recording, except automation recording, or exporting.
     juce::Result setSendAutomation (const juce::String& trackId, const juce::String& returnTrackId, const AutomationLane&);
     juce::Result setReturnSendMode (const juce::String& returnTrackId, SendMode);
-    juce::Result importMidiFile (const juce::File&, double startBeat, std::vector<juce::String>& clipIds);
+    // Imports a MIDI file's tracks from a beat; with `timeSignatures` its time signatures become
+    // markers from there, as the reference offers when importing. One undo step.
+    juce::Result importMidiFile (const juce::File&, double startBeat, std::vector<juce::String>& clipIds, bool timeSignatures = false);
+    // A MIDI file's valid time signatures, in its beats.
+    static std::vector<TimeSignatureChange> midiFileTimeSignatures (const juce::File&);
     juce::Result exportMidiClip (const juce::String& clipId, const juce::File&);
     // Browser preview: a separate preview Edit plays an audio file on the audio device, beside the
     // project and outside it, at the preview volume. Another file replaces it; it stops at its end.

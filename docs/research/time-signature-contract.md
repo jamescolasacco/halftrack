@@ -117,7 +117,15 @@ Evidence (`tests/TimeSignatureTests.cpp`):
 
 The UI suite completes a fragmentary bar from its menu.
 
-Not yet: importing a MIDI file's meters, clip editors' rulers (which keep the meter at the playhead), and scene meters with markers present.
+### Importing MIDI files
+
+As the reference's manual describes, a MIDI file's time signatures can be imported as markers. Importing a file that has them asks first ("Import Them" or "Keep the Project's").
+- `importMidiFile(file, beat, ids, timeSignatures)` places a marker for each of the file's time signatures, counted from the import's beat, in the import's single undo step. One at beat 0 retypes the first marker.
+- `Session::midiFileTimeSignatures` reads a file's valid ones, the last of any sharing a beat.
+
+The time-signature suite imports a file with 5/4 and 7/8 with and without them, and undoes the import. The UI suite answers the question and checks the markers from the import's beat.
+
+Not yet: clip editors' rulers (which keep the meter at the playhead), and scene meters with markers present.
 
 ## Not implemented
 

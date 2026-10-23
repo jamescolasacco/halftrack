@@ -629,6 +629,9 @@ void migrateFaderLaw (juce::ValueTree edit)
 }
 
 bool isReturn (const te::AudioTrack& track) { return track.state.getProperty (returnProperty, false); }
+// A time signature Halftrack takes: 1 to 99 over 1, 2, 4, 8 or 16.
+bool validMeter (Session::TimeSignature m)
+{ return m.numerator >= 1 && m.numerator <= 99 && m.denominator >= 1 && m.denominator <= 16 && (m.denominator & (m.denominator - 1)) == 0; }
 Session::SendMode sendMode (const te::AudioTrack& track)
 { return static_cast<Session::SendMode> (static_cast<int> (track.state.getProperty (returnModeProperty, 1))); }
 
@@ -7464,7 +7467,27 @@ Result Session::setReturnSendMode (const String& destinationID, SendMode mode)
         }
     impl->refreshRouting(); impl->changed(); return Result::ok();
 }
-Result Session::importMidiFile (const File& file, double startBeat, std::vector<String>& importedIds)
+std::vector<Session::TimeSignatureChange> Session::midiFileTimeSignatures (const File& file)
+{
+    std::vector<TimeSignatureChange> meters;
+    if (! file.existsAsFile() || file.getSize() > 16*1024*1024) return meters;
+    juce::FileInputStream input (file); juce::MidiFile midi;
+    if (! input.openedOk() || ! midi.readFrom (input, false) || midi.getTimeFormat() <= 0) return meters;
+    for (int t = 0; t < midi.getNumTracks(); ++t)
+        for (const auto* event : *midi.getTrack (t))
+            if (event->message.isTimeSignatureMetaEvent())
+            {
+                int numerator = 0, denominator = 0; event->message.getTimeSignatureInfo (numerator, denominator);
+                const auto beat = event->message.getTimeStamp() / midi.getTimeFormat();
+                if (validMeter ({ numerator, denominator }) && std::isfinite (beat) && beat >= 0 && beat <= 1000000) meters.push_back ({ beat, { numerator, denominator } });
+            }
+    // In beat order, the last of any at one beat.
+    std::stable_sort (meters.begin(), meters.end(), [] (const auto& a, const auto& b) { return a.beat < b.beat; });
+    std::vector<TimeSignatureChange> unique;
+    for (const auto& m : meters) { if (! unique.empty() && std::abs (unique.back().beat - m.beat) < 1.0 / 960) unique.back() = m; else unique.push_back (m); }
+    return unique;
+}
+Result Session::importMidiFile (const File& file, double startBeat, std::vector<String>& importedIds, bool timeSignatures)
 {
     if (impl->exporting || impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording or finish exporting before importing MIDI.");
     if (! std::isfinite (startBeat) || startBeat < 0 || startBeat >= 1000000) return Result::fail ("Choose a valid MIDI insertion position.");
@@ -7558,6 +7581,14 @@ Result Session::importMidiFile (const File& file, double startBeat, std::vector<
         clip->setName(part.name);clip->getSequence().copyFrom(*part.list,&impl->edit->getUndoManager());
         created.push_back(clip->itemID.toString());
     }
+    // Its time signatures as markers from where it goes, as the reference offers.
+    if (timeSignatures)
+        for (const auto& meter : midiFileTimeSignatures (file))
+        {
+            const auto at = startBeat + meter.beat;
+            auto result = at < 1.0e-9 ? setTimeSignatureChange (0, meter.meter) : insertTimeSignatureChange (at, meter.meter);
+            if (result.failed()) { endEditGesture(); undo(); return result; }
+        }
     endEditGesture();impl->changed();importedIds=std::move(created);return Result::ok();
 }
 Result Session::exportMidiClip (const String& id, const File& destination)
@@ -12850,11 +12881,6 @@ Result Session::setTimeSignature (int numerator, int denominator)
     int index = 0;
     for (int i = 0; i < (int) markers.size(); ++i) if (markers[(size_t) i].beat <= here + 1e-9) index = i;
     return setTimeSignatureChange (index, { numerator, denominator });
-}
-namespace
-{
-bool validMeter (Session::TimeSignature m)
-{ return m.numerator >= 1 && m.numerator <= 99 && m.denominator >= 1 && m.denominator <= 16 && (m.denominator & (m.denominator - 1)) == 0; }
 }
 Session::BarInfo Session::barAt (const std::vector<TimeSignatureChange>& changes, double beat)
 {

@@ -10432,7 +10432,21 @@ private:
     }
     void importMidiSelection (const juce::File& file,double startBeat)
     {
-        std::vector<juce::String> ids;const auto result=session.importMidiFile(file,startBeat,ids);
+        // As the reference offers: a file's time signatures can come in as markers from where it goes.
+        if (! Session::midiFileTimeSignatures (file).empty())
+        {
+            auto* dialog=new juce::AlertWindow ("Import MIDI File","This MIDI file has time signatures. Import them as time signature markers from where it goes?",juce::MessageBoxIconType::QuestionIcon);
+            dialog->addButton ("Import Them",1,juce::KeyPress (juce::KeyPress::returnKey));dialog->addButton ("Keep the Project's",0,juce::KeyPress (juce::KeyPress::escapeKey));
+            dialog->setLookAndFeel (&theme);alerts.emplace_back (dialog);
+            auto safe=juce::Component::SafePointer<Impl> (this);
+            dialog->enterModalState (true,juce::ModalCallbackFunction::create ([safe,file,startBeat] (int choice) { if (safe!=nullptr) safe->finishMidiImport (file,startBeat,choice==1); }),true);
+            return;
+        }
+        finishMidiImport (file,startBeat,false);
+    }
+    void finishMidiImport (const juce::File& file,double startBeat,bool timeSignatures)
+    {
+        std::vector<juce::String> ids;const auto result=session.importMidiFile(file,startBeat,ids,timeSignatures);
         report(result,"Imported "+juce::String((int)ids.size())+" MIDI tracks at the project tempo.");refresh();
         if(result.failed()||ids.empty())return;
         for(int t=0;t<(int)state.tracks.size();++t)for(int c=0;c<(int)state.tracks[(size_t)t].clips.size();++c)
@@ -16088,6 +16102,25 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     const auto importedMidiId=currentMidiClip()->id;exportMidiSelection(importedMidiId,midiOutput.getFile());
     {juce::FileInputStream input(midiOutput.getFile());juce::MidiFile file;
     check(input.openedOk()&&file.readFrom(input)&&file.getTimeFormat()==9600,"production export completion writes a real MIDI file");}
+    {
+        // A file with time signatures asks whether to import them as markers, as the reference does.
+        juce::TemporaryFile meters (".mid");
+        juce::MidiMessageSequence conductor, notes;
+        auto threeFour=juce::MidiMessage::timeSignatureMetaEvent(3,4);threeFour.setTimeStamp(0);conductor.addEvent(threeFour);
+        auto sixEight=juce::MidiMessage::timeSignatureMetaEvent(6,8);sixEight.setTimeStamp(960*3);conductor.addEvent(sixEight);
+        auto on=juce::MidiMessage::noteOn(1,60,(juce::uint8)90);on.setTimeStamp(0);notes.addEvent(on);
+        auto off=juce::MidiMessage::noteOff(1,60);off.setTimeStamp(960*6);notes.addEvent(off);
+        juce::MidiFile file;file.setTicksPerQuarterNote(960);file.addTrack(conductor);file.addTrack(notes);
+        {auto stream=meters.getFile().createOutputStream();check(stream&&file.writeTo(*stream,1),"write a MIDI file with time signatures");}
+        const auto alertsBefore=alerts.size();
+        importMidiSelection(meters.getFile(),4);
+        check(alerts.size()==alertsBefore+1&&alerts.back()!=nullptr&&state.timeSignatures.size()==1,"importing it asks first");
+        alerts.back()->exitModalState(1);juce::MessageManager::getInstance()->runDispatchLoopUntil(50);refresh();
+        check(state.timeSignatures.size()==3&&state.timeSignatures[1]==Session::TimeSignatureChange{4,{3,4}}&&state.timeSignatures[2]==Session::TimeSignatureChange{7,{6,8}},
+              "Import Them makes markers from the import's beat: 3/4 at beat 4 and 6/8 at beat 7");
+        session.undo();refresh();
+        check(state.timeSignatures.size()==1,"one undo takes the import and its markers back");
+    }
     session.undo();refresh();check(state.tracks.size()==2,"native import completion groups all musical edits in one undo");
     check(midiOutput.getFile().replaceWithText("preserve existing file"),"prepare stale MIDI export destination");
     exportMidiSelection(importedMidiId,midiOutput.getFile());

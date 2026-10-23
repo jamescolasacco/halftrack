@@ -172,6 +172,30 @@ int runTimeSignatureTests (const juce::File& artifacts)
             f.undo(); check (f.snapshot().timeSignatures.size() == 2, "undo brings it back");
         }
 
+        // A MIDI file's time signatures, imported as markers when asked.
+        {
+            const auto file = root.getChildFile ("meters.mid");
+            {
+                juce::MidiMessageSequence conductor, notes;
+                auto fiveFour = juce::MidiMessage::timeSignatureMetaEvent (5, 4); fiveFour.setTimeStamp (0); conductor.addEvent (fiveFour);
+                auto sevenEight = juce::MidiMessage::timeSignatureMetaEvent (7, 8); sevenEight.setTimeStamp (480 * 5); conductor.addEvent (sevenEight);
+                auto on = juce::MidiMessage::noteOn (1, 64, (juce::uint8) 100); on.setTimeStamp (0); notes.addEvent (on);
+                auto off = juce::MidiMessage::noteOff (1, 64); off.setTimeStamp (480); notes.addEvent (off);
+                juce::MidiFile midi; midi.setTicksPerQuarterNote (480); midi.addTrack (conductor); midi.addTrack (notes);
+                juce::FileOutputStream out (file); check (out.openedOk() && midi.writeTo (out, 1), "write a MIDI file with 5/4 and 7/8");
+            }
+            check (Session::midiFileTimeSignatures (file) == std::vector<Session::TimeSignatureChange> { { 0, { 5, 4 } }, { 5, { 7, 8 } } }, "the file's time signatures read back");
+            Session i (false); std::vector<juce::String> ids;
+            const auto tracksBefore = i.snapshot().tracks.size();
+            ok (i.importMidiFile (file, 0, ids), "import it without its time signatures");
+            check (i.snapshot().timeSignatures.size() == 1 && i.snapshot().timeSignatures[0].meter == Session::TimeSignature {}, "the project keeps its 4/4");
+            i.undo();
+            ok (i.importMidiFile (file, 0, ids, true), "import it with them");
+            check (i.snapshot().timeSignatures == std::vector<Session::TimeSignatureChange> { { 0, { 5, 4 } }, { 5, { 7, 8 } } }, "the first marker takes 5/4 and a 7/8 marker goes in at beat 5");
+            i.undo(); check (i.snapshot().timeSignatures.size() == 1 && i.snapshot().timeSignatures[0].meter == Session::TimeSignature {} && i.snapshot().tracks.size() == tracksBefore,
+                             "one undo takes back the tracks and the markers");
+        }
+
         // A launch on the bar grid in 3/4 waits for beat 3.
         {
             std::unique_ptr<choc::buffer::InterleavedBuffer<float>> buffer; // Outlives the session and its graph readers.

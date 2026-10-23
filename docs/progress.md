@@ -2283,3 +2283,7 @@ Checked in the UI suite ([contract](research/time-signature-contract.md#arrangem
 ## Fragmentary bar commands — 2026-10-23
 
 Engine and UI areas. As the reference's manual describes, Delete Fragmentary Bar Time and Complete Fragmentary Bar fix a bar a marker cuts short. Each deletes or inserts its missing time across the Arrangement, so the marker falls on a bar line; they are offered in the ruler's menu. Insert Silence and Delete Time now move time signature markers too, and Delete Time removes those inside it. Measured in the time-signature suite with a clip moving with the marker, and checked in the UI suite ([contract](research/time-signature-contract.md#fragmentary-bars-and-time-edits)).
+
+## MIDI file time signatures — 2026-10-23
+
+Engine and UI areas. As the reference offers, importing a MIDI file with time signatures asks whether to import them. They become markers from the import's beat, in the import's undo step (`importMidiFile(..., timeSignatures)`, `Session::midiFileTimeSignatures`). Checked in the time-signature and UI suites ([contract](research/time-signature-contract.md#importing-midi-files)).
