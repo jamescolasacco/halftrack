@@ -161,7 +161,7 @@ The reference automates a group's mixer and devices as a track's: its group mixe
 - **Overrides.** Moving an automated group control overrides its lane, as on tracks, until Re-Enable Automation. Automation recording captures group moves through the same keys.
 - **Interface.** In Automation Mode a group's header shows the device and control choosers in place of its fader and pan, and its lane draws the chosen envelope and edits it as a track's: the mixer's Track Volume and Track Panning, its sends named for their returns, and its devices' controls. The envelopes are drawn over the clip overview.
   - The choosers are now one `AutomationChoosers` shared by track and group headers.
-  - A group still has no lanes below it for more envelopes.
+  - The group header's + moves the envelope into a lane below the group's header, as a track's does. The lane draws and edits that envelope, and its header hides it.
 
 Evidence (`tests/GroupTests.cpp`):
 - a group's volume automated at −6 dB plays its track 6 dB down, and reopens playing the same;
@@ -169,4 +169,4 @@ Evidence (`tests/GroupTests.cpp`):
 - the group's pan lane;
 - the group's volume, pan and split pans as mapping targets, and an unknown group's refused.
 
-The automation-capture suite records a group's pan and send through the synthetic device. The UI suite checks a nested group's choosers in Automation Mode, a double-click adding a breakpoint to its volume, and undo.
+The automation-capture suite records a group's pan and send through the synthetic device. The UI suite checks a nested group's choosers in Automation Mode, a double-click adding a breakpoint to its volume, and undo. It also checks the + opening a lane under the group's header, a breakpoint added in it, and hiding it.

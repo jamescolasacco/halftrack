@@ -2291,3 +2291,7 @@ Engine and UI areas. As the reference offers, importing a MIDI file with time si
 ## Returns reorder by drag — 2026-10-23
 
 Engine and UI areas. As the reference's drop rules keep returns and other tracks apart, a return's Arrangement header drags among the returns only, before a return or after the last. Other tracks stay before the first return. `Session::moveTracks` takes returns for that and refuses mixing them. Checked in the groups and UI suites ([contract](research/groups-contract.md#moving-tracks-2026-10-23)).
+
+## Group automation lanes — 2026-10-23
+
+UI area. In Automation Mode a group header's + moves its envelope into a lane below the header, as a track's does. The lane draws and edits it, and its header hides it. Checked in the UI suite ([contract](research/groups-contract.md#group-automation-and-mapping-2026-10-23)).

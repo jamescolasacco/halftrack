@@ -1405,8 +1405,13 @@ private:
             // inside it, nested groups' headers too.
             if (item.group)
             {
-                const bool hidden = anyFolded (state.groups[(size_t) item.index].parentId);
+                const auto& group = state.groups[(size_t) item.index];
+                const bool hidden = anyFolded (group.parentId);
                 lanes.push_back ({ true, item.index, y, hidden ? 0 : groupHeight }); y += hidden ? 0 : groupHeight;
+                // A group's automation lanes, below its header, as a track's below it.
+                if (automationMode && ! hidden)
+                    if (const auto found = automationLanes.find (group.id); found != automationLanes.end())
+                        for (int k = 0; k < found->second.size(); ++k) { lanes.push_back ({ true, item.index, y, automationLaneHeight, k }); y += automationLaneHeight; }
                 continue;
             }
             const int t = item.index;
@@ -2532,6 +2537,14 @@ private:
                 split->onDragEnd = [this] { owner.session.endEditGesture(); };
                 split->onValueChange = [this, split, right] { owner.report (owner.session.setGroupSplitPan (groupId, right, (float) split->getValue())); };
             }
+            if (! columnLayout)
+            {
+                // Automation Mode's button that moves the envelope into a lane below the group.
+                addChildComponent (automationLane); automationLane.setName ("Show automation in lane");
+                automationLane.setTooltip ("Move this envelope into its own lane below the group");
+                automationLane.setWantsKeyboardFocus (false);
+                automationLane.onClick = [this] { owner.addAutomationLane (groupId, choosers.shownKey); };
+            }
             if (columnLayout)
             {
                 // Session mixer strip: the grid column header names and folds the group.
@@ -2574,9 +2587,9 @@ private:
             {
                 // In Automation Mode the choosers take the mixer's line, as on tracks.
                 const bool automating = owner.automationMode;
-                choosers.setVisible (automating); gain.setVisible (! automating);
+                choosers.setVisible (automating); automationLane.setVisible (automating); gain.setVisible (! automating);
                 mixerShown = ! automating;
-                if (automating) choosers.sync (Impl::automationView (*g));
+                if (automating) automationLane.setEnabled (choosers.sync (Impl::automationView (*g)));
             }
             pan.setVisible (mixerShown && ! splitPan); leftSplit.setVisible (mixerShown && splitPan); rightSplit.setVisible (mixerShown && splitPan);
             repaint();
@@ -2633,7 +2646,8 @@ private:
             fold.setBounds (2, 2, 18, 18); name.setBounds (20, 1, w - 80, 20);
             activator.setBounds (w - 56, 2, 26, 18); solo.setBounds (w - 28, 2, 26, 18);
             gain.setBounds (24, 21, (w - 30) / 2 + 10, 17); pan.setBounds (24 + (w - 30) / 2 + 14, 21, w - 38 - (w - 30) / 2 - 10, 17);
-            choosers.device.setBounds (gain.getBounds()); choosers.control.setBounds (pan.getBounds());
+            choosers.device.setBounds (gain.getBounds()); choosers.control.setBounds (pan.getBounds().withTrimmedRight (26));
+            automationLane.setBounds (pan.getRight() - 24, pan.getY(), 24, pan.getHeight());
             const int pans = w - 38 - (w - 30) / 2 - 10, x = 24 + (w - 30) / 2 + 14;
             leftSplit.setBounds (x, 21, pans / 2 - 1, 17); rightSplit.setBounds (x + pans / 2 + 1, 21, pans - pans / 2 - 1, 17);
         }
@@ -2703,6 +2717,7 @@ private:
         bool splitPan = false, dragArmed = false, headerDrag = false;
         std::vector<std::unique_ptr<juce::Slider>> sends;
         juce::StringArray sendReturnIds;
+        juce::TextButton automationLane { "+" };
         AutomationChoosers choosers { owner, *this };
         ChildMouseEvents childMouse { *this };
     };
@@ -2815,10 +2830,12 @@ private:
                 if (lane.automation >= 0)
                 {
                     if (count >= laneHeaders.size()) { laneHeaders.push_back (std::make_unique<AutomationLaneHeader> (owner)); addAndMakeVisible (*laneHeaders.back()); layout = true; }
-                    const auto& track = owner.state.tracks[(size_t) lane.index];
-                    const auto key = owner.automationLanes[track.id][lane.automation];
-                    const auto target = owner.automationTarget (track.id, key);
-                    laneHeaders[count]->set (track.id, lane.automation, target ? target->device + ": " + target->control : juce::String ("Unavailable"), track.colour);
+                    // A track's lane, or a group's.
+                    const auto& id = lane.group ? owner.state.groups[(size_t) lane.index].id : owner.state.tracks[(size_t) lane.index].id;
+                    const auto colour = lane.group ? owner.state.groups[(size_t) lane.index].colour : owner.state.tracks[(size_t) lane.index].colour;
+                    const auto key = owner.automationLanes[id][lane.automation];
+                    const auto target = owner.automationTarget (id, key);
+                    laneHeaders[count]->set (id, lane.automation, target ? target->device + ": " + target->control : juce::String ("Unavailable"), colour);
                     ++count;
                 }
             if (laneHeaders.size() != count) { laneHeaders.resize (count); layout = true; }
@@ -2845,11 +2862,17 @@ private:
         bool envelopeAt (int y, juce::String& trackId, juce::String& key, juce::Rectangle<float>& area) const
         {
             const auto* lane = owner.laneAt (y);
-            // A group's lane shows its own envelope.
-            if (lane != nullptr && lane->group && lane->automation < 0 && juce::isPositiveAndBelow (lane->index, (int) owner.state.groups.size()))
+            // A group's lane shows its own envelope, and the lanes below it more.
+            if (lane != nullptr && lane->group && juce::isPositiveAndBelow (lane->index, (int) owner.state.groups.size()))
             {
                 const auto& group = owner.state.groups[(size_t) lane->index];
-                key = owner.shownKey (Impl::automationView (group));
+                if (lane->automation >= 0)
+                {
+                    const auto found = owner.automationLanes.find (group.id);
+                    if (found == owner.automationLanes.end() || lane->automation >= found->second.size()) return false;
+                    key = found->second[lane->automation];
+                }
+                else key = owner.shownKey (Impl::automationView (group));
                 if (key == "none") return false;
                 trackId = group.id;
                 area = { 0.0f, (float) lane->y + 5, (float) timelineWidth(), (float) juce::jmax (4, lane->height - 10) };
@@ -16687,6 +16710,23 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 refresh();
                 const auto lane = groupInfo (inner)->volumeAutomation;
                 check (lane.points.size() == 1 && std::abs (lane.points[0].beat - 4) < .26 && lane.points[0].value > 0, "double-clicking the group's lane adds a breakpoint to its volume");
+                // The group's + moves the envelope into a lane below the group, as a track's does.
+                auto* laneButton = dynamic_cast<juce::Button*> (findNamed (*header, "Show automation in lane"));
+                check (laneButton != nullptr && laneButton->isVisible() && laneButton->isEnabled(), "the group's header has the lane button");
+                laneButton->onClick(); refresh();
+                const Lane* below = nullptr;
+                for (const auto& l : lanes) if (l.group && l.automation == 0 && state.groups[(size_t) l.index].id == inner) below = &l;
+                check (automationLanes[inner].size() == 1 && below != nullptr && below->height == automationLaneHeight && below->y == groupLane (inner).y + groupLane (inner).height
+                           && shownKey (automationView (*groupInfo (inner))) == "none",
+                       "it opens a lane under the group's header, and the group's own lane shows no envelope");
+                const auto inLane = juce::Point<float> ((float) ((secondsAt (6) - viewStart) * pixelsPerSecond), (float) below->y + below->height - 8);
+                canvas.mouseDoubleClick (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), inLane, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                                           &canvas, &canvas, when, inLane, when, 2, false));
+                refresh();
+                check (groupInfo (inner)->volumeAutomation.points.size() == 2, "double-clicking in that lane adds a breakpoint to the group's volume there");
+                removeAutomationLane (inner, 0); refresh();
+                check (automationLanes[inner].isEmpty(), "hiding the lane removes it");
+                session.undo(); refresh();
                 session.undo(); setAutomationMode (false); refresh();
                 check (groupInfo (inner)->volumeAutomation.points.empty() && findNamed (*header, "Group volume")->isVisible(), "one undo removes it, and the fader returns with the mode off");
             }
