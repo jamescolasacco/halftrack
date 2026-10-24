@@ -2524,3 +2524,7 @@ UI area. The note editor now takes clicks as the reference's does: a click place
 
 UI area. Draw Mode now draws in automation envelopes, clip envelopes and the velocity and Chance lanes, as the reference's manual describes. Envelopes take steps as wide as the grid, or freehand breakpoints with Cmd (Alt elsewhere) or snapping off, keeping their shape beside the drawing (`arrangementAutomation::Drawing`). Velocities are set for the notes in each grid step passed, or along a straight line with Option. Each drag is one undo step ([automation contract](research/arrangement-automation-contract.md#draw-mode-2026-10-24), [note drawing contract](research/note-drawing-contract.md)). Checked in the UI suite.
 
+## Velocity and copy drags on notes — 2026-10-24
+
+UI area. As the reference's manual describes, Cmd held at the press (Alt elsewhere) makes a vertical drag on a note change the selected notes' velocity, one step a pixel, and Option (Ctrl elsewhere) drags copies, leaving the notes where they were ([contract](research/note-drawing-contract.md)). Checked in the UI suite.
+

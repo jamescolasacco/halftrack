@@ -1291,6 +1291,15 @@ private:
        #endif
     }
     bool snaps (juce::ModifierKeys mods) const { return editGrid.snap != bypassesGrid (mods); }
+    // Option (Mac) or Ctrl (elsewhere) held at the press drags copies, as the reference's does.
+    static bool copiesOnDrag (juce::ModifierKeys mods)
+    {
+       #if JUCE_MAC
+        return mods.isAltDown();
+       #else
+        return mods.isCtrlDown();
+       #endif
+    }
    #if JUCE_MAC
     static constexpr int bypassModifier = juce::ModifierKeys::commandModifier;
    #else
@@ -7065,7 +7074,7 @@ private:
             }
             if (! gridBounds().contains (e.getPosition())) return;
             grabKeyboardFocus();
-            endGesture(); originalNotes.clear(); drawing = false; marquee = false; erasing = false;
+            endGesture(); originalNotes.clear(); drawing = false; marquee = false; erasing = false; velocityDrag = copyDrag = false;
             // As in the reference: in Draw Mode a click on a note deletes it and a drag elsewhere draws
             // notes (drawNotes); without it, a double-click adds a note (addNote) or deletes one.
             const bool plain = ! e.mods.isPopupMenu() && ! e.mods.isShiftDown();
@@ -7107,7 +7116,11 @@ private:
                     selectedNoteId = note.id; original = note; originalNotes = selectedNotes();
                     previewDelta = 0; if (! e.mods.isPopupMenu()) sound ({ { note.pitch, note.velocity } });
                     dragOrigin = e.position; dragClipId = clip->id;
-                    resizeNote = e.x >= noteBounds (note).getRight() - 8;
+                    // As in the reference, Cmd (Alt elsewhere) held at the press makes a vertical drag change
+                    // the selected notes' velocity, and Option (Ctrl elsewhere) drags copies of them.
+                    velocityDrag = bypassesGrid (e.mods) && ! e.mods.isShiftDown() && ! e.mods.isPopupMenu();
+                    copyDrag = ! velocityDrag && copiesOnDrag (e.mods) && ! e.mods.isPopupMenu(); copied = false;
+                    resizeNote = ! velocityDrag && e.x >= noteBounds (note).getRight() - 8;
                     if (e.mods.isPopupMenu()) { showNoteMenu(); return; }
                     sync(); return;
                 }
@@ -7171,7 +7184,26 @@ private:
                 sync(); return;
             }
             if (originalNotes.empty() || selectedNoteIds.empty()) return;
-            if (! gesture) { owner.session.beginEditGesture (resizeNote ? "Resize MIDI notes" : "Move MIDI notes"); gesture = true; }
+            if (velocityDrag)
+            {
+                // One velocity step a pixel, the same change for every selected note.
+                if (! gesture) { owner.session.beginEditGesture ("Note velocity"); gesture = true; }
+                const auto steps = juce::roundToInt (dragOrigin.y - e.position.y);
+                auto notes = originalNotes;
+                for (auto& note : notes) note.velocity = (float) juce::jlimit (1, 127, juce::roundToInt (note.velocity * 127.0f) + steps) / 127.0f;
+                updateNotes (dragClipId, notes, "Note velocity");
+                return;
+            }
+            if (! gesture) { owner.session.beginEditGesture (copyDrag ? "Copy MIDI notes" : resizeNote ? "Resize MIDI notes" : "Move MIDI notes"); gesture = true; }
+            if (copyDrag && ! copied)
+            {
+                // The copies stay where the notes were, and the selected notes move on.
+                copied = true;
+                auto copies = originalNotes;
+                for (auto& note : copies) note.id.clear();
+                juce::StringArray inserted;
+                owner.report (owner.session.addMidiNotes (dragClipId, copies, inserted));
+            }
             double beatDelta = (e.x - dragOrigin.x) / pixelsPerBeat;
             if (resizeNote)
             {
@@ -7814,7 +7846,7 @@ private:
         double viewBeat = 0, pixelsPerBeat = 60, insertionBeat = 0;
         int topPitch = 77;
         float drawVelocity = 0.8f;
-        bool gesture = false, resizeNote = false, drawing = false, marquee = false, erasing = false, pitchLocked = false;
+        bool gesture = false, resizeNote = false, drawing = false, marquee = false, erasing = false, pitchLocked = false, velocityDrag = false, copyDrag = false, copied = false;
         // Draw Mode's notes in the drag under way, by grid step: the note's id and pitch.
         std::map<int, std::pair<juce::String, int>> drawn;
         int drawFirstStep = 0, drawLastStep = 0, drawPitch = 60;
@@ -15100,6 +15132,31 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (notes().empty(), "a double-click on a note deletes it");
         pianoRoll.keyPressed (undo);
         check (only (noteId), "one undo brings it back");
+        {
+            // Cmd (Alt elsewhere) held at the press makes a vertical drag change the velocity; Option (Ctrl elsewhere) drags a copy.
+            click (point (1.4, 64));
+            const auto velocityBefore = juce::roundToInt (notes().front().velocity * 127);
+            const auto at = point (1.4, 64), up = at.translated (0, -20);
+            pianoRoll.mouseDown (event (at, at, false, 1, bypassModifier)); pianoRoll.mouseDrag (event (up, at, true, 1, bypassModifier)); pianoRoll.mouseUp (event (up, at, true, 1, bypassModifier));
+            check (only (noteId) && juce::roundToInt (notes().front().velocity * 127) == juce::jmin (127, velocityBefore + 20) && notes().front().startBeat == 1.25 && notes().front().pitch == 64,
+                   "Cmd-dragging a note up 20 pixels raises its velocity by 20 steps, without moving it");
+            pianoRoll.keyPressed (undo);
+            check (juce::roundToInt (notes().front().velocity * 127) == velocityBefore, "one undo restores the velocity");
+           #if JUCE_MAC
+            const int copyModifier = juce::ModifierKeys::altModifier;
+           #else
+            const int copyModifier = juce::ModifierKeys::ctrlModifier;
+           #endif
+            const auto later = at.translated ((float) (4 * beatWidth), 0);
+            pianoRoll.mouseDown (event (at, at, false, 1, copyModifier)); pianoRoll.mouseDrag (event (later, at, true, 1, copyModifier)); pianoRoll.mouseUp (event (later, at, true, 1, copyModifier));
+            const auto copiedNotes = notes();
+            check (copiedNotes.size() == 2 && std::any_of (copiedNotes.begin(), copiedNotes.end(), [] (const auto& n) { return n.startBeat == 1.25 && n.pitch == 64; })
+                       && std::any_of (copiedNotes.begin(), copiedNotes.end(), [] (const auto& n) { return n.startBeat == 5.25 && n.pitch == 64 && n.lengthBeats == 2; }),
+                   "Option-dragging a note four beats on leaves it in place and puts a copy there");
+            pianoRoll.keyPressed (undo);
+            check (only (noteId) && notes().front().startBeat == 1.25, "one undo takes the copy back");
+            pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+        }
         // Draw Mode, from its key B: a drag draws a note on each grid step at the pointer's pitch.
         check (! drawMode && handleKey (juce::KeyPress ('b')) && drawMode && drawButton.getToggleState(), "B turns Draw Mode on and lights the control bar's pencil");
         const auto drawDrag = [&] (std::vector<juce::Point<float>> path, int modifiers = 0)
