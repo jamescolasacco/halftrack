@@ -2345,3 +2345,7 @@ UI area. U folds or unfolds a selected group, in the Session view as well as the
 ## Plug-in editor moves — 2026-10-23
 
 Engine area. A parameter moved in a plug-in's own editor now overrides its automation lane, or records it with Automation Arm on while recording, as Halftrack's own controls do. The engine reports editor changes asynchronously on the message thread. Halftrack listens to every hosted parameter, counts a change inside the editor's gesture as a move, and takes the hosted value at the gesture's end so the last move is kept. Changes outside a gesture, which editors send when opening, never override. Checked in the plug-in automation suite, through the synthetic device for recording ([contract](research/plugin-automation-contract.md)).
+
+## Device controls show their automation — 2026-10-23
+
+UI area (the native device editor). A native device's controls now show their automation as the mixer's faders do: red while following a lane, grey while overridden, with the faders' tooltips. Before, a device control looked the same with or without automation. The editor also takes one snapshot per refresh instead of three. Checked in the native effects suite ([contract](research/automation-capture-contract.md)).

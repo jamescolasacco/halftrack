@@ -253,14 +253,17 @@ public:
     }
     void synchronise()
     {
-        auto value = settings(); const bool enabled = value.has_value() && ! session.isExporting();
+        const auto snapshot = session.snapshot();
+        const auto where = racks::locate (snapshot, pluginId);
+        std::optional<Session::EffectSettings> value;
+        if (where.device != nullptr && where.device->isNativeEffect) value = where.device->effect;
+        const bool enabled = value.has_value() && ! session.isExporting();
         const auto specs = effectParameters (kind);
         // A control a rack's macro drives shows the macro's value and cannot be edited directly.
         std::array<bool, maximumControls> mapped {};
         if (value)
         {
-            const auto snapshot = session.snapshot();
-            if (const auto where = racks::locate (snapshot, pluginId); where.rack != nullptr)
+            if (where.rack != nullptr)
                 for (size_t i = 0; i < specs.size(); ++i)
                     if (const auto driven = racks::macroValue (*where.rack, pluginId, (int) i))
                     {
@@ -269,10 +272,27 @@ public:
                         sliders[i].setTooltip (tip); choices[i].setTooltip (tip);
                     }
         }
+        // A control's automation shows as the mixer's faders show theirs: red while it follows its lane,
+        // grey while overridden.
+        std::array<const Session::AutomationLane*, maximumControls> lanes {};
+        if (where.device != nullptr)
+            for (const auto& a : where.device->automation)
+                if (juce::isPositiveAndBelow (a.parameter, (int) specs.size()) && ! a.lane.points.empty()) lanes[(size_t) a.parameter] = &a.lane;
         for (size_t i = 0; i < specs.size(); ++i)
         {
             sliders[i].setEnabled (enabled && ! mapped[i]); choices[i].setEnabled (enabled && ! mapped[i]);
-            if (! mapped[i]) { sliders[i].setTooltip ({}); choices[i].setTooltip ({}); }
+            if (! mapped[i])
+            {
+                const auto tip = lanes[i] == nullptr ? juce::String()
+                               : lanes[i]->enabled ? juce::String (specs[i].label) + " follows its automation. Moving it overrides the automation until Re-Enable Automation."
+                                                   : juce::String (specs[i].label) + " automation is overridden. Re-Enable Automation (beside the transport) to follow it again.";
+                sliders[i].setTooltip (tip); choices[i].setTooltip (tip);
+            }
+            for (const auto id : { juce::Slider::thumbColourId, juce::Slider::rotarySliderFillColourId })
+            {
+                if (lanes[i] == nullptr) sliders[i].removeColour (id);
+                else sliders[i].setColour (id, themes::colour (lanes[i]->enabled ? 0xffed5249 : 0xff969696));
+            }
             if (value) { sliders[i].setValue (value->values[i], juce::dontSendNotification); choices[i].setSelectedId ((int)value->values[i]+1, juce::dontSendNotification); }
         }
         if (value && kind == Session::EffectKind::equalizer)
@@ -609,6 +629,20 @@ int runNativeEffectEditorTests (const juce::File& root)
             };
             check (device().effect.values[index] == specs[index].maximum, "control changes actual engine value");
             s.undo(); check (device().effect == info.effect, "one undo restores full gesture"); s.redo();
+            if (kind == Session::EffectKind::channelEq)
+            {
+                // A control's automation shows on it, as the faders' does: red following, grey overridden.
+                auto& view = dynamic_cast<NativeEffectEditor&> (*editor);
+                const auto normal = slider->findColour (juce::Slider::thumbColourId);
+                const Session::AutomationLane lane { true, { { 0, specs[index].minimum }, { 4, specs[index].maximum } } };
+                check (s.setDeviceAutomation (info.id, (int) index, lane).wasOk(), "automate the control"); view.synchronise();
+                check (slider->findColour (juce::Slider::thumbColourId) == themes::colour (0xffed5249) && slider->getTooltip().contains ("follows its automation"), "it shows red, following its lane");
+                auto off = lane; off.enabled = false;
+                check (s.setDeviceAutomation (info.id, (int) index, off).wasOk(), "override the lane"); view.synchronise();
+                check (slider->findColour (juce::Slider::thumbColourId) == themes::colour (0xff969696) && slider->getTooltip().contains ("overridden"), "grey, overridden");
+                check (s.setDeviceAutomation (info.id, (int) index, {}).wasOk(), "clear the lane"); view.synchronise();
+                check (slider->findColour (juce::Slider::thumbColourId) == normal && slider->getTooltip().isEmpty(), "and its own look again without automation");
+            }
         }
         const auto image = editor->createComponentSnapshot (editor->getLocalBounds()); const auto file = root.getChildFile ("effect-editor-"+juce::String(type)+".png");
         juce::FileOutputStream output (file); juce::PNGImageFormat png; check (png.writeImageToStream (image, output), "write original editor snapshot");

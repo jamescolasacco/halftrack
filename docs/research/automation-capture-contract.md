@@ -43,6 +43,7 @@ The playhead is the transport position on the message thread.
 
 - **Control bar.** Automation Arm (an envelope icon, red when on) and Re-Enable Automation (a returning arrow, orange when anything is overridden) sit after Record.
 - **Faders.** Mixer and master faders stay live with automation. Their thumb is red while following a lane and grey while overridden, and the tooltip says which.
+- **Device controls.** A native device's knobs and sliders show their lanes the same way: red while following, grey while overridden, with the same tooltips. The effects suite checks a Channel EQ control through following, overridden and cleared.
 
 ## Evidence
 
@@ -68,5 +69,4 @@ The UI suite checks the live faders, their thumb colours, the override, Re-Enabl
 - Recording into Session clips (the reference records Session automation as clip envelopes).
 - Utility controls. (Third-party plug-ins' parameters are captured and overridden from their own editors as well as Halftrack's controls; see the [plug-in automation contract](plugin-automation-contract.md).)
 - Per-control Re-Enable Automation from a context menu.
-- Greying overridden device knobs.
 - Measured comparison with the reference's recorded point density.
