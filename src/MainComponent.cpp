@@ -10569,7 +10569,9 @@ private:
             if (selection && state.scenes.size() < 256) item (arrangementConsolidateScene, "Consolidate Time to New Scene");
             if (single != nullptr && single->isMidi) item (arrangementExportMidi, "Export MIDI Clip...");
             if (const auto lanes = emptyMidiLanes(); ! lanes.isEmpty()) item (arrangementInsertMidi, lanes.size() > 1 ? "Insert MIDI Clips" : "Insert MIDI Clip");
+           #if JUCE_MAC
             if (clicked != nullptr && clicked->videoFile != juce::File()) item (arrangementVideo, "Video Window", video::supported(), videoWindow != nullptr && videoWindow->isVisible());
+           #endif
             // The sample's file: Halftrack's browser has no Show in Browser yet.
             if (single != nullptr && single->isAudio && single->file.existsAsFile())
             { separator(); item (arrangementReveal, "Reveal in Finder"); item (arrangementSimilar, "Show Similar Files", browserFolder != juce::File()); }
