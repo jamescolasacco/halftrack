@@ -2051,7 +2051,7 @@ private:
     class BrowserCategories final : public juce::Component
     {
     public:
-        explicit BrowserCategories (Impl& o) : owner (o) { setName ("Browser categories"); }
+        explicit BrowserCategories (Impl& o) : owner (o) { setName ("Browser categories"); setWantsKeyboardFocus (true); }
         int contentHeight() const { return placeBounds (placeRows()).getBottom() + 6; }
         void paint (juce::Graphics& g) override
         {
@@ -2089,11 +2089,45 @@ private:
             for (int place = 0; place < owner.placeCount(); ++place)
                 drawRow (placeBounds (place + 1), owner.placeName (place), owner.browserCategory == BrowserCategory::place && owner.browserPlace == place, owner.placeAvailable (place));
             drawRow (placeBounds (placeRows()), "Add Folder...", false, true);
+            // With the keyboard here, the shown row is outlined.
+            if (hasKeyboardFocus (false))
+                if (const auto current = currentRow(); current >= 0)
+                { g.setColour (orange.withAlpha (0.8f)); g.drawRect (rowArea (rows()[(size_t) current]), 1); }
             g.setColour (line); g.drawVerticalLine (getWidth() - 1, 0.0f, (float) getHeight());
+        }
+        // Up and Down show the row above or below, as the reference's sidebar does; Right and Return
+        // move to the list beside it.
+        bool keyPressed (const juce::KeyPress& key) override
+        {
+            if (key.getModifiers().isAnyModifierKeyDown()) return false;
+            const auto code = key.getKeyCode();
+            if (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) { step (code == juce::KeyPress::downKey ? 1 : -1); return true; }
+            if (code == juce::KeyPress::rightKey || code == juce::KeyPress::returnKey) { owner.focusBrowserList(); return true; }
+            return false;
+        }
+        void focusGained (FocusChangeType) override { repaint(); }
+        void focusLost (FocusChangeType) override { repaint(); }
+        void step (int by)
+        {
+            const auto all = rows();
+            int next = currentRow();
+            do next += by;
+            while (juce::isPositiveAndBelow (next, (int) all.size()) && all[(size_t) next].kind == Row::place && ! owner.placeAvailable (all[(size_t) next].index));
+            if (! juce::isPositiveAndBelow (next, (int) all.size())) return;
+            const auto row = all[(size_t) next];
+            if (row.kind == Row::place) owner.showPlace (row.index);
+            else
+            {
+                owner.leavePlace();
+                if (row.kind == Row::collection) owner.showBrowserCollection (row.index);
+                else owner.setBrowserCategory (row.kind == Row::category ? entries[(size_t) row.index].first : BrowserCategory::packs);
+            }
+            repaint();
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
             const auto at = e.getPosition();
+            if (isShowing()) grabKeyboardFocus(); // The arrows then move through the rows.
             for (int i = 0; i < Collections::count; ++i) if (collectionBounds (i).contains (at)) { owner.leavePlace(); owner.showBrowserCollection (i); return; }
             for (int i = 0; i < (int) entries.size(); ++i) if (rowBounds (i).contains (at)) { owner.leavePlace(); owner.setBrowserCategory (entries[(size_t) i].first); return; }
             if (placeBounds (0).contains (at)) { owner.leavePlace(); owner.setBrowserCategory (BrowserCategory::packs); return; }
@@ -2111,6 +2145,35 @@ private:
         juce::Point<int> placePoint (int place) const { return placeBounds (place + 1).getCentre(); }
         juce::Point<int> addFolderPoint() const { return placeBounds (placeRows()).getCentre(); }
     private:
+        // The rows the arrows move through, in order; Add Folder is left to clicks.
+        struct Row { enum Kind { collection, category, packs, place } kind; int index; };
+        std::vector<Row> rows() const
+        {
+            std::vector<Row> all;
+            for (int i = 0; i < Collections::count; ++i) all.push_back ({ Row::collection, i });
+            for (int i = 0; i < (int) entries.size(); ++i) all.push_back ({ Row::category, i });
+            all.push_back ({ Row::packs, 0 });
+            for (int p = 0; p < owner.placeCount(); ++p) all.push_back ({ Row::place, p });
+            return all;
+        }
+        int currentRow() const
+        {
+            const auto all = rows();
+            for (int i = 0; i < (int) all.size(); ++i)
+            {
+                const auto& r = all[(size_t) i];
+                if ((r.kind == Row::collection && owner.browserCategory == BrowserCategory::collection && owner.browserCollection == r.index)
+                    || (r.kind == Row::category && owner.browserCategory == entries[(size_t) r.index].first)
+                    || (r.kind == Row::packs && owner.browserCategory == BrowserCategory::packs)
+                    || (r.kind == Row::place && owner.browserCategory == BrowserCategory::place && owner.browserPlace == r.index)) return i;
+            }
+            return -1;
+        }
+        juce::Rectangle<int> rowArea (const Row& r) const
+        {
+            return r.kind == Row::collection ? collectionBounds (r.index) : r.kind == Row::category ? rowBounds (r.index)
+                 : r.kind == Row::packs ? placeBounds (0) : placeBounds (r.index + 1);
+        }
         static constexpr int headerHeight = 20, rowHeight = 22;
         int categoriesTop() const { return headerHeight + Collections::count * rowHeight + 6 + headerHeight; }
         int placesTop() const { return categoriesTop() + (int) entries.size() * rowHeight + 6 + headerHeight; }
@@ -10614,7 +10677,8 @@ private:
         return std::nullopt;
     }
     // The reference's other browser keys: Right opens the selected folder or previews the selected
-    // file, Left goes up a folder, and 0 takes the selected item out of every collection.
+    // file, Left closes a folder or moves out to the sidebar, and 0 takes the selected item out of
+    // every collection.
     bool browserListKey (const juce::KeyPress& key)
     {
         const auto code = key.getKeyCode();
@@ -10655,7 +10719,9 @@ private:
                     return true;
                 }
             }
-            upButton.onClick(); return true;
+            // At the top, Left moves to the sidebar, as the reference's does.
+            if (browserCategories.isShowing()) browserCategories.grabKeyboardFocus();
+            return true;
         }
         return false;
     }
@@ -15802,6 +15868,12 @@ private:
         add (allBrowserItems, 0);
         return rows;
     }
+    // From the sidebar into the list beside it, its first row selected when none is.
+    void focusBrowserList()
+    {
+        if (browserList.isShowing()) browserList.grabKeyboardFocus();
+        if (browserList.getSelectedRow() < 0 && getNumRows() > 0) browserList.selectRow (0);
+    }
     // Opening a folder closes the others outside it unless Cmd is held, as the reference's do.
     void openBrowserFolder (const juce::File& folder, bool keepOthers)
     {
@@ -17182,7 +17254,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (! openFolders.contains (fills) && openFolders.contains (drums), "a double-click closes an open folder");
             browserFolder = drums; updateBrowser(); settle();
             browserList.selectRow (rowOf (drums.getChildFile ("Kick.wav")));
-            check (browserListKey (left) && browserFolder == library && openFolders.contains (drums), "at the top, Left goes up a folder, showing the one left open in it");
+            check (browserListKey (left) && browserFolder == drums, "at the top, Left moves out to the sidebar rather than up a folder");
+            upButton.onClick();
+            check (browserFolder == library && openFolders.contains (drums), "Up goes up a folder, showing the one left open in it");
             settle();
             check (rowOf (drums.getChildFile ("Kick.wav")) > rowOf (drums), "with its items under it");
             closeBrowserFolder (drums); settle();
@@ -17426,6 +17500,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (handleKey (juce::KeyPress (']', cmd, 0)) && browserCategory == BrowserCategory::audioEffects, "Cmd+] goes forward again");
         setBrowserCategory (BrowserCategory::plugins);
         check (! canBrowseForward() && ! browseForward.isEnabled(), "a new category drops the states ahead");
+        // The sidebar's arrows, as the reference's: Up and Down show the row above or below.
+        check (browserCategories.keyPressed (juce::KeyPress (juce::KeyPress::downKey)) && browserCategory == BrowserCategory::samples, "Down in the sidebar shows the row below");
+        check (browserCategories.keyPressed (juce::KeyPress (juce::KeyPress::upKey)) && browserCategories.keyPressed (juce::KeyPress (juce::KeyPress::upKey))
+                   && browserCategory == BrowserCategory::midiEffects, "and Up the rows above");
+        setBrowserCategory (BrowserCategory::grooves);
+        browserCategories.keyPressed (juce::KeyPress (juce::KeyPress::downKey)); browserCategories.keyPressed (juce::KeyPress (juce::KeyPress::downKey));
+        check (browserCategory == BrowserCategory::packs, "they run on from the Library into Places");
+        browserList.deselectAllRows();
+        check (browserCategories.keyPressed (juce::KeyPress (juce::KeyPress::rightKey)) && (getNumRows() == 0 || browserList.getSelectedRow() == 0), "Right moves to the list, its first row selected");
         browserSearch.setText ({}, juce::sendNotificationSync);
         setBrowserCategory (category); showBrowser = browserWas; resized();
     }

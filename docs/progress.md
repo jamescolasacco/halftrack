@@ -2669,3 +2669,7 @@ UI area. The file lists in Samples and the places now unfold folders in place, a
 ## Browser history — 2026-10-24
 
 UI area. The browser gains the reference's Browse Back and Browse Forward arrows left of its search bar, with Cmd+[ and Cmd+]: the categories, places, folders and searches shown join a history as the browser leaves or settles on them, and stepping through it restores them ([contract](research/browser-places-contract.md#history-2026-10-24)). Checked in the UI suite.
+
+## The browser sidebar's keys — 2026-10-24
+
+UI area. The sidebar takes the keyboard, as the reference's does: a click focuses it, Up and Down show the row above or below through the collections, the Library and Places, and Right or Return move to the list. In the list, Left at the top now moves out to the sidebar instead of up a folder; the Up button still goes up in Samples ([contract](research/browser-places-contract.md#the-folder-tree-2026-10-24)). Checked in the UI suite through the keys' handlers.

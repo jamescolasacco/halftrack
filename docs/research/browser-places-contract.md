@@ -30,7 +30,7 @@ Status: partial. This follows the reference's manual and static menu research. N
 
 The reference's manual: Pack folders "can be unfolded to reveal the included Pack contents", and Left and Right "close and open folders"; holding Cmd while opening a folder keeps the others open, which otherwise close ([Working with the Browser](https://www.ableton.com/en/live-manual/12/working-with-the-browser/), sections 4.7.1 and 4.8, consulted 2026-10-24). Halftrack's file lists, in Samples and the places, do the same:
 - **Opening.** A folder opens in place, its items listed under it, indented, with a triangle showing whether it is open. A click on the triangle, a double-click, Return or Right opens it. Opening a folder closes the others outside it, unless Cmd is held. Each open folder is read on a worker of its own, as the listed folder is.
-- **Keys.** Right on an open folder goes to its first item, and on a sound previews it. Left closes an open folder, and on an item goes to the folder holding it. At the top, Left goes up a folder in Samples, the folder left showing open in its parent, and no higher than a place.
+- **Keys.** Right on an open folder goes to its first item, and on a sound previews it. Left closes an open folder, and on an item goes to the folder holding it. At the top, Left moves out to the sidebar, as the manual's arrows "move between the sidebar and content pane": there Up and Down show the row above or below, through the collections, the Library and Places (Add Folder left to clicks, a missing User Library skipped), and Right or Return move back to the list, its first row selected. The Up button goes up a folder in Samples, the folder left showing open in its parent.
 - **Search.** Results are a flat list, as before. Opening a folder found by a search clears it and shows the folder open in the tree.
 - **Show in Browser.** The folders down to the file open, with the file selected.
 
@@ -54,7 +54,8 @@ See [open questions](../open-questions.md) for the defaults taken where the manu
 
 The UI suite checks:
 - Browse Back left of the search bar, offered after moving about; Back returning to a search, Cmd+[ going back before it and to an earlier category, Cmd+] going forward, and a new category dropping the states ahead;
-- the folder tree: Right opening a folder in place with its items indented under it, Right going into it, Left going back and closing it, opening another closing the first unless Cmd is held, a double-click closing a folder, and Left at the top going up a folder with the one left showing open;
+- the folder tree: Right opening a folder in place with its items indented under it, Right going into it, Left going back and closing it, opening another closing the first unless Cmd is held, a double-click closing a folder, Left at the top moving out rather than up, and Up going up a folder with the one left showing open;
+- the sidebar's Down and Up showing the rows below and above, running on from the Library into Places, and Right moving to the list with its first row selected;
 - the sidebar's order: Packs, the User Library, the Current Project, then Add Folder, after the Library;
 - the User Library listing its folders without Choose Folder, a folder in it opening in place, Left going to it, closing it and going no higher than the place, and Samples returning to its own folder afterwards;
 - that the File menu offers Add Folder to Browser after Install Pack;
