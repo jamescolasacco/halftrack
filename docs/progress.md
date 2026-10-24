@@ -2681,3 +2681,7 @@ UI area. As the reference's Full Height Browser is off by default (its song pref
 ## Hot-Swap — 2026-10-24
 
 Engine and UI areas. `Session::hotSwapDevice` replaces a chain's device in its place, in one undo step, by a preset, a native device's defaults, the Utility or a plug-in of the same type, a preset of the device's own kind loading into it. In the app, as the reference's: Q or a new arrows button in each device's title bar links the device to the browser, which shows its category with its row selected and a Hot-Swap bar naming it; Return or a double-click swaps the chosen device or preset in, the link following it; Q, Escape, the bar's X or the button end it ([contract](research/presets-contract.md#hot-swap-2026-10-24)). Checked in the presets and UI suites.
+
+## Hot-Swap Sample — 2026-10-24
+
+UI area. The Sampler's waveform and a Drum Sampler's selected pad gain the reference's Hot-Swap Sample button: it opens the sample's folder in the browser with the sample selected, under the Hot-Swap bar, and Return or a double-click on a sound loads it into the Sampler or pad, the link kept; the button again, the bar's X, Escape, Q or another category end it ([contract](research/presets-contract.md#hot-swap-2026-10-24)). Checked in the UI suite.

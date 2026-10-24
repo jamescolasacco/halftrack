@@ -61,7 +61,10 @@ The reference's manual: Q or a device's Hot-Swap Presets button links the device
 - **Linking.** Q, or the arrows button in a device's title bar, links the selected device, or with none an audio track's first audio effect or a MIDI track's instrument. The browser shows the device's category (Plug-Ins for a plug-in) with its row selected, and a bar above the list names it.
 - **Swapping.** Return or a double-click on a device, preset or plug-in puts it in the device's place, and the link follows the new device, so swapping can go on.
 - **Ending.** Q, Escape, the bar's X, the device's button again, or a category the device's kin are not in (Plug-Ins and the collections keep it).
+- **Samples.** As the manual's section 23.2.4.1 has it, the Sampler's waveform and a Drum Sampler's selected pad have a Hot-Swap Sample button, always shown, which opens the sample's folder in the browser with it selected. Return or a double-click on a sound loads it into the Sampler or pad, folders still opening; the button again, the bar's X, Escape, Q or a category other than Samples, the places and the collections end it.
 
 `tests/PresetTests.cpp` checks a preset of the device's own kind loading into it, another audio effect and an audio effect's preset taking a device's place in the chain's order, one undo restoring it, an instrument and a MIDI effect swapping for their own types, and the refusal of other types and unknown chains or devices. The UI suite links a Saturator with Q, swaps an EQ Three in with Return, ends it with Escape and undoes the swap, links and unlinks a device from its button and the bar's X, links a MIDI track's instrument, and ends a link by choosing Samples.
 
-Not yet: hot-swapping samples in the Sampler, Drum Sampler and drum pads, devices inside racks, and the reference's option to replace a device as soon as a preset is selected.
+The UI suite also opens the Sampler's sample from its button, loads another sound into it with Return and ends with Escape, and does the same for a Drum Sampler pad, ending with the button.
+
+Not yet: Drum Rack pads' samples, devices inside racks, showing the sample buttons only on hover, and the reference's option to replace a device as soon as a preset is selected.

@@ -9104,6 +9104,28 @@ private:
     };
 
     // A Sampler's sample: waveform with draggable start/end markers, file loading and drops.
+    // A device's Hot-Swap button: two arrows passing each other, lit while the device is linked to the browser.
+    class HotSwapButton final : public juce::Button
+    {
+    public:
+        HotSwapButton() : juce::Button ("Hot-Swap")
+        {
+            setTitle ("Hot-Swap Presets"); setTooltip ("Hot-Swap Presets: link this device to the browser, to replace it from there  |  Q");
+            setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false);
+        }
+        std::function<bool()> lit;
+        void paintButton (juce::Graphics& g, bool over, bool) override
+        {
+            const auto r = getLocalBounds().toFloat().reduced (4.0f, 6.0f);
+            g.setColour (lit && lit() ? orange : over ? ink : muted);
+            const auto top = r.getY() + r.getHeight() * .25f, bottom = r.getY() + r.getHeight() * .75f;
+            g.drawLine (r.getX(), top, r.getRight() - 2, top, 1.3f); g.drawLine (r.getX() + 2, bottom, r.getRight(), bottom, 1.3f);
+            juce::Path heads;
+            heads.addTriangle (r.getRight(), top, r.getRight() - 4, top - 2.5f, r.getRight() - 4, top + 2.5f);
+            heads.addTriangle (r.getX(), bottom, r.getX() + 4, bottom - 2.5f, r.getX() + 4, bottom + 2.5f);
+            g.fillPath (heads);
+        }
+    };
     class SampleView final : public juce::Component, public juce::FileDragAndDropTarget, private juce::ChangeListener
     {
     public:
@@ -9114,6 +9136,15 @@ private:
             load.setWantsKeyboardFocus (false); load.setMouseClickGrabsKeyboardFocus (false);
             load.onClick = [this] { choose(); };
             addAndMakeVisible (load);
+            // Hot-Swap Sample, at the waveform's bottom right as the reference's samplers have it.
+            addAndMakeVisible (swap); swap.setName ("Hot-Swap sample"); swap.setTitle ("Hot-Swap Sample");
+            swap.setTooltip ("Hot-Swap Sample: open this sample's folder in the browser, to replace it from there");
+            swap.lit = [this] { const auto* track = owner.currentTrack(); return track != nullptr && owner.hotSwappingSample (track->id, -1); };
+            swap.onClick = [this]
+            {
+                const auto* track = owner.currentTrack(); if (track == nullptr) return;
+                if (owner.hotSwappingSample (track->id, -1)) owner.endHotSwap(); else owner.startSampleHotSwap (track->id, -1, shown);
+            };
             thumbnail.addChangeListener (this);
         }
         ~SampleView() override { thumbnail.removeChangeListener (this); if (gesture) owner.session.endEditGesture(); }
@@ -9124,7 +9155,7 @@ private:
             load.setEnabled (! owner.session.isExporting());
             repaint();
         }
-        void resized() override { load.setBounds (getWidth() - 62, 3, 58, 18); }
+        void resized() override { load.setBounds (getWidth() - 62, 3, 58, 18); swap.setBounds (waveBounds().getRight() - 24, waveBounds().getBottom() - 22, 22, 20); }
         void paint (juce::Graphics& g) override
         {
             g.setColour (themes::colour (0xff1c1c1c)); g.fillRect (getLocalBounds());
@@ -9189,6 +9220,7 @@ private:
         juce::File shown;
         Session::PluginInfo plugin;
         juce::TextButton load { "Load..." };
+        HotSwapButton swap;
         std::unique_ptr<juce::FileChooser> chooser;
         int dragging = -1;
         bool gesture = false;
@@ -9233,7 +9265,16 @@ private:
             choke.onChange = [this] { change (instruments::drumSampler::choke, (float) (choke.getSelectedId() - 1)); };
             clear.setName ("Clear pad"); clear.setTooltip ("Remove this pad's sample");
             clear.onClick = [this] { if (const auto* track = owner.currentTrack()) { owner.report (owner.session.setDrumPadSample (track->id, selected, {})); owner.refresh(); } };
-            for (auto* c : std::initializer_list<juce::Component*> { &choke, &clear }) addAndMakeVisible (c);
+            // Hot-Swap Sample for the selected pad, as the reference's pads have it.
+            swap.setName ("Hot-Swap pad sample"); swap.setTitle ("Hot-Swap Sample");
+            swap.setTooltip ("Hot-Swap Sample: open this pad's sample folder in the browser, to replace it from there");
+            swap.lit = [this] { const auto* track = owner.currentTrack(); return track != nullptr && owner.hotSwappingSample (track->id, selected); };
+            swap.onClick = [this]
+            {
+                const auto* track = owner.currentTrack(); if (track == nullptr) return;
+                if (owner.hotSwappingSample (track->id, selected)) owner.endHotSwap(); else owner.startSampleHotSwap (track->id, selected, padFile (selected));
+            };
+            for (auto* c : std::initializer_list<juce::Component*> { &choke, &clear, &swap }) addAndMakeVisible (c);
         }
         ~DrumPanel() override { if (gesture) owner.session.endEditGesture(); }
         void show (const Session::PluginInfo& info)
@@ -9258,7 +9299,7 @@ private:
             for (auto& knob : knobs) knob.setBounds (row.removeFromLeft (66).withTrimmedTop (14));
             area.removeFromTop (6);
             auto buttons = area.removeFromTop (22);
-            choke.setBounds (buttons.removeFromLeft (110)); buttons.removeFromLeft (6); clear.setBounds (buttons.removeFromLeft (70));
+            choke.setBounds (buttons.removeFromLeft (110)); buttons.removeFromLeft (6); clear.setBounds (buttons.removeFromLeft (70)); buttons.removeFromLeft (4); swap.setBounds (buttons.removeFromLeft (24));
         }
         void paint (juce::Graphics& g) override
         {
@@ -9304,6 +9345,7 @@ private:
         std::array<juce::Slider, 4> knobs;
         juce::ComboBox choke;
         juce::TextButton clear { "Clear" };
+        HotSwapButton swap;
         juce::File padFile (int pad) const { return pad < (int) plugin.padSamples.size() ? plugin.padSamples[(size_t) pad] : juce::File(); }
         void change (size_t control, float value)
         {
@@ -9735,28 +9777,6 @@ private:
 
     // One device in the inline chain: a title bar (on/off, name, window, remove)
     // over the device's own compact controls.
-    // A device's Hot-Swap button: two arrows passing each other, lit while the device is linked to the browser.
-    class HotSwapButton final : public juce::Button
-    {
-    public:
-        HotSwapButton() : juce::Button ("Hot-Swap")
-        {
-            setTitle ("Hot-Swap Presets"); setTooltip ("Hot-Swap Presets: link this device to the browser, to replace it from there  |  Q");
-            setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false);
-        }
-        std::function<bool()> lit;
-        void paintButton (juce::Graphics& g, bool over, bool) override
-        {
-            const auto r = getLocalBounds().toFloat().reduced (4.0f, 6.0f);
-            g.setColour (lit && lit() ? orange : over ? ink : muted);
-            const auto top = r.getY() + r.getHeight() * .25f, bottom = r.getY() + r.getHeight() * .75f;
-            g.drawLine (r.getX(), top, r.getRight() - 2, top, 1.3f); g.drawLine (r.getX() + 2, bottom, r.getRight(), bottom, 1.3f);
-            juce::Path heads;
-            heads.addTriangle (r.getRight(), top, r.getRight() - 4, top - 2.5f, r.getRight() - 4, top + 2.5f);
-            heads.addTriangle (r.getX(), bottom, r.getX() + 4, bottom - 2.5f, r.getX() + 4, bottom + 2.5f);
-            g.fillPath (heads);
-        }
-    };
     class DevicePanel final : public juce::Component
     {
     public:
@@ -10537,11 +10557,24 @@ private:
     // Hot-Swap, as the reference's: a device linked to the browser, which shows it among its kin;
     // Return or a double-click puts the chosen preset or device of the same type in its place. Q,
     // Escape, the Hot-Swap bar's X or the device's button end it.
-    struct HotSwapTarget { juce::String chainId, pluginId, name; };
+    // A sample's Hot-Swap links a Sampler (pad -1) or a Drum Sampler pad instead of a device.
+    struct HotSwapTarget { juce::String chainId, pluginId, name; bool sample = false; int pad = -1; };
     std::optional<HotSwapTarget> hotSwap;
     juce::Label hotSwapLabel;
     juce::TextButton hotSwapClose { "x" };
-    bool hotSwapping (const juce::String& pluginId) const { return hotSwap && hotSwap->pluginId == pluginId; }
+    bool hotSwapping (const juce::String& pluginId) const { return hotSwap && ! hotSwap->sample && hotSwap->pluginId == pluginId; }
+    bool hotSwappingSample (const juce::String& trackId, int pad) const { return hotSwap && hotSwap->sample && hotSwap->chainId == trackId && hotSwap->pad == pad; }
+    // A sample's Hot-Swap, as the reference's: the browser opens at the sample's folder, and Return
+    // or a double-click on a sound loads it into the Sampler or the pad.
+    void startSampleHotSwap (const juce::String& trackId, int pad, const juce::File& sample)
+    {
+        const auto* track = currentTrack();
+        if (track == nullptr || track->id != trackId) return;
+        hotSwap.reset();
+        if (sample.existsAsFile()) showInBrowser (sample); else { showBrowser = true; leavePlace(); setBrowserCategory (BrowserCategory::samples); }
+        hotSwap = HotSwapTarget { trackId, track->instrument.id, pad >= 0 ? "Pad " + juce::String (pad + 1) : sample.existsAsFile() ? sample.getFileName() : juce::String ("Sampler"), true, pad };
+        updateHotSwapBar(); resized(); deviceChain.repaint();
+    }
     // The chain's device and the category its kin are in.
     std::optional<std::pair<Session::PluginInfo, BrowserCategory>> hotSwapDevice (const juce::String& chainId, const juce::String& pluginId) const
     {
@@ -10603,6 +10636,23 @@ private:
             for (const auto& p : track->plugins) if (! (p.isNativeEffect && effectIsMidi (p.effect.kind))) { startHotSwap (chainId, p.id); return; }
         }
         else if (const auto* devices = chainDevices(); devices != nullptr && ! devices->empty()) startHotSwap (chainId, devices->front().id);
+    }
+    // In a sample's Hot-Swap, Return or a double-click on a sound loads it into the Sampler or pad;
+    // folders still open and close. False leaves the row to its usual action.
+    bool hotSwapSampleRow (int row)
+    {
+        juce::File sound;
+        if (sampleBrowser() && juce::isPositiveAndBelow (row, (int) browserItems.size()))
+        {
+            if (browserItems[(size_t) row].directory) return false;
+            sound = browserItems[(size_t) row].file;
+        }
+        else if (! sampleBrowser() && juce::isPositiveAndBelow (row, (int) deviceItems.size())) sound = deviceItems[(size_t) row].sample;
+        if (! isAudio (sound)) { report (juce::Result::fail ("Only a sound can be hot-swapped into a sampler.")); return true; }
+        const auto result = hotSwap->pad >= 0 ? session.setDrumPadSample (hotSwap->chainId, hotSwap->pad, sound) : session.setInstrumentSample (hotSwap->chainId, sound);
+        report (result);
+        if (result.wasOk()) { if (hotSwap->pad < 0) hotSwap->name = sound.getFileName(); refresh(); updateHotSwapBar(); }
+        return true;
     }
     // In Hot-Swap, Return or a double-click on a device, preset or plug-in of the device's type puts it in the device's place.
     void hotSwapRow (int row)
@@ -16069,7 +16119,8 @@ private:
     }
     void setBrowserCategory (BrowserCategory category)
     {
-        if (hotSwap && category != BrowserCategory::plugins && category != BrowserCategory::collection)
+        if (hotSwap && hotSwap->sample) { if (category != BrowserCategory::samples && category != BrowserCategory::place && category != BrowserCategory::collection) endHotSwap(); }
+        else if (hotSwap && category != BrowserCategory::plugins && category != BrowserCategory::collection)
             if (const auto device = hotSwapDevice (hotSwap->chainId, hotSwap->pluginId); ! device || device->second != category) endHotSwap();
         noteBrowserState();
         browserCategory = category; browserList.deselectAllRows(); updateBrowser(); resized();
@@ -16393,7 +16444,8 @@ private:
     void activateBrowserRow (int row)
     {
         if (row < 0 || row >= getNumRows()) return;
-        if (hotSwap) { hotSwapRow (row); return; }
+        if (hotSwap && hotSwap->sample) { if (hotSwapSampleRow (row)) return; }
+        else if (hotSwap) { hotSwapRow (row); return; }
         if (sampleBrowser())
         {
             auto item = browserItems[(size_t) row];
@@ -20506,6 +20558,36 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "with no device selected on a MIDI track, Q links its instrument");
         setBrowserCategory (BrowserCategory::samples);
         check (! hotSwap, "a category its kin are not in ends Hot-Swap");
+        {
+            // A sample's Hot-Swap: the Sampler's and a drum pad's buttons open the sample's folder in the
+            // browser, and Return on another sound loads it into them.
+            const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-hotswap-ui-" + juce::Uuid().toString());
+            const auto a = folder.getChildFile ("A.wav"), b = folder.getChildFile ("B.wav");
+            check (folder.createDirectory().wasOk() && audioFixture.copyFileTo (a) && audioFixture.copyFileTo (b), "two sounds in a folder");
+            const auto keys = currentTrack()->id;
+            check (session.setTrackInstrument (keys, Session::EffectKind::sampler).wasOk() && session.setInstrumentSample (keys, a).wasOk(), "a Sampler playing A"); refresh();
+            const auto settle = [&] { for (int i = 0; i < 1000 && browserBusy(); ++i) { juce::Thread::sleep (5); pollBrowserScan(); } };
+            auto* samplerSwap = dynamic_cast<juce::Button*> (findNamed (deviceChain, "Hot-Swap sample"));
+            check (samplerSwap != nullptr && samplerSwap->isVisible(), "the Sampler's waveform has a Hot-Swap Sample button");
+            samplerSwap->onClick(); settle();
+            const auto rowOf = [&] (const juce::File& file) { for (int r = 0; r < (int) browserItems.size(); ++r) if (browserItems[(size_t) r].file == file) return r; return -1; };
+            check (hotSwap && hotSwap->sample && sampleBrowser() && browserList.getSelectedRow() == rowOf (a) && hotSwapLabel.getText().contains ("A.wav"),
+                   "it opens the sample's folder with the sample selected, under the Hot-Swap bar");
+            activateBrowserRow (rowOf (b));
+            check (currentTrack()->instrument.sample == b && hotSwap && hotSwapLabel.getText().contains ("B.wav"), "Return on B loads it into the Sampler, the link kept");
+            check (handleKey (juce::KeyPress (juce::KeyPress::escapeKey)) && ! hotSwap, "Escape ends it");
+            check (session.setTrackInstrument (keys, Session::EffectKind::drumSampler).wasOk() && session.setDrumPadSample (keys, 0, a).wasOk(), "a Drum Sampler with A on pad 1");
+            selectedDrumPad = 0; refresh();
+            auto* padSwap = dynamic_cast<juce::Button*> (findNamed (deviceChain, "Hot-Swap pad sample"));
+            check (padSwap != nullptr && padSwap->isVisible(), "the selected pad has a Hot-Swap Sample button");
+            padSwap->onClick(); settle();
+            check (hotSwap && hotSwap->pad == 0 && browserList.getSelectedRow() == rowOf (a), "it opens the pad's sample in the browser");
+            activateBrowserRow (rowOf (b));
+            check (currentTrack()->instrument.padSamples.size() > 0 && currentTrack()->instrument.padSamples[0] == b, "Return on B loads it onto the pad");
+            padSwap->onClick();
+            check (! hotSwap, "the button again ends it");
+            folder.deleteRecursively();
+        }
         check (session.newProject().wasOk(), "leave Hot-Swap"); refresh();
     }
     {
