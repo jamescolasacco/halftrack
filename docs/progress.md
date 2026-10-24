@@ -2507,3 +2507,7 @@ UI area. The Preferences research resolved the condition on the reference's Opti
 ## Warped clips' first play — 2026-10-24
 
 Engine area (a new pinned Tracktion patch). A warped clip's first play after a graph build began late by its stretcher's latency, about 150 ms in Complex and half a second in Beats: its readers primed their stretcher with silence when its audio was not yet cached. `cmake/PatchStretchPriming.cmake` lets the cache reader wait for that audio while the graph builds the readers, then read without waiting in real time ([warp contract](research/warp-contract.md#first-play-of-a-warped-clip-2026-10-24), [dependencies](dependencies.md)). Found while trying the reference's Beats and Auto-Warp defaults from the Preferences research, which Halftrack does not adopt yet. Checked in the warp modes suite, which fails without the patch.
+
+## Undo and Redo name their steps — 2026-10-24
+
+Engine and UI areas. As the reference's Edit menu names the step from its history, Undo and Redo now read "Undo Add MIDI track" and "Redo Add MIDI track", or Can't Undo and Can't Redo with nothing to take back (`Session::undoDescription`, `redoDescription`). The names are Halftrack's own step names ([contract](research/main-menu-contract.md)). Checked in the UI suite.

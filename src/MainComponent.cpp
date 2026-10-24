@@ -12102,7 +12102,10 @@ private:
             const auto context = areaMenu (area);
             const auto command = [&] (int id, const juce::String& text)
             { const auto found = areaItem (area, context, id); add (id, found.text.isNotEmpty() ? found.text : text, found.enabled); };
-            add (20, "Undo", session.canUndo()); add (21, "Redo", session.canRedo());
+            // The step Undo and Redo would take, as the reference's history names it.
+            const auto named = [] (const juce::String& verb, const juce::String& step) { return verb + (step.isNotEmpty() ? " " + step.substring (0, 1).toUpperCase() + step.substring (1) : juce::String()); };
+            add (20, session.canUndo() ? named ("Undo", session.undoDescription()) : "Can't Undo", session.canUndo());
+            add (21, session.canRedo() ? named ("Redo", session.redoDescription()) : "Can't Redo", session.canRedo());
             popup.addSeparator();
             command (menuCut, "Cut"); command (menuCopy, "Copy"); command (menuPaste, "Paste"); command (menuDuplicate, "Duplicate"); command (22, "Delete");
             popup.addSeparator();
@@ -17671,7 +17674,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         expect ("File", { "New Project", "Open Project...", "-", "Install Pack...", "-", "Locate Missing Media...", "-", "Save Project", "Save Project As...", "Save as Default Set",
                           "-", "Export Audio...", "Export MIDI Clip..." });
         const juce::String loop = state.looping ? "Deactivate Loop" : "Activate Loop";
-        expect ("Edit", { "Undo", "Redo", "-", "Cut", "Copy", "Paste", "Duplicate", "Delete", "-", "Deactivate Clip", "-", "Select All", "Invert Selection", loop, "-", "Group Tracks", "Ungroup Tracks", "-",
+        const auto history = [this]
+        {
+            const auto step = [] (const juce::String& s) { return s.isEmpty() ? s : " " + s.substring (0, 1).toUpperCase() + s.substring (1); };
+            return juce::StringArray { session.canUndo() ? "Undo" + step (session.undoDescription()) : "Can't Undo", session.canRedo() ? "Redo" + step (session.redoDescription()) : "Can't Redo" };
+        }();
+        check (history[0] == "Undo Add MIDI track" && history[1] == "Can't Redo", "Edit names the step Undo takes back (" + history.joinIntoString (", ") + ")");
+        expect ("Edit", { history[0], history[1], "-", "Cut", "Copy", "Paste", "Duplicate", "Delete", "-", "Deactivate Clip", "-", "Select All", "Invert Selection", loop, "-", "Group Tracks", "Ungroup Tracks", "-",
                           "Cut Time (Loop Range)", "Paste Time", "Duplicate Time (Loop Range)", "Delete Time (Loop Range)", "-", "Rename", "Edit Info Text", "-", "Solo", "Arm", "-",
                           "Freeze Track", "Bounce Track in Place", "Bounce to New Track", "-", "Split", "Consolidate", "-", "Quantize", "Extract Groove", "Record Quantization >" });
         expect ("Create", { "Insert Audio Track", "Insert MIDI Track", "Insert Return Track", "Insert Take Lane", "-", "Insert Silence (Loop Range)", "Capture and Insert Scene",
@@ -17705,6 +17714,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                && shortcut ("Playback", menuFollow, juce::KeyPress ('f', juce::ModifierKeys (alt | shift), 0)) && shortcut ("View", menuSearch, juce::KeyPress ('f', cmd, 0))
                && shortcut ("Options", 13, juce::KeyPress ('e', juce::ModifierKeys (cmd | shift | alt), 0)),
                "the items show the reference's shortcuts: Save Cmd+S, Export Shift+Cmd+R, Bounce to New Track Cmd+B, Insert MIDI Clip Shift+Cmd+M, Follow Option+Shift+F, Search Cmd+F");
+        session.undo(); refresh();
+        check (entry ("Edit", 21)->text == "Redo Add MIDI track" && entry ("Edit", 21)->isEnabled, "and after it, the step Redo would do again");
+        session.redo(); refresh();
         // Every item stays, greyed while it cannot act.
         check (entry ("Edit", menuCut).has_value() && ! entry ("Edit", menuCut)->isEnabled && ! entry ("View", menuZoomBack)->isEnabled,
                "with nothing selected, Cut and Zoom Back stay in their menus, greyed");

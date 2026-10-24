@@ -14909,6 +14909,8 @@ void Session::redo()
 }
 bool Session::canUndo() const { return ! impl->exporting && ! impl->anyRecording() && impl->edit->getUndoManager().canUndo(); }
 bool Session::canRedo() const { return ! impl->exporting && ! impl->anyRecording() && impl->edit->getUndoManager().canRedo(); }
+String Session::undoDescription() const { return canUndo() ? impl->edit->getUndoManager().getUndoDescription() : String(); }
+String Session::redoDescription() const { return canRedo() ? impl->edit->getUndoManager().getRedoDescription() : String(); }
 
 Result Session::exportWav (const File& file, double rate, int bits, double tailSeconds)
 {
