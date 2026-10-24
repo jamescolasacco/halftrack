@@ -2569,3 +2569,7 @@ UI area. From the reference's key list, the note editor gains Cmd+Up and Cmd+Dow
 
 UI area. As in the reference's key list: in the Session, Cmd+Return stops the selected slot's track, Return launches the scene when its column was clicked, Page Up and Page Down move eight scenes, Home and End go to the first and last track, and Cmd with the arrows moves the selected track or scene. Escape now jumps to the selected track's title bar instead of stopping, which was Halftrack's own ([menu contract](research/main-menu-contract.md#keys-outside-the-menus), [transport contract](research/transport-contract.md)). Checked in the UI suite.
 
+## Global quantization keys — 2026-10-24
+
+UI area. Cmd+6, 7, 8 and 9 set the global launch quantization to 1/16, 1/8, 1/4 and 1 Bar, and Cmd+0 to None, as the reference's keys do ([menu contract](research/main-menu-contract.md#keys-outside-the-menus)). Checked in the UI suite.
+

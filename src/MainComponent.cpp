@@ -958,6 +958,14 @@ public:
         {
             // The reference's grid commands, for the Arrangement.
             if (! shift && code >= '1' && code <= '5') if (const auto place = focusedGrid()) { gridCommand (code - '0', *place); return true; }
+            // The global launch quantization, as the reference's keys set it: Cmd+6 to 9 for 1/16, 1/8, 1/4
+            // and 1 Bar, and Cmd+0 for None.
+            if (! shift && ! key.getModifiers().isAltDown() && (code == '0' || (code >= '6' && code <= '9')))
+            {
+                using Q = Session::LaunchQuantisation;
+                const Q grids[] { Q::sixteenth, Q::eighth, Q::beat, Q::bar };
+                report (session.setLaunchQuantisation (code == '0' ? Q::none : grids[code - '6'])); refresh(); return true;
+            }
             // View > Mixer, as in the reference, before MIDI Map Mode's Cmd/Ctrl+M.
             if ((code == 'M' || code == 'm') && key.getModifiers().isAltDown() && showSession) { menuItemSelected (109, 3); return true; }
             if (code == 'M' && ! shift && ! key.getModifiers().isAltDown()) { setMidiMapMode (! midiMapMode); return true; }
@@ -18904,6 +18912,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto index = (size_t) std::distance (state.tracks.begin(), first);
             check (handleKey (juce::KeyPress (juce::KeyPress::F1Key)) && state.tracks[index].mute, "F1 switches track 1 off");
             check (handleKey (juce::KeyPress (juce::KeyPress::F1Key)) && ! state.tracks[index].mute, "and on again");
+            // Cmd+6 to 9 and Cmd+0 set the global launch quantization, as the reference's keys do.
+            using Q = Session::LaunchQuantisation;
+            const auto grid = state.launchQuantisation;
+            const auto quantise = [&] (int code) { return handleKey (juce::KeyPress (code, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)); };
+            check (quantise ('6') && state.launchQuantisation == Q::sixteenth && quantise ('7') && state.launchQuantisation == Q::eighth
+                       && quantise ('8') && state.launchQuantisation == Q::beat && quantise ('9') && state.launchQuantisation == Q::bar && quantise ('0') && state.launchQuantisation == Q::none,
+                   "Cmd+6, 7, 8, 9 and 0 set the global quantization to 1/16, 1/8, 1/4, 1 Bar and None");
+            check (session.setLaunchQuantisation (grid).wasOk(), "the quantization as it was"); refresh();
         }
         {
             // The reference's Session keys, and Escape jumping to the selected track's title bar.
