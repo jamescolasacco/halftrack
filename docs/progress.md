@@ -2597,3 +2597,7 @@ Engine and UI areas. As the reference's does, a clip moved along its track now t
 
 UI area. As the reference's key list gives them, the Arrangement's Left and Right nudge the selected clips a grid step, their automation following, or move the time selection without one; from the headers they fold and unfold the selected track; Up and Down select the track above or below ([menu contract](research/main-menu-contract.md#keys-outside-the-menus)). Checked in the UI suite.
 
+## Momentary latching — 2026-10-24
+
+UI area. As the reference's key list describes, A, B, S, Z, Tab and F1 to F8 act when pressed, and when held for about 500 ms letting go returns what they changed (Z zooming back). Their repeats while held now do nothing; before, holding one flipped its switch over and over ([menu contract](research/main-menu-contract.md#keys-outside-the-menus)). Checked in the UI suite with a stood-in key state and clock.
+

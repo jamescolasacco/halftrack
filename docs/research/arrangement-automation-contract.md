@@ -107,7 +107,7 @@ After the reference's manual ([Automation and Editing Envelopes](https://www.abl
 
 `arrangementAutomation::Drawing` holds a drawing over a lane's original breakpoints; clip envelopes use it too. The UI suite draws two quarter-note steps over a rising volume segment and checks the eight breakpoints, the line's old values on both sides, one undo, and freehand breakpoints with Cmd.
 
-Not yet: Shift's finer steps, and holding B to switch Draw Mode for the moment.
+Not yet: Shift's finer steps.
 
 ## Clear Envelope (2026-10-24)
 

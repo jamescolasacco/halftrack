@@ -18,7 +18,7 @@ Outside Draw Mode:
 - With Cmd held at the press (Alt elsewhere), dragging a note up or down changes the selected notes' velocity by one step a pixel, without moving them. Cmd pressed during a drag still bypasses the grid.
 - With Option held at the press (Ctrl elsewhere), dragging notes leaves copies where they were. Each drag is one undo step.
 
-Draw Mode (Options > Draw Mode, B, or the pencil beside the control bar's KEYS switch):
+Draw Mode (Options > Draw Mode, B, or the pencil beside the control bar's KEYS switch; B held for 500 ms switches it only until let go, see the [menu contract](main-menu-contract.md#keys-outside-the-menus)):
 - A drag on the grid draws a note one grid step long on each step from the first to the pointer's. Each takes the pitch the pointer had on its step; when the pointer jumps several steps, the pitch moves evenly between them.
 - With Alt held at the start, every note takes the first note's pitch.
 - Steps the pointer goes back over lose their notes. A drawn note replaces the notes it covers at its pitch.
@@ -40,7 +40,6 @@ From the MIDI Note Editor section of the reference's key list ([Live keyboard sh
 
 ## Not yet
 
-- Holding B to switch Draw Mode for the moment.
 - Draw Mode in take lanes.
 - The Display & Input setting "Draw Mode with Pitch Lock", which makes pitch-locked drawing the default.
 - The timespan a background drag selects: Halftrack selects notes only.

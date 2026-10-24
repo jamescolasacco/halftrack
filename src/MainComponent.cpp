@@ -948,6 +948,7 @@ public:
         if (session.isExporting()) return true;
         if (mappedKey (key)) return true;
         if (computerKeyboardKey (key)) return true;
+        if (const auto repeat = latchKey (key)) return *repeat;
         const auto code = key.getKeyCode();
         const auto cmd = key.getModifiers().isCommandDown();
         const auto shift = key.getModifiers().isShiftDown();
@@ -9881,7 +9882,45 @@ private:
         for (const auto& event : computerKeys.release ([] (int code) { return juce::KeyPress::isKeyCurrentlyDown (code); }))
             session.computerKeyboardNote (event.note, 0, false);
     }
-    bool keyStateChanged (bool) override { releaseComputerKeys(); releaseMappedKeys(); return false; }
+    bool keyStateChanged (bool) override { releaseComputerKeys(); releaseMappedKeys(); releaseLatches(); return false; }
+    // Momentary latching, as the reference's: A, B, S, Z, Tab and F1 to F8 act when pressed; held for
+    // about 500 ms, letting go returns what they changed (Z zooming back). Their repeats while held do
+    // nothing. The key state and clock can be stood in for by the tests.
+    struct Latch { int code = 0, keyCode = 0; juce::uint32 pressedAt = 0; juce::KeyPress press; };
+    std::vector<Latch> latches;
+    bool replayingLatch = false;
+    std::function<bool (int)> keyIsDown = [] (int code) { return juce::KeyPress::isKeyCurrentlyDown (code); };
+    std::function<juce::uint32()> latchClock = [] { return juce::Time::getMillisecondCounter(); };
+    static constexpr juce::uint32 latchMilliseconds = 500;
+    // A repeat of a held latching key, consumed; otherwise nothing, the key acting as it does.
+    std::optional<bool> latchKey (const juce::KeyPress& key)
+    {
+        if (replayingLatch || key.getModifiers().isAnyModifierKeyDown()) return std::nullopt;
+        const auto keyCode = key.getKeyCode();
+        const auto code = keyCode < 256 ? (int) juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) keyCode) : keyCode;
+        if (! (code == 'A' || code == 'B' || code == 'S' || code == 'Z' || code == juce::KeyPress::tabKey || (code >= juce::KeyPress::F1Key && code <= juce::KeyPress::F8Key)))
+            return std::nullopt;
+        for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused; focused = focused->getParentComponent())
+            if (dynamic_cast<juce::TextEditor*> (focused)) return std::nullopt;
+        for (const auto& held : latches) if (held.code == code && keyIsDown (held.keyCode)) return true;
+        std::erase_if (latches, [code] (const Latch& l) { return l.code == code; });
+        // Only a key that is down can be held; a press sent without one acts and is done.
+        if (keyIsDown (keyCode)) latches.push_back ({ code, keyCode, latchClock(), key });
+        return std::nullopt;
+    }
+    void releaseLatches()
+    {
+        for (auto it = latches.begin(); it != latches.end();)
+        {
+            if (keyIsDown (it->keyCode)) { ++it; continue; }
+            const auto latch = *it; it = latches.erase (it);
+            if (latchClock() - latch.pressedAt < latchMilliseconds) continue;
+            replayingLatch = true;
+            if (latch.code == 'Z') zoomBackFromSelection(); else handleKey (latch.press);
+            replayingLatch = false;
+            it = latches.begin();
+        }
+    }
     // Mapped keys being held, by key code: a held key does not press again as it repeats, and its
     // release releases a clip slot it pressed, as the reference's keys follow a clip's Launch Mode.
     std::map<int, juce::juce_wchar> heldMappedKeys;
@@ -19152,6 +19191,28 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto index = (size_t) std::distance (state.tracks.begin(), first);
             check (handleKey (juce::KeyPress (juce::KeyPress::F1Key)) && state.tracks[index].mute, "F1 switches track 1 off");
             check (handleKey (juce::KeyPress (juce::KeyPress::F1Key)) && ! state.tracks[index].mute, "and on again");
+            {
+                // Momentary latching, as the reference's: a press acts; held for about 500 ms, letting go returns
+                // what it changed; repeats while held do nothing. The key state and clock are stood in for here.
+                bool held = false; juce::uint32 clock = 1000;
+                keyIsDown = [&] (int) { return held; }; latchClock = [&] { return clock; };
+                const bool wasAutomation = automationMode;
+                held = true; handleKey (juce::KeyPress ('a'));
+                check (automationMode != wasAutomation, "A acts when pressed");
+                handleKey (juce::KeyPress ('a'));
+                check (automationMode != wasAutomation, "its repeats while held do nothing");
+                clock += 100; held = false; keyStateChanged (false);
+                check (automationMode != wasAutomation, "let go at once, the change stays");
+                held = true; handleKey (juce::KeyPress ('a'));
+                check (automationMode == wasAutomation, "a second press changes it back");
+                clock += 100; held = false; keyStateChanged (false);
+                held = true; handleKey (juce::KeyPress ('b'));
+                check (drawMode, "B turns Draw Mode on");
+                clock += 600; held = false; keyStateChanged (false);
+                check (! drawMode && automationMode == wasAutomation, "held for more than 500 ms, letting go of B turns it off again");
+                keyIsDown = [] (int code) { return juce::KeyPress::isKeyCurrentlyDown (code); }; latchClock = [] { return juce::Time::getMillisecondCounter(); };
+                latches.clear();
+            }
             // Cmd+6 to 9 and Cmd+0 set the global launch quantization, as the reference's keys do.
             using Q = Session::LaunchQuantisation;
             const auto grid = state.launchQuantisation;
