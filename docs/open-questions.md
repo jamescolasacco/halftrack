@@ -828,6 +828,7 @@ Main menu bar ([contract](research/main-menu-contract.md)). Defaults where the r
 - **Metronome While Recording.** Taken as Halftrack's metronome's only-while-recording switch.
 - **Labels.** Items are named plainly for their commands, as the reference's English text is in its encrypted language file. Undo and Redo name their step with Halftrack's own step names.
 - **Preferences.** Preferences is one window with the reference's tabs (see the [preferences contract](research/preferences-contract.md)).
+- **Save a Copy and collecting.** The reference's Save Live Set As and Save a Copy keep pointing at the original samples, and Collect All and Save copies them in ([Managing Files and Sets](https://www.ableton.com/en/live-manual/12/managing-files-and-sets/), consulted 2026-10-24). Every Halftrack save collects its media into the project's Assets folder, so Save a Copy collects too and there is no Collect All and Save. Whether the reference's Save a Copy leaves the original Set open was not read; Halftrack's does.
 
 Warp defaults ([warp contract](research/warp-contract.md#defaults-not-yet-the-references)):
 

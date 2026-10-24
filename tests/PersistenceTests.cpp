@@ -94,6 +94,41 @@ void saveAsPreservesHistory (const juce::File& root)
            "portable reopened project retains the saved redone note");
 }
 
+// Save a Copy writes a portable project with its media beside it, and the open project keeps its
+// file, its media and its unsaved changes.
+void saveCopyKeepsTheProject (const juce::File& root)
+{
+    const auto source = root.getChildFile ("save-copy-source.wav");
+    {
+        juce::AudioBuffer<float> signal (2, 4800);
+        for (int sample = 0; sample < signal.getNumSamples(); ++sample)
+            for (int channel = 0; channel < 2; ++channel) signal.setSample (channel, sample, channel == 0 ? 0.25f : -0.25f);
+        juce::WavAudioFormat format;
+        std::unique_ptr<juce::OutputStream> stream (source.createOutputStream());
+        auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (2).withBitsPerSample (24));
+        check (writer && writer->writeFromAudioSampleBuffer (signal, 0, signal.getNumSamples()), "write the copy's audio");
+    }
+    Session session (false);
+    ok (session.importAudio (source, 0), "import audio to copy");
+    const auto original = root.getChildFile ("Copy original").getChildFile ("Original.halftrack");
+    ok (session.saveProject (original), "save the original project");
+    const auto collected = session.snapshot().tracks[0].clips.front().file;
+    ok (session.addMidiTrack ("Unsaved"), "an unsaved change");
+    check (session.snapshot().dirty, "the project has unsaved changes");
+    const auto copy = root.getChildFile ("Copy elsewhere").getChildFile ("Copy.halftrack");
+    ok (session.saveProjectCopy (copy), "save a copy");
+    const auto after = session.snapshot();
+    check (after.projectFile == original && after.dirty && after.tracks[0].clips.front().file == collected,
+           "Save a Copy keeps the open project's file, its media's places and its unsaved changes");
+    const auto copiedMedia = copy.getSiblingFile ("Copy Assets");
+    check (copy.existsAsFile() && copiedMedia.isDirectory() && copiedMedia.findChildFiles (juce::File::findFiles, false, "*.wav").size() == 1,
+           "the copy has its own media beside it");
+    Session reopened (false);
+    ok (reopened.loadProject (copy), "open the copy");
+    const auto opened = reopened.snapshot();
+    check (opened.tracks.size() == after.tracks.size() && opened.tracks[0].clips.front().file.isAChildOf (copiedMedia),
+           "the copy opens with the unsaved track and plays its own media");
+}
 void launcherLoadValidation (const juce::File& root)
 {
     Session session (false);
@@ -292,6 +327,7 @@ int runPersistenceTests (const juce::File& destination)
             check (session.snapshot().tracks.back().id == trackId, "registered effect project retains MIDI identity");
         }
         saveAsPreservesHistory (root);
+        saveCopyKeepsTheProject (root);
         launcherLoadValidation (root);
         std::cout << "Persistence acceptance passed." << std::endl;
         return 0;

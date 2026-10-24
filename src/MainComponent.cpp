@@ -11727,7 +11727,7 @@ private:
                     menuToggleView, menuClipView, menuDeviceView, menuToggleDetail, menuBrowser, menuGroovePool, menuSearch, menuSimilar,
                     menuFoldAll, menuFoldSelected, menuZoomSelection, menuZoomBack, menuMidiMap, menuKeyMap, menuComputerKeyboard,
                     menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuOverview, menuSceneSettings,
-                    menuSoloSwitches, menuCueSwitches,
+                    menuSoloSwitches, menuCueSwitches, menuSaveCopy,
                     menuSlice = 200, // Plus Session::SliceBy.
                     menuTimeFormat = 210 }; // Plus Session::TimeFormat.
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
@@ -12091,7 +12091,7 @@ private:
             add (12, "Locate Missing Media...", ! session.missingMedia().isEmpty());
             popup.addSeparator();
             // Save while there is something to save, as the reference's: changes, or a project never saved.
-            add (3, "Save Project", state.dirty || state.projectFile == juce::File()); add (4, "Save Project As...");
+            add (3, "Save Project", state.dirty || state.projectFile == juce::File()); add (4, "Save Project As..."); add (menuSaveCopy, "Save a Copy...");
             add (11, "Save as Default Set", userLibrary != juce::File());
             popup.addSeparator();
             add (6, "Export Audio..."); add (10, "Export MIDI Clip...", currentMidiClip() != nullptr);
@@ -12316,6 +12316,7 @@ private:
             case 2: openDialog(); break;
             case 3: saveProject (false); break;
             case 4: saveProject (true); break;
+            case menuSaveCopy: saveCopyDialog(); return;
             case 5: importFileDialog(); break;
             case 6: exportDialog(); break;
             case 14: showPreferences(); break;
@@ -12460,6 +12461,19 @@ private:
                 auto result = safe->session.saveProject (fc.getResult().withFileExtension ("halftrack"));
                 safe->report (result, "Project and media saved."); safe->refresh();
                 if (result.wasOk() && onSaved) onSaved();
+            });
+    }
+    // Save a Copy: the project written elsewhere with its media, the open project staying as it is.
+    void saveCopyDialog()
+    {
+        const auto folder = state.projectFile != juce::File() ? state.projectFile.getParentDirectory() : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
+        chooser = std::make_unique<juce::FileChooser> ("Save a Copy", folder.getChildFile (state.name + " Copy.halftrack"), "*.halftrack");
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+            [safe = juce::Component::SafePointer<Impl> (this)] (const juce::FileChooser& fc)
+            {
+                if (safe == nullptr || fc.getResult() == juce::File()) return;
+                const auto file = fc.getResult().withFileExtension ("halftrack");
+                safe->report (safe->session.saveProjectCopy (file), "Saved a copy as " + file.getFileName() + ".");
             });
     }
     // Searches a chosen folder for the project's missing files, as the reference's File Manager does.
@@ -17671,7 +17685,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
        #endif
         const auto expect = [&] (const juce::String& name, const juce::StringArray& wanted)
         { const auto shown = texts (name); check (shown == wanted, name + " holds the reference's items in its order (" + shown.joinIntoString (" | ") + ")"); };
-        expect ("File", { "New Project", "Open Project...", "-", "Install Pack...", "-", "Locate Missing Media...", "-", "Save Project", "Save Project As...", "Save as Default Set",
+        expect ("File", { "New Project", "Open Project...", "-", "Install Pack...", "-", "Locate Missing Media...", "-", "Save Project", "Save Project As...", "Save a Copy...", "Save as Default Set",
                           "-", "Export Audio...", "Export MIDI Clip..." });
         const juce::String loop = state.looping ? "Deactivate Loop" : "Activate Loop";
         const auto history = [this]

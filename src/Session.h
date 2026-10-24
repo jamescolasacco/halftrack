@@ -697,6 +697,9 @@ public:
     juce::Result newBuiltInDefaultProject();
     juce::Result loadProject (const juce::File&);
     juce::Result saveProject (const juce::File&);
+    // Save a Copy, as the reference's File menu has it: writes the project to another file with its
+    // media collected beside it, keeping the open project's file, media and unsaved changes.
+    juce::Result saveProjectCopy (const juce::File&);
     // Audio files and samples the project refers to that are not on disk. Opening and saving keep
     // their references, and clips whose file is missing play silence.
     juce::Array<juce::File> missingMedia() const;
@@ -1751,6 +1754,7 @@ public:
 
 private:
     juce::Result startProject (bool builtInDefaultSet);
+    juce::Result writeProject (const juce::File&, bool copy);
     struct Impl;
     std::unique_ptr<Impl> impl;
     juce::Result beginRecording (bool waitForPlay);

@@ -7887,7 +7887,9 @@ Result Session::recoverProject (const File& recovery, File& recoveredFrom)
     recoveredFrom = origin.isNotEmpty() && File::isAbsolutePath (origin) ? File (origin) : File{};
     sendChangeMessage(); return Result::ok();
 }
-Result Session::saveProject (const File& destination)
+Result Session::saveProject (const File& destination) { return writeProject (destination, false); }
+Result Session::saveProjectCopy (const File& destination) { return writeProject (destination, true); }
+Result Session::writeProject (const File& destination, bool copy)
 {
     impl->endNudge(); // The project keeps the song tempo.
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -8004,6 +8006,8 @@ Result Session::saveProject (const File& destination)
     juce::TemporaryFile temp (file);
     if (! document.writeTo (temp.getFile()) || ! temp.overwriteTargetFileWithTemporary())
         return Result::fail ("Could not write the project file.");
+    // A copy leaves the open project as it was: its file, its media's places and its changes.
+    if (copy) return Result::ok();
     impl->projectFile = file;
     impl->edit->editFileRetriever = [owner = impl.get()] { return owner->editLocation(); };
     for (auto& [clip, source] : sources)
