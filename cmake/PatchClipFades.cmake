@@ -186,7 +186,7 @@ std::unique_ptr<tracktion::graph::Node> createFadeNodeForClip (AudioClipBase& cl
                 clipEntries.push_back ({ std::move (clipNode), timeRange });]=])
     # The later cue patch builds on the engine behaviour and the node builder.
     set(downstream1 "296e079a8c70e5d13fd8aec6c640daa56c325f1cf33e836e69d2b3037c14ecc6")
-    set(downstream2 "bbc12a579f50896a7be4a5c13127b63c47863b22986b776290a7d523f80866cf")
+    set(downstream2 "bbc12a579f50896a7be4a5c13127b63c47863b22986b776290a7d523f80866cf" "05e73d01d1cc0a824f96a7dad772a850e5906e3a645bf56affd072f91d986bcc")
     foreach(index RANGE 0 2)
         file(SHA256 "${source${index}}" hash)
         if(hash STREQUAL "${patched${index}}" OR (DEFINED downstream${index} AND hash IN_LIST downstream${index}))

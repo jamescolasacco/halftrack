@@ -49,7 +49,7 @@ function(halftrack_patch_midi_ports source_dir)
     set(source3 "${source_dir}/modules/tracktion_engine/playback/graph/tracktion_EditNodeBuilder.cpp")
     set(original3 "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647")
     set(patched3 "1a07134c8c4c2a229b4da262dc6b547d3ab1302496fd5e5fbf1d375e9614517a")
-    set(downstream3 "9e1afcb494391df977c7f7950ce8030410576a2fab891e757d30a0249f87d60c" "bbc12a579f50896a7be4a5c13127b63c47863b22986b776290a7d523f80866cf") # The later clip fades and cue patches.
+    set(downstream3 "9e1afcb494391df977c7f7950ce8030410576a2fab891e757d30a0249f87d60c" "bbc12a579f50896a7be4a5c13127b63c47863b22986b776290a7d523f80866cf" "05e73d01d1cc0a824f96a7dad772a850e5906e3a645bf56affd072f91d986bcc") # The later clip fades, cue and group outputs patches.
     set(count3 2)
     set(before3_0 [=[    // Halftrack: a plug-in reads its sidechain source unless its sidechain is switched off.]=])
     set(after3_0 [=[    // Halftrack: a track playing to a MIDI port sends its MIDI on the channel it names (1-16), as

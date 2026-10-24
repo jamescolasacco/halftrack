@@ -37,7 +37,7 @@ function(halftrack_patch_midi_variations source_dir)
     set(original1 "06c1d2be2f00c494f5db33c2b5ced64f9395e9fb7e16e4e8002ef7beacfa9ee8")
     set(patched1 "bfc26bb83dcc389b9b3cd64db016f5e493e7f1f982b7c8910be6524c30703766")
     set(count1 1)
-    set(downstream1 "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647" "1a07134c8c4c2a229b4da262dc6b547d3ab1302496fd5e5fbf1d375e9614517a" "9e1afcb494391df977c7f7950ce8030410576a2fab891e757d30a0249f87d60c" "bbc12a579f50896a7be4a5c13127b63c47863b22986b776290a7d523f80866cf") # The later sidechain taps, MIDI ports, clip fades and cue patches.
+    set(downstream1 "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647" "1a07134c8c4c2a229b4da262dc6b547d3ab1302496fd5e5fbf1d375e9614517a" "9e1afcb494391df977c7f7950ce8030410576a2fab891e757d30a0249f87d60c" "bbc12a579f50896a7be4a5c13127b63c47863b22986b776290a7d523f80866cf" "05e73d01d1cc0a824f96a7dad772a850e5906e3a645bf56affd072f91d986bcc") # The later sidechain taps, MIDI ports, clip fades, cue and group outputs patches.
     set(before1_0 [=[        std::vector<juce::MidiMessageSequence> sequences;
         sequences.emplace_back (clip.getSequence().exportToPlaybackMidiSequence (clip, timeBase, generateMPE));]=])
     set(after1_0 [=[        std::vector<juce::MidiMessageSequence> sequences;

@@ -129,6 +129,8 @@ const juce::Identifier infoTextProperty { "halftrackInfoText" }; // A track's or
 // A clip's own colour. The engine gives every new clip a colour of its own hue, so its colour cannot
 // say whether a clip shows its track's.
 const juce::Identifier clipColourProperty { "halftrackClipColour" };
+// A grouped track or group whose Audio To leaves its group; the engine then plays it where its output goes.
+const juce::Identifier outsideGroupProperty { "halftrackOutsideGroup" };
 const juce::Identifier hostedInstrumentProperty { "halftrackInstrument" }; // A hosted plug-in that is its track's instrument.
 // A hosted plug-in's sidechain tap (InputTap, Post FX by default) and whether it is off; the
 // engine's node builder reads both (see cmake/PatchSidechainTaps.cmake).
@@ -751,6 +753,38 @@ Result validateRouting (const juce::ValueTree& state, bool legacyFaders)
         };
         if (! checkContents (checkContents, track)) return Result::fail ("Return tracks require empty clip slots with valid identities.");
     }
+    // Routes may not loop back: through outputs to tracks, groups and sends. The reference's engine has
+    // feedback units for such loops; Halftrack's engine would drop the route, so the project is refused.
+    {
+        std::vector<juce::ValueTree> audio;
+        for (const auto& track : tracks) if (track.hasType (te::IDs::TRACK)) audio.push_back (track);
+        std::map<String, std::vector<String>> fed;
+        for (const auto& track : tracks)
+        {
+            auto& next = fed[track[te::IDs::id].toString()];
+            const auto parent = track.getParent();
+            if (parent.hasType (te::IDs::FOLDERTRACK) && ! static_cast<bool> (track.getProperty (outsideGroupProperty, false))) next.push_back (parent[te::IDs::id].toString());
+            else
+                for (const auto& device : track.getChildWithName (te::IDs::OUTPUTDEVICES))
+                    if (const auto name = device[te::IDs::name].toString(); name.startsWithIgnoreCase ("track "))
+                        if (const int n = name.substring (6).trim().getIntValue(); n >= 1 && n <= (int) audio.size()) next.push_back (audio[(size_t) n - 1][te::IDs::id].toString());
+            for (const auto& plugin : track)
+                if (plugin.hasType (te::IDs::PLUGIN) && plugin[te::IDs::type].toString() == te::AuxSendPlugin::xmlTypeName)
+                    next.push_back (plugin[sendReturnProperty].toString());
+        }
+        std::map<String, int> marks; // 1 while being visited, 2 once done.
+        const auto loops = [&] (auto&& self, const String& id) -> bool
+        {
+            auto& mark = marks[id];
+            if (mark == 1) return true;
+            if (mark == 2) return false;
+            mark = 1;
+            if (const auto found = fed.find (id); found != fed.end())
+                for (const auto& to : found->second) if (self (self, to)) return true;
+            marks[id] = 2; return false;
+        };
+        for (const auto& [id, to] : fed) if (loops (loops, id)) return Result::fail ("The project routes a track's sound back into itself.");
+    }
     std::vector<juce::ValueTree> validated;
     for (const auto& track : tracks)
     {
@@ -769,11 +803,8 @@ Result validateRouting (const juce::ValueTree& state, bool legacyFaders)
             }
         if (routed && (mixers != 1 || ! canonicalID (track[te::IDs::id])))
             return Result::fail ("Routed tracks require a valid identity and exactly one track mixer.");
-        // A source track may send and play into another track; the engine drops an output that would feed back.
-        if (returned)
-            for (const auto& device : track.getChildWithName (te::IDs::OUTPUTDEVICES))
-                if (device[te::IDs::name].toString().startsWithIgnoreCase ("track "))
-                    return Result::fail ("Return tracks play into Main.");
+        // A track, return or group may send and play into another track, as the reference's Audio To lets
+        // it; the engine drops an output that would feed back.
         std::set<String> targets;
         bool pastSourceEffects = false;
         for (int index = 0; index < static_cast<int> (plugins.size()); ++index)
@@ -4380,12 +4411,49 @@ struct Session::Impl
     }
     bool composite = false; // A command made of other edits keeps them in its one undo step.
     // The audio output a track plays to directly, other than the master's, if any.
-    String externalOutput (const te::AudioTrack& t) const
+    String externalOutput (const te::AudioTrack& t) const { return externalOutput (t.getOutput()); }
+    String externalOutput (const te::TrackOutput& output) const
     {
-        if (t.getOutput().usesDefaultAudioOut() || t.getOutput().outputsToNone() || t.getOutput().getDestinationTrack() != nullptr) return {};
-        auto* device = dynamic_cast<te::WaveOutputDevice*> (t.getOutput().getOutputDevice (false));
+        if (output.usesDefaultAudioOut() || output.outputsToNone() || output.getDestinationTrack() != nullptr) return {};
+        auto* device = dynamic_cast<te::WaveOutputDevice*> (output.getOutputDevice (false));
         if (device == nullptr || device->getDeviceID() == engine.getDeviceManager().getDefaultWaveOutDeviceID()) return {};
         return device->getName();
+    }
+    // A track's or group's output.
+    static te::TrackOutput* outputOf (te::Track& t)
+    {
+        if (auto* audio = dynamic_cast<te::AudioTrack*> (&t)) return &audio->getOutput();
+        if (auto* folder = dynamic_cast<te::FolderTrack*> (&t)) return folder->getOutput();
+        return nullptr;
+    }
+    // A track's or group's Audio To, as the snapshot reports it.
+    Session::TrackOutput describeOutput (te::Track& t) const
+    {
+        auto* output = outputOf (t);
+        if (output == nullptr) return {};
+        if (t.getParentFolderTrack() != nullptr && ! static_cast<bool> (t.state.getProperty (outsideGroupProperty, false))) return { OutputKind::group };
+        if (const int channel = static_cast<int> (t.state.getProperty (midiOutChannelProperty, 0)); channel > 0) return { OutputKind::midiPort, {}, output->getOutputName(), channel };
+        if (auto* destination = output->getDestinationTrack()) return { OutputKind::track, destination->itemID.toString() };
+        if (output->outputsToNone()) return { OutputKind::sendsOnly, {} };
+        if (const auto external = externalOutput (*output); external.isNotEmpty()) return { OutputKind::external, {}, external };
+        return {};
+    }
+    // The reference's grouping switch (0x1024bdbf8), from the tracks' places: a track or group in a group
+    // that plays to Main plays into the group, one routed elsewhere keeps its route by leaving the group,
+    // and one in no group no longer leaves one. Inside the current transaction.
+    void normaliseGroupOutputs()
+    {
+        auto* undo = &edit->getUndoManager();
+        for (auto* t : te::getAllTracks (*edit))
+        {
+            auto* output = outputOf (*t);
+            if (output == nullptr) continue;
+            const bool grouped = t->getParentFolderTrack() != nullptr, outside = t->state.getProperty (outsideGroupProperty, false);
+            const bool toMain = output->usesDefaultAudioOut() && output->getDestinationTrack() == nullptr && ! output->outputsToNone()
+                                && static_cast<int> (t->state.getProperty (midiOutChannelProperty, 0)) == 0;
+            if (grouped && ! outside && ! toMain) t->state.setProperty (outsideGroupProperty, true, undo);
+            if (! grouped && outside) t->state.removeProperty (outsideGroupProperty, undo);
+        }
     }
     // The project's Master Out, when its output is there: the engine's default output follows it.
     void applyMasterOutput()
@@ -5625,25 +5693,32 @@ struct Session::Impl
     }
     // Whether a's audio reaches b, through track outputs, track-sourced inputs and plug-in
     // sidechains (whether on or off, so switching one on cannot feed back).
-    bool feeds (te::AudioTrack& a, te::AudioTrack& b) const
+    // Whether a's sound reaches b: through its output or its group, its sends, the tracks taking its audio
+    // and the plug-ins taking it as a sidechain.
+    bool feeds (te::Track& a, te::Track& b) const
     {
-        std::multimap<te::EditItemID, te::AudioTrack*> sidechains;
-        for (auto* t : te::getAudioTracks (*edit))
+        std::multimap<te::EditItemID, te::Track*> sidechains;
+        for (auto* t : te::getAllTracks (*edit))
             for (auto* p : t->pluginList.getPlugins())
                 if (p->getSidechainSourceID().isValid()) sidechains.emplace (p->getSidechainSourceID(), t);
-        std::vector<te::AudioTrack*> pending { &a };
-        std::set<te::AudioTrack*> seen;
+        std::vector<te::Track*> pending { &a };
+        std::set<te::Track*> seen;
         while (! pending.empty())
         {
             auto* t = pending.back(); pending.pop_back();
             if (t == &b) return true;
             if (! seen.insert (t).second) continue;
-            if (auto* destination = t->getOutput().getDestinationTrack()) pending.push_back (destination);
+            if (t->isPartOfSubmix()) { if (auto* parent = t->getParentFolderTrack()) pending.push_back (parent); }
+            else if (auto* output = outputOf (*t)) { if (auto* destination = output->getDestinationTrack()) pending.push_back (destination); }
+            for (auto* p : t->pluginList.getPlugins())
+                if (auto* send = dynamic_cast<te::AuxSendPlugin*> (p))
+                    if (auto* fed = track (send->state.getProperty (sendReturnProperty).toString())) pending.push_back (fed);
             for (auto [from, to] = sidechains.equal_range (t->itemID); from != to; ++from) pending.push_back (from->second);
-            for (auto* in : edit->getAllInputDevices())
-                if (&in->getInputDevice() == &t->getWaveInputDevice())
-                    for (auto target : in->getTargets())
-                        if (auto* fed = dynamic_cast<te::AudioTrack*> (te::findTrackForID (*edit, target))) pending.push_back (fed);
+            if (auto* audio = dynamic_cast<te::AudioTrack*> (t))
+                for (auto* in : edit->getAllInputDevices())
+                    if (&in->getInputDevice() == &audio->getWaveInputDevice())
+                        for (auto target : in->getTargets())
+                            if (auto* fed = dynamic_cast<te::AudioTrack*> (te::findTrackForID (*edit, target))) pending.push_back (fed);
         }
         return false;
     }
@@ -6919,10 +6994,7 @@ Session::Snapshot Session::snapshot() const
         for (auto& clip : info.clips) if (clip.colour.isTransparent()) clip.colour = info.colour;
         for (auto& lane : info.takeLanes) for (auto& clip : lane.clips) if (clip.colour.isTransparent()) clip.colour = info.colour;
         info.launcherActive = t->playSlotClips.get() || (t->launcherOwnership.load (std::memory_order_acquire) & 1) != 0;
-        if (const int channel = static_cast<int> (t->state.getProperty (midiOutChannelProperty, 0)); channel > 0) info.output = { OutputKind::midiPort, {}, t->getOutput().getOutputName(), channel };
-        else if (auto* destination = t->getOutput().getDestinationTrack()) info.output = { OutputKind::track, destination->itemID.toString() };
-        else if (t->getOutput().outputsToNone()) info.output = { OutputKind::sendsOnly, {} };
-        else if (const auto external = impl->externalOutput (*t); external.isNotEmpty()) info.output = { OutputKind::external, {}, external };
+        info.output = impl->describeOutput (*t);
         info.hasInstrument = info.isMidi && Impl::instrument (*t) != nullptr;
         info.frozen = t->isFrozen (te::Track::individualFreeze);
         info.crossfade = static_cast<CrossfadeAssign> (juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (crossfadeProperty, 0))));
@@ -6997,6 +7069,7 @@ Session::Snapshot Session::snapshot() const
                 group.peakL = m.read (0); group.peakR = m.read (1);
             }
             for (auto* member : te::getAudioTracks (e)) if (member->getParentFolderTrack() == folder) group.memberIds.add (member->itemID.toString());
+            group.output = impl->describeOutput (*folder);
             s.groups.push_back (std::move (group));
         }
     for (auto* p : Impl::devicesIn (e.getMasterPluginList())) s.mainPlugins.push_back (describe (*p));
@@ -8238,8 +8311,10 @@ Result Session::exportMidiClip (const String& id, const File& destination)
 juce::StringArray Session::outputDestinations (const String& trackId) const
 {
     juce::StringArray result;
-    auto* source = impl->track (trackId);
-    if (source == nullptr || isReturn (*source) || source->getParentFolderTrack() != nullptr) return result;
+    te::Track* source = impl->track (trackId);
+    if (source == nullptr) source = impl->group (trackId);
+    if (source == nullptr) return result;
+    // Audio tracks, as the reference lists them, but not those whose sound reaches the source.
     for (auto* t : te::getAudioTracks (*impl->edit))
         if (t != source && ! isReturn (*t) && ! static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) && ! impl->feeds (*t, *source))
             result.add (t->itemID.toString());
@@ -8301,15 +8376,16 @@ Result Session::setTrackOutput (const String& trackId, const TrackOutput& output
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->anyRecording()) return Result::fail ("Stop recording before changing a track's output.");
-    auto* t = impl->track (trackId); if (t == nullptr) return Result::fail ("Track not found.");
-    TrackOutput current;
-    if (const int channel = static_cast<int> (t->state.getProperty (midiOutChannelProperty, 0)); channel > 0) current = { OutputKind::midiPort, {}, t->getOutput().getOutputName(), channel };
-    else if (auto* destination = t->getOutput().getDestinationTrack()) current = { OutputKind::track, destination->itemID.toString() };
-    else if (t->getOutput().outputsToNone()) current = { OutputKind::sendsOnly, {} };
-    else if (const auto external = impl->externalOutput (*t); external.isNotEmpty()) current = { OutputKind::external, {}, external };
-    if (output.kind == OutputKind::master || output.kind == OutputKind::sendsOnly ? output.kind == current.kind : output == current) return Result::ok();
-    if (output.kind != OutputKind::master && isReturn (*t)) return Result::fail ("Return tracks play into Main.");
-    if (output.kind != OutputKind::master && t->getParentFolderTrack() != nullptr) return Result::fail ("Tracks in a group play into the group.");
+    te::Track* item = impl->track (trackId);
+    if (item == nullptr) item = impl->group (trackId);
+    auto* t = dynamic_cast<te::AudioTrack*> (item);
+    auto* routed = item != nullptr ? Impl::outputOf (*item) : nullptr;
+    if (routed == nullptr) return Result::fail ("Track not found.");
+    const auto current = impl->describeOutput (*item);
+    if (output.kind == OutputKind::master || output.kind == OutputKind::sendsOnly || output.kind == OutputKind::group ? output.kind == current.kind : output == current) return Result::ok();
+    const bool grouped = item->getParentFolderTrack() != nullptr;
+    if (output.kind == OutputKind::group && ! grouped) return Result::fail ("Only a track or group inside a group plays into it.");
+    if (output.kind == OutputKind::midiPort && t == nullptr) return Result::fail ("Only a MIDI track without an instrument plays to a MIDI port.");
     te::AudioTrack* destination = nullptr;
     te::MidiOutputDevice* port = nullptr;
     if (output.kind == OutputKind::track)
@@ -8328,7 +8404,7 @@ Result Session::setTrackOutput (const String& trackId, const TrackOutput& output
     }
     if (output.kind == OutputKind::external)
     {
-        if (static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) && Impl::instrument (*t) == nullptr)
+        if (t != nullptr && static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) && Impl::instrument (*t) == nullptr)
             return Result::fail ("A MIDI track without an instrument plays no audio to send out.");
         if (! outputNames().contains (output.port) || output.port == masterOutput())
             return Result::fail ("Choose an output that is switched on in the Output Config and is not the Main Out.");
@@ -8337,15 +8413,18 @@ Result Session::setTrackOutput (const String& trackId, const TrackOutput& output
     auto* undo = &impl->edit->getUndoManager();
     switch (output.kind)
     {
-        case OutputKind::master: t->getOutput().setOutputToDefaultDevice (false); break;
-        case OutputKind::sendsOnly: t->getOutput().setOutputToNone(); break;
-        case OutputKind::track: t->getOutput().setOutputToTrack (destination); break;
+        case OutputKind::master: case OutputKind::group: routed->setOutputToDefaultDevice (false); break;
+        case OutputKind::sendsOnly: routed->setOutputToNone(); break;
+        case OutputKind::track: routed->setOutputToTrack (destination); break;
         // By name, which the engine also resolves, so a project names the port on any machine.
-        case OutputKind::midiPort: t->getOutput().setOutputToDeviceID (port->getName()); break;
-        case OutputKind::external: t->getOutput().setOutputToDeviceID (output.port); break;
+        case OutputKind::midiPort: routed->setOutputToDeviceID (port->getName()); break;
+        case OutputKind::external: routed->setOutputToDeviceID (output.port); break;
     }
-    if (output.kind == OutputKind::midiPort) t->state.setProperty (midiOutChannelProperty, output.midiChannel, undo);
-    else t->state.removeProperty (midiOutChannelProperty, undo);
+    if (output.kind == OutputKind::midiPort) item->state.setProperty (midiOutChannelProperty, output.midiChannel, undo);
+    else item->state.removeProperty (midiOutChannelProperty, undo);
+    // Any output but its group's leaves the group.
+    if (grouped && output.kind != OutputKind::group) item->state.setProperty (outsideGroupProperty, true, undo);
+    else item->state.removeProperty (outsideGroupProperty, undo);
     impl->edit->restartPlayback(); impl->refreshRouting(); impl->changed(); return Result::ok();
 }
 Result Session::auditionTakeLane (const String& laneId)
@@ -10229,6 +10308,7 @@ Result Session::groupTracks (const juce::StringArray& ids, String& groupId)
     te::Track* preceding = nullptr;
     for (auto* track : members) { impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (folder.get(), preceding)); preceding = track; }
     groupId = folder->itemID.toString();
+    impl->normaliseGroupOutputs();
     impl->changed(); return Result::ok();
 }
 Result Session::ungroupTracks (const String& groupId)
@@ -10243,6 +10323,14 @@ Result Session::ungroupTracks (const String& groupId)
     for (auto* track : members)
     { impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (folder->getParentTrack(), preceding)); preceding = track; }
     impl->edit->deleteTrack (folder);
+    // As the reference's Ungroup gives every track its new parent (0x1024bdbf8), one playing to Main
+    // inside the group around this one now plays into that group.
+    if (auto* parent = dynamic_cast<te::FolderTrack*> (members.isEmpty() ? nullptr : members.getFirst()->getParentTrack()))
+        for (auto* track : members)
+            if (auto* output = Impl::outputOf (*track); output != nullptr && track->getParentTrack() == parent && output->usesDefaultAudioOut()
+                && output->getDestinationTrack() == nullptr && ! output->outputsToNone())
+                track->state.removeProperty (outsideGroupProperty, &impl->edit->getUndoManager());
+    impl->normaliseGroupOutputs();
     impl->changed(); return Result::ok();
 }
 Result Session::moveTracks (const juce::StringArray& ids, const String& groupId, const String& beforeId)
@@ -10292,6 +10380,7 @@ Result Session::moveTracks (const juce::StringArray& ids, const String& groupId,
     te::Track* preceding = at > 0 ? siblings[at - 1] : nullptr;
     impl->transaction ("Move tracks");
     for (auto* t : moving) { impl->edit->moveTrack (te::Track::Ptr (t), te::TrackInsertPoint (parent, preceding)); preceding = t; }
+    impl->normaliseGroupOutputs();
     impl->changed(); return Result::ok();
 }
 Result Session::copyTracksTo (const juce::StringArray& ids, const String& groupId, const String& beforeId, juce::StringArray& copiedIds)
@@ -10321,6 +10410,7 @@ Result Session::copyTracksTo (const juce::StringArray& ids, const String& groupI
     impl->transaction (states.size() > 1 || states.front().hasType (te::IDs::FOLDERTRACK) ? "Copy tracks" : "Copy track");
     juce::StringArray created;
     if (auto inserted = impl->insertStates (states, parent, before, created); inserted.failed()) { impl->changed(); return inserted; }
+    impl->normaliseGroupOutputs();
     impl->refreshRouting(); impl->changed(); copiedIds = created; return Result::ok();
 }
 bool Session::canClearAllEnvelopes (const juce::StringArray& ids) const
@@ -10565,6 +10655,7 @@ Result Session::duplicateTracks (const juce::StringArray& ids, juce::StringArray
         created.add (copy->itemID.toString());
         preceding = copy;
     }
+    impl->normaliseGroupOutputs();
     impl->refreshRouting(); impl->changed(); duplicateIds = created; return Result::ok();
 }
 Result Session::copyTracks (const juce::StringArray& ids)
@@ -10604,6 +10695,7 @@ Result Session::pasteTracks (const juce::StringArray& selectedIds, juce::StringA
     impl->transaction (impl->trackClipboard.size() > 1 || impl->trackClipboard.front().hasType (te::IDs::FOLDERTRACK) ? "Paste tracks" : "Paste track");
     juce::StringArray created;
     if (auto inserted = impl->insertStates (impl->trackClipboard, parent, before, created); inserted.failed()) { impl->changed(); return inserted; }
+    impl->normaliseGroupOutputs();
     impl->refreshRouting(); impl->changed(); pastedIds = created; return Result::ok();
 }
 Result Session::moveTrack (const String& id, int destinationIndex)

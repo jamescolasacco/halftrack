@@ -493,12 +493,13 @@ public:
     // A take lane: recorded or added takes kept below a track's main lane, as in the reference's
     // comping. Take lane clips do not play; comping copies a range of a lane into the main lane.
     struct TakeLaneInfo { juce::String id, name; std::vector<ClipInfo> clips; };
-    // A track's output ("Audio To"): Master, Sends Only, or another audio track, whose devices and
-    // mixer then play it as if it were that track's input.
+    // A track's or group's output ("Audio To"): Master, Sends Only, or another audio track, whose devices
+    // and mixer then play it as if it were that track's input.
     // A MIDI track without an instrument plays its MIDI to a MIDI port instead ("MIDI To"), on one channel.
     // external plays to one of the audio device's outputs (the reference's Audio To Ext. Out),
-    // bypassing the master.
-    enum class OutputKind { master, sendsOnly, track, midiPort, external };
+    // bypassing the master. group plays into the group the track or group is in, the default there,
+    // which the reference names after the group; any other output leaves the group.
+    enum class OutputKind { master, sendsOnly, track, midiPort, external, group };
     struct TrackOutput
     {
         OutputKind kind = OutputKind::master;
@@ -564,6 +565,7 @@ public:
         std::vector<PluginInfo> plugins; // Its audio devices, in chain order.
         std::vector<SendInfo> sends;     // One per return, as a track's.
         AutomationLane volumeAutomation, panAutomation, leftSplitAutomation, rightSplitAutomation; // As a track's.
+        TrackOutput output; // Its Audio To, as a track's.
     };
     // A point on the tempo map: the tempo ramps linearly from each point to the next and holds after the last.
     struct TempoPoint
@@ -1289,10 +1291,14 @@ public:
     juce::Result resetTrackControl (int trackIndex, const juce::String& control);
     // Atomic, strictly ordered beat points. Empty points restore manual control.
     juce::Result setTrackAutomation (const juce::String& trackId, AutomationTarget, const AutomationLane&);
-    // Routes a track's output. Return tracks and tracks in a group play into Master or their group;
-    // a route that would lead back into the track is refused. One undo step.
+    // Routes a track's or group's output, as the reference's Audio To does: a track or group in a group
+    // plays into it, or leaves it for Main, Sends Only, another track or an external output; returns
+    // play into Main, Sends Only, a track or an external output. A route that would lead back into the
+    // track, through outputs, groups, sends, track inputs or sidechains, is refused. One undo step.
+    // As the reference's grouping does (0x1024bdbf8), a track moved into a group from Main plays into
+    // it, and one leaving every group goes back to Main from its group; other outputs are kept.
     juce::Result setTrackOutput (const juce::String& trackId, const TrackOutput&);
-    // The audio tracks a track's output can go to, in order.
+    // The audio tracks a track's or group's output can go to, in order.
     juce::StringArray outputDestinations (const juce::String& trackId) const;
     // Audio From another track: its audio becomes this audio track's input, monitored and recorded
     // like any input. Sources are the tracks with audio output that this one does not feed, so

@@ -1976,6 +1976,9 @@ private:
         juce::StringArray controlLabels;
         juce::String shownKey, deviceSignature, id;
     };
+    // A choice in an Audio To chooser: an output, or Configure... (see outputChoices).
+    static constexpr int configureOutputItem = 9000;
+    struct OutputChoice { juce::String label; std::optional<Session::TrackOutput> output; bool separatorBefore = false; };
     class TrackRow final : public juce::Component
     {
     public:
@@ -2094,9 +2097,7 @@ private:
                         chosen = { Session::OutputKind::midiPort, {}, outputPorts[port], (item - firstPortItem) % 16 + 1 };
                     }
                     else if (midiTo) chosen.kind = Session::OutputKind::master; // No Output.
-                    else if (item == 2) chosen.kind = Session::OutputKind::sendsOnly;
-                    else if (juce::isPositiveAndBelow (item - 3, outputIds.size())) chosen = { Session::OutputKind::track, outputIds[item - 3] };
-                    else if (juce::isPositiveAndBelow (item - 3 - outputIds.size(), externalOutputs.size())) chosen = { Session::OutputKind::external, {}, externalOutputs[item - 3 - outputIds.size()] };
+                    else { owner.chooseOutput (trackId, output, outputChoiceList); return; }
                     owner.report (owner.session.setTrackOutput (trackId, chosen)); owner.refresh();
                 };
                 gain.setSliderStyle (juce::Slider::LinearVertical); gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 16);
@@ -2284,13 +2285,12 @@ private:
             if (! automating) return;
             automationLane.setEnabled (choosers.sync (track));
         }
-        // Returns play into Master and grouped tracks into their group; other tracks choose Master,
-        // Sends Only or one of the tracks they may play into.
+        // Audio To, as the reference's: see Impl::outputChoices.
         void syncOutput (const Session::TrackInfo& track)
         {
             // A MIDI track without an instrument chooses MIDI To instead: No Output, or a channel
             // of each port whose Track switch is on (and of its current port, if that is off).
-            midiTo = track.isMidi && ! track.hasInstrument && track.groupId.isEmpty();
+            midiTo = track.isMidi && ! track.hasInstrument;
             if (midiTo)
             {
                 juce::StringArray ports;
@@ -2298,7 +2298,7 @@ private:
                 if (track.output.kind == Session::OutputKind::midiPort && ! ports.contains (track.output.port)) ports.add (track.output.port);
                 if (ports != outputPorts || outputLabels != juce::StringArray { "MIDI To" })
                 {
-                    outputPorts = ports; outputLabels = { "MIDI To" }; output.clear (juce::dontSendNotification);
+                    outputPorts = ports; outputLabels = { "MIDI To" }; outputSignature.clear(); output.clear (juce::dontSendNotification);
                     output.addItem ("No Output", 1);
                     for (int i = 0; i < ports.size(); ++i)
                     {
@@ -2307,41 +2307,18 @@ private:
                         output.getRootMenu()->addSubMenu (ports[i], channels);
                     }
                 }
-                outputIds.clear();
                 const int port = outputPorts.indexOf (track.output.port);
                 output.setSelectedId (track.output.kind == Session::OutputKind::midiPort && port >= 0 ? firstPortItem + port * 16 + track.output.midiChannel - 1 : 1, juce::dontSendNotification);
                 output.setTooltip ("MIDI To: the MIDI port and channel this track's MIDI plays to.");
                 output.setEnabled (! owner.session.isExporting());
                 return;
             }
-            outputPorts.clear();
-            output.setTooltip ("Audio To: where this track plays. With Sends Only, only its sends are heard.");
-            juce::StringArray ids, labels;
-            if (track.isReturn) labels.add ("Main");
-            else if (track.groupId.isNotEmpty()) labels.add ("Group");
-            else
-            {
-                labels.addArray ({ "Main", "Sends Only" });
-                for (const auto& id : owner.session.outputDestinations (track.id))
-                    for (const auto& other : owner.state.tracks) if (other.id == id) { ids.add (id); labels.add (other.name); }
-            }
-            // Ext. Out: the audio device's other outputs, as the reference's Audio To offers them.
-            juce::StringArray externals;
-            if (! track.isReturn && track.groupId.isEmpty())
-                for (const auto& name : owner.session.outputNames())
-                    if (name != owner.session.masterOutput()) { externals.add (name); labels.add ("Ext. Out " + name); }
-            if (labels != outputLabels)
-            {
-                outputLabels = labels; output.clear (juce::dontSendNotification);
-                for (int i = 0; i < labels.size(); ++i) output.addItem (labels[i], i + 1);
-            }
-            outputIds = ids; externalOutputs = externals;
-            int chosen = 1;
-            if (track.output.kind == Session::OutputKind::sendsOnly) chosen = 2;
-            else if (track.output.kind == Session::OutputKind::track && ids.contains (track.output.trackId)) chosen = ids.indexOf (track.output.trackId) + 3;
-            else if (track.output.kind == Session::OutputKind::external && externals.contains (track.output.port)) chosen = ids.size() + externals.indexOf (track.output.port) + 3;
-            output.setSelectedId (chosen, juce::dontSendNotification);
-            output.setEnabled (labels.size() > 1 && ! owner.session.isExporting());
+            outputPorts.clear(); outputLabels.clear();
+            output.setTooltip (track.groupId.isNotEmpty() ? "Audio To: where this track plays, into its group or past it. With Sends Only, only its sends are heard."
+                                                         : "Audio To: where this track plays. With Sends Only, only its sends are heard.");
+            outputChoiceList = owner.outputChoices (track.id, track.groupId);
+            owner.syncOutputChooser (output, outputChoiceList, track.output, outputSignature);
+            output.setEnabled (! owner.session.isExporting());
         }
         // Session mixer sends: one knob per return, labelled A, B, C as the returns are.
         void syncSends (const Session::TrackInfo& track)
@@ -2562,14 +2539,15 @@ private:
         MonitorSwitch monitor;
         juce::TextButton automationLane { "+" };
         AutomationChoosers choosers { owner, *this };
-        juce::StringArray inputNames, sendReturnIds, outputIds, outputLabels, inputSourceIds, inputSourceLabels, inputDetailItems;
+        juce::StringArray inputNames, sendReturnIds, outputLabels, inputSourceIds, inputSourceLabels, inputDetailItems;
         juce::ComboBox inputDetail;
         juce::String sourceTrack, lastExternalInput;
         bool inputIsMidi = false, inputDetailShown = false;
         juce::StringArray outputPorts; // MIDI To: the ports offered, by item.
         bool midiTo = false;
         static constexpr int firstPortItem = 1000;
-        juce::StringArray externalOutputs; // The Ext. Out choices after the track destinations.
+        std::vector<Impl::OutputChoice> outputChoiceList; // The Audio To choices, in the chooser's order.
+        juce::String outputSignature;
         static constexpr int firstSourceItem = 1000;
         std::vector<std::unique_ptr<juce::Slider>> sends;
         std::unique_ptr<juce::TextButton> sideA, sideB;
@@ -2681,6 +2659,11 @@ private:
             }
             if (columnLayout)
             {
+                // Its Audio To, in the In/Out section in line with the tracks', as the reference's group
+                // strip shows only its output.
+                addChildComponent (output); output.setName ("Group output");
+                output.setTooltip ("Audio To: where this group plays. With Sends Only, only its sends are heard.");
+                output.onChange = [this] { owner.chooseOutput (groupId, output, outputChoiceList); };
                 // Session mixer strip: the grid column header names and folds the group.
                 gain.setSliderStyle (juce::Slider::LinearVertical); gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 16);
                 pan.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); pan.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 42, 15);
@@ -2712,6 +2695,9 @@ private:
             if (columnLayout)
             {
                 syncSends (*g);
+                outputChoiceList = owner.outputChoices (groupId, g->parentId);
+                owner.syncOutputChooser (output, outputChoiceList, g->output, outputSignature);
+                output.setVisible (owner.state.mixerSections.inOut); output.setEnabled (! owner.session.isExporting());
                 // The Mixer section, lined up with the tracks' as the In/Out section moves it.
                 const auto& shown = owner.state.mixerSections;
                 for (auto* c : std::initializer_list<juce::Component*> { &gain, &activator, &solo }) c->setVisible (shown.mixer);
@@ -2768,6 +2754,7 @@ private:
             {
                 const auto& shown = owner.state.mixerSections;
                 int top = shown.inOut ? TrackRow::inOutHeight : 4;
+                output.setBounds (5, 67, getWidth() - 10, 19);
                 for (size_t i = 0; i < sends.size(); ++i)
                     sends[i]->setBounds (8 + (int) (i % 3) * 36, top + (int) (i / 3) * 40, 34, 28);
                 if (shown.sends && ! sends.empty()) top += (int) ((sends.size() + 2) / 3) * 40;
@@ -2849,6 +2836,9 @@ private:
         float peakL = 0, peakR = 0;
         FoldButton fold;
         juce::TextButton activator { "G" }, solo { "S" };
+        juce::ComboBox output;
+        std::vector<OutputChoice> outputChoiceList;
+        juce::String outputSignature;
         Session::MixerSections laidOut;
         juce::Label name;
         juce::Slider gain, pan, leftSplit, rightSplit;
@@ -10104,6 +10094,59 @@ private:
         int hovered = -1;
     };
     const Session::TrackInfo* trackInfo (const juce::String& id) const { const auto t = trackIndex (id); return t >= 0 ? &state.tracks[(size_t) t] : nullptr; }
+    // An Audio To chooser's choices, in the reference's order (0x1023ea370): the Ext. Out outputs and
+    // Configure..., then Main and the group the track or group is in (named after the group), the tracks
+    // it can play into, and Sends Only, with separators where the reference has its dividers.
+    std::vector<OutputChoice> outputChoices (const juce::String& id, const juce::String& groupId) const
+    {
+        std::vector<OutputChoice> choices;
+        for (const auto& name : session.outputNames())
+            if (name != session.masterOutput()) choices.push_back ({ "Ext. Out " + name, Session::TrackOutput { Session::OutputKind::external, {}, name } });
+        choices.push_back ({ "Configure...", std::nullopt });
+        choices.push_back ({ "Main", Session::TrackOutput {}, true });
+        if (const auto* g = groupInfo (groupId)) choices.push_back ({ g->name, Session::TrackOutput { Session::OutputKind::group } });
+        bool first = true;
+        for (const auto& destination : session.outputDestinations (id))
+            if (const auto* t = trackInfo (destination)) { choices.push_back ({ t->name, Session::TrackOutput { Session::OutputKind::track, destination }, first }); first = false; }
+        choices.push_back ({ "Sends Only", Session::TrackOutput { Session::OutputKind::sendsOnly }, true });
+        return choices;
+    }
+    static bool sameOutput (const Session::TrackOutput& a, const Session::TrackOutput& b)
+    {
+        if (a.kind != b.kind) return false;
+        if (a.kind == Session::OutputKind::track) return a.trackId == b.trackId;
+        if (a.kind == Session::OutputKind::external) return a.port == b.port;
+        return true;
+    }
+    // Fills an Audio To chooser when its choices change, and shows the current output.
+    void syncOutputChooser (juce::ComboBox& box, const std::vector<OutputChoice>& choices, const Session::TrackOutput& current, juce::String& shown) const
+    {
+        juce::String signature;
+        for (const auto& choice : choices) signature << (choice.separatorBefore ? "-|" : "") << choice.label << "\n";
+        if (signature != shown)
+        {
+            shown = signature; box.clear (juce::dontSendNotification);
+            for (int i = 0; i < (int) choices.size(); ++i)
+            {
+                if (choices[(size_t) i].separatorBefore) box.addSeparator();
+                box.addItem (choices[(size_t) i].label, choices[(size_t) i].output ? i + 1 : configureOutputItem);
+            }
+        }
+        int selected = 0;
+        for (int i = 0; i < (int) choices.size(); ++i)
+            if (const auto& o = choices[(size_t) i].output; o && sameOutput (*o, current)) selected = i + 1;
+        box.setSelectedId (selected, juce::dontSendNotification);
+    }
+    // A choice from an Audio To chooser. Configure... opens Audio & MIDI Setup, as the reference's opens
+    // its output preferences, and leaves the output as it was.
+    void chooseOutput (const juce::String& id, const juce::ComboBox& box, const std::vector<OutputChoice>& choices)
+    {
+        const int item = box.getSelectedId();
+        if (item == configureOutputItem) { refresh(); showAudioSettings(); return; }
+        if (juce::isPositiveAndBelow (item - 1, (int) choices.size()) && choices[(size_t) item - 1].output)
+            report (session.setTrackOutput (id, *choices[(size_t) item - 1].output));
+        refresh();
+    }
     // The tracks of these tracks and groups, those inside the groups included, in order.
     juce::StringArray tracksWithin (const juce::StringArray& ids) const
     {
@@ -18643,10 +18686,18 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         auto* output = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Track output"));
         const auto outs = session.outputNames();
         check (outs.size() == 2 && session.masterOutput() == outs[0], "the test device has a second output pair");
-        check (output != nullptr && output->isVisible() && output->getNumItems() == 4 && output->getText() == "Main"
-               && output->getItemText (2) == state.tracks[1].name && output->getItemText (3) == "Ext. Out " + outs[1],
-               "a track strip's output offers Master, Sends Only, the other track and Ext. Out to the other outputs, as the reference's Audio To does");
-        output->setSelectedId (4, juce::sendNotificationSync); refresh();
+        // Chooses an Audio To item by its text.
+        const auto choose = [&] (juce::ComboBox& box, const juce::String& text)
+        {
+            for (int i = 0; i < box.getNumItems(); ++i)
+                if (box.getItemText (i) == text) { box.setSelectedId (box.getItemId (i), juce::sendNotificationSync); return true; }
+            return false;
+        };
+        const auto items = [] (const juce::ComboBox& box) { juce::StringArray texts; for (int i = 0; i < box.getNumItems(); ++i) texts.add (box.getItemText (i)); return texts.joinIntoString ("|"); };
+        check (output != nullptr && output->isVisible() && output->getText() == "Main"
+                   && items (*output) == "Ext. Out " + outs[1] + "|Configure...|Main|" + state.tracks[1].name + "|Sends Only",
+               "a track strip's Audio To lists Ext. Out, Configure..., Main, the other track and Sends Only, in the reference's order: " + items (*output));
+        check (choose (*output, "Ext. Out " + outs[1]), "choose Ext. Out"); refresh();
         check ((state.tracks[0].output == Session::TrackOutput { Session::OutputKind::external, {}, outs[1] }) && output->getText() == "Ext. Out " + outs[1], "choosing Ext. Out plays the track to those outputs");
         session.undo(); refresh();
         {
@@ -18715,12 +18766,33 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             menuItemSelected (98, 3); refresh();
             check (state.soloInPlace, "and on");
         }
-        output->setSelectedId (2, juce::sendNotificationSync); refresh();
+        choose (*output, "Sends Only"); refresh();
         check (state.tracks[0].output.kind == Session::OutputKind::sendsOnly && output->getText() == "Sends Only", "choosing Sends Only routes the track");
-        output->setSelectedId (3, juce::sendNotificationSync); refresh();
+        choose (*output, state.tracks[1].name); refresh();
         check ((state.tracks[0].output == Session::TrackOutput { Session::OutputKind::track, state.tracks[1].id }), "choosing a track routes into it");
         session.undo(); session.undo(); refresh();
         check (state.tracks[0].output == Session::TrackOutput {} && output->getText() == "Main", "undo returns the strip to Main");
+        {
+            // A grouped track's Audio To names its group after Main; choosing Main leaves the group. The
+            // group's strip has an Audio To of its own.
+            juce::String group;
+            check (session.groupTracks ({ state.tracks[0].id }, group).wasOk(), "group the first track"); refresh();
+            const auto groupName = groupInfo (group)->name;
+            check (output->getText() == groupName && items (*output).contains ("Configure...|Main|" + groupName + "|"),
+                   "the grouped track's Audio To shows its group, by name, after Main: " + items (*output));
+            choose (*output, "Main"); refresh();
+            check (state.tracks[0].output.kind == Session::OutputKind::master && output->getText() == "Main", "choosing Main leaves the group");
+            choose (*output, groupName); refresh();
+            check (state.tracks[0].output.kind == Session::OutputKind::group, "choosing the group plays into it again");
+            auto* groupOutput = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Group output"));
+            check (groupOutput != nullptr && groupOutput->getText() == "Main" && items (*groupOutput).endsWith ("|Sends Only") && ! items (*groupOutput).contains (groupName),
+                   "the group's strip has its own Audio To: " + (groupOutput != nullptr ? items (*groupOutput) : juce::String()));
+            choose (*groupOutput, "Sends Only"); refresh();
+            check (groupInfo (group)->output.kind == Session::OutputKind::sendsOnly, "and choosing Sends Only there routes the group");
+            for (int i = 0; i < 4; ++i) session.undo();
+            refresh();
+            check (state.groups.empty() && state.tracks[0].output == Session::TrackOutput {}, "undo removes the group, and the track plays to Main");
+        }
         {
             // A MIDI track without an instrument: No Instrument in its device view, then MIDI To
             // from its strip, offering a channel of each port whose Track switch is on.
@@ -18770,7 +18842,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             }
             else std::cout << "SKIP UI MIDI To ports: this system cannot make a virtual MIDI port" << std::endl;
             chooser->setSelectedId (1, juce::sendNotificationSync); refresh();
-            check (state.tracks[(size_t) lane].hasInstrument && midiTo->getItemText (0) == "Main", "the built-in synth comes back, with Audio To");
+            check (state.tracks[(size_t) lane].hasInstrument && midiTo->getText() == "Main" && midiTo->indexOfItemId (configureOutputItem) >= 0, "the built-in synth comes back, with Audio To");
             check (session.removeTrack (lane).wasOk(), "remove the MIDI To track"); refresh();
         }
         // Audio From another track, as the reference's: the track in Audio From, its tap in the chooser under it.

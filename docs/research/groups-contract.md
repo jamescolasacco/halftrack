@@ -125,7 +125,7 @@ The stems suite exports a group holding only a group, before the group inside it
 
 Not reproduced:
 - **The strips' look.** The reference keeps the deepest nesting for its arranger layout (LSong +0x800); how it draws the strips was not read. Halftrack's strips are its own.
-- **Audio To.** Moving a track into or out of a group switches its Audio To between Main and Group in the reference, leaving other destinations (0x1024bdbf8). Halftrack's grouped tracks always play into their group.
+- **Audio To.** Reproduced since 2026-10-24: a grouped track plays into its group or leaves it, and grouping switches it between Main and the group, keeping other outputs (see the [routing contract](routing-contract.md)).
 - **Other gestures.** The reference's modifier rules for selecting several headers (not read; Halftrack's Shift adds or removes one track). Header drags scroll the lanes at Halftrack's own speeds (see the [timeline navigation contract](timeline-navigation-contract.md)).
 
 ## Deleting (2026-10-23)

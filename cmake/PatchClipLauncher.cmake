@@ -34,7 +34,8 @@ function(halftrack_patch_clip_launcher source_dir)
        AND NOT source_hash STREQUAL "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647" # the sidechain taps patch,
        AND NOT source_hash STREQUAL "1a07134c8c4c2a229b4da262dc6b547d3ab1302496fd5e5fbf1d375e9614517a" # the MIDI ports patch,
        AND NOT source_hash STREQUAL "9e1afcb494391df977c7f7950ce8030410576a2fab891e757d30a0249f87d60c" # the clip fades patch,
-       AND NOT source_hash STREQUAL "bbc12a579f50896a7be4a5c13127b63c47863b22986b776290a7d523f80866cf") # and the cue patch.
+       AND NOT source_hash STREQUAL "bbc12a579f50896a7be4a5c13127b63c47863b22986b776290a7d523f80866cf" # the cue patch,
+       AND NOT source_hash STREQUAL "05e73d01d1cc0a824f96a7dad772a850e5906e3a645bf56affd072f91d986bcc") # and the group outputs patch.
         message(FATAL_ERROR "Halftrack launcher patch requires pinned source: ${source}; unexpected SHA256 ${source_hash}.")
     endif()
     set(source "${source_dir}/modules/tracktion_engine/model/tracks/tracktion_AudioTrack.h")
@@ -548,7 +549,8 @@ function(halftrack_patch_clip_launcher source_dir)
        AND NOT source_hash STREQUAL "d5ebc0acfbfc0dae66b15881ad2a8f9ece557e737c0c8ad7d4f7b8038a30d647" # or the sidechain taps patch after that,
        AND NOT source_hash STREQUAL "1a07134c8c4c2a229b4da262dc6b547d3ab1302496fd5e5fbf1d375e9614517a" # or the MIDI ports patch after that,
        AND NOT source_hash STREQUAL "9e1afcb494391df977c7f7950ce8030410576a2fab891e757d30a0249f87d60c" # or the clip fades patch after that,
-       AND NOT source_hash STREQUAL "bbc12a579f50896a7be4a5c13127b63c47863b22986b776290a7d523f80866cf") # or the cue patch after that.
+       AND NOT source_hash STREQUAL "bbc12a579f50896a7be4a5c13127b63c47863b22986b776290a7d523f80866cf" # or the cue patch after that,
+       AND NOT source_hash STREQUAL "05e73d01d1cc0a824f96a7dad772a850e5906e3a645bf56affd072f91d986bcc") # or the group outputs patch after that.
         file(READ "${source}" content)
         set(before [=[    if (arrangerNodes.empty() && launcherNodes.empty())
         return {};]=])

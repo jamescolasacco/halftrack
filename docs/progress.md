@@ -2418,3 +2418,15 @@ The Session slot, scene and grid menus follow the reference's order too:
 - Away from any slot, the menu offers the track and scene inserts.
 
 Halftrack's own items there are gone; each is still reached where the reference has it. Checked in the UI and range edit suites ([contract](research/clip-menus-contract.md)).
+
+## Grouped tracks', groups' and returns' Audio To — 2026-10-24
+
+Engine, UI and root areas, with an engine patch. After a static reading of the reference's routing choosers, Audio To follows the reference's model:
+- A grouped track plays into its group by default, shown by the group's name. It may play past the group to Main, Sends Only, another track or an external output.
+- A group has an Audio To of its own, on its Session strip.
+- A return may play into Main, Sends Only, an audio track or an external output.
+- Grouping switches a track between Main and its group, keeping other outputs, as the reference's does.
+
+The chooser lists the reference's order: Ext. Out and Configure..., Main and the group, the tracks, and Sends Only. Configure... opens Audio & MIDI Setup.
+
+`cmake/PatchGroupOutputs.cmake` lets the engine leave a track out of its group's sum. Routes that would loop are still refused, now followed through groups and sends as well, and a project whose routes loop does not open. Checked in the routing, sends and UI suites ([contract](research/routing-contract.md)).

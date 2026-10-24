@@ -18,7 +18,7 @@ Halftrack's outputs follow the reference's:
   - A track plays straight to an output with `OutputKind::external`, bypassing the master, as one undo step. The project names the output.
   - The mixer's Audio To lists "Ext. Out" and the output for each output other than the Master Out.
   - A MIDI track without an instrument has no audio to send out and is refused.
-  - So are returns and grouped tracks (they play into Master or their group), and outputs switched off or missing.
+  - So are outputs switched off or missing. Returns, groups and grouped tracks may play to an output too, as the reference offers Ext. Out to every track with audio output.
   - The Master Out itself is refused: in the engine everything playing to that output is the master.
 - **Master Out.**
   - `setMasterOutput` moves the master, and every track playing to Master, to another output.
