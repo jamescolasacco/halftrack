@@ -384,6 +384,7 @@ public:
         std::vector<ControllerLane> controllers; // Lanes with points, by controller number.
         ScaleSettings scale;
         juce::String grooveId; // The pool groove a MIDI clip plays with; empty for None.
+        juce::String infoText; // Its own info text, from Edit Info Text; empty for none.
         std::vector<WarpMarker> warpMarkers; // A warped audio clip's markers, in order.
         // MIDI and warped audio clips: the beat of their content heard at the clip's start (the
         // start marker) and their loop. Unlooped, the loop gives the content the clip plays.
@@ -431,6 +432,7 @@ public:
         juce::String id, name;
         std::optional<double> tempo;
         std::optional<TimeSignature> timeSignature;
+        juce::String infoText; // Its own info text, from Edit Info Text; empty for none.
     };
     struct SlotInfo
     {
@@ -1004,9 +1006,10 @@ public:
     juce::Result clearAllEnvelopes (const juce::StringArray& trackAndGroupIds);
     // Whether a selected track or group has Arrangement automation for clearAllEnvelopes to clear.
     bool canClearAllEnvelopes (const juce::StringArray& trackAndGroupIds) const;
-    // A track's or group's own info text, as the reference's Edit Info Text gives one: the Info view
-    // shows it while pointing at the track's header. Empty clears it. Saved; one undo step.
-    juce::Result setInfoText (const juce::String& trackOrGroupId, const juce::String& text);
+    // A track's, group's, clip's or scene's own info text, as the reference's Edit Info Text gives one:
+    // the Info view shows it while pointing at the track's header, the clip or the scene. Empty clears
+    // it. Saved; one undo step.
+    juce::Result setInfoText (const juce::String& id, const juce::String& text);
     // Gives tracks and groups a colour, opaque, as the reference's header colour grid does; one undo step.
     // As the reference's clips keep the colour they were made with, a recoloured track's clips without
     // a colour of their own keep the one they showed.

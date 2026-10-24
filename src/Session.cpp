@@ -2023,6 +2023,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
     Session::ClipInfo result;
     const auto position = clip.getPosition();
     result.id = clip.itemID.toString(); result.name = clip.getName(); result.active = !clip.isMuted();
+    result.infoText = clip.state[infoTextProperty].toString();
     if (clip.state.hasProperty (clipColourProperty)) result.colour = juce::VariantConverter<juce::Colour>::fromVar (clip.state[clipColourProperty]); // Else its track's, given by the snapshot.
     result.grid = readGrid (clip.state.getChildWithName (gridType));
     result.start = position.time.getStart().inSeconds(); result.length = position.time.getLength().inSeconds();
@@ -6914,6 +6915,7 @@ Session::Snapshot Session::snapshot() const
         if (scene->state.hasProperty (sceneTempoProperty)) info.tempo = (double) scene->state[sceneTempoProperty];
         if (scene->state.hasProperty (sceneNumeratorProperty))
             info.timeSignature = TimeSignature { (int) scene->state[sceneNumeratorProperty], (int) scene->state[sceneDenominatorProperty] };
+        info.infoText = scene->state[infoTextProperty].toString();
         s.scenes.push_back (std::move (info));
     }
     for (const auto& groove : e.state.getChildWithName (groovePoolType)) s.grooves.push_back (readGroove (groove));
@@ -10527,14 +10529,17 @@ void Session::setDefaultTrackFiles (const File& audio, const File& midi) { impl-
 Result Session::setInfoText (const String& id, const String& text)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    te::Track* t = impl->track (id);
-    if (t == nullptr) t = impl->group (id);
-    if (t == nullptr) return Result::fail ("Track not found.");
+    juce::ValueTree state;
+    if (auto* t = impl->track (id)) state = t->state;
+    else if (auto* g = impl->group (id)) state = g->state;
+    else if (auto* s = impl->scene (id)) state = s->state;
+    else for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* c : allTrackClips (*t)) if (c->itemID.toString() == id) state = c->state;
+    if (! state.isValid()) return Result::fail ("Track, clip or scene not found.");
     const auto own = text.trim();
-    if (own == t->state[infoTextProperty].toString()) return Result::ok();
+    if (own == state[infoTextProperty].toString()) return Result::ok();
     impl->transaction ("Edit info text");
-    if (own.isEmpty()) t->state.removeProperty (infoTextProperty, &impl->edit->getUndoManager());
-    else t->state.setProperty (infoTextProperty, own, &impl->edit->getUndoManager());
+    if (own.isEmpty()) state.removeProperty (infoTextProperty, &impl->edit->getUndoManager());
+    else state.setProperty (infoTextProperty, own, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
 Result Session::setTrackColours (const juce::StringArray& ids, juce::Colour colour)

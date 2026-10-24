@@ -233,6 +233,17 @@ int runGroupTests (const juce::File& artifacts)
             ok (n.setInfoText (top, ""), "clear the group's"); n.undo(); n.undo();
             check (n.snapshot().tracks[0].infoText.isEmpty(), "two undo steps take both texts back");
             check (n.setInfoText ("missing", "x").failed(), "an unknown track has no info text");
+            {
+                // Clips and scenes have info texts of their own too.
+                const auto clipId = n.snapshot().tracks[0].clips.at (0).id; const auto sceneId = n.snapshot().scenes.at (0).id;
+                ok (n.setInfoText (clipId, "Count-in"), "a clip's info text"); ok (n.setInfoText (sceneId, " Verse "), "and a scene's");
+                const auto notesProject = root.getChildFile ("Notes.halftrack");
+                ok (n.saveProject (notesProject), "save them");
+                Session notes (false); ok (notes.loadProject (notesProject), "reopen them");
+                check (notes.snapshot().tracks[0].clips.at (0).infoText == "Count-in" && notes.snapshot().scenes.at (0).infoText == "Verse", "a clip's and a scene's info texts reopen, trimmed");
+                n.undo(); n.undo();
+                check (n.snapshot().tracks[0].clips.at (0).infoText.isEmpty() && n.snapshot().scenes.at (0).infoText.isEmpty(), "each is one undo step");
+            }
             ok (n.ungroupTracks (outer), "ungroup the outer group");
             const auto flatter = n.snapshot();
             check (flatter.groups.size() == 2 && flatter.tracks[0].groupId == inner && flatter.tracks[1].groupId == top

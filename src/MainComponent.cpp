@@ -3802,7 +3802,13 @@ private:
         }
         void mouseMove (const juce::MouseEvent& e) override
         {
+            // A clip's own info text shows in the Info view while pointing at it.
+            juce::String infoTitle, infoText;
             const auto track = owner.trackAtY (e.y); bool handle = false;
+            if (e.x < timelineWidth() && juce::isPositiveAndBelow (track, (int) owner.state.tracks.size()))
+                for (const auto& clip : owner.state.tracks[(size_t) track].clips)
+                    if (clipBounds (clip, track).contains (e.position)) { infoTitle = clip.name; infoText = clip.infoText; }
+            getProperties().set (infoTitleProperty, infoTitle); getProperties().set (infoTextProperty, infoText);
             if (e.x < timelineWidth() && e.y >= 0 && juce::isPositiveAndBelow (track,(int) owner.state.tracks.size()))
             {
                 const auto& clips = owner.state.tracks[(size_t) track].clips;
@@ -4729,6 +4735,10 @@ private:
                 if (const auto g = columns[(size_t) column].group; g >= 0) { title = owner.state.groups[(size_t) g].name; text = owner.state.groups[(size_t) g].infoText; }
                 else { const auto& track = owner.state.tracks[(size_t) columns[(size_t) column].track]; title = track.name; text = track.infoText; }
             }
+            else if (const auto cell = cellAt (event.getPosition()); cell.first >= 0)
+            { if (const auto* slot = slotAt (cell.first, cell.second); slot != nullptr && slot->hasClip) { title = slot->clip.name; text = slot->clip.infoText; } }
+            else if (const auto scene = sceneAt (event.getPosition()); scene >= 0)
+            { title = owner.state.scenes[(size_t) scene].name; text = owner.state.scenes[(size_t) scene].infoText; }
             getProperties().set (infoTitleProperty, title); getProperties().set (infoTextProperty, text);
         }
         void mouseExit (const juce::MouseEvent&) override { getProperties().set (infoTextProperty, juce::String()); }
@@ -10257,13 +10267,25 @@ private:
         { if (safe != nullptr && result == 1) safe->report (safe->session.saveTrackAsDefault (id, file)); }), true);
     }
     // Edit Info Text, for the clicked track or group: its own text for the Info view.
+    // The name and info text of a track, group, clip or scene.
+    std::optional<std::pair<juce::String, juce::String>> infoOf (const juce::String& id) const
+    {
+        if (const auto* group = groupInfo (id)) return std::pair { group->name, group->infoText };
+        if (const auto* track = trackInfo (id)) return std::pair { track->name, track->infoText };
+        for (const auto& scene : state.scenes) if (scene.id == id) return std::pair { scene.name, scene.infoText };
+        for (const auto& track : state.tracks)
+        {
+            for (const auto& clip : track.clips) if (clip.id == id) return std::pair { clip.name, clip.infoText };
+            for (const auto& slot : track.slots) if (slot.hasClip && slot.clip.id == id) return std::pair { slot.clip.name, slot.clip.infoText };
+        }
+        return std::nullopt;
+    }
     void editInfoTextDialog (const juce::String& id)
     {
-        const auto* group = groupInfo (id);
-        const auto* track = trackInfo (id);
-        if (group == nullptr && track == nullptr) return;
-        auto* dialog = new juce::AlertWindow ("Edit Info Text", "Shown in the Info view while pointing at " + (group != nullptr ? group->name : track->name) + ".", juce::MessageBoxIconType::NoIcon);
-        dialog->addTextEditor ("text", group != nullptr ? group->infoText : track->infoText, "Info text");
+        const auto info = infoOf (id);
+        if (! info) return;
+        auto* dialog = new juce::AlertWindow ("Edit Info Text", "Shown in the Info view while pointing at " + info->first + ".", juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor ("text", info->second, "Info text");
         if (auto* editor = dialog->getTextEditor ("text")) { editor->setMultiLine (true, true); editor->setReturnKeyStartsNewLine (true); editor->setSize (300, 90); }
         dialog->addButton ("OK", 1); dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
         dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
@@ -10424,7 +10446,7 @@ private:
                            arrangementZoom, arrangementZoomBack, arrangementRename, arrangementGroove, arrangementActivate, arrangementSplit,
                            arrangementConsolidate, arrangementConsolidateScene, arrangementExportMidi, arrangementInsertMidi, arrangementVideo,
                            arrangementReveal, arrangementSimilar, arrangementFade, arrangementResetFades, arrangementLoop, arrangementFreeze,
-                           arrangementBounceInPlace, arrangementBounceNew, arrangementCrop, arrangementReverse, arrangementColour,
+                           arrangementBounceInPlace, arrangementBounceNew, arrangementCrop, arrangementReverse, arrangementColour, arrangementInfo,
                            arrangementSlice = 450 }; // Plus Session::SliceBy.
     // A right-click's selection, as the reference prepares it (0x1037c6280): an unselected clip is
     // selected alone, with the time selection on its lane at its edges; a click inside the selection keeps
@@ -10600,6 +10622,7 @@ private:
         if (! place.takeLane)
         {
             if (clicked != nullptr || single != nullptr) item (arrangementRename, "Rename");
+            if (single != nullptr) item (arrangementInfo, "Edit Info Text");
             if (! clips.empty() && std::all_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return c->isMidi; }))
                 item (arrangementGroove, clips.size() > 1 ? "Extract Grooves" : "Extract Groove");
             if (! clips.empty())
@@ -10699,6 +10722,7 @@ private:
             case arrangementZoom: zoomToSelection(); break;
             case arrangementZoomBack: zoomBackFromSelection(); break;
             case arrangementRename: renameClipDialog (place.clipId.isNotEmpty() ? place.clipId : single != nullptr ? single->id : juce::String()); return;
+            case arrangementInfo: if (single != nullptr) editInfoTextDialog (single->id); return;
             case arrangementGroove: for (const auto* clip : clips) extractGrooveFromUI (clip->id); break;
             case arrangementActivate:
             {
@@ -10803,7 +10827,7 @@ private:
         if (hasClip) { item (slotDuplicate, "Duplicate"); item (slotDelete, "Delete"); }
         if (std::any_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return ! c->envelopes.empty(); })) item (slotClearEnvelopes, "Clear All Envelopes");
         separator();
-        if (single != nullptr) item (slotRename, "Rename");
+        if (single != nullptr) { item (slotRename, "Rename"); item (slotInfo, "Edit Info Text"); }
         if (hasClip && std::all_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return c->isMidi; })) item (slotGroove, clips.size() > 1 ? "Extract Grooves" : "Extract Groove");
         if (hasClip)
         {
@@ -10854,6 +10878,7 @@ private:
                 for (const auto* c : clips) for (auto envelope : c->envelopes) { envelope.points.clear(); report (session.setClipEnvelope (c->id, envelope)); }
                 session.endEditGesture(); break;
             case slotRename: if (single != nullptr) renameClipDialog (single->id); return;
+            case slotInfo: if (single != nullptr) editInfoTextDialog (single->id); return;
             case slotGroove: for (const auto& id : clipIds) extractGrooveFromUI (id); break;
             case slotActivate:
             {
@@ -10940,7 +10965,7 @@ private:
         sessionSpaceMenu().showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this)] (int result)
         { if (safe != nullptr && result != 0) safe->chooseSessionSpaceItem (result); });
     }
-    enum SceneItem { sceneDuplicate = 560, sceneDelete, sceneRename, sceneInsert, sceneCapture, sceneSelectContent, sceneTempo, sceneSignature };
+    enum SceneItem { sceneDuplicate = 560, sceneDelete, sceneRename, sceneInsert, sceneCapture, sceneSelectContent, sceneTempo, sceneSignature, sceneInfo };
     // A scene's menu, in the reference's order (LSceneManager 0x1039e7c54). Halftrack has no scene clipboard,
     // info text or colours yet, and edits a scene's tempo and time signature in place of the reference's
     // switch that shows them.
@@ -10950,7 +10975,7 @@ private:
         if (state.scenes.size() < 256) menu.addItem (sceneDuplicate, "Duplicate");
         if (state.scenes.size() > 1) menu.addItem (sceneDelete, "Delete");
         menu.addSeparator();
-        menu.addItem (sceneRename, "Rename");
+        menu.addItem (sceneRename, "Rename"); menu.addItem (sceneInfo, "Edit Info Text");
         menu.addSeparator();
         if (state.scenes.size() < 256) menu.addItem (sceneInsert, "Insert Scene");
         menu.addItem (sceneCapture, "Capture and Insert Scene");
@@ -10970,6 +10995,7 @@ private:
             case sceneDuplicate: duplicateSceneFromUI (sceneId); return;
             case sceneDelete: report (session.removeScene (index)); break;
             case sceneRename: renameSceneDialog (index); return;
+            case sceneInfo: editInfoTextDialog (sceneId); return;
             case sceneInsert: insertSceneFromUI(); return;
             case sceneCapture: captureSceneFromUI(); return;
             case sceneSelectContent:
@@ -14644,7 +14670,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                    && std::abs (timeSelection.end - 2.1) < 1e-3, "a right-click selects the clip with its time on its lane");
         const juce::String paste = session.hasRangeClipboard() || session.hasAudioClipClipboard() ? "Paste|" : "";
         const auto clipMenu = listed (arrangementMenu (onClip, colour));
-        check (clipMenu == "Cut|Copy|" + paste + "Duplicate|Delete|-|Zoom to Arrangement Time Selection|-|Rename|Deactivate Clip|Consolidate|Consolidate Time to New Scene|-|"
+        check (clipMenu == "Cut|Copy|" + paste + "Duplicate|Delete|-|Zoom to Arrangement Time Selection|-|Rename|Edit Info Text|Deactivate Clip|Consolidate|Consolidate Time to New Scene|-|"
                                "Reveal in Finder|Show Similar Files (off)|-|Create Fade (off)|Reset Fades (off)|Loop Selection|-|Freeze Track|Bounce Track in Place|"
                                "Bounce to New Track|-|Crop Clip (off)|Reverse Clip|-|Slice to New MIDI Track|-|[Clip Colours]",
                "an audio clip's menu lists the reference's commands in its order, ending with the clip colours: " + clipMenu);
@@ -14653,13 +14679,24 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (clip().colour == paletteColour (5), "a swatch gives the clip its colour");
         session.undo(); refresh();
         check (clip().colour != paletteColour (5), "one undo takes it back");
+        // The clip's own info text shows in the Info view while pointing at it.
+        check (session.setInfoText (clipId, "Breath before the line").wasOk(), "give the clip an info text"); refresh();
+        {
+            viewStart = 0; updateScroll(); refresh();
+            const auto at = juce::Point<float> ((float) (2.05 * pixelsPerSecond), (float) (laneY (t) + laneHeight (t) / 2));
+            const auto when = juce::Time::getCurrentTime();
+            canvas.mouseMove (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, {}, 1.0f, 0, 0, 0, 0, &canvas, &canvas, when, at, when, 0, false));
+            info.describe (&canvas);
+            check (info.body == "Breath before the line", "the Info view shows the clip's info text while pointing at it");
+        }
+        session.undo(); refresh();
         // Inside a time selection that holds the clip's start, it keeps the selection and offers a fade in and the grid.
         timeSelection = { 1.0, 2.05, { trackId } };
         const ArrangementPlace inside { t, {}, 1.5, false };
         prepareArrangementMenu (inside, 1.5);
         check (timeSelection.active() && std::abs (timeSelection.start - 1.0) < 1e-6, "a right-click inside the time selection keeps it");
         const auto selectionMenu = listed (arrangementMenu (inside, colour));
-        check (selectionMenu == "Cut|Copy|" + paste + "Duplicate|Delete|-|Zoom to Arrangement Time Selection|-|Rename|Deactivate Clip|Split|Consolidate|Consolidate Time to New Scene|-|"
+        check (selectionMenu == "Cut|Copy|" + paste + "Duplicate|Delete|-|Zoom to Arrangement Time Selection|-|Rename|Edit Info Text|Deactivate Clip|Split|Consolidate|Consolidate Time to New Scene|-|"
                                     "Reveal in Finder|Show Similar Files (off)|-|Create Fade In|Reset Fades (off)|Loop Selection|-|Freeze Track|Bounce Track in Place|"
                                     "Bounce to New Track|-|Slice to New MIDI Track|-|Snap to Grid (on)|[Adaptive Grid]|[Fixed Grid]|-|Narrow Grid|Widen Grid|-|Triplet Grid",
                "a time selection's menu has Split and Create Fade In, and the grid's items in place of the colours: " + selectionMenu);
@@ -14719,7 +14756,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         selectedSlots.clear(); selectLauncherSlot (t, 0);
         const juce::String paste = session.hasSlotClipboard() ? "Paste|" : "";
         const auto filled = listed (slotContextMenu (colour));
-        check (filled == "Cut|Copy|" + paste + "Duplicate|Delete|-|Rename|Extract Groove|Deactivate Clip|Export MIDI Clip...|-|Freeze Track (off)|Bounce Track in Place|Bounce to New Track|-|[Clip Colours]",
+        check (filled == "Cut|Copy|" + paste + "Duplicate|Delete|-|Rename|Edit Info Text|Extract Groove|Deactivate Clip|Export MIDI Clip...|-|Freeze Track (off)|Bounce Track in Place|Bounce to New Track|-|[Clip Colours]",
                "a filled slot's menu lists the reference's commands in its order: " + filled);
         chooseSlotItem (slotColour, 7);
         check (state.tracks[(size_t) t].slots[0].clip.colour == paletteColour (7), "a swatch colours the slot's clip");
@@ -14730,7 +14767,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tracks[(size_t) t].slots[1].hasClip && state.tracks[(size_t) t].slots[1].clip.isMidi, "Insert MIDI Clip puts a clip in the empty slot");
         session.undo(); refresh();
         const auto sceneMenu = listed (sceneContextMenu());
-        check (sceneMenu == "Duplicate|Delete|-|Rename|-|Insert Scene|Capture and Insert Scene|-|Select Scene Content|-|Scene Tempo...|Scene Time Signature...", "a scene's menu: " + sceneMenu);
+        check (sceneMenu == "Duplicate|Delete|-|Rename|Edit Info Text|-|Insert Scene|Capture and Insert Scene|-|Select Scene Content|-|Scene Tempo...|Scene Time Signature...", "a scene's menu: " + sceneMenu);
         const auto scenes = state.scenes.size();
         chooseSceneItem (sceneSelectContent, state.scenes[0].id);
         check (selectedSlots.size() >= 2 && std::all_of (selectedSlots.begin(), selectedSlots.end(), [] (const Session::SlotRef& r) { return r.scene == 0; }),

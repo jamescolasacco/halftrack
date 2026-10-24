@@ -33,7 +33,7 @@ The reference's items, with what Halftrack shows:
 | Copy to Main Lane, then a separator | a take lane | the same, from a take lane's selection |
 | Cut, Copy, Paste, Duplicate, Delete | a time selection with content; Paste when the clipboard fits | the same over the time selection (`copyRange`, `pasteRange`, `duplicateRange`, `deleteRange`), or over the selected clips when several are selected without one. Paste takes a copied time selection, or a copied clip of the track's kind |
 | Zoom to Arrangement Time Selection, Zoom Back | a time selection; Zoom Back always | Zoom Back only after a zoom to return from, as Halftrack keeps no other view to go back to |
-| Rename, Edit Info Text | one clip | Rename. Clips have no info text yet |
+| Rename, Edit Info Text | one clip | the same: Edit Info Text gives the clip its own text (`setInfoText`, saved, one undo step), which the Info view shows while pointing at the clip |
 | Extract Grooves | clips that are MIDI, or audio with a warped sample | MIDI clips only: Halftrack does not extract grooves from audio yet |
 | Deactivate / Activate Clip(s) | clips in the selection | the same, Activate when all are deactivated, in one undo step |
 | Split | clips cut by the selection's edges | the same, or at the insert marker without a selection |
@@ -58,6 +58,7 @@ Halftrack's own clip menu items are gone: the gain, fades and range dialog, spli
 The UI suite builds the menus for an audio clip, a time selection holding the clip's start, and an empty lane. It compares each with the reference's order. It also checks:
 - the right-click selections;
 - a swatch colouring the clip, undone in one step;
+- a clip's info text showing in the Info view while pointing at it;
 - Create Fade In fading the clip over the selection's part, and Reset Fades returning it to the default;
 - Crop Clip leaving the selection's part;
 - Bounce to New Track making a track after the clip's, removed with one undo.
@@ -72,7 +73,7 @@ A right-click on a slot that is not selected selects it alone, its track and sce
 |---|---|---|
 | Cut, Copy, Paste, Duplicate, Delete | a selected slot holds a clip; Paste when the clipboard fits | the same, over the selected slots (`copySlotClips`, `pasteSlotClip`, `duplicateSlotClip`, `clearSlots`) |
 | Clear All Envelopes | a selected clip has envelopes | the same, in one undo step |
-| Rename, Edit Info Text | one clip | Rename. Clips have no info text yet |
+| Rename, Edit Info Text | one clip | the same: Edit Info Text gives the clip its own text (`setInfoText`, saved, one undo step), which the Info view shows while pointing at the clip |
 | Extract Grooves | MIDI clips, or audio with a warped sample | MIDI clips only |
 | Deactivate / Activate Clip(s) | clips | the same |
 | Export MIDI Clip | one MIDI clip | the same |
@@ -97,7 +98,7 @@ The reference's order (0x1039e7c54), with what Halftrack shows:
 | Reference item | Halftrack |
 |---|---|
 | Cut, Copy, Paste, Duplicate, Delete | Duplicate, and Delete while there is more than one scene. Halftrack has no scene clipboard yet |
-| Rename, Edit Info Text | Rename. Scenes have no info text yet |
+| Rename, Edit Info Text | the same; the Info view shows a scene's text while pointing at it |
 | Insert Scene, Capture and Insert Scene | the same. Insert Scene puts the new scene right below the selected one and selects it, in one undo step |
 | Select Scene Content | the same: every slot in the scene is selected |
 | Cancel Scene Launch, Select Next Scene on Launch, Record on Launch | left out: not implemented |

@@ -2434,3 +2434,7 @@ The chooser lists the reference's order: Ext. Out and Configure..., Main and the
 ## Returns as Audio From sources — 2026-10-24
 
 Engine area. As the reference lists them, return tracks are now Audio From sources, so a track can take a return's audio at Pre FX, Post FX or Post Mixer. A send into a return is refused while the track takes that return's audio, and a track sending to a return is not offered it as a source. Opening a project now follows track inputs in its loop check, in place of refusing every input taken from a return. Groups and the Main ("Resampling") are not sources yet: the engine has no input device for them. Checked in the Audio From and sends suites ([contract](research/audio-from-contract.md)).
+
+## Clip and scene info texts — 2026-10-24
+
+Engine and UI areas. Clips and scenes have info texts of their own, as the reference's Edit Info Text gives them. The Arrangement clip menu, the Session slot menu and the scene menu offer Edit Info Text. The Info view shows a clip's text while pointing at it in the Arrangement or its slot, and a scene's while pointing at the scene. The texts are saved, and each edit is one undo step. Checked in the groups and UI suites ([contract](research/clip-menus-contract.md)).
