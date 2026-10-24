@@ -115,6 +115,42 @@ void waveformTests (const juce::File& root)
     const auto restored = render (s, root);
     level (restored, 0, 4800, 80000, manualGain * std::cos (.625 * juce::MathConstants<double>::halfPi), "undo retains the original stored manual level");
 }
+// As the reference's do unless Lock Envelopes is on, a clip moved along its track takes its span of
+// the track's automation with it; a drag hands the move over once at its end; another track leaves it.
+void clipMoveTests (const juce::File& root)
+{
+    Session s (false); ok (s.importAudio (constantFile (root), 0), "import a two-second clip to move");
+    const auto id = s.snapshot().tracks[0].id;
+    const auto clipId = s.snapshot().tracks[0].clips[0].id;
+    check (s.snapshot().tracks[0].clips[0].start == 0 && ! s.lockEnvelopes(), "the clip starts at zero and Lock Envelopes is off at first");
+    const Lane before { true, { { 1, -20 }, { 3, 0 }, { 14, -10 } } };
+    ok (s.setTrackAutomation (id, Target::volume, before), "automation under the clip and after it");
+    const auto has = [&] (double beat, float value)
+    {
+        const auto points = lane (s, Target::volume).points;
+        return std::any_of (points.begin(), points.end(), [&] (const auto& p) { return std::abs (p.beat - beat) < 1e-3 && std::abs (p.value - value) < .05f; });
+    };
+    const auto inside = [&] (double from, double to)
+    {
+        const auto points = lane (s, Target::volume).points;
+        return std::count_if (points.begin(), points.end(), [&] (const auto& p) { return p.beat > from && p.beat < to; });
+    };
+    ok (s.moveClip (0, 0, 3), "move the clip three seconds on");
+    check (has (7, -20) && has (9, 0) && inside (.5, 3.5) == 0 && has (14, -10), "its automation moved with it, six beats on, leaving the rest");
+    s.undo(); check (equal (lane (s, Target::volume), before), "one undo returns the clip and its automation");
+    s.setLockEnvelopes (true);
+    ok (s.moveClip (0, 0, 3), "move it with Lock Envelopes on");
+    check (equal (lane (s, Target::volume), before) && s.snapshot().tracks[0].clips[0].start == 3, "locked, the automation stays where it is");
+    s.undo(); s.setLockEnvelopes (false);
+    ok (s.moveAudioClip (clipId, id, 3, false), "a drag moves the clip on its own");
+    check (equal (lane (s, Target::volume), before), "the automation waits for the drag's end");
+    ok (s.moveAutomationWithClips ({ clipId }, 3), "the drag's end moves the automation after it");
+    check (has (7, -20) && has (9, 0) && inside (.5, 3.5) == 0, "as a single move does");
+    s.undo(); s.undo(); check (equal (lane (s, Target::volume), before), "undo returns both");
+    ok (s.addAudioTrack ("Other"), "another audio track");
+    ok (s.moveAudioClip (clipId, s.snapshot().tracks[1].id, 3), "move the clip to the other track");
+    check (equal (lane (s, Target::volume), before), "a move to another track leaves the automation");
+}
 void historyTests (const juce::File& root)
 {
     Session s (false); const auto id = s.snapshot().tracks[0].id;
@@ -708,7 +744,7 @@ int runAutomationTests (const juce::File& artifacts)
     try
     {
         const auto root = artifacts.getChildFile ("automation-" + juce::Uuid().toString()); ok (root.createDirectory(), "create isolated test directory");
-        historyTests (root); malformedLoads (root); waveformTests (root); playbackPersistence (root); interpolationTests (root); beatBoundaryTests(); playbackModeRegressions (root); masterWaveformTests (root); masterHistoryTests (root); malformedMasterLoads (root); curveTests (root); return 0;
+        clipMoveTests (root); historyTests (root); malformedLoads (root); waveformTests (root); playbackPersistence (root); interpolationTests (root); beatBoundaryTests(); playbackModeRegressions (root); masterWaveformTests (root); masterHistoryTests (root); malformedMasterLoads (root); curveTests (root); return 0;
     }
     catch (const std::exception& error) { std::cerr << "FAIL automation: " << error.what() << std::endl; return 1; }
 }

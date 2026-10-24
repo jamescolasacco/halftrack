@@ -64,6 +64,7 @@ const juce::Identifier firstClipNameProperty { "halftrackFirstClipName" }, first
 const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsProperty { "halftrackMixerSends" }, mixerReturnsProperty { "halftrackMixerReturns" }, mixerVolumeProperty { "halftrackMixerVolume" },
                        mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" }, mixerShownProperty { "halftrackMixerInSession" },
                        arrangementOverviewProperty { "halftrackArrangementOverview" }, timeRulerFormatProperty { "halftrackTimeRulerFormat" },
+                       lockEnvelopesProperty { "halftrackLockEnvelopes" },
                        sceneSettingsShownProperty { "halftrackSceneSettingsShown" };
 constexpr float defaultCueVolumeDb = -6.0f; // As the reference's default Set has it.
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
@@ -5306,6 +5307,16 @@ struct Session::Impl
     static void moveLinked (const std::vector<te::Clip*>& linked, double offset)
     {
         for (auto* other : linked) other->setStart (other->getPosition().getStart() + te::TimeDuration::fromSeconds (offset), false, true);
+    }
+    // The spans of their tracks' automation that clips cover, for moving it with them (moveTrackAutomation).
+    using AutomationSpans = std::vector<std::pair<te::AudioTrack*, te::TimeRange>>;
+    static AutomationSpans automationSpans (const std::vector<te::Clip*>& clips, double shiftBack = 0)
+    {
+        AutomationSpans spans;
+        for (auto* clip : clips)
+            if (auto* track = dynamic_cast<te::AudioTrack*> (clip->getTrack()))
+                spans.push_back ({ track, clip->getPosition().time - te::TimeDuration::fromSeconds (shiftBack) });
+        return spans;
     }
     // Links the given ones left that now have one track end.
     void endSingleLinks (const juce::StringArray& links)
@@ -12019,6 +12030,50 @@ void duplicateCurveRange (te::AutomationCurve& curve, te::Edit& edit, te::TimePo
     points.push_back ({ after - edgeGap, end, 0 }); points.push_back ({ after, resume, 0 });
     rebuildCurve (curve, edit, points, undo);
 }
+// A clip's move takes the shape of each of its track's curves over its span along, as the reference's
+// envelopes follow their clips: where the span was, the curve keeps its values at both ends, as Delete
+// Selection leaves it (unless the move copies), and where it lands it replaces what was there, which
+// goes on after it. Every shape is taken before any is written, so none moves twice.
+void moveTrackAutomation (te::Edit& edit, std::vector<std::pair<te::AudioTrack*, te::TimeRange>> spans, te::TimeDuration delta, bool copy, juce::UndoManager* undo)
+{
+    if (spans.empty() || delta == te::TimeDuration()) return;
+    std::map<te::AudioTrack*, std::vector<te::TimeRange>> byTrack;
+    for (const auto& [track, range] : spans) byTrack[track].push_back (range);
+    for (auto& [track, ranges] : byTrack)
+    {
+        // Touching or overlapping spans on a track move as one.
+        std::sort (ranges.begin(), ranges.end(), [] (const auto& a, const auto& b) { return a.getStart() < b.getStart(); });
+        std::vector<te::TimeRange> merged;
+        for (const auto& range : ranges)
+            if (! merged.empty() && range.getStart() <= merged.back().getEnd()) merged.back() = merged.back().getUnionWith (range);
+            else merged.push_back (range);
+        for (auto* curve : trackCurves (*track))
+        {
+            if (curve->getNumPoints() == 0) continue;
+            std::vector<std::vector<CurvePoint>> shapes;
+            for (const auto& range : merged)
+            {
+                const auto from = range.getStart(), to = range.getEnd();
+                std::vector<CurvePoint> shape { { from + delta, curve->getValueAt (from, 0.0f), 0 } };
+                for (const auto& p : curvePoints (*curve)) if (p.time > from && p.time < to - edgeGap) shape.push_back ({ p.time + delta, p.value, p.shape });
+                shape.push_back ({ to - edgeGap + delta, curve->getValueAt (to - edgeGap, 0.0f), 0 });
+                shapes.push_back (std::move (shape));
+            }
+            if (! copy) for (const auto& range : merged) clearCurveRange (*curve, edit, range.getStart(), range.getEnd(), undo);
+            for (size_t i = 0; i < merged.size(); ++i)
+            {
+                const auto landFrom = merged[i].getStart() + delta, landTo = merged[i].getEnd() + delta;
+                const auto before = curve->getValueAt (landFrom - edgeGap, 0.0f), after = curve->getValueAt (landTo, 0.0f);
+                std::vector<CurvePoint> points;
+                for (const auto& p : curvePoints (*curve)) if (p.time < landFrom - edgeGap || p.time > landTo) points.push_back (p);
+                if (landFrom - edgeGap > te::TimePosition()) points.push_back ({ landFrom - edgeGap, before, 0 });
+                points.insert (points.end(), shapes[i].begin(), shapes[i].end());
+                points.push_back ({ landTo, after, 0 });
+                rebuildCurve (*curve, edit, points, undo);
+            }
+        }
+    }
+}
 // Removes points in `removed` and moves points at or after `from` by `delta`.
 void shiftCurve (te::AutomationCurve& curve, te::Edit& edit, te::TimePosition from, te::TimeDuration delta, std::optional<te::TimeRange> removed, juce::UndoManager* undo)
 {
@@ -13039,7 +13094,7 @@ Result Session::copyClipTo (const String& id, const String& destinationId, doubl
     copyId = inserted->itemID.toString();
     impl->changed(); return Result::ok();
 }
-Result Session::moveMidiClip (const String& id, const String& destinationId, double start)
+Result Session::moveMidiClip (const String& id, const String& destinationId, double start, bool withAutomation)
 {
     if (auto frozen = impl->unfrozen (impl->trackOfClip (id), impl->track (destinationId)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -13060,6 +13115,8 @@ Result Session::moveMidiClip (const String& id, const String& destinationId, dou
     if (clip->getClipTrack() == destination) if (auto r = impl->linkedMoves (*clip, offset, linked); r.failed()) return r;
     const te::Clip::Ptr retained (clip);
     const auto lengthBeats = clip->getLengthInBeats(), offsetBeats = clip->getOffsetInBeats();
+    auto moving = linked; moving.push_back (clip);
+    const auto spans = withAutomation && clip->getClipTrack() == destination ? Impl::automationSpans (moving) : Impl::AutomationSpans();
     impl->transaction ("Move MIDI clip");
     if (clip->getClipTrack() != destination && ! clip->moveTo (*destination)) return Result::fail ("Could not move the MIDI clip to that track.");
     // It keeps its beats, and its content start its beat, at the tempo where it lands.
@@ -13067,9 +13124,10 @@ Result Session::moveMidiClip (const String& id, const String& destinationId, dou
     const auto at = te::TimePosition::fromSeconds (start);
     clip->setPosition ({ { at, tempo.toTime (tempo.toBeats (at) + lengthBeats) }, te::TimeDuration::fromSeconds (offsetBeats.inBeats() / tempo.getBeatsPerSecondAt (at)) });
     Impl::moveLinked (linked, offset);
+    if (! lockEnvelopes()) moveTrackAutomation (*impl->edit, spans, te::TimeDuration::fromSeconds (offset), false, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
-Result Session::moveAudioClip (const String& id, const String& destinationId, double start)
+Result Session::moveAudioClip (const String& id, const String& destinationId, double start, bool withAutomation)
 {
     if (auto frozen = impl->unfrozen (impl->trackOfClip (id), impl->track (destinationId)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -13089,10 +13147,33 @@ Result Session::moveAudioClip (const String& id, const String& destinationId, do
     std::vector<te::Clip*> linked;
     if (clip->getClipTrack() == destination) if (auto r = impl->linkedMoves (*clip, offset, linked); r.failed()) return r;
     const te::Clip::Ptr retained (clip);
+    auto moving = linked; moving.push_back (clip);
+    const auto spans = withAutomation && clip->getClipTrack() == destination ? Impl::automationSpans (moving) : Impl::AutomationSpans();
     impl->transaction ("Move audio clip");
     if (clip->getClipTrack() != destination && ! clip->moveTo (*destination)) return Result::fail ("Could not move the audio clip to that track.");
     clip->setStart (te::TimePosition::fromSeconds (start), false, true);
     Impl::moveLinked (linked, offset);
+    if (! lockEnvelopes()) moveTrackAutomation (*impl->edit, spans, te::TimeDuration::fromSeconds (offset), false, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::moveAutomationWithClips (const juce::StringArray& clipIds, double offsetSeconds, bool copy)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! std::isfinite (offsetSeconds)) return Result::fail ("The clips' move is not a time.");
+    std::vector<te::Clip*> moved;
+    for (const auto& id : clipIds)
+    {
+        te::Clip* found = nullptr;
+        for (auto* track : te::getAudioTracks (*impl->edit))
+            for (auto* clip : track->getClips()) if (clip->itemID.toString() == id) found = clip;
+        if (found == nullptr) return Result::fail ("Clip not found.");
+        if (std::find (moved.begin(), moved.end(), found) == moved.end()) moved.push_back (found);
+        for (auto* other : impl->linkedClips (*found)) if (std::find (moved.begin(), moved.end(), other) == moved.end()) moved.push_back (other);
+    }
+    // The clips are where the drag left them, so their spans began offsetSeconds earlier.
+    if (offsetSeconds == 0 || lockEnvelopes()) return Result::ok();
+    impl->transaction (copy ? "Copy automation" : "Move automation");
+    moveTrackAutomation (*impl->edit, Impl::automationSpans (moved, offsetSeconds), te::TimeDuration::fromSeconds (offsetSeconds), copy, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
 Result Session::moveClip (int t, int c, double start)
@@ -13106,7 +13187,10 @@ Result Session::moveClip (int t, int c, double start)
     const auto offset = start - clip->getPosition().getStart().inSeconds();
     std::vector<te::Clip*> linked;
     if (auto r = impl->linkedMoves (*clip, offset, linked); r.failed()) return r;
+    auto moving = linked; moving.push_back (clip);
+    const auto spans = Impl::automationSpans (moving);
     impl->transaction ("Move clip"); clip->setStart (te::TimePosition::fromSeconds (start), false, true); Impl::moveLinked (linked, offset);
+    if (! lockEnvelopes()) moveTrackAutomation (*impl->edit, spans, te::TimeDuration::fromSeconds (offset), false, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
 Result Session::removeClip (int t, int c)
@@ -13933,6 +14017,13 @@ void Session::setMixerSections (const MixerSections& sections)
     s.setProperty (mixerInOutProperty, sections.inOut, nullptr); s.setProperty (mixerSendsProperty, sections.sends, nullptr); s.setProperty (mixerReturnsProperty, sections.returns, nullptr);
     s.setProperty (mixerVolumeProperty, sections.mixer, nullptr); s.setProperty (mixerTrackDelayProperty, sections.trackDelay, nullptr);
     s.setProperty (mixerCrossfaderProperty, sections.crossfader, nullptr); s.setProperty (mixerShownProperty, sections.shown, nullptr);
+    impl->viewStateChanged();
+}
+bool Session::lockEnvelopes() const { return impl->edit->state.getProperty (lockEnvelopesProperty, false); }
+void Session::setLockEnvelopes (bool locked)
+{
+    if (locked == lockEnvelopes()) return;
+    impl->edit->state.setProperty (lockEnvelopesProperty, locked, nullptr);
     impl->viewStateChanged();
 }
 bool Session::arrangementOverview() const { return impl->edit->state.getProperty (arrangementOverviewProperty, true); }

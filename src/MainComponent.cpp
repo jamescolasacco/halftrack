@@ -3793,9 +3793,10 @@ private:
                             juce::String copy;
                             if (copyDrag (e.mods) && juce::isPositiveAndBelow (dragTrack, (int) current.tracks.size()))
                                 owner.report (owner.session.copyClipTo (dragClipId, current.tracks[(size_t) dragTrack].id, originalStart, copy));
+                            movedClips = { { dragClipId, dragTrack, originalStart } }; movedByCopy = copyDrag (e.mods);
                         }
-                        const auto result = clip.isAudio ? owner.session.moveAudioClip (dragClipId,current.tracks[(size_t)destination].id,start)
-                            : owner.session.moveMidiClip (dragClipId,current.tracks[(size_t)destination].id,start);
+                        const auto result = clip.isAudio ? owner.session.moveAudioClip (dragClipId,current.tracks[(size_t)destination].id,start, false)
+                            : owner.session.moveMidiClip (dragClipId,current.tracks[(size_t)destination].id,start, false);
                         owner.report (result); owner.refresh();
                         if (result.wasOk()) owner.selectArrangementClip (dragClipId);
                         return;
@@ -3825,6 +3826,18 @@ private:
                 owner.envelope.mouseUp (owner.session, target ? *target : arrangementAutomation::Target {});
                 owner.envelopeKey.clear(); owner.refresh(); return;
             }
+            if (clipGesture && ! movedClips.empty())
+            {
+                // The automation follows the clips that stayed on their tracks, in one go, as the reference's does.
+                const auto now = owner.session.snapshot();
+                juce::StringArray ids; double offset = 0;
+                for (const auto& moved : movedClips)
+                    if (juce::isPositiveAndBelow (moved.track, (int) now.tracks.size()))
+                        for (const auto& clip : now.tracks[(size_t) moved.track].clips)
+                            if (clip.id == moved.id && std::abs (clip.start - moved.start) > 1.0e-9) { ids.add (moved.id); offset = clip.start - moved.start; }
+                if (! ids.isEmpty()) owner.report (owner.session.moveAutomationWithClips (ids, offset, movedByCopy));
+            }
+            movedClips.clear();
             if (clipGesture) { owner.session.endEditGesture(); clipGesture = false; }
             draggedClip = -1; fadeDrag = 0; rangeDrag = 0; dragClipId.clear(); selecting = false;
         }
@@ -3888,17 +3901,23 @@ private:
                 owner.session.beginEditGesture (copyDrag (e.mods) ? "Copy clips" : "Move clips"); clipGesture = true;
                 if (copyDrag (e.mods))
                     for (const auto& m : moving) { juce::String copy; owner.report (owner.session.copyClipTo (m.id, current.tracks[(size_t) m.track].id, m.start, copy)); }
+                movedClips.clear(); movedByCopy = copyDrag (e.mods);
+                for (const auto& m : moving) movedClips.push_back ({ m.id, m.track, m.start });
             }
             for (const auto& m : moving)
             {
                 const auto& to = current.tracks[(size_t) (m.track + trackShift)].id;
-                const auto result = m.midi ? owner.session.moveMidiClip (m.id, to, m.start + shift) : owner.session.moveAudioClip (m.id, to, m.start + shift);
+                const auto result = m.midi ? owner.session.moveMidiClip (m.id, to, m.start + shift, false) : owner.session.moveAudioClip (m.id, to, m.start + shift, false);
                 if (result.failed()) { owner.report (result); break; }
             }
             owner.refresh(); owner.selectArrangementClip (dragClipId);
         }
         struct Moving { juce::String id; int track = -1; double start = 0; bool midi = false; };
         std::vector<Moving> moving;
+        // The clips a drag moves, where they started: their automation follows them when it ends.
+        struct MovedClip { juce::String id; int track = -1; double start = 0; };
+        std::vector<MovedClip> movedClips;
+        bool movedByCopy = false;
         int dragTrack = -1;
         bool toggleOffOnUp = false, collapseOnUp = false;
         // The selection runs from the anchor to the pointer in time and across the tracks between them.
@@ -12551,7 +12570,7 @@ private:
                     menuSoloSwitches, menuCueSwitches, menuSaveCopy, menuDrawMode, menuFoldToNotes, menuFoldToScale, menuScaleHighlighting, menuUndoHistory,
                     menuFocusSession, menuFocusArrangement, menuFocusClip, menuFocusDevices, menuFocusBrowser, menuFocusGroovePool, menuFocusMixer,
                     menuSelectLoop, menuPlaySelection, menuSetClipStart, menuSetLoopStart, menuSetLoopEnd, menuSetClipEnd,
-                    menuMidiPrelisten, menuBrowserPreHear,
+                    menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410 }; // Plus Session::TimeFormat.
@@ -13205,6 +13224,8 @@ private:
             add (menuSoloSwitches, "Solo Switches", state.cueAvailable, ! state.cueMode); add (menuCueSwitches, "Cue Switches", state.cueAvailable, state.cueMode);
             add (98, "Solo in Place", true, state.soloInPlace);
             popup.addSeparator();
+            add (menuLockEnvelopes, "Lock Envelopes", true, session.lockEnvelopes());
+            popup.addSeparator();
             add (13, "Audio Engine On", true, session.isAudioEngineEnabled());
            #if ! JUCE_MAC
             popup.addSeparator(); add (14, "Preferences...");
@@ -13359,6 +13380,7 @@ private:
             case menuKeyMap: setKeyMapMode (! keyMapMode); return;
             case menuComputerKeyboard: setComputerKeyboard (! session.isComputerKeyboardEnabled()); return;
             case menuDrawMode: setDrawMode (! drawMode); return;
+            case menuLockEnvelopes: session.setLockEnvelopes (! session.lockEnvelopes()); refresh(); return;
             case menuMidiPrelisten: session.setNotePreview (! session.notePreview()); pianoRoll.sync(); refresh(); return;
             case menuBrowserPreHear: previewButton.setToggleState (! previewButton.getToggleState(), juce::dontSendNotification); previewButton.onClick(); return;
             case menuFoldToNotes: setFold (! foldToNotes, foldToScale); return;
@@ -17279,6 +17301,37 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             session.undo(); refresh();
             check (volume().points.size() == 3, "one undo brings them back");
             session.undo(); refresh();
+            // Dragging a clip takes the automation under it along, unless Options > Lock Envelopes is on.
+            const auto lanesBefore = volume();
+            check (session.importAudio (audioFixture, t).wasOk(), "a clip on the automated track"); refresh();
+            check (session.setTrackAutomation (trackId, Session::AutomationTarget::volume, { true, { { .05, -24 }, { .15, 0 } } }).wasOk(), "automation under the clip"); refresh();
+            const auto dragClip = [&] (double seconds)
+            {
+                selectTrack (t); selectedClip = 0; refresh();
+                const auto from = canvas.clipBounds (state.tracks[(size_t) t].clips[0], t).getCentre();
+                const auto to = from.translated ((float) (seconds * pixelsPerSecond), 0);
+                const auto at = [&] (juce::Point<float> p, bool dragged)
+                { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | bypassModifier), 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, from, now, 1, dragged); };
+                canvas.mouseDown (at (from, false)); canvas.mouseDrag (at (from.translated (3, 0), true)); canvas.mouseDrag (at (to, true)); canvas.mouseUp (at (to, true)); refresh();
+            };
+            const auto moved = [&] { return state.tracks[(size_t) t].clips[0].start; };
+            dragClip (1);
+            const auto shiftBeats = beatsAt (moved());
+            const auto afterDrag = volume().points;
+            check (moved() > .9 && moved() < 1.1 && std::none_of (afterDrag.begin(), afterDrag.end(), [] (const auto& p) { return p.beat > .01 && p.beat < .19; })
+                       && std::any_of (afterDrag.begin(), afterDrag.end(), [&] (const auto& p) { return std::abs (p.beat - (.05 + shiftBeats)) < .01 && std::abs (p.value + 24) < .1f; })
+                       && std::any_of (afterDrag.begin(), afterDrag.end(), [&] (const auto& p) { return std::abs (p.beat - (.15 + shiftBeats)) < .01 && std::abs (p.value) < .1f; }),
+                   "dragging the clip a second on takes its automation along");
+            session.undo(); refresh();
+            check (moved() == 0 && volume().points.size() == 2 && std::abs (volume().points.front().beat - .05) < 1e-6, "one undo returns the clip and the automation");
+            check (! session.lockEnvelopes(), "Lock Envelopes is off at first");
+            menuItemSelected (menuLockEnvelopes, 6); refresh();
+            check (session.lockEnvelopes(), "Options > Lock Envelopes turns it on");
+            dragClip (1);
+            check (moved() > .9 && volume().points.size() == 2 && std::abs (volume().points.front().beat - .05) < 1e-6, "locked, the automation stays where it is");
+            session.undo(); menuItemSelected (menuLockEnvelopes, 6); refresh();
+            session.undo(); session.undo(); refresh();
+            check (state.tracks[(size_t) t].clips.empty() && volume().points.size() == lanesBefore.points.size(), "undo removes the clip and its automation");
         }
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
@@ -18939,7 +18992,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                          "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
         expect ("View", view);
         juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "MIDI Prelisten", "Browser Pre-Hear", "-", "External Sync", "-", "Time Ruler Format >", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
-                                    "Fixed Grid", "-", "Draw Mode", "-", "Scale Highlighting", "-", "Solo Switches", "Cue Switches", "Solo in Place", "-", "Audio Engine On" };
+                                    "Fixed Grid", "-", "Draw Mode", "-", "Scale Highlighting", "-", "Solo Switches", "Cue Switches", "Solo in Place", "-", "Lock Envelopes", "-", "Audio Engine On" };
        #if ! JUCE_MAC
         options.addArray ({ "-", "Preferences..." });
        #endif

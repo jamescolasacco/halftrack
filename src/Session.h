@@ -786,6 +786,10 @@ public:
     // it. Kept with the project as view state, not as an undo step.
     bool arrangementOverview() const;
     void setArrangementOverview (bool);
+    // Options > Lock Envelopes: automation stays at its place in the song instead of moving with clips.
+    // Kept with the project, outside the undo history; off at first, as the reference's.
+    bool lockEnvelopes() const;
+    void setLockEnvelopes (bool);
     // Kept with the project as view state, as the reference's Set keeps its SmpteFormat (minutes and
     // seconds in its default Set).
     TimeFormat timeRulerFormat() const;
@@ -1274,9 +1278,17 @@ public:
     juce::Result copyAudioClip (const juce::String& clipId, bool cut = false);
     bool hasAudioClipClipboard() const;
     juce::Result pasteAudioClip (const juce::String& trackId, double startSeconds, juce::String& pastedId);
-    juce::Result moveMidiClip (const juce::String& clipId, const juce::String& destinationTrackId, double startSeconds);
-    juce::Result moveAudioClip (const juce::String& clipId, const juce::String& destinationTrackId, double startSeconds);
+    // A move along the clip's own track takes its automation along, as the reference's does unless Lock
+    // Envelopes is on: the clip's span of the track's envelopes goes with it, replacing what is where it
+    // lands. A move to another track leaves the automation. A drag passes withAutomation false on its
+    // way and calls moveAutomationWithClips once at its end.
+    juce::Result moveMidiClip (const juce::String& clipId, const juce::String& destinationTrackId, double startSeconds, bool withAutomation = true);
+    juce::Result moveAudioClip (const juce::String& clipId, const juce::String& destinationTrackId, double startSeconds, bool withAutomation = true);
     juce::Result moveClip (int trackIndex, int clipIndex, double startSeconds);
+    // The automation under clips that a drag has moved by offsetSeconds along their tracks, and their
+    // linked clips', moved after them in one go, or copied for a copying drag. Nothing while Lock
+    // Envelopes is on.
+    juce::Result moveAutomationWithClips (const juce::StringArray& clipIds, double offsetSeconds, bool copy = false);
     // A copy of an Arrangement audio or MIDI clip at a time on a track of its kind, as a copying drag
     // leaves; a MIDI clip keeps its beats, as a move does. One undo step.
     juce::Result copyClipTo (const juce::String& clipId, const juce::String& destinationTrackId, double startSeconds, juce::String& copyId);

@@ -2589,3 +2589,7 @@ UI area. In Automation Mode, Cmd+Delete clears the envelope last clicked, as the
 
 UI area. Options gains the reference's MIDI Prelisten and Browser Pre-Hear, after Computer MIDI Keyboard: they switch the note editor's Preview switch and the browser's Preview button, and are ticked to match ([menu contract](research/main-menu-contract.md)). Checked in the UI suite.
 
+## Automation follows clips, and Lock Envelopes — 2026-10-24
+
+Engine and UI areas. As the reference's does, a clip moved along its track now takes its span of the track's automation along: the vacated span keeps its edge values, and the moved shape replaces what was where it lands. Drags hand the move over once at their end so automation they pass over is untouched; copying drags copy it. Options > Lock Envelopes, kept with the project, leaves automation in place ([automation contract](research/arrangement-automation-contract.md#automation-follows-clips-and-lock-envelopes-2026-10-24)). Moves to another track and clipboard edits do not carry automation yet. Checked in the automation and UI suites.
+

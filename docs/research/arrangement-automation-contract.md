@@ -113,3 +113,13 @@ Not yet: Shift's finer steps, and holding B to switch Draw Mode for the moment.
 
 The reference's hidden menu registers Clear Envelope (`clen`) on Cmd+Delete, and its key list calls it Delete Selected Breakpoint Envelope ([Live keyboard shortcuts](https://www.ableton.com/en/live-manual/12/live-keyboard-shortcuts/), consulted 2026-10-24). In Automation Mode a click on an envelope selects it, and Cmd+Delete then clears its breakpoints, one undo step; a click elsewhere, or leaving Automation Mode, drops the selection. The envelope's context menu offers Clear Envelope too, before Simplify Envelope. The UI suite clicks a lane's envelope, clears it with Cmd+Delete and undoes it.
 
+## Automation follows clips, and Lock Envelopes (2026-10-24)
+
+The reference's manual: "Live normally moves all automation with the clip", and the Lock Envelopes switch, also in the Options menu, locks the envelopes to the song position instead ([Automation and Editing Envelopes](https://www.ableton.com/en/live-manual/12/automation-and-editing-envelopes/), consulted 2026-10-24). The Options builder places Lock Envelopes (`lock`) after Solo in Place, between separators.
+- **Moving.** A clip moved along its own track, by a drag or by `moveClip`, `moveMidiClip` or `moveAudioClip`, takes the shape of each of its track's envelopes over its span along (the mixer's, the sends' and the devices'). Where the span was, the envelope keeps its values at both ends, as Delete Selection leaves it; where it lands, the moved shape replaces what was there, which goes on after it, with the 1 ms steps Halftrack's lanes use. A linked clip's automation moves with it.
+- **Drags.** A drag moves its clips on their own and hands the whole move over when it ends (`moveAutomationWithClips`), so automation the clips pass over is untouched and touching clips move theirs as one. A copying drag copies the automation, keeping the original.
+- **Lock Envelopes** (Options), off at first and kept with the project outside the undo history, leaves the automation where it is.
+- **Not covered.** A move to another track leaves the automation. Cut, Copy, Paste and Duplicate of clips do not carry automation yet.
+
+The automation suite moves a clip three seconds and finds its two breakpoints six beats on and nothing left inside its old span, a point after it untouched; one undo, Lock Envelopes leaving the lane as it was, a drag's deferred move matching a single move, and a move to another track leaving it. The UI suite drags a clip a second on with its automation, undoes it, and drags it again with Options > Lock Envelopes on.
+
