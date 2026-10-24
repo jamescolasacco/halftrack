@@ -237,10 +237,14 @@ int runGroupTests (const juce::File& artifacts)
                 // Clips and scenes have info texts of their own too.
                 const auto clipId = n.snapshot().tracks[0].clips.at (0).id; const auto sceneId = n.snapshot().scenes.at (0).id;
                 ok (n.setInfoText (clipId, "Count-in"), "a clip's info text"); ok (n.setInfoText (sceneId, " Verse "), "and a scene's");
+                ok (n.setSceneColours ({ sceneId }, juce::Colours::orange), "and the scene's colour");
+                check (n.setSceneColours ({ "missing" }, juce::Colours::red).failed(), "an unknown scene has no colour");
                 const auto notesProject = root.getChildFile ("Notes.halftrack");
                 ok (n.saveProject (notesProject), "save them");
                 Session notes (false); ok (notes.loadProject (notesProject), "reopen them");
                 check (notes.snapshot().tracks[0].clips.at (0).infoText == "Count-in" && notes.snapshot().scenes.at (0).infoText == "Verse", "a clip's and a scene's info texts reopen, trimmed");
+                check (notes.snapshot().scenes.at (0).colour == juce::Colours::orange, "and the scene's colour");
+                n.undo(); check (n.snapshot().scenes.at (0).colour.isTransparent(), "one undo takes the scene's colour back");
                 n.undo(); n.undo();
                 check (n.snapshot().tracks[0].clips.at (0).infoText.isEmpty() && n.snapshot().scenes.at (0).infoText.isEmpty(), "each is one undo step");
             }

@@ -4502,6 +4502,10 @@ private:
                 const auto cell = juce::Rectangle<int> (sceneX, sceneY (scene), sceneWidth, rowHeight).reduced (1, 0).withTrimmedBottom (1);
                 const bool selected = owner.state.scenes[(size_t) scene].id == owner.selectedSceneId;
                 const auto& info = owner.state.scenes[(size_t) scene];
+                // A scene with a colour of its own fills its cell with it, lighter while selected.
+                const bool coloured = ! info.colour.isTransparent();
+                g.setColour (coloured ? (selected ? info.colour.brighter (0.25f) : info.colour) : selected ? themes::colour (0xff4a4a4a) : themes::colour (0xff383838)); g.fillRect (cell);
+                // A scene that changes the tempo or meter shows them and lights its launch button.
                 const auto settings = sceneSettingsText (info);
                 g.setColour (selected ? orange : settings.isNotEmpty() ? green : ink.withAlpha (0.8f)); drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
                 auto nameArea = cell.withTrimmedLeft (20).withTrimmedRight (6);
@@ -4511,7 +4515,7 @@ private:
                     g.setColour (muted); g.setFont (small);
                     g.drawText (settings, nameArea.removeFromRight (juce::jmin (76, juce::GlyphArrangement::getStringWidthInt (small, settings) + 6)), juce::Justification::centredRight, false);
                 }
-                g.setColour (ink); g.setFont (font (10.5f)); g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
+                g.setColour (coloured ? themes::colour (0xff141414) : ink); g.setFont (font (10.5f)); g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
             }
             g.restoreState();
             const auto stopAll = stopAllBounds();
@@ -10974,7 +10978,8 @@ private:
         sessionSpaceMenu().showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this)] (int result)
         { if (safe != nullptr && result != 0) safe->chooseSessionSpaceItem (result); });
     }
-    enum SceneItem { sceneDuplicate = 560, sceneDelete, sceneRename, sceneInsert, sceneCapture, sceneSelectContent, sceneTempo, sceneSignature, sceneInfo };
+    enum SceneItem { sceneDuplicate = 560, sceneDelete, sceneRename, sceneInsert, sceneCapture, sceneSelectContent, sceneTempo, sceneSignature, sceneInfo,
+                     sceneResetColour, sceneColour };
     // A scene's menu, in the reference's order (LSceneManager 0x1039e7c54). Halftrack has no scene clipboard,
     // info text or colours yet, and edits a scene's tempo and time signature in place of the reference's
     // switch that shows them.
@@ -10992,6 +10997,12 @@ private:
         menu.addItem (sceneSelectContent, "Select Scene Content");
         menu.addSeparator();
         menu.addItem (sceneTempo, "Scene Tempo..."); menu.addItem (sceneSignature, "Scene Time Signature...");
+        // Reset Color and the colour grid, as the reference's scene menu ends.
+        menu.addSeparator();
+        menu.addItem (sceneResetColour, "Reset Color");
+        std::vector<juce::Colour> used;
+        for (const auto& scene : state.scenes) if (scene.id == sceneId && ! scene.colour.isTransparent()) used.push_back (scene.colour);
+        menu.addCustomItem (sceneColour, std::make_unique<ColourGrid> (used, colour), nullptr, "Scene Colours");
         return menu;
     }
     void chooseSceneItem (int result, const juce::String& sceneId, int colour = -1)
@@ -11012,6 +11023,8 @@ private:
                 if (! selectedSlots.empty()) selectLauncherSlot (selectedSlots.front().track, index);
                 launcher.repaint(); return;
             case sceneTempo: case sceneSignature: sceneSettingsDialog (index, result == sceneTempo); return;
+            case sceneResetColour: report (session.setSceneColours ({ sceneId }, std::nullopt)); break;
+            case sceneColour: if (colour >= 0) report (session.setSceneColours ({ sceneId }, paletteColour (colour))); break;
             default: return;
         }
         refresh();
@@ -14780,7 +14793,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tracks[(size_t) t].slots[1].hasClip && state.tracks[(size_t) t].slots[1].clip.isMidi, "Insert MIDI Clip puts a clip in the empty slot");
         session.undo(); refresh();
         const auto sceneMenu = listed (sceneContextMenu());
-        check (sceneMenu == "Duplicate|Delete|-|Rename|Edit Info Text|-|Insert Scene|Capture and Insert Scene|-|Select Scene Content|-|Scene Tempo...|Scene Time Signature...", "a scene's menu: " + sceneMenu);
+        check (sceneMenu == "Duplicate|Delete|-|Rename|Edit Info Text|-|Insert Scene|Capture and Insert Scene|-|Select Scene Content|-|Scene Tempo...|Scene Time Signature...|-|Reset Color|[Scene Colours]",
+               "a scene's menu: " + sceneMenu);
+        chooseSceneItem (sceneColour, state.scenes[0].id, 9);
+        check (state.scenes[0].colour == paletteColour (9), "a swatch gives the scene its colour");
+        chooseSceneItem (sceneResetColour, state.scenes[0].id);
+        check (state.scenes[0].colour.isTransparent(), "Reset Color takes it away");
+        session.undo(); session.undo(); refresh();
+        check (state.scenes[0].colour.isTransparent(), "each is one undo step");
         const auto scenes = state.scenes.size();
         chooseSceneItem (sceneSelectContent, state.scenes[0].id);
         check (selectedSlots.size() >= 2 && std::all_of (selectedSlots.begin(), selectedSlots.end(), [] (const Session::SlotRef& r) { return r.scene == 0; }),

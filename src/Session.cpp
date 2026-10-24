@@ -6918,6 +6918,7 @@ Session::Snapshot Session::snapshot() const
         if (scene->state.hasProperty (sceneNumeratorProperty))
             info.timeSignature = TimeSignature { (int) scene->state[sceneNumeratorProperty], (int) scene->state[sceneDenominatorProperty] };
         info.infoText = scene->state[infoTextProperty].toString();
+        if (scene->state.hasProperty (te::IDs::colour)) info.colour = scene->colour.get();
         s.scenes.push_back (std::move (info));
     }
     for (const auto& groove : e.state.getChildWithName (groovePoolType)) s.grooves.push_back (readGroove (groove));
@@ -8698,6 +8699,22 @@ Result Session::addScene (String name)
     auto* scene = list.getScenes()[count];
     scene->state.setProperty ("halftrackSceneID", juce::Uuid().toString(), &impl->edit->getUndoManager());
     scene->name = name.trim().isEmpty() ? "Scene " + String (count + 1) : name.trim();
+    impl->changed(); return Result::ok();
+}
+Result Session::setSceneColours (const juce::StringArray& ids, std::optional<juce::Colour> colour)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    std::vector<te::Scene*> scenes;
+    for (const auto& id : ids) if (auto* scene = impl->scene (id)) scenes.push_back (scene); else return Result::fail ("Scene not found.");
+    if (scenes.empty()) return Result::fail ("Choose scenes to colour.");
+    const auto value = colour ? juce::VariantConverter<juce::Colour>::toVar (*colour) : juce::var();
+    if (std::all_of (scenes.begin(), scenes.end(), [&] (te::Scene* s) { return colour ? s->state[te::IDs::colour] == value : ! s->state.hasProperty (te::IDs::colour); })) return Result::ok();
+    impl->transaction (colour ? "Set scene colour" : "Reset scene colour");
+    for (auto* scene : scenes)
+    {
+        if (colour) scene->state.setProperty (te::IDs::colour, value, &impl->edit->getUndoManager());
+        else scene->state.removeProperty (te::IDs::colour, &impl->edit->getUndoManager());
+    }
     impl->changed(); return Result::ok();
 }
 Result Session::removeScene (int index)

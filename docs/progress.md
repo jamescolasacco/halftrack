@@ -2442,3 +2442,7 @@ Engine and UI areas. Clips and scenes have info texts of their own, as the refer
 ## Slot stop buttons — 2026-10-24
 
 Engine and UI areas. As the reference's slot command does, Add Stop Button and Remove Stop Button in the slot menu give empty slots a stop button or take it away (`setSlotStopButtons`). An empty slot without one shows no button, and launching it, its scene or its group's slot leaves its track playing. Checked in the launcher and UI suites ([contract](research/clip-menus-contract.md)).
+
+## Scene colours — 2026-10-24
+
+Engine and UI areas. As the reference's scene menu ends, Reset Color and a colour grid colour a scene or take its colour away (`setSceneColours`, one undo step, saved). The scene column fills a coloured scene's cell with its colour. Checked in the groups and UI suites ([contract](research/clip-menus-contract.md)).

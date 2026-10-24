@@ -104,7 +104,7 @@ The reference's order (0x1039e7c54), with what Halftrack shows:
 | Select Scene Content | the same: every slot in the scene is selected |
 | Cancel Scene Launch, Select Next Scene on Launch, Record on Launch | left out: not implemented |
 | Scene Tempo and Time Signature (a switch that shows them) | Scene Tempo and Scene Time Signature, Halftrack's editors for them |
-| Reset Color and the scene colour grid | left out: scenes have no colours yet |
+| Reset Color and the scene colour grid | the same (`setSceneColours`, one undo step, saved): a scene's cell shows its colour, and Reset Color takes it away |
 | Copy LOM Path | left out |
 
 Halftrack's own scene items are gone: Launch Scene, which the scene's launch button does, and Move Scene Up and Down, which the Session menu keeps.
@@ -122,6 +122,7 @@ It also checks:
 - Insert MIDI Clip filling the empty slot;
 - Remove Stop Button taking the slot's away and offering Add Stop Button (the launcher suite hears a track play on through a scene's empty slot without one, and the slot itself launch nothing);
 - Select Scene Content selecting the scene's slots;
+- a swatch colouring a scene and Reset Color taking it away;
 - Insert Scene going right below the selected scene;
 - Bounce to New Track from a slot, removed with one undo.
 

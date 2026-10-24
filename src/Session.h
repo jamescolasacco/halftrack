@@ -433,6 +433,7 @@ public:
         std::optional<double> tempo;
         std::optional<TimeSignature> timeSignature;
         juce::String infoText; // Its own info text, from Edit Info Text; empty for none.
+        juce::Colour colour;   // Its own colour, or transparent for none.
     };
     struct SlotInfo
     {
@@ -813,6 +814,9 @@ public:
     juce::Result consolidateTimeToNewScene (const juce::StringArray& trackIds, double startSeconds, double endSeconds, int afterSceneIndex, juce::String& sceneId);
     juce::Result moveScene (const juce::String& sceneId, int destinationIndex);
     juce::Result renameScene (int sceneIndex, const juce::String& name);
+    // The scene colour grid and Reset Color, after the reference's scene menu: each listed scene takes
+    // the colour, or loses its own with none. One undo step.
+    juce::Result setSceneColours (const juce::StringArray& sceneIds, std::optional<juce::Colour>);
     // Each is one undo step; an empty value clears it. Tempos run 20 to 999 BPM, meters 1 to 99 over 1, 2, 4, 8 or 16.
     juce::Result setSceneTempo (const juce::String& sceneId, std::optional<double> bpm);
     juce::Result setSceneTimeSignature (const juce::String& sceneId, std::optional<TimeSignature>);
