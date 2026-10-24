@@ -15657,7 +15657,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "dragging a time selection past the edge scrolls on and selects up to the time under the pointer");
         // Enough tracks to scroll the lanes.
         int added = 0;
-        while (canvas.getHeight() <= viewport.getMaximumVisibleHeight() + 200 && added < 40) { check (session.addMidiTrack ("Filler").wasOk(), "add a track"); ++added; refresh(); }
+        while (canvas.getHeight() <= laneY (t) + viewport.getMaximumVisibleHeight() + 200 && added < 40) { check (session.addMidiTrack ("Filler").wasOk(), "add a track"); ++added; refresh(); }
         timeSelection = {}; viewStart = 0; updateScroll(); viewport.setViewPosition (0, laneY (t)); refresh();
         const auto top = viewport.getViewPositionY();
         const juce::Point<float> start { empty.x, (float) laneY (t) + 4 }, below { empty.x, (float) (top + viewport.getMaximumVisibleHeight() + 40) };
