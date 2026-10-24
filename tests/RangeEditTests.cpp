@@ -125,6 +125,36 @@ int runRangeEditTests (const juce::File& artifacts)
         check (same (all, { { 62, 0, 1 }, { 60, 1, 2 }, { 60, 3, 2 }, { 64, 5, 1 } }), "the MIDI copy of beats 1 to 3 lands on beats 3 to 5");
         s.undo(); check (clips (s, 0).size() == 1 && clips (s, 1).size() == 1 && error (render (s, file), 0, frames, source) < 1e-6, "one undo removes the copy and its splits");
 
+        // Crop to a selection on tracks 1 and 2.
+        check (s.canCropRange (ids(), 1, 2) && ! s.canCropRange (ids(), 5, 6), "a selection inside the clips can crop them; one past them cannot");
+        ok (s.cropRange (ids(), 1, 2), "crop tracks 1 and 2 to 1 s - 2 s");
+        audio = clips (s, 0); midi = clips (s, 1);
+        check (audio.size() == 1 && near (audio[0].start, 1) && near (audio[0].length, 1) && near (audio[0].sourceOffset, 1) && midi.size() == 1 && near (midi[0].startBeat, 2)
+                   && near (midi[0].lengthBeats, 2) && same (notes (midi[0]), { { 60, 0, 1 } }) && clips (s, 2).size() == 1 && near (clips (s, 2)[0].length, 4),
+               "each clip keeps only the selection's part, and track 3 is untouched");
+        check (error (render (s, file), 0, frames, [] (int n) { return n >= 48000 && n < 96000 ? source (n) : 0.0; }) < 1e-6, "track 1 plays only the cropped second");
+        check (! s.canCropRange (ids(), 1, 2) && s.cropRange (ids(), 1, 2).failed(), "a crop leaves nothing more to crop");
+        s.undo(); check (clips (s, 0).size() == 1 && near (clips (s, 0)[0].length, 4) && clips (s, 1).size() == 1 && clips (s, 1)[0].notes.size() == 3, "one undo restores the clips");
+
+        // Reverse a selection on tracks 1 and 2.
+        ok (s.reverseRange (ids(), 1, 2), "reverse 1 s - 2 s on tracks 1 and 2");
+        audio = clips (s, 0); midi = clips (s, 1);
+        check (audio.size() == 3 && audio[1].reversed && ! audio[0].reversed && ! audio[2].reversed && midi.size() == 3, "the selection's clips are split off and reversed");
+        check (same (notes (midi[1]), { { 60, 1, 1 } }), "the MIDI note is mirrored inside the clip's two beats");
+        check (error (render (s, file), 0, frames, [] (int n) { return n >= 48000 && n < 96000 ? source (143999 - n) : source (n); }) < 1e-6,
+               "the second plays backwards and the rest is unchanged");
+        s.undo();
+        check (clips (s, 0).size() == 1 && ! clips (s, 0)[0].reversed && clips (s, 1).size() == 1 && same (notes (clips (s, 1)[0]), { { 62, 0, 1 }, { 60, 1, 2 }, { 64, 5, 1 } }),
+               "one undo restores them");
+        check (s.reverseRange (ids(), 5, 6).failed(), "a selection without clips has nothing to reverse");
+
+        // Clip colours.
+        ok (s.setClipColours ({ clips (s, 0)[0].id, clips (s, 1)[0].id }, juce::Colours::orange), "colour two clips");
+        check (clips (s, 0)[0].colour == juce::Colours::orange && clips (s, 1)[0].colour == juce::Colours::orange && clips (s, 2)[0].colour != juce::Colours::orange,
+               "both take the colour and the third keeps its own");
+        s.undo(); check (clips (s, 0)[0].colour != juce::Colours::orange && clips (s, 1)[0].colour != juce::Colours::orange, "one undo restores their colours");
+        check (s.setClipColours ({ "missing" }, juce::Colours::red).failed(), "an unknown clip is refused");
+
         // Automation on the selected tracks moves with Duplicate and is cleared by Delete.
         const auto trackId = s.snapshot().tracks[0].id;
         ok (s.setTrackAutomation (trackId, Session::AutomationTarget::volume, { true, { { 0, -12 }, { 2, -12 }, { 3, 0 } } }), "volume holds -12 dB to beat 2, then rises to 0 dB at beat 3");

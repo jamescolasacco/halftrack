@@ -2397,3 +2397,24 @@ UI area. A drag that reaches the timeline's left or right edge now scrolls the t
 Engine area. Bounce Track in Place now renders each active Session clip through the track's devices into a warped audio clip in its slot. A looping clip becomes one seamless loop, with its tail wrapped onto its start. The bounce keeps the clip's launch settings, follow actions and colour, and deactivated Session clips go. `bounceSlotsToNewTracks` is the Session view's Bounce to New Track: selected active clips render into the same slots of a new track after theirs, and are deactivated. Bounced Arrangement clips and their tails keep the original clips' colours.
 
 A correction came with it: native instruments and the built-in synth reported no tail, so freezes and bounces cut a note's release at the clip's end. They now report 20 seconds, and renders stop once the sound has died away. The earlier check of a held note's release compared exports, which do not play the freeze, so it now listens to the freeze through a bounce. Checked in the freeze suite ([contract](research/freeze-contract.md#session-clips)).
+
+## Arrangement clip menu — 2026-10-24
+
+UI and engine areas. After a static reading of the reference's clip and time-selection menu, the Arrangement's right-click menu has its commands in its order. Commands that cannot act are left out, and Freeze, the bounces, the fades, Crop and Reverse stay greyed when they cannot act. A right-click selects as the reference's does: an unselected clip alone, with the time selection at its edges; inside the selection, the selection stays; elsewhere, the insert marker moves to the click.
+
+New commands came with it:
+- Crop Clip (`cropRange`);
+- Reverse Clip (`reverseRange`), which splits at the selection's edges and plays audio backwards or mirrors MIDI notes;
+- Create Fade In and Out, and Reset Fades;
+- Insert MIDI Clip over the selection;
+- Bounce to New Track;
+- a clip colour grid (`setClipColours`).
+
+The grid's items follow the reference's layout everywhere: Snap to Grid, the adaptive and fixed rows, Narrow and Widen Grid, and Triplet Grid. Halftrack's own clip items are gone. Their gain, fades and range dialog opens from a double-click on a fade handle.
+
+The Session slot, scene and grid menus follow the reference's order too:
+- A slot's menu has Cut, Copy, Paste, Duplicate, Delete, Clear All Envelopes, Rename, Extract Groove, activation, Export MIDI Clip and the file items, then Freeze and the bounces, Insert MIDI Clip and the colour grid.
+- A scene's menu has Duplicate, Delete, Rename, Insert Scene (now right below the selected scene), Capture and Insert Scene, Select Scene Content, and Halftrack's scene tempo and time signature editors.
+- Away from any slot, the menu offers the track and scene inserts.
+
+Halftrack's own items there are gone; each is still reached where the reference has it. Checked in the UI and range edit suites ([contract](research/clip-menus-contract.md)).

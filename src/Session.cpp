@@ -11927,6 +11927,119 @@ Result Session::duplicateRange (const juce::StringArray& trackIds, double start,
     impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }
+// The clips a crop trims: those reaching from inside the range to outside it, with the span each had.
+static std::vector<std::pair<te::AudioTrack*, te::TimeRange>> cropped (const juce::Array<te::AudioTrack*>& tracks, te::TimePosition from, te::TimePosition to)
+{
+    const auto epsilon = te::TimeDuration::fromSeconds (1e-6);
+    std::vector<std::pair<te::AudioTrack*, te::TimeRange>> spans;
+    for (auto* t : tracks)
+        for (auto* c : t->getClips())
+            if (const auto p = c->getPosition(); p.getStart() < to - epsilon && p.getEnd() > from + epsilon && (p.getStart() < from - epsilon || p.getEnd() > to + epsilon))
+                spans.push_back ({ t, p.time });
+    return spans;
+}
+Result Session::cropRange (const juce::StringArray& trackIds, double start, double end)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before cropping clips.");
+    juce::Array<te::AudioTrack*> tracks;
+    if (auto r = rangeTracks (*impl->edit, impl->withLinkedTracks (trackIds), start, end, tracks); r.failed()) return r;
+    const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (end);
+    const auto epsilon = te::TimeDuration::fromSeconds (1e-6);
+    const auto spans = cropped (tracks, from, to);
+    if (spans.empty()) return Result::fail ("No clip reaches past the selection to crop.");
+    for (const auto& [t, span] : spans) if (auto r = impl->unfrozen (t); r.failed()) return r;
+    for (auto* t : tracks) for (const auto at : { from, to }) if (auto r = splittableAt (*t, at); r.failed()) return r;
+    endEditGesture(); closePluginEditors();
+    impl->transaction ("Crop clips");
+    auto* undo = &impl->edit->getUndoManager();
+    for (auto* t : tracks)
+    {
+        for (const auto at : { from, to }) splitTrackAt (*t, at, undo);
+        const auto clips = t->getClips();
+        for (auto* c : clips)
+        {
+            const auto p = c->getPosition();
+            if (p.getEnd() > from + epsilon && p.getStart() < to - epsilon) continue;
+            for (const auto& [owner, span] : spans)
+                if (owner == t && p.getStart() >= span.getStart() - epsilon && p.getEnd() <= span.getEnd() + epsilon) { c->removeFromParent(); break; }
+        }
+    }
+    impl->changed(); return Result::ok();
+}
+bool Session::canCropRange (const juce::StringArray& trackIds, double start, double end) const
+{
+    juce::Array<te::AudioTrack*> tracks;
+    return ! impl->exporting && rangeTracks (*impl->edit, impl->withLinkedTracks (trackIds), start, end, tracks).wasOk()
+        && ! cropped (tracks, te::TimePosition::fromSeconds (start), te::TimePosition::fromSeconds (end)).empty();
+}
+Result Session::reverseRange (const juce::StringArray& trackIds, double start, double end)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before reversing clips.");
+    juce::Array<te::AudioTrack*> tracks;
+    if (auto r = rangeTracks (*impl->edit, impl->withLinkedTracks (trackIds), start, end, tracks); r.failed()) return r;
+    const auto from = te::TimePosition::fromSeconds (start), to = te::TimePosition::fromSeconds (end);
+    const auto epsilon = te::TimeDuration::fromSeconds (1e-6);
+    bool any = false;
+    for (auto* t : tracks)
+    {
+        for (const auto at : { from, to }) if (auto r = splittableAt (*t, at); r.failed()) return r;
+        for (auto* c : t->getClips())
+        {
+            const auto p = c->getPosition();
+            if (! (p.getStart() < to - epsilon && p.getEnd() > from + epsilon)) continue;
+            if (auto r = impl->unfrozen (t); r.failed()) return r;
+            if (auto* wave = dynamic_cast<te::WaveAudioClip*> (c))
+            {
+                const te::AudioFile source (impl->engine, wave->getOriginalFile());
+                if (! canReverseAudio (*wave) || ! source.isValid() || p.offset.inSeconds() < 0 || p.offset.inSeconds() + p.getLength().inSeconds() > source.getLength() + 1e-9)
+                    return Result::fail ("\"" + c->getName() + "\" cannot be reversed: it needs a single unwarped, unlooped source at its original speed and pitch.");
+            }
+            else if (dynamic_cast<te::MidiClip*> (c) == nullptr) continue;
+            any = true;
+        }
+    }
+    if (! any) return Result::fail ("The selection holds no clip to reverse.");
+    endEditGesture(); closePluginEditors();
+    impl->transaction ("Reverse clips");
+    auto* undo = &impl->edit->getUndoManager();
+    for (auto* t : tracks)
+    {
+        for (const auto at : { from, to }) splitTrackAt (*t, at, undo);
+        for (auto* c : t->getClips())
+        {
+            const auto p = c->getPosition();
+            if (p.getStart() < from - epsilon || p.getEnd() > to + epsilon) continue;
+            if (auto* wave = dynamic_cast<te::WaveAudioClip*> (c)) wave->setIsReversed (! wave->getIsReversed());
+            else if (auto* midi = dynamic_cast<te::MidiClip*> (c))
+            {
+                // The notes mirror within the content the clip shows: its loop, or its span.
+                const auto low = midi->isLooping() ? midi->getLoopStartBeats().inBeats() : midi->getOffsetInBeats().inBeats();
+                const auto high = low + (midi->isLooping() ? midi->getLoopLengthBeats().inBeats() : midi->getLengthInBeats().inBeats());
+                for (auto* note : midi->getSequence().getNotes())
+                {
+                    const auto noteStart = note->getStartBeat().inBeats(), length = note->getLengthBeats().inBeats();
+                    if (noteStart >= high || noteStart + length <= low) continue;
+                    note->setStartAndLength (te::BeatPosition::fromBeats (std::max (0.0, low + high - noteStart - length)), note->getLengthBeats(), undo);
+                }
+            }
+        }
+    }
+    impl->changed(); return Result::ok();
+}
+Result Session::setClipColours (const juce::StringArray& clipIds, juce::Colour colour)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    std::vector<te::Clip*> clips;
+    for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* c : allTrackClips (*t)) if (clipIds.contains (c->itemID.toString())) clips.push_back (c);
+    if (clips.empty()) return Result::fail ("Clip not found.");
+    const auto value = juce::VariantConverter<juce::Colour>::toVar (colour);
+    if (std::all_of (clips.begin(), clips.end(), [&] (te::Clip* c) { return c->state[clipColourProperty] == value; })) return Result::ok();
+    impl->transaction (clips.size() > 1 ? "Set clip colours" : "Set clip colour");
+    for (auto* c : clips) c->state.setProperty (clipColourProperty, value, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
 Result Session::copyRange (const juce::StringArray& trackIds, double start, double end, bool cut, const juce::StringArray& onlyClips)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

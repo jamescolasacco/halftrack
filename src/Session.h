@@ -1111,6 +1111,18 @@ public:
     juce::Result splitRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
     juce::Result deleteRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
     juce::Result duplicateRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
+    // Crop, after the reference's (0x10379e2cc): each clip the selection reaches into loses what lies
+    // outside it; clips wholly inside or outside it are left alone. canCropRange says whether a clip
+    // reaches past the selection. One undo step.
+    juce::Result cropRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
+    bool canCropRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds) const;
+    // Reverse, after the reference's (0x10379e774): the selection's edges split its clips, then each clip
+    // inside it plays backwards: an audio clip its audio, a MIDI clip its notes mirrored in time within
+    // the content it shows (its loop, when looped). One undo step.
+    juce::Result reverseRange (const juce::StringArray& trackIds, double startSeconds, double endSeconds);
+    // Each listed clip, Arrangement or Session, takes the colour as its own, as the reference's clip
+    // colour grid gives it (undo sManeuverSetClipColor). One undo step.
+    juce::Result setClipColours (const juce::StringArray& clipIds, juce::Colour);
     // A time selection's clipboard, after the reference's Copy and Paste of selected time. Copying
     // keeps what the selected tracks hold in the range, their audio kept apart from the project;
     // cutting also deletes it, as Delete Selection does. Pasting places it from a track onward at a

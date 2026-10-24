@@ -3433,7 +3433,17 @@ private:
                 const auto& track = owner.state.tracks[(size_t) lane->index];
                 owner.selectTrack (lane->index);
                 takeAnchor = owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods);
-                owner.takeSelection = { track.takeLanes[(size_t) lane->take].id, takeAnchor, takeAnchor };
+                const auto laneId = track.takeLanes[(size_t) lane->take].id;
+                if (e.mods.isPopupMenu())
+                {
+                    // A right-click inside the lane's selection keeps it for Copy to Main Lane.
+                    const auto at = owner.viewStart + e.x / owner.pixelsPerSecond;
+                    if (! (owner.takeSelection.laneId == laneId && at >= owner.takeSelection.start && at <= owner.takeSelection.end)) owner.takeSelection = { laneId, takeAnchor, takeAnchor };
+                    owner.timeSelection = {}; repaint();
+                    owner.showArrangementMenu ({ lane->index, {}, at, true });
+                    return;
+                }
+                owner.takeSelection = { laneId, takeAnchor, takeAnchor };
                 owner.timeSelection = {}; selectingTake = true; repaint(); return;
             }
             owner.takeSelection = {};
@@ -3474,8 +3484,16 @@ private:
                             std::erase (owner.extraMidiClipIds, clips[(size_t) c].id);
                         }
                         else if (! e.mods.isPopupMenu()) owner.extraMidiClipIds.clear();
-                        if (! e.mods.isPopupMenu()) chooseClips (track, c, e.mods, previousTrack, previousClip);
-                        else if (! owner.isClipSelected (clips[(size_t) c].id)) owner.selectedClipIds.clear();
+                        if (e.mods.isPopupMenu())
+                        {
+                            const auto at = owner.viewStart + e.x / owner.pixelsPerSecond;
+                            const Impl::ArrangementPlace place { track, clips[(size_t) c].id, at, false };
+                            owner.prepareArrangementMenu (place, owner.snapTime (at, e.mods));
+                            draggedClip = -1; owner.refresh(); repaint();
+                            owner.showArrangementMenu (place);
+                            return;
+                        }
+                        chooseClips (track, c, e.mods, previousTrack, previousClip);
                         owner.selectedClip = c;
                         owner.timeSelection = {};
                         draggedClip = c;
@@ -3497,15 +3515,26 @@ private:
                             else if (fadeDrag == 0 && track == previousTrack && c == previousClip)
                                 rangeDrag = hitTrim (originalRange, track, e.position);
                         }
-                        if (e.mods.isPopupMenu()) showClipMenu();
                         repaint();
                         return;
                     }
             }
             draggedClip = -1;
-            owner.extraMidiClipIds.clear(); owner.selectedClipIds.clear();
+            owner.extraMidiClipIds.clear();
+            if (e.mods.isPopupMenu())
+            {
+                const auto at = juce::jmax (0.0, owner.viewStart + e.x / owner.pixelsPerSecond);
+                if (track < (int) owner.state.tracks.size())
+                {
+                    const Impl::ArrangementPlace place { track, {}, at, false };
+                    owner.prepareArrangementMenu (place, owner.snapTime (at, e.mods));
+                    owner.refresh(); repaint();
+                    owner.showArrangementMenu (place);
+                }
+                return;
+            }
+            owner.selectedClipIds.clear();
             // Dragging over empty lane space selects time; Shift-click extends the selection.
-            if (! e.mods.isPopupMenu())
             {
                 const auto at = owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods);
                 if (e.mods.isShiftDown() && owner.timeSelection.active())
@@ -3519,26 +3548,15 @@ private:
             }
             owner.session.setInsertMarker (owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods));
             owner.refresh();
-            if (e.mods.isPopupMenu())
-                if (const auto* target = owner.currentTrack(); target && ! target->isReturn)
-                {
-                    const auto trackId = target->id;
-                    const auto position = owner.state.insertMarker;
-                    juce::PopupMenu popup;
-                    const bool midi=target->isMidi;
-                    popup.addItem (7, midi?"Paste MIDI here":"Paste audio here", midi?owner.session.hasMidiClipClipboard():owner.session.hasAudioClipClipboard());
-                    popup.addSeparator(); owner.addGridItems (popup);
-                    auto safe = juce::Component::SafePointer<Impl> (&owner);
-                    popup.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId, position, midi] (int choice)
-                    {
-                        if (safe == nullptr || safe->gridItem (choice)) return;
-                        if (choice == 7) {if(midi)safe->pasteMidi(trackId,position);else safe->pasteAudio(trackId,position);}
-                    });
-                }
         }
         void mouseDoubleClick (const juce::MouseEvent& e) override
         {
             if (e.x >= timelineWidth()) return;
+            // A fade handle opens the clip's gain, fades and range, Halftrack's own dialog for their curves and lengths.
+            if (const auto track = owner.trackAtY (e.y); juce::isPositiveAndBelow (track, (int) owner.state.tracks.size()))
+                for (const auto& clip : owner.state.tracks[(size_t) track].clips)
+                    if (clip.isAudio && clip.canEditAudioFades && clipBounds (clip, track).contains (e.position) && hitFade (clip, track, e.position) != 0)
+                    { owner.audioClipCommand (2, clip.id); return; }
             if (owner.automationMode)
             {
                 juce::String trackId, key; juce::Rectangle<float> area;
@@ -3885,56 +3903,6 @@ private:
             auto* result = thumb.get();
             thumbnails.emplace (key, std::move (thumb));
             return result;
-        }
-        void showClipMenu()
-        {
-            juce::PopupMenu popup;
-            popup.addItem (1, "Delete clip");
-            const auto* track = owner.currentTrack();
-            const auto* clip = track && juce::isPositiveAndBelow(owner.selectedClip,(int)track->clips.size()) ? &track->clips[(size_t)owner.selectedClip] : nullptr;
-            const auto id = clip ? clip->id : juce::String();
-            const bool activate=clip && !clip->active;
-            if (clip) {popup.addItem(8,activate?"Activate clip":"Deactivate clip");popup.addItem(9,"Rename clip...");}
-            if (clip && clip->isAudio)
-            {
-                popup.addItem (2, "Gain, fades and range...");
-                popup.addItem (3, "Split at playhead", clip->canEditAudioRange);
-                popup.addItem (4, "Duplicate after clip");
-                popup.addSeparator();
-                popup.addItem (5, "Copy audio clip", clip->canEditAudioRange);
-                popup.addItem (6, "Cut audio clip", clip->canEditAudioRange);
-                popup.addItem (7, "Paste audio at playhead", owner.session.hasAudioClipClipboard());
-                popup.addSeparator();
-                // Slice to New MIDI Track, by transients, warp markers or a division of the clip's beats.
-                juce::PopupMenu slices;
-                const bool warped = clip->warp.mode != Session::WarpMode::off, markers = warped && clip->warpMarkers.size() >= 2;
-                slices.addItem (20, "Transients", ! markers); slices.addItem (21, "Warp Markers", markers);
-                slices.addItem (22, "1/16", ! markers); slices.addItem (23, "1/8", ! markers); slices.addItem (24, "1/4", ! markers);
-                slices.addItem (25, "1/2", ! markers); slices.addItem (26, "1 Bar", ! markers);
-                popup.addSubMenu ("Slice to New MIDI Track", slices, clip->canEditAudioRange || warped);
-            }
-            if(clip&&clip->isMidi)
-            {
-                popup.addItem(4,"Duplicate MIDI after clip",clip->canEditMidiClip);
-                popup.addItem(5,"Copy MIDI clip",clip->canEditMidiClip);popup.addItem(6,"Cut MIDI clip",clip->canEditMidiClip);
-                popup.addItem(7,"Paste MIDI at insert marker",owner.session.hasMidiClipClipboard());
-                popup.addSeparator();popup.addItem(10,"Extract Groove");
-            }
-            popup.addSeparator(); owner.addGridItems (popup);
-            const bool midi=clip&&clip->isMidi;
-            auto safe = juce::Component::SafePointer<Impl> (&owner);
-            const auto trackId = track ? track->id : juce::String();
-            const auto position = owner.state.insertMarker;
-            popup.showMenuAsync (juce::PopupMenu::Options(), [safe, id, trackId, position, midi, activate] (int choice)
-            {
-                if (safe == nullptr || safe->gridItem (choice)) return;
-                if (choice == 1) safe->deleteClipById(id);
-                else if (choice == 8) safe->setClipActiveFromUI(id,activate);
-                else if (choice == 9) safe->renameClipDialog(id);
-                else if (choice == 7) {if(midi)safe->pasteMidi(trackId,position);else safe->pasteAudio(trackId,position);}
-                else if (choice >= 20 && choice <= 26) safe->sliceClip (id, static_cast<Session::SliceBy> (choice - 20));
-                else if (choice > 1) {if(midi)safe->midiClipCommand(choice,id);else safe->audioClipCommand(choice,id);}
-            });
         }
     };
 
@@ -4677,7 +4645,7 @@ private:
                 if (! event.mods.isPopupMenu() && ! onButton) chooseSlots ({ cell.first, cell.second }, anchor, event.mods);
                 else if (! owner.isSlotSelected (cell.first, cell.second)) owner.selectedSlots.clear();
                 owner.selectLauncherSlot (cell.first, cell.second);
-                if (event.mods.isPopupMenu()) { slotMenu (cell.first, cell.second); return; }
+                if (event.mods.isPopupMenu()) { owner.showSlotMenu(); repaint(); return; }
                 if (onButton)
                 {
                     // Gate and Repeat clips follow the button, so the release is sent on mouse up.
@@ -4692,23 +4660,32 @@ private:
             if (scene >= 0)
             {
                 owner.selectedSceneId = owner.state.scenes[(size_t) scene].id;
-                if (event.mods.isPopupMenu()) sceneMenu (scene);
+                if (event.mods.isPopupMenu())
+                {
+                    repaint();
+                    const auto id = owner.state.scenes[(size_t) scene].id;
+                    owner.sceneContextMenu().showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (&owner), id] (int result)
+                    { if (safe != nullptr && result != 0) safe->chooseSceneItem (result, id); });
+                    return;
+                }
                 else if (event.x - masterX() < 22) { owner.report (owner.session.launchScene (scene)); owner.refresh(); }
                 repaint(); return;
             }
             if (event.x >= masterX() && event.x < masterX() + sceneWidth && event.y >= gridTop && event.mods.isPopupMenu())
-            {
-                juce::PopupMenu menu; menu.addItem (1, "Insert Scene");
-                auto safe = juce::Component::SafePointer<Impl> (&owner);
-                menu.showMenuAsync (juce::PopupMenu::Options(), [safe] (int choice) { if (safe != nullptr && choice == 1) safe->addSceneFromUI(); });
-                return;
-            }
+            { owner.selectedSlots.clear(); owner.showSessionSpaceMenu(); return; }
             const int column = columnAt (event.x);
             const auto track = column >= 0 ? columns[(size_t) column].track : -1;
             if (event.x < tracksWidth() && track >= 0 && track < (int) owner.state.tracks.size())
             {
                 // A track's title selects it, as an Arrangement header does, and drags it; its menu is the header's.
                 if (event.y < headerHeight && event.mods.isPopupMenu()) { owner.showHeaderMenu (owner.state.tracks[(size_t) track].id, false); repaint(); return; }
+                // Below the slots, the track there and the last scene are selected, and the grid's own menu shows.
+                if (event.y >= gridTop && event.y < gridArea().getBottom() && event.mods.isPopupMenu() && ! owner.state.scenes.empty())
+                {
+                    owner.selectedSlots.clear();
+                    owner.selectLauncherSlot (track, (int) owner.state.scenes.size() - 1);
+                    repaint(); owner.showSessionSpaceMenu(); return;
+                }
                 if (event.y < headerHeight)
                 {
                     headerPressed = owner.state.tracks[(size_t) track].id;
@@ -5131,49 +5108,6 @@ private:
         }
         static void drawTriangle (juce::Graphics& g, int x, int y) { juce::Path path; path.addTriangle ((float) x, (float) y, (float) x, (float) y + 10, (float) x + 9, (float) y + 5); g.fillPath (path); }
         void scrollBarMoved (juce::ScrollBar* bar, double start) override { if (bar == &horizontal) offsetX = start; else offsetScene = start; resized(); repaint(); }
-        void slotMenu (int track, int scene)
-        {
-            const auto* slot = slotAt (track, scene); if (slot == nullptr) return;
-            juce::PopupMenu menu;
-            if (slot->hasClip) { menu.addItem (1, "Launch Clip"); if (slot->clip.isMidi) menu.addItem (2, "Edit MIDI Notes"); if (slot->clip.isAudio) menu.addItem (7, "Audio clip gain..."); menu.addItem (3, "Clear Clip"); }
-            else menu.addItem (owner.state.tracks[(size_t) track].isMidi ? 4 : 5, owner.state.tracks[(size_t) track].isMidi ? "Create MIDI Clip" : "Import Audio Here...");
-            menu.addSeparator(); menu.addItem (6, "Stop Track Clips");
-            const auto clipId=slot->hasClip?slot->clip.id:juce::String();const bool activate=slot->hasClip && !slot->clip.active;
-            if(slot->hasClip){menu.addItem(8,activate?"Activate clip":"Deactivate clip");menu.addItem(9,"Rename clip...");menu.addItem(10,"Follow action...",!owner.state.recording);if(slot->clip.isMidi)menu.addItem(11,"Extract Groove");}
-            const auto trackId = owner.state.tracks[(size_t) track].id, sceneId = owner.state.scenes[(size_t) scene].id;
-            auto safe = juce::Component::SafePointer<Impl> (&owner);
-            menu.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId, sceneId, clipId, activate] (int choice)
-            {
-                if (safe == nullptr || choice == 0) return;
-                if(choice==8){safe->setClipActiveFromUI(clipId,activate);return;}
-                if(choice==9){safe->renameClipDialog(clipId);return;}
-                if(choice==10){safe->clipFollowDialog(clipId);return;}
-                if(choice==11){safe->extractGrooveFromUI(clipId);return;}
-                const auto indices = safe->launcherIndices (trackId, sceneId); if (indices.first < 0 || indices.second < 0) return;
-                safe->selectLauncherSlot (indices.first, indices.second);
-                if (choice == 1) safe->report (safe->session.launchSlot (indices.first, indices.second));
-                if (choice == 2) safe->openPianoRoll(); if (choice == 3) safe->clearSelectedSlot(); if (choice == 4) safe->createLauncherMidiClip();
-                if (choice == 5) safe->importSlotDialog (indices.first, indices.second); if (choice == 6) safe->report (safe->session.stopLauncherTrack (indices.first));
-                if (choice == 7) if (const auto* selected = safe->selectedSlot(); selected && selected->hasClip && selected->clip.isAudio)
-                    safe->audioClipCommand (2, selected->clip.id);
-                safe->refresh();
-            });
-        }
-        void sceneMenu (int scene)
-        {
-            juce::PopupMenu menu; menu.addItem (1, "Launch Scene"); menu.addItem (2, "Rename Scene..."); menu.addItem (3, "Delete Scene");menu.addItem(4,"Duplicate Scene");
-            menu.addSeparator();menu.addItem(5,"Move Scene Up",scene>0&&!owner.state.recording);menu.addItem(6,"Move Scene Down",scene+1<(int)owner.state.scenes.size()&&!owner.state.recording);
-            menu.addSeparator(); menu.addItem (7, "Scene Tempo..."); menu.addItem (8, "Scene Time Signature...");
-            const auto id = owner.state.scenes[(size_t) scene].id; auto safe = juce::Component::SafePointer<Impl> (&owner);
-            menu.showMenuAsync (juce::PopupMenu::Options(), [safe, id] (int choice)
-            {
-                if (safe == nullptr) return; const auto index = safe->launcherIndices ({}, id).second; if (index < 0) return;
-                if(choice==4){safe->duplicateSceneFromUI(id);return;}
-                if(choice==5||choice==6){safe->moveSceneFromUI(id,choice==5?-1:1);return;}
-                if (choice == 7 || choice == 8) { safe->sceneSettingsDialog (index, choice == 7); return; }
-                if (choice == 1) safe->report (safe->session.launchScene (index)); if (choice == 2) safe->renameSceneDialog (index); if (choice == 3) safe->report (safe->session.removeScene (index)); safe->refresh();
-            });
-        }
     };
 
     // Audio clip detail: Clip and Sample boxes (warp, tempo, gain, reverse) beside the waveform.
@@ -9940,21 +9874,62 @@ private:
     }
     // The grid section of a context menu, as the reference's: adaptive widths, fixed values, triplets
     // and snapping, from item 200.
+    // Choices laid out in a menu, as the reference's grid menu lays out its adaptive widths and fixed sizes
+    // (AGridContextMenu 0x10325d9b4): a label, then the choices in columns, the current one lit.
+    struct ChoiceGrid final : juce::PopupMenu::CustomComponent
+    {
+        ChoiceGrid (juce::String label, juce::StringArray choices, int columns, int current, std::shared_ptr<int> picked)
+            : CustomComponent (false), title (std::move (label)), names (std::move (choices)), across (columns), lit (current), chosen (std::move (picked))
+        { setTitle (title); }
+        static constexpr int cellWidth = 62, cellHeight = 18, labelWidth = 66;
+        int rows() const { return (names.size() + across - 1) / across; }
+        void getIdealSize (int& width, int& height) override { width = labelWidth + across * cellWidth + 8; height = rows() * cellHeight + 4; }
+        juce::Rectangle<int> cellBounds (int i) const { return { labelWidth + (i % across) * cellWidth, 2 + (i / across) * cellHeight, cellWidth, cellHeight }; }
+        int cellAt (juce::Point<int> at) const { for (int i = 0; i < names.size(); ++i) if (cellBounds (i).contains (at)) return i; return -1; }
+        void paint (juce::Graphics& g) override
+        {
+            g.setFont (font (12.0f)); g.setColour (muted); g.drawText (title, 10, 2, labelWidth - 12, cellHeight, juce::Justification::centredLeft);
+            for (int i = 0; i < names.size(); ++i)
+            {
+                const auto box = cellBounds (i).reduced (1);
+                if (i == lit) { g.setColour (orange); g.fillRect (box); }
+                else if (i == hovered) { g.setColour (themes::colour (0xff505050)); g.fillRect (box); }
+                g.setColour (i == lit ? themes::colour (0xff1a1a1a) : ink); g.drawText (names[i], box, juce::Justification::centred);
+            }
+        }
+        void mouseMove (const juce::MouseEvent& e) override { if (const auto i = cellAt (e.getPosition()); i != hovered) { hovered = i; repaint(); } }
+        void mouseExit (const juce::MouseEvent&) override { hovered = -1; repaint(); }
+        void mouseUp (const juce::MouseEvent& e) override { if (const auto i = cellAt (e.getPosition()); i >= 0) { *chosen = i; triggerMenuItem(); } }
+        juce::String title;
+        juce::StringArray names;
+        int across = 1, lit = -1, hovered = -1;
+        std::shared_ptr<int> chosen;
+    };
+    // The grid's items, in the reference's order (AGridContextMenu 0x10325d9b4): Snap to Grid, the adaptive
+    // widths and the fixed sizes laid out in rows, Narrow and Widen Grid, and Triplet Grid.
+    static constexpr int adaptiveGridItem = 230, fixedGridItem = 231, narrowGridItem = 222, widenGridItem = 223;
+    mutable std::shared_ptr<int> adaptivePick = std::make_shared<int> (-1), fixedPick = std::make_shared<int> (-1);
     void addGridItems (juce::PopupMenu& menu) const { addGridItems (menu, arrangementGrid()); }
     void addGridItems (juce::PopupMenu& menu, const GridPlace& place) const
     {
         const auto g = gridAt (place);
-        juce::PopupMenu adaptive, fixed;
-        const juce::StringArray widths { "Widest", "Wide", "Medium", "Narrow", "Narrowest" };
-        for (int i = 0; i < widths.size(); ++i) adaptive.addItem (200 + i, widths[i], true, ! g.fixed && gridWidth (place) == i);
+        adaptivePick = std::make_shared<int> (-1); fixedPick = std::make_shared<int> (-1);
+        juce::StringArray sizes;
+        int fixedNow = -1;
         for (int i = 0; i < (int) std::size (fixedGridItems); ++i)
-            fixed.addItem (210 + i, fixedGridItems[i].bars() ? juce::String (fixedGridItems[i].numerator) + (fixedGridItems[i].numerator == 1 ? " Bar" : " Bars")
-                                                       : Session::gridValueName (fixedGridItems[i], 2), true,
-                           g.fixed && fixedGridItems[i] == Session::GridValue { g.numerator, g.denominator });
-        menu.addSubMenu ("Adaptive Grid", adaptive, true, juce::Image(), ! g.fixed);
-        menu.addSubMenu ("Fixed Grid", fixed, true, juce::Image(), g.fixed);
-        menu.addItem (220, "Triplet Grid", ! gridValueAt (place).bars(), g.tuplet == 3);
+        {
+            sizes.add (fixedGridItems[i].bars() ? juce::String (fixedGridItems[i].numerator) + (fixedGridItems[i].numerator == 1 ? " Bar" : " Bars")
+                                                 : Session::gridValueName (fixedGridItems[i], 2));
+            if (g.fixed && fixedGridItems[i] == Session::GridValue { g.numerator, g.denominator }) fixedNow = i;
+        }
         menu.addItem (221, "Snap to Grid", true, g.snap);
+        menu.addCustomItem (adaptiveGridItem, std::make_unique<ChoiceGrid> ("Adaptive", juce::StringArray { "Widest", "Wide", "Medium", "Narrow", "Narrowest" }, 3,
+                                                                            g.fixed ? -1 : gridWidth (place), adaptivePick), nullptr, "Adaptive Grid");
+        menu.addCustomItem (fixedGridItem, std::make_unique<ChoiceGrid> ("Fixed", sizes, 5, fixedNow, fixedPick), nullptr, "Fixed Grid");
+        menu.addSeparator();
+        menu.addItem (narrowGridItem, "Narrow Grid"); menu.addItem (widenGridItem, "Widen Grid");
+        menu.addSeparator();
+        menu.addItem (220, "Triplet Grid", ! gridValueAt (place).bars(), g.tuplet == 3);
     }
     static constexpr Session::GridValue fixedGridItems[] { { 8, 1 }, { 4, 1 }, { 2, 1 }, { 1, 1 }, { 1, 2 }, { 1, 4 }, { 1, 8 }, { 1, 16 }, { 1, 32 } };
     // The five adaptive widths, from half the view's width down to 8 pixels, each the geometric mean
@@ -9979,6 +9954,9 @@ private:
     bool gridItem (int item) { return gridItem (item, arrangementGrid()); }
     bool gridItem (int item, const GridPlace& place)
     {
+        if (item == adaptiveGridItem) { if (*adaptivePick < 0) return true; item = 200 + *adaptivePick; }
+        if (item == fixedGridItem) { if (*fixedPick < 0) return true; item = 210 + *fixedPick; }
+        if (item == narrowGridItem || item == widenGridItem) { gridCommand (item == narrowGridItem ? 1 : 2, place); return true; }
         auto g = gridAt (place);
         if (item >= 200 && item < 205) { g.fixed = false; g.intervalPixels = gridWidths (place)[(size_t) item - 200]; g.snap = true; }
         else if (item >= 210 && item < 210 + (int) std::size (fixedGridItems))
@@ -10395,6 +10373,574 @@ private:
         auto colour = std::make_shared<int> (-1);
         headerMenu (id, arrangement, colour, join).showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), id, arrangement, colour, join] (int result)
         { if (safe != nullptr) safe->chooseHeaderItem (result, id, arrangement, *colour, join); });
+    }
+    // Where a right-click in the Arrangement's lanes landed: its track, the clip there (if any), the time,
+    // and whether on a take lane.
+    struct ArrangementPlace { int track = -1; juce::String clipId; double time = 0; bool takeLane = false; };
+    enum ArrangementItem { arrangementComp = 400, arrangementCut, arrangementCopy, arrangementPaste, arrangementDuplicate, arrangementDelete,
+                           arrangementZoom, arrangementZoomBack, arrangementRename, arrangementGroove, arrangementActivate, arrangementSplit,
+                           arrangementConsolidate, arrangementConsolidateScene, arrangementExportMidi, arrangementInsertMidi, arrangementVideo,
+                           arrangementReveal, arrangementSimilar, arrangementFade, arrangementResetFades, arrangementLoop, arrangementFreeze,
+                           arrangementBounceInPlace, arrangementBounceNew, arrangementCrop, arrangementReverse, arrangementColour,
+                           arrangementSlice = 450 }; // Plus Session::SliceBy.
+    // A right-click's selection, as the reference prepares it (0x1037c6280): an unselected clip is
+    // selected alone, with the time selection on its lane at its edges; a click inside the selection keeps
+    // it; elsewhere the selection gives way to the insert marker at the click.
+    void prepareArrangementMenu (const ArrangementPlace& place, double snappedTime)
+    {
+        if (! juce::isPositiveAndBelow (place.track, (int) state.tracks.size())) return;
+        const auto& track = state.tracks[(size_t) place.track];
+        const bool inside = timeSelection.active() && timeSelection.trackIds.contains (track.id) && place.time >= timeSelection.start && place.time <= timeSelection.end;
+        selectTrack (place.track);
+        if (place.clipId.isNotEmpty())
+        {
+            if (isClipSelected (place.clipId) || inside) return;
+            for (int c = 0; c < (int) track.clips.size(); ++c)
+                if (track.clips[(size_t) c].id == place.clipId)
+                {
+                    selectedClipIds.clear(); selectedClip = c;
+                    timeSelection = { track.clips[(size_t) c].start, track.clips[(size_t) c].start + track.clips[(size_t) c].length, { track.id } };
+                }
+            return;
+        }
+        selectedClipIds.clear();
+        if (inside) return;
+        timeSelection = {}; selectedClip = -1;
+        session.setInsertMarker (snappedTime);
+    }
+    // The clips the Arrangement's menu acts on: those the time selection reaches, or the selected clips.
+    std::vector<const Session::ClipInfo*> menuClips() const
+    {
+        std::vector<const Session::ClipInfo*> clips;
+        if (timeSelection.active())
+        {
+            for (const auto& track : state.tracks)
+                if (timeSelection.trackIds.contains (track.id))
+                    for (const auto& clip : track.clips)
+                        if (clip.start < timeSelection.end - 1e-9 && clip.start + clip.length > timeSelection.start + 1e-9) clips.push_back (&clip);
+        }
+        else if (selectedClipIds.size() > 1)
+        {
+            for (const auto& id : selectedClipIds) if (const auto [t, c] = arrangementClipIndex (id); t >= 0) clips.push_back (&state.tracks[(size_t) t].clips[(size_t) c]);
+        }
+        else if (const auto* track = currentTrack(); track != nullptr && juce::isPositiveAndBelow (selectedClip, (int) track->clips.size()))
+            clips.push_back (&track->clips[(size_t) selectedClip]);
+        return clips;
+    }
+    // The tracks with selected content, which Freeze and the bounces act on: those of the menu's clips, or
+    // the lanes selected.
+    juce::StringArray menuTracks() const
+    {
+        juce::StringArray tracks;
+        for (const auto* clip : menuClips()) if (const auto [t, c] = arrangementClipIndex (clip->id); t >= 0) tracks.addIfNotAlreadyThere (state.tracks[(size_t) t].id);
+        if (tracks.isEmpty()) { if (timeSelection.active()) tracks = timeSelection.trackIds; else if (const auto* track = currentTrack()) tracks.add (track->id); }
+        return tracks;
+    }
+    // The fade the time selection makes, as the reference's menu names it (0x10379a3e4, 0x10379b5fc): a fade
+    // in where it holds the start of its audio clips but not their end, a fade out where it holds their end
+    // but not their start, every track agreeing. The reference's crossfades are not made here yet.
+    enum class SelectionFade { none, fadeIn, fadeOut };
+    SelectionFade selectionFade() const
+    {
+        if (! timeSelection.active()) return SelectionFade::none;
+        std::optional<SelectionFade> agreed;
+        for (const auto* clip : menuClips())
+        {
+            if (! clip->isAudio) continue;
+            const auto end = clip->start + clip->length;
+            const bool holdsStart = clip->start >= timeSelection.start - 1e-6, holdsEnd = end <= timeSelection.end + 1e-6;
+            const auto fade = holdsStart && ! holdsEnd ? SelectionFade::fadeIn : holdsEnd && ! holdsStart ? SelectionFade::fadeOut : SelectionFade::none;
+            if (fade == SelectionFade::none || ! clip->canEditAudioFades || (agreed && *agreed != fade)) return SelectionFade::none;
+            agreed = fade;
+        }
+        return agreed.value_or (SelectionFade::none);
+    }
+    // Create Fade In or Out: each audio clip's fade over the selection's part of it, in one undo step.
+    void createSelectionFades()
+    {
+        const auto fade = selectionFade();
+        if (fade == SelectionFade::none) return;
+        const auto clips = menuClips();
+        session.beginEditGesture (fade == SelectionFade::fadeIn ? "Create fade in" : "Create fade out");
+        for (const auto* clip : clips)
+        {
+            if (! clip->isAudio) continue;
+            auto settings = clip->audio;
+            const auto other = [&] (bool defaultEdge, double seconds) { return defaultEdge ? 0.0 : seconds; };
+            if (fade == SelectionFade::fadeIn)
+            { settings.fadeInSeconds = juce::jmin (timeSelection.end - clip->start, clip->length - other (settings.defaultFadeOut, settings.fadeOutSeconds)); settings.defaultFadeIn = false; }
+            else
+            { settings.fadeOutSeconds = juce::jmin (clip->start + clip->length - timeSelection.start, clip->length - other (settings.defaultFadeIn, settings.fadeInSeconds)); settings.defaultFadeOut = false; }
+            report (session.setAudioClipSettings (clip->id, settings));
+        }
+        session.endEditGesture(); refresh();
+    }
+    // Reset Fades: fades of the selection's audio clips go back to the default, as Delete returns a fade
+    // handle to it (0x10379bd90 enables it while one has a fade of its own).
+    bool canResetFades() const
+    {
+        const auto clips = menuClips();
+        return std::any_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c)
+        { return c->isAudio && c->canEditAudioFades && ((! c->audio.defaultFadeIn && c->audio.fadeInSeconds > 0) || (! c->audio.defaultFadeOut && c->audio.fadeOutSeconds > 0)); });
+    }
+    void resetSelectionFades()
+    {
+        const bool fallback = session.preferences().createFadesOnClipEdges;
+        const auto clips = menuClips();
+        session.beginEditGesture ("Reset fades");
+        for (const auto* clip : clips)
+        {
+            if (! clip->isAudio || ! clip->canEditAudioFades) continue;
+            auto settings = clip->audio;
+            settings.defaultFadeIn = settings.defaultFadeOut = fallback;
+            if (! fallback) settings.fadeInSeconds = settings.fadeOutSeconds = 0;
+            if (! (settings == clip->audio)) report (session.setAudioClipSettings (clip->id, settings));
+        }
+        session.endEditGesture(); refresh();
+    }
+    // Whether the time selection's edges, or the insert marker without one, cut a clip on the selected lanes.
+    bool canSplitSelection() const
+    {
+        const auto cuts = [] (const Session::ClipInfo& clip, double at) { return at > clip.start + 1e-6 && at < clip.start + clip.length - 1e-6; };
+        if (timeSelection.active())
+        {
+            for (const auto& track : state.tracks)
+                if (timeSelection.trackIds.contains (track.id))
+                    for (const auto& clip : track.clips) if (cuts (clip, timeSelection.start) || cuts (clip, timeSelection.end)) return true;
+            return false;
+        }
+        if (const auto* track = currentTrack()) for (const auto& clip : track->clips) if (cuts (clip, state.insertMarker)) return true;
+        return false;
+    }
+    // The selected lanes on MIDI tracks with no clip in the time selection, for Insert MIDI Clip.
+    juce::StringArray emptyMidiLanes() const
+    {
+        juce::StringArray lanes;
+        if (! timeSelection.active()) return lanes;
+        for (const auto& track : state.tracks)
+            if (timeSelection.trackIds.contains (track.id))
+            {
+                if (! track.isMidi || track.isReturn) return {};
+                for (const auto& clip : track.clips) if (clip.start < timeSelection.end && clip.start + clip.length > timeSelection.start) return {};
+                lanes.add (track.id);
+            }
+        return lanes;
+    }
+    // The Arrangement's clip and time-selection menu, in the reference's order (LArrangerControlManager
+    // 0x10379c6c8): commands that cannot act are left out, while Freeze, the bounces, the fades, Crop and
+    // Reverse stay, greyed when they cannot. The colour grid colours the selected clips.
+    juce::PopupMenu arrangementMenu (const ArrangementPlace& place, std::shared_ptr<int> colour) const
+    {
+        juce::PopupMenu menu;
+        bool pending = false;
+        const auto item = [&] (int result, const juce::String& text, bool enabled = true, bool ticked = false)
+        { if (pending) menu.addSeparator(); pending = false; menu.addItem (result, text, enabled, ticked); };
+        const auto separator = [&pending] { pending = true; };
+        const auto clips = menuClips();
+        const bool selection = timeSelection.active() && ! state.recording, content = selection ? ! clips.empty() : clips.size() > 1;
+        const bool group = ! timeSelection.active() && selectedClipIds.size() > 1;
+        const auto* clicked = [&]() -> const Session::ClipInfo* { const auto [t, c] = arrangementClipIndex (place.clipId); return t >= 0 ? &state.tracks[(size_t) t].clips[(size_t) c] : nullptr; }();
+        const auto* single = clips.size() == 1 ? clips.front() : nullptr;
+        const auto* track = juce::isPositiveAndBelow (place.track, (int) state.tracks.size()) ? &state.tracks[(size_t) place.track] : nullptr;
+        if (place.takeLane) { item (arrangementComp, "Copy to Main Lane", takeSelection.active()); separator(); }
+        else
+        {
+            if (content || group) { item (arrangementCut, "Cut"); item (arrangementCopy, "Copy"); }
+            if (track != nullptr && ! track->isReturn && (session.hasRangeClipboard() || (track->isMidi ? session.hasMidiClipClipboard() : session.hasAudioClipClipboard())))
+                item (arrangementPaste, "Paste");
+            if (content || group) { item (arrangementDuplicate, "Duplicate"); item (arrangementDelete, "Delete"); }
+        }
+        separator();
+        if (selection) item (arrangementZoom, "Zoom to Arrangement Time Selection");
+        if (zoomBack) item (arrangementZoomBack, "Zoom Back from Arrangement Time Selection");
+        separator();
+        if (! place.takeLane)
+        {
+            if (clicked != nullptr || single != nullptr) item (arrangementRename, "Rename");
+            if (! clips.empty() && std::all_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return c->isMidi; }))
+                item (arrangementGroove, clips.size() > 1 ? "Extract Grooves" : "Extract Groove");
+            if (! clips.empty())
+            {
+                const bool allOff = std::all_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return ! c->active; });
+                item (arrangementActivate, juce::String (allOff ? "Activate Clip" : "Deactivate Clip") + (clips.size() > 1 ? "s" : ""));
+            }
+            if (canSplitSelection()) item (arrangementSplit, "Split");
+            if (selection && ! clips.empty()) item (arrangementConsolidate, "Consolidate");
+            if (selection && state.scenes.size() < 256) item (arrangementConsolidateScene, "Consolidate Time to New Scene");
+            if (single != nullptr && single->isMidi) item (arrangementExportMidi, "Export MIDI Clip...");
+            if (const auto lanes = emptyMidiLanes(); ! lanes.isEmpty()) item (arrangementInsertMidi, lanes.size() > 1 ? "Insert MIDI Clips" : "Insert MIDI Clip");
+            if (clicked != nullptr && clicked->videoFile != juce::File()) item (arrangementVideo, "Video Window", video::supported(), videoWindow != nullptr && videoWindow->isVisible());
+            // The sample's file: Halftrack's browser has no Show in Browser yet.
+            if (single != nullptr && single->isAudio && single->file.existsAsFile())
+            { separator(); item (arrangementReveal, "Reveal in Finder"); item (arrangementSimilar, "Show Similar Files", browserFolder != juce::File()); }
+            separator();
+            // The fades, for audio tracks that are not frozen.
+            const auto tracks = selection ? timeSelection.trackIds : menuTracks();
+            if (std::any_of (tracks.begin(), tracks.end(), [this] (const juce::String& id) { const auto* t = trackInfo (id); return t != nullptr && ! t->isMidi && ! t->isReturn && ! t->frozen; }))
+            {
+                const auto fade = selectionFade();
+                item (arrangementFade, fade == SelectionFade::fadeIn ? "Create Fade In" : fade == SelectionFade::fadeOut ? "Create Fade Out" : "Create Fade", fade != SelectionFade::none);
+                item (arrangementResetFades, "Reset Fades", canResetFades());
+            }
+        }
+        // The loop brace: to the selection, or switched on or off.
+        const bool onLoop = selection && std::abs (timeSelection.start - state.loopStart) < 1e-6 && std::abs (timeSelection.end - state.loopEnd) < 1e-6;
+        item (arrangementLoop, selection && ! onLoop ? "Loop Selection" : state.looping ? "Deactivate Loop" : "Activate Loop");
+        if (! place.takeLane)
+        {
+            separator();
+            const auto tracks = menuTracks();
+            const auto freezable = freezableTracks (tracks);
+            const bool allFrozen = ! freezable.isEmpty() && std::all_of (freezable.begin(), freezable.end(), [this] (const juce::String& t) { return trackInfo (t)->frozen; });
+            const auto plural = [&] (const juce::String& one, const juce::String& many) { return tracks.size() > 1 ? many : one; };
+            item (arrangementFreeze, juce::String (allFrozen ? "Unfreeze " : "Freeze ") + (freezable.size() > 1 ? "Tracks" : "Track"), ! freezable.isEmpty());
+            item (arrangementBounceInPlace, plural ("Bounce Track in Place", "Bounce Tracks in Place"), session.canBounceTracksInPlace (tracks));
+            const bool bounceable = selection && session.canBounceToNewTracks (timeSelection.trackIds, timeSelection.start, timeSelection.end);
+            item (arrangementBounceNew, plural ("Bounce to New Track", "Bounce to New Tracks"), bounceable);
+            if (clicked != nullptr)
+            {
+                separator();
+                item (arrangementCrop, clips.size() > 1 ? "Crop Clips" : "Crop Clip", selection && session.canCropRange (timeSelection.trackIds, timeSelection.start, timeSelection.end));
+                item (arrangementReverse, "Reverse Clip", selection && std::any_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return c->isMidi || c->canReverse; }));
+            }
+            // Slice to New MIDI Track, for one audio clip, by transients, warp markers or a division of its beats.
+            if (single != nullptr && single->isAudio)
+            {
+                const bool warped = single->warp.mode != Session::WarpMode::off, markers = warped && single->warpMarkers.size() >= 2;
+                if (single->canEditAudioRange || warped)
+                {
+                    juce::PopupMenu slices;
+                    slices.addItem (arrangementSlice + (int) Session::SliceBy::transients, "Transients", ! markers);
+                    slices.addItem (arrangementSlice + (int) Session::SliceBy::warpMarkers, "Warp Markers", markers);
+                    const std::pair<Session::SliceBy, const char*> divisions[] { { Session::SliceBy::sixteenth, "1/16" }, { Session::SliceBy::eighth, "1/8" }, { Session::SliceBy::quarter, "1/4" },
+                                                                                  { Session::SliceBy::half, "1/2" }, { Session::SliceBy::bar, "1 Bar" } };
+                    for (const auto& [by, text] : divisions) slices.addItem (arrangementSlice + (int) by, text, ! markers);
+                    pending = false;
+                    menu.addSeparator(); menu.addSubMenu ("Slice to New MIDI Track", slices);
+                }
+            }
+        }
+        if (clicked == nullptr) { if (menu.getNumItems() > 0) menu.addSeparator(); pending = false; addGridItems (menu); }
+        else
+        {
+            std::vector<juce::Colour> used;
+            for (const auto* clip : clips) used.push_back (clip->colour);
+            menu.addSeparator();
+            menu.addCustomItem (arrangementColour, std::make_unique<ColourGrid> (used, colour), nullptr, "Clip Colours");
+        }
+        return menu;
+    }
+    void chooseArrangementItem (int result, const ArrangementPlace& place, int colour)
+    {
+        if (gridItem (result)) return;
+        const auto clips = menuClips();
+        const bool group = ! timeSelection.active() && selectedClipIds.size() > 1;
+        const auto* single = clips.size() == 1 ? clips.front() : nullptr;
+        const auto clipIds = [&] { juce::StringArray ids; for (const auto* c : clips) ids.add (c->id); return ids; }();
+        const auto [start, end] = std::pair { timeSelection.start, timeSelection.end };
+        if (result >= arrangementSlice && result <= arrangementSlice + (int) Session::SliceBy::bar)
+        { if (single != nullptr) sliceClip (single->id, static_cast<Session::SliceBy> (result - arrangementSlice)); return; }
+        switch (result)
+        {
+            case arrangementComp: compSelectedTake(); break;
+            case arrangementCut: if (group) clipGroupCommand ('X'); else selectionCommand (82); break;
+            case arrangementCopy: if (group) clipGroupCommand ('C'); else selectionCommand (81); break;
+            case arrangementPaste:
+                if (session.hasRangeClipboard()) selectionCommand (83);
+                else if (const auto* track = currentTrack()) { if (track->isMidi) pasteMidi (track->id, state.insertMarker); else pasteAudio (track->id, state.insertMarker); }
+                break;
+            case arrangementDuplicate: if (group) clipGroupCommand ('D'); else selectionCommand (77); break;
+            case arrangementDelete: if (group) deleteSelectedClip(); else { selectionCommand (78); timeSelection = {}; } break;
+            case arrangementZoom: zoomToSelection(); break;
+            case arrangementZoomBack: zoomBackFromSelection(); break;
+            case arrangementRename: renameClipDialog (place.clipId.isNotEmpty() ? place.clipId : single != nullptr ? single->id : juce::String()); return;
+            case arrangementGroove: for (const auto* clip : clips) extractGrooveFromUI (clip->id); break;
+            case arrangementActivate:
+            {
+                const bool activate = std::all_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return ! c->active; });
+                session.beginEditGesture (activate ? "Activate clips" : "Deactivate clips");
+                for (const auto& id : clipIds) report (session.setClipActive (id, activate));
+                session.endEditGesture(); break;
+            }
+            case arrangementSplit:
+                if (timeSelection.active()) selectionCommand (76);
+                else if (const auto* track = currentTrack())
+                    for (const auto& clip : track->clips)
+                        if (state.insertMarker > clip.start + 1e-6 && state.insertMarker < clip.start + clip.length - 1e-6)
+                        {
+                            juce::String right;
+                            report (clip.isMidi ? session.splitMidiClip (clip.id, state.insertMarker, right) : session.splitAudioClip (clip.id, state.insertMarker, right));
+                            break;
+                        }
+                break;
+            case arrangementConsolidate: selectionCommand (80); break;
+            case arrangementConsolidateScene: menuItemSelected (88, 0); return;
+            case arrangementExportMidi: if (single != nullptr) { selectArrangementClip (single->id); exportMidiDialog(); } return;
+            case arrangementInsertMidi:
+            {
+                const auto lanes = emptyMidiLanes();
+                session.beginEditGesture (lanes.size() > 1 ? "Insert MIDI clips" : "Insert MIDI clip");
+                for (const auto& id : lanes) report (session.addMidiClip (id, beatsAt (start), beatsAt (end) - beatsAt (start)));
+                session.endEditGesture(); break;
+            }
+            case arrangementVideo: toggleVideoWindow(); break;
+            case arrangementReveal: if (single != nullptr) single->file.revealToUser(); return;
+            case arrangementSimilar: if (single != nullptr) showSimilarFiles (single->file); return;
+            case arrangementFade: createSelectionFades(); return;
+            case arrangementResetFades: resetSelectionFades(); return;
+            case arrangementLoop:
+                if (timeSelection.active() && ! (std::abs (start - state.loopStart) < 1e-6 && std::abs (end - state.loopEnd) < 1e-6)) selectionCommand (79);
+                else session.setLoop (! state.looping, state.loopStart, state.loopEnd);
+                break;
+            case arrangementFreeze: freezeTracksFromUI (freezableTracks (menuTracks())); return;
+            case arrangementBounceInPlace: report (session.bounceTracksInPlace (menuTracks())); break;
+            case arrangementBounceNew:
+            {
+                juce::StringArray made;
+                const auto bounced = session.bounceToNewTracks (timeSelection.trackIds, start, end, made);
+                report (bounced, made.size() > 1 ? "Bounced the selection to new tracks." : "Bounced the selection to a new track.");
+                break;
+            }
+            case arrangementCrop: report (session.cropRange (timeSelection.trackIds, start, end)); break;
+            case arrangementReverse: report (session.reverseRange (timeSelection.trackIds, start, end)); break;
+            case arrangementColour:
+                if (colour >= 0) report (session.setClipColours (group ? selectedClipIds : clipIds, paletteColour (colour)));
+                break;
+            default: return;
+        }
+        refresh();
+    }
+    // The Session slots a slot menu acts on: the selected slots, or the selected one.
+    std::vector<Session::SlotRef> menuSlots() const
+    {
+        if (selectedSlots.size() > 1) return selectedSlots;
+        if (const auto scene = selectedSceneIndex(); scene >= 0 && juce::isPositiveAndBelow (selectedTrack, (int) state.tracks.size())) return { { selectedTrack, scene } };
+        return {};
+    }
+    std::vector<const Session::ClipInfo*> menuSlotClips() const
+    {
+        std::vector<const Session::ClipInfo*> clips;
+        for (const auto& ref : menuSlots())
+            if (juce::isPositiveAndBelow (ref.track, (int) state.tracks.size()) && juce::isPositiveAndBelow (ref.scene, (int) state.tracks[(size_t) ref.track].slots.size()))
+                if (const auto& slot = state.tracks[(size_t) ref.track].slots[(size_t) ref.scene]; slot.hasClip) clips.push_back (&slot.clip);
+        return clips;
+    }
+    // The selected empty slots, when all are on MIDI tracks, for Insert MIDI Clip.
+    std::vector<Session::SlotRef> emptyMidiSlots() const
+    {
+        std::vector<Session::SlotRef> slots;
+        for (const auto& ref : menuSlots())
+        {
+            if (! juce::isPositiveAndBelow (ref.track, (int) state.tracks.size())) return {};
+            const auto& track = state.tracks[(size_t) ref.track];
+            if (! juce::isPositiveAndBelow (ref.scene, (int) track.slots.size()) || track.slots[(size_t) ref.scene].hasClip) continue;
+            if (! track.isMidi || track.isReturn) return {};
+            slots.push_back (ref);
+        }
+        return slots;
+    }
+    enum SlotItem { slotCut = 500, slotCopy, slotPaste, slotDuplicate, slotDelete, slotClearEnvelopes, slotRename, slotGroove, slotActivate, slotExportMidi,
+                    slotReveal, slotSimilar, slotFreeze, slotBounceInPlace, slotBounceNew, slotInsertMidi, slotColour };
+    // A Session slot's menu, in the reference's order (LSlotManager 0x103a38ce4): commands that cannot act
+    // are left out, while Freeze and the bounces stay, greyed when they cannot act.
+    juce::PopupMenu slotContextMenu (std::shared_ptr<int> colour) const
+    {
+        juce::PopupMenu menu;
+        bool pending = false;
+        const auto item = [&] (int result, const juce::String& text, bool enabled = true, bool ticked = false)
+        { if (pending) menu.addSeparator(); pending = false; menu.addItem (result, text, enabled, ticked); };
+        const auto separator = [&pending] { pending = true; };
+        const auto clips = menuSlotClips();
+        const bool hasClip = ! clips.empty();
+        const auto* single = clips.size() == 1 && menuSlots().size() == 1 ? clips.front() : nullptr;
+        if (hasClip) { item (slotCut, "Cut"); item (slotCopy, "Copy"); }
+        if (selectedSlot() != nullptr && session.hasSlotClipboard() && ! state.recording) item (slotPaste, "Paste");
+        if (hasClip) { item (slotDuplicate, "Duplicate"); item (slotDelete, "Delete"); }
+        if (std::any_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return ! c->envelopes.empty(); })) item (slotClearEnvelopes, "Clear All Envelopes");
+        separator();
+        if (single != nullptr) item (slotRename, "Rename");
+        if (hasClip && std::all_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return c->isMidi; })) item (slotGroove, clips.size() > 1 ? "Extract Grooves" : "Extract Groove");
+        if (hasClip)
+        {
+            const bool allOff = std::all_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return ! c->active; });
+            item (slotActivate, juce::String (allOff ? "Activate Clip" : "Deactivate Clip") + (clips.size() > 1 ? "s" : ""));
+        }
+        if (single != nullptr && single->isMidi) item (slotExportMidi, "Export MIDI Clip...");
+        if (single != nullptr && single->isAudio && single->file.existsAsFile())
+        { separator(); item (slotReveal, "Reveal in Finder"); item (slotSimilar, "Show Similar Files", browserFolder != juce::File()); }
+        if (hasClip)
+        {
+            separator();
+            juce::StringArray tracks, clipIds;
+            for (const auto& ref : menuSlots()) tracks.addIfNotAlreadyThere (state.tracks[(size_t) ref.track].id);
+            for (const auto* c : clips) clipIds.add (c->id);
+            const auto freezable = freezableTracks (tracks);
+            const bool allFrozen = ! freezable.isEmpty() && std::all_of (freezable.begin(), freezable.end(), [this] (const juce::String& t) { return trackInfo (t)->frozen; });
+            item (slotFreeze, juce::String (allFrozen ? "Unfreeze " : "Freeze ") + (freezable.size() > 1 ? "Tracks" : "Track"), ! freezable.isEmpty());
+            item (slotBounceInPlace, tracks.size() > 1 ? "Bounce Tracks in Place" : "Bounce Track in Place", session.canBounceTracksInPlace (tracks));
+            item (slotBounceNew, tracks.size() > 1 ? "Bounce to New Tracks" : "Bounce to New Track", session.canBounceSlotsToNewTracks (clipIds));
+        }
+        separator();
+        if (const auto empty = emptyMidiSlots(); ! empty.empty()) item (slotInsertMidi, empty.size() > 1 ? "Insert MIDI Clips" : "Insert MIDI Clip");
+        if (hasClip)
+        {
+            std::vector<juce::Colour> used;
+            for (const auto* c : clips) used.push_back (c->colour);
+            menu.addSeparator();
+            menu.addCustomItem (slotColour, std::make_unique<ColourGrid> (used, colour), nullptr, "Clip Colours");
+        }
+        return menu;
+    }
+    void chooseSlotItem (int result, int colour)
+    {
+        const auto clips = menuSlotClips();
+        const auto* single = clips.size() == 1 ? clips.front() : nullptr;
+        juce::StringArray clipIds; for (const auto* c : clips) clipIds.add (c->id);
+        juce::StringArray tracks; for (const auto& ref : menuSlots()) tracks.addIfNotAlreadyThere (state.tracks[(size_t) ref.track].id);
+        switch (result)
+        {
+            case slotCut: slotCommand (84); return;
+            case slotCopy: slotCommand (85); return;
+            case slotPaste: slotCommand (86); return;
+            case slotDuplicate: slotCommand (87); return;
+            case slotDelete: clearSelectedSlot(); return;
+            case slotClearEnvelopes:
+                session.beginEditGesture ("Clear all envelopes");
+                for (const auto* c : clips) for (auto envelope : c->envelopes) { envelope.points.clear(); report (session.setClipEnvelope (c->id, envelope)); }
+                session.endEditGesture(); break;
+            case slotRename: if (single != nullptr) renameClipDialog (single->id); return;
+            case slotGroove: for (const auto& id : clipIds) extractGrooveFromUI (id); break;
+            case slotActivate:
+            {
+                const bool activate = std::all_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return ! c->active; });
+                session.beginEditGesture (activate ? "Activate clips" : "Deactivate clips");
+                for (const auto& id : clipIds) report (session.setClipActive (id, activate));
+                session.endEditGesture(); break;
+            }
+            case slotExportMidi: exportMidiDialog(); return;
+            case slotReveal: if (single != nullptr) single->file.revealToUser(); return;
+            case slotSimilar: if (single != nullptr) showSimilarFiles (single->file); return;
+            case slotFreeze: freezeTracksFromUI (freezableTracks (tracks)); return;
+            case slotBounceInPlace: report (session.bounceTracksInPlace (tracks)); break;
+            case slotBounceNew:
+            {
+                juce::StringArray made;
+                report (session.bounceSlotsToNewTracks (clipIds, made), made.size() > 1 ? "Bounced the clips to new tracks." : "Bounced the clip to a new track.");
+                break;
+            }
+            case slotInsertMidi:
+            {
+                const auto empty = emptyMidiSlots();
+                session.beginEditGesture (empty.size() > 1 ? "Insert MIDI clips" : "Insert MIDI clip");
+                for (const auto& ref : empty) report (session.addMidiClipToSlot (state.tracks[(size_t) ref.track].id, ref.scene, 4.0));
+                session.endEditGesture(); break;
+            }
+            case slotColour: if (colour >= 0) report (session.setClipColours (clipIds, paletteColour (colour))); break;
+            default: return;
+        }
+        refresh();
+    }
+    void showSlotMenu()
+    {
+        auto colour = std::make_shared<int> (-1);
+        auto menu = slotContextMenu (colour);
+        if (menu.getNumItems() == 0) return;
+        menu.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), colour] (int result)
+        { if (safe != nullptr && result != 0) safe->chooseSlotItem (result, *colour); });
+    }
+    // Insert Scene, after the reference's: a new scene below the selected one, selected.
+    void insertSceneFromUI()
+    {
+        const auto at = selectedSceneIndex();
+        session.beginEditGesture ("Insert scene");
+        auto result = session.addScene();
+        if (result.wasOk()) { refresh(); if (at >= 0 && at + 1 < (int) state.scenes.size() - 1) result = session.moveScene (state.scenes.back().id, at + 1); }
+        session.endEditGesture();
+        report (result); refresh();
+        if (result.wasOk()) selectedSceneId = at >= 0 && at + 1 < (int) state.scenes.size() ? state.scenes[(size_t) at + 1].id : state.scenes.back().id;
+        launcher.scrollSelectionIntoView();
+    }
+    void captureSceneFromUI()
+    {
+        juce::String captured;
+        const auto result = session.captureAndInsertScene (selectedSceneIndex(), captured);
+        report (result, "Captured the playing clips into a new scene.");
+        if (result.wasOk()) selectedSceneId = captured;
+        refresh();
+    }
+    enum SessionSpaceItem { spaceInsertAudio = 540, spaceInsertMidi, spaceInsertReturn, spaceInsertScene, spaceCaptureScene };
+    // The Session grid's menu away from any slot, as the reference's (LSlotManager vt+0x740 0x103a39ae0):
+    // the track inserts, then the scene inserts. Its paste has no handler there, so it is left out.
+    juce::PopupMenu sessionSpaceMenu() const
+    {
+        juce::PopupMenu menu;
+        menu.addItem (spaceInsertAudio, "Insert Audio Track"); menu.addItem (spaceInsertMidi, "Insert MIDI Track");
+        if (std::count_if (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return t.isReturn; }) < Session::maximumReturnTracks) menu.addItem (spaceInsertReturn, "Insert Return Track");
+        menu.addSeparator();
+        if (state.scenes.size() < 256) menu.addItem (spaceInsertScene, "Insert Scene");
+        menu.addItem (spaceCaptureScene, "Capture and Insert Scene");
+        return menu;
+    }
+    void chooseSessionSpaceItem (int result)
+    {
+        if (result == spaceInsertAudio) addTrack();
+        else if (result == spaceInsertMidi) addMidiTrack();
+        else if (result == spaceInsertReturn) addReturnTrack();
+        else if (result == spaceInsertScene) insertSceneFromUI();
+        else if (result == spaceCaptureScene) captureSceneFromUI();
+        refresh();
+    }
+    void showSessionSpaceMenu()
+    {
+        sessionSpaceMenu().showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this)] (int result)
+        { if (safe != nullptr && result != 0) safe->chooseSessionSpaceItem (result); });
+    }
+    enum SceneItem { sceneDuplicate = 560, sceneDelete, sceneRename, sceneInsert, sceneCapture, sceneSelectContent, sceneTempo, sceneSignature };
+    // A scene's menu, in the reference's order (LSceneManager 0x1039e7c54). Halftrack has no scene clipboard,
+    // info text or colours yet, and edits a scene's tempo and time signature in place of the reference's
+    // switch that shows them.
+    juce::PopupMenu sceneContextMenu() const
+    {
+        juce::PopupMenu menu;
+        if (state.scenes.size() < 256) menu.addItem (sceneDuplicate, "Duplicate");
+        if (state.scenes.size() > 1) menu.addItem (sceneDelete, "Delete");
+        menu.addSeparator();
+        menu.addItem (sceneRename, "Rename");
+        menu.addSeparator();
+        if (state.scenes.size() < 256) menu.addItem (sceneInsert, "Insert Scene");
+        menu.addItem (sceneCapture, "Capture and Insert Scene");
+        menu.addSeparator();
+        menu.addItem (sceneSelectContent, "Select Scene Content");
+        menu.addSeparator();
+        menu.addItem (sceneTempo, "Scene Tempo..."); menu.addItem (sceneSignature, "Scene Time Signature...");
+        return menu;
+    }
+    void chooseSceneItem (int result, const juce::String& sceneId)
+    {
+        const auto index = launcherIndices ({}, sceneId).second;
+        if (index < 0) return;
+        selectedSceneId = sceneId;
+        switch (result)
+        {
+            case sceneDuplicate: duplicateSceneFromUI (sceneId); return;
+            case sceneDelete: report (session.removeScene (index)); break;
+            case sceneRename: renameSceneDialog (index); return;
+            case sceneInsert: insertSceneFromUI(); return;
+            case sceneCapture: captureSceneFromUI(); return;
+            case sceneSelectContent:
+                selectedSlots = slotRectangle ({ 0, index }, { (int) state.tracks.size() - 1, index });
+                if (! selectedSlots.empty()) selectLauncherSlot (selectedSlots.front().track, index);
+                launcher.repaint(); return;
+            case sceneTempo: case sceneSignature: sceneSettingsDialog (index, result == sceneTempo); return;
+            default: return;
+        }
+        refresh();
+    }
+    void showArrangementMenu (const ArrangementPlace& place)
+    {
+        auto colour = std::make_shared<int> (-1);
+        arrangementMenu (place, colour).showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), place, colour] (int result)
+        { if (safe != nullptr && result != 0) safe->chooseArrangementItem (result, place, *colour); });
     }
     void selectTrack (int track)
     {
@@ -14022,6 +14568,146 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         refresh();
         check (session.removeTrack (t).wasOk(), "remove the track"); refresh();
         check (session.setEditGrid (grid).wasOk(), "snapping back"); selectTrack (previousTrack); viewStart = 0; updateScroll(); refresh();
+    }
+    {
+        // The Arrangement's clip and time-selection menu, in the reference's order (0x10379c6c8). A right-click
+        // on a clip selects it with its time; inside a time selection it keeps the selection; elsewhere it
+        // gives way to the insert marker.
+        showArrangementView(); refresh();
+        const int previousTrack = selectedTrack;
+        check (session.addAudioTrack ("Menus").wasOk(), "add an audio track for the menus"); refresh();
+        selectTrack (lastOrdinaryTrack()); refresh();
+        const int t = selectedTrack; const auto trackId = currentTrack()->id;
+        check (session.importAudio (audioFixture, t, 2.0).wasOk(), "a 0.1 s clip at 2 s"); refresh();
+        const auto clipId = state.tracks[(size_t) t].clips.at (0).id;
+        const auto clip = [&] { return state.tracks[(size_t) t].clips.at (0); };
+        const auto listed = [] (const juce::PopupMenu& menu)
+        {
+            juce::StringArray texts;
+            for (juce::PopupMenu::MenuItemIterator items (menu); items.next();)
+            {
+                const auto& item = items.getItem();
+                texts.add (item.isSeparator ? "-" : item.customComponent != nullptr ? "[" + item.text + "]" : item.text + (item.isEnabled ? "" : " (off)") + (item.isTicked ? " (on)" : ""));
+            }
+            return texts.joinIntoString ("|");
+        };
+        const auto colour = std::make_shared<int> (-1);
+        timeSelection = {}; selectedClipIds.clear(); zoomBack.reset();
+        const ArrangementPlace onClip { t, clipId, 2.05, false };
+        prepareArrangementMenu (onClip, 2.05);
+        check (selectedClip == 0 && timeSelection.active() && timeSelection.trackIds == juce::StringArray { trackId } && std::abs (timeSelection.start - 2.0) < 1e-6
+                   && std::abs (timeSelection.end - 2.1) < 1e-3, "a right-click selects the clip with its time on its lane");
+        const juce::String paste = session.hasRangeClipboard() || session.hasAudioClipClipboard() ? "Paste|" : "";
+        const auto clipMenu = listed (arrangementMenu (onClip, colour));
+        check (clipMenu == "Cut|Copy|" + paste + "Duplicate|Delete|-|Zoom to Arrangement Time Selection|-|Rename|Deactivate Clip|Consolidate|Consolidate Time to New Scene|-|"
+                               "Reveal in Finder|Show Similar Files (off)|-|Create Fade (off)|Reset Fades (off)|Loop Selection|-|Freeze Track|Bounce Track in Place|"
+                               "Bounce to New Track|-|Crop Clip (off)|Reverse Clip|-|Slice to New MIDI Track|-|[Clip Colours]",
+               "an audio clip's menu lists the reference's commands in its order, ending with the clip colours: " + clipMenu);
+        // The colour grid colours the clip.
+        chooseArrangementItem (arrangementColour, onClip, 5);
+        check (clip().colour == paletteColour (5), "a swatch gives the clip its colour");
+        session.undo(); refresh();
+        check (clip().colour != paletteColour (5), "one undo takes it back");
+        // Inside a time selection that holds the clip's start, it keeps the selection and offers a fade in and the grid.
+        timeSelection = { 1.0, 2.05, { trackId } };
+        const ArrangementPlace inside { t, {}, 1.5, false };
+        prepareArrangementMenu (inside, 1.5);
+        check (timeSelection.active() && std::abs (timeSelection.start - 1.0) < 1e-6, "a right-click inside the time selection keeps it");
+        const auto selectionMenu = listed (arrangementMenu (inside, colour));
+        check (selectionMenu == "Cut|Copy|" + paste + "Duplicate|Delete|-|Zoom to Arrangement Time Selection|-|Rename|Deactivate Clip|Split|Consolidate|Consolidate Time to New Scene|-|"
+                                    "Reveal in Finder|Show Similar Files (off)|-|Create Fade In|Reset Fades (off)|Loop Selection|-|Freeze Track|Bounce Track in Place|"
+                                    "Bounce to New Track|-|Slice to New MIDI Track|-|Snap to Grid (on)|[Adaptive Grid]|[Fixed Grid]|-|Narrow Grid|Widen Grid|-|Triplet Grid",
+               "a time selection's menu has Split and Create Fade In, and the grid's items in place of the colours: " + selectionMenu);
+        chooseArrangementItem (arrangementFade, inside, -1);
+        check (std::abs (clip().audio.fadeInSeconds - .05) < 1e-3 && ! clip().audio.defaultFadeIn, "Create Fade In fades the clip in over the selection's part of it");
+        check (listed (arrangementMenu (inside, colour)).contains ("Reset Fades|"), "Reset Fades is offered for a fade of its own");
+        chooseArrangementItem (arrangementResetFades, inside, -1);
+        check (clip().audio.defaultFadeIn == session.preferences().createFadesOnClipEdges, "Reset Fades returns it to the default");
+        session.undo(); session.undo(); refresh();
+        // Crop and Bounce to New Track over part of the clip.
+        timeSelection = { 2.02, 2.06, { trackId } };
+        const ArrangementPlace onPart { t, clipId, 2.04, false };
+        prepareArrangementMenu (onPart, 2.04);
+        check (timeSelection.active() && std::abs (timeSelection.start - 2.02) < 1e-6, "a right-click on the clip inside the selection keeps the selection");
+        check (listed (arrangementMenu (onPart, colour)).contains ("|Crop Clip|Reverse Clip|"), "Crop Clip is offered where the clip reaches past the selection");
+        chooseArrangementItem (arrangementCrop, onPart, -1);
+        check (state.tracks[(size_t) t].clips.size() == 1 && std::abs (clip().start - 2.02) < 1e-6 && std::abs (clip().length - .04) < 1e-6, "Crop Clip leaves the selection's part");
+        session.undo(); refresh();
+        const auto tracksBefore = state.tracks.size();
+        chooseArrangementItem (arrangementBounceNew, onPart, -1);
+        check (state.tracks.size() == tracksBefore + 1 && state.tracks[(size_t) t + 1].name.endsWith ("Bounce") && ! state.tracks[(size_t) t].clips.empty(),
+               "Bounce to New Track makes a new track after the clip's with the selection's render");
+        session.undo(); refresh();
+        check (state.tracks.size() == tracksBefore, "one undo removes it");
+        // Elsewhere, the selection gives way and the empty lane's menu keeps the loop and the grid.
+        const ArrangementPlace outside { t, {}, 5.0, false };
+        prepareArrangementMenu (outside, 5.0); refresh();
+        check (! timeSelection.active() && std::abs (state.insertMarker - 5.0) < 1e-6, "elsewhere the selection gives way to the insert marker at the click");
+        const auto emptyMenu = listed (arrangementMenu (outside, colour));
+        check (emptyMenu == paste + juce::String (paste.isEmpty() ? "" : "-|") + "Create Fade (off)|Reset Fades (off)|" + juce::String (state.looping ? "Deactivate Loop" : "Activate Loop")
+                               + "|-|Freeze Track|Bounce Track in Place|Bounce to New Track (off)|-|Snap to Grid (on)|[Adaptive Grid]|[Fixed Grid]|-|Narrow Grid|Widen Grid|-|Triplet Grid",
+               "an empty lane's menu keeps Paste, the greyed fades, the loop, Freeze and the bounces, and the grid: " + emptyMenu);
+        session.undo(); refresh();
+        check (session.removeTrack (t).wasOk(), "remove the track"); refresh();
+        selectTrack (previousTrack); timeSelection = {}; refresh();
+    }
+    {
+        // The Session view's slot, scene and grid menus, in the reference's order (0x103a38ce4, 0x1039e7c54, 0x103a39ae0).
+        showSessionView(); refresh();
+        const int previousTrack = selectedTrack;
+        const auto previousScene = selectedSceneId;
+        check (session.addMidiTrack ("Slots").wasOk(), "add a MIDI track for the slot menus"); refresh();
+        selectTrack (lastOrdinaryTrack()); refresh();
+        const int t = selectedTrack; const auto trackId = currentTrack()->id;
+        check (state.scenes.size() >= 2 && session.addMidiClipToSlot (trackId, 0, 4).wasOk(), "a Session clip in the first slot"); refresh();
+        const auto listed = [] (const juce::PopupMenu& menu)
+        {
+            juce::StringArray texts;
+            for (juce::PopupMenu::MenuItemIterator items (menu); items.next();)
+            {
+                const auto& item = items.getItem();
+                texts.add (item.isSeparator ? "-" : item.customComponent != nullptr ? "[" + item.text + "]" : item.text + (item.isEnabled ? "" : " (off)") + (item.isTicked ? " (on)" : ""));
+            }
+            return texts.joinIntoString ("|");
+        };
+        const auto colour = std::make_shared<int> (-1);
+        selectedSlots.clear(); selectLauncherSlot (t, 0);
+        const juce::String paste = session.hasSlotClipboard() ? "Paste|" : "";
+        const auto filled = listed (slotContextMenu (colour));
+        check (filled == "Cut|Copy|" + paste + "Duplicate|Delete|-|Rename|Extract Groove|Deactivate Clip|Export MIDI Clip...|-|Freeze Track (off)|Bounce Track in Place|Bounce to New Track|-|[Clip Colours]",
+               "a filled slot's menu lists the reference's commands in its order: " + filled);
+        chooseSlotItem (slotColour, 7);
+        check (state.tracks[(size_t) t].slots[0].clip.colour == paletteColour (7), "a swatch colours the slot's clip");
+        session.undo(); refresh();
+        selectLauncherSlot (t, 1);
+        check (listed (slotContextMenu (colour)) == paste + "Insert MIDI Clip", "an empty slot on a MIDI track offers Insert MIDI Clip: " + listed (slotContextMenu (colour)));
+        chooseSlotItem (slotInsertMidi, -1);
+        check (state.tracks[(size_t) t].slots[1].hasClip && state.tracks[(size_t) t].slots[1].clip.isMidi, "Insert MIDI Clip puts a clip in the empty slot");
+        session.undo(); refresh();
+        const auto sceneMenu = listed (sceneContextMenu());
+        check (sceneMenu == "Duplicate|Delete|-|Rename|-|Insert Scene|Capture and Insert Scene|-|Select Scene Content|-|Scene Tempo...|Scene Time Signature...", "a scene's menu: " + sceneMenu);
+        const auto scenes = state.scenes.size();
+        chooseSceneItem (sceneSelectContent, state.scenes[0].id);
+        check (selectedSlots.size() >= 2 && std::all_of (selectedSlots.begin(), selectedSlots.end(), [] (const Session::SlotRef& r) { return r.scene == 0; }),
+               "Select Scene Content selects every slot in the scene");
+        selectedSlots.clear();
+        chooseSceneItem (sceneInsert, state.scenes[0].id);
+        check (state.scenes.size() == scenes + 1 && selectedSceneId == state.scenes[1].id && state.tracks[(size_t) t].slots[0].hasClip && ! state.tracks[(size_t) t].slots[1].hasClip,
+               "Insert Scene puts a new scene right below the selected one, selected");
+        session.undo(); refresh();
+        check (state.scenes.size() == scenes, "one undo removes it");
+        const auto space = listed (sessionSpaceMenu());
+        check (space == "Insert Audio Track|Insert MIDI Track|Insert Return Track|-|Insert Scene|Capture and Insert Scene", "the grid's menu away from any slot: " + space);
+        // Bounce to New Track from the slot.
+        selectedSlots.clear(); selectLauncherSlot (t, 0);
+        const auto tracksBefore = state.tracks.size();
+        chooseSlotItem (slotBounceNew, -1);
+        check (state.tracks.size() == tracksBefore + 1 && state.tracks[(size_t) t + 1].slots[0].hasClip && state.tracks[(size_t) t + 1].slots[0].clip.isAudio
+                   && ! state.tracks[(size_t) t].slots[0].clip.active, "Bounce to New Track puts the clip's render in the same slot of a new track and deactivates the clip");
+        session.undo(); refresh();
+        check (state.tracks.size() == tracksBefore && state.tracks[(size_t) t].slots[0].clip.active, "one undo removes it");
+        check (session.removeTrack (t).wasOk(), "remove the track"); refresh();
+        selectTrack (previousTrack); selectedSceneId = previousScene; showArrangementView(); refresh();
     }
     {
         // Take lanes, as in the reference: Cmd+Option+U shows a track's take lanes below it, a range
