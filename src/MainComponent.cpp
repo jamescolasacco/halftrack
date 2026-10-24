@@ -2092,9 +2092,9 @@ private:
                 const auto row = collectionBounds (i);
                 const bool selected = owner.browserCategory == BrowserCategory::collection && owner.browserCollection == i;
                 if (selected) { g.setColour (raised); g.fillRect (row); }
-                g.setColour (Collections::colour (i)); g.fillEllipse ((float) row.getX() + 8, (float) row.getCentreY() - 3, 6, 6);
+                g.setColour (owner.collections.colour (i)); g.fillEllipse ((float) row.getX() + 8, (float) row.getCentreY() - 3, 6, 6);
                 g.setColour (selected ? orange : ink.withAlpha (0.85f)); g.setFont (font (11.0f, selected));
-                g.drawText (Collections::name (i), row.withTrimmedLeft (20), juce::Justification::centredLeft, true);
+                g.drawText (owner.collections.name (i), row.withTrimmedLeft (20), juce::Justification::centredLeft, true);
             }
             const auto drawRow = [&] (juce::Rectangle<int> row, const juce::String& text, bool selected, bool available)
             {
@@ -2147,7 +2147,12 @@ private:
         {
             const auto at = e.getPosition();
             if (isShowing()) grabKeyboardFocus(); // The arrows then move through the rows.
-            for (int i = 0; i < Collections::count; ++i) if (collectionBounds (i).contains (at)) { owner.leavePlace(); owner.showBrowserCollection (i); return; }
+            for (int i = 0; i < Collections::count; ++i)
+                if (collectionBounds (i).contains (at))
+                {
+                    if (e.mods.isPopupMenu()) { owner.collectionMenu (i); return; }
+                    owner.leavePlace(); owner.showBrowserCollection (i); return;
+                }
             for (int i = 0; i < (int) entries.size(); ++i) if (rowBounds (i).contains (at)) { owner.leavePlace(); owner.setBrowserCategory (entries[(size_t) i].first); return; }
             if (placeBounds (0).contains (at)) { owner.leavePlace(); owner.setBrowserCategory (BrowserCategory::packs); return; }
             for (int place = 0; place < owner.placeCount(); ++place)
@@ -10676,6 +10681,40 @@ private:
     }
     Collections collections;
     int browserCollection = 0;
+    // A collection's right-click menu, as the reference's labels have: Rename, and a colour.
+    static constexpr int renameCollectionItem = 1, collectionColourItem = 2;
+    juce::PopupMenu collectionMenuFor (int collection, std::shared_ptr<int> colour) const
+    {
+        juce::PopupMenu menu;
+        menu.addItem (renameCollectionItem, "Rename...");
+        menu.addSeparator();
+        menu.addCustomItem (collectionColourItem, std::make_unique<ColourGrid> (std::vector<juce::Colour> { collections.colour (collection) }, std::move (colour)), nullptr, "Collection Colours");
+        return menu;
+    }
+    void runCollectionCommand (int collection, int command, int colour)
+    {
+        if (command == renameCollectionItem) renameCollectionDialog (collection);
+        else if (command == collectionColourItem && colour >= 0) { report (collections.setColour (collection, paletteColour (colour))); updateBrowser(); }
+    }
+    void collectionMenu (int collection)
+    {
+        auto colour = std::make_shared<int> (-1);
+        collectionMenuFor (collection, colour).showMenuAsync (juce::PopupMenu::Options().withMousePosition(),
+            [safe = juce::Component::SafePointer<Impl> (this), collection, colour] (int choice) { if (safe != nullptr) safe->runCollectionCommand (collection, choice, *colour); });
+    }
+    void renameCollectionDialog (int collection)
+    {
+        auto* dialog = new juce::AlertWindow ("Rename Collection", "Name the collection. An empty name gives it its usual one again.", juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor ("name", collections.name (collection), "Name");
+        dialog->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey)); dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
+        auto safe = juce::Component::SafePointer<Impl> (this); auto safeDialog = juce::Component::SafePointer<juce::AlertWindow> (dialog);
+        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog, collection] (int result)
+        {
+            if (! safe || ! safeDialog || result != 1) return;
+            safe->report (safe->collections.rename (collection, safeDialog->getTextEditorContents ("name"))); safe->updateBrowser();
+        }), true);
+    }
     void showBrowserCollection (int collection) { browserCollection = collection; setBrowserCategory (BrowserCategory::collection); }
     // The browser's Places, after the reference's: the User Library, the Current Project (the
     // project's media folder) and the folders added with Add Folder, numbered in that order. A place
@@ -10914,7 +10953,7 @@ private:
         const auto key = browserKey (row);
         if (key.isEmpty()) return;
         const bool adding = ! collections.contains (key, collection);
-        report (collections.toggle (key, collection), (adding ? "Added to " : "Removed from ") + Collections::name (collection) + ".");
+        report (collections.toggle (key, collection), (adding ? "Added to " : "Removed from ") + collections.name (collection) + ".");
         updateBrowser(); browserList.repaint();
     }
     // User library: presets per device and the default set.
@@ -16185,7 +16224,7 @@ private:
         const auto query = browserSearch.getText().trim();
         folderButton.setButtonText (pluginBrowser() ? "Manage / Scan..." : "Choose Folder...");
         upButton.setEnabled (browserCanGoUp());
-        browserSearch.setTextToShowWhenEmpty ("Search (" + juce::String (browserCategory == BrowserCategory::collection ? Collections::name (browserCollection)
+        browserSearch.setTextToShowWhenEmpty ("Search (" + juce::String (browserCategory == BrowserCategory::collection ? collections.name (browserCollection)
             : browserCategory == BrowserCategory::instruments ? "Instruments"
             : browserCategory == BrowserCategory::audioEffects ? "Audio Effects" : browserCategory == BrowserCategory::midiEffects ? "MIDI Effects"
             : pluginBrowser() ? "Plug-Ins" : browserCategory == BrowserCategory::grooves ? "Grooves" : browserCategory == BrowserCategory::templates ? "Templates"
@@ -16323,7 +16362,7 @@ private:
         // A tagged item shows its collections' colours at the right.
         const auto tags = collections.collectionsOf (browserKey (row));
         for (size_t i = 0; i < tags.size(); ++i)
-        { g.setColour (Collections::colour (tags[i])); g.fillEllipse ((float) width - 10 - 8 * (float) i, (float) height / 2 - 3, 6, 6); }
+        { g.setColour (collections.colour (tags[i])); g.fillEllipse ((float) width - 10 - 8 * (float) i, (float) height / 2 - 3, 6, 6); }
     }
     void paintBrowserRow (int row, juce::Graphics& g, int width, int height, bool selected)
     {
@@ -16544,7 +16583,7 @@ private:
         if (browserKey (row).isEmpty()) return;
         juce::PopupMenu menu;
         for (int i = 0; i < Collections::count; ++i)
-            menu.addItem (i + 1, Collections::name (i) + "  (" + juce::String (i + 1) + ")", true, collections.contains (browserKey (row), i));
+            menu.addItem (i + 1, collections.name (i) + "  (" + juce::String (i + 1) + ")", true, collections.contains (browserKey (row), i));
         const bool sound = sampleBrowser() && juce::isPositiveAndBelow (row, (int) browserItems.size()) && ! browserItems[(size_t) row].directory && isAudio (browserItems[(size_t) row].file);
         if (sound) { menu.addSeparator(); menu.addItem (showSimilarItem, "Show Similar Files"); }
         auto safe = juce::Component::SafePointer<Impl> (this);
@@ -17720,6 +17759,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         browserList.deselectAllRows();
         check (browserCategories.keyPressed (juce::KeyPress (juce::KeyPress::rightKey)) && (getNumRows() == 0 || browserList.getSelectedRow() == 0), "Right moves to the list, its first row selected");
         browserSearch.setText ({}, juce::sendNotificationSync);
+        {
+            // A collection's right-click menu, as the reference's labels have: Rename and a colour.
+            auto colour = std::make_shared<int> (-1);
+            juce::StringArray items;
+            const auto menu = collectionMenuFor (1, colour);
+            for (juce::PopupMenu::MenuItemIterator it (menu); it.next();)
+                items.add (it.getItem().isSeparator ? "-" : it.getItem().customComponent != nullptr ? "[" + it.getItem().text + "]" : it.getItem().text);
+            check (items.joinIntoString ("|") == "Rename...|-|[Collection Colours]", "a collection's right-click menu offers Rename and its colours (" + items.joinIntoString ("|") + ")");
+            const auto colourWas = collections.colour (1); const auto nameWas = collections.name (1);
+            runCollectionCommand (1, collectionColourItem, 3);
+            check (collections.colour (1) == paletteColour (3), "choosing a swatch colours the collection");
+            check (collections.rename (1, "Drums").wasOk(), "rename it");
+            showBrowserCollection (1);
+            check (collections.name (1) == "Drums" && browserSearch.getTextToShowWhenEmpty().contains ("Drums"), "the browser shows its new name");
+            check (collections.rename (1, nameWas).wasOk() && collections.setColour (1, colourWas).wasOk(), "and back");
+        }
         setBrowserCategory (category); showBrowser = browserWas; resized();
     }
     {

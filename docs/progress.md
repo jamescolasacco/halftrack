@@ -2685,3 +2685,7 @@ Engine and UI areas. `Session::hotSwapDevice` replaces a chain's device in its p
 ## Hot-Swap Sample — 2026-10-24
 
 UI area. The Sampler's waveform and a Drum Sampler's selected pad gain the reference's Hot-Swap Sample button: it opens the sample's folder in the browser with the sample selected, under the Hot-Swap bar, and Return or a double-click on a sound loads it into the Sampler or pad, the link kept; the button again, the bar's X, Escape, Q or another category end it ([contract](research/presets-contract.md#hot-swap-2026-10-24)). Checked in the UI suite.
+
+## Renaming and colouring collections — 2026-10-24
+
+UI and library areas. As the reference's labels can be, collections can be renamed and coloured: a collection's right-click menu in the sidebar has Rename... and the palette's colour grid. `Collections` now keeps per-library names and colours, saved in `Collections.xml` with the items ([contract](research/collections-contract.md)). Checked in the collections and UI suites.

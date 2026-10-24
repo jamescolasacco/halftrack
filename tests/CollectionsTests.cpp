@@ -21,7 +21,7 @@ int runCollectionsTests (const juce::File& artifacts)
         const auto file = root.getChildFile ("Library").getChildFile ("Collections.xml");
         Collections c;
         ok (c.load (file), "load collections that do not exist yet");
-        check (c.keys (0).isEmpty() && Collections::name (0) == "Favorites" && Collections::name (7).isEmpty(), "they start empty, with Favorites first");
+        check (c.keys (0).isEmpty() && c.name (0) == "Favorites" && c.name (7).isEmpty() && Collections::defaultName (0) == "Favorites", "they start empty, with Favorites first");
         ok (c.toggle ("device:3", 0), "add a device to Favorites");
         ok (c.toggle ("sample:/library/kick.wav", 0), "and a sample");
         ok (c.toggle ("device:3", 2), "put the device in Yellow too");
@@ -36,6 +36,21 @@ int runCollectionsTests (const juce::File& artifacts)
         ok (c.toggle ("device:3", 2), "and out of Yellow");
         check (c.collectionsOf ("device:3").empty() && c.keys (0).size() == 1, "an item in no collection is forgotten");
         check (c.toggle ({}, 0).failed() && c.toggle ("device:3", 7).failed(), "an empty key or a collection past the seventh is refused");
+
+        // Names and colours, as the reference's labels can be renamed and coloured.
+        ok (c.rename (1, "  Drums  "), "rename Red to Drums");
+        ok (c.setColour (1, juce::Colour (0xff336699)), "and colour it");
+        check (c.name (1) == "Drums" && c.colour (1) == juce::Colour (0xff336699) && c.name (2) == "Yellow" && c.colour (2) == Collections::defaultColour (2),
+               "the collection takes its name, trimmed, and colour; the others keep theirs");
+        {
+            Collections again;
+            ok (again.load (file), "reload them");
+            check (again.name (1) == "Drums" && again.colour (1) == juce::Colour (0xff336699) && again.keys (0) == c.keys (0), "the name and colour are saved with the items");
+        }
+        ok (c.rename (1, ""), "an empty name");
+        check (c.name (1) == "Red", "gives the collection its usual name again");
+        check (c.rename (8, "X").failed() && c.setColour (-1, juce::Colours::red).failed() && c.rename (1, juce::String::repeatedString ("x", 65)).failed(),
+               "unknown collections and names past 64 characters are refused");
 
         const auto bad = root.getChildFile ("Bad.xml");
         check (bad.replaceWithText ("<NOT_COLLECTIONS/>"), "write a file that is not collections");
