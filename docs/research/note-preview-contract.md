@@ -16,7 +16,7 @@ The reference's MIDI editor has a Preview switch above the piano ruler. With it 
 - **The switch.** It is drawn as headphones above the keys, lit when on. While it is on, the piano roll sounds notes on the clip's track, at most eight at once:
   - a key while it is held, and each key a drag along the keys reaches (velocity 100);
   - a clicked note while the button is down, at its velocity;
-  - a drawn note while the button is down, at the draw velocity;
+  - a note added by a double-click while the button is down, at the editor's Velocity, and in Draw Mode each note drawn, briefly;
   - a dragged note each time it reaches another pitch;
   - notes transposed with the arrow keys, for 200 ms.
 - **Key track selection.** Shift-clicking a key adds every note of that pitch to the selection, or takes them out if all were selected. This works whether Preview is on or off, as the reference's manual describes.
@@ -49,7 +49,7 @@ The main UI suite checks:
 
 - the switch's place and default;
 - that a key is silent with Preview off, and sounds while held with it on;
-- that clicking a note and drawing one sound while the button is down, and stop on release;
+- that clicking a note and adding one by a double-click sound while the button is down, and stop on release;
 - Shift-clicking a key selects its pitch's notes (Delete then removes just those);
 - that step recording needs Preview on.
 

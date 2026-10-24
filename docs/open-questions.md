@@ -830,6 +830,13 @@ Main menu bar ([contract](research/main-menu-contract.md)). Defaults where the r
 - **Preferences.** Preferences is one window with the reference's tabs (see the [preferences contract](research/preferences-contract.md)).
 - **Save a Copy and collecting.** The reference's Save Live Set As and Save a Copy keep pointing at the original samples, and Collect All and Save copies them in ([Managing Files and Sets](https://www.ableton.com/en/live-manual/12/managing-files-and-sets/), consulted 2026-10-24). Every Halftrack save collects its media into the project's Assets folder, so Save a Copy collects too and there is no Collect All and Save. Whether the reference's Save a Copy leaves the original Set open was not read; Halftrack's does.
 
+Note editor clicks and Draw Mode ([contract](research/note-drawing-contract.md)). Defaults where the manual is silent:
+
+- **A new note's length and velocity.** A double-clicked or drawn note is one grid step long, the step the editor's grid shows, and takes the editor's Velocity (the last selected note's). The reference's note length and velocity were not read.
+- **The selection box.** A drag selects the notes the box touches, as Halftrack's Shift-drag did. Whether the reference's needs a note wholly inside, and the timespan it also selects, were not determined.
+- **Draw Mode's drag.** A drag that starts on a note goes on erasing the notes it crosses. A melodic drag gives each step one note that follows the pointer's pitch on that step, and a drawn note replaces the notes it covers at its pitch. Steps follow the grid even with snapping off.
+- **Saving Draw Mode.** Draw Mode belongs to the window and starts off; whether the reference keeps it between launches was not read.
+
 Warp defaults ([warp contract](research/warp-contract.md#defaults-not-yet-the-references)):
 
 - **Default warp mode and Auto-Warp.** The reference's are Beats and on; Halftrack keeps Complex and off until its Beats plays a slowed constant clip without silences between segments and a constant level without overshoot. Which transient loop mode the reference's Beats uses by default was not read.

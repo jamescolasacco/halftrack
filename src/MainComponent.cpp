@@ -390,6 +390,45 @@ private:
     Kind kind;
 };
 
+// The control bar's Draw Mode switch, a pencil lit while Draw Mode is on, as the reference's.
+class DrawModeButton final : public juce::Button
+{
+public:
+    DrawModeButton() : juce::Button ("Draw Mode") { setClickingTogglesState (true); setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); }
+    void paintButton (juce::Graphics& g, bool over, bool down) override
+    {
+        const auto on = getToggleState();
+        g.setColour (on ? orange : (over || down) ? raised.brighter (0.08f) : raised);
+        g.fillRect (getLocalBounds().reduced (1));
+        g.setColour (line); g.drawRect (getLocalBounds().reduced (1));
+        g.setColour (on ? themes::colour (0xff1a1a1a) : ink);
+        g.fillPath (pencil (getLocalBounds().toFloat().reduced (getWidth() * .28f, getHeight() * .2f)));
+    }
+    // A pencil fitted in r, its point at the lower left.
+    static juce::Path pencil (juce::Rectangle<float> r)
+    {
+        juce::Path p;
+        p.startNewSubPath (0.0f, 0.5f); p.lineTo (0.24f, 0.33f); p.lineTo (0.24f, 0.67f); p.closeSubPath();
+        p.addRectangle (0.29f, 0.33f, 0.52f, 0.34f);
+        p.addRectangle (0.86f, 0.33f, 0.14f, 0.34f);
+        p.applyTransform (juce::AffineTransform::rotation (-juce::MathConstants<float>::pi * 0.25f, 0.5f, 0.5f));
+        p.scaleToFit (r.getX(), r.getY(), r.getWidth(), r.getHeight(), true);
+        return p;
+    }
+    // The pointer over the note editor in Draw Mode, its point the hot spot.
+    static juce::MouseCursor cursor()
+    {
+        juce::Image image (juce::Image::ARGB, 20, 20, true);
+        {
+            juce::Graphics g (image);
+            const auto shape = pencil ({ 1.5f, 1.5f, 17.0f, 17.0f });
+            g.setColour (juce::Colours::white); g.strokePath (shape, juce::PathStrokeType (2.0f));
+            g.setColour (juce::Colours::black); g.fillPath (shape);
+        }
+        return { image, 2, 18 };
+    }
+};
+
 // A mixer control's look for its lane: automated controls show a red thumb, overridden ones a grey one.
 void showAutomationState (juce::Slider& slider, const Session::AutomationLane& lane, const juce::String& manualTip, const juce::String& what)
 {
@@ -563,6 +602,8 @@ public:
         keysButton.setColour (juce::TextButton::buttonOnColourId, orange); keysButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
         keysButton.setWantsKeyboardFocus (false); keysButton.setMouseClickGrabsKeyboardFocus (false);
         keysButton.onClick = [this] { setComputerKeyboard (keysButton.getToggleState()); };
+        addAndMakeVisible (drawButton); drawButton.setTooltip ("Draw Mode: draw notes in the clip view, and click a note to delete it  |  B");
+        drawButton.onClick = [this] { setDrawMode (drawButton.getToggleState()); };
         midiMapButton.setName ("MIDI Map Mode"); midiMapButton.setClickingTogglesState (true);
         midiMapButton.setTooltip ("MIDI Map Mode: click a blue control, then move a controller to map it  |  Cmd/Ctrl+M");
         midiMapButton.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff3d8bff)); midiMapButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xffffffff));
@@ -725,7 +766,9 @@ public:
         g.drawHorizontalLine (getHeight() - statusHeight, 0.0f, (float) getWidth());
         g.setColour (muted);
         g.setFont (font (10.5f));
-        auto message = status.isNotEmpty() ? status : showPiano ? "Click: draw / select    Shift: group select    Ruler: insertion point    Cmd/Ctrl+C/X/V/D: notes clipboard (Halftrack only)" : "Space: play / pause     Click ruler: seek     Shift-drag ruler: loop     Double-click MIDI clip: edit notes";
+        auto message = status.isNotEmpty() ? status
+            : showPiano && drawMode ? "Draw Mode: drag to draw notes    Alt: one pitch    Click a note: delete    B: leave Draw Mode"
+            : showPiano ? "Double-click: add or delete a note    Drag: select    Shift: add to the selection    Ruler: insertion point    B: Draw Mode" : "Space: play / pause     Click ruler: seek     Shift-drag ruler: loop     Double-click MIDI clip: edit notes";
         if (status.isEmpty() && showSession && ! showPiano) message = "Click triangle: launch     Double-click MIDI slot: edit     Enter: launch slot     Shift+Enter: launch scene     Tab: switch view";
         g.drawText (message, 13, getHeight() - statusHeight, getWidth() - 280, statusHeight, juce::Justification::centredLeft, true);
         auto* device = session.audioDeviceManager().getCurrentAudioDevice();
@@ -752,13 +795,14 @@ public:
         meterBounds = bar.removeFromLeft (40); bar.removeFromLeft (8); meterLabel.setBounds (meterBounds);
         clickButton.setBounds (bar.removeFromLeft (46)); clickSettingsButton.setBounds (bar.removeFromLeft (20));
         bar.removeFromLeft (8); quantisation.setBounds (bar.removeFromLeft (64));
-        audioButton.setBounds (bar.removeFromRight (52)); bar.removeFromRight (8);
-        midiMapButton.setBounds (bar.removeFromRight (46)); bar.removeFromRight (4);
-        keyMapButton.setBounds (bar.removeFromRight (40)); bar.removeFromRight (4);
-        keysButton.setBounds (bar.removeFromRight (46)); bar.removeFromRight (8);
-        arrangementTab.setBounds (bar.removeFromRight (62)); sessionTab.setBounds (bar.removeFromRight (62));
+        audioButton.setBounds (bar.removeFromRight (52)); bar.removeFromRight (6);
+        midiMapButton.setBounds (bar.removeFromRight (40)); bar.removeFromRight (4);
+        keyMapButton.setBounds (bar.removeFromRight (34)); bar.removeFromRight (4);
+        keysButton.setBounds (bar.removeFromRight (40)); bar.removeFromRight (4);
+        drawButton.setBounds (bar.removeFromRight (26)); bar.removeFromRight (6);
+        arrangementTab.setBounds (bar.removeFromRight (58)); sessionTab.setBounds (bar.removeFromRight (58));
         pianoTab.setBounds (bar.removeFromRight (40)); bar.removeFromRight (10);
-        cpuBounds = bar.removeFromRight (56); bar.removeFromRight (8);
+        cpuBounds = bar.removeFromRight (50); bar.removeFromRight (8);
         // Transport is centred on the window, independent of the side groups, and kept clear of them.
         // In a narrow window the less essential sections give way first, as the reference's do.
         struct Section { std::vector<juce::Component*> parts; int width; };
@@ -6684,8 +6728,8 @@ private:
             };
             noteLength.addItem ("1/16", 1); noteLength.addItem ("1/8", 2); noteLength.addItem ("1/4", 3); noteLength.addItem ("1/2", 4); noteLength.addItem ("1 bar", 5);
             noteLength.setName ("New note length");
-            noteLength.getProperties().set ("readWhenUsed", true); // Drawing a note reads it (defaultLength).
-            noteLength.setSelectedId (3); noteLength.setTooltip ("Default length for newly drawn notes");
+            noteLength.getProperties().set ("readWhenUsed", true); // Set Fixed Length reads it (defaultLength).
+            noteLength.setSelectedId (3); noteLength.setTooltip ("The length Transform > Set Fixed Length gives the notes");
             velocity.setName ("Note velocity");
             velocity.setSliderStyle (juce::Slider::LinearHorizontal);
             velocity.setRange (0.01, 1.0, 0.01); velocity.setValue (0.8);
@@ -6979,7 +7023,11 @@ private:
             }
             if (! gridBounds().contains (e.getPosition())) return;
             grabKeyboardFocus();
-            endGesture(); originalNotes.clear(); drawing = false; marquee = false;
+            endGesture(); originalNotes.clear(); drawing = false; marquee = false; erasing = false;
+            // As in the reference: in Draw Mode a click on a note deletes it and a drag elsewhere draws
+            // notes (drawNotes); without it, a double-click adds a note (addNote) or deletes one.
+            const bool plain = ! e.mods.isPopupMenu() && ! e.mods.isShiftDown();
+            const bool draw = owner.drawMode && plain, second = ! owner.drawMode && plain && e.getNumberOfClicks() >= 2;
             // A note of another shown clip makes that clip the edited one, with the note selected,
             // keeping the view where it was.
             if (std::none_of (clip->notes.begin(), clip->notes.end(), [&] (const auto& n) { return noteBounds (n).contains (e.position); }))
@@ -6997,6 +7045,13 @@ private:
             for (auto it = clip->notes.rbegin(); it != clip->notes.rend(); ++it)
                 if (noteBounds (*it).contains (e.position))
                 {
+                    if (draw || second)
+                    {
+                        // The note goes; in Draw Mode, so do those the drag goes on to cross.
+                        owner.session.beginEditGesture ("Delete MIDI notes"); gesture = true;
+                        dragClipId = clip->id; erasing = draw; eraseAt (e.position);
+                        return;
+                    }
                     const auto note = *it;
                     if (e.mods.isShiftDown() && ! e.mods.isPopupMenu())
                     {
@@ -7023,21 +7078,11 @@ private:
             }
             clearSelection();
             if (e.mods.isPopupMenu()) { repaint(); return; }
-            const auto start = std::floor (beatAt (e.x) / snapBeats()) * snapBeats();
-            if (start < 0 || start >= contentEndBeat (*clip)) return;
-            const auto pitch = juce::jlimit (0, 127, topPitch - (e.y - gridTop) / rowHeight);
-            const auto length = juce::jmin (defaultLength(), contentEndBeat (*clip) - start);
-            const auto clipId = clip->id;
-            const auto oldNotes = clip->notes;
-            owner.session.beginEditGesture ("Draw MIDI note"); gesture = true;
-            const auto result = owner.session.addMidiNote (clipId, pitch, start, length, drawVelocity);
-            owner.report (result); owner.refresh();
-            if (result.failed()) { endGesture(); return; }
-            if (const auto* updated = owner.currentMidiClip())
-                for (const auto& note : updated->notes)
-                    if (std::none_of (oldNotes.begin(), oldNotes.end(), [&] (const auto& old) { return old.id == note.id; })) { selectOnly (note.id); original = note; originalNotes = { note }; break; }
-            dragClipId = clipId; dragOrigin = e.position; resizeNote = true; drawing = true; sync();
-            sound ({ { pitch, drawVelocity } });
+            if (draw) { drawNotes (e, true); return; }
+            if (second) { addNote (*clip, e); return; }
+            // A click places the insert marker, and a drag selects the notes it encloses.
+            insertionBeat = juce::jlimit (0.0, contentEndBeat (*clip), std::round (beatAt (e.x) / snapBeats()) * snapBeats());
+            marquee = true; marqueeBase.clear(); dragOrigin = e.position; dragClipId = clip->id; marqueeBounds = {}; repaint();
         }
         void mouseDrag (const juce::MouseEvent& e) override
         {
@@ -7050,6 +7095,8 @@ private:
             }
             const auto* clip = owner.currentMidiClip();
             if (clip == nullptr || clip->id != dragClipId || e.mods.isPopupMenu() || ! e.mouseWasDraggedSinceMouseDown()) return;
+            if (erasing) { eraseAt (e.position); return; }
+            if (drawing) { drawNotes (e, false); return; }
             if (braceDrag != 0)
             {
                 // Ends resize the loop, its middle moves it with the start, and the start marker moves
@@ -7086,7 +7133,7 @@ private:
             double beatDelta = (e.x - dragOrigin.x) / pixelsPerBeat;
             if (resizeNote)
             {
-                auto length = drawing ? beatAt (e.x) - original.startBeat : original.lengthBeats + beatDelta;
+                auto length = original.lengthBeats + beatDelta;
                 if (snapsNotes (e.mods)) length = std::round (length / snapBeats()) * snapBeats();
                 // Preserve valid model notes shorter than the mouse resize floor.
                 // Every selected note must admit the same length delta.
@@ -7119,7 +7166,7 @@ private:
         void mouseUp (const juce::MouseEvent& e) override
         {
             silence(); keyPitch = -1;
-            endGesture(); drawing = false; originalNotes.clear(); braceDrag = 0;
+            endGesture(); drawing = false; erasing = false; drawn.clear(); originalNotes.clear(); braceDrag = 0;
             if (marquee)
             {
                 if (! e.mouseWasDraggedSinceMouseDown()) clearSelection();
@@ -7128,6 +7175,7 @@ private:
         }
         void mouseMove (const juce::MouseEvent& e) override
         {
+            if (owner.drawMode && gridBounds().contains (e.getPosition())) { setMouseCursor (owner.drawCursor); return; }
             const auto* clip = owner.currentMidiClip();
             bool edge = false;
             if (clip != nullptr) for (const auto& note : clip->notes) if (noteBounds (note).contains (e.position) && e.x >= noteBounds (note).getRight() - 8) edge = true;
@@ -7147,7 +7195,7 @@ private:
             for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused != nullptr; focused = focused->getParentComponent())
                 if (dynamic_cast<juce::TextEditor*> (focused) != nullptr) return false;
             if (owner.session.isExporting()) return true;
-            endGesture(); originalNotes.clear(); drawing = false; marquee = false;
+            endGesture(); originalNotes.clear(); drawing = false; marquee = false; erasing = false;
             const auto* clip = owner.currentMidiClip();
             const auto code = key.getKeyCode();
             if (code == juce::KeyPress::escapeKey) { clearSelection(); repaint(); return true; }
@@ -7191,6 +7239,7 @@ private:
             return owner.handleKey (key);
         }
         bool hasSelectedNote() const { return selectedNote() != nullptr; }
+        double insertion() const { return insertionBeat; }
         bool canPasteNotes() const { return owner.currentMidiClip() != nullptr && ! noteClipboard.empty(); }
         int selectedNoteCount() const { return (int) selectedNotes().size(); }
         // Whether every selected note is deactivated, for Edit's Activate Notes.
@@ -7205,7 +7254,7 @@ private:
         {
             const auto* clip = owner.currentMidiClip();
             if (clip == nullptr) return;
-            endGesture(); originalNotes.clear(); drawing = false; marquee = false;
+            endGesture(); originalNotes.clear(); drawing = false; marquee = false; erasing = false;
             switch (command)
             {
                 case NoteCommand::cut: copySelectedNotes (true); break;
@@ -7641,7 +7690,10 @@ private:
         double viewBeat = 0, pixelsPerBeat = 60, insertionBeat = 0;
         int topPitch = 77;
         float drawVelocity = 0.8f;
-        bool gesture = false, resizeNote = false, drawing = false, marquee = false;
+        bool gesture = false, resizeNote = false, drawing = false, marquee = false, erasing = false, pitchLocked = false;
+        // Draw Mode's notes in the drag under way, by grid step: the note's id and pitch.
+        std::map<int, std::pair<juce::String, int>> drawn;
+        int drawFirstStep = 0, drawLastStep = 0, drawPitch = 60;
     public:
         // The clip's grid at the editor's zoom and width.
         GridPlace gridPlace() const
@@ -7656,6 +7708,100 @@ private:
     private:
         double defaultLength() const { return std::pow (2.0, noteLength.getSelectedId() - 3); }
         double beatAt (float x) const { return viewBeat + (x - keysWidth) / pixelsPerBeat; }
+        int pitchAt (float y) const { return juce::jlimit (0, 127, topPitch - (int) std::floor ((y - gridTop) / rowHeight)); }
+        Session::MidiNoteInfo newNote (int pitch, double start, double length) const { return { {}, pitch, start, length, drawVelocity }; }
+        // A double-click's note: one grid step long, on the step and at the pitch clicked, selected, so
+        // the drag goes on to move it.
+        void addNote (const Session::ClipInfo& clip, const juce::MouseEvent& e)
+        {
+            const auto grid = snapBeats();
+            const auto start = std::floor (beatAt (e.x) / grid) * grid;
+            if (start < 0 || start >= contentEndBeat (clip)) return;
+            const auto pitch = pitchAt (e.position.y);
+            const auto clipId = clip.id;
+            juce::StringArray inserted;
+            owner.session.beginEditGesture ("Add MIDI note"); gesture = true;
+            const auto result = owner.session.addMidiNotes (clipId, { newNote (pitch, start, juce::jmin (grid, contentEndBeat (clip) - start)) }, inserted);
+            owner.report (result); owner.refresh();
+            if (result.failed() || inserted.isEmpty()) { endGesture(); return; }
+            selectOnly (inserted[0]);
+            if (const auto* note = selectedNote()) { selectedNoteId = note->id; original = *note; originalNotes = { *note }; }
+            dragClipId = clipId; dragOrigin = e.position; resizeNote = false; sync();
+            sound ({ { pitch, drawVelocity } });
+        }
+        // The topmost note under p goes, for a double-click and Draw Mode's eraser.
+        void eraseAt (juce::Point<float> p)
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr || clip->id != dragClipId) return;
+            for (auto it = clip->notes.rbegin(); it != clip->notes.rend(); ++it)
+                if (noteBounds (*it).contains (p))
+                {
+                    const auto id = it->id;
+                    owner.report (owner.session.removeMidiNotes (clip->id, { id })); selectedNoteIds.erase (id);
+                    owner.refresh(); repaint(); return;
+                }
+        }
+        // Draw Mode's drawing, after the reference's: a note on each grid step from the first one to the
+        // pointer's, at the pitch the pointer had on it, or with Alt all at the first note's pitch. Steps
+        // the pointer goes back over lose their notes, and a drawn note replaces those it covers at its pitch.
+        void drawNotes (const juce::MouseEvent& e, bool first)
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr) return;
+            const auto grid = snapBeats();
+            const auto step = (int) std::floor (beatAt (e.position.x) / grid);
+            const auto pitch = pitchAt (e.position.y);
+            if (first)
+            {
+                if (step < 0 || step * grid >= contentEndBeat (*clip)) return;
+                owner.session.beginEditGesture ("Draw MIDI notes"); gesture = true;
+                drawing = true; dragClipId = clip->id; drawn.clear();
+                pitchLocked = e.mods.isAltDown(); drawFirstStep = drawLastStep = step; drawPitch = pitch;
+            }
+            else if (! drawing || clip->id != dragClipId) return;
+            const auto clipId = clip->id;
+            const auto lo = std::min (drawFirstStep, step), hi = std::max (drawFirstStep, step);
+            juce::StringArray gone;
+            for (auto it = drawn.begin(); it != drawn.end();)
+                if (it->first < lo || it->first > hi) { gone.add (it->second.first); it = drawn.erase (it); }
+                else ++it;
+            if (! gone.isEmpty()) owner.report (owner.session.removeMidiNotes (clipId, gone));
+            // The steps from the last one reached to the pointer's, the pitch moving evenly between them.
+            const auto from = drawLastStep;
+            const auto fromPitch = drawn.count (from) > 0 ? drawn[from].second : drawPitch;
+            const auto count = std::abs (step - from);
+            for (int i = 0; i <= count; ++i)
+            {
+                const auto s = from + (step >= from ? i : -i);
+                if (s < lo || s > hi) continue;
+                const auto at = pitchLocked ? drawPitch : count == 0 ? pitch : juce::roundToInt (fromPitch + (pitch - fromPitch) * (double) i / count);
+                owner.refresh();
+                if (const auto* current = owner.currentMidiClip(); current != nullptr && current->id == clipId) drawStep (*current, s, at);
+            }
+            drawLastStep = step;
+            owner.refresh(); repaint();
+            if (const auto found = drawn.find (step); found != drawn.end() && found->second.second == pitch) sound ({ { pitch, drawVelocity } }, true);
+        }
+        void drawStep (const Session::ClipInfo& clip, int step, int pitch)
+        {
+            const auto grid = snapBeats(), start = step * grid;
+            if (start < 0 || start >= contentEndBeat (clip) - 1.0e-9) return;
+            const auto length = juce::jmin (grid, contentEndBeat (clip) - start);
+            const auto found = drawn.find (step);
+            if (found != drawn.end() && found->second.second == pitch) return;
+            juce::StringArray replaced;
+            if (found != drawn.end()) { replaced.add (found->second.first); drawn.erase (found); }
+            for (const auto& note : clip.notes)
+                if (note.pitch == pitch && note.startBeat < start + length - 1.0e-9 && note.startBeat + note.lengthBeats > start + 1.0e-9 && ! replaced.contains (note.id)
+                    && std::none_of (drawn.begin(), drawn.end(), [&] (const auto& d) { return d.second.first == note.id; }))
+                    replaced.add (note.id);
+            if (! replaced.isEmpty()) owner.report (owner.session.removeMidiNotes (clip.id, replaced));
+            juce::StringArray inserted;
+            if (const auto result = owner.session.addMidiNotes (clip.id, { newNote (pitch, start, length) }, inserted); result.wasOk() && inserted.size() == 1)
+                drawn[step] = { inserted[0], pitch };
+            else owner.report (result);
+        }
         juce::Rectangle<int> gridBounds() const
         { return { keysWidth, gridTop, juce::jmax (1, getWidth() - keysWidth - scrollSize), juce::jmax (1, getHeight() - gridTop - scrollSize - (laneView.isVisible() ? laneHeight : 0)) }; }
         static constexpr int laneHeight = 92, hiddenLane = 99;
@@ -9152,6 +9298,15 @@ private:
     // The computer MIDI keyboard: M or the KEYS switch turns it on; then the note keys play the
     // Computer Keyboard input and are released when the key comes up.
     juce::TextButton keysButton { "KEYS" };
+    // Options > Draw Mode (B) and the control bar's pencil: the note editor draws notes, as the reference's.
+    bool drawMode = false;
+    DrawModeButton drawButton;
+    const juce::MouseCursor drawCursor = DrawModeButton::cursor();
+    void setDrawMode (bool on)
+    {
+        drawMode = on; drawButton.setToggleState (on, juce::dontSendNotification);
+        pianoRoll.repaint(); repaint();
+    }
     ComputerKeyboard computerKeys;
     void setComputerKeyboard (bool on)
     {
@@ -11727,7 +11882,7 @@ private:
                     menuToggleView, menuClipView, menuDeviceView, menuToggleDetail, menuBrowser, menuGroovePool, menuSearch, menuSimilar,
                     menuFoldAll, menuFoldSelected, menuZoomSelection, menuZoomBack, menuMidiMap, menuKeyMap, menuComputerKeyboard,
                     menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuOverview, menuSceneSettings,
-                    menuSoloSwitches, menuCueSwitches, menuSaveCopy,
+                    menuSoloSwitches, menuCueSwitches, menuSaveCopy, menuDrawMode,
                     menuSlice = 200, // Plus Session::SliceBy.
                     menuTimeFormat = 210 }; // Plus Session::TimeFormat.
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
@@ -11762,7 +11917,7 @@ private:
             { menuSearch, key ('f', cmd) }, { menuSimilar, key ('f', cmd | shift) }, { menuPluginWindows, key ('p', cmd | alt) }, { 92, key ('v', cmd | alt) }, { 109, key ('m', cmd | alt) },
             { menuOverview, key ('o', cmd | alt) }, { 103, key ('i', cmd | alt) }, { 104, key ('s', cmd | alt) }, { 108, key ('r', cmd | alt) }, { 49, key ('a') }, { menuFoldAll, key ('u', alt) },
             { menuFoldSelected, key ('u') }, { 41, key ('+') }, { 42, key ('-') }, { menuZoomSelection, key ('z') }, { menuZoomBack, key ('x') },
-            { menuMidiMap, key ('m', cmd) }, { menuKeyMap, key ('k', cmd) }, { menuComputerKeyboard, key ('m') },
+            { menuMidiMap, key ('m', cmd) }, { menuKeyMap, key ('k', cmd) }, { menuComputerKeyboard, key ('m') }, { menuDrawMode, key ('b') },
             { 93, key ('1', cmd) }, { 94, key ('2', cmd) }, { 95, key ('3', cmd) }, { 96, key ('4', cmd) }, { 97, key ('5', cmd) }, { 13, key ('e', cmd | shift | alt) } };
         for (const auto& [id, press] : shortcuts)
         {
@@ -12288,6 +12443,8 @@ private:
             add (95, "Triplet Grid", place.has_value(), g.tuplet == 3); add (96, "Snap to Grid", place.has_value(), g.snap);
             add (97, "Fixed Grid", place.has_value(), g.fixed);
             popup.addSeparator();
+            add (menuDrawMode, "Draw Mode", true, drawMode);
+            popup.addSeparator();
             // The tracks' switches solo or cue, as the Main's Solo/Cue switch chooses; Cue needs a Cue Out of its own.
             add (menuSoloSwitches, "Solo Switches", state.cueAvailable, ! state.cueMode); add (menuCueSwitches, "Cue Switches", state.cueAvailable, state.cueMode);
             add (98, "Solo in Place", true, state.soloInPlace);
@@ -12436,6 +12593,7 @@ private:
             case menuMidiMap: setMidiMapMode (! midiMapMode); return;
             case menuKeyMap: setKeyMapMode (! keyMapMode); return;
             case menuComputerKeyboard: setComputerKeyboard (! session.isComputerKeyboardEnabled()); return;
+            case menuDrawMode: setDrawMode (! drawMode); return;
             case menuExternalSync: report (session.setExternalSync (! session.isExternalSync())); break;
             default: break;
         }
@@ -14757,12 +14915,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     {
         return juce::Point<float> ((float) (55.0 + beat * beatWidth), (float) (60 + (77 - pitch) * 15 + 7));
     };
-    auto event = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged = false)
+    auto event = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged = false, int clicks = 1, int modifiers = 0)
     {
         const auto now = juce::Time::getCurrentTime();
         return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at,
-                                juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
-                                &pianoRoll, &pianoRoll, now, down, now, 1, dragged);
+                                juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers), 1.0f, 0, 0, 0, 0,
+                                &pianoRoll, &pianoRoll, now, down, now, clicks, dragged);
     };
     const auto arrangementRuler = juce::Point<float> ((float) (55 + 2 * beatWidth), 48.0f);
     pianoRoll.mouseDown (event (arrangementRuler, arrangementRuler));
@@ -14771,31 +14929,34 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (std::abs (state.position - clickedBeat * 60.0 / state.tempo) < 0.001 && std::abs (clickedBeat - 2) < 1.0 / beatWidth + 1e-9,
            "arrangement MIDI ruler seeks the global transport");
     pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
-    auto click = [&] (juce::Point<float> at)
+    auto click = [&] (juce::Point<float> at, int clicks = 1)
     {
         const auto parentPoint = getLocalPoint (&pianoRoll, at.toInt());
         check (getComponentAt (parentPoint) == &pianoRoll, "piano grid receives pointer events without an overlay");
-        pianoRoll.mouseDown (event (at, at)); pianoRoll.mouseUp (event (at, at));
+        pianoRoll.mouseDown (event (at, at, false, clicks)); pianoRoll.mouseUp (event (at, at, false, clicks));
     };
+    const auto doubleClick = [&] (juce::Point<float> at) { click (at); click (at, 2); };
     click (point (0.35, 60));
-    check (currentMidiClip()->notes.size() == 1, "grid mouse-down creates an actual MIDI note");
+    check (currentMidiClip()->notes.empty() && std::abs (pianoRoll.insertion() - 0.25) < 1e-9, "a click on the grid places the insert marker on the grid, adding nothing");
+    doubleClick (point (0.35, 60));
+    check (currentMidiClip()->notes.size() == 1, "a double-click on the grid adds an actual MIDI note");
     auto note = currentMidiClip()->notes.front();
     const auto noteId = note.id;
-    check (note.pitch == 60 && note.startBeat == 0.25 && note.lengthBeats == 1,
-           "draw uses the selected pitch, grid and default note length");
+    check (note.pitch == 60 && note.startBeat == 0.25 && note.lengthBeats == 0.25,
+           "the note takes the pitch and grid step double-clicked, one grid step long, as the reference's");
     auto down = point (0.3, 60), to = down + juce::Point<float> ((float) beatWidth, -60.0f);
     pianoRoll.mouseDown (event (down, down)); pianoRoll.mouseDrag (event (to, down, true)); pianoRoll.mouseUp (event (to, down, true));
     note = currentMidiClip()->notes.front();
     check (note.id == noteId && note.pitch == 64 && note.startBeat == 1.25,
            "note body drag moves time and pitch while retaining identity");
-    down = point (2.25, 64) - juce::Point<float> (2.0f, 0.0f);
-    to = down + juce::Point<float> ((float) beatWidth, 0.0f);
+    down = point (1.5, 64) - juce::Point<float> (2.0f, 0.0f);
+    to = down + juce::Point<float> ((float) (1.75 * beatWidth), 0.0f);
     pianoRoll.mouseDown (event (down, down)); pianoRoll.mouseDrag (event (to, down, true)); pianoRoll.mouseUp (event (to, down, true));
     check (currentMidiClip()->notes.front().lengthBeats == 2, "right-edge drag resizes a real note");
     const auto undo = juce::KeyPress ('Z', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0);
     const auto redo = juce::KeyPress ('Z', juce::ModifierKeys (juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier), 0);
     pianoRoll.keyPressed (undo);
-    check (currentMidiClip()->notes.front().lengthBeats == 1, "one undo reverses one resize gesture");
+    check (currentMidiClip()->notes.front().lengthBeats == 0.25, "one undo reverses one resize gesture");
     pianoRoll.keyPressed (redo);
     check (currentMidiClip()->notes.front().lengthBeats == 2, "redo restores the resize gesture");
     pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::deleteKey));
@@ -14803,6 +14964,61 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     pianoRoll.keyPressed (undo);
     check (currentMidiClip()->notes.size() == 1 && currentMidiClip()->notes.front().id == noteId,
            "undo deletion restores the original note identity");
+    {
+        // As in the reference, a drag on the grid selects the notes it encloses and a double-click on a note deletes it.
+        const auto notes = [&] { return currentMidiClip()->notes; };
+        const auto only = [&] (const juce::String& id) { return notes().size() == 1 && notes().front().id == id; };
+        pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+        auto from = point (0.6, 66), to = point (2.0, 62);
+        pianoRoll.mouseDown (event (from, from)); pianoRoll.mouseDrag (event (to, from, true)); pianoRoll.mouseUp (event (to, from, true));
+        check (only (noteId) && pianoRoll.selectedNoteCount() == 1, "a drag on the grid selects the note it encloses, adding none");
+        doubleClick (point (1.4, 64));
+        check (notes().empty(), "a double-click on a note deletes it");
+        pianoRoll.keyPressed (undo);
+        check (only (noteId), "one undo brings it back");
+        // Draw Mode, from its key B: a drag draws a note on each grid step at the pointer's pitch.
+        check (! drawMode && handleKey (juce::KeyPress ('b')) && drawMode && drawButton.getToggleState(), "B turns Draw Mode on and lights the control bar's pencil");
+        const auto drawDrag = [&] (std::vector<juce::Point<float>> path, int modifiers = 0)
+        {
+            pianoRoll.mouseDown (event (path.front(), path.front(), false, 1, modifiers));
+            for (size_t i = 1; i < path.size(); ++i) pianoRoll.mouseDrag (event (path[i], path.front(), true, 1, modifiers));
+            pianoRoll.mouseUp (event (path.back(), path.front(), true, 1, modifiers));
+        };
+        const auto drawnNotes = [&]
+        {
+            std::vector<std::tuple<double, int, double>> drawn;
+            for (const auto& n : notes()) if (n.id != noteId) drawn.emplace_back (n.startBeat, n.pitch, n.lengthBeats);
+            std::sort (drawn.begin(), drawn.end());
+            return drawn;
+        };
+        using Drawn = std::vector<std::tuple<double, int, double>>;
+        drawDrag ({ point (4.05, 70), point (4.55, 70), point (5.05, 72) });
+        check (drawnNotes() == Drawn { { 4.0, 70, .25 }, { 4.25, 70, .25 }, { 4.5, 70, .25 }, { 4.75, 71, .25 }, { 5.0, 72, .25 } } && notes().size() == 6,
+               "dragging in Draw Mode draws one grid-step note on each step crossed, at the pointer's pitch, moving evenly between pitches");
+        pianoRoll.keyPressed (undo);
+        check (only (noteId), "one undo takes back the whole drawing");
+        drawDrag ({ point (4.05, 70), point (5.05, 70), point (4.55, 70) });
+        check (drawnNotes() == Drawn { { 4.0, 70, .25 }, { 4.25, 70, .25 }, { 4.5, 70, .25 } }, "moving back over the drawn steps takes their notes away again");
+        pianoRoll.keyPressed (undo);
+        drawDrag ({ point (4.05, 70), point (4.55, 73), point (5.05, 66) }, juce::ModifierKeys::altModifier);
+        check (drawnNotes() == Drawn { { 4.0, 70, .25 }, { 4.25, 70, .25 }, { 4.5, 70, .25 }, { 4.75, 70, .25 }, { 5.0, 70, .25 } },
+               "with Alt held, every drawn note keeps the first note's pitch");
+        pianoRoll.keyPressed (undo);
+        drawDrag ({ point (0.55, 64), point (1.55, 64) });
+        check (drawnNotes() == Drawn { { 0.5, 64, .25 }, { 0.75, 64, .25 }, { 1.0, 64, .25 }, { 1.25, 64, .25 }, { 1.5, 64, .25 } } && notes().size() == 5,
+               "notes drawn over another at their pitch replace it");
+        pianoRoll.keyPressed (undo);
+        check (only (noteId), "and one undo restores it");
+        // A click on a note in Draw Mode deletes it, and the drag goes on deleting the notes it crosses.
+        drawDrag ({ point (4.05, 70), point (4.55, 70) });
+        drawDrag ({ point (1.4, 64), point (4.1, 70), point (4.35, 70), point (4.6, 70) });
+        check (notes().empty(), "in Draw Mode, a click on a note deletes it and dragging on erases the notes crossed");
+        pianoRoll.keyPressed (undo);
+        check (drawnNotes() == Drawn { { 4.0, 70, .25 }, { 4.25, 70, .25 }, { 4.5, 70, .25 } } && notes().size() == 4, "one undo restores every erased note");
+        pianoRoll.keyPressed (undo);
+        check (only (noteId), "and the drawing goes with the next");
+        check (handleKey (juce::KeyPress ('b')) && ! drawMode && ! drawButton.getToggleState(), "B again leaves Draw Mode");
+    }
     std::function<juce::Component* (juce::Component&, const juce::String&)> findNamed;
     findNamed = [&] (juce::Component& parent, const juce::String& name) -> juce::Component*
     {
@@ -16488,7 +16704,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
            "empty MIDI slot double-click creates and opens its own one-bar clip");
     const auto launcherClipId = currentMidiClip()->id;
     const auto launcherNotePoint = juce::Point<float> (139.0f, 322.0f);
-    pianoRoll.mouseDown (event (launcherNotePoint, launcherNotePoint)); pianoRoll.mouseUp (event (launcherNotePoint, launcherNotePoint));
+    for (const int clicks : { 1, 2 })
+    { pianoRoll.mouseDown (event (launcherNotePoint, launcherNotePoint, false, clicks)); pianoRoll.mouseUp (event (launcherNotePoint, launcherNotePoint, false, clicks)); }
     check (currentMidiClip()->notes.size() == 1 && currentMidiClip()->notes.front().pitch == 60,
            "existing piano mouse handler edits the selected Session clip");
     auto clipIdentities = [this]
@@ -16908,12 +17125,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     {
         return juce::Point<float> ((float) (55 + beat * groupBeatWidth), (float) (60 + (77 - pitch) * 15 + 7));
     };
-    auto groupEvent = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged, int modifiers)
+    auto groupEvent = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged, int modifiers, int clicks = 1)
     {
         const auto now = juce::Time::getCurrentTime();
         return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at,
                                 juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers), 1.0f, 0, 0, 0, 0,
-                                &pianoRoll, &pianoRoll, now, down, now, 1, dragged);
+                                &pianoRoll, &pianoRoll, now, down, now, clicks, dragged);
     };
     auto groupClick = [&] (juce::Point<float> at, int modifiers = 0)
     {
@@ -16933,13 +17150,28 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         if (clip != nullptr) for (const auto& note : clip->notes) if (note.id == id) return note;
         throw std::runtime_error ("Expected fixture note is missing");
     };
+    // A fixture note: double-clicked on the grid, then a beat long by its right edge. Returns its id.
+    auto groupAdd = [&] (juce::Point<float> at)
+    {
+        const auto before = currentMidiClip()->notes;
+        for (const int clicks : { 1, 2 }) { pianoRoll.mouseDown (groupEvent (at, at, false, 0, clicks)); pianoRoll.mouseUp (groupEvent (at, at, false, 0, clicks)); }
+        const auto after = currentMidiClip()->notes;
+        for (const auto& note : after)
+            if (std::none_of (before.begin(), before.end(), [&] (const auto& old) { return old.id == note.id; }))
+            {
+                const auto edge = juce::Point<float> ((float) (55 + (note.startBeat + note.lengthBeats) * groupBeatWidth) - 2, at.y);
+                groupDrag (edge, edge + juce::Point<float> ((float) ((1 - note.lengthBeats) * groupBeatWidth), 0));
+                return note.id;
+            }
+        throw std::runtime_error ("A double-click added no fixture note");
+    };
     const auto shiftModifier = juce::ModifierKeys::shiftModifier;
     const auto allNotes = juce::KeyPress ('A', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0);
     const auto escape = juce::KeyPress (juce::KeyPress::escapeKey);
     const auto deleteNotes = juce::KeyPress (juce::KeyPress::deleteKey);
-    groupClick (groupPoint (1.1, 60)); const auto aId = currentMidiClip()->notes.back().id;
-    groupClick (groupPoint (4.1, 64)); const auto bId = currentMidiClip()->notes.back().id;
-    groupClick (groupPoint (8.1, 67)); const auto cId = currentMidiClip()->notes.back().id;
+    const auto aId = groupAdd (groupPoint (1.1, 60));
+    const auto bId = groupAdd (groupPoint (4.1, 64));
+    const auto cId = groupAdd (groupPoint (8.1, 67));
     groupClick (groupPoint (1.1, 60), shiftModifier); // C + A
     groupClick (groupPoint (8.1, 67), shiftModifier); // A (toggle C off)
     groupClick (groupPoint (4.1, 64), shiftModifier); // A + B
@@ -17052,10 +17284,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (currentMidiClip() != nullptr && currentMidiClip()->id == groupClipId && ! pianoRoll.hasSelectedNote(), "clip creation undo resolves live clip identity without stale selection");
 
     insertSynthTrackAndClip(); pianoRoll.fit(); fixNoteGrid();
-    groupClick (groupPoint (0.1, 60)); const auto lowId = currentMidiClip()->notes.back().id;
+    const auto lowId = groupAdd (groupPoint (0.1, 60));
     edge = groupPoint (1, 60) - juce::Point<float> (2, 0);
     groupDrag (edge, edge + juce::Point<float> ((float) groupBeatWidth, 0));
-    groupClick (groupPoint (15.1, 64)); const auto highId = currentMidiClip()->notes.back().id;
+    const auto highId = groupAdd (groupPoint (15.1, 64));
     pianoRoll.keyPressed (allNotes);
     pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::leftKey)); pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
     check (noteById (lowId).startBeat == 0 && noteById (highId).startBeat == 15,
@@ -17101,7 +17333,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     lowXml->setAttribute ("p", 60); lowXml->setAttribute ("l", 1.0);
     highXml->setAttribute ("p", 64); highXml->setAttribute ("l", 2.0);
     check (noteXml->writeTo (noteProject), "write original offscreen-note project fixture");
-    groupClick (groupPoint (8.1, 60));
+    groupAdd (groupPoint (8.1, 60));
     check (pianoRoll.hasSelectedNote() && currentMidiClip()->notes.size() == 3, "a newly drawn note is selected before reopening earlier state");
     check (session.loadProject (noteProject).wasOk(), "loader accepts original MIDI content extending past the clip");
     refresh();
@@ -17126,8 +17358,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     // The facade also accepts notes shorter than the mouse editor's 1/32-beat
     // floor. Establish that valid fixture directly, then use real UI handlers.
     insertSynthTrackAndClip(); pianoRoll.fit(); fixNoteGrid();
-    groupClick (groupPoint (1.1, 60)); const auto shortId = currentMidiClip()->notes.back().id;
-    groupClick (groupPoint (15.1, 64)); const auto endId = currentMidiClip()->notes.back().id;
+    const auto shortId = groupAdd (groupPoint (1.1, 60));
+    const auto endId = groupAdd (groupPoint (15.1, 64));
     check (session.updateMidiNote (currentMidiClip()->id, shortId, 60, 1, 1.0 / 64, 0.8f).wasOk(),
            "facade-valid short note fixture is accepted before UI resizing");
     refresh(); pianoRoll.keyPressed (allNotes);
@@ -17212,9 +17444,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto at = juce::Point<float> ((float) (55 + beat * groupBeatWidth), 48);
         pianoRoll.mouseDown (groupEvent (at, at, false, 0)); pianoRoll.mouseUp (groupEvent (at, at, false, 0));
     };
-    groupClick (groupPoint (1.1, 60));
+    groupAdd (groupPoint (1.1, 60));
     groupVelocity->setValue (0.31, juce::sendNotificationSync);
-    groupClick (groupPoint (3.35, 64));
+    groupAdd (groupPoint (3.35, 64));
     groupVelocity->setValue (0.73, juce::sendNotificationSync);
     pianoRoll.keyPressed (allNotes);
     const auto sourceNotes = currentMidiClip()->notes;
@@ -17315,13 +17547,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (session.notePreview() && previewSwitch->getToggleState(), "clicking the switch turns Preview on for the project");
         const auto [held, released] = pressKey (0);
         check (held > .01f && released < 1e-4f, "with Preview on, a key sounds while held and stops when released");
-        const auto pressAt = [&] (juce::Point<float> at)
+        const auto pressAt = [&] (juce::Point<float> at, int clicks = 1)
         {
             pumpSyntheticTestDevice (session, 40);
-            pianoRoll.mouseDown (groupEvent (at, at, false, 0));
+            pianoRoll.mouseDown (groupEvent (at, at, false, 0, clicks));
             pumpSyntheticTestDevice (session, 20);
             const auto sounding = pumpSyntheticTestDevice (session, 40);
-            pianoRoll.mouseUp (groupEvent (at, at, false, 0));
+            pianoRoll.mouseUp (groupEvent (at, at, false, 0, clicks));
             pumpSyntheticTestDevice (session, 60);
             return std::pair { sounding, pumpSyntheticTestDevice (session, 40) };
         };
@@ -17330,8 +17562,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (visible != shown.end(), "a note to click is in view");
         const auto [clicked, afterClick] = pressAt (groupPoint (visible->startBeat + .02, visible->pitch));
         check (clicked > .01f && afterClick < 1e-4f && currentMidiClip()->notes.size() == shown.size(), "clicking a note sounds it while held, without changing it");
-        const auto [drawn, afterDraw] = pressAt (groupPoint (juce::jmin (12.0, std::floor (contentEndBeat (*currentMidiClip()) - 1)) + .1, 71));
-        check (drawn > .01f && afterDraw < 1e-4f && currentMidiClip()->notes.size() == shown.size() + 1, "drawing a note sounds it while the button is down");
+        const auto drawAt = groupPoint (juce::jmin (12.0, std::floor (contentEndBeat (*currentMidiClip()) - 1)) + .1, 71);
+        pianoRoll.mouseDown (groupEvent (drawAt, drawAt, false, 0)); pianoRoll.mouseUp (groupEvent (drawAt, drawAt, false, 0));
+        const auto [drawn, afterDraw] = pressAt (drawAt, 2);
+        check (drawn > .01f && afterDraw < 1e-4f && currentMidiClip()->notes.size() == shown.size() + 1, "a double-click's note sounds while the button is down");
         pianoRoll.keyPressed (undo);
         check (currentMidiClip()->notes.size() == shown.size(), "undo removes the drawn note");
         // Shift-clicking a key adds its notes to the selection, as the reference's does.
@@ -17467,9 +17701,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     // A project can contain ambiguous note IDs. Neither Cut nor Delete may
     // remove a valid first note before rejecting a later ambiguous identity.
     insertSynthTrackAndClip(); pianoRoll.fit(); fixNoteGrid();
-    groupClick (groupPoint (1.1, 60)); const auto uniqueCutId = currentMidiClip()->notes.back().id;
-    groupClick (groupPoint (3.1, 64)); const auto ambiguousCutId = currentMidiClip()->notes.back().id;
-    groupClick (groupPoint (5.1, 67)); const auto repeatedCutId = currentMidiClip()->notes.back().id;
+    const auto uniqueCutId = groupAdd (groupPoint (1.1, 60));
+    const auto ambiguousCutId = groupAdd (groupPoint (3.1, 64));
+    const auto repeatedCutId = groupAdd (groupPoint (5.1, 67));
     const auto ambiguousProject = noteLoad.directory.getChildFile ("Ambiguous clipboard notes.halftrack");
     check (session.saveProject (ambiguousProject).wasOk(), "save original ambiguous-ID fixture before mutation");
     auto ambiguousXml = juce::XmlDocument::parse (ambiguousProject);
@@ -17711,7 +17945,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         view.addArray ({ "-", "Mixer", "Mixer Controls >", "-", "Overview", "Scene Tempo and Time Signature", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
         expect ("View", view);
         juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "-", "External Sync", "-", "Time Ruler Format >", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
-                                    "Fixed Grid", "-", "Solo Switches", "Cue Switches", "Solo in Place", "-", "Audio Engine On" };
+                                    "Fixed Grid", "-", "Draw Mode", "-", "Solo Switches", "Cue Switches", "Solo in Place", "-", "Audio Engine On" };
        #if ! JUCE_MAC
         options.addArray ({ "-", "Preferences..." });
        #endif
@@ -17728,6 +17962,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                && shortcut ("Playback", menuFollow, juce::KeyPress ('f', juce::ModifierKeys (alt | shift), 0)) && shortcut ("View", menuSearch, juce::KeyPress ('f', cmd, 0))
                && shortcut ("Options", 13, juce::KeyPress ('e', juce::ModifierKeys (cmd | shift | alt), 0)),
                "the items show the reference's shortcuts: Save Cmd+S, Export Shift+Cmd+R, Bounce to New Track Cmd+B, Insert MIDI Clip Shift+Cmd+M, Follow Option+Shift+F, Search Cmd+F");
+        check (shortcut ("Options", menuDrawMode, juce::KeyPress ('b')) && ! entry ("Options", menuDrawMode)->isTicked, "Draw Mode shows the reference's B, unticked while off");
+        menuItemSelected (menuDrawMode, 5); refresh();
+        check (drawMode && drawButton.getToggleState() && entry ("Options", menuDrawMode)->isTicked, "choosing it turns Draw Mode on, ticked, with the pencil lit");
+        drawButton.setToggleState (false, juce::dontSendNotification); drawButton.onClick(); refresh();
+        check (! drawMode && ! entry ("Options", menuDrawMode)->isTicked, "and the pencil turns it off again");
         session.undo(); refresh();
         check (entry ("Edit", 21)->text == "Redo Add MIDI track" && entry ("Edit", 21)->isEnabled, "and after it, the step Redo would do again");
         session.redo(); refresh();

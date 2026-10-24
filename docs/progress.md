@@ -2515,3 +2515,7 @@ Engine and UI areas. As the reference's Edit menu names the step from its histor
 ## Save a Copy — 2026-10-24
 
 Engine, persistence and UI areas. File > Save a Copy, after Save Project As as in the reference's File menu, writes the project to another file with its media collected beside it (`Session::saveProjectCopy`). The open project keeps its file, its media's places, its unsaved changes and its history. Every Halftrack save collects media, where the reference's collect only with Collect All and Save ([contract](research/main-menu-contract.md), [open questions](open-questions.md)). Checked in the persistence tests and the UI suite.
+
+## The reference's note clicks and Draw Mode — 2026-10-24
+
+UI area. The note editor now takes clicks as the reference's does: a click places the insert marker, a drag selects, and a double-click adds a note one grid step long or deletes one. Single clicks no longer draw. Options > Draw Mode (B), with a pencil beside the control bar's KEYS switch, draws a note on each grid step dragged over at the pointer's pitch, or at one pitch with Alt, takes notes away when the pointer goes back, and deletes notes clicked; each drag is one undo step ([contract](research/note-drawing-contract.md)). The control bar's right-hand switches are narrower to make room. Checked in the UI suite; Draw Mode in automation and the velocity lane is next.
