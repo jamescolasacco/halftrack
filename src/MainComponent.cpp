@@ -10649,6 +10649,17 @@ private:
         }
         else if (const auto* devices = chainDevices(); devices != nullptr && ! devices->empty()) startHotSwap (chainId, devices->front().id);
     }
+    // What a device list's item puts in a device's place, or nothing for items that are not devices.
+    std::optional<Session::HotSwapSource> hotSwapSourceOf (const DeviceRow& item) const
+    {
+        Session::HotSwapSource source;
+        if (item.preset != juce::File()) source.preset = item.preset;
+        else if (item.pluginId.isNotEmpty()) { for (const auto& type : session.knownPlugins().getTypes()) if (type.createIdentifierString() == item.pluginId) source.plugin = type; }
+        else if (item.kind == -3) source.utility = true;
+        else if (item.kind >= 0) source.kind = static_cast<Session::EffectKind> (item.kind);
+        if (source.preset == juce::File() && ! source.plugin && ! source.utility && ! source.kind) return std::nullopt;
+        return source;
+    }
     // In a sample's Hot-Swap, Return or a double-click on a sound loads it into the Sampler or pad;
     // folders still open and close. False leaves the row to its usual action.
     bool hotSwapSampleRow (int row)
@@ -10672,17 +10683,10 @@ private:
         if (! hotSwap || ! juce::isPositiveAndBelow (row, (int) deviceItems.size()) || sampleBrowser()) { report (juce::Result::fail ("Only presets and devices can be hot-swapped in.")); return; }
         const auto& item = deviceItems[(size_t) row];
         if (item.header) return;
-        Session::HotSwapSource source;
-        if (item.preset != juce::File()) source.preset = item.preset;
-        else if (item.pluginId.isNotEmpty())
-        {
-            for (const auto& type : session.knownPlugins().getTypes()) if (type.createIdentifierString() == item.pluginId) source.plugin = type;
-        }
-        else if (item.kind == -3) source.utility = true;
-        else if (item.kind >= 0) source.kind = static_cast<Session::EffectKind> (item.kind);
-        if (source.preset == juce::File() && ! source.plugin && ! source.utility && ! source.kind) { report (juce::Result::fail ("Only presets and devices can be hot-swapped in.")); return; }
+        const auto source = hotSwapSourceOf (item);
+        if (! source) { report (juce::Result::fail ("Only presets and devices can be hot-swapped in.")); return; }
         juce::String replaced;
-        const auto result = session.hotSwapDevice (hotSwap->chainId, hotSwap->pluginId, source, replaced);
+        const auto result = session.hotSwapDevice (hotSwap->chainId, hotSwap->pluginId, *source, replaced);
         report (result);
         if (result.wasOk()) { hotSwap->pluginId = replaced; refresh(); if (const auto now = hotSwapDevice (hotSwap->chainId, replaced)) hotSwap->name = now->first.name; updateHotSwapBar(); }
     }
@@ -16613,7 +16617,19 @@ private:
         const auto row = collectionRow (key);
         if (! row) return;
         // A device goes onto the track under it, or the chain the device view shows; below the tracks a new one is made.
-        if (deviceChain.isVisible() && deviceChain.getBounds().contains (at)) { useDeviceRow (*row); return; }
+        if (deviceChain.isVisible() && deviceChain.getBounds().contains (at))
+        {
+            // Dropped over a device of its type, it takes the device's place, as the reference's presets do.
+            auto* hit = deviceChain.getComponentAt (deviceChain.getLocalPoint (this, at));
+            while (hit != nullptr && hit != &deviceChain && dynamic_cast<DevicePanel*> (hit) == nullptr) hit = hit->getParentComponent();
+            if (auto* panel = dynamic_cast<DevicePanel*> (hit))
+                if (const auto source = hotSwapSourceOf (*row))
+                {
+                    juce::String replaced;
+                    if (session.hotSwapDevice (deviceChainId(), panel->getId(), *source, replaced).wasOk()) { refresh(); return; }
+                }
+            useDeviceRow (*row); return;
+        }
         if (showSession)
         {
             const auto cell = launcher.cellAt (launcher.getLocalPoint (this, at));
@@ -20674,6 +20690,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         selectTrack (0); refresh(); resized();
         itemDropped (SourceDetails (description, &browserList, deviceChain.getBounds().getCentre()));
         check (now().tracks[0].plugins.size() == 1 && now().tracks[0].plugins[0].effect.kind == Session::EffectKind::saturator, "dropped on the device view, it joins the chain shown");
+        {
+            // Dropped over a device of its type, it takes the device's place, as the reference's presets do.
+            refresh(); resized();
+            auto* swapButton = findNamed (deviceChain, "Hot-Swap");
+            auto* panel = swapButton != nullptr ? swapButton->getParentComponent() : nullptr;
+            check (panel != nullptr, "the Saturator's panel in the device view");
+            itemDropped (SourceDetails (juce::String (browserDragPrefix) + "device:" + juce::String ((int) Session::EffectKind::eqThree), &browserList,
+                                        getLocalPoint (panel, panel->getLocalBounds().getCentre())));
+            check (now().tracks[0].plugins.size() == 1 && now().tracks[0].plugins[0].effect.kind == Session::EffectKind::eqThree, "an EQ Three dropped over the Saturator takes its place");
+            session.undo(); refresh();
+        }
         const auto tracks = now().tracks.size();
         const auto below = getLocalPoint (&canvas, juce::Point<int> (canvas.timelineWidth() / 2, laneY ((int) tracks - 1) + laneHeight ((int) tracks - 1) + 12));
         check (viewport.getBounds().contains (below), "room below the tracks");

@@ -2693,3 +2693,7 @@ UI and library areas. As the reference's labels can be, collections can be renam
 ## Dragging from the browser — 2026-10-24
 
 UI area. Browser items now drag, as the reference's do: sounds land where they are dropped (an Arrangement track at the pointer's time, or a Session slot), devices, presets and plug-ins go onto the track or column under the pointer or the chain in the device view (below the Arrangement's tracks, onto a new track), and items dropped on a collection join it. Activation's device branch is now `useDeviceRow`, shared by double-clicks and drops ([contract](research/browser-places-contract.md#dragging-2026-10-24)). Checked in the UI suite through the drop handler.
+
+## Dropping a device over another — 2026-10-24
+
+UI area. A device, preset or plug-in dragged from the browser over a device of its type in the device view takes its place in one undo step, as the reference's presets do, through `hotSwapDevice` ([contract](research/browser-places-contract.md#dragging-2026-10-24)). Checked in the UI suite.
