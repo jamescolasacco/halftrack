@@ -209,6 +209,13 @@ int runTrackOrderTests (const juce::File& artifacts)
             ok (s.saveProject (mixed), "save it hidden"); ok (s.newProject(), "a new project again");
             check (s.arrangementOverview(), "which shows it");
             ok (s.loadProject (mixed), "reopen once more"); check (! s.arrangementOverview(), "and the saved project keeps it hidden");
+            // And the time ruler's format: minutes and seconds at first, as in the reference's default Set.
+            check (s.timeRulerFormat() == Session::TimeFormat::minutesSeconds, "the time ruler counts minutes and seconds at first");
+            s.setTimeRulerFormat (Session::TimeFormat::smpte30Drop);
+            check (s.snapshot().timeRulerFormat == Session::TimeFormat::smpte30Drop && ! s.canUndo(), "choosing SMPTE 30 Drop is view state, outside the undo history");
+            ok (s.saveProject (mixed), "save the format"); ok (s.newProject(), "a new project for the format");
+            check (s.timeRulerFormat() == Session::TimeFormat::minutesSeconds, "which counts minutes and seconds");
+            ok (s.loadProject (mixed), "reopen with the format"); check (s.timeRulerFormat() == Session::TimeFormat::smpte30Drop, "and the format comes back");
         }
         {
             // Where Insert puts a track, and automatic names, as the reference's (static reading of its code).

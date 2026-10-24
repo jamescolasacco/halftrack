@@ -63,7 +63,7 @@ const juce::Identifier firstClipNameProperty { "halftrackFirstClipName" }, first
 // The Session mixer's sections shown, as view state.
 const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsProperty { "halftrackMixerSends" }, mixerReturnsProperty { "halftrackMixerReturns" }, mixerVolumeProperty { "halftrackMixerVolume" },
                        mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" }, mixerShownProperty { "halftrackMixerInSession" },
-                       arrangementOverviewProperty { "halftrackArrangementOverview" };
+                       arrangementOverviewProperty { "halftrackArrangementOverview" }, timeRulerFormatProperty { "halftrackTimeRulerFormat" };
 constexpr float defaultCueVolumeDb = -6.0f; // As the reference's default Set has it.
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
 te::Edit::CountIn countInMode (int bars)
@@ -6998,7 +6998,7 @@ Session::Snapshot Session::snapshot() const
     s.cueMode = s.cueModeChosen && s.cueAvailable;
     s.soloInPlace = soloInPlace();
     s.loopIsSongStart = loopIsSongStart();
-    s.mixerSections = mixerSections(); s.arrangementOverview = arrangementOverview();
+    s.mixerSections = mixerSections(); s.arrangementOverview = arrangementOverview(); s.timeRulerFormat = timeRulerFormat();
     for (const auto& m : e.state.getChildWithName (midiMapType))
         if (auto mapping = readMidiMapping (m); isMappableTarget (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
     s.midiLearnTarget = impl->midiLearnTarget;
@@ -13926,6 +13926,17 @@ void Session::setArrangementOverview (bool shown)
 {
     if (shown == arrangementOverview()) return;
     impl->edit->state.setProperty (arrangementOverviewProperty, shown, nullptr);
+    impl->viewStateChanged();
+}
+Session::TimeFormat Session::timeRulerFormat() const
+{
+    const int stored = impl->edit->state.getProperty (timeRulerFormatProperty, 0);
+    return juce::isPositiveAndNotGreaterThan (stored, (int) TimeFormat::smpte2997) ? static_cast<TimeFormat> (stored) : TimeFormat::minutesSeconds;
+}
+void Session::setTimeRulerFormat (TimeFormat format)
+{
+    if (format == timeRulerFormat()) return;
+    impl->edit->state.setProperty (timeRulerFormatProperty, static_cast<int> (format), nullptr);
     impl->viewStateChanged();
 }
 bool Session::loopIsSongStart() const { return impl->edit->state.getProperty (loopIsSongStartProperty, false); }

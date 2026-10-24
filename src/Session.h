@@ -627,6 +627,10 @@ public:
         bool shown = true; // The whole mixer in the Session View, as the reference's View > Mixer.
         bool operator== (const MixerSections&) const = default;
     };
+    // How the Arrangement's time ruler counts, as the reference's Options > Time Ruler Format offers:
+    // minutes and seconds, or SMPTE frames at 24, 25 or 30 a second, 30 drop-frame (at 29.97) or
+    // 29.97 without dropping.
+    enum class TimeFormat { minutesSeconds, smpte24, smpte25, smpte30, smpte30Drop, smpte2997 };
     struct Snapshot
     {
         juce::String name;
@@ -669,6 +673,7 @@ public:
         bool loopIsSongStart = false; // The loop brace's Set Song Start Time Here.
         MixerSections mixerSections;
         bool arrangementOverview = true;
+        TimeFormat timeRulerFormat = TimeFormat::minutesSeconds;
         bool automationOverridden = false; // Some lane with points is switched off.
         float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
@@ -777,6 +782,10 @@ public:
     // it. Kept with the project as view state, not as an undo step.
     bool arrangementOverview() const;
     void setArrangementOverview (bool);
+    // Kept with the project as view state, as the reference's Set keeps its SmpteFormat (minutes and
+    // seconds in its default Set).
+    TimeFormat timeRulerFormat() const;
+    void setTimeRulerFormat (TimeFormat);
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
     // Take lanes. Arrangement recording puts each pass on an armed track in a take lane (reusing a lane
     // with nothing at or after the pass's start) as well as the main lane. Comping copies a lane's

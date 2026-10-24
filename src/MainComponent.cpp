@@ -440,7 +440,7 @@ public:
         for (auto* child : std::initializer_list<juce::Component*> {
                  &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &nudgeDown, &nudgeUp, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
-                 &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &info, &overview, &ruler, &viewport,
+                 &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &info, &overview, &ruler, &timeRuler, &viewport,
                  &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain })
             addAndMakeVisible (child);
 
@@ -864,6 +864,8 @@ public:
         arrangementTab.setToggleState (! showSession, juce::dontSendNotification);
         pianoTab.setToggleState (showPiano, juce::dontSendNotification);
         const auto foot = area.removeFromBottom (12);
+        timeRuler.setVisible (! showSession);
+        timeRuler.setBounds (area.removeFromBottom (TimeRuler::height));
         horizontalScroll.setBounds (foot.withTrimmedRight (trackWidth + 10));
         gridReadout.setBounds (foot.withTrimmedLeft (horizontalScroll.getWidth() + 6).withWidth (60).expanded (0, 1));
         overview.setVisible (! showSession && state.arrangementOverview);
@@ -4395,8 +4397,85 @@ private:
     {
         pixelsPerSecond = juce::jlimit (3.0, 650.0, zoomLevel);
         viewStart = juce::jmax (0.0, start);
-        updateScroll(); canvas.repaint(); ruler.repaint(); overview.sync();
+        updateScroll(); canvas.repaint(); ruler.repaint(); timeRuler.repaint(); overview.sync();
     }
+
+    // The Arrangement's time ruler, after the reference's: below the tracks, the time in minutes and
+    // seconds or in SMPTE frames (Options > Time Ruler Format), labelled at steps at least 64 pixels apart.
+    class TimeRuler final : public juce::Component
+    {
+    public:
+        explicit TimeRuler (Impl& o) : owner (o) { setName ("Time ruler"); }
+        static constexpr int height = 16;
+        // Frames a second, and whether drop-frame numbering applies.
+        static double frameRate (Session::TimeFormat format)
+        {
+            switch (format)
+            {
+                case Session::TimeFormat::smpte24: return 24.0;
+                case Session::TimeFormat::smpte25: return 25.0;
+                case Session::TimeFormat::smpte30: return 30.0;
+                case Session::TimeFormat::smpte30Drop: case Session::TimeFormat::smpte2997: return 30000.0 / 1001.0;
+                default: return 0.0;
+            }
+        }
+        // A label: minutes and seconds (with milliseconds below a second's step), or SMPTE hours,
+        // minutes, seconds and frames, the frames after a semicolon in drop-frame.
+        static juce::String label (double seconds, Session::TimeFormat format, double step)
+        {
+            seconds = juce::jmax (0.0, seconds);
+            if (format == Session::TimeFormat::minutesSeconds)
+            {
+                const auto milliseconds = (juce::int64) std::llround (seconds * 1000.0);
+                auto text = juce::String (milliseconds / 60000) + ":" + juce::String ((milliseconds / 1000) % 60).paddedLeft ('0', 2);
+                return step < 0.999 ? text + ":" + juce::String (milliseconds % 1000).paddedLeft ('0', 3) : text;
+            }
+            const int nominal = format == Session::TimeFormat::smpte24 ? 24 : format == Session::TimeFormat::smpte25 ? 25 : 30;
+            auto frame = (juce::int64) std::floor (seconds * frameRate (format) + 1e-6);
+            if (format == Session::TimeFormat::smpte30Drop)
+            {
+                // Frames 0 and 1 of every minute but each tenth are skipped.
+                const auto tens = frame / 17982, rest = frame % 17982;
+                frame += 18 * tens + (rest > 2 ? 2 * ((rest - 2) / 1798) : 0);
+            }
+            const auto two = [] (juce::int64 v) { return juce::String (v).paddedLeft ('0', 2); };
+            const auto totalSeconds = frame / nominal;
+            return two (totalSeconds / 3600) + ":" + two ((totalSeconds / 60) % 60) + ":" + two (totalSeconds % 60)
+                 + (format == Session::TimeFormat::smpte30Drop ? ";" : ":") + two (frame % nominal);
+        }
+        // The labels' step in seconds: the first of the format's steps at least `minimum` long.
+        static double step (double minimum, Session::TimeFormat format)
+        {
+            static constexpr double clock[] { .001, .002, .005, .01, .02, .05, .1, .2, .5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600 };
+            if (const auto rate = frameRate (format); rate > 0)
+            {
+                for (const auto frames : { 1, 2, 5, 10 }) if (frames / rate >= minimum) return frames / rate;
+                for (const auto s : clock) if (s >= 1 && s >= minimum) return s;
+            }
+            else for (const auto s : clock) if (s >= minimum) return s;
+            return 3600;
+        }
+        void paint (juce::Graphics& g) override
+        {
+            const auto width = juce::jmin (getWidth(), owner.canvas.timelineWidth());
+            g.setColour (themes::colour (0xff1e1e1e)); g.fillRect (getLocalBounds());
+            g.setColour (line); g.drawHorizontalLine (0, 0.0f, (float) getWidth());
+            const auto format = owner.state.timeRulerFormat;
+            const auto every = step (64.0 / owner.pixelsPerSecond, format);
+            g.setFont (font (9.5f));
+            for (auto t = std::floor (owner.viewStart / every) * every; ; t += every)
+            {
+                const auto x = (float) ((t - owner.viewStart) * owner.pixelsPerSecond);
+                if (x > (float) width) break;
+                if (x < 0) continue;
+                g.setColour (muted); g.drawVerticalLine ((int) x, 1.0f, 5.0f);
+                g.setColour (ink.withAlpha (0.75f)); g.drawText (label (t, format, every), juce::Rectangle<float> (x + 3, 2, 90, (float) getHeight() - 2), juce::Justification::centredLeft, false);
+            }
+        }
+    private:
+        Impl& owner;
+    };
+    TimeRuler timeRuler { *this };
 
     // A scene's tempo and meter as its launcher cell shows them, or empty.
     static juce::String sceneSettingsText (const Session::SceneInfo& scene)
@@ -11630,7 +11709,9 @@ private:
                     menuRecordSession, menuMetronome, menuMetronomeRecording, menuFullscreen, menuZoomIn, menuZoomOut, menuZoomReset,
                     menuToggleView, menuClipView, menuDeviceView, menuToggleDetail, menuBrowser, menuGroovePool, menuSearch, menuSimilar,
                     menuFoldAll, menuFoldSelected, menuZoomSelection, menuZoomBack, menuMidiMap, menuKeyMap, menuComputerKeyboard,
-                    menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuOverview, menuSlice = 200 }; // Plus Session::SliceBy.
+                    menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuOverview,
+                    menuSlice = 200, // Plus Session::SliceBy.
+                    menuTimeFormat = 210 }; // Plus Session::TimeFormat.
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
     // Fullscreen take their Windows keys elsewhere). The command manager only holds them for the menus:
     // nothing is registered with it as a target.
@@ -12172,6 +12253,13 @@ private:
             popup.addSeparator();
             add (menuExternalSync, "External Sync", session.hasSyncInputs() || session.isExternalSync(), session.isExternalSync());
             popup.addSeparator();
+            juce::PopupMenu formats;
+            const std::pair<Session::TimeFormat, const char*> timeFormats[] {
+                { Session::TimeFormat::minutesSeconds, "Min:Sec" }, { Session::TimeFormat::smpte24, "SMPTE 24" }, { Session::TimeFormat::smpte25, "SMPTE 25" },
+                { Session::TimeFormat::smpte30, "SMPTE 30 Non-Drop" }, { Session::TimeFormat::smpte30Drop, "SMPTE 30 Drop" }, { Session::TimeFormat::smpte2997, "SMPTE 29.97 Non-Drop" } };
+            for (const auto& [format, name] : timeFormats) formats.addItem (menuEntry (menuTimeFormat + (int) format, name, true, state.timeRulerFormat == format));
+            popup.addSubMenu ("Time Ruler Format", formats, ! menusBlocked());
+            popup.addSeparator();
             const auto place = focusedGrid();
             const auto g = place ? gridAt (*place) : editGrid;
             add (93, "Narrow Grid", place.has_value()); add (94, "Widen Grid", place.has_value());
@@ -12193,6 +12281,8 @@ private:
         if (menusBlocked()) return;
         if(id>=60 && id<=66) { report(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>(id-60)));refresh();return; }
         if(id==120 || id==121) { report(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>(id-113)));refresh();return; }
+        if (id >= menuTimeFormat && id <= menuTimeFormat + (int) Session::TimeFormat::smpte2997)
+        { session.setTimeRulerFormat (static_cast<Session::TimeFormat> (id - menuTimeFormat)); refresh(); timeRuler.repaint(); return; }
         if (id >= menuSlice && id <= menuSlice + (int) Session::SliceBy::bar)
         { if (const auto clips = menuClips(); clips.size() == 1) sliceClip (clips.front()->id, static_cast<Session::SliceBy> (id - menuSlice)); refresh(); return; }
         switch (id)
@@ -17295,7 +17385,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
        #endif
         view.addArray ({ "-", "Mixer", "Mixer Controls >", "-", "Overview", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
         expect ("View", view);
-        juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "-", "External Sync", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
+        juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "-", "External Sync", "-", "Time Ruler Format >", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
                                     "Fixed Grid", "-", "Solo in Place", "-", "Audio Engine On" };
        #if ! JUCE_MAC
         options.addArray ({ "-", "Preferences..." });
@@ -17363,6 +17453,24 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const bool looping = state.looping;
         check (handleKey (juce::KeyPress ('l', juce::ModifierKeys (cmd | alt), 0)) && showDetail && deviceChain.isVisible() && state.looping == looping,
                "and shows it again, leaving the loop alone");
+        // The Arrangement's time ruler: under the tracks, in minutes and seconds or SMPTE frames.
+        {
+            using F = Session::TimeFormat;
+            check (TimeRuler::label (61.5, F::minutesSeconds, .5) == "1:01:500" && TimeRuler::label (75, F::minutesSeconds, 5) == "1:15",
+                   "minutes and seconds, with milliseconds below a second's step");
+            check (TimeRuler::label (1.04, F::smpte25, .04) == "00:00:01:01" && TimeRuler::label (3661, F::smpte24, 1) == "01:01:01:00", "SMPTE hours, minutes, seconds and frames");
+            check (TimeRuler::label (60, F::smpte30Drop, 1) == "00:00:59;28" && TimeRuler::label (1800 * 1001.0 / 30000.0, F::smpte30Drop, 1) == "00:01:00;02"
+                       && TimeRuler::label (1800 * 1001.0 / 30000.0, F::smpte2997, 1) == "00:01:00:00",
+                   "drop-frame skips frames 0 and 1 of the minute after a semicolon; 29.97 without dropping counts them");
+            check (TimeRuler::step (.3, F::minutesSeconds) == .5 && std::abs (TimeRuler::step (.03, F::smpte25) - .04) < 1e-12 && TimeRuler::step (.5, F::smpte30) == 1,
+                   "labels step by the first of the format's steps at least 64 pixels long");
+            check (timeRuler.isVisible() && timeRuler.getHeight() == TimeRuler::height && timeRuler.getBottom() <= horizontalScroll.getY(), "the time ruler shows under the Arrangement's tracks");
+            check (entry ("Options", menuTimeFormat)->isTicked, "it counts minutes and seconds at first");
+            menuItemSelected (menuTimeFormat + (int) F::smpte25, 5);
+            check (state.timeRulerFormat == F::smpte25 && entry ("Options", menuTimeFormat + (int) F::smpte25)->isTicked && ! entry ("Options", menuTimeFormat)->isTicked,
+                   "Options > Time Ruler Format > SMPTE 25 switches it");
+            menuItemSelected (menuTimeFormat, 5);
+        }
         // The Arrangement's overview: shown at first, as in the reference's default Set, and hidden and shown from View.
         check (overview.isVisible() && overview.getHeight() == Overview::height && entry ("View", menuOverview)->isTicked, "the Arrangement shows its overview at first");
         check (handleKey (juce::KeyPress ('o', juce::ModifierKeys (cmd | alt), 0)) && ! overview.isVisible() && ! state.arrangementOverview, "Option+Cmd+O hides it");

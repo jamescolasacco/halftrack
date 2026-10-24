@@ -2487,3 +2487,7 @@ Engine and UI areas. As the reference's View > Plug-In Windows (Option+Cmd+P) do
 ## Arrangement overview — 2026-10-24
 
 Engine and UI areas. As the reference's default Set shows it, the Arrangement has an overview above the ruler: the whole song in miniature, each track a row of its clips, with an outline round the time shown. A press outside the outline centres the view there, a drag across moves the view and a drag down or up zooms about the pressed time. View > Overview (Option+Cmd+O) hides and shows it, kept with the project as view state ([contract](research/timeline-navigation-contract.md)). Choosing view state, the mixer's sections too, now marks even a new project changed, as their contracts say. Checked in the UI suite and the track order suite.
+
+## Time ruler — 2026-10-24
+
+Engine and UI areas. As the reference's Arrangement has one, a time ruler under the tracks counts minutes and seconds, or SMPTE frames at 24, 25, 30, 30 drop-frame or 29.97, chosen from Options > Time Ruler Format and kept with the project ([contract](research/timeline-navigation-contract.md)). Checked in the UI suite (labels, steps, placement, the menu) and the track order suite (kept with the project).
