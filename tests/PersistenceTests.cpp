@@ -133,6 +133,62 @@ void saveCopyKeepsTheProject (const juce::File& root)
     check (opened.tracks.size() == after.tracks.size() && opened.tracks[0].clips.front().file.isAChildOf (copiedMedia),
            "the copy opens with the unsaved track and plays its own media");
 }
+// Saving over a project keeps the version it replaces in its Assets' Backup folder, stamped with
+// when that version was saved and opening with its media; the ten newest are kept, and other files
+// there are left alone.
+void savingKeepsBackups (const juce::File& root)
+{
+    const auto source = root.getChildFile ("backup-source.wav");
+    {
+        juce::AudioBuffer<float> signal (1, 4800);
+        for (int sample = 0; sample < signal.getNumSamples(); ++sample) signal.setSample (0, sample, 0.25f);
+        juce::WavAudioFormat format;
+        std::unique_ptr<juce::OutputStream> stream (source.createOutputStream());
+        auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (1).withBitsPerSample (24));
+        check (writer && writer->writeFromAudioSampleBuffer (signal, 0, signal.getNumSamples()), "write the backup test's audio");
+    }
+    Session session (false);
+    ok (session.importAudio (source, 0), "import audio to back up");
+    const auto project = root.getChildFile ("Backups").getChildFile ("Song.halftrack");
+    const auto folder = project.getSiblingFile ("Song Assets").getChildFile ("Backup");
+    ok (session.saveProject (project), "save the project");
+    check (session.projectBackups().isEmpty() && ! folder.exists(), "a first save keeps no backup");
+    const juce::Time first (2026, 0, 2, 10, 30, 15, 0, false);
+    check (project.setLastModificationTime (first), "date the first version");
+    ok (session.addMidiTrack ("Second"), "change the project");
+    ok (session.saveProject (project), "save it again");
+    const auto backups = session.projectBackups();
+    check (backups.size() == 1 && backups[0] == folder.getChildFile ("Song [" + first.formatted ("%Y-%m-%d %H%M%S") + "].halftrack"),
+           "saving again keeps the version it replaced, named for when it was saved");
+    {
+        Session reopened (false);
+        ok (reopened.loadProject (backups[0]), "open the backup");
+        const auto opened = reopened.snapshot();
+        check (opened.tracks.size() == session.snapshot().tracks.size() - 1 && opened.tracks[0].clips.size() == 1
+                   && opened.tracks[0].clips.front().file == session.snapshot().tracks[0].clips.front().file && opened.tracks[0].clips.front().file.existsAsFile()
+                   && reopened.missingMedia().isEmpty(),
+               "the backup opens as the earlier version, its audio found in the project's Assets");
+    }
+    const auto other = folder.getChildFile ("Other [2020-01-01 000000].halftrack"), note = folder.getChildFile ("Song notes.halftrack");
+    check (other.replaceWithText ("other") && note.replaceWithText ("notes"), "files of others in the Backup folder");
+    for (int i = 1; i <= 11; ++i)
+    {
+        check (project.setLastModificationTime (first + juce::RelativeTime::minutes (i)), "date the version");
+        ok (session.renameTrack (0, "Take " + juce::String (i)), "change the project again");
+        ok (session.saveProject (project), "and save it");
+    }
+    const auto kept = session.projectBackups();
+    check (kept.size() == 10 && kept[0].getFileName() == "Song [" + (first + juce::RelativeTime::minutes (11)).formatted ("%Y-%m-%d %H%M%S") + "].halftrack"
+               && kept[9].getFileName() == "Song [" + (first + juce::RelativeTime::minutes (2)).formatted ("%Y-%m-%d %H%M%S") + "].halftrack",
+           "the ten newest are kept, the newest first");
+    check (other.loadFileAsString() == "other" && note.loadFileAsString() == "notes", "other files in the folder are left alone");
+    // Save a Copy over another project keeps that project's version in its own Backup folder.
+    const auto elsewhere = root.getChildFile ("Backups").getChildFile ("Elsewhere.halftrack");
+    ok (session.saveProjectCopy (elsewhere), "save a copy");
+    ok (session.saveProjectCopy (elsewhere), "and over it again");
+    const auto copies = elsewhere.getSiblingFile ("Elsewhere Assets").getChildFile ("Backup").findChildFiles (juce::File::findFiles, false, "*.halftrack");
+    check (copies.size() == 1 && copies[0].getFileName().startsWith ("Elsewhere ["), "a copy saved over a project keeps its version too");
+}
 void launcherLoadValidation (const juce::File& root)
 {
     Session session (false);
@@ -332,6 +388,7 @@ int runPersistenceTests (const juce::File& destination)
         }
         saveAsPreservesHistory (root);
         saveCopyKeepsTheProject (root);
+        savingKeepsBackups (root);
         launcherLoadValidation (root);
         std::cout << "Persistence acceptance passed." << std::endl;
         return 0;

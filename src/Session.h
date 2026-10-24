@@ -709,6 +709,11 @@ public:
     // Save a Copy, as the reference's File menu has it: writes the project to another file with its
     // media collected beside it, keeping the open project's file, media and unsaved changes.
     juce::Result saveProjectCopy (const juce::File&);
+    // Saving over a project file first keeps the version it replaces, as the reference keeps a Set's
+    // backups: "<name> [YYYY-MM-DD HHMMSS].halftrack", stamped with when that version was saved, in the
+    // Backup folder of its Assets, with its media paths relative to there. The ten newest are kept.
+    // projectBackups lists the open project's, the newest first.
+    juce::Array<juce::File> projectBackups() const;
     // Audio files and samples the project refers to that are not on disk. Opening and saving keep
     // their references, and clips whose file is missing play silence.
     juce::Array<juce::File> missingMedia() const;

@@ -7943,6 +7943,61 @@ Result Session::recoverProject (const File& recovery, File& recoveredFrom)
 }
 Result Session::saveProject (const File& destination) { return writeProject (destination, false); }
 Result Session::saveProjectCopy (const File& destination) { return writeProject (destination, true); }
+namespace
+{
+// A project's backups, as the reference keeps a Set's: "<name> [YYYY-MM-DD HHMMSS].halftrack" in the
+// Backup folder of its Assets, the newest first.
+File backupFolder (const File& project) { return project.getSiblingFile (project.getFileNameWithoutExtension() + " Assets").getChildFile ("Backup"); }
+juce::Array<File> backupsOf (const File& project)
+{
+    juce::Array<File> found;
+    const auto name = project.getFileNameWithoutExtension();
+    for (const auto& file : backupFolder (project).findChildFiles (File::findFiles, false, "*.halftrack"))
+    {
+        const auto stamp = file.getFileNameWithoutExtension().fromLastOccurrenceOf (" [", false, false);
+        if (file.getFileNameWithoutExtension() == name + " [" + stamp && stamp.length() == 18 && stamp.endsWithChar (']')
+            && stamp.substring (0, 17).containsOnly ("0123456789- ")) found.add (file);
+    }
+    std::sort (found.begin(), found.end(), [] (const File& a, const File& b) { return a.getFileName() > b.getFileName(); });
+    return found;
+}
+// The attributes a saved project keeps media paths in, relative to its folder.
+juce::StringArray mediaAttributes()
+{
+    juce::StringArray names { te::IDs::source.toString(), videoProperty.toString() };
+    for (int kind = 0; kind < Session::deviceKindCount; ++kind)
+        for (int slot = 0; slot < sampleSlotCount (static_cast<Session::EffectKind> (kind)); ++slot)
+            names.addIfNotAlreadyThere (sampleSlotProperty (static_cast<Session::EffectKind> (kind), slot).toString());
+    return names;
+}
+void rebaseMediaPaths (juce::XmlElement& element, const juce::StringArray& names, const File& from, const File& to)
+{
+    for (int i = 0; i < element.getNumAttributes(); ++i)
+        if (const auto path = element.getAttributeValue (i); names.contains (element.getAttributeName (i)) && path.isNotEmpty() && ! File::isAbsolutePath (path))
+            element.setAttribute (element.getAttributeName (i), from.getChildFile (path).getRelativePathFrom (to));
+    for (auto* child : element.getChildIterator()) rebaseMediaPaths (*child, names, from, to);
+}
+// Saving over a project keeps the version it replaces as a backup, with its media paths made
+// relative to the backup, and the ten newest. A backup that cannot be written leaves the save to go ahead.
+constexpr int maximumBackups = 10;
+void backUpProject (const File& project)
+{
+    const auto folder = backupFolder (project);
+    if (folder.createDirectory().failed()) return;
+    const auto backup = folder.getChildFile (project.getFileNameWithoutExtension() + " [" + project.getLastModificationTime().formatted ("%Y-%m-%d %H%M%S") + "].halftrack");
+    if (backup.exists()) return; // The same version, kept already.
+    if (auto document = juce::parseXML (project); document != nullptr && document->hasTagName ("HALFTRACK"))
+    {
+        rebaseMediaPaths (*document, mediaAttributes(), project.getParentDirectory(), folder);
+        juce::TemporaryFile temp (backup);
+        if (! document->writeTo (temp.getFile()) || ! temp.overwriteTargetFileWithTemporary()) return;
+    }
+    else if (! project.copyFileTo (backup)) return;
+    const auto backups = backupsOf (project);
+    for (int i = maximumBackups; i < backups.size(); ++i) backups[i].deleteFile();
+}
+}
+juce::Array<File> Session::projectBackups() const { return impl->projectFile == File() ? juce::Array<File>() : backupsOf (impl->projectFile); }
 Result Session::writeProject (const File& destination, bool copy)
 {
     impl->endNudge(); // The project keeps the song tempo.
@@ -8058,8 +8113,9 @@ Result Session::writeProject (const File& destination, bool copy)
     document.setAttribute ("version", 1);
     document.addChildElement (state.createXml().release());
     juce::TemporaryFile temp (file);
-    if (! document.writeTo (temp.getFile()) || ! temp.overwriteTargetFileWithTemporary())
-        return Result::fail ("Could not write the project file.");
+    if (! document.writeTo (temp.getFile())) return Result::fail ("Could not write the project file.");
+    if (file.existsAsFile()) backUpProject (file);
+    if (! temp.overwriteTargetFileWithTemporary()) return Result::fail ("Could not write the project file.");
     // A copy leaves the open project as it was: its file, its media's places and its changes.
     if (copy) return Result::ok();
     impl->projectFile = file;

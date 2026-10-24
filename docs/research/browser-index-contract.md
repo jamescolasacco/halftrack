@@ -39,7 +39,7 @@ The UI suite checks that the folder lists its own items, and that a search finds
 
 - Indexing every place in the background: [Places](browser-places-contract.md) are indexed as they are opened.
 - Watching folders for changes without reindexing.
-- Searching outside the Samples browser.
+- Searching outside the Samples browser, and finding projects, which folder listings show.
 - Non-ASCII case folding.
 - Tags and search by file attributes.
 - Timing on real libraries of hundreds of thousands of files.

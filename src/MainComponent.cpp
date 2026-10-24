@@ -459,6 +459,7 @@ bool isAudio (const juce::File& file)
 {
     return file.hasFileExtension ("wav;aif;aiff;flac;ogg;mp3;wave");
 }
+bool isProject (const juce::File& file) { return file.hasFileExtension ("halftrack"); }
 }
 
 class MainComponent::Impl final : public juce::Component,
@@ -10502,7 +10503,7 @@ private:
     juce::String browserKey (int row) const
     {
         if (row < 0 || row >= const_cast<Impl*> (this)->getNumRows()) return {};
-        if (sampleBrowser()) return browserItems[(size_t) row].directory ? juce::String() : "sample:" + browserItems[(size_t) row].file.getFullPathName();
+        if (sampleBrowser()) return browserItems[(size_t) row].directory || ! isAudio (browserItems[(size_t) row].file) ? juce::String() : "sample:" + browserItems[(size_t) row].file.getFullPathName();
         const auto& item = deviceItems[(size_t) row];
         if (item.header) return {};
         if (item.sample != juce::File()) return "sample:" + item.sample.getFullPathName();
@@ -10559,7 +10560,7 @@ private:
         if (code == juce::KeyPress::rightKey && juce::isPositiveAndBelow (row, (int) browserItems.size()))
         {
             if (browserItems[(size_t) row].directory) activateBrowserRow (row);
-            else if (const auto file = browserItems[(size_t) row].file; session.snapshot().previewing != file) report (session.previewFile (file));
+            else if (const auto file = browserItems[(size_t) row].file; isAudio (file) && session.snapshot().previewing != file) report (session.previewFile (file));
             return true;
         }
         if (code == juce::KeyPress::leftKey) { upButton.onClick(); return true; }
@@ -12950,13 +12951,14 @@ private:
                     menuSelectLoop, menuPlaySelection, menuSetClipStart, menuSetLoopStart, menuSetLoopEnd, menuSetClipEnd,
                     menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
                     menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
-                    menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects,
+                    menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects, menuShowBackups, menuRevealBackups,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410, // Plus Session::TimeFormat.
-                    menuRecentProject = 420 }; // Plus the project's place in the list.
+                    menuRecentProject = 420, // Plus the project's place in the list.
+                    menuBackup = 430 }; // Plus the backup's place in the list.
     static_assert (menuLastCommand <= menuSlice && menuSlice + (int) Session::SliceBy::bar < menuTimeFormat
-                   && menuTimeFormat + (int) Session::TimeFormat::smpte2997 < menuRecentProject, "the menu bar's command ids overlap");
+                   && menuTimeFormat + (int) Session::TimeFormat::smpte2997 < menuRecentProject && menuRecentProject + 10 <= menuBackup, "the menu bar's command ids overlap");
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
     // Fullscreen take their Windows keys elsewhere). The command manager only holds them for the menus:
     // nothing is registered with it as a target.
@@ -13455,6 +13457,18 @@ private:
             add (15, "Install Pack...", packsFolder() != juce::File()); add (menuAddFolder, "Add Folder to Browser...");
             popup.addSeparator();
             add (12, "Locate Missing Media...", ! session.missingMedia().isEmpty());
+            // Backups, as the reference's: the project's saved versions, the newest first, then where they are kept.
+            juce::PopupMenu backups;
+            const auto kept = session.projectBackups();
+            for (int i = 0; i < kept.size() && i < 10; ++i) backups.addItem (menuEntry (menuBackup + i, kept[i].getFileNameWithoutExtension()));
+            if (! kept.isEmpty()) backups.addSeparator();
+            backups.addItem (menuEntry (menuShowBackups, "Show in Browser", ! kept.isEmpty()));
+           #if JUCE_MAC
+            backups.addItem (menuEntry (menuRevealBackups, "Reveal in Finder", ! kept.isEmpty()));
+           #else
+            backups.addItem (menuEntry (menuRevealBackups, "Show in Explorer", ! kept.isEmpty()));
+           #endif
+            popup.addSubMenu ("Backups", backups, ! menusBlocked());
             popup.addSeparator();
             // Save while there is something to save, as the reference's: changes, or a project never saved.
             add (3, "Save Project", state.dirty || state.projectFile == juce::File()); add (4, "Save Project As..."); add (menuSaveCopy, "Save a Copy...");
@@ -13715,6 +13729,8 @@ private:
         if(id>=60 && id<=66) { report(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>(id-60)));refresh();return; }
         if(id==120 || id==121) { report(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>(id-113)));refresh();return; }
         if (id >= menuRecentProject && id < menuRecentProject + maximumRecentProjects) { openRecentProject (id - menuRecentProject); return; }
+        if (id >= menuBackup && id < menuBackup + 10)
+        { if (const auto kept = session.projectBackups(); juce::isPositiveAndBelow (id - menuBackup, kept.size())) openProject (kept[id - menuBackup]); return; }
         if (id >= menuTimeFormat && id <= menuTimeFormat + (int) Session::TimeFormat::smpte2997)
         { session.setTimeRulerFormat (static_cast<Session::TimeFormat> (id - menuTimeFormat)); refresh(); timeRuler.repaint(); return; }
         if (id >= menuSlice && id <= menuSlice + (int) Session::SliceBy::bar)
@@ -13729,6 +13745,8 @@ private:
             case menuSaveCopy: saveCopyDialog(); return;
             case menuAddFolder: addFolderToBrowser(); return;
             case menuRemoveUnavailableProjects: removeUnavailableProjects(); return;
+            case menuShowBackups: if (const auto kept = session.projectBackups(); ! kept.isEmpty()) showInBrowser (kept[0]); return;
+            case menuRevealBackups: if (const auto kept = session.projectBackups(); ! kept.isEmpty()) kept[0].revealToUser(); return;
             case menuClearRecentProjects: setRecentProjects ({}); return;
             case 5: importFileDialog(); break;
             case 6: exportDialog(); break;
@@ -13971,8 +13989,11 @@ private:
     void openRecentProject (int index)
     {
         const auto projects = session.preferences().recentProjects;
-        if (! juce::isPositiveAndBelow (index, projects.size())) return;
-        const juce::File file (projects[index]);
+        if (juce::isPositiveAndBelow (index, projects.size())) openProject (juce::File (projects[index]));
+    }
+    // Opens a project chosen from a list, the browser or a menu, asking first to save changes.
+    void openProject (const juce::File& file)
+    {
         if (! file.existsAsFile()) { report (juce::Result::fail ("\"" + file.getFullPathName() + "\" is no longer there.")); return; }
         auto safe = juce::Component::SafePointer<Impl> (this);
         ensureSaved ([safe, file]
@@ -15516,7 +15537,8 @@ private:
                             std::transform (extension.begin(), extension.end(), extension.begin(), [] (unsigned char c) { return (char) std::tolower (c); });
                             const auto audio = extension == ".wav" || extension == ".wave" || extension == ".aif" || extension == ".aiff"
                                 || extension == ".flac" || extension == ".ogg" || extension == ".mp3";
-                            if (! typeError && (directory || audio)) entries.push_back ({ std::move (name), directory });
+                            // Projects are listed too, as the reference's browser lists Sets.
+                            if (! typeError && (directory || audio || extension == ".halftrack")) entries.push_back ({ std::move (name), directory });
                         }
                         iterator.increment (ec);
                     }
@@ -15793,6 +15815,12 @@ private:
         {
             g.drawRect (6, height / 2 - 4, 11, 9); g.fillRect (6, height / 2 - 6, 5, 2);
         }
+        else if (isProject (browserItems[(size_t) row].file))
+        {
+            // A project: a page with lines on it.
+            g.drawRect (7, height / 2 - 6, 9, 12);
+            for (int i = 0; i < 3; ++i) g.fillRect (9, height / 2 - 3 + i * 3, 5, 1);
+        }
         else
         {
             for (int i = 0; i < 5; ++i) { const int h = i % 2 == 0 ? 6 : 12; g.drawVerticalLine (6 + i * 2, (float) (height - h) / 2, (float) (height + h) / 2); }
@@ -15838,6 +15866,7 @@ private:
                 scannedBrowserFolder = juce::File(); updateBrowser(); return;
             }
             if (item.directory) { browserFolder = item.file; browserSearch.clear(); updateBrowser(); }
+            else if (isProject (item.file)) openProject (item.file);
             else useBrowserSample (item.file);
         }
         else
@@ -15962,7 +15991,7 @@ private:
     void previewSelectedSample()
     {
         const int row = browserList.getSelectedRow();
-        if (sampleBrowser() && juce::isPositiveAndBelow (row, (int) browserItems.size()) && ! browserItems[(size_t) row].directory)
+        if (sampleBrowser() && juce::isPositiveAndBelow (row, (int) browserItems.size()) && ! browserItems[(size_t) row].directory && isAudio (browserItems[(size_t) row].file))
         {
             const auto file = browserItems[(size_t) row].file;
             if (session.snapshot().previewing != file) report (session.previewFile (file));
@@ -19747,6 +19776,49 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         root.deleteRecursively();
     }
     {
+        // Backups, as the reference's File menu has them: the versions a save replaced, the newest first,
+        // opening from the menu; Show in Browser lists them in the Current Project, where they open too.
+        const auto keptRecent = session.preferences().recentProjects; const auto category = browserCategory; const auto folder = browserFolder;
+        check (session.newProject().wasOk(), "a fresh project for backups"); refresh();
+        const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-backups-ui-" + juce::Uuid().toString());
+        const auto project = root.getChildFile ("Song.halftrack");
+       #if JUCE_MAC
+        const juce::String reveal = "Reveal in Finder";
+       #else
+        const juce::String reveal = "Show in Explorer";
+       #endif
+        const auto backupItems = [this]
+        {
+            juce::StringArray texts;
+            const auto fileMenu = getMenuForIndex (0, {});
+            for (juce::PopupMenu::MenuItemIterator items (fileMenu); items.next();)
+                if (items.getItem().text == "Backups" && items.getItem().subMenu != nullptr)
+                    for (juce::PopupMenu::MenuItemIterator inner (*items.getItem().subMenu); inner.next();)
+                        texts.add (inner.getItem().isSeparator ? "-" : inner.getItem().text + (inner.getItem().isEnabled ? "" : " (off)"));
+            return texts.joinIntoString ("|");
+        };
+        check (session.saveProject (project).wasOk(), "save a project"); refresh();
+        check (backupItems() == "Show in Browser (off)|" + reveal + " (off)", "a project saved once has no backups yet");
+        check (project.setLastModificationTime (juce::Time (2026, 0, 2, 10, 30, 15, 0, true)), "date the first version, in local time as backups are named");
+        check (session.addMidiTrack ("Second").wasOk() && session.saveProject (project).wasOk(), "change the project and save it again"); refresh();
+        const auto backup = project.getSiblingFile ("Song Assets").getChildFile ("Backup").getChildFile ("Song [2026-01-02 103015].halftrack");
+        check (backupItems() == "Song [2026-01-02 103015]|-|Show in Browser|" + reveal, "the version it replaced is listed, then where backups are kept: " + backupItems());
+        const auto tracks = state.tracks.size();
+        menuItemSelected (menuShowBackups, 0);
+        for (int i = 0; i < 1000 && (browserIndex.status().indexing || browserLoading); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
+        check (browserCategory == BrowserCategory::place && browserPlace == currentProjectPlace && browserFolder == backup.getParentDirectory()
+                   && juce::isPositiveAndBelow (browserList.getSelectedRow(), (int) browserItems.size()) && browserItems[(size_t) browserList.getSelectedRow()].file == backup
+                   && browserKey (browserList.getSelectedRow()).isEmpty(), "Show in Browser lists the backups in the Current Project, the newest selected");
+        activateBrowserRow (browserList.getSelectedRow());
+        check (state.projectFile == backup && state.tracks.size() == tracks - 1, "a project in the browser opens with a double-click: the earlier version");
+        check (session.loadProject (project).wasOk(), "back to the project"); refresh();
+        menuItemSelected (menuBackup, 0);
+        check (state.projectFile == backup && state.tracks.size() == tracks - 1, "a backup opens from the menu too");
+        check (session.newProject().wasOk(), "leave the backups"); refresh();
+        setRecentProjects (keptRecent); leavePlace(); browserFolder = folder; setBrowserCategory (category);
+        root.deleteRecursively();
+    }
+    {
         // The menu bar, after the reference's: its menus and items in its order, every item there while it
         // is greyed, the reference's shortcuts on them and working from the keys, and Edit's commands
         // acting on the area last clicked.
@@ -19774,7 +19846,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
        #endif
         const auto expect = [&] (const juce::String& name, const juce::StringArray& wanted)
         { const auto shown = texts (name); check (shown == wanted, name + " holds the reference's items in its order (" + shown.joinIntoString (" | ") + ")"); };
-        expect ("File", { "New Project", "Open Project...", "Open Recent Project >", "-", "Install Pack...", "Add Folder to Browser...", "-", "Locate Missing Media...", "-", "Save Project", "Save Project As...", "Save a Copy...", "Save as Default Set",
+        expect ("File", { "New Project", "Open Project...", "Open Recent Project >", "-", "Install Pack...", "Add Folder to Browser...", "-", "Locate Missing Media...", "Backups >", "-", "Save Project", "Save Project As...", "Save a Copy...", "Save as Default Set",
                           "-", "Export Audio...", "Export MIDI Clip..." });
         const juce::String loop = state.looping ? "Deactivate Loop" : "Activate Loop";
         const auto history = [this]

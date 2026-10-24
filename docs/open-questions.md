@@ -842,6 +842,13 @@ Open Recent Project ([menu contract](research/main-menu-contract.md)). Defaults 
 - **What joins the list.** A project opened, or saved under a new name, joins the top; Save a Copy does not. The list keeps ten, kept with the preferences, and a preferences reset keeps it. The reference's own limit was not read.
 - **Names.** Each entry shows its project's file name, with its folder in brackets when another entry has the same name.
 
+Project backups ([contract](research/backups-contract.md)). Defaults where the reference was not read:
+
+- **Where.** In a `Backup` folder inside the project's Assets, Halftrack's project-owned folder, standing in for the reference's project folder.
+- **The stamp.** When the replaced version was saved (its file's modification time), in local time, as `[YYYY-MM-DD HHMMSS]` after the project's name. The reference's own file naming was not read.
+- **Copies.** Save a Copy onto an existing project backs that project up too, as any save over a project file does.
+- **A backup that cannot be written.** The save goes ahead without it.
+
 Note editor clicks and Draw Mode ([contract](research/note-drawing-contract.md)). Defaults where the manual is silent:
 
 - **A new note's length and velocity.** A double-clicked or drawn note is one grid step long, the step the editor's grid shows, and takes the editor's Velocity (the last selected note's). The reference's note length and velocity were not read.
