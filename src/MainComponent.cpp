@@ -6740,7 +6740,11 @@ private:
         {
             setName ("Piano roll editor");
             setWantsKeyboardFocus (true);
-            for (auto* c : std::initializer_list<juce::Component*> { &gridButton, &noteLength, &velocity, &noteTools, &laneChoice, &laneView, &scaleButton, &scaleRoot, &scaleMode, &horizontal, &vertical, &previewSwitch }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &gridButton, &noteLength, &velocity, &noteTools, &laneChoice, &laneView, &foldButton, &scaleButton, &scaleRoot, &scaleMode, &horizontal, &vertical, &previewSwitch }) addAndMakeVisible (c);
+            foldButton.setName ("Fold"); foldButton.setClickingTogglesState (true); foldButton.setTooltip ("Fold: show only the rows with notes  |  F");
+            foldButton.setColour (juce::TextButton::buttonOnColourId, orange); foldButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
+            foldButton.setWantsKeyboardFocus (false); foldButton.setMouseClickGrabsKeyboardFocus (false);
+            foldButton.onClick = [this] { owner.setFold (foldButton.getToggleState(), owner.foldToScale); };
             previewSwitch.setTooltip ("Preview: hear notes as you click the keys, add, select and move them; with the track armed, step record held keys with the arrow keys");
             previewSwitch.onClick = [this] { silence(); owner.session.setNotePreview (previewSwitch.getToggleState()); };
             scaleButton.setName ("Scale"); scaleButton.setClickingTogglesState (true); scaleButton.setTooltip ("Scale: highlight this clip's scale in the note editor");
@@ -6824,6 +6828,7 @@ private:
                 else topPitch = 77;
                 fit();
             }
+            if (! gesture) updateRows();
             std::unordered_set<juce::String> liveIds;
             if (clip != nullptr)
             {
@@ -6872,7 +6877,7 @@ private:
             const int tier = getWidth() >= 1216 ? 0 : getWidth() >= 940 ? 1 : 2;
             const int velocityWidth = std::array { 142, 104, 80 }[(size_t) tier], laneWidth = std::array { 116, 100, 90 }[(size_t) tier];
             const int modeWidth = std::array { 132, 108, 96 }[(size_t) tier], toolsWidth = std::array { 100, 88, 76 }[(size_t) tier];
-            const int fixed = 7 + 34 + 66 + 8 + 48 + 76 + 12 + 56 + velocityWidth + 12 + toolsWidth + 12 + 32 + laneWidth + 10 + 50 + 54 + modeWidth;
+            const int fixed = 7 + 34 + 66 + 8 + 48 + 76 + 12 + 56 + velocityWidth + 12 + toolsWidth + 12 + 32 + laneWidth + 10 + 44 + 50 + 54 + modeWidth;
             nameWidth = juce::jlimit (0, 225, getWidth() - 24 - fixed);
             if (nameWidth < 40) nameWidth = 0;
             int x = nameWidth > 0 ? 12 + nameWidth + 7 : 8;
@@ -6881,6 +6886,7 @@ private:
             labelX[2] = x; x += 56; velocity.setBounds (x, 5, velocityWidth, 27); x += velocityWidth + 12;
             noteTools.setBounds (x, 7, toolsWidth, 23); x += toolsWidth + 12;
             labelX[3] = x; x += 32; laneChoice.setBounds (x, 7, laneWidth, 23); x += laneWidth + 10;
+            foldButton.setBounds (x, 7, 40, 23); x += 44;
             scaleButton.setBounds (x, 7, 48, 23); x += 50; scaleRoot.setBounds (x, 7, 52, 23); x += 54; scaleMode.setBounds (x, 7, modeWidth, 23);
             infoX = x + modeWidth + 6;
             if (laneView.isVisible()) laneView.setBounds (0, getHeight() - scrollSize - laneHeight, getWidth() - scrollSize, laneHeight);
@@ -6914,21 +6920,23 @@ private:
             }
             const auto grid = gridBounds();
             g.saveState(); g.reduceClipRegion (0, gridTop, getWidth() - scrollSize, grid.getHeight());
-            for (int row = 0; row <= grid.getHeight() / rowHeight; ++row)
+            const auto first = topRow();
+            for (int row = 0; row <= grid.getHeight() / rowHeight && first + row < (int) rows.size(); ++row)
             {
-                const int pitch = topPitch - row;
-                if (pitch < 0 || pitch > 127) continue;
+                const int pitch = rows[(size_t) (first + row)];
                 const int semitone = pitch % 12;
                 const bool black = semitone == 1 || semitone == 3 || semitone == 6 || semitone == 8 || semitone == 10;
                 const int y = gridTop + row * rowHeight;
-                // A clip scale lights its rows (the root most) and dims the rest.
-                const bool scaled = clip->scale.enabled;
-                const bool member = Session::inScale (clip->scale, pitch);
-                g.setColour (scaled ? (member ? (semitone == clip->scale.root ? themes::colour (0xff474038) : themes::colour (0xff3c3c3c)) : themes::colour (0xff272727))
-                                    : black ? themes::colour (0xff2a2a2a) : themes::colour (0xff353535));
+                // A clip's scale marks its keys; Scale Highlighting also lights its rows (the root most)
+                // and dims the rest, and marks the root's key more strongly, as the reference's does.
+                const bool scaled = clip->scale.enabled, member = scaled && Session::inScale (clip->scale, pitch), root = member && semitone == clip->scale.root;
+                const bool lit = scaled && owner.scaleHighlighting;
+                g.setColour (lit ? (member ? (root ? themes::colour (0xff474038) : themes::colour (0xff3c3c3c)) : themes::colour (0xff272727))
+                                 : black ? themes::colour (0xff2a2a2a) : themes::colour (0xff353535));
                 g.fillRect (keysWidth, y, grid.getWidth(), rowHeight);
                 g.setColour (black ? themes::colour (0xff232323) : themes::colour (0xffc6c6c6));
                 g.fillRect (0, y, black ? keysWidth - 14 : keysWidth, rowHeight);
+                if (member) { g.setColour (orange.withAlpha (lit && root ? 1.0f : .6f)); g.fillRect (keysWidth - 5, y + 1, lit && root ? 5 : 3, rowHeight - 2); }
                 g.setColour (line); g.drawHorizontalLine (y + rowHeight - 1, 0.0f, (float) getWidth());
                 if (semitone == 0)
                 {
@@ -7043,7 +7051,7 @@ private:
                 // notes to the selection, or takes them out if they all were selected.
                 if (e.y < gridTop || e.y >= gridBounds().getBottom() || e.mods.isPopupMenu()) return;
                 grabKeyboardFocus(); endGesture();
-                keyPitch = juce::jlimit (0, 127, topPitch - (e.y - gridTop) / rowHeight);
+                keyPitch = pitchAt ((float) e.y);
                 if (e.mods.isShiftDown())
                 {
                     std::vector<juce::String> ids;
@@ -7144,7 +7152,7 @@ private:
             if (keyPitch >= 0)
             {
                 // Dragging along the keys plays each one it reaches.
-                const auto pitch = juce::jlimit (0, 127, topPitch - (juce::jlimit (gridTop, gridBounds().getBottom() - 1, e.y) - gridTop) / rowHeight);
+                const auto pitch = pitchAt ((float) juce::jlimit (gridTop, gridBounds().getBottom() - 1, e.y));
                 if (pitch != keyPitch) { keyPitch = pitch; sound ({ { pitch, keyVelocity } }); }
                 return;
             }
@@ -7227,7 +7235,9 @@ private:
             else
             {
                 if (snapsNotes (e.mods)) beatDelta = std::round ((original.startBeat + beatDelta) / snapBeats()) * snapBeats() - original.startBeat;
-                const auto pitchDelta = -(int) std::round ((e.y - dragOrigin.y) / rowHeight);
+                // Rows, not semitones: folded, a note moves to the next row shown.
+                const auto rowDelta = (int) std::round ((e.y - dragOrigin.y) / rowHeight);
+                const auto pitchDelta = rowIndex[(size_t) original.pitch] < 0 ? -rowDelta : pitchAtRow (rowIndex[(size_t) original.pitch] + rowDelta) - original.pitch;
                 moveNotes (dragClipId, originalNotes, beatDelta, pitchDelta);
                 if (pitchDelta != previewDelta)
                 {
@@ -7241,6 +7251,7 @@ private:
         {
             silence(); keyPitch = -1;
             endGesture(); drawing = false; erasing = false; drawn.clear(); originalNotes.clear(); braceDrag = 0;
+            updateRows(); updateScroll(); repaint();
             if (marquee)
             {
                 if (! e.mouseWasDraggedSinceMouseDown()) clearSelection();
@@ -7259,7 +7270,7 @@ private:
         {
             if (e.mods.isCommandDown()) { zoom (details.deltaY > 0 ? 1.1 : 1.0 / 1.1); return; }
             if (e.mods.isShiftDown() || std::abs (details.deltaX) > std::abs (details.deltaY)) viewBeat = juce::jmax (0.0, viewBeat - (details.deltaX + details.deltaY) * 8.0);
-            else topPitch = juce::jlimit (0, 127, topPitch + (int) std::round (details.deltaY * 20.0));
+            else topPitch = pitchAtRow (topRow() - (int) std::round (details.deltaY * 20.0));
             updateScroll(); repaint();
         }
         bool keyPressed (const juce::KeyPress& key) override
@@ -7314,6 +7325,9 @@ private:
         }
         bool hasSelectedNote() const { return selectedNote() != nullptr; }
         double insertion() const { return insertionBeat; }
+        // View's Fold to Notes and Fold to Scale, and Options' Scale Highlighting, changed.
+        void foldChanged() { foldButton.setToggleState (owner.foldToNotes, juce::dontSendNotification); updateRows(); updateScroll(); repaint(); }
+        int shownRows() const { return (int) rows.size(); }
         bool canPasteNotes() const { return owner.currentMidiClip() != nullptr && ! noteClipboard.empty(); }
         int selectedNoteCount() const { return (int) selectedNotes().size(); }
         // Whether every selected note is deactivated, for Edit's Activate Notes.
@@ -7828,7 +7842,7 @@ private:
         juce::TextButton gridButton;
         int nameWidth = 225, infoX = 1210;
         std::array<int, 4> labelX { 244, 352, 488, 810 };
-        juce::TextButton noteTools { "Note tools" }, scaleButton { "Scale" };
+        juce::TextButton noteTools { "Note tools" }, scaleButton { "Scale" }, foldButton { "Fold" };
         void editScale()
         {
             const auto* clip = owner.currentMidiClip(); if (! clip) return;
@@ -7864,7 +7878,40 @@ private:
     private:
         double defaultLength() const { return std::pow (2.0, noteLength.getSelectedId() - 3); }
         double beatAt (float x) const { return viewBeat + (x - keysWidth) / pixelsPerBeat; }
-        int pitchAt (float y) const { return juce::jlimit (0, 127, topPitch - (int) std::floor ((y - gridTop) / rowHeight)); }
+        int pitchAt (float y) const { return pitchAtRow (topRow() + (int) std::floor ((y - gridTop) / rowHeight)); }
+        // The rows shown, top to bottom, and each pitch's row (-1 when folded away): every pitch, or as
+        // View's Fold to Notes leaves them the pitches with notes, or as Fold to Scale leaves them the
+        // clip scale's pitches and those with notes.
+        std::vector<int> rows = [] { std::vector<int> all; for (int pitch = 127; pitch >= 0; --pitch) all.push_back (pitch); return all; }();
+        std::array<int, 128> rowIndex = [] { std::array<int, 128> index {}; for (int pitch = 0; pitch < 128; ++pitch) index[(size_t) pitch] = 127 - pitch; return index; }();
+        void updateRows()
+        {
+            const auto* clip = owner.currentMidiClip();
+            std::array<bool, 128> used {};
+            if (clip != nullptr)
+            {
+                for (const auto& note : clip->notes) used[(size_t) juce::jlimit (0, 127, note.pitch)] = true;
+                for (const auto* other : owner.extraMidiClips()) for (const auto& note : other->notes) used[(size_t) juce::jlimit (0, 127, note.pitch)] = true;
+            }
+            const bool notes = owner.foldToNotes && std::find (used.begin(), used.end(), true) != used.end();
+            const bool scale = ! notes && owner.foldToScale && clip != nullptr && clip->scale.enabled;
+            rows.clear(); rowIndex.fill (-1);
+            for (int pitch = 127; pitch >= 0; --pitch)
+                if ((! notes && ! scale) || used[(size_t) pitch] || (scale && Session::inScale (clip->scale, pitch)))
+                { rowIndex[(size_t) pitch] = (int) rows.size(); rows.push_back (pitch); }
+        }
+        // The top row: the first shown at or below topPitch.
+        int topRow() const
+        {
+            for (int pitch = juce::jlimit (0, 127, topPitch); pitch >= 0; --pitch) if (rowIndex[(size_t) pitch] >= 0) return rowIndex[(size_t) pitch];
+            return juce::jmax (0, (int) rows.size() - 1);
+        }
+        int pitchAtRow (int row) const { return rows.empty() ? 60 : rows[(size_t) juce::jlimit (0, (int) rows.size() - 1, row)]; }
+        int rowY (int pitch) const
+        {
+            const auto row = rowIndex[(size_t) juce::jlimit (0, 127, pitch)];
+            return row < 0 ? -100000 : gridTop + (row - topRow()) * rowHeight;
+        }
         Session::MidiNoteInfo newNote (int pitch, double start, double length) const { return { {}, pitch, start, length, drawVelocity }; }
         // A double-click's note: one grid step long, on the step and at the pitch clicked, selected, so
         // the drag goes on to move it.
@@ -8021,7 +8068,7 @@ private:
         juce::StringArray envelopeSignature;
         juce::Rectangle<float> noteBounds (const Session::MidiNoteInfo& note) const
         {
-            return { (float) (keysWidth + (note.startBeat - viewBeat) * pixelsPerBeat), (float) (gridTop + (topPitch - note.pitch) * rowHeight + 1), (float) juce::jmax (3.0, note.lengthBeats * pixelsPerBeat), (float) rowHeight - 2 };
+            return { (float) (keysWidth + (note.startBeat - viewBeat) * pixelsPerBeat), (float) (rowY (note.pitch) + 1), (float) juce::jmax (3.0, note.lengthBeats * pixelsPerBeat), (float) rowHeight - 2 };
         }
         static juce::String pitchName (int pitch) { return midimonitor::noteName (pitch); } // C3 is note 60, as in the reference.
         const Session::MidiNoteInfo* selectedNote() const
@@ -8141,13 +8188,14 @@ private:
             const auto totalBeats = juce::jmax (visibleBeats, clip != nullptr ? contentEndBeat (*clip) : 16.0);
             viewBeat = juce::jlimit (0.0, juce::jmax (0.0, totalBeats - visibleBeats), viewBeat);
             horizontal.setRangeLimits (0.0, totalBeats, juce::dontSendNotification); horizontal.setCurrentRange (viewBeat, visibleBeats, juce::dontSendNotification);
-            const auto rows = juce::jlimit (1, 128, grid.getHeight() / rowHeight);
-            topPitch = juce::jlimit (rows - 1, 127, topPitch);
-            vertical.setRangeLimits (0.0, 128.0, juce::dontSendNotification); vertical.setCurrentRange (127 - topPitch, rows, juce::dontSendNotification);
+            const auto visible = juce::jmax (1, grid.getHeight() / rowHeight);
+            const auto top = juce::jlimit (0, juce::jmax (0, (int) rows.size() - visible), topRow());
+            topPitch = pitchAtRow (top);
+            vertical.setRangeLimits (0.0, (double) rows.size(), juce::dontSendNotification); vertical.setCurrentRange (top, visible, juce::dontSendNotification);
         }
         void scrollBarMoved (juce::ScrollBar* bar, double start) override
         {
-            if (bar == &horizontal) { if (owner.state.playing) owner.setFollow (false); viewBeat = start; } else topPitch = 127 - (int) std::round (start);
+            if (bar == &horizontal) { if (owner.state.playing) owner.setFollow (false); viewBeat = start; } else topPitch = pitchAtRow ((int) std::round (start));
             repaint();
         }
     public:
@@ -9454,6 +9502,10 @@ private:
     // The computer MIDI keyboard: M or the KEYS switch turns it on; then the note keys play the
     // Computer Keyboard input and are released when the key comes up.
     juce::TextButton keysButton { "KEYS" };
+    // View's Fold to Notes (F) and Fold to Scale (G), and Options' Scale Highlighting (K), for every
+    // MIDI clip, as the reference's.
+    bool foldToNotes = false, foldToScale = false, scaleHighlighting = false;
+    void setFold (bool notes, bool scale) { foldToNotes = notes; foldToScale = scale; pianoRoll.foldChanged(); }
     // Options > Draw Mode (B) and the control bar's pencil: the note editor draws notes, as the reference's.
     bool drawMode = false;
     DrawModeButton drawButton;
@@ -12038,7 +12090,7 @@ private:
                     menuToggleView, menuClipView, menuDeviceView, menuToggleDetail, menuBrowser, menuGroovePool, menuSearch, menuSimilar,
                     menuFoldAll, menuFoldSelected, menuZoomSelection, menuZoomBack, menuMidiMap, menuKeyMap, menuComputerKeyboard,
                     menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuOverview, menuSceneSettings,
-                    menuSoloSwitches, menuCueSwitches, menuSaveCopy, menuDrawMode,
+                    menuSoloSwitches, menuCueSwitches, menuSaveCopy, menuDrawMode, menuFoldToNotes, menuFoldToScale, menuScaleHighlighting,
                     menuSlice = 200, // Plus Session::SliceBy.
                     menuTimeFormat = 210 }; // Plus Session::TimeFormat.
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
@@ -12074,6 +12126,7 @@ private:
             { menuOverview, key ('o', cmd | alt) }, { 103, key ('i', cmd | alt) }, { 104, key ('s', cmd | alt) }, { 108, key ('r', cmd | alt) }, { 49, key ('a') }, { menuFoldAll, key ('u', alt) },
             { menuFoldSelected, key ('u') }, { 41, key ('+') }, { 42, key ('-') }, { menuZoomSelection, key ('z') }, { menuZoomBack, key ('x') },
             { menuMidiMap, key ('m', cmd) }, { menuKeyMap, key ('k', cmd) }, { menuComputerKeyboard, key ('m') }, { menuDrawMode, key ('b') },
+            { menuFoldToNotes, key ('f') }, { menuFoldToScale, key ('g') }, { menuScaleHighlighting, key ('k') },
             { 93, key ('1', cmd) }, { 94, key ('2', cmd) }, { 95, key ('3', cmd) }, { 96, key ('4', cmd) }, { 97, key ('5', cmd) }, { 13, key ('e', cmd | shift | alt) } };
         for (const auto& [id, press] : shortcuts)
         {
@@ -12573,6 +12626,11 @@ private:
             const auto* current = showSession ? nullptr : currentTrack();
             add (menuFoldSelected, (group != nullptr ? group->folded : current != nullptr && current->folded) ? "Unfold Selected Track" : "Fold Selected Track", group != nullptr || current != nullptr);
             popup.addSeparator();
+            // The note editor's folds, for a MIDI clip in the clip view; to a scale only with the clip's scale on.
+            const auto* notes = showPiano ? currentMidiClip() : nullptr;
+            add (menuFoldToNotes, "Fold to Notes", notes != nullptr, foldToNotes);
+            add (menuFoldToScale, "Fold to Scale", notes != nullptr && notes->scale.enabled, foldToScale);
+            popup.addSeparator();
             const bool canZoom = ! showSession || showPiano;
             add (41, "Zoom In", canZoom); add (42, "Zoom Out", canZoom);
             const bool selected = timeSelection.active() || loneClip() != nullptr;
@@ -12600,6 +12658,8 @@ private:
             add (97, "Fixed Grid", place.has_value(), g.fixed);
             popup.addSeparator();
             add (menuDrawMode, "Draw Mode", true, drawMode);
+            popup.addSeparator();
+            add (menuScaleHighlighting, "Scale Highlighting", true, scaleHighlighting);
             popup.addSeparator();
             // The tracks' switches solo or cue, as the Main's Solo/Cue switch chooses; Cue needs a Cue Out of its own.
             add (menuSoloSwitches, "Solo Switches", state.cueAvailable, ! state.cueMode); add (menuCueSwitches, "Cue Switches", state.cueAvailable, state.cueMode);
@@ -12750,6 +12810,9 @@ private:
             case menuKeyMap: setKeyMapMode (! keyMapMode); return;
             case menuComputerKeyboard: setComputerKeyboard (! session.isComputerKeyboardEnabled()); return;
             case menuDrawMode: setDrawMode (! drawMode); return;
+            case menuFoldToNotes: setFold (! foldToNotes, foldToScale); return;
+            case menuFoldToScale: setFold (foldToNotes, ! foldToScale); return;
+            case menuScaleHighlighting: scaleHighlighting = ! scaleHighlighting; pianoRoll.foldChanged(); return;
             case menuExternalSync: report (session.setExternalSync (! session.isExternalSync())); break;
             default: break;
         }
@@ -15324,6 +15387,35 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     && png.writeImageToStream (pianoRoll.createComponentSnapshot (pianoRoll.getLocalBounds(), true, 1.0f), *stream))
                     std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
             }
+        {
+            // View's Fold to Notes (F) shows only the rows with notes, and Fold to Scale (G) the clip scale's
+            // rows and those with notes, where a note dragged a row moves to the next row shown. K lights
+            // the scale's rows, as the reference's Scale Highlighting does.
+            std::set<int> used;
+            for (const auto& n : currentMidiClip()->notes) used.insert (n.pitch);
+            int scaleRows = 0;
+            for (int p = 0; p < 128; ++p) if (Session::inScale (currentMidiClip()->scale, p) || used.count (p) > 0) ++scaleRows;
+            check (pianoRoll.shownRows() == 128 && ! foldToNotes && ! foldToScale, "the note editor shows all 128 rows unfolded");
+            check (handleKey (juce::KeyPress ('f')) && foldToNotes && pianoRoll.shownRows() == (int) used.size(), "F folds the editor to the rows with notes");
+            check (handleKey (juce::KeyPress ('f')) && ! foldToNotes && pianoRoll.shownRows() == 128, "and F again unfolds it");
+            check (handleKey (juce::KeyPress ('g')) && foldToScale && pianoRoll.shownRows() == scaleRows, "G folds it to the clip's scale, keeping the rows with notes");
+            const auto before = currentMidiClip()->notes.front();
+            const auto centre = pianoRoll.shownNoteBounds (before).getCentre(), up = centre.translated (0, -15);
+            pianoRoll.mouseDown (event (centre, centre)); pianoRoll.mouseDrag (event (up, centre, true)); pianoRoll.mouseUp (event (up, centre, true));
+            int next = before.pitch + 1;
+            while (next < 127 && ! Session::inScale (currentMidiClip()->scale, next)) ++next;
+            check (currentMidiClip()->notes.front().pitch == next && next > before.pitch + 0, "dragging a note up a row, folded to the scale, moves it to the scale's next pitch");
+            pianoRoll.keyPressed (undo);
+            check (currentMidiClip()->notes.front().pitch == before.pitch, "one undo moves it back");
+            check (handleKey (juce::KeyPress ('g')) && ! foldToScale && pianoRoll.shownRows() == 128, "G again unfolds it");
+            int outside = before.pitch - 1;
+            while (outside > 0 && Session::inScale (currentMidiClip()->scale, outside)) --outside;
+            const auto row = pianoRoll.shownNoteBounds ({ {}, outside, 0, 1 });
+            const auto pixel = [&] { return pianoRoll.createComponentSnapshot (pianoRoll.getLocalBounds()).getPixelAt (58, juce::roundToInt (row.getCentreY())); };
+            const auto plain = pixel();
+            check (handleKey (juce::KeyPress ('k')) && scaleHighlighting && pixel() != plain, "K turns Scale Highlighting on, dimming the rows outside the scale");
+            check (handleKey (juce::KeyPress ('k')) && ! scaleHighlighting && pixel() == plain, "and K turns it off");
+        }
         pianoRoll.openNoteTool (Session::NoteTool::fitToScale);
         juce::Component* fit = nullptr;
         for (int w = 0; w < juce::TopLevelWindow::getNumTopLevelWindows() && fit == nullptr; ++w)
@@ -18193,10 +18285,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
        #if JUCE_MAC
         view.add ("Video Window");
        #endif
-        view.addArray ({ "-", "Mixer", "Mixer Controls >", "-", "Overview", "Scene Tempo and Time Signature", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
+        view.addArray ({ "-", "Mixer", "Mixer Controls >", "-", "Overview", "Scene Tempo and Time Signature", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Fold to Notes", "Fold to Scale", "-",
+                         "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
         expect ("View", view);
         juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "-", "External Sync", "-", "Time Ruler Format >", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
-                                    "Fixed Grid", "-", "Draw Mode", "-", "Solo Switches", "Cue Switches", "Solo in Place", "-", "Audio Engine On" };
+                                    "Fixed Grid", "-", "Draw Mode", "-", "Scale Highlighting", "-", "Solo Switches", "Cue Switches", "Solo in Place", "-", "Audio Engine On" };
        #if ! JUCE_MAC
         options.addArray ({ "-", "Preferences..." });
        #endif

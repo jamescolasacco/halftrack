@@ -2528,3 +2528,7 @@ UI area. Draw Mode now draws in automation envelopes, clip envelopes and the vel
 
 UI area. As the reference's manual describes, Cmd held at the press (Alt elsewhere) makes a vertical drag on a note change the selected notes' velocity, one step a pixel, and Option (Ctrl elsewhere) drags copies, leaving the notes where they were ([contract](research/note-drawing-contract.md)). Checked in the UI suite.
 
+## Fold to Notes, Fold to Scale and Scale Highlighting — 2026-10-24
+
+UI area. View's Fold to Notes (F), with a Fold switch in the note editor, shows only the rows with notes, and Fold to Scale (G) the clip scale's rows and those with notes; a note dragged a row moves to the next row shown. Options > Scale Highlighting (K) lights the scale's rows, while a clip's own scale now marks its keys, as the reference's Scale Mode does ([scale contract](research/scales-contract.md#folding)). Checked in the UI suite.
+
