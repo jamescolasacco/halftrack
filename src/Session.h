@@ -798,6 +798,10 @@ public:
     // Kept with the project as view state, outside the undo history, as mixerSections is.
     ArrangementControls arrangementControls() const;
     void setArrangementControls (const ArrangementControls&);
+    // Options > Arrangement Overdub, as the reference's: a MIDI take recorded in the Arrangement adds its
+    // notes to the clips it records over instead of replacing them. Kept with the project; off at first.
+    bool arrangementOverdub() const;
+    void setArrangementOverdub (bool);
     // Options > Lock Envelopes: automation stays at its place in the song instead of moving with clips.
     // Kept with the project, outside the undo history; off at first, as the reference's.
     bool lockEnvelopes() const;

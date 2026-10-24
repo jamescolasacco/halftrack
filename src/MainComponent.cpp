@@ -12734,7 +12734,7 @@ private:
                     menuFocusSession, menuFocusArrangement, menuFocusClip, menuFocusDevices, menuFocusBrowser, menuFocusGroovePool, menuFocusMixer,
                     menuSelectLoop, menuPlaySelection, menuSetClipStart, menuSetLoopStart, menuSetLoopEnd, menuSetClipEnd,
                     menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
-                    menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns,
+                    menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410 }; // Plus Session::TimeFormat.
@@ -13472,6 +13472,7 @@ private:
             add (98, "Solo in Place", true, state.soloInPlace);
             popup.addSeparator();
             add (menuLockEnvelopes, "Lock Envelopes", true, session.lockEnvelopes());
+            add (menuArrangementOverdub, "Arrangement Overdub", true, session.arrangementOverdub());
             popup.addSeparator();
             add (13, "Audio Engine On", true, session.isAudioEngineEnabled());
            #if ! JUCE_MAC
@@ -13632,6 +13633,7 @@ private:
             case menuComputerKeyboard: setComputerKeyboard (! session.isComputerKeyboardEnabled()); return;
             case menuDrawMode: setDrawMode (! drawMode); return;
             case menuLockEnvelopes: session.setLockEnvelopes (! session.lockEnvelopes()); refresh(); return;
+            case menuArrangementOverdub: session.setArrangementOverdub (! session.arrangementOverdub()); refresh(); return;
             case menuArrangementInOut: case menuArrangementVolume: case menuArrangementTrackOptions: case menuArrangementReturns:
             {
                 auto controls = state.arrangementControls;
@@ -19333,7 +19335,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                          "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
         expect ("View", view);
         juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "MIDI Prelisten", "Browser Pre-Hear", "-", "External Sync", "-", "Time Ruler Format >", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
-                                    "Fixed Grid", "-", "Draw Mode", "-", "Scale Highlighting", "-", "Solo Switches", "Cue Switches", "Solo in Place", "-", "Lock Envelopes", "-", "Audio Engine On" };
+                                    "Fixed Grid", "-", "Draw Mode", "-", "Scale Highlighting", "-", "Solo Switches", "Cue Switches", "Solo in Place", "-", "Lock Envelopes", "Arrangement Overdub", "-", "Audio Engine On" };
        #if ! JUCE_MAC
         options.addArray ({ "-", "Preferences..." });
        #endif
@@ -19375,6 +19377,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (previewButton.getToggleState() != samples && entry ("Options", menuBrowserPreHear)->isTicked == previewButton.getToggleState(), "Browser Pre-Hear switches the browser's Preview");
             menuItemSelected (menuBrowserPreHear, 6);
             check (session.notePreview() == notes && previewButton.getToggleState() == samples, "and both back");
+            check (! entry ("Options", menuArrangementOverdub)->isTicked, "Arrangement Overdub is off at first");
+            menuItemSelected (menuArrangementOverdub, 6);
+            check (session.arrangementOverdub() && entry ("Options", menuArrangementOverdub)->isTicked, "Options > Arrangement Overdub turns it on");
+            menuItemSelected (menuArrangementOverdub, 6);
+            check (! session.arrangementOverdub(), "and off");
         }
         check (shortcut ("Options", menuDrawMode, juce::KeyPress ('b')) && ! entry ("Options", menuDrawMode)->isTicked, "Draw Mode shows the reference's B, unticked while off");
         menuItemSelected (menuDrawMode, 5); refresh();
@@ -22894,7 +22901,6 @@ int MainComponent::Impl::runSeparationStress (const juce::File& root)
     // The take arrives once the engine has finished writing it.
     const auto takeClips = [this] { const auto now = session.snapshot(); return now.tracks.empty() ? std::vector<Session::ClipInfo> {} : now.tracks[0].clips; };
     for (int i = 0; i < 500 && takeClips().empty(); ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-    for (const auto& clip : session.snapshot().tracks[0].clips) std::cout << "DEBUG clip audio " << (int) clip.isAudio << " file " << clip.file.getFullPathName() << " exists " << (int) clip.file.existsAsFile() << std::endl;
     const int after = device->blocks();
     browserSearch.setText ({}, juce::dontSendNotification); updateBrowser();
 

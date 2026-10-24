@@ -1,4 +1,5 @@
 #include "Session.h"
+#include <set>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -241,6 +242,30 @@ int runTakeLanesTests (const juce::File& artifacts)
             int heard = 0; bool onlyLast = true;
             for (const auto& c : k.clips) for (const auto& n : c.notes) { ++heard; onlyLast = onlyLast && n.pitch == 64; }
             check (heard == 1 && onlyLast, "the main lane plays the last pass, its note replacing the earlier ones under it");
+            // With Arrangement Overdub on, as the reference's, a take adds its notes to what it records over.
+            check (! s.arrangementOverdub(), "Arrangement Overdub is off at first");
+            s.setArrangementOverdub (true);
+            s.setLoop (false, 12, 14);
+            s.seek (12); ok (s.record(), "record over the last pass with Arrangement Overdub on");
+            pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+            ok (s.computerKeyboardNote (67, .8f, true), "play another note");
+            pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+            ok (s.computerKeyboardNote (67, 0, false), "release it");
+            pumpSyntheticTestDevice (s, blocksPerSecond);
+            s.stop(); pumpSyntheticTestDevice (s, 8);
+            const auto pitchesOf = [&]
+            {
+                const auto track = s.snapshot().tracks[(size_t) keys]; // A copy: the snapshot is a temporary.
+                std::set<int> pitches;
+                for (const auto& c : track.clips) for (const auto& n : c.notes) pitches.insert (n.pitch);
+                return pitches;
+            };
+            const auto merged = pitchesOf();
+            check (merged.count (64) == 1 && merged.count (67) == 1, "the main lane keeps the earlier note with the new one");
+            s.undo();
+            const auto before = pitchesOf();
+            check (before == std::set<int> { 64 }, "one undo takes the overdub back");
+            s.setArrangementOverdub (false);
             ok (s.setTrackArmed (keys, false), "disarm Keys");
         }
         std::cout << "Take lanes passed: " << root.getFullPathName() << std::endl; return 0;

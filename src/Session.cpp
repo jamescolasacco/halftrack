@@ -66,7 +66,7 @@ const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsP
                        arrangementOverviewProperty { "halftrackArrangementOverview" }, timeRulerFormatProperty { "halftrackTimeRulerFormat" },
                        lockEnvelopesProperty { "halftrackLockEnvelopes" }, arrangementInOutProperty { "halftrackArrangementInOut" },
                        arrangementVolumeProperty { "halftrackArrangementVolume" }, arrangementTrackOptionsProperty { "halftrackArrangementTrackOptions" },
-                       arrangementReturnsProperty { "halftrackArrangementReturns" },
+                       arrangementReturnsProperty { "halftrackArrangementReturns" }, arrangementOverdubProperty { "halftrackArrangementOverdub" },
                        sceneSettingsShownProperty { "halftrackSceneSettingsShown" };
 constexpr float defaultCueVolumeDb = -6.0f; // As the reference's default Set has it.
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
@@ -5378,18 +5378,33 @@ struct Session::Impl
         return copy;
     }
     // Splits the earlier clips under a new one at its edges and removes what lies beneath it. The new
-    // clip does not cross its own edges, so only earlier material is split.
-    void replaceUnder (te::AudioTrack& t, te::Clip& above, const std::set<String>& earlier)
+    // clip does not cross its own edges, so only earlier material is split. Merging, as Arrangement
+    // Overdub does, a MIDI clip first takes the notes and controller points of the MIDI beneath it.
+    void replaceUnder (te::AudioTrack& t, te::Clip& above, const std::set<String>& earlier, bool merge = false)
     {
         const auto range = above.getPosition().time;
         auto* undo = &edit->getUndoManager();
         for (const auto at : { range.getStart(), range.getEnd() })
             if (splittableAt (t, at).wasOk()) splitTrackAt (t, at, undo);
         const auto clips = t.getClips(); // Removing clips changes the track's list.
+        auto* into = merge ? dynamic_cast<te::MidiClip*> (&above) : nullptr;
         for (auto* c : clips)
             if (c != &above && c->getClipSlot() == nullptr && earlier.count (c->itemID.toString()) != 0
                 && c->getPosition().getStart() >= range.getStart() - te::TimeDuration::fromSeconds (1e-6) && c->getPosition().getEnd() <= range.getEnd() + te::TimeDuration::fromSeconds (1e-6))
+            {
+                if (auto* beneath = dynamic_cast<te::MidiClip*> (c); beneath != nullptr && into != nullptr)
+                {
+                    // Where each plays, in the take's own beats: both start their content at their starts.
+                    const auto shift = (beneath->getStartBeat() - beneath->getOffsetInBeats()) - (into->getStartBeat() - into->getOffsetInBeats());
+                    auto& sequence = into->getSequence();
+                    for (auto* note : beneath->getSequence().getNotes())
+                        if (auto* added = sequence.addNote (note->getNoteNumber(), note->getStartBeat() + shift, note->getLengthBeats(), note->getVelocity(), note->getColour(), undo))
+                        { added->setMute (note->isMute(), undo); added->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), undo); }
+                    for (auto* event : beneath->getSequence().getControllerEvents())
+                        sequence.addControllerEvent (event->getBeatPosition() + shift, event->getType(), event->getControllerValue(), event->getMetadata(), undo);
+                }
                 c->removeFromParent();
+            }
     }
     // A recorded pass goes into the first take lane with nothing at or after its start, or a new one.
     void keepTake (te::AudioTrack& t, te::Clip& recorded)
@@ -14036,6 +14051,13 @@ void Session::setArrangementControls (const ArrangementControls& controls)
     s.setProperty (arrangementTrackOptionsProperty, controls.trackOptions, nullptr); s.setProperty (arrangementReturnsProperty, controls.returns, nullptr);
     impl->viewStateChanged();
 }
+bool Session::arrangementOverdub() const { return impl->edit->state.getProperty (arrangementOverdubProperty, false); }
+void Session::setArrangementOverdub (bool on)
+{
+    if (on == arrangementOverdub()) return;
+    impl->edit->state.setProperty (arrangementOverdubProperty, on, nullptr);
+    impl->viewStateChanged();
+}
 bool Session::lockEnvelopes() const { return impl->edit->state.getProperty (lockEnvelopesProperty, false); }
 void Session::setLockEnvelopes (bool locked)
 {
@@ -14510,7 +14532,8 @@ void Session::finishRecording (bool stopTransport)
                 for (auto* clip : recorded) impl->keepTake (*track, *clip);
                 // In order, so the last pass is left on top in the main lane, as the reference copies it there.
                 auto earlier = impl->clipsBeforeRecording;
-                for (auto* clip : recorded) { impl->replaceUnder (*track, *clip, earlier); earlier.insert (clip->itemID.toString()); }
+                const bool merge = arrangementOverdub() && static_cast<bool> (track->state.getProperty (midiTrackProperty, false));
+                for (auto* clip : recorded) { impl->replaceUnder (*track, *clip, earlier, merge); earlier.insert (clip->itemID.toString()); }
             }
         impl->changed();
     }

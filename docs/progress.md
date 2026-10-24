@@ -2613,3 +2613,7 @@ Engine and UI areas. View > Arrangement Track Controls shows and hides the Arran
 
 UI area. The envelope's context menu offers the reference's waveform shapes, sine, triangle, sawtooth, inverse sawtooth and square, one cycle over the time selection or a grid step, across the control's whole range ([automation contract](research/arrangement-automation-contract.md#shapes-2026-10-24)). Checked in the UI suite.
 
+## Arrangement Overdub — 2026-10-24
+
+Engine and UI areas. Options > Arrangement Overdub, as the reference's: with it on, a MIDI take recorded in the Arrangement keeps the notes of the clips it records over, merging them into the take, instead of replacing them. It is kept with the project and off at first ([take lanes contract](research/take-lanes-contract.md)). Also removed a leftover debug print from a UI test that read a temporary snapshot after its lifetime. Checked in the take lanes and UI suites.
+
