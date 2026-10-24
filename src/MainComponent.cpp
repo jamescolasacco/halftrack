@@ -10184,7 +10184,7 @@ private:
     // has the take lane and link items; the Session view's titles do not. A colour picked in the grid
     // is put in `colour`.
     enum HeaderItem { headerCut = 100, headerCopy, headerPaste, headerDuplicate = 1, headerDelete, headerRename, headerFreeze, headerBounce, headerInsertAudio, headerInsertMidi, headerInsertReturn,
-                      headerGroup, headerUngroup, headerSelectContent, headerEditInfo, headerClearEnvelopes, headerAssignColour, headerInsertTakeLane, headerShowTakeLanes, headerDeleteTakeLanes, headerLink, headerUnlink, headerColour };
+                      headerGroup, headerUngroup, headerSelectContent, headerEditInfo, headerClearEnvelopes, headerAssignColour, headerDeleteUnusedTakeLanes, headerInsertTakeLane, headerShowTakeLanes, headerDeleteTakeLanes, headerLink, headerUnlink, headerColour };
     juce::PopupMenu headerMenu (const juce::String& id, bool arrangement, std::shared_ptr<int> colour, bool join) const
     {
         const auto ids = headerSelection();
@@ -10229,6 +10229,7 @@ private:
             const bool shown = std::all_of (selected.begin(), selected.end(), [this] (const juce::String& t) { return takeLanesShown.count (t) > 0; });
             item (headerInsertTakeLane, "Insert Take Lane"); item (headerShowTakeLanes, "Show Take Lanes", true, shown);
             item (headerDeleteTakeLanes, "Delete All Take Lanes", ! selectedTakeLanes (ids).isEmpty());
+            item (headerDeleteUnusedTakeLanes, "Delete Unused Take Lanes", ! session.unusedTakeLanes (tracksWithin (ids)).isEmpty());
         }
         // Links join audio and MIDI tracks (Halftrack's groups do not link yet).
         if (arrangement && track != nullptr && ! track->isReturn)
@@ -10286,6 +10287,7 @@ private:
                 break;
             }
             case headerDeleteTakeLanes: report (session.removeTakeLanes (selectedTakeLanes (ids))); break;
+            case headerDeleteUnusedTakeLanes: report (session.removeTakeLanes (session.unusedTakeLanes (tracksWithin (ids)))); break;
             case headerLink: linkSelectedTracks (join); return;
             case headerUnlink: unlinkSelectedTracks(); return;
             case headerColour: if (colour >= 0) report (session.setTrackColours (ids, paletteColour (colour))); break;
@@ -17468,7 +17470,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     const bool clips = ! state.tracks[(size_t) indexOf (second)].clips.empty();
                     const auto expected = juce::String ("Cut|Copy|Duplicate|Delete|-|Rename|Edit Info Text|-|") + (clips ? "Freeze Track|" : "") + "Bounce Track in Place|-|"
                         + "Insert Audio Track|Insert MIDI Track|Insert Return Track|Group Tracks|-|Select Content" + (clips ? "" : " (off)")
-                        + "|-|Insert Take Lane|Show Take Lanes|Delete All Take Lanes (off)|-|Link Tracks (off)|Unlink Tracks (off)|-|[colours]|-|Assign Track Color to Clips";
+                        + "|-|Insert Take Lane|Show Take Lanes|Delete All Take Lanes (off)|Delete Unused Take Lanes (off)|-|Link Tracks (off)|Unlink Tracks (off)|-|[colours]|-|Assign Track Color to Clips";
                     check (listed (headerMenu (second, true, colour, false)) == expected, "a track's menu: " + listed (headerMenu (second, true, colour, false)));
                     check (listed (headerMenu (second, false, colour, false)) == expected.upToFirstOccurrenceOf ("Select Content", true, false) + "|-|[colours]|-|Assign Track Color to Clips",
                            "a Session title's has no take lane or link items, and Select Content for its audio or MIDI track: " + listed (headerMenu (second, false, colour, false)));

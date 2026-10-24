@@ -2371,3 +2371,7 @@ Engine and UI areas, with an engine patch. After a static reading of the referen
 ## Clip colours — 2026-10-24
 
 Engine and UI areas. Clips have colours of their own, as the reference's do, showing their track's colour until then. A recoloured track's clips keep the colour they showed, and the header menu's Assign Track Color to Clips gives them the track's again. From a group it is Assign Track Color to Clips and Grouped Tracks, which first gives the group's tracks its colour. The Arrangement, take lanes, group lanes and Session slots draw each clip in its colour. Checked in the groups and UI suites ([contract](research/track-header-menu-contract.md#clip-colours)).
+
+## Delete Unused Take Lanes — 2026-10-24
+
+Engine and UI areas. The header menu's take lane items gain Delete Unused Take Lanes. A lane is in use while the main lane plays something that came from it, by comping or recording, as the reference counts a lane used when one of its takes is in the main lane. A recorded pass now notes the lane that keeps it, so cycling back from a fresh pass reaches the take before it; before, it chose the take already playing. Checked in the take lanes and UI suites ([contract](research/take-lanes-contract.md)).

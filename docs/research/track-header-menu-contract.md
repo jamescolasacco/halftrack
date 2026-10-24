@@ -37,7 +37,7 @@ The reference's Arrangement menu, with what Halftrack shows:
 | Insert Return Track | fewer than 12 returns | the same; `addReturnTrack` refuses a thirteenth too (`maximumReturnTracks`) |
 | Group Tracks, Ungroup Tracks | the grouping rule; one selected group | the same |
 | Select Content | always shown; enabled if a selected track has Arrangement content | the same, selecting the time the selected tracks' clips cover on those tracks (members of a selected group included) |
-| take lanes: Insert Take Lane, Show Take Lanes, Delete All Take Lanes, Delete Unused Take Lanes | an audio or MIDI track's header, Automation Mode off | Insert Take Lane, Show Take Lanes (ticked when all selected tracks show theirs) and Delete All Take Lanes (one undo step, `removeTakeLanes`). Delete Unused Take Lanes is not yet there |
+| take lanes: Insert Take Lane, Show Take Lanes, Delete All Take Lanes, Delete Unused Take Lanes | an audio or MIDI track's header, Automation Mode off | Insert Take Lane, Show Take Lanes (ticked when all selected tracks show theirs), Delete All Take Lanes and Delete Unused Take Lanes (one undo step each, `removeTakeLanes`, `unusedTakeLanes`; see the [take lanes contract](take-lanes-contract.md)), the last two disabled when they would delete nothing |
 | Link Tracks, Unlink Tracks | audio, MIDI and group tracks | for audio and MIDI tracks; Halftrack's groups do not link yet |
 | colour grid | always | Halftrack's own palette in the reference's layout, 5 rows of 14. A colour in use by a selected track is marked, and picking one colours every selected track and group in one undo step (`setTrackColours`) |
 | Assign Track Color to Clips (and Grouped Tracks with a group chosen) | the selection is audio, MIDI and group tracks | the same (`assignTrackColourToClips`): the tracks inside a chosen group take its colour, then the chosen tracks' and those tracks' clips show their track's colour, the Arrangement's main-lane clips from a header and Session clips from a title, as a later static reading of the reference's (0x1037d5828, 0x103a1db88) found. One undo step |
@@ -73,5 +73,4 @@ The groups suite checks the return limit.
 - Whether right-clicking an unselected header changes the selection.
 - Where Insert Audio/MIDI/Return Track insert in the reference; Halftrack inserts after the selected track, as its Create menu does.
 - The reference keeps one clipboard for clips and tracks; Halftrack's track clipboard is its own. (Its Paste position was decoded later: right before the first selected track, in its group; with Main selected, returns after the last return and other tracks at the end of the other tracks.)
-- Delete Unused Take Lanes' notion of unused: a take lane none of whose clips share an id with a main-lane clip (0x1024b6770, 0x102481d98), the id itself not decoded.
 - Select Content for groups, and the meaning of the Session flag that drops Select Content and Assign colour.

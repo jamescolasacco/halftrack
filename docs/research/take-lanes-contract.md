@@ -11,7 +11,8 @@ Halftrack's take lanes follow the reference's [comping chapter](https://www.able
 
   Both are part of the take's undo step.
 - **Comping.** `compTake (laneId, start, end)` splits the main lane at the range's edges, removes its material inside, and copies each lane clip's part of the range into it at its own timing (start and offset adjusted). The copies record their source lane. It is one undo step.
-- **Cycling.** `cycleTake (trackId, start, end, next)` comps the range from the next or previous lane holding material there, starting from the lane the main lane's range came from.
+- **Cycling.** `cycleTake (trackId, start, end, next)` comps the range from the next or previous lane holding material there, starting from the lane the main lane's range came from. A recorded pass in the main lane counts as coming from the lane that keeps it, so cycling back from a fresh pass reaches the take before it rather than the one already playing.
+- **Unused lanes.** `unusedTakeLanes (trackIds)` lists the lanes from which nothing in the main lane came, by comping or recording; `removeTakeLanes` deletes lanes in one undo step. The track header menu's Delete All Take Lanes and Delete Unused Take Lanes use them. The reference counts a lane used when one of its takes, by take id, is in the main lane (0x103827a2c, 0x1024b6770); Halftrack counts the lane each main-lane clip came from.
 - **Managing lanes.** `insertTakeLane`, `renameTakeLane` and `removeTakeLane` are each one undo step.
 - **Saving and media.** Saving collects take lane audio into the project's assets. Loading anchors it to absolute paths. Missing Media lists and relinks it.
 - **Auditioning.** `auditionTakeLane (laneId)` plays a lane in place of its track's main lane, through the track's devices; `stopAuditioning` ends it. The main lane's clip states are set aside at their places in the track while copies of the lane's clips play, with no undo history. The same states return, so earlier undo steps stay valid. The snapshot keeps showing the main lane and names the auditioned lane in `TrackInfo::auditionLane`. Any edit (through the Session's transaction start), undo, redo, recording, saving or exporting ends the audition first; replacing the project drops it.
@@ -30,6 +31,8 @@ Halftrack's take lanes follow the reference's [comping chapter](https://www.able
 - that a second pass over the same time gets Take 2, and a later pass reuses Take 1;
 - that comping Take 1 into 0.25–0.5 s plays it there at its own offset, with Take 2 around it, and that one undo restores it;
 - cycling forward and wrapping, and refusal where no lane covers the range;
+- cycling back from a fresh pass reaching Take 1, and one undo restoring Take 2;
+- both takes in use, an inserted empty lane unused and deleted alone, and two undo steps restoring it and undoing the insert;
 - inserting, renaming, deleting and undoing lanes;
 - that saving puts every take's audio in the assets and the lanes reopen with it.
 

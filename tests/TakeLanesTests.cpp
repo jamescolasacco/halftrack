@@ -66,6 +66,14 @@ int runTakeLanesTests (const juce::File& artifacts)
 
         // Comping: the main lane holds Take 2 over the first second; comp Take 1 into 0.25-0.5 s.
         const auto laneOne = lanes[0].id, laneTwo = lanes[1].id;
+        {
+            // The pass in the main lane came from Take 2, so cycling back from it reaches Take 1.
+            const auto at = [&] (double seconds) { for (const auto& c : track().clips) if (c.start <= seconds + 1e-9 && c.start + c.length > seconds) return c.file; return juce::File(); };
+            ok (s.cycleTake (trackId, .25, .5, false), "cycle back from the pass just recorded");
+            check (at (.3) == first.file, "it reaches Take 1, not the Take 2 already playing");
+            s.undo();
+            check (at (.3) == second.file, "one undo plays Take 2 again");
+        }
         check (s.compTake (laneOne, .5, .25).failed() && s.compTake ("missing", 0, 1).failed(), "comping needs a lane and a forward range");
         ok (s.compTake (laneOne, .25, .5), "comp Take 1 from 0.25 to 0.5 s");
         auto main = sorted (track().clips);
@@ -118,6 +126,14 @@ int runTakeLanesTests (const juce::File& artifacts)
         check (track().takeLanes.size() == 2, "it is gone");
         s.undo(); check (track().takeLanes.size() == 3 && track().takeLanes[2].name == "Keeper", "undo returns it with its name");
         s.undo(); s.undo(); check (track().takeLanes.size() == 2, "and undoes the insert");
+        // Delete Unused Take Lanes: a lane is in use while the main lane plays something from it.
+        check (s.unusedTakeLanes ({ trackId }).isEmpty(), "both takes are in use: Take 2's pass plays in the main lane, with Take 1's comp and later pass");
+        ok (s.insertTakeLane (trackId, added), "insert an empty lane");
+        check (s.unusedTakeLanes ({ trackId }) == juce::StringArray { added } && s.unusedTakeLanes ({ "missing" }).isEmpty(), "which is unused; an unknown track has none");
+        ok (s.removeTakeLanes (s.unusedTakeLanes ({ trackId })), "delete the unused lanes");
+        check (track().takeLanes.size() == 2, "only it goes");
+        s.undo(); check (track().takeLanes.size() == 3, "one undo brings it back");
+        s.undo(); check (track().takeLanes.size() == 2, "and another undoes the insert");
 
         // Reopening.
         ok (s.setTrackArmed (0, false), "disarm");

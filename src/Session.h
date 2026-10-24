@@ -770,6 +770,10 @@ public:
     // Deletes take lanes, with the lanes at their places on linked tracks, as one undo step, as the
     // reference's Delete All Take Lanes does for the selected tracks.
     juce::Result removeTakeLanes (const juce::StringArray& laneIds);
+    // The tracks' take lanes from which nothing in their main lanes came, by comping or as the pass
+    // recorded into both, for Delete Unused Take Lanes; as the reference counts a lane used when one of
+    // its takes is in the main lane (0x103827a2c).
+    juce::StringArray unusedTakeLanes (const juce::StringArray& trackIds) const;
     juce::Result renameTakeLane (const juce::String& laneId, const juce::String& name);
     juce::Result compTake (const juce::String& laneId, double startSeconds, double endSeconds);
     juce::Result cycleTake (const juce::String& trackId, double startSeconds, double endSeconds, bool next);

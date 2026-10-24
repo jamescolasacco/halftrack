@@ -5068,6 +5068,9 @@ struct Session::Impl
         }
         if (! target.isValid()) target = newTakeLane (t);
         target.appendChild (freshClipCopy (recorded.state), &edit->getUndoManager());
+        // The main lane's pass came from that lane, as a comp's material does, so the lane is in use
+        // and cycling goes on from it.
+        recorded.state.setProperty (compSourceProperty, target[te::IDs::id].toString(), &edit->getUndoManager());
     }
     // The loop being recorded over, while it is.
     std::optional<te::TimeRange> loopRecording;
@@ -8235,6 +8238,18 @@ Result Session::removeTakeLanes (const juce::StringArray& laneIds)
     impl->transaction (lanes.size() > 1 ? "Delete take lanes" : "Delete take lane");
     for (auto& l : lanes) l.getParent().removeChild (l, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
+}
+juce::StringArray Session::unusedTakeLanes (const juce::StringArray& trackIds) const
+{
+    juce::StringArray unused;
+    for (const auto& id : trackIds)
+        if (auto* t = impl->track (id))
+        {
+            std::set<String> used;
+            for (auto* clip : t->getClips()) if (clip->state.hasProperty (compSourceProperty)) used.insert (clip->state[compSourceProperty].toString());
+            for (auto lane : impl->takeLanes (*t, false)) if (! used.contains (lane[te::IDs::id].toString())) unused.add (lane[te::IDs::id].toString());
+        }
+    return unused;
 }
 Result Session::renameTakeLane (const String& laneId, const String& name)
 {
