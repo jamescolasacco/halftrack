@@ -996,7 +996,7 @@ public:
             // Cmd+Option+Delete deletes the selected clips' fades and crossfades, as the reference's key does.
             if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && key.getModifiers().isAltDown() && ! showSession && ! showPiano)
             { if (canResetFades()) resetSelectionFades(); return true; }
-            if (code == 'G') { if (shift) ungroupSelectedTrack(); else groupSelectedTracks(); return true; }
+            if (code == 'G' && ! key.getModifiers().isAltDown()) { if (shift) ungroupSelectedTrack(); else groupSelectedTracks(); return true; }
             if ((code == 'E' || code == 'e') && shift && key.getModifiers().isAltDown()) { menuItemSelected (13, 1); return true; }
             if (code == 'C' && shift) { captureFromUI(); return true; }
             if ((code == 'U' || code == 'u') && key.getModifiers().isAltDown() && ! showSession) { toggleTakeLanes(); return true; }
@@ -1048,7 +1048,7 @@ public:
             setComputerKeyboard (! session.isComputerKeyboardEnabled()); return true;
         }
         if ((code == 'T' || code == 't') && ! cmd && shift && key.getModifiers().isAltDown() && ! showSession) { insertTakeLaneFromUI(); return true; }
-        if ((code == 'T' || code == 't') && ! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && takeSelection.laneId.isNotEmpty())
+        if ((code == 'T' || code == 't') && ! cmd && ! key.getModifiers().isAltDown() && ! showSession && takeSelection.laneId.isNotEmpty())
         {
             for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused; focused = focused->getParentComponent())
                 if (dynamic_cast<juce::TextEditor*> (focused)) return false;
@@ -1061,7 +1061,7 @@ public:
                 if (dynamic_cast<juce::TextEditor*> (focused)) return false;
             setAutomationMode (! automationMode); return true;
         }
-        if ((code == 'Z' || code == 'X') && ! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano)
+        if ((code == 'X' || (code == 'Z' && ! shift)) && ! cmd && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano)
         {
             for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused; focused = focused->getParentComponent())
                 if (dynamic_cast<juce::TextEditor*> (focused)) return false;
@@ -1087,15 +1087,16 @@ public:
         }
         if (key.getModifiers().isAltDown() && ! cmd && ! showSession && (code == '=' || code == '+' || code == '-'))
         { scaleTrackHeight (selectedTrack, code == '-' ? 1 / 1.25 : 1.25); return true; }
-        if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'H' || code == 'h')) { optimizeHeight(); return true; }
-        if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'R' || code == 'r') && clickedArea == Area::arrangement)
+        // H, W, U, T, R and X also take Shift, as the reference's alternates do.
+        if (! cmd && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'H' || code == 'h')) { optimizeHeight(); return true; }
+        if (! cmd && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'R' || code == 'r') && clickedArea == Area::arrangement)
         {
             for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused; focused = focused->getParentComponent())
                 if (dynamic_cast<juce::TextEditor*> (focused)) return false;
             runArrangementKey (arrangementReverse); return true;
         }
-        if (! cmd && ! shift && ! showPiano && (code == 'U' || code == 'u')) { toggleFold (key.getModifiers().isAltDown()); return true; }
-        if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'W' || code == 'w')) { optimizeWidth(); return true; }
+        if (! cmd && ! showPiano && (code == 'U' || code == 'u')) { toggleFold (key.getModifiers().isAltDown()); return true; }
+        if (! cmd && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'W' || code == 'w')) { optimizeWidth(); return true; }
         if ((key.getTextCharacter() == '+' || key.getTextCharacter() == '=') && ! cmd) { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); return true; }
         if (key.getTextCharacter() == '-' && ! cmd) { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); return true; }
         for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused != nullptr; focused = focused->getParentComponent())
@@ -12571,6 +12572,12 @@ private:
             { menuFocusBrowser, key ('5', alt) }, { menuFocusGroovePool, key ('6', alt) }, { menuFocusMixer, key ('m', alt | shift) },
             { menuSelectLoop, key ('l', cmd | shift) }, { menuPlaySelection, key (KeyPress::spaceKey, alt) },
             { menuSetClipStart, key (KeyPress::F9Key, cmd) }, { menuSetLoopStart, key (KeyPress::F10Key, cmd) }, { menuSetLoopEnd, key (KeyPress::F11Key, cmd) }, { menuSetClipEnd, key (KeyPress::F12Key, cmd) },
+            // The reference's alternates, after each item's own key.
+            { menuToggleDetail, key (KeyPress::F12Key) }, { menuBrowser, key ('b', cmd | alt) }, { menuGroovePool, key ('g', cmd | alt) }, { menuZoomOut, key ('_', cmd) },
+            { 41, key ('=') }, { 42, key ('_') }, { menuFoldSelected, key ('u', shift) }, { menuZoomBack, key ('x', shift) },
+           #if JUCE_MAC
+            { menuFullscreen, key (KeyPress::F11Key) },
+           #endif
             { 93, key ('1', cmd) }, { 94, key ('2', cmd) }, { 95, key ('3', cmd) }, { 96, key ('4', cmd) }, { 97, key ('5', cmd) }, { 13, key ('e', cmd | shift | alt) } };
         for (const auto& [id, press] : shortcuts)
         {
@@ -18914,6 +18921,20 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                && shortcut ("Playback", menuFollow, juce::KeyPress ('f', juce::ModifierKeys (alt | shift), 0)) && shortcut ("View", menuSearch, juce::KeyPress ('f', cmd, 0))
                && shortcut ("Options", 13, juce::KeyPress ('e', juce::ModifierKeys (cmd | shift | alt), 0)),
                "the items show the reference's shortcuts: Save Cmd+S, Export Shift+Cmd+R, Bounce to New Track Cmd+B, Insert MIDI Clip Shift+Cmd+M, Follow Option+Shift+F, Search Cmd+F");
+        {
+            // The reference's alternate keys reach the same items, which keep showing their own keys.
+            const auto alternate = [&] (int id, const juce::KeyPress& press) { return menuKeys.getKeyMappings()->containsMapping (id, press); };
+            check (alternate (menuToggleDetail, juce::KeyPress (juce::KeyPress::F12Key)) && alternate (menuBrowser, juce::KeyPress ('b', juce::ModifierKeys (cmd | alt), 0))
+                       && alternate (menuGroovePool, juce::KeyPress ('g', juce::ModifierKeys (cmd | alt), 0)) && alternate (menuZoomOut, juce::KeyPress ('_', juce::ModifierKeys (cmd), 0))
+                       && alternate (41, juce::KeyPress ('=')) && alternate (42, juce::KeyPress ('_')) && alternate (menuFoldSelected, juce::KeyPress ('u', juce::ModifierKeys (shift), 0))
+                       && alternate (menuZoomBack, juce::KeyPress ('x', juce::ModifierKeys (shift), 0)), "the reference's alternate keys reach the same items");
+            const bool browserWas = showBrowser;
+            const auto groupsWere = state.groups.size();
+            check (handleKey (juce::KeyPress ('B', juce::ModifierKeys (cmd | alt), 0)) && showBrowser != browserWas, "Option+Cmd+B shows or hides the browser");
+            handleKey (juce::KeyPress ('B', juce::ModifierKeys (cmd | alt), 0));
+            check (showBrowser == browserWas && entry ("View", menuBrowser)->shortcutKeyDescription.isNotEmpty() && state.groups.size() == groupsWere,
+                   "and back, the menu still showing its own key");
+        }
         check (shortcut ("Options", menuDrawMode, juce::KeyPress ('b')) && ! entry ("Options", menuDrawMode)->isTicked, "Draw Mode shows the reference's B, unticked while off");
         menuItemSelected (menuDrawMode, 5); refresh();
         check (drawMode && drawButton.getToggleState() && entry ("Options", menuDrawMode)->isTicked, "choosing it turns Draw Mode on, ticked, with the pencil lit");

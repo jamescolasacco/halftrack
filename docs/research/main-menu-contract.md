@@ -15,7 +15,7 @@ Nothing was launched, no preferences or Sets were read, and nothing was decrypte
 
 - **The menus.** The reference's bar is Live, File, Edit, Create, Playback, View, Navigate, Options and Help, the same in both views. Halftrack's is File, Edit, Create, Playback, View, Navigate and Options. On a Mac the application menu takes the Live menu's place: About Halftrack, then Preferences (Cmd+comma), then the system's items. Elsewhere Help holds About Halftrack and Options ends with Preferences; the reference's Windows layout was not read.
 - **Every item stays.** Unlike the reference's context menus, its menu bar never leaves out an item that cannot act: the item is greyed. Halftrack does the same. It leaves out only the reference's items for features it does not have.
-- **Shortcuts.** Each item shows the reference's shortcut (macOS; Redo and Fullscreen take their Windows keys elsewhere). A key that nothing focused takes runs the menu command it is shown on, when that can act (`runMenuShortcut`). On a Mac the items carry their shortcuts natively; JUCE does not show a plain Delete key there, so Edit's Delete shows none.
+- **Shortcuts.** Each item shows the reference's shortcut (macOS; Redo and Fullscreen take their Windows keys elsewhere). The reference's alternates reach the same items: F11 (Fullscreen), Cmd+underscore (Zoom Out), F12 (Toggle Clip/Device View), Option+Cmd+B (Browser), Option+Cmd+G (Groove Pool), Shift+U (Fold Selected Track), = and _ (Zoom In and Out), Shift+X (Zoom Back), and Shift with H, W, T and R. A key that nothing focused takes runs the menu command it is shown on, when that can act (`runMenuShortcut`). On a Mac the items carry their shortcuts natively; JUCE does not show a plain Delete key there, so Edit's Delete shows none.
 - **While a dialog or menu is open**, every item is greyed and the shortcuts wait, as the reference blocks its menu commands.
 - **Text that changes.** Play/Stop, Solo/Unsolo, Arm/Disarm, Add/Delete Locator, the record items, the fold items, Loop Selection or Activate/Deactivate Loop, and the plurals of the clip commands follow the state, as the reference's handlers rename them. Undo and Redo name the step they would take back or do again ("Undo Add MIDI track"), or read Can't Undo and Can't Redo, as the reference's history texts do; the step names are Halftrack's own.
 
@@ -55,7 +55,7 @@ What moved with the rebuild:
 ## Keys outside the menus
 
 From the reference's list of keys ([Live keyboard shortcuts](https://www.ableton.com/en/live-manual/12/live-keyboard-shortcuts/), consulted 2026-10-24), these act without a menu item:
-- **R** reverses, and **Shift+Cmd+J** crops, the Arrangement's time selection or a lone selected clip ([clip menus](clip-menus-contract.md)).
+- **R** reverses, and **Shift+Cmd+J** crops, as the reference's hidden menu has them (`rvrs`, `crop`; Option+Cmd+Delete is its Reset Fades, `rsfd`, and Cmd+6 to Cmd+0 its grid items `gri6` to `qno `), the Arrangement's time selection or a lone selected clip ([clip menus](clip-menus-contract.md)).
 - **Cmd+Option+Delete** deletes the fades and crossfades of the selected Arrangement clips, as Reset Fades does.
 - **F1 to F8** switch the tracks numbered 1 to 8 on and off, groups counted, as their activators do.
 - **Escape** jumps to the selected track's title bar: the headers then take Edit's commands.
@@ -80,6 +80,7 @@ The UI suite compares each menu with the reference's order, filtered to Halftrac
 - Draw Mode showing B, ticked while on, and following the control bar's pencil;
 - Shift+Cmd+L selecting the loop's time across every track, Play Arrangement Selection's two names, and Option+Space playing the selection from its start and stopping at its end (the transport suite checks the stop within 60 ms, 12 ms locally, as Halftrack watches the range from the message thread every 2 ms; the reference's precision was not measured); Select Loop in the clip view selecting the notes in the clip's loop;
 - F1 switching track 1 off and on, and Cmd+Option+Delete deleting a fade (in the Arrangement menu checks);
+- the alternate keys reaching their items, with Option+Cmd+B showing and hiding the browser;
 - the Session keys above, Escape giving the headers Edit's commands, Cmd+6 to 9 and Cmd+0 setting the global quantization, and the browser's Right, Left and 0;
 - Navigate's Option+1 and Option+2 showing the Session and Arrangement Views with Edit acting there, Focus Device View and Focus Clip View likewise, Focus Browser showing the browser, and Option+Shift+M showing the Session's hidden mixer;
 - Undo History opening from Option+Cmd+Z without undoing, listing the steps from the start with the latest selected, a click on an earlier step undoing back to it and on the latest redoing, the main window's menus working while it is open, and choosing it again closing it;

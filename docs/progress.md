@@ -2577,3 +2577,7 @@ UI area. Cmd+6, 7, 8 and 9 set the global launch quantization to 1/16, 1/8, 1/4 
 
 UI area. As the reference's key list gives them, in the browser Right opens the selected folder or previews the selected sample, Left goes up a folder, and 0 takes the selected item out of every collection ([menu contract](research/main-menu-contract.md#keys-outside-the-menus)). Checked in the UI suite.
 
+## The reference's alternate keys — 2026-10-24
+
+UI area. The alternates the reference's menu builders register now reach the same items: F11, Cmd+underscore, F12, Option+Cmd+B, Option+Cmd+G, Shift+U, = and _, Shift+X, and Shift with H, W, T and R. Cmd+Option+G no longer groups tracks on its way to the Groove Pool ([menu contract](research/main-menu-contract.md)). Checked in the UI suite.
+
