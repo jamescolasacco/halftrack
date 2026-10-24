@@ -9994,8 +9994,8 @@ private:
         resized();
     }
     void duplicateTrackFromUI (const juce::String& trackId) { duplicateFromUI ({ trackId }); }
-    // The headers' Cut, Copy and Paste: Paste puts the copied tracks after the selected ones, as
-    // Duplicate does, and selects them; Cut leaves the selection as Delete does.
+    // The headers' Cut, Copy and Paste: Paste puts the copied tracks right before the first selected
+    // one, as the reference's does, and selects them; Cut leaves the selection as Delete does.
     void trackClipboardCommand (char command)
     {
         const auto ids = headerSelection();
@@ -17464,13 +17464,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                            "a group's: Ungroup Tracks, no take lane or link items: " + listed (headerMenu (inner, true, colour, false)));
                     check (selectForHeaderMenu (first) && selectedTrackIds() == juce::StringArray { first } && selectedChain.isEmpty(), "right-clicking the first track selects it alone");
                     check (listed (headerMenu (first, true, colour, false)).startsWith ("Copy|Duplicate|-|Rename"), "its menu leaves Cut and Delete out, as the inner group keeps its only track");
-                    // Cmd+C and Cmd+V after a click on a header copy the selection and paste it after the selected track.
+                    // Cmd+C and Cmd+V after a click on a header copy the selection and paste it right before the selected track.
                     headerFocus = true;
                     check (handleKey (juce::KeyPress ('C', juce::ModifierKeys::commandModifier, 0)) && session.hasTrackClipboard() && state.tracks.size() == 2, "Cmd+C copies the first track");
                     check (listed (headerMenu (first, true, colour, false)).startsWith ("Copy|Paste|Duplicate"), "and the menu then offers Paste");
                     check (handleKey (juce::KeyPress ('V', juce::ModifierKeys::commandModifier, 0)), "Cmd+V is handled"); refresh();
-                    check (state.tracks.size() == 3 && state.tracks[1].groupId == inner && state.tracks[1].id != first && selectedTrack == 1,
-                           "it pastes a copy after the first track, in the inner group, and selects it");
+                    check (state.tracks.size() == 3 && state.tracks[0].groupId == inner && state.tracks[0].id != first && state.tracks[1].id == first && selectedTrack == 0,
+                           "it pastes a copy right before the first track, in the inner group, and selects it");
                     session.undo(); refresh(); selectForHeaderMenu (first);
                     // The colour grid colours the selected tracks, and marks the colour in use.
                     multiSelectedTracks.insert (second); refresh();

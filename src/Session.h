@@ -937,14 +937,15 @@ public:
     // Whether duplicateTracks would duplicate these.
     bool canDuplicateTracks (const juce::StringArray& trackAndGroupIds) const;
     // The headers' Copy, Cut and Paste, as the reference's track header commands. Copy keeps copies of
-    // tracks and groups, a group with everything in it, as Duplicate copies them. Paste inserts them
-    // as one block after the last of the given tracks and groups, in its group, or after the other
-    // tracks, with new identities; sends to returns the project lacks are left out. One undo step.
-    // Cut copies, then deletes as removeTracks does. Returns and frozen tracks are refused, as for
-    // Duplicate. Copying leaves the project and its history alone.
+    // tracks and groups, a group with everything in it, as Duplicate copies them. Paste inserts them,
+    // as the reference's does, right before the first of the selected tracks and groups, in its group,
+    // or after the other tracks with none selected; with new identities, and without sends to returns
+    // the project lacks. One undo step. A selection with returns has no place for them. Cut copies,
+    // then deletes as removeTracks does. Returns and frozen tracks are refused, as for Duplicate.
+    // Copying leaves the project and its history alone.
     juce::Result copyTracks (const juce::StringArray& trackAndGroupIds);
     juce::Result cutTracks (const juce::StringArray& trackAndGroupIds);
-    juce::Result pasteTracks (const juce::StringArray& afterIds, juce::StringArray& pastedIds);
+    juce::Result pasteTracks (const juce::StringArray& selectedIds, juce::StringArray& pastedIds);
     bool hasTrackClipboard() const;
     bool canCutTracks (const juce::StringArray& trackAndGroupIds) const;
     // Freeze renders a track's Arrangement clips through its devices and plays the render; one undo step each.

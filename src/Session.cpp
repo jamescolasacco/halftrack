@@ -3522,6 +3522,27 @@ struct Session::Impl
         edit->state.addChild (copy, -1, &edit->getUndoManager());
         return te::findTrackForState (*edit, copy);
     }
+    // Inserts tracks made from copied states, in order, before `before` in `parent`, or at the end of
+    // `parent` (the top level's end being before the returns), as Paste and a copying drop put them.
+    Result insertStates (const std::vector<juce::ValueTree>& states, te::FolderTrack* parent, te::Track* before, juce::StringArray& created)
+    {
+        for (const auto& stored : states)
+        {
+            juce::ValueTree original;
+            auto* track = appendCopy (stored, original);
+            if (track == nullptr) return Result::fail ("Could not copy the tracks.");
+            auto others = siblings (parent);
+            others.removeAllInstancesOf (track);
+            te::Track* firstReturn = nullptr;
+            if (parent == nullptr) for (auto* t : others) if (auto* audio = dynamic_cast<te::AudioTrack*> (t); audio != nullptr && isReturn (*audio)) { firstReturn = t; break; }
+            if (auto* place = before != nullptr ? before : firstReturn) edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (*place, true));
+            else if (! others.isEmpty()) edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (*others.getLast(), false));
+            else edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (parent, nullptr));
+            freshCopy (*track, original);
+            created.add (track->itemID.toString());
+        }
+        return Result::ok();
+    }
     // The headers' Copy: each copied top-most track's or group's state, in order.
     std::vector<juce::ValueTree> trackClipboard;
     // A group, other than `keep`, that grouping these would leave empty, as the reference's Group Tracks never does.
@@ -10062,22 +10083,7 @@ Result Session::copyTracksTo (const juce::StringArray& ids, const String& groupI
     }
     impl->transaction (states.size() > 1 || states.front().hasType (te::IDs::FOLDERTRACK) ? "Copy tracks" : "Copy track");
     juce::StringArray created;
-    for (const auto& stored : states)
-    {
-        juce::ValueTree original;
-        auto* track = impl->appendCopy (stored, original);
-        if (track == nullptr) { impl->changed(); return Result::fail ("Could not copy the tracks."); }
-        // Before `before`, or at the end of the group, the top level's before the returns.
-        auto others = impl->siblings (parent);
-        others.removeAllInstancesOf (track);
-        te::Track* firstReturn = nullptr;
-        if (parent == nullptr) for (auto* t : others) if (auto* audio = dynamic_cast<te::AudioTrack*> (t); audio != nullptr && isReturn (*audio)) { firstReturn = t; break; }
-        if (auto* place = before != nullptr ? before : firstReturn) impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (*place, true));
-        else if (! others.isEmpty()) impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (*others.getLast(), false));
-        else impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (parent, nullptr));
-        impl->freshCopy (*track, original);
-        created.add (track->itemID.toString());
-    }
+    if (auto inserted = impl->insertStates (states, parent, before, created); inserted.failed()) { impl->changed(); return inserted; }
     impl->refreshRouting(); impl->changed(); copiedIds = created; return Result::ok();
 }
 Result Session::setInfoText (const String& id, const String& text)
@@ -10223,35 +10229,22 @@ Result Session::cutTracks (const juce::StringArray& ids)
     if (auto copied = copyTracks (ids); copied.failed()) return copied;
     return removeTracks (ids);
 }
-Result Session::pasteTracks (const juce::StringArray& afterIds, juce::StringArray& pastedIds)
+Result Session::pasteTracks (const juce::StringArray& selectedIds, juce::StringArray& pastedIds)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before pasting tracks.");
     if (impl->trackClipboard.empty()) return Result::fail ("Copy tracks to paste first.");
-    for (const auto& id : afterIds) if (impl->track (id) == nullptr && impl->group (id) == nullptr) return Result::fail ("Track not found.");
-    // After the last of the chosen tracks and groups, in its group, as Duplicate places its copies;
-    // after the other tracks when none is chosen or the last is a return.
-    const auto roots = impl->roots (afterIds);
-    te::Track* preceding = roots.isEmpty() ? nullptr : roots.getLast();
-    if (auto* audio = dynamic_cast<te::AudioTrack*> (preceding); audio != nullptr && isReturn (*audio)) preceding = nullptr;
-    te::Track* parent = preceding != nullptr ? preceding->getParentTrack() : nullptr;
-    if (preceding == nullptr)
-        for (auto* t : impl->siblings (nullptr))
-            if (auto* audio = dynamic_cast<te::AudioTrack*> (t); audio == nullptr || ! isReturn (*audio)) preceding = t;
+    for (const auto& id : selectedIds) if (impl->track (id) == nullptr && impl->group (id) == nullptr) return Result::fail ("Track not found.");
+    // As the reference's Paste places them: right before the first of the chosen tracks and groups,
+    // in its group, or after the other tracks when none is chosen. Copied tracks are not returns, so
+    // a choice with returns has no place for them.
+    const auto roots = impl->roots (selectedIds);
+    for (auto* t : roots) if (auto* audio = dynamic_cast<te::AudioTrack*> (t); audio != nullptr && isReturn (*audio)) return Result::fail ("Copied tracks paste among the other tracks, not the returns.");
+    te::Track* before = roots.isEmpty() ? nullptr : roots.getFirst();
+    auto* parent = before != nullptr ? before->getParentFolderTrack() : nullptr;
     impl->transaction (impl->trackClipboard.size() > 1 || impl->trackClipboard.front().hasType (te::IDs::FOLDERTRACK) ? "Paste tracks" : "Paste track");
     juce::StringArray created;
-    for (const auto& stored : impl->trackClipboard)
-    {
-        juce::ValueTree original;
-        auto* track = impl->appendCopy (stored, original);
-        if (track == nullptr) { impl->changed(); return Result::fail ("Could not paste the tracks."); }
-        if (preceding != nullptr) impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (parent, preceding));
-        else for (auto* t : te::getAudioTracks (*impl->edit))
-            if (t != track && t->getParentTrack() == nullptr && isReturn (*t)) { impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (*t, true)); break; }
-        impl->freshCopy (*track, original);
-        created.add (track->itemID.toString());
-        preceding = track;
-    }
+    if (auto inserted = impl->insertStates (impl->trackClipboard, parent, before, created); inserted.failed()) { impl->changed(); return inserted; }
     impl->refreshRouting(); impl->changed(); pastedIds = created; return Result::ok();
 }
 Result Session::moveTrack (const String& id, int destinationIndex)

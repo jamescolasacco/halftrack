@@ -283,18 +283,21 @@ int runGroupTests (const juce::File& artifacts)
                 check (n.duplicateTracks ({ "missing" }, kept).failed() && n.duplicateTracks ({}, kept).failed() && kept == juce::StringArray { "keep" } && n.canRedo(),
                        "unknown and empty duplications are refused, leaving the result and redo alone");
                 check (n.snapshot().tracks.size() == 3 && n.snapshot().groups.size() == 3, "and the tree as it was");
-                // Copy, Cut and Paste, as the reference's headers have them: Paste puts the copies after
-                // the chosen tracks, as Duplicate places its copies.
+                // Copy, Cut and Paste, as the reference's headers have them: Paste puts the copies right
+                // before the first chosen track, in its group.
                 check (! n.hasTrackClipboard(), "nothing is copied at first");
                 ok (n.copyTracks ({ outer }), "copy the outer group");
                 check (n.hasTrackClipboard() && n.snapshot().tracks.size() == 3 && n.snapshot().groups.size() == 3, "copying changes nothing in the project");
                 juce::StringArray pasted;
-                ok (n.pasteTracks ({ ids[2] }, pasted), "paste after c");
+                ok (n.pasteTracks ({ ids[2], ids[1] }, pasted), "paste with b and c chosen");
                 const auto after = n.snapshot();
                 const auto parentOf = [&after] (const juce::String& id) { for (const auto& g : after.groups) if (g.id == id) return g.parentId; return juce::String ("?"); };
-                check (pasted.size() == 1 && after.tracks.size() == 5 && after.tracks[2].id == ids[2] && after.tracks[4].groupId == pasted[0] && parentOf (pasted[0]) == top
-                           && parentOf (after.tracks[3].groupId) == pasted[0],
-                       "the copy of the outer group goes after c, in the top group, with copies of what was inside");
+                check (pasted.size() == 1 && after.tracks.size() == 5 && after.tracks[0].id == ids[0] && after.tracks[1].groupId != inner && parentOf (after.tracks[1].groupId) == pasted[0]
+                           && after.tracks[2].groupId == pasted[0] && after.tracks[3].id == ids[1] && after.tracks[4].id == ids[2] && parentOf (pasted[0]) == outer,
+                       "the copy of the outer group goes right before b, the first chosen, inside the outer group, with copies of what was inside");
+                n.undo();
+                ok (n.pasteTracks ({ ids[2] }, pasted), "paste with c chosen");
+                check (n.snapshot().tracks.size() == 5 && n.snapshot().tracks[4].id == ids[2] && n.snapshot().tracks[3].groupId == pasted[0], "the copy goes right before c, beside the outer group");
                 ok (n.setGroupMute (outer, true), "mute the original");
                 check (difference (render (n, mix), plain) < 1e-6, "the pasted tracks play as the originals did");
                 n.undo(); n.undo();
@@ -306,10 +309,10 @@ int runGroupTests (const juce::File& artifacts)
                 check (n.cutTracks ({ ids[0] }).failed() && ! n.canCutTracks ({ ids[0] }) && n.snapshot().tracks.size() == 3, "a, the inner group's only track, cannot be cut");
                 ok (n.cutTracks ({ ids[1] }), "cut b");
                 check (n.snapshot().tracks.size() == 2 && n.snapshot().tracks[1].id == ids[2], "b goes");
-                ok (n.pasteTracks ({ ids[2] }, pasted), "paste it after c");
-                check (n.snapshot().tracks.size() == 3 && n.snapshot().tracks[2].id == pasted[0] && n.snapshot().tracks[2].groupId == top
-                           && n.snapshot().tracks[2].userName == tree.tracks[1].userName && n.snapshot().tracks[2].clips.size() == tree.tracks[1].clips.size(),
-                       "b's copy comes back after c, with its own name (automatic, numbered by its place) and clip: " + n.snapshot().tracks[2].name + " / " + tree.tracks[1].name);
+                ok (n.pasteTracks ({ ids[2] }, pasted), "paste it with c chosen");
+                check (n.snapshot().tracks.size() == 3 && n.snapshot().tracks[1].id == pasted[0] && n.snapshot().tracks[1].groupId == top && n.snapshot().tracks[2].id == ids[2]
+                           && n.snapshot().tracks[1].userName == tree.tracks[1].userName && n.snapshot().tracks[1].clips.size() == tree.tracks[1].clips.size(),
+                       "b's copy comes back right before c, with its own name (automatic, numbered by its place) and clip: " + n.snapshot().tracks[1].name + " / " + tree.tracks[1].name);
                 n.undo(); n.undo();
                 check (n.snapshot().tracks.size() == 3 && n.snapshot().tracks[1].id == ids[1], "two undo steps undo the paste and the cut");
                 // A copying drag puts copies where a move would go; a group can be copied into itself.

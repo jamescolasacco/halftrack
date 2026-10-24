@@ -2349,3 +2349,7 @@ Engine area. A parameter moved in a plug-in's own editor now overrides its autom
 ## Device controls show their automation — 2026-10-23
 
 UI area (the native device editor). A native device's controls now show their automation as the mixer's faders do: red while following a lane, grey while overridden, with the faders' tooltips. Before, a device control looked the same with or without automation. The editor also takes one snapshot per refresh instead of three. Checked in the native effects suite ([contract](research/automation-capture-contract.md)).
+
+## Paste goes before the selection — 2026-10-23
+
+Engine area. A further static reading found where the reference's Paste puts tracks: right before the first selected track, inside its group. `pasteTracks` now does that; before, it pasted after the last selected track, as Duplicate places copies. A selection with returns has no place for copied tracks. Paste and the copying drop share one insertion step. Checked in the groups and UI suites ([contract](research/groups-contract.md#duplicating-2026-10-23)).
