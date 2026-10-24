@@ -2483,3 +2483,7 @@ Checked in the UI suite.
 
 Engine and UI areas. As the reference's View > Plug-In Windows (Option+Cmd+P) does, the open device windows hide and show together (`setPluginEditorsShown`), keeping their windows; opening any editor shows them again. Checked in the plug-in editor suite and the UI suite ([contract](research/main-menu-contract.md)).
 
+
+## Arrangement overview — 2026-10-24
+
+Engine and UI areas. As the reference's default Set shows it, the Arrangement has an overview above the ruler: the whole song in miniature, each track a row of its clips, with an outline round the time shown. A press outside the outline centres the view there, a drag across moves the view and a drag down or up zooms about the pressed time. View > Overview (Option+Cmd+O) hides and shows it, kept with the project as view state ([contract](research/timeline-navigation-contract.md)). Choosing view state, the mixer's sections too, now marks even a new project changed, as their contracts say. Checked in the UI suite and the track order suite.

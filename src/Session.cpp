@@ -62,7 +62,8 @@ const juce::Identifier locatorSongStartProperty { "halftrackSongStart" }; // On 
 const juce::Identifier firstClipNameProperty { "halftrackFirstClipName" }, firstClipIdProperty { "halftrackFirstClipId" };
 // The Session mixer's sections shown, as view state.
 const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsProperty { "halftrackMixerSends" }, mixerReturnsProperty { "halftrackMixerReturns" }, mixerVolumeProperty { "halftrackMixerVolume" },
-                       mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" }, mixerShownProperty { "halftrackMixerInSession" };
+                       mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" }, mixerShownProperty { "halftrackMixerInSession" },
+                       arrangementOverviewProperty { "halftrackArrangementOverview" };
 constexpr float defaultCueVolumeDb = -6.0f; // As the reference's default Set has it.
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
 te::Edit::CountIn countInMode (int bars)
@@ -4016,6 +4017,14 @@ struct Session::Impl
             return true;
         });
     }
+    // View state, kept with the project outside the undo history: a change still marks it changed,
+    // a new project's too.
+    void viewStateChanged()
+    {
+        explicitChanges = true; pristineNewDocument = false;
+        edit->markAsChanged();
+        owner.sendChangeMessage();
+    }
     void changed()
     {
         flushStructuralUpdates();
@@ -6989,7 +6998,7 @@ Session::Snapshot Session::snapshot() const
     s.cueMode = s.cueModeChosen && s.cueAvailable;
     s.soloInPlace = soloInPlace();
     s.loopIsSongStart = loopIsSongStart();
-    s.mixerSections = mixerSections();
+    s.mixerSections = mixerSections(); s.arrangementOverview = arrangementOverview();
     for (const auto& m : e.state.getChildWithName (midiMapType))
         if (auto mapping = readMidiMapping (m); isMappableTarget (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
     s.midiLearnTarget = impl->midiLearnTarget;
@@ -13910,8 +13919,14 @@ void Session::setMixerSections (const MixerSections& sections)
     s.setProperty (mixerInOutProperty, sections.inOut, nullptr); s.setProperty (mixerSendsProperty, sections.sends, nullptr); s.setProperty (mixerReturnsProperty, sections.returns, nullptr);
     s.setProperty (mixerVolumeProperty, sections.mixer, nullptr); s.setProperty (mixerTrackDelayProperty, sections.trackDelay, nullptr);
     s.setProperty (mixerCrossfaderProperty, sections.crossfader, nullptr); s.setProperty (mixerShownProperty, sections.shown, nullptr);
-    impl->edit->markAsChanged(); // View state, kept with the project outside the undo history.
-    sendChangeMessage();
+    impl->viewStateChanged();
+}
+bool Session::arrangementOverview() const { return impl->edit->state.getProperty (arrangementOverviewProperty, true); }
+void Session::setArrangementOverview (bool shown)
+{
+    if (shown == arrangementOverview()) return;
+    impl->edit->state.setProperty (arrangementOverviewProperty, shown, nullptr);
+    impl->viewStateChanged();
 }
 bool Session::loopIsSongStart() const { return impl->edit->state.getProperty (loopIsSongStartProperty, false); }
 Result Session::setLoopIsSongStart (bool on)

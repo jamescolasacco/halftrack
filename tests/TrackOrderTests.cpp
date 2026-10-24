@@ -201,6 +201,14 @@ int runTrackOrderTests (const juce::File& artifacts)
             ok (s.saveProject (mixed), "save them"); ok (s.newProject(), "a new project");
             check (s.mixerSections() == Session::MixerSections {}, "which has the defaults");
             ok (s.loadProject (mixed), "reopen"); check (s.mixerSections() == shown, "and the saved sections come back");
+            // So is the Arrangement's overview, shown at first as in the reference's default Set.
+            ok (s.newProject(), "another new project");
+            check (s.arrangementOverview() && s.snapshot().arrangementOverview, "the overview shows at first");
+            s.setArrangementOverview (false);
+            check (! s.snapshot().arrangementOverview && ! s.canUndo() && s.snapshot().dirty, "hiding it marks the project changed, outside the undo history");
+            ok (s.saveProject (mixed), "save it hidden"); ok (s.newProject(), "a new project again");
+            check (s.arrangementOverview(), "which shows it");
+            ok (s.loadProject (mixed), "reopen once more"); check (! s.arrangementOverview(), "and the saved project keeps it hidden");
         }
         {
             // Where Insert puts a track, and automatic names, as the reference's (static reading of its code).

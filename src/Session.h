@@ -668,6 +668,7 @@ public:
         bool soloInPlace = true;
         bool loopIsSongStart = false; // The loop brace's Set Song Start Time Here.
         MixerSections mixerSections;
+        bool arrangementOverview = true;
         bool automationOverridden = false; // Some lane with points is switched off.
         float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
@@ -772,6 +773,10 @@ public:
     // The Session mixer's sections, as the reference's View menu shows and hides them (see MixerSections).
     MixerSections mixerSections() const;
     void setMixerSections (const MixerSections&);
+    // The Arrangement's overview, as the reference's View > Overview shows it; its default Set shows
+    // it. Kept with the project as view state, not as an undo step.
+    bool arrangementOverview() const;
+    void setArrangementOverview (bool);
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
     // Take lanes. Arrangement recording puts each pass on an armed track in a take lane (reusing a lane
     // with nothing at or after the pass's start) as well as the main lane. Comping copies a lane's

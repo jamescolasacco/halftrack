@@ -440,7 +440,7 @@ public:
         for (auto* child : std::initializer_list<juce::Component*> {
                  &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &nudgeDown, &nudgeUp, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
-                 &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &info, &ruler, &viewport,
+                 &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &info, &overview, &ruler, &viewport,
                  &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain })
             addAndMakeVisible (child);
 
@@ -866,6 +866,8 @@ public:
         const auto foot = area.removeFromBottom (12);
         horizontalScroll.setBounds (foot.withTrimmedRight (trackWidth + 10));
         gridReadout.setBounds (foot.withTrimmedLeft (horizontalScroll.getWidth() + 6).withWidth (60).expanded (0, 1));
+        overview.setVisible (! showSession && state.arrangementOverview);
+        if (overview.isVisible()) overview.setBounds (area.removeFromTop (Overview::height));
         ruler.setBounds (area.removeFromTop (rulerHeight + (meterLaneShown() ? meterLaneHeight : 0)));
         viewport.setBounds (area);
         canvas.setSize (juce::jmax (1, viewport.getWidth() - 10), juce::jmax (area.getHeight(), lanesHeight));
@@ -904,7 +906,7 @@ public:
             if ((code == 'M' || code == 'm') && key.getModifiers().isAltDown() && showSession) { menuItemSelected (109, 3); return true; }
             if (code == 'M' && ! shift && ! key.getModifiers().isAltDown()) { setMidiMapMode (! midiMapMode); return true; }
             if (code == 'K' && ! shift) { setKeyMapMode (! keyMapMode); return true; }
-            if (code == 'O') { openDialog(); return true; }
+            if (code == 'O' && ! shift && ! key.getModifiers().isAltDown()) { openDialog(); return true; }
             if (code == 'N') { ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) safe->startNewProject(); }); return true; }
             if (code == 'T') { if (key.getModifiers().isAltDown()) addReturnTrack(); else if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
             if (code == 'Z') { if (shift) session.redo(); else session.undo(); refresh(); return true; }
@@ -4313,6 +4315,88 @@ private:
             menuFor (id,position,meter).showMenuAsync (juce::PopupMenu::Options(),[safe,id,position,ids,meter](int choice) { if(safe!=nullptr)safe->choose(choice,id,position,ids,meter); });
         }
     };
+
+    // The Arrangement's overview, after the reference's: the whole song in miniature, each track's clips
+    // in its colour, with an outline round the time the Arrangement shows. A press outside the outline
+    // centres the view there; a drag across moves the view, and down or up zooms it in or out about the
+    // press.
+    class Overview final : public juce::Component
+    {
+    public:
+        explicit Overview (Impl& o) : owner (o) { setName ("Arrangement overview"); }
+        static constexpr int height = 20;
+        // What it spans: the clips, the loop and what the Arrangement shows.
+        double span() const
+        {
+            auto end = juce::jmax (owner.state.loopEnd, owner.viewStart + visible());
+            for (const auto& track : owner.state.tracks) for (const auto& clip : track.clips) end = juce::jmax (end, clip.start + clip.length);
+            return juce::jmax (end, 1.0);
+        }
+        double visible() const { return owner.canvas.timelineWidth() / owner.pixelsPerSecond; }
+        int stripWidth() const { return juce::jmax (1, juce::jmin (getWidth(), owner.canvas.timelineWidth())); }
+        float xOf (double seconds, double total) const { return (float) (seconds / total * stripWidth()); }
+        // Repaints once what it shows has changed.
+        void sync()
+        {
+            auto hash = (juce::int64) std::llround (owner.viewStart * 1000) * 31 + (juce::int64) std::llround (owner.pixelsPerSecond * 1000) * 17 + stripWidth();
+            for (const auto& track : owner.state.tracks)
+                for (const auto& clip : track.clips)
+                    hash = hash * 31 + (juce::int64) std::llround (clip.start * 1000) * 7 + (juce::int64) std::llround (clip.length * 1000) + (juce::int64) clip.colour.getARGB() + (clip.active ? 1 : 0);
+            if (std::exchange (painted, hash) != hash) repaint();
+        }
+        void paint (juce::Graphics& g) override
+        {
+            const auto total = span();
+            const auto strip = getLocalBounds().withWidth (stripWidth());
+            g.setColour (themes::colour (0xff181818)); g.fillRect (strip);
+            int rows = 0; for (const auto& track : owner.state.tracks) rows += track.isReturn ? 0 : 1;
+            const auto rowHeight = (float) (strip.getHeight() - 2) / (float) juce::jmax (1, rows);
+            int row = 0;
+            for (const auto& track : owner.state.tracks)
+            {
+                if (track.isReturn) continue;
+                const auto y = 1.0f + (float) row++ * rowHeight;
+                for (const auto& clip : track.clips)
+                {
+                    const auto x = xOf (clip.start, total);
+                    g.setColour (clip.active ? clip.colour : clip.colour.withSaturation (0.0f).withMultipliedAlpha (0.6f));
+                    g.fillRect (juce::Rectangle<float> (x, y, juce::jmax (1.0f, xOf (clip.start + clip.length, total) - x), juce::jmax (1.0f, rowHeight - (rowHeight > 3.0f ? 1.0f : 0.0f))));
+                }
+            }
+            // The time the Arrangement shows.
+            const auto from = xOf (owner.viewStart, total);
+            g.setColour (ink); g.drawRect (juce::Rectangle<float> (from, 0.5f, juce::jmax (3.0f, xOf (owner.viewStart + visible(), total) - from), (float) getHeight() - 1.0f), 1.0f);
+            g.setColour (line); g.drawHorizontalLine (getHeight() - 1, (float) strip.getRight(), (float) getWidth());
+        }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            pressSpan = span(); pressZoom = owner.pixelsPerSecond;
+            pressSeconds = e.position.x / (double) stripWidth() * pressSpan;
+            pressView = owner.viewStart;
+            if (owner.state.playing) owner.setFollow (false); // As a hand scroll does.
+            if (pressSeconds < owner.viewStart || pressSeconds > owner.viewStart + visible())
+            { pressView = juce::jmax (0.0, pressSeconds - visible() / 2); owner.setView (pressView, pressZoom); }
+        }
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            const auto zoom = juce::jlimit (3.0, 650.0, pressZoom * std::pow (1.01, (double) e.getDistanceFromDragStartY()));
+            // The pressed time keeps its place in the Arrangement while zooming.
+            const auto at = (pressSeconds - pressView) * pressZoom;
+            owner.setView (pressSeconds - at / zoom + e.getDistanceFromDragStartX() / (double) stripWidth() * pressSpan, zoom);
+        }
+    private:
+        Impl& owner;
+        juce::int64 painted = 0;
+        double pressSpan = 1, pressSeconds = 0, pressView = 0, pressZoom = 1;
+    };
+    Overview overview { *this };
+    // Sets the Arrangement's view: its start and zoom.
+    void setView (double start, double zoomLevel)
+    {
+        pixelsPerSecond = juce::jlimit (3.0, 650.0, zoomLevel);
+        viewStart = juce::jmax (0.0, start);
+        updateScroll(); canvas.repaint(); ruler.repaint(); overview.sync();
+    }
 
     // A scene's tempo and meter as its launcher cell shows them, or empty.
     static juce::String sceneSettingsText (const Session::SceneInfo& scene)
@@ -11149,6 +11233,7 @@ private:
         const auto previous = state;
         const auto selectedId = currentTrack() != nullptr ? currentTrack()->id : juce::String();
         state = session.snapshot(); editGrid = session.editGrid();
+        if (overview.isVisible() != (! showSession && state.arrangementOverview)) resized(); else if (overview.isVisible()) overview.sync();
         session.setSelectedTracks (selectedTrackIds());
         std::erase_if (selectedSlots, [this] (const Session::SlotRef& ref)
         { return ! juce::isPositiveAndBelow (ref.track, (int) state.tracks.size()) || ! juce::isPositiveAndBelow (ref.scene, (int) state.scenes.size()); });
@@ -11545,7 +11630,7 @@ private:
                     menuRecordSession, menuMetronome, menuMetronomeRecording, menuFullscreen, menuZoomIn, menuZoomOut, menuZoomReset,
                     menuToggleView, menuClipView, menuDeviceView, menuToggleDetail, menuBrowser, menuGroovePool, menuSearch, menuSimilar,
                     menuFoldAll, menuFoldSelected, menuZoomSelection, menuZoomBack, menuMidiMap, menuKeyMap, menuComputerKeyboard,
-                    menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuSlice = 200 }; // Plus Session::SliceBy.
+                    menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuOverview, menuSlice = 200 }; // Plus Session::SliceBy.
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
     // Fullscreen take their Windows keys elsewhere). The command manager only holds them for the menus:
     // nothing is registered with it as a target.
@@ -11576,7 +11661,7 @@ private:
             { 90, key ('?') }, { menuToggleView, key (KeyPress::tabKey) }, { menuClipView, key ('3', cmd | alt) }, { menuDeviceView, key ('4', cmd | alt) },
             { menuToggleDetail, key (KeyPress::tabKey, shift) }, { menuDetailView, key ('l', cmd | alt) }, { menuBrowser, key ('5', cmd | alt) }, { menuGroovePool, key ('6', cmd | alt) },
             { menuSearch, key ('f', cmd) }, { menuSimilar, key ('f', cmd | shift) }, { menuPluginWindows, key ('p', cmd | alt) }, { 92, key ('v', cmd | alt) }, { 109, key ('m', cmd | alt) },
-            { 103, key ('i', cmd | alt) }, { 104, key ('s', cmd | alt) }, { 108, key ('r', cmd | alt) }, { 49, key ('a') }, { menuFoldAll, key ('u', alt) },
+            { menuOverview, key ('o', cmd | alt) }, { 103, key ('i', cmd | alt) }, { 104, key ('s', cmd | alt) }, { 108, key ('r', cmd | alt) }, { 49, key ('a') }, { menuFoldAll, key ('u', alt) },
             { menuFoldSelected, key ('u') }, { 41, key ('+') }, { 42, key ('-') }, { menuZoomSelection, key ('z') }, { menuZoomBack, key ('x') },
             { menuMidiMap, key ('m', cmd) }, { menuKeyMap, key ('k', cmd) }, { menuComputerKeyboard, key ('m') },
             { 93, key ('1', cmd) }, { 94, key ('2', cmd) }, { 95, key ('3', cmd) }, { 96, key ('4', cmd) }, { 97, key ('5', cmd) }, { 13, key ('e', cmd | shift | alt) } };
@@ -12064,6 +12149,8 @@ private:
             sections.addItem (menuEntry (108, "Returns", true, shown.returns));
             popup.addSubMenu ("Mixer Controls", sections, ! menusBlocked());
             popup.addSeparator();
+            add (menuOverview, "Overview", ! showSession, state.arrangementOverview);
+            popup.addSeparator();
             add (49, "Automation Mode", ! showSession, automationMode);
             const bool anyUnfolded = std::any_of (state.groups.begin(), state.groups.end(), [] (const auto& g) { return ! g.folded; })
                                   || (! showSession && std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return ! t.folded; }));
@@ -12221,6 +12308,7 @@ private:
             case menuToggleDetail: showClipView (! showPiano); break;
             case menuBrowser: showBrowser = ! showBrowser; resized(); break;
             case menuPluginWindows: session.setPluginEditorsShown (! session.pluginEditorsShown()); return;
+            case menuOverview: session.setArrangementOverview (! state.arrangementOverview); refresh(); resized(); break;
             case menuGroovePool: openGroovePool(); return;
             case menuSearch: showBrowser = true; resized(); browserSearch.grabKeyboardFocus(); return;
             case menuSimilar: showSimilarFiles (similarSource()); return;
@@ -17205,7 +17293,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
        #if JUCE_MAC
         view.add ("Video Window");
        #endif
-        view.addArray ({ "-", "Mixer", "Mixer Controls >", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
+        view.addArray ({ "-", "Mixer", "Mixer Controls >", "-", "Overview", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
         expect ("View", view);
         juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "-", "External Sync", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
                                     "Fixed Grid", "-", "Solo in Place", "-", "Audio Engine On" };
@@ -17275,6 +17363,30 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const bool looping = state.looping;
         check (handleKey (juce::KeyPress ('l', juce::ModifierKeys (cmd | alt), 0)) && showDetail && deviceChain.isVisible() && state.looping == looping,
                "and shows it again, leaving the loop alone");
+        // The Arrangement's overview: shown at first, as in the reference's default Set, and hidden and shown from View.
+        check (overview.isVisible() && overview.getHeight() == Overview::height && entry ("View", menuOverview)->isTicked, "the Arrangement shows its overview at first");
+        check (handleKey (juce::KeyPress ('o', juce::ModifierKeys (cmd | alt), 0)) && ! overview.isVisible() && ! state.arrangementOverview, "Option+Cmd+O hides it");
+        menuItemSelected (menuOverview, 4);
+        check (overview.isVisible() && state.arrangementOverview, "and View's Overview shows it again");
+        {
+            // A press outside the outline centres the view there; a drag across moves it, and down zooms in.
+            check (session.addMidiClip (state.tracks[(size_t) midiIndex].id, beatsAt (60.0), 4).wasOk(), "a clip a minute in, for a long song"); refresh();
+            setView (0, 100); refresh();
+            const auto span = overview.span(), width = (double) overview.stripWidth(), visible = overview.visible();
+            const auto now = juce::Time::getCurrentTime();
+            const auto event = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged)
+            { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0, &overview, &overview, now, down, now, 1, dragged); };
+            const juce::Point<float> press ((float) (40.0 / span * width), 10.0f);
+            overview.mouseDown (event (press, press, false));
+            const auto pressed = press.x / width * span;
+            check (std::abs (viewStart - (pressed - visible / 2)) < 1e-6 && std::abs (pixelsPerSecond - 100) < 1e-9, "a press outside the outline centres the view on that time");
+            overview.mouseDrag (event (press + juce::Point<float> (20.0f, 0.0f), press, true));
+            check (std::abs (viewStart - (pressed - visible / 2 + 20.0 / width * span)) < 1e-6, "a drag across moves the view with the outline");
+            overview.mouseDrag (event (press + juce::Point<float> (0.0f, 50.0f), press, true));
+            check (pixelsPerSecond > 150 && std::abs ((pressed - viewStart) * pixelsPerSecond - visible / 2 * 100) < 1e-3, "a drag down zooms in, keeping the pressed time in place");
+            overview.mouseUp (event (press + juce::Point<float> (0.0f, 50.0f), press, true));
+            session.undo(); refresh(); fitTimeline();
+        }
         menuItemSelected (menuPluginWindows, 4);
         check (! session.pluginEditorsShown() && ! entry ("View", menuPluginWindows)->isTicked, "View's Plug-In Windows hides the plug-in windows");
         menuItemSelected (menuPluginWindows, 4);
