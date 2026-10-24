@@ -2,6 +2,8 @@
 
 #include "Session.h"
 #include <functional>
+#include <map>
+#include <optional>
 
 // The Arrangement's automation envelopes. A track offers its mixer's Volume, Pan and sends, every
 // control of its native devices (racks' inner devices included) and its plug-ins' parameters. Envelope
@@ -35,6 +37,28 @@ float fromProportion (const Target&, float proportion);
 juce::String format (const Target&, float value);
 juce::Result write (Session&, const Target&, const Session::AutomationLane&);
 
+// Draw Mode's drawing over an envelope, as the reference's: each grid cell the pointer passes holds
+// the value drawn on it, as a step as wide as the grid, or without a grid each position gives a
+// breakpoint. Values are 0-1 proportions of the lane; outside the drawing the lane keeps its shape.
+class Drawing
+{
+public:
+    // A beat's grid cell, as its start and end; none draws freehand.
+    using Cell = std::function<std::optional<std::pair<double, double>> (double beat)>;
+    void begin (std::vector<Session::AutomationPoint> points) { original = std::move (points); drawn.clear(); last.reset(); }
+    // The pointer at a beat and height. Cells it skipped since the last position take values between the two.
+    void add (double beat, float proportion, const Cell&);
+    // The lane's points with the drawing, given its mapping to proportions and its value without points.
+    std::vector<Session::AutomationPoint> points (const std::function<float (float)>& fromProportion, const std::function<float (float)>& toProportion, float manual) const;
+    bool empty() const noexcept { return drawn.empty(); }
+    static constexpr double stepGap = 1.0 / 960; // Between one step's end and the next step's start.
+
+private:
+    std::vector<Session::AutomationPoint> original;
+    std::map<double, std::pair<double, float>> drawn; // A cell's start to its end and proportion; a freehand point ends where it starts.
+    std::optional<std::pair<double, float>> last;
+};
+
 class Envelope
 {
 public:
@@ -44,6 +68,9 @@ public:
     std::function<double (double)> snapBeat;
     // The time selection on a track, in beats, when it has one.
     std::function<std::optional<std::pair<double, double>> (const juce::String& trackId)> selectedBeats;
+    // Draw Mode, and the grid cell its steps fill (none with the grid's snapping off).
+    bool drawMode = false;
+    Drawing::Cell gridCell;
 
     void paint (juce::Graphics&, juce::Rectangle<float> area, const Target&) const;
     // Each returns true when it handled the event.
@@ -66,6 +93,9 @@ private:
     juce::Point<float> position (const Target&, juce::Rectangle<float> area, const Session::AutomationPoint&) const;
     Session::AutomationPoint pointAt (const Target&, juce::Rectangle<float> area, juce::Point<float>, bool snap) const;
     void begin (Session&, const Target&);
+    void drawTo (Session&, const Target&, juce::Rectangle<float> area, const juce::MouseEvent&);
+    Drawing sketch;
+    bool drawing = false;
     int dragged = -1;           // The breakpoint being dragged.
     int curving = -1;           // The breakpoint whose segment an Option-drag is curving.
     float curveFrom = 0;

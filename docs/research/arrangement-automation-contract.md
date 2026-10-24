@@ -97,3 +97,15 @@ Not read in the reference: how its choosers name a send (Halftrack uses the retu
 
 The track header menu's Clear All Envelopes, after a static reading of the reference's (0x1037d8af4, enabled 0x1037f18b4): `clearAllEnvelopes(ids)` removes the selected tracks' and groups' own Arrangement automation, their mixers', sends' and devices' (rack devices included; a frozen track's mixer only), and their Arrangement clips' envelopes for the same controls, in one undo step. Tracks inside a selected group and Session clips keep theirs. `canClearAllEnvelopes(ids)` says whether there is anything to clear. Checked in the groups and UI suites ([menu](track-header-menu-contract.md)).
 
+## Draw Mode (2026-10-24)
+
+After the reference's manual ([Automation and Editing Envelopes](https://www.ableton.com/en/live-manual/12/automation-and-editing-envelopes/), consulted 2026-10-24), in Draw Mode (B; see the [note drawing contract](note-drawing-contract.md)) a drag in an envelope draws instead of editing breakpoints:
+- **Steps.** Each cell of the Arrangement grid the pointer passes holds the value drawn on it, a step as wide as the grid. Cells it skips take values between the two positions, and passing a cell again draws it again.
+- **Freehand.** With the grid's snapping off, or Cmd held (Alt elsewhere), each position gives a breakpoint, replacing those drawn between it and the last.
+- **The rest of the lane.** Outside the drawing the envelope keeps its shape: a breakpoint a 960th of a beat before the drawing and one at its end hold the old values there. A lane without breakpoints keeps the control's own value outside it.
+- **Undo.** One drag is one undo step, and a double-click draws nothing more.
+
+`arrangementAutomation::Drawing` holds a drawing over a lane's original breakpoints; clip envelopes use it too. The UI suite draws two quarter-note steps over a rising volume segment and checks the eight breakpoints, the line's old values on both sides, one undo, and freehand breakpoints with Cmd.
+
+Not yet: Shift's finer steps, and holding B to switch Draw Mode for the moment.
+

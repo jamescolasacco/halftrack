@@ -253,9 +253,108 @@ void Envelope::begin (Session& session, const Target& t)
     session.beginEditGesture ("Edit " + t.control + " automation");
     gesture = true; gestureKey = t.key;
 }
+void Drawing::add (double beat, float proportion, const Cell& cell)
+{
+    beat = std::clamp (beat, 0.0, maximumBeat); proportion = std::clamp (proportion, 0.0f, 1.0f);
+    const auto previous = last;
+    last = { beat, proportion };
+    const auto here = cell ? cell (beat) : std::nullopt;
+    if (! here)
+    {
+        // Freehand: the points drawn between the last position and this one give way to it.
+        if (previous)
+        {
+            const auto low = std::min (previous->first, beat), high = std::max (previous->first, beat);
+            for (auto it = drawn.begin(); it != drawn.end();)
+                if (it->second.first <= it->first && it->first > low + 1.0e-9 && it->first < high - 1.0e-9) it = drawn.erase (it);
+                else ++it;
+        }
+        drawn[beat] = { beat, proportion };
+        return;
+    }
+    // The cells from the last one reached to this one, the value moving evenly between them.
+    std::vector<std::pair<double, double>> cells { *here };
+    if (const auto from = previous ? cell (previous->first) : std::nullopt; from && std::abs (from->first - here->first) > 1.0e-9)
+    {
+        cells.clear();
+        const bool forward = here->first > from->first;
+        for (auto c = *from; cells.size() < 4096;)
+        {
+            cells.push_back (c);
+            if (std::abs (c.first - here->first) < 1.0e-9 || (! forward && c.first <= 0)) break;
+            const auto next = cell (forward ? c.second + 1.0e-9 : c.first - 1.0e-9);
+            if (! next || std::abs (next->first - c.first) < 1.0e-12) break;
+            c = *next;
+        }
+    }
+    const auto start = previous ? previous->second : proportion;
+    for (size_t i = 0; i < cells.size(); ++i)
+    {
+        const auto [from, to] = cells[i];
+        const auto value = cells.size() == 1 ? proportion : start + (proportion - start) * (float) i / (float) (cells.size() - 1);
+        for (auto it = drawn.lower_bound (from); it != drawn.end() && it->first < to - 1.0e-9;) it = drawn.erase (it);
+        drawn[from] = { to, value };
+    }
+}
+std::vector<Session::AutomationPoint> Drawing::points (const std::function<float (float)>& fromProportion, const std::function<float (float)>& toProportion, float manual) const
+{
+    if (drawn.empty()) return original;
+    // The lane as it was, along its curves; without points, the destination's own value.
+    const auto valueAt = [&] (double beat) -> float
+    {
+        if (original.empty()) return manual;
+        if (beat <= original.front().beat) return original.front().value;
+        if (beat >= original.back().beat) return original.back().value;
+        const auto right = std::upper_bound (original.begin(), original.end(), beat, [] (double b, const auto& p) { return b < p.beat; });
+        const auto& a = *std::prev (right);
+        const auto& b = *right;
+        const auto fraction = (float) ((beat - a.beat) / std::max (1.0e-12, b.beat - a.beat));
+        return fromProportion (Session::curveProportion (toProportion (a.value), toProportion (b.value), a.curve, fraction));
+    };
+    const auto from = drawn.begin()->first;
+    auto to = from;
+    bool endsOnPoint = true;
+    for (const auto& [start, cell] : drawn)
+        if (cell.first >= to) { to = cell.first; endsOnPoint = cell.first <= start; }
+    const auto resume = to + (endsOnPoint ? stepGap : 0.0);
+    std::vector<Session::AutomationPoint> result;
+    for (const auto& p : original) if (p.beat < from - stepGap - 1.0e-9) result.push_back (p);
+    if (from - stepGap > 0) result.push_back ({ from - stepGap, valueAt (from - stepGap) });
+    for (const auto& [start, cell] : drawn)
+    {
+        const auto value = fromProportion (cell.second);
+        result.push_back ({ start, value });
+        if (cell.first - stepGap > start + stepGap * 0.5) result.push_back ({ cell.first - stepGap, value });
+    }
+    result.push_back ({ resume, valueAt (resume) });
+    for (const auto& p : original) if (p.beat > resume + 1.0e-9) result.push_back (p);
+    // Strictly ordered, at least a microbeat apart, as lanes are.
+    std::vector<Session::AutomationPoint> ordered;
+    for (const auto& p : result) if (ordered.empty() || p.beat - ordered.back().beat >= 1.0e-6) ordered.push_back (p);
+    return ordered;
+}
+void Envelope::drawTo (Session& session, const Target& t, juce::Rectangle<float> area, const juce::MouseEvent& e)
+{
+    if (! beatOfX) return;
+    // Cmd (Alt elsewhere) draws freehand with the grid shown, as the reference's does.
+    sketch.add (beatOfX (e.position.x), (area.getBottom() - e.position.y) / std::max (1.0f, area.getHeight()), bypassesSnap (e.mods) ? Drawing::Cell() : gridCell);
+    auto lane = t.lane;
+    lane.points = sketch.points ([&t] (float p) { return fromProportion (t, p); }, [&t] (float v) { return toProportion (t, v); }, t.manual);
+    if (lane.points.size() > 4096) return;
+    begin (session, t);
+    write (session, t, lane);
+}
 bool Envelope::mouseDown (Session& session, const Target& t, juce::Rectangle<float> area, const juce::MouseEvent& e)
 {
     if (! area.expanded (0, hitRadius).contains (e.position) || ! e.mods.isLeftButtonDown()) return false;
+    if (drawMode)
+    {
+        // Draw Mode draws over the breakpoints instead of editing them.
+        drawing = true; dragged = -1; pressedPoint = false; curving = segment = -1; group.clear();
+        sketch.begin (t.lane.points);
+        drawTo (session, t, area, e);
+        return true;
+    }
     moved = false; downAt = e.position; dragged = hitPoint (t, area, e.position); pressedPoint = dragged >= 0; curving = segment = -1;
     original = t.lane.points; group.clear();
     if (pressedPoint)
@@ -298,6 +397,7 @@ bool Envelope::mouseDown (Session& session, const Target& t, juce::Rectangle<flo
 }
 bool Envelope::mouseDrag (Session& session, const Target& t, juce::Rectangle<float> area, const juce::MouseEvent& e)
 {
+    if (drawing) { drawTo (session, t, area, e); return true; }
     if (curving >= 0 && (size_t) curving + 1 < t.lane.points.size())
     {
         // Dragging up raises the segment's middle, dragging down lowers it.
@@ -364,8 +464,8 @@ bool Envelope::mouseDrag (Session& session, const Target& t, juce::Rectangle<flo
 }
 bool Envelope::mouseUp (Session& session, const Target& t)
 {
-    const bool handled = dragged >= 0 || curving >= 0 || segment >= 0 || gesture;
-    curving = segment = -1; group.clear();
+    const bool handled = dragged >= 0 || curving >= 0 || segment >= 0 || gesture || drawing;
+    curving = segment = -1; group.clear(); drawing = false;
     // Clicking a breakpoint without dragging it deletes it.
     if (pressedPoint && ! moved && dragged >= 0 && (size_t) dragged < t.lane.points.size())
     {
@@ -378,6 +478,7 @@ bool Envelope::mouseUp (Session& session, const Target& t)
 }
 bool Envelope::doubleClick (Session& session, const Target& t, juce::Rectangle<float> area, const juce::MouseEvent& e)
 {
+    if (drawMode) return area.contains (e.position); // Each press drew already.
     if (! area.contains (e.position) || hitPoint (t, area, e.position) >= 0) return false;
     auto lane = t.lane;
     // Option-double-clicking a curved segment straightens it.

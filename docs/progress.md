@@ -2519,3 +2519,8 @@ Engine, persistence and UI areas. File > Save a Copy, after Save Project As as i
 ## The reference's note clicks and Draw Mode — 2026-10-24
 
 UI area. The note editor now takes clicks as the reference's does: a click places the insert marker, a drag selects, and a double-click adds a note one grid step long or deletes one. Single clicks no longer draw. Options > Draw Mode (B), with a pencil beside the control bar's KEYS switch, draws a note on each grid step dragged over at the pointer's pitch, or at one pitch with Alt, takes notes away when the pointer goes back, and deletes notes clicked; each drag is one undo step ([contract](research/note-drawing-contract.md)). The control bar's right-hand switches are narrower to make room. Checked in the UI suite; Draw Mode in automation and the velocity lane is next.
+
+## Draw Mode in the lanes — 2026-10-24
+
+UI area. Draw Mode now draws in automation envelopes, clip envelopes and the velocity and Chance lanes, as the reference's manual describes. Envelopes take steps as wide as the grid, or freehand breakpoints with Cmd (Alt elsewhere) or snapping off, keeping their shape beside the drawing (`arrangementAutomation::Drawing`). Velocities are set for the notes in each grid step passed, or along a straight line with Option. Each drag is one undo step ([automation contract](research/arrangement-automation-contract.md#draw-mode-2026-10-24), [note drawing contract](research/note-drawing-contract.md)). Checked in the UI suite.
+

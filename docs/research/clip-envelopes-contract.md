@@ -21,6 +21,7 @@ Halftrack's clip envelopes follow the reference's clip envelopes for mixer and d
   - In the clip view, an audio clip's Envelope chooser, at the foot of its Clip box, picks a control by device, under Modulation and, for Session clips, Automation. The chosen envelope is drawn over the waveform.
   - A MIDI clip's envelopes are chosen in the piano roll's lane chooser, under Envelope and Envelope automation, and drawn in the lane.
   - Clicking adds a point and drags it, and double-clicking or right-clicking a point deletes it. Each edit is one undo step.
+  - In Draw Mode a drag draws steps as wide as the clip's grid, or freehand with its snapping off or bypassed, as the Arrangement's envelopes do ([automation contract](arrangement-automation-contract.md#draw-mode-2026-10-24)); the drawing shows while the button is held and is one undo step.
 - **Editing.** `setClipEnvelope` sets one envelope as one undo step, and no points removes it. Envelopes are kept when a clip is split, duplicated, saved and reopened. A duplicated track's clips modulate the duplicate's own devices. Malformed envelope values in a project file are refused before the open project is replaced.
 
 ## Engine changes
@@ -54,7 +55,7 @@ The UI suite:
 
 ## Not yet covered
 
-- The editor sets no unlinked loop, has no draw mode, and does not show the reference's separate device and control choosers.
+- The editor sets no unlinked loop and does not show the reference's separate device and control choosers.
 - Audio clips' own envelopes (clip gain, pan, transposition and sample offset) are missing.
 - Sends, devices inside racks, and the reference's own envelope scaling are unmeasured.
 - A Session clip's automation stops applying when the clip stops; whether the reference keeps the last value is unmeasured.

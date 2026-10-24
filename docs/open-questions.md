@@ -836,6 +836,7 @@ Note editor clicks and Draw Mode ([contract](research/note-drawing-contract.md))
 - **The selection box.** A drag selects the notes the box touches, as Halftrack's Shift-drag did. Whether the reference's needs a note wholly inside, and the timespan it also selects, were not determined.
 - **Draw Mode's drag.** A drag that starts on a note goes on erasing the notes it crosses. A melodic drag gives each step one note that follows the pointer's pitch on that step, and a drawn note replaces the notes it covers at its pitch. Steps follow the grid even with snapping off.
 - **Saving Draw Mode.** Draw Mode belongs to the window and starts off; whether the reference keeps it between launches was not read.
+- **Drawn envelopes.** Steps change value across a 960th of a beat, and the lane keeps its old values beside the drawing. Passing a cell again redraws it. In the velocity lane, Alt both bypasses the grid and draws a line on Windows and Linux; Halftrack takes it as the line there.
 
 Warp defaults ([warp contract](research/warp-contract.md#defaults-not-yet-the-references)):
 

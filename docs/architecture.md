@@ -253,7 +253,7 @@ Audio outputs are the engine's wave output devices, one per output pair or mono 
 
 `notePreview` and `setNotePreview` keep the MIDI editor's Preview switch as an edit property, set without undo, like the editing grid. `previewNote` injects note-ons and note-offs on channel 1 into a MIDI track through `te::AudioTrack::injectLiveMidiMessage` and records them in `Impl::previewing`, so `stopNotePreviews`, switching Preview off and loading a project can end them. `newProject` drops the record along with the old Edit. The piano roll's `sound` and `silence` keep the notes it started, at most eight, and end them on mouse-up or after 200 ms for arrow transpositions. See the [Preview contract](research/note-preview-contract.md).
 
-Draw Mode is window state (`Impl::drawMode`), not saved with the project. The piano roll's `addNote`, `drawNotes` and `eraseAt` edit through `addMidiNotes` and `removeMidiNotes` inside one edit gesture per press, so a double-click or a whole drawing drag is one undo step. See the [note drawing contract](research/note-drawing-contract.md).
+Draw Mode is window state (`Impl::drawMode`), not saved with the project. The piano roll's `addNote`, `drawNotes` and `eraseAt` edit through `addMidiNotes` and `removeMidiNotes` inside one edit gesture per press, so a double-click or a whole drawing drag is one undo step. Envelopes draw through `arrangementAutomation::Drawing`, which rebuilds a lane's points from its original breakpoints and the cells drawn so far; the Arrangement writes each step inside the drag's gesture, and clip envelopes and the velocity lane preview until release and commit once. See the [note drawing contract](research/note-drawing-contract.md).
 
 ## Audio engine switch
 

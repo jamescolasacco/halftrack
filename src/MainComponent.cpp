@@ -462,6 +462,14 @@ public:
         envelope.xOfBeat = [this] (double beat) { return (float) ((secondsAt (beat) - viewStart) * pixelsPerSecond); };
         envelope.beatOfX = [this] (float x) { return beatsAt (juce::jmax (0.0, viewStart + x / pixelsPerSecond)); };
         envelope.snapBeat = [this] (double beat) { return beatsAt (snapSeconds (secondsAt (beat))); };
+        // Draw Mode's steps fill the Arrangement grid's cells; with its snapping off it draws freehand.
+        envelope.gridCell = [this] (double beat) -> std::optional<std::pair<double, double>>
+        {
+            if (! editGrid.snap) return std::nullopt;
+            const auto start = gridLine (beat, -1), end = gridLine (start + 1.0e-6, 1);
+            if (! (end > start)) return std::nullopt;
+            return std::pair { start, end };
+        };
         envelope.selectedBeats = [this] (const juce::String& trackId) -> std::optional<std::pair<double, double>>
         {
             if (! timeSelection.active() || ! timeSelection.trackIds.contains (trackId)) return std::nullopt;
@@ -3868,6 +3876,9 @@ private:
                     { handle = track == owner.selectedTrack && c == owner.selectedClip
                         && (hitFade (clips[(size_t)c],track,e.position) != 0 || hitTrim (clips[(size_t)c],track,e.position) != 0); break; }
             }
+            // In Draw Mode the pointer is a pencil over the envelopes it draws.
+            juce::String envelopeTrack, envelopeKey; juce::Rectangle<float> envelopeLane;
+            if (owner.drawMode && owner.automationMode && e.x < timelineWidth() && envelopeAt (e.y, envelopeTrack, envelopeKey, envelopeLane)) { setMouseCursor (owner.drawCursor); return; }
             setMouseCursor (handle ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
         }
         void mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
@@ -5961,6 +5972,9 @@ private:
     public:
         explicit EnvelopeEditor (Impl& o) : owner (o) {}
         std::optional<EnvelopeChoice> choice;
+        // Draw Mode's grid: the editor's step, and whether a drag with these keys snaps to it.
+        std::function<double()> gridStep;
+        std::function<bool (juce::ModifierKeys)> snaps;
         bool active() const { return choice.has_value(); }
         // The track's mixer and device controls; Session clips can also automate them.
         static std::vector<EnvelopeChoice> choices (const Impl& owner, const Session::TrackInfo& track, bool sessionClip)
@@ -6053,9 +6067,16 @@ private:
         void mouseDown (const juce::MouseEvent& e, juce::Rectangle<float> area, const Session::ClipInfo& clip,
                         const std::function<float (double)>& x, const std::function<double (float)>& beatAt, double endBeat)
         {
-            dragged = -1; preview.reset();
+            dragged = -1; preview.reset(); drawing = false;
             if (! choice) return;
             clipId = clip.id;
+            if (owner.drawMode && ! e.mods.isPopupMenu())
+            {
+                // Draw Mode draws over the points, as the Arrangement's envelopes do.
+                sketch.begin (points (clip)); drawing = true;
+                drawTo (e, area, beatAt, endBeat);
+                return;
+            }
             auto list = points (clip);
             const auto y = [&] (float v) { return area.getBottom() - proportion (v) * area.getHeight(); };
             int hit = -1;
@@ -6074,6 +6095,7 @@ private:
         }
         void mouseDrag (const juce::MouseEvent& e, juce::Rectangle<float> area, const std::function<double (float)>& beatAt, double endBeat)
         {
+            if (drawing) { drawTo (e, area, beatAt, endBeat); return; }
             if (! preview || dragged < 0) return;
             auto& list = *preview;
             const double low = dragged > 0 ? list[(size_t) dragged - 1].beat + 1.0 / 960 : 0;
@@ -6082,11 +6104,29 @@ private:
         }
         void mouseUp (const Session::ClipInfo& clip)
         {
+            drawing = false;
             if (preview) { auto list = *preview; preview.reset(); dragged = -1; commit (clip, list); }
         }
     private:
         Impl& owner;
         juce::String clipId;
+        arrangementAutomation::Drawing sketch;
+        bool drawing = false;
+        // Steps as wide as the editor's grid, or freehand with its snapping off or bypassed; the drawing shows until release.
+        void drawTo (const juce::MouseEvent& e, juce::Rectangle<float> area, const std::function<double (float)>& beatAt, double endBeat)
+        {
+            arrangementAutomation::Drawing::Cell cell;
+            if (const auto step = gridStep ? gridStep() : 0.0; step > 0 && snaps && snaps (e.mods))
+                cell = [step, endBeat] (double beat) -> std::optional<std::pair<double, double>>
+                {
+                    const auto start = std::floor (beat / step + 1.0e-9) * step;
+                    return std::pair { start, juce::jmin (endBeat, start + step) };
+                };
+            sketch.add (juce::jlimit (0.0, endBeat, beatAt (e.position.x)), (area.getBottom() - e.position.y) / juce::jmax (1.0f, area.getHeight()), cell);
+            auto list = sketch.points ([this] (float p) { return value (p); }, [this] (float v) { return proportion (v); }, neutral());
+            std::erase_if (list, [endBeat] (const auto& p) { return p.beat > endBeat + 1.0e-9; });
+            preview = list;
+        }
         std::optional<std::vector<Session::AutomationPoint>> preview;
         int dragged = -1;
         const Session::PluginInfo* device() const
@@ -6115,6 +6155,8 @@ private:
         explicit AudioClipView (Impl& o) : owner (o), thumbnail (512, o.formats, o.thumbnailCache)
         {
             setName ("Audio clip view");
+            envelope.gridStep = [this] { return snapGrid(); };
+            envelope.snaps = [this] (juce::ModifierKeys mods) { return snapsMarkers (mods); };
             for (auto* c : std::initializer_list<juce::Component*> { &warp, &mode, &bpm, &halve, &twice, &gain, &reverse, &transpose, &detune }) addAndMakeVisible (c);
             for (auto* c : std::initializer_list<juce::Component*> { &transientLoop, &transientEnvelope, &grainSize, &flux, &formants }) addChildComponent (c);
             addChildComponent (launch);
@@ -7349,7 +7391,12 @@ private:
     class LaneView final : public juce::Component
     {
     public:
-        explicit LaneView (PianoRoll& r) : envelope (r.owner), roll (r) { setName ("Controller lane"); }
+        explicit LaneView (PianoRoll& r) : envelope (r.owner), roll (r)
+        {
+            setName ("Controller lane");
+            envelope.gridStep = [this] { return roll.snapBeats(); };
+            envelope.snaps = [this] (juce::ModifierKeys mods) { return roll.snapsNotes (mods); };
+        }
         // A clip envelope when one is chosen; otherwise the lane below.
         EnvelopeEditor envelope;
         // MPE: the selected note's own pitch bend, slide or pressure when one is chosen.
@@ -7423,7 +7470,7 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             const auto* clip = roll.owner.currentMidiClip();
-            dragged = -1; velocityNote.clear(); preview.reset(); previewNotes.clear(); drawing = false;
+            dragged = -1; velocityNote.clear(); preview.reset(); previewNotes.clear(); drawing = false; sketching = false;
             if (clip == nullptr || e.x < keysWidth) return;
             clipId = clip->id;
             if (expression) { expressionDown (e); repaint(); return; }
@@ -7431,6 +7478,12 @@ private:
             {
                 envelope.mouseDown (e, plot().toFloat(), *clip, [this] (double b) { return x (b); }, [this] (float px) { return beatAt (px); }, contentEndBeat (*clip));
                 repaint(); return;
+            }
+            if (lane < 0 && roll.owner.drawMode && ! e.mods.isPopupMenu())
+            {
+                previewNotes = clip->notes; sketching = true; lastSketch.reset();
+                sketchStart = { beatAt (e.position.x), valueAt (e.position.y) };
+                sketchValues (e); return;
             }
             if (lane < 0)
             {
@@ -7463,7 +7516,7 @@ private:
                 if (const auto* clip = roll.owner.currentMidiClip()) envelope.mouseDrag (e, plot().toFloat(), [this] (float px) { return beatAt (px); }, contentEndBeat (*clip));
                 repaint(); return;
             }
-            if (lane < 0) { if (velocityNote.isNotEmpty()) dragVelocity (e); return; }
+            if (lane < 0) { if (sketching) sketchValues (e); else if (velocityNote.isNotEmpty()) dragVelocity (e); return; }
             if (! preview) return;
             if (drawing) { paintPoint (e); repaint(); return; }
             if (dragged < 0) return;
@@ -7480,6 +7533,29 @@ private:
             if (envelope.active())
             {
                 if (const auto* clip = roll.owner.currentMidiClip()) envelope.mouseUp (*clip);
+                repaint(); return;
+            }
+            if (lane < 0 && sketching)
+            {
+                // The drawn values, one undo step.
+                sketching = false;
+                std::vector<Session::MidiNoteInfo> changed;
+                if (const auto* clip = roll.owner.currentMidiClip(); clip != nullptr && clip->id == clipId)
+                    for (const auto& note : previewNotes)
+                        for (const auto& old : clip->notes)
+                            if (old.id == note.id && (old.velocity != note.velocity || old.chance != note.chance)) changed.push_back (note);
+                previewNotes.clear();
+                if (changed.empty()) { repaint(); return; }
+                if (lane == chanceLane)
+                {
+                    std::map<float, juce::StringArray> byChance;
+                    for (const auto& note : changed) byChance[note.chance].add (note.id);
+                    roll.owner.session.beginEditGesture ("Draw note chances");
+                    for (const auto& [chance, ids] : byChance) roll.owner.report (roll.owner.session.setMidiNotesChance (clipId, ids, chance));
+                    roll.owner.session.endEditGesture();
+                    roll.owner.refresh();
+                }
+                else roll.updateNotes (clipId, changed, "Draw velocities");
                 repaint(); return;
             }
             if (lane < 0)
@@ -7520,6 +7596,54 @@ private:
         PianoRoll& roll;
         juce::String clipId, velocityNote;
         bool rangeDrag = false;
+        // Draw Mode in the velocity and chance lanes, as the reference's: each grid step the pointer
+        // passes gives its value to the notes starting in it, the selected ones when there are any.
+        // Cmd (Alt elsewhere), or snapping off, sets just the notes under the pointer; Option (Alt
+        // elsewhere) draws a straight line from the press, and Shift with it keeps the line level.
+        bool sketching = false;
+        std::pair<double, int> sketchStart;
+        std::optional<std::pair<double, int>> lastSketch;
+        void sketchValues (const juce::MouseEvent& e)
+        {
+            const auto* clip = roll.owner.currentMidiClip();
+            if (clip == nullptr || clip->id != clipId) return;
+            const auto beat = beatAt (e.position.x);
+            const int value = valueAt (e.position.y);
+            const bool chosen = std::any_of (clip->notes.begin(), clip->notes.end(), [this] (const auto& n) { return roll.selectedNoteIds.contains (n.id); });
+            const auto takes = [&] (const Session::MidiNoteInfo& n) { return ! chosen || roll.selectedNoteIds.contains (n.id); };
+            const auto set = [this] (Session::MidiNoteInfo& n, int v)
+            { if (lane == chanceLane) n.chance = (float) juce::jlimit (0, 100, v) / 100.0f; else n.velocity = (float) juce::jlimit (1, 127, v) / 127.0f; };
+            if (e.mods.isAltDown())
+            {
+                previewNotes = clip->notes;
+                const auto [b0, v0] = sketchStart;
+                const auto low = std::min (b0, beat), high = std::max (b0, beat);
+                for (auto& n : previewNotes)
+                    if (takes (n) && n.startBeat >= low - 1.0e-9 && n.startBeat <= high + 1.0e-9)
+                        set (n, e.mods.isShiftDown() || high - low < 1.0e-9 ? v0 : juce::roundToInt (v0 + (value - v0) * (n.startBeat - b0) / (beat - b0)));
+                repaint(); return;
+            }
+            const auto from = lastSketch.value_or (std::pair { beat, value });
+            lastSketch = { beat, value };
+            if (const auto step = roll.snapBeats(); step > 0 && roll.snapsNotes (e.mods))
+            {
+                const auto first = (long long) std::floor (from.first / step + 1.0e-9), last = (long long) std::floor (beat / step + 1.0e-9);
+                const auto count = std::llabs (last - first);
+                for (long long i = 0; i <= count && i < 4096; ++i)
+                {
+                    const auto cell = (double) (first + (last >= first ? i : -i));
+                    const int v = count == 0 ? value : juce::roundToInt (from.second + (value - from.second) * (double) i / (double) count);
+                    for (auto& n : previewNotes)
+                        if (takes (n) && n.startBeat >= cell * step - 1.0e-9 && n.startBeat < (cell + 1) * step - 1.0e-9) set (n, v);
+                }
+            }
+            else
+            {
+                const auto low = std::min (x (from.first), e.position.x) - 3, high = std::max (x (from.first), e.position.x) + 3;
+                for (auto& n : previewNotes) if (takes (n) && x (n.startBeat) >= low && x (n.startBeat) <= high) set (n, value);
+            }
+            repaint();
+        }
         // Note expression editing: points at beats from the note's start, bend -48 to 48 semitones,
         // slide and pressure 0-1, ramping between points.
         std::optional<std::vector<Session::ExpressionPoint>> expressionPreview;
@@ -9304,7 +9428,7 @@ private:
     const juce::MouseCursor drawCursor = DrawModeButton::cursor();
     void setDrawMode (bool on)
     {
-        drawMode = on; drawButton.setToggleState (on, juce::dontSendNotification);
+        drawMode = envelope.drawMode = on; drawButton.setToggleState (on, juce::dontSendNotification);
         pianoRoll.repaint(); repaint();
     }
     ComputerKeyboard computerKeys;
@@ -15047,6 +15171,38 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (currentMidiClip()->notes.front().velocity == 1.0f, "dragging a velocity bar to the top sets full velocity");
         pianoRoll.keyPressed (undo);
         check (currentMidiClip()->notes.front().velocity == before, "one undo restores the velocity");
+        {
+            // Draw Mode in the velocity lane: each grid step the pointer passes gives its notes the value drawn.
+            juce::StringArray added;
+            const auto half = 64.0f / 127.0f; // Velocities are kept as MIDI's whole steps.
+            check (session.addMidiNotes (currentMidiClip()->id, { { {}, 70, 4.0, .25, half }, { {}, 70, 4.25, .25, half }, { {}, 70, 4.5, .25, half }, { {}, 70, 5.0, .25, half } }, added).wasOk(),
+                   "four notes to draw velocities over"); refresh();
+            pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+            setDrawMode (true);
+            const auto velocityOf = [&] (const juce::String& id) { for (const auto& n : currentMidiClip()->notes) if (n.id == id) return n.velocity; return -1.0f; };
+            const auto atBeat = [&] (double beat, float y) { return juce::Point<float> ((float) (55.0 + beat * beatWidth), y); };
+            const auto dragLane = [&] (std::vector<juce::Point<float>> path, int modifiers = 0)
+            {
+                const auto now = juce::Time::getCurrentTime();
+                const auto at = [&] (juce::Point<float> p, bool dragged)
+                { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers), 1.0f, 0, 0, 0, 0, laneView, laneView, now, path.front(), now, 1, dragged); };
+                laneView->mouseDown (at (path.front(), false));
+                for (size_t i = 1; i < path.size(); ++i) laneView->mouseDrag (at (path[i], true));
+                laneView->mouseUp (at (path.back(), true)); refresh();
+            };
+            dragLane ({ atBeat (4.05, 6), atBeat (4.3, 6), atBeat (4.6, 6) });
+            check (velocityOf (added[0]) == 1.0f && velocityOf (added[1]) == 1.0f && velocityOf (added[2]) == 1.0f && velocityOf (added[3]) == half && currentMidiClip()->notes.front().velocity == before,
+                   "dragging across three grid steps in Draw Mode sets the velocities of the notes in them");
+            pianoRoll.keyPressed (undo);
+            check (velocityOf (added[0]) == half && velocityOf (added[2]) == half, "one undo restores them");
+            const auto bottom = (float) laneView->getHeight() - 4;
+            dragLane ({ atBeat (4.0, bottom), atBeat (5.0, 6) }, juce::ModifierKeys::altModifier);
+            check (velocityOf (added[0]) < velocityOf (added[1]) && velocityOf (added[1]) < velocityOf (added[2]) && velocityOf (added[2]) < velocityOf (added[3]) && velocityOf (added[3]) == 1.0f,
+                   "with Option held, the velocities follow a straight line from the press");
+            pianoRoll.keyPressed (undo); pianoRoll.keyPressed (undo);
+            check (currentMidiClip()->notes.size() == 1, "undo returns to the one note");
+            setDrawMode (false);
+        }
         // The Chance lane sets a note's chance; Cmd-dragging a velocity sets its velocity range.
         laneMenu->setSelectedId (97, juce::sendNotificationSync);
         check (laneMenu->getText() == "Chance", "the lane chooser offers Chance");
@@ -16286,6 +16442,44 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             for (int step = 0; step < 4; ++step) session.undo();
             refresh();
             check (volume().points.size() == 2, "four more undo steps return the lane to its two breakpoints");
+        }
+        {
+            // Draw Mode draws steps as wide as the grid over the breakpoints, or freehand with Cmd (Alt elsewhere).
+            const auto proportion = [] (float db) { return Session::automationValueToProportion (Session::AutomationTarget::volume, db); };
+            const auto decibels = [] (float p) { return Session::automationProportionToValue (Session::AutomationTarget::volume, p); };
+            const auto oldGrid = editGrid;
+            { Session::EditGrid quarters; quarters.fixed = true; quarters.denominator = 4; setGrid (quarters); }
+            check (handleKey (juce::KeyPress ('b')) && drawMode, "B turns Draw Mode on");
+            const auto draw = [&] (std::vector<juce::Point<float>> path, int modifiers = 0)
+            {
+                const auto at = [&] (juce::Point<float> p, bool dragged)
+                { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers), 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, path.front(), now, 1, dragged); };
+                canvas.mouseDown (at (path.front(), false));
+                for (size_t i = 1; i < path.size(); ++i) canvas.mouseDrag (at (path[i], true));
+                canvas.mouseUp (at (path.back(), true)); refresh();
+            };
+            const auto y12 = yOf (inLane, -12);
+            draw ({ { xOf (2.1), y12 }, { xOf (3.0), y12 }, { xOf (3.9), y12 } });
+            const auto points = volume().points;
+            const auto originalAt = [&] (double beat) { return decibels (proportion (-24) + (proportion (0) - proportion (-24)) * (float) ((beat - 1) / 4)); };
+            const auto gap = arrangementAutomation::Drawing::stepGap;
+            const std::vector<double> beats { 1, 2 - gap, 2, 3 - gap, 3, 4 - gap, 4, 5 };
+            bool stepped = points.size() == beats.size();
+            for (size_t i = 0; stepped && i < beats.size(); ++i) stepped = std::abs (points[i].beat - beats[i]) < 1e-6;
+            for (size_t i = 2; stepped && i < 6; ++i) stepped = std::abs (points[i].value + 12) < .5f;
+            check (stepped && std::abs (points[1].value - originalAt (2 - gap)) < .05f && std::abs (points[6].value - originalAt (4)) < .05f && points[7].value == 0,
+                   "dragging across two grid cells draws a step on each at the pointer's height, the line going on as it was on both sides");
+            session.undo(); refresh();
+            check (volume().points.size() == 2, "one undo takes the whole drawing back");
+            const auto y6 = yOf (inLane, -6);
+            draw ({ { xOf (2.1), y12 }, { xOf (2.6), y6 }, { xOf (3.1), y12 } }, bypassModifier);
+            const auto freehand = volume().points;
+            const auto near = [&] (double beat, float db)
+            { return std::any_of (freehand.begin(), freehand.end(), [&] (const auto& p) { return std::abs (p.beat - beat) < .02 && std::abs (p.value - db) < .5f; }); };
+            check (near (2.1, -12) && near (2.6, -6) && near (3.1, -12) && freehand.size() == 7, "with Cmd held, drawing is freehand: a breakpoint at each position drawn");
+            session.undo(); refresh();
+            check (handleKey (juce::KeyPress ('b')) && ! drawMode && volume().points.size() == 2, "B leaves Draw Mode");
+            setGrid (oldGrid);
         }
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
@@ -18334,6 +18528,27 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "clicking the lane adds a pan modulation point to the MIDI clip");
         session.undo(); refresh();
         check (currentMidiClip()->envelopes.empty(), "undo removes it");
+        {
+            // In Draw Mode a drag across the lane draws steps as wide as the clip's grid.
+            Session::EditGrid quarters; quarters.fixed = true; quarters.denominator = 4;
+            check (session.setClipGrid (currentMidiClip()->id, quarters).wasOk(), "a quarter-note grid in the clip"); refresh(); pianoRoll.updateGridButton();
+            setDrawMode (true);
+            const auto beatX = [&] (double beat) { return (float) (55 + beat * (pianoRoll.getWidth() - 66.0) / 4.0); };
+            const auto high = plotBottom - (plotBottom - plotTop) * .75f;
+            const juce::Point<float> from { beatX (1.1), high }, through { beatX (2.0), high }, to { beatX (2.9), high };
+            laneComponent->mouseDown (press (*laneComponent, from, from, false, 1));
+            laneComponent->mouseDrag (press (*laneComponent, through, from, true, 1)); laneComponent->mouseDrag (press (*laneComponent, to, from, true, 1));
+            laneComponent->mouseUp (press (*laneComponent, to, from, true, 1)); refresh();
+            const auto gap = arrangementAutomation::Drawing::stepGap;
+            const std::vector<std::pair<double, float>> expected { { 1 - gap, 0 }, { 1, .5f }, { 2 - gap, .5f }, { 2, .5f }, { 3 - gap, .5f }, { 3, 0 } };
+            const auto drawnPoints = currentMidiClip()->envelopes.empty() ? std::vector<Session::AutomationPoint>() : currentMidiClip()->envelopes[0].points;
+            bool matches = drawnPoints.size() == expected.size();
+            for (size_t i = 0; matches && i < expected.size(); ++i) matches = std::abs (drawnPoints[i].beat - expected[i].first) < 1e-6 && std::abs (drawnPoints[i].value - expected[i].second) < .03f;
+            check (matches, "a Draw Mode drag across the clip lane draws a step on each grid cell, the pan returning to centre after");
+            session.undo(); refresh();
+            check (currentMidiClip()->envelopes.empty(), "one undo takes the drawing back");
+            setDrawMode (false);
+        }
         // MPE: the lane edits the selected note's pitch bend, drawn on the note too.
         check (session.addMidiNote (currentMidiClip()->id, 60, 0, 4, .8f).wasOk(), "a note to bend"); refresh();
         const auto noteCentre = pianoRoll.shownNoteBounds (currentMidiClip()->notes[0]).getCentre();

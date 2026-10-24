@@ -22,10 +22,14 @@ Draw Mode (Options > Draw Mode, B, or the pencil beside the control bar's KEYS s
 - A click on a note deletes it, and the drag goes on deleting the notes it crosses.
 - One drag is one undo step. The pointer is a pencil over the grid. Draw Mode is a setting of the window, not saved with the project.
 
+In the lanes, Draw Mode draws too:
+- In automation and clip envelopes, steps as wide as the grid, or freehand with Cmd held (Alt elsewhere) or snapping off ([automation contract](arrangement-automation-contract.md#draw-mode-2026-10-24)).
+- In the velocity and Chance lanes, each grid step the pointer passes gives its value to the notes starting in it, only the selected notes when there are any. With Cmd held (Alt elsewhere) or snapping off, it sets just the notes under the pointer. With Option held (Alt elsewhere) the values follow a straight line from the press, level with Shift. Each drag is one undo step.
+
 ## Not yet
 
 - Holding B to switch Draw Mode for the moment.
-- Draw Mode in automation lanes, clip envelopes, the velocity lane and take lanes.
+- Draw Mode in take lanes.
 - The Display & Input setting "Draw Mode with Pitch Lock", which makes pitch-locked drawing the default.
 - Changing velocity by dragging a note with Cmd (Alt elsewhere), and Option-dragging copies.
 - The timespan a background drag selects: Halftrack selects notes only.
@@ -40,4 +44,5 @@ The UI suite checks:
 - that B turns Draw Mode on and off, lighting the pencil, and that Options > Draw Mode shows B and is ticked while on;
 - drawing five notes across steps with a pitch change between them, moving back taking notes away, Alt keeping one pitch, and drawn notes replacing a covered note;
 - a Draw Mode click deleting a note and the drag erasing more, with one undo for each drag;
+- velocities drawn over three grid steps, and along a straight line with Option, each one undo step; and steps drawn in a clip envelope lane;
 - that a double-click's note sounds while the button is held with Preview on.
