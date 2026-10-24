@@ -6941,7 +6941,7 @@ private:
                 if (semitone == 0)
                 {
                     g.setColour (themes::colour (0xff344149)); g.setFont (font (9.5f, true));
-                    g.drawText ("C" + juce::String (pitch / 12 - 1), 7, y, 32, rowHeight, juce::Justification::centredLeft);
+                    g.drawText (pitchName (pitch), 7, y, 32, rowHeight, juce::Justification::centredLeft); // C3 is note 60, as on the notes.
                 }
             }
             for (double beat = std::floor (viewBeat / snapBeats()) * snapBeats(); beat <= viewBeat + grid.getWidth() / pixelsPerBeat; beat += snapBeats())

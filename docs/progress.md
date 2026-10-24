@@ -2532,3 +2532,7 @@ UI area. As the reference's manual describes, Cmd held at the press (Alt elsewhe
 
 UI area. View's Fold to Notes (F), with a Fold switch in the note editor, shows only the rows with notes, and Fold to Scale (G) the clip scale's rows and those with notes; a note dragged a row moves to the next row shown. Options > Scale Highlighting (K) lights the scale's rows, while a clip's own scale now marks its keys, as the reference's Scale Mode does ([scale contract](research/scales-contract.md#folding)). Checked in the UI suite.
 
+
+## The keys' octave names — 2026-10-24
+
+UI area. The note editor's keys named middle C "C4" while its notes named the same pitch "C3". The keys now use the notes' names, the reference's C3 for note 60 (`midimonitor::noteName`, checked in the MIDI monitor suite).
