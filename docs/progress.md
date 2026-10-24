@@ -2585,3 +2585,7 @@ UI area. The alternates the reference's menu builders register now reach the sam
 
 UI area. In Automation Mode, Cmd+Delete clears the envelope last clicked, as the reference's hidden menu has it, and the envelope's context menu offers Clear Envelope ([automation contract](research/arrangement-automation-contract.md#clear-envelope-2026-10-24)). Checked in the UI suite.
 
+## MIDI Prelisten and Browser Pre-Hear — 2026-10-24
+
+UI area. Options gains the reference's MIDI Prelisten and Browser Pre-Hear, after Computer MIDI Keyboard: they switch the note editor's Preview switch and the browser's Preview button, and are ticked to match ([menu contract](research/main-menu-contract.md)). Checked in the UI suite.
+

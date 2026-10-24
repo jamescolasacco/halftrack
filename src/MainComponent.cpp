@@ -12551,6 +12551,7 @@ private:
                     menuSoloSwitches, menuCueSwitches, menuSaveCopy, menuDrawMode, menuFoldToNotes, menuFoldToScale, menuScaleHighlighting, menuUndoHistory,
                     menuFocusSession, menuFocusArrangement, menuFocusClip, menuFocusDevices, menuFocusBrowser, menuFocusGroovePool, menuFocusMixer,
                     menuSelectLoop, menuPlaySelection, menuSetClipStart, menuSetLoopStart, menuSetLoopEnd, menuSetClipEnd,
+                    menuMidiPrelisten, menuBrowserPreHear,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410 }; // Plus Session::TimeFormat.
@@ -13177,6 +13178,9 @@ private:
         {
             add (menuMidiMap, "Edit MIDI Map", true, midiMapMode); add (menuKeyMap, "Edit Key Map", true, keyMapMode);
             add (menuComputerKeyboard, "Computer MIDI Keyboard", true, session.isComputerKeyboardEnabled());
+            // The note editor's Preview switch and the browser's Preview button, as the reference's items.
+            add (menuMidiPrelisten, "MIDI Prelisten", true, session.notePreview());
+            add (menuBrowserPreHear, "Browser Pre-Hear", true, previewButton.getToggleState());
             popup.addSeparator();
             add (menuExternalSync, "External Sync", session.hasSyncInputs() || session.isExternalSync(), session.isExternalSync());
             popup.addSeparator();
@@ -13355,6 +13359,8 @@ private:
             case menuKeyMap: setKeyMapMode (! keyMapMode); return;
             case menuComputerKeyboard: setComputerKeyboard (! session.isComputerKeyboardEnabled()); return;
             case menuDrawMode: setDrawMode (! drawMode); return;
+            case menuMidiPrelisten: session.setNotePreview (! session.notePreview()); pianoRoll.sync(); refresh(); return;
+            case menuBrowserPreHear: previewButton.setToggleState (! previewButton.getToggleState(), juce::dontSendNotification); previewButton.onClick(); return;
             case menuFoldToNotes: setFold (! foldToNotes, foldToScale); return;
             case menuFoldToScale: setFold (foldToNotes, ! foldToScale); return;
             case menuScaleHighlighting: scaleHighlighting = ! scaleHighlighting; pianoRoll.foldChanged(); return;
@@ -18932,7 +18938,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         view.addArray ({ "-", "Mixer", "Mixer Controls >", "-", "Overview", "Scene Tempo and Time Signature", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Fold to Notes", "Fold to Scale", "-",
                          "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
         expect ("View", view);
-        juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "-", "External Sync", "-", "Time Ruler Format >", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
+        juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "MIDI Prelisten", "Browser Pre-Hear", "-", "External Sync", "-", "Time Ruler Format >", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
                                     "Fixed Grid", "-", "Draw Mode", "-", "Scale Highlighting", "-", "Solo Switches", "Cue Switches", "Solo in Place", "-", "Audio Engine On" };
        #if ! JUCE_MAC
         options.addArray ({ "-", "Preferences..." });
@@ -18964,6 +18970,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             handleKey (juce::KeyPress ('B', juce::ModifierKeys (cmd | alt), 0));
             check (showBrowser == browserWas && entry ("View", menuBrowser)->shortcutKeyDescription.isNotEmpty() && state.groups.size() == groupsWere,
                    "and back, the menu still showing its own key");
+        }
+        {
+            // MIDI Prelisten and Browser Pre-Hear switch the note editor's Preview and the browser's.
+            const bool notes = session.notePreview(), samples = previewButton.getToggleState();
+            menuItemSelected (menuMidiPrelisten, 6); refresh();
+            check (session.notePreview() != notes && entry ("Options", menuMidiPrelisten)->isTicked == session.notePreview(), "Options > MIDI Prelisten switches the note editor's Preview");
+            menuItemSelected (menuMidiPrelisten, 6); refresh();
+            menuItemSelected (menuBrowserPreHear, 6);
+            check (previewButton.getToggleState() != samples && entry ("Options", menuBrowserPreHear)->isTicked == previewButton.getToggleState(), "Browser Pre-Hear switches the browser's Preview");
+            menuItemSelected (menuBrowserPreHear, 6);
+            check (session.notePreview() == notes && previewButton.getToggleState() == samples, "and both back");
         }
         check (shortcut ("Options", menuDrawMode, juce::KeyPress ('b')) && ! entry ("Options", menuDrawMode)->isTicked, "Draw Mode shows the reference's B, unticked while off");
         menuItemSelected (menuDrawMode, 5); refresh();
