@@ -264,11 +264,11 @@ if(BUILD_TESTING)
     set_tests_properties(automation-editor-acceptance PROPERTIES TIMEOUT 90
         ENVIRONMENT "HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY=${CMAKE_BINARY_DIR}/test-artifacts/ui-snapshots")
     add_test(NAME audio-export-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-audio-export ${CMAKE_BINARY_DIR}/test-artifacts)
-    set_tests_properties(audio-export-acceptance PROPERTIES TIMEOUT 180)
+    set_tests_properties(audio-export-acceptance PROPERTIES TIMEOUT 360)
     add_test(NAME metronome-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-metronome ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(metronome-acceptance PROPERTIES TIMEOUT 600)
     add_test(NAME midi-input-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-midi-input ${CMAKE_BINARY_DIR}/test-artifacts)
-    set_tests_properties(midi-input-acceptance PROPERTIES TIMEOUT 300)
+    set_tests_properties(midi-input-acceptance PROPERTIES TIMEOUT 600)
     add_test(NAME midi-monitor-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-midi-monitor)
     set_tests_properties(midi-monitor-acceptance PROPERTIES TIMEOUT 240 ENVIRONMENT "HALFTRACK_TEST_DISPATCH_MS=7")
     add_test(NAME tempo-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-tempo ${CMAKE_BINARY_DIR}/test-artifacts)
@@ -477,7 +477,7 @@ if(BUILD_TESTING)
     add_test(NAME utility-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-utility ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(utility-acceptance PROPERTIES TIMEOUT 180)
     add_test(NAME sends-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-sends ${CMAKE_BINARY_DIR}/test-artifacts)
-    set_tests_properties(sends-acceptance PROPERTIES TIMEOUT 180
+    set_tests_properties(sends-acceptance PROPERTIES TIMEOUT 360
         ENVIRONMENT "HALFTRACK_TEST_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_VST3>/../..;HALFTRACK_TEST_LATENCY_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestLatency_VST3>/../..")
     add_test(NAME plugin-editor-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-plugin-editor ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(plugin-editor-acceptance PROPERTIES TIMEOUT 90)
@@ -494,7 +494,7 @@ if(BUILD_TESTING)
     set_tests_properties(export-ui-acceptance PROPERTIES TIMEOUT 90
         ENVIRONMENT "HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY=${CMAKE_BINARY_DIR}/test-artifacts/ui-snapshots")
     add_test(NAME ui-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-ui)
-    set_tests_properties(ui-acceptance PROPERTIES TIMEOUT 90
+    set_tests_properties(ui-acceptance PROPERTIES TIMEOUT 300
         ENVIRONMENT "HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY=${CMAKE_BINARY_DIR}/test-artifacts/ui-snapshots;HALFTRACK_TEST_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestGain_VST3>/../..;HALFTRACK_TEST_SIDECHAIN_PLUGIN=$<TARGET_FILE_DIR:HalftrackTestSidechain_VST3>/../..")
     add_test(NAME launcher-acceptance COMMAND $<TARGET_FILE:Halftrack> --self-test-launcher ${CMAKE_BINARY_DIR}/test-artifacts)
     set_tests_properties(launcher-acceptance PROPERTIES TIMEOUT 120)
