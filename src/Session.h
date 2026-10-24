@@ -215,8 +215,8 @@ public:
     enum class NoteTransform { quantizeStarts, quantizeEnds, reverse, invertPitch, legato, halfTime, doubleTime, fixedLength };
     // Note tools after the reference's transformation and generative tools; settings follow each
     // tool's field table in NoteTools.h. Appended tools keep their value; never reorder.
-    enum class NoteTool { strum, chop, span, recombine, velocityShaper, arpeggiate, ornament, connect, euclidean, seed, fitToScale };
-    static constexpr int noteToolCount = 11;
+    enum class NoteTool { strum, chop, span, recombine, velocityShaper, arpeggiate, ornament, connect, euclidean, seed, fitToScale, quantize };
+    static constexpr int noteToolCount = 12;
     struct NoteToolSettings
     {
         NoteTool tool = NoteTool::strum;
@@ -948,8 +948,11 @@ public:
     juce::Result splitMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, double splitBeat, juce::StringArray& insertedIds);
     juce::Result transformMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, NoteTransform, double gridBeats);
     // Applies a note tool in one undo step. A transformation replaces the chosen notes with its
-    // result; a generator (Euclidean, Seed) fills the clip, replacing any chosen notes.
-    juce::Result applyNoteTool (const juce::String& clipId, const juce::StringArray& noteIds, const NoteToolSettings&, juce::StringArray& resultIds);
+    // result; a generator (Euclidean, Seed) fills the clip, replacing any chosen notes. Quantize moves
+    // the chosen notes themselves, keeping their identities and properties; its Current Grid is
+    // `gridBeats`, the editor's grid.
+    juce::Result applyNoteTool (const juce::String& clipId, const juce::StringArray& noteIds, const NoteToolSettings&, juce::StringArray& resultIds,
+                                double gridBeats = 0.25);
     juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);
     // Replaces one controller lane of a MIDI clip in one undo step; no points removes the lane.
     juce::Result setMidiControllerLane (const juce::String& clipId, int controller, const std::vector<ControllerPoint>& points);

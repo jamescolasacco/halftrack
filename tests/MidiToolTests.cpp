@@ -93,6 +93,33 @@ int runMidiToolTests (const juce::File& artifacts)
             check (inside && same (a, b) && ! same (a, c), "Seed places 16 notes in range on the grid, repeatably for a seed and differently for another");
         }
 
+        {
+            // Quantize: starts, ends or both move Amount of the way to the grid's nearest line.
+            const std::vector<Note> loose { note (60, .1, .5), note (62, 1.9, .3), note (64, 3.05, .02) };
+            const auto quantized = [&] (std::initializer_list<std::pair<int, double>> values, double current = .25)
+            { return notetools::run (settings (Tool::quantize, values), loose, 4, current); };
+            check (notetools::valid (notetools::defaults (Tool::quantize)) && notetools::defaults (Tool::quantize).values[0] == 0 && notetools::defaults (Tool::quantize).values[1] == 1
+                       && notetools::defaults (Tool::quantize).values[2] == 0 && notetools::defaults (Tool::quantize).values[3] == 100,
+                   "Quantize starts on the current grid, quantizing starts by 100%");
+            expect (quantized ({}), { note (60, 0, .5), note (62, 2, .3), note (64, 3, .02) }, "by default starts move to the current grid, each note keeping its length");
+            expect (quantized ({ { 0, 1 } }), { note (60, 0, .5), note (62, 2, .3), note (64, 3, .02) }, "a 1/4 grid");
+            expect (quantized ({ { 3, 50 } }), { note (60, .05, .5), note (62, 1.95, .3), note (64, 3.025, .02) }, "Amount moves them part of the way");
+            expect (quantized ({ { 1, 0 }, { 2, 1 } }), { note (60, .1, .4), note (62, 1.9, .35), note (64, 3.05, .2) },
+                    "ends alone stretch the notes, one ending at its start going to the next line");
+            expect (quantized ({ { 2, 1 } }), { note (60, 0, .5), note (62, 2, .25), note (64, 3, .25) }, "starts and ends both, keeping at least a step");
+            expect (quantized ({ { 0, 3 } }), { note (60, 0, .5), note (62, 2, .3), note (64, 3, .02) }, "a 1/8 triplet grid");
+            const auto triplet = notetools::run (settings (Tool::quantize, { { 0, 3 } }), { note (60, .3, .5) }, 4);
+            check (triplet.size() == 1 && near (triplet[0].startBeat, 1.0 / 3), "a 1/8 triplet grid has lines a third of a beat apart");
+            const auto both = notetools::run (settings (Tool::quantize, { { 0, 7 } }), { note (60, .26, .1), note (62, .45, .1), note (64, .7, .1) }, 4);
+            check (both.size() == 3 && near (both[0].startBeat, .25) && near (both[1].startBeat, .5) && near (both[2].startBeat, 2.0 / 3),
+                   "1/16 + 1/16T takes the nearer line of either grid");
+            const auto coarse = notetools::run (settings (Tool::quantize, {}), { note (60, .3, .5) }, 4, 1);
+            check (coarse.size() == 1 && near (coarse[0].startBeat, 0), "Current Grid follows the editor's grid");
+            Note marked = note (60, .1, .5); marked.id = "kept"; marked.chance = .5f;
+            const auto keeps = notetools::run (settings (Tool::quantize, {}), { marked }, 4);
+            check (keeps.size() == 1 && keeps[0].id == "kept" && keeps[0].chance == .5f, "a quantized note keeps its identity and properties");
+        }
+
         // Applying a tool in a clip.
         Session s (false);
         ok (s.addMidiTrack ("Keys"), "add a MIDI track");
@@ -117,6 +144,26 @@ int runMidiToolTests (const juce::File& artifacts)
         s.undo();
         ok (s.applyNoteTool (clip, ids, settings (Tool::euclidean, { { 0, 8 }, { 1, 3 }, { 3, 36 } }), result), "generate over the chosen chord");
         check (notesNow().size() == 6, "a generator replaces the chosen notes");
+        s.undo();
+        {
+            // Quantize moves the chosen notes themselves.
+            juce::StringArray loose;
+            ok (s.addMidiNotes (clip, { note (72, .1, .5), note (74, 1.9, .3) }, loose), "two loose notes");
+            ok (s.setMidiNotesChance (clip, loose, .5f), "with a chance");
+            ok (s.applyNoteTool (clip, loose, settings (Tool::quantize, {}), result, .5), "quantize them to a half-beat grid");
+            auto moved = notesNow();
+            std::erase_if (moved, [&] (const Note& n) { return ! loose.contains (n.id); });
+            std::sort (moved.begin(), moved.end(), [] (const Note& a, const Note& b) { return a.startBeat < b.startBeat; });
+            check (result == loose && moved.size() == 2 && near (moved[0].startBeat, 0) && near (moved[1].startBeat, 2) && near (moved[0].lengthBeats, .5)
+                       && moved[0].chance == .5f && moved[1].chance == .5f,
+                   "Quantize moves the notes on the given grid, keeping their identities and chance");
+            check (s.undoDescription().containsIgnoreCase ("quantize"), "as one Quantize step");
+            s.undo();
+            auto back = notesNow();
+            std::erase_if (back, [&] (const Note& n) { return ! loose.contains (n.id); });
+            check (back.size() == 2 && std::any_of (back.begin(), back.end(), [] (const Note& n) { return near (n.startBeat, .1); }), "one undo puts them back");
+            check (s.applyNoteTool (clip, loose, settings (Tool::quantize, {}), result, 0).failed(), "a grid of nothing is refused");
+        }
         // Scales.
         const Session::ScaleSettings cMajor { true, 0, 0 }, aMinor { true, 9, 1 }, cPentatonic { true, 0, 9 };
         check (Session::inScale (cMajor, 60) && ! Session::inScale (cMajor, 61) && Session::inScale (cMajor, 71) && Session::inScale (aMinor, 69)

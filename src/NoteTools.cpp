@@ -1,6 +1,7 @@
 #include "NoteTools.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 
 namespace halftrack::notetools
@@ -30,6 +31,9 @@ constexpr Field euclideanFields[] {
 constexpr Field fitFields[] {
     { "Root", 0, 11, 0, true, "", "C|C#|D|D#|E|F|F#|G|G#|A|A#|B" },
     { "Scale", 0, Session::scaleModeCount - 1, 0, true, "", "Major|Minor|Dorian|Phrygian|Lydian|Mixolydian|Locrian|Harmonic Minor|Melodic Minor|Major Pentatonic|Minor Pentatonic|Minor Blues|Whole Tone|Half-whole Diminished|Whole-half Diminished|Phrygian Dominant" } };
+constexpr Field quantizeFields[] {
+    { "Grid", 0, 8, 0, true, "", "Current Grid|1/4|1/8|1/8T|1/8 + 1/8T|1/16|1/16T|1/16 + 1/16T|1/32" }, { "Start", 0, 1, 1, true, "", "Off|On" },
+    { "End", 0, 1, 0, true, "", "Off|On" }, { "Amount", 0, 100, 100, true, "%" } };
 constexpr Field seedFields[] {
     { "Notes", 1, 256, 16, true, "" }, { "Low pitch", 0, 127, 48, true, "" }, { "High pitch", 0, 127, 72, true, "" },
     { "Shortest", 1.0 / 16, 4, .25, false, " beats" }, { "Longest", 1.0 / 16, 4, 1, false, " beats" }, { "Grid", 0, 4, 1, true, "", grids },
@@ -73,6 +77,46 @@ std::vector<Note> strum (const std::array<double, 8>& v, const std::vector<Note>
             const auto start = std::max (0.0, n.startBeat + offset), end = std::max (n.startBeat + n.lengthBeats, start + minimumLength);
             result.push_back (make (n.pitch, start, end - start, n.velocity, clip));
         }
+    return result;
+}
+// Quantize, as the reference's tool: note starts, ends or both move Amount of the way to the nearest
+// grid line, of either grid for the combined ones (as Record Quantization's list has them). A note
+// whose start alone moves keeps its length; a quantized end that would reach the start goes to the
+// next line after it. Each note keeps its identity and properties.
+std::vector<Note> quantize (const std::array<double, 8>& v, const std::vector<Note>& notes, double clip, double current)
+{
+    // Each choice's straight and triplet steps; 0 is none.
+    constexpr std::pair<double, double> grids[] { { 0, 0 }, { 1, 0 }, { .5, 0 }, { 0, 1.0 / 3 }, { .5, 1.0 / 3 }, { .25, 0 }, { 0, 1.0 / 6 }, { .25, 1.0 / 6 }, { .125, 0 } };
+    const auto [straight, triplet] = v[0] == 0 ? std::pair { current, 0.0 } : grids[(size_t) v[0]];
+    const bool starts = v[1] > 0, ends = v[2] > 0;
+    const auto amount = v[3] / 100;
+    const auto nearest = [&] (double beat)
+    {
+        const auto a = straight > 0 ? std::round (beat / straight) * straight : beat, b = triplet > 0 ? std::round (beat / triplet) * triplet : beat;
+        return straight <= 0 ? b : triplet <= 0 ? a : std::abs (a - beat) <= std::abs (b - beat) ? a : b;
+    };
+    const auto after = [&] (double beat)
+    {
+        const auto next = [beat] (double step) { return step > 0 ? (std::floor (beat / step + epsilon) + 1) * step : std::numeric_limits<double>::max(); };
+        return std::min (next (straight), next (triplet));
+    };
+    std::vector<Note> result;
+    for (auto n : notes)
+    {
+        const auto end = n.startBeat + n.lengthBeats;
+        auto start = starts ? n.startBeat + (nearest (n.startBeat) - n.startBeat) * amount : n.startBeat;
+        auto finish = end + (start - n.startBeat);
+        if (ends)
+        {
+            auto target = nearest (end);
+            if (target <= start + epsilon) target = after (start);
+            finish = end + (target - end) * amount;
+        }
+        start = std::clamp (start, 0.0, std::max (0.0, clip - minimumLength));
+        finish = std::clamp (finish, start + minimumLength, std::max (start + minimumLength, clip));
+        n.startBeat = start; n.lengthBeats = finish - start;
+        result.push_back (n);
+    }
     return result;
 }
 std::vector<Note> chop (const std::array<double, 8>& v, const std::vector<Note>& notes, double clip)
@@ -264,12 +308,13 @@ std::span<const Field> fields (Tool tool) noexcept
         case Tool::euclidean: return euclideanFields;
         case Tool::seed: return seedFields;
         case Tool::fitToScale: return fitFields;
+        case Tool::quantize: return quantizeFields;
     }
     return {};
 }
 const char* name (Tool tool) noexcept
 {
-    constexpr const char* names[] { "Strum", "Chop", "Span", "Recombine", "Velocity Shaper", "Arpeggiate", "Ornament", "Connect", "Euclidean", "Seed", "Fit to Scale" };
+    constexpr const char* names[] { "Strum", "Chop", "Span", "Recombine", "Velocity Shaper", "Arpeggiate", "Ornament", "Connect", "Euclidean", "Seed", "Fit to Scale", "Quantize" };
     const auto index = (int) tool;
     return index >= 0 && index < Session::noteToolCount ? names[index] : "";
 }
@@ -294,9 +339,9 @@ bool valid (const Session::NoteToolSettings& s) noexcept
     }
     return true;
 }
-std::vector<Note> run (const Session::NoteToolSettings& s, const std::vector<Note>& notes, double clip)
+std::vector<Note> run (const Session::NoteToolSettings& s, const std::vector<Note>& notes, double clip, double current)
 {
-    if (! valid (s) || ! std::isfinite (clip) || clip < minimumLength) return {};
+    if (! valid (s) || ! std::isfinite (clip) || clip < minimumLength || ! std::isfinite (current) || current < minimumLength || current > 16) return {};
     const auto& v = s.values;
     std::vector<Note> result;
     switch (s.tool)
@@ -315,6 +360,7 @@ std::vector<Note> run (const Session::NoteToolSettings& s, const std::vector<Not
             // Out-of-scale notes move to the nearest scale tone; ties move down.
             for (auto n : notes) { n.pitch = Session::fitToScale ({ true, (int) v[0], (int) v[1] }, n.pitch); result.push_back (make (n.pitch, n.startBeat, n.lengthBeats, n.velocity, clip)); }
             break;
+        case Tool::quantize: result = quantize (v, notes, clip, current); break;
     }
     return ordered (result);
 }

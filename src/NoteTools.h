@@ -24,5 +24,7 @@ bool valid (const Session::NoteToolSettings&) noexcept;
 double gridBeats (double choice) noexcept;
 // The notes the tool produces. Transformations reshape `notes`; generators ignore them. Results
 // lie inside [0, clipLengthBeats], are at least a 960th of a beat long and are ordered by start.
-std::vector<Session::MidiNoteInfo> run (const Session::NoteToolSettings&, const std::vector<Session::MidiNoteInfo>& notes, double clipLengthBeats);
+// Quantize keeps each note's identity and properties, and its Current Grid is `currentGridBeats`.
+std::vector<Session::MidiNoteInfo> run (const Session::NoteToolSettings&, const std::vector<Session::MidiNoteInfo>& notes, double clipLengthBeats,
+                                        double currentGridBeats = 0.25);
 }

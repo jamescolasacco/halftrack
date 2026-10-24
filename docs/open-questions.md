@@ -844,6 +844,12 @@ Open Recent Project ([menu contract](research/main-menu-contract.md)). Defaults 
 
 Browser width. The browser's right edge drags to resize it, from 220 pixels to the smaller of 640 and half the window, starting at 300; the width lasts while the window is open. The reference's limits, and whether it keeps the width with the Set, were not read.
 
+Quantize ([contract](research/midi-tools-contract.md#quantize-2026-10-24)). Defaults where the manual is silent:
+
+- **Settings.** Current Grid, Start on, End off and Amount 100% at first; the tool keeps its last settings while Halftrack runs, not with the project.
+- **Ends.** A quantized end that would reach its note's start goes to the next grid line after the start.
+- **Halftrack's own items.** The note menu keeps Quantize Starts to Grid and Quantize Ends to Grid beside the tools.
+
 Templates ([contract](research/templates-contract.md)). Defaults where the manual is silent:
 
 - **Saving.** Save as Template asks for a name, the project's at first, and asks before replacing a template of that name.

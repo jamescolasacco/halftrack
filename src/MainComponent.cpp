@@ -7633,8 +7633,9 @@ private:
             if (clip != nullptr && key.getModifiers().isCommandDown())
             {
                 if ((code == 'E' || code == 'e') && !key.getModifiers().isShiftDown()) { noteCommand (NoteCommand::split); return true; }
+                // Cmd+U quantizes with the Quantize tool's settings, and Shift+Cmd+U opens them, as the reference's keys do.
                 if (code == 'U' || code == 'u')
-                { transformSelected (key.getModifiers().isShiftDown() ? Session::NoteTransform::quantizeEnds : Session::NoteTransform::quantizeStarts); return true; }
+                { if (key.getModifiers().isShiftDown()) openNoteTool (Session::NoteTool::quantize); else quantizeNotes(); return true; }
                 if (code == 'C' || code == 'c') { noteCommand (NoteCommand::copy); return true; }
                 if (code == 'X' || code == 'x') { noteCommand (NoteCommand::cut); return true; }
                 if (code == 'V' || code == 'v') { noteCommand (NoteCommand::paste); return true; }
@@ -7818,7 +7819,7 @@ private:
                 case NoteCommand::invertSelection:
                     for (const auto& note : clip->notes) if (! selectedNoteIds.erase (note.id)) selectedNoteIds.insert (note.id);
                     sync(); break;
-                case NoteCommand::quantize: transformSelected (Session::NoteTransform::quantizeStarts); break;
+                case NoteCommand::quantize: quantizeNotes(); break;
             }
         }
         void deleteSelectedNote()
@@ -8786,7 +8787,7 @@ private:
                     {
                         auto& box = choices[i]; box.setName (f.label); box.addItemList (juce::StringArray::fromTokens (f.choices, "|", ""), 1);
                         box.setSelectedId ((int) settings.values[i] + 1, juce::dontSendNotification);
-                        box.onChange = [this, i] { settings.values[i] = choices[i].getSelectedId() - 1; };
+                        box.onChange = [this, i] { settings.values[i] = choices[i].getSelectedId() - 1; remember(); };
                         addAndMakeVisible (box);
                     }
                     else
@@ -8795,7 +8796,7 @@ private:
                         slider.setRange (f.minimum, f.maximum, f.integer ? 1.0 : 0.0); slider.setValue (settings.values[i], juce::dontSendNotification);
                         slider.setTextValueSuffix (f.unit); slider.setNumDecimalPlacesToDisplay (f.integer ? 0 : 3); slider.updateText();
                         slider.setColour (juce::Slider::trackColourId, themes::colour (0xff59606a)); slider.setColour (juce::Slider::textBoxTextColourId, ink);
-                        slider.onValueChange = [this, i] { settings.values[i] = sliders[i].getValue(); };
+                        slider.onValueChange = [this, i] { settings.values[i] = sliders[i].getValue(); remember(); };
                         addAndMakeVisible (slider);
                     }
                 }
@@ -8826,6 +8827,8 @@ private:
             Session::NoteToolSettings settings;
             juce::TextButton apply;
         private:
+            // The tool keeps its settings for the next time, as Edit > Quantize uses Quantize's.
+            void remember() { if (roll != nullptr) roll->toolSettings[(int) settings.tool] = settings; }
             juce::Component::SafePointer<PianoRoll> roll;
             std::array<juce::Label, 8> labels;
             std::array<juce::ComboBox, 8> choices;
@@ -8833,9 +8836,18 @@ private:
             juce::Label hint;
             int rows = 0;
         };
+        // Each tool's settings as last chosen, or its defaults.
+        std::map<int, Session::NoteToolSettings> toolSettings;
+        Session::NoteToolSettings toolSettingsFor (Session::NoteTool tool) const
+        {
+            const auto found = toolSettings.find ((int) tool);
+            return found != toolSettings.end() ? found->second : notetools::defaults (tool);
+        }
+        // Edit > Quantize, as the reference's: the Quantize tool's settings, applied to the selected notes or every note.
+        void quantizeNotes() { applyNoteTool (toolSettingsFor (Session::NoteTool::quantize)); }
         void openNoteTool (Session::NoteTool tool)
         {
-            auto initial = notetools::defaults (tool);
+            auto initial = toolSettingsFor (tool);
             // Fit to Scale starts from the clip's own scale.
             if (const auto* clip = owner.currentMidiClip(); clip && tool == Session::NoteTool::fitToScale && clip->scale.enabled)
             { initial.values[0] = clip->scale.root; initial.values[1] = clip->scale.mode; }
@@ -8850,7 +8862,7 @@ private:
             for (const auto& note : clip->notes)
                 if (selectedNoteIds.empty() ? ! generator : selectedNoteIds.contains (note.id)) ids.add (note.id);
             juce::StringArray created;
-            const auto result = owner.session.applyNoteTool (clip->id, ids, settings, created);
+            const auto result = owner.session.applyNoteTool (clip->id, ids, settings, created, snapBeats());
             owner.report (result); owner.refresh();
             if (result.wasOk())
             {
@@ -13036,6 +13048,7 @@ private:
                     menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
                     menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
                     menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects, menuShowBackups, menuRevealBackups, menuSnapAutomation, menuSaveTemplate,
+                    menuQuantizeSettings,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410, // Plus Session::TimeFormat.
@@ -13064,7 +13077,7 @@ private:
             { 72, key ('g', cmd) }, { 73, key ('g', cmd | shift) }, { 89, key ('x', cmd | shift) }, { 101, key ('v', cmd | shift) }, { 102, key ('d', cmd | shift) },
             { 75, key (KeyPress::backspaceKey, cmd | shift) }, { menuRename, key ('r', cmd) }, { menuSolo, key ('s') }, { menuArm, key ('c') },
             { menuFreeze, key ('f', cmd | shift | alt) }, { menuBounceNew, key ('b', cmd) }, { 76, key ('e', cmd) }, { menuSplitStop, key ('e', cmd) },
-            { 80, key ('j', cmd) }, { menuQuantize, key ('u', cmd) },
+            { 80, key ('j', cmd) }, { menuQuantize, key ('u', cmd) }, { menuQuantizeSettings, key ('u', cmd | shift) },
             { 30, key ('t', cmd) }, { 33, key ('t', cmd | shift) }, { 35, key ('t', cmd | alt) }, { 39, key ('t', alt | shift) }, { 50, key ('i', cmd) }, { 74, key ('i', cmd) },
             { 68, key ('i', cmd | shift) }, { 34, key ('m', cmd | shift) }, { menuCaptureMidi, key ('c', cmd | shift) }, { menuFade, key ('f', cmd | alt) },
             { menuPlay, key (KeyPress::spaceKey) }, { menuContinue, key (KeyPress::spaceKey, shift) }, { menuInsertMarkerToPlayhead, key (KeyPress::spaceKey, cmd | shift) },
@@ -13613,7 +13626,7 @@ private:
             if (area == EditArea::slots) command (menuSplitStop, "Add Stop Button"); else command (76, "Split");
             command (80, "Consolidate");
             popup.addSeparator();
-            command (menuQuantize, "Quantize");
+            command (menuQuantize, "Quantize"); add (menuQuantizeSettings, "Quantize Settings...", currentMidiClip() != nullptr);
             command (menuGroove, "Extract Groove");
             juce::PopupMenu recordingGrid;
             // In the reference's order; the two combined grids came later and take ids 120 and 121.
@@ -13830,6 +13843,7 @@ private:
             case menuSaveCopy: saveCopyDialog(); return;
             case menuAddFolder: addFolderToBrowser(); return;
             case menuSaveTemplate: saveTemplateDialog(); return;
+            case menuQuantizeSettings: if (currentMidiClip() != nullptr) { if (! showPiano) openPianoRoll(); pianoRoll.openNoteTool (Session::NoteTool::quantize); } return;
             case menuSnapAutomation: session.setSnapAutomationToGrid (! session.snapAutomationToGrid()); refresh(); return;
             case menuRemoveUnavailableProjects: removeUnavailableProjects(); return;
             case menuShowBackups: if (const auto kept = session.projectBackups(); ! kept.isEmpty()) showInBrowser (kept[0]); return;
@@ -19749,6 +19763,34 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (noteIds (currentMidiClip()->notes) == toolIds
         && std::abs (currentMidiClip()->notes.front().startBeat-unquantized.front().startBeat) < 1e-8,
         "one production undo restores quantized group");
+    {
+        // Edit > Quantize Settings (Shift+Cmd+U) opens the Quantize tool, and Quantize then uses its
+        // settings, as the reference's do.
+        const auto quantizeWindow = [&]
+        {
+            juce::Component* panel = nullptr;
+            for (int w = 0; w < juce::TopLevelWindow::getNumTopLevelWindows() && panel == nullptr; ++w)
+                if (auto* window = juce::TopLevelWindow::getTopLevelWindow (w)) panel = findNamed (*window, "Note tool Quantize");
+            return panel;
+        };
+        check (pianoRoll.keyPressed (juce::KeyPress ('U', juce::ModifierKeys (juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier), 0)) && quantizeWindow() != nullptr,
+               "Shift+Cmd+U opens the Quantize tool");
+        if (auto* window = quantizeWindow()->findParentComponentOfClass<juce::DialogWindow>()) delete window;
+        menuItemSelected (menuQuantizeSettings, 0);
+        auto* panel = quantizeWindow();
+        auto* grid = panel != nullptr ? dynamic_cast<juce::ComboBox*> (findNamed (*panel, "Grid")) : nullptr;
+        check (grid != nullptr && grid->getText() == "Current Grid" && grid->getNumItems() == 9, "so does Edit > Quantize Settings, on the current grid among the reference's nine choices");
+        dynamic_cast<juce::Slider*> (findNamed (*panel, "Amount"))->setValue (50, juce::sendNotificationSync);
+        if (auto* window = panel->findParentComponentOfClass<juce::DialogWindow>()) delete window;
+        pianoRoll.keyPressed (allNotes);
+        check (pianoRoll.keyPressed (quantize), "Cmd+U again");
+        bool halfway = true;
+        for (const auto& old : unquantized)
+            halfway = halfway && std::abs (noteById (old.id).startBeat - (old.startBeat + (std::round (old.startBeat / .25) * .25 - old.startBeat) / 2)) < 1e-6;
+        check (halfway && noteIds (currentMidiClip()->notes) == toolIds, "with the Amount at 50% Quantize moves the notes halfway, keeping them");
+        pianoRoll.keyPressed (undo);
+        pianoRoll.toolSettings.erase ((int) Session::NoteTool::quantize);
+    }
 
     {
         // The Info View describes the control under the pointer, and says when it is unavailable.
@@ -20053,7 +20095,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (history[0] == "Undo Add MIDI track" && history[1] == "Can't Redo", "Edit names the step Undo takes back (" + history.joinIntoString (", ") + ")");
         expect ("Edit", { history[0], history[1], "-", "Cut", "Copy", "Paste", "Duplicate", "Delete", "-", "Deactivate Clip", "-", "Select All", "Invert Selection", "Select Loop", loop, "Clip Markers >", "-", "Group Tracks", "Ungroup Tracks", "-",
                           "Cut Time (Loop Range)", "Paste Time", "Duplicate Time (Loop Range)", "Delete Time (Loop Range)", "-", "Rename", "Edit Info Text", "-", "Solo", "Arm", "-",
-                          "Freeze Track", "Bounce Track in Place", "Bounce to New Track", "-", "Split", "Consolidate", "-", "Quantize", "Extract Groove", "Record Quantization >" });
+                          "Freeze Track", "Bounce Track in Place", "Bounce to New Track", "-", "Split", "Consolidate", "-", "Quantize", "Quantize Settings...", "Extract Groove", "Record Quantization >" });
         expect ("Create", { "Insert Audio Track", "Insert MIDI Track", "Insert Return Track", "Insert Take Lane", "-", "Insert Silence (Loop Range)", "Capture and Insert Scene",
                             "Consolidate Time to New Scene", "-", "Insert MIDI Clip", "Capture MIDI", "-", "Create Fade", "-", "Slice to New MIDI Track >", "-", "Add Locator",
                             "Insert Time Signature Change", "-", "Import File..." });

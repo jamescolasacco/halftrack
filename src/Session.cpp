@@ -10094,8 +10094,9 @@ Result Session::transformMidiNotes (const String& clipId, const juce::StringArra
     // Existing batch validation rejects the complete edit before changing any note.
     return updateMidiNotes (clipId, notes);
 }
-Result Session::applyNoteTool (const String& clipId, const juce::StringArray& ids, const NoteToolSettings& settings, juce::StringArray& resultIds)
+Result Session::applyNoteTool (const String& clipId, const juce::StringArray& ids, const NoteToolSettings& settings, juce::StringArray& resultIds, double gridBeats)
 {
+    if (! std::isfinite (gridBeats) || gridBeats < 1.0 / 960 || gridBeats > 16) return Result::fail ("The grid is outside its range.");
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing notes.");
     auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
@@ -10114,7 +10115,26 @@ Result Session::applyNoteTool (const String& clipId, const juce::StringArray& id
     if (chosen.size() != requested.size()) return Result::fail ("A chosen note is missing or ambiguous.");
     if (chosen.empty() && ! notetools::generates (settings.tool)) return Result::fail ("Choose the notes to transform.");
     const auto length = clip->getLengthInBeats().inBeats();
-    const auto result = notetools::run (settings, chosen, length);
+    const auto result = notetools::run (settings, chosen, length, gridBeats);
+    if (settings.tool == NoteTool::quantize)
+    {
+        // Quantize moves the notes themselves, so they keep their identities, chance and expression.
+        for (const auto& note : result)
+            if (auto valid = impl->validateNote (*clip, note.pitch, note.startBeat, note.lengthBeats, note.velocity); valid.failed()) return valid;
+        impl->transaction ("Quantize");
+        auto* undo = &impl->edit->getUndoManager();
+        std::map<String, const MidiNoteInfo*> moved;
+        for (const auto& note : result) moved[note.id] = &note;
+        resultIds.clear();
+        for (auto* note : originals)
+        {
+            const auto id = note->state.getProperty (midiNoteIDProperty).toString();
+            if (const auto found = moved.find (id); found != moved.end())
+                note->setStartAndLength (te::BeatPosition::fromBeats (found->second->startBeat), te::BeatDuration::fromBeats (found->second->lengthBeats), undo);
+            resultIds.add (id);
+        }
+        impl->changed(); return Result::ok();
+    }
     if (result.size() > 16384 || clip->getSequence().getNumNotes() - (int) chosen.size() + (int) result.size() > 100000)
         return Result::fail ("The result has too many notes.");
     for (const auto& note : result)

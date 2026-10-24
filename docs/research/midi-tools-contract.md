@@ -26,6 +26,7 @@ The piano roll's Note tools menu has Transform and Generate submenus modelled on
 | Euclidean | Steps, Pulses, Rotation, Pitch, Rate, Gate, Velocity | Spreads Pulses evenly over Steps (step *i* sounds when (*i* × pulses) mod steps < pulses). Rotation shifts the pattern earlier, and it repeats across the clip. |
 | Fit to Scale | Root, Scale | Each note moves to the nearest tone of the scale, ties going down. The window starts from the clip's scale (see the [scale contract](scales-contract.md)). |
 | Seed | Notes, pitch range, Shortest, Longest, Grid, Seed, Velocity | Places that many notes at random grid starts with random pitches and lengths, reproducibly for a seed. |
+| Quantize | Grid (Current Grid, 1/4, 1/8, 1/8T, 1/8 + 1/8T, 1/16, 1/16T, 1/16 + 1/16T, 1/32), Start, End, Amount | See [Quantize](#quantize-2026-10-24). |
 
 ## Evidence
 
@@ -47,4 +48,14 @@ In a Session it also checks replacement with reported IDs, single-step undo, gen
 
 ## Not implemented
 
-The reference's Quantize, Time Warp, Rhythm, Shape and Stacks tools as tools (Halftrack keeps its separate quantize transforms), live preview while settings change, scale awareness, and any comparison with reference output.
+The reference's Time Warp, Rhythm, Shape and Stacks tools, live preview while settings change, scale awareness, and any comparison with reference output.
+
+## Quantize (2026-10-24)
+
+The reference's manual: the Quantize tool moves or stretches the selected notes to the current grid or a chosen value, triplets included; it quantizes note starts, ends or both, and Amount moves notes only part of the way ([MIDI Tools](https://www.ableton.com/en/live-manual/12/midi-tools/), section 11.2.7, consulted 2026-10-24). Edit > Quantize uses the tool's settings, and Quantize Settings opens it ([Editing MIDI](https://www.ableton.com/en/live-manual/12/editing-midi/), section 10.5.11). The reference's quantize algorithm keeps a straight and a triplet reference grid, note starts and ends, and an amount (static reading of its `AQuantizeAlgorithm` members), and its Record Quantization list offers the nine grids below.
+- **Grids.** Current Grid (the editor's grid), 1/4, 1/8, 1/8T, 1/8 + 1/8T, 1/16, 1/16T, 1/16 + 1/16T and 1/32, the combined ones taking the nearer line of either grid. Lines run from the clip's start.
+- **Start, End, Amount.** With Start, each note's start moves Amount of the way to the nearest line and the note keeps its length. With End, its end moves Amount of the way to the nearest line; an end that would reach the start goes to the next line after the start. With both, the note moves and stretches.
+- **Notes.** It applies to the selected notes, or every note when none is selected, moving the notes themselves: they keep their identities, chance, velocity range and expression. One application is one undo step, named Quantize.
+- **Keys and menus.** Edit > Quantize and Cmd+U apply the tool with its last settings, Current Grid, Start on, End off and Amount 100% at first. Edit > Quantize Settings... and Shift+Cmd+U open its window. Every note tool now keeps its last settings while Halftrack runs.
+
+`tests/MidiToolTests.cpp` checks the defaults; starts to the current and 1/4 grids; Amount at 50%; ends alone, one end going past its start; starts and ends together; triplet and combined grids; Current Grid following the editor's; and a quantized note keeping its identity and chance. In a Session it checks that the notes move on the given grid as one Quantize step keeping their IDs and chance, that undo restores them and that a zero grid is refused. The UI suite opens the window from Shift+Cmd+U and from Edit > Quantize Settings, sets Amount to 50% and finds Cmd+U moving the notes halfway.

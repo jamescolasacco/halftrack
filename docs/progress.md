@@ -2649,3 +2649,7 @@ UI area. File > Save as Template..., after the reference's: the project, named i
 ## Resizable browser — 2026-10-24
 
 UI area. The browser's right edge drags to resize it, as the reference's border does: from 220 pixels to the smaller of 640 and half the window, starting at 300, with a left-right cursor over the edge. Checked in the UI suite, which drags it wider and past both limits.
+
+## The Quantize tool and Quantize Settings — 2026-10-24
+
+Engine and UI areas. The note tools gain Quantize, after the reference's MIDI tool: starts, ends or both move an Amount of the way to the current grid or one of the reference's nine grids (1/4 to 1/32, triplets and the combined straight-and-triplet ones), moving the notes themselves so they keep their identities, chance and expression. Edit > Quantize and Cmd+U now apply its last settings, and the new Edit > Quantize Settings... (Shift+Cmd+U, which used to quantize ends) opens its window, as in the reference. Every note tool keeps its last settings while Halftrack runs ([contract](research/midi-tools-contract.md#quantize-2026-10-24)). Checked in the MIDI tools and UI suites.
