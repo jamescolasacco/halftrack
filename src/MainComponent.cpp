@@ -681,7 +681,12 @@ public:
         filesButton.onClick = [this] { setBrowserCategory (BrowserCategory::samples); };
         pluginsButton.onClick = [this] { setBrowserCategory (BrowserCategory::plugins); };
         folderButton.onClick = [this] { if (pluginBrowser()) showPlugins(); else chooseFolder(); };
-        upButton.onClick = [this] { if (sampleBrowser() && browserCanGoUp()) { browserFolder = browserFolder.getParentDirectory(); updateBrowser(); } };
+        upButton.onClick = [this]
+        {
+            if (! sampleBrowser() || ! browserCanGoUp()) return;
+            const auto left = browserFolder;
+            browserFolder = browserFolder.getParentDirectory(); openFolders = { left }; updateBrowser(); // The folder left shows open in its parent.
+        };
         browserSidebar.setViewedComponent (&browserCategories, false);
         browserSidebar.setScrollBarsShown (true, false); browserSidebar.setScrollBarThickness (6);
         browserSidebar.setTitle ("Browser sidebar"); browserSidebar.setDescription ("Collections, the Library's categories and Places");
@@ -2007,7 +2012,8 @@ private:
     static constexpr float automationMagnet = 6; // How near a grid line, in pixels, a breakpoint snaps to it.
     static constexpr int categoryWidth = 98, trackWidth = 252, trackHeight = 72, rulerHeight = 60,
                          deviceHeight = 268, statusHeight = 24;
-    struct BrowserItem { juce::File file; bool directory = false, found = false; }; // found: a search result from the index.
+    // found: a search result from the index; depth: how far inside the listed folder's open folders it is.
+    struct BrowserItem { juce::File file; bool directory = false, found = false; int depth = 0; };
     struct FolderScan
     {
         struct Entry { std::string name; bool directory = false; };
@@ -10591,7 +10597,10 @@ private:
     bool browserListKey (const juce::KeyPress& key)
     {
         const auto code = key.getKeyCode();
-        if (key.getModifiers().isAnyModifierKeyDown()) return false;
+        const auto mods = key.getModifiers();
+        // Cmd with Right opens a folder keeping the others open, as the reference's does.
+        const bool keepOpen = mods == juce::ModifierKeys (juce::ModifierKeys::commandModifier) && code == juce::KeyPress::rightKey;
+        if (mods.isAnyModifierKeyDown() && ! keepOpen) return false;
         const auto row = browserList.getSelectedRow();
         if (code == '0' && row >= 0)
         {
@@ -10602,13 +10611,31 @@ private:
             updateBrowser(); browserList.repaint(); return true;
         }
         if (! sampleBrowser()) return false;
+        // Right opens a folder, then goes into it, and previews a sound; Left closes a folder, goes to
+        // the folder holding an item, and at the top goes up a folder, as the reference's keys do.
         if (code == juce::KeyPress::rightKey && juce::isPositiveAndBelow (row, (int) browserItems.size()))
         {
-            if (browserItems[(size_t) row].directory) activateBrowserRow (row);
-            else if (const auto file = browserItems[(size_t) row].file; isAudio (file) && session.snapshot().previewing != file) report (session.previewFile (file));
+            const auto item = browserItems[(size_t) row];
+            if (item.directory && item.found) activateBrowserRow (row);
+            else if (item.directory && ! openFolders.contains (item.file)) openBrowserFolder (item.file, key.getModifiers().isCommandDown());
+            else if (item.directory) { if (row + 1 < (int) browserItems.size() && browserItems[(size_t) row + 1].depth > item.depth) browserList.selectRow (row + 1); }
+            else if (isAudio (item.file) && session.snapshot().previewing != item.file) report (session.previewFile (item.file));
             return true;
         }
-        if (code == juce::KeyPress::leftKey) { upButton.onClick(); return true; }
+        if (code == juce::KeyPress::leftKey)
+        {
+            if (juce::isPositiveAndBelow (row, (int) browserItems.size()))
+            {
+                const auto item = browserItems[(size_t) row];
+                if (item.directory && openFolders.contains (item.file)) { closeBrowserFolder (item.file); return true; }
+                if (item.depth > 0)
+                {
+                    for (int r = row; --r >= 0;) if (browserItems[(size_t) r].depth == item.depth - 1) { browserList.selectRow (r); break; }
+                    return true;
+                }
+            }
+            upButton.onClick(); return true;
+        }
         return false;
     }
     void toggleBrowserCollection (int row, int collection)
@@ -15609,23 +15636,38 @@ private:
         browserError.clear();
         browserLoading = false;
         browserIndex.cancel(); shownIndex = {};
+        // The tree keeps the folders open under the new listed folder and reads them again.
+        for (auto& [folder, scan] : folderScans) scan->cancelled.store (true);
+        folderScans.clear(); folderListings.clear();
+        std::erase_if (openFolders, [this] (const juce::File& f) { return browserFolder == juce::File() || ! f.isAChildOf (browserFolder); });
         if (browserFolder == juce::File()) return;
         if (! browserIndex.start (browserFolder.getFullPathName().toStdString()))
             browserError = "Previous folders are still waiting on the filesystem. Try again shortly.";
+        auto scan = launchFolderScan (browserFolder);
+        if (scan == nullptr)
+        {
+            if (browserError.isEmpty()) browserError = "Previous folders are still waiting on the filesystem. Try again shortly.";
+            return;
+        }
+        browserLoading = true;
+        browserScanStarted = juce::Time::getMillisecondCounterHiRes();
+        browserScan = scan;
+        for (const auto& folder : openFolders) if (auto opened = launchFolderScan (folder)) folderScans[folder] = opened;
+    }
+    // Reads a folder's audio files, projects and folders on a worker of its own, or nothing when
+    // four scans are still outstanding.
+    std::shared_ptr<FolderScan> launchFolderScan (const juce::File& folder)
+    {
         // A filesystem call may remain blocked inside the OS. Keep at most four
         // outstanding workers, including cancelled scans still waiting on I/O.
         if (activeBrowserScans->fetch_add (1) >= 4)
         {
             activeBrowserScans->fetch_sub (1);
-            browserError = "Previous folders are still waiting on the filesystem. Try again shortly.";
-            return;
+            return nullptr;
         }
-        browserLoading = true;
-        browserScanStarted = juce::Time::getMillisecondCounterHiRes();
         auto scan = std::make_shared<FolderScan>();
-        browserScan = scan;
         auto active = activeBrowserScans;
-        const auto path = browserFolder.getFullPathName().toStdString();
+        const auto path = folder.getFullPathName().toStdString();
         // Workers own only standard-library data. They never capture a Component,
         // call JUCE, or post callbacks. A blocked OS operation can finish after the
         // window closes without touching its memory or delaying destruction.
@@ -15674,31 +15716,90 @@ private:
         catch (const std::exception& e)
         {
             activeBrowserScans->fetch_sub (1);
-            browserLoading = false;
             browserError = juce::String::fromUTF8 (e.what());
-            browserScan.reset();
+            return nullptr;
         }
+        return scan;
+    }
+    // A folder's finished scan as rows, folders first, then by name.
+    static std::vector<BrowserItem> scannedItems (FolderScan& scan, const juce::File& folder, std::string& error)
+    {
+        std::vector<FolderScan::Entry> entries;
+        {
+            const std::lock_guard<std::mutex> lock (scan.mutex);
+            entries = std::move (scan.entries);
+            error = std::move (scan.error);
+        }
+        std::vector<BrowserItem> items;
+        for (const auto& entry : entries)
+            items.push_back ({ folder.getChildFile (juce::String::fromUTF8 (entry.name.data(), (int) entry.name.size())), entry.directory });
+        std::sort (items.begin(), items.end(), [] (const auto& a, const auto& b)
+        { return a.directory != b.directory ? a.directory : a.file.getFileName().compareNatural (b.file.getFileName()) < 0; });
+        return items;
     }
     void pollBrowserScan()
     {
-        if (! browserScan || ! browserScan->finished.load()) return;
-        std::vector<FolderScan::Entry> entries;
-        std::string error;
+        bool changed = false;
+        for (auto it = folderScans.begin(); it != folderScans.end();)
         {
-            const std::lock_guard<std::mutex> lock (browserScan->mutex);
-            entries = std::move (browserScan->entries);
-            error = std::move (browserScan->error);
+            if (! it->second->finished.load()) { ++it; continue; }
+            std::string ignored;
+            folderListings[it->first] = scannedItems (*it->second, it->first, ignored);
+            it = folderScans.erase (it); changed = true;
         }
-        browserScan.reset();
-        browserLoading = false;
-        browserError = juce::String::fromUTF8 (error.data(), (int) error.size());
-        allBrowserItems.clear();
-        for (const auto& entry : entries)
-            allBrowserItems.push_back ({ browserFolder.getChildFile (juce::String::fromUTF8 (entry.name.data(), (int) entry.name.size())), entry.directory });
-        std::sort (allBrowserItems.begin(), allBrowserItems.end(), [] (const auto& a, const auto& b)
-        { return a.directory != b.directory ? a.directory : a.file.getFileName().compareNatural (b.file.getFileName()) < 0; });
-        updateBrowser(); selectShownBrowserFile();
+        if (browserScan && browserScan->finished.load())
+        {
+            std::string error;
+            allBrowserItems = scannedItems (*browserScan, browserFolder, error);
+            browserScan.reset();
+            browserLoading = false;
+            browserError = juce::String::fromUTF8 (error.data(), (int) error.size());
+            changed = true;
+        }
+        if (changed) { updateBrowser(); selectShownBrowserFile(); }
     }
+    // The file lists' tree, as the reference's content pane unfolds folders in place: the listed
+    // folder's items, each open folder's under it, indented.
+    std::vector<BrowserItem> treeRows() const
+    {
+        std::vector<BrowserItem> rows;
+        const std::function<void (const std::vector<BrowserItem>&, int)> add = [&] (const std::vector<BrowserItem>& items, int depth)
+        {
+            for (auto item : items)
+            {
+                item.depth = depth; rows.push_back (item);
+                if (item.directory && openFolders.contains (item.file))
+                    if (const auto found = folderListings.find (item.file); found != folderListings.end()) add (found->second, depth + 1);
+            }
+        };
+        add (allBrowserItems, 0);
+        return rows;
+    }
+    // Opening a folder closes the others outside it unless Cmd is held, as the reference's do.
+    void openBrowserFolder (const juce::File& folder, bool keepOthers)
+    {
+        if (! keepOthers) std::erase_if (openFolders, [&] (const juce::File& f) { return ! (folder == f || folder.isAChildOf (f)); });
+        openFolders.insert (folder);
+        if (! folderListings.contains (folder) && ! folderScans.contains (folder))
+            if (auto scan = launchFolderScan (folder)) folderScans[folder] = scan;
+        updateBrowser();
+    }
+    void closeBrowserFolder (const juce::File& folder)
+    {
+        std::erase_if (openFolders, [&] (const juce::File& f) { return f == folder || f.isAChildOf (folder); });
+        updateBrowser();
+    }
+    // Opens the folders between the listed folder and a file, closing the others.
+    void revealInTree (const juce::File& file)
+    {
+        openFolders.clear();
+        for (auto f = file.getParentDirectory(); f != browserFolder && f.isAChildOf (browserFolder); f = f.getParentDirectory()) openFolders.insert (f);
+    }
+    // Still reading: the index, the listed folder or an open folder.
+    bool browserBusy() const { return browserIndex.status().indexing || browserLoading || ! folderScans.empty(); }
+    std::set<juce::File> openFolders;
+    std::map<juce::File, std::vector<BrowserItem>> folderListings;
+    std::map<juce::File, std::shared_ptr<FolderScan>> folderScans;
     // While the folder is indexed, a search's results grow and the browser shows how far it has got.
     void pollBrowserIndex()
     {
@@ -15787,7 +15888,7 @@ private:
             else if (query.isNotEmpty())
                 for (const auto& entry : browserIndex.search (query.toStdString(), maximumSearchResults))
                     browserItems.push_back ({ juce::File (juce::String::fromUTF8 (entry.path.data(), (int) entry.path.size())), entry.directory, true });
-            else browserItems = allBrowserItems;
+            else browserItems = treeRows();
         }
         else if (browserCategory == BrowserCategory::packs)
         {
@@ -15942,35 +16043,47 @@ private:
         if (selected) { g.setColour (raised); g.fillRect (0, 0, width, height); }
         g.setColour (selected ? orange : muted);
         g.setFont (font (11.5f));
-        auto label = browserItems[(size_t) row].file.getFileName();
-        if (browserItems[(size_t) row].directory)
+        const auto& item = browserItems[(size_t) row];
+        auto label = item.file.getFileName();
+        // Items inside open folders are indented under them; a folder's triangle shows whether it is open.
+        const int x = treeIndent (item);
+        if (item.directory)
         {
-            g.drawRect (6, height / 2 - 4, 11, 9); g.fillRect (6, height / 2 - 6, 5, 2);
+            if (! item.found)
+            {
+                juce::Path triangle;
+                const auto cx = (float) x - 8.0f, cy = (float) height / 2;
+                if (openFolders.contains (item.file)) triangle.addTriangle (cx - 3.5f, cy - 2, cx + 3.5f, cy - 2, cx, cy + 2.5f);
+                else triangle.addTriangle (cx - 2, cy - 3.5f, cx - 2, cy + 3.5f, cx + 2.5f, cy);
+                g.fillPath (triangle);
+            }
+            g.drawRect (x, height / 2 - 4, 11, 9); g.fillRect (x, height / 2 - 6, 5, 2);
         }
-        else if (isProject (browserItems[(size_t) row].file))
+        else if (isProject (item.file))
         {
             // A project: a page with lines on it.
-            g.drawRect (7, height / 2 - 6, 9, 12);
-            for (int i = 0; i < 3; ++i) g.fillRect (9, height / 2 - 3 + i * 3, 5, 1);
+            g.drawRect (x + 1, height / 2 - 6, 9, 12);
+            for (int i = 0; i < 3; ++i) g.fillRect (x + 3, height / 2 - 3 + i * 3, 5, 1);
         }
         else
         {
-            for (int i = 0; i < 5; ++i) { const int h = i % 2 == 0 ? 6 : 12; g.drawVerticalLine (6 + i * 2, (float) (height - h) / 2, (float) (height + h) / 2); }
+            for (int i = 0; i < 5; ++i) { const int h = i % 2 == 0 ? 6 : 12; g.drawVerticalLine (x + i * 2, (float) (height - h) / 2, (float) (height + h) / 2); }
         }
         g.setColour (selected ? ink : themes::colour (0xffc6c6c6));
-        const auto& item = browserItems[(size_t) row];
         if (item.found)
         {
             // A search result also shows its folder, under the browser folder, so equal names differ.
             const auto folder = item.file.getParentDirectory().getRelativePathFrom (browserFolder);
             const int labelWidth = juce::jmin (width - 29, juce::roundToInt (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), label)) + 8);
-            g.drawText (label, 25, 0, labelWidth, height, juce::Justification::centredLeft, true);
+            g.drawText (label, x + 19, 0, labelWidth, height, juce::Justification::centredLeft, true);
             g.setColour (muted); g.setFont (font (10.0f));
-            if (folder != ".") g.drawText (folder, 25 + labelWidth + 4, 0, width - 33 - labelWidth, height, juce::Justification::centredLeft, true);
+            if (folder != ".") g.drawText (folder, x + 19 + labelWidth + 4, 0, width - x - 27 - labelWidth, height, juce::Justification::centredLeft, true);
             return;
         }
-        g.drawText (label, 25, 0, width - 29, height, juce::Justification::centredLeft, true);
+        g.drawText (label, x + 19, 0, width - x - 23, height, juce::Justification::centredLeft, true);
     }
+    // Where a file row's icon starts: after its folder triangle, indented by its depth.
+    static int treeIndent (const BrowserItem& item) { return 18 + 14 * item.depth; }
     // A sample chosen for a MIDI track goes into its Drum Sampler's selected pad, or its Sampler;
     // otherwise it imports at the insert marker, or into the selected Session slot.
     void useBrowserSample (const juce::File& file)
@@ -15997,7 +16110,18 @@ private:
                 report (juce::Result::fail ("\"" + item.file.getFileName() + "\" has moved or been deleted. Searching the folder again."));
                 scannedBrowserFolder = juce::File(); updateBrowser(); return;
             }
-            if (item.directory) { browserFolder = item.file; browserSearch.clear(); updateBrowser(); }
+            if (item.directory && item.found)
+            {
+                // A folder found by a search shows open in the tree.
+                browserSearch.setText ({}, juce::dontSendNotification);
+                revealInTree (item.file); shownBrowserFile = item.file;
+                openBrowserFolder (item.file, true); selectShownBrowserFile();
+            }
+            else if (item.directory)
+            {
+                if (openFolders.contains (item.file)) closeBrowserFolder (item.file);
+                else openBrowserFolder (item.file, juce::ModifierKeys::currentModifiers.isCommandDown());
+            }
             else if (isProject (item.file)) openProject (item.file);
             else useBrowserSample (item.file);
         }
@@ -16050,7 +16174,15 @@ private:
     // Right-click: the collections the item belongs to, ticked, each toggled by its choice (or keys 1 to 7).
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override
     {
-        if (! e.mods.isPopupMenu()) return;
+        if (! e.mods.isPopupMenu())
+        {
+            if (sampleBrowser() && juce::isPositiveAndBelow (row, (int) browserItems.size()))
+                if (const auto item = browserItems[(size_t) row]; item.directory && ! item.found && e.x < treeIndent (item))
+                {
+                    if (openFolders.contains (item.file)) closeBrowserFolder (item.file); else openBrowserFolder (item.file, e.mods.isCommandDown());
+                }
+            return;
+        }
         if (browserCategory == BrowserCategory::templates && juce::isPositiveAndBelow (row, (int) deviceItems.size()) && deviceItems[(size_t) row].projectTemplate != juce::File())
         {
             juce::PopupMenu templateMenu; templateMenu.addItem (1, "Set Default Set");
@@ -16101,9 +16233,10 @@ private:
         {
             if (browserCategory != BrowserCategory::place) samplesFolder = browserFolder;
             browserPlace = holder; browserPlaceRoot = placeFolder (holder);
+            browserFolder = browserPlaceRoot; revealInTree (file); // Opened down to the file, in its place.
         }
-        else leavePlace();
-        browserFolder = file.getParentDirectory(); shownBrowserFile = file;
+        else { leavePlace(); browserFolder = file.getParentDirectory(); openFolders.clear(); }
+        shownBrowserFile = file;
         scannedBrowserFolder = juce::File(); // Listed afresh, so a file new to the folder is found.
         setBrowserCategory (holder >= 0 ? BrowserCategory::place : BrowserCategory::samples);
         selectShownBrowserFile();
@@ -16919,7 +17052,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         }
         const auto settle = [&]
         {
-            for (int i = 0; i < 1000 && (browserIndex.status().indexing || browserLoading); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
+            for (int i = 0; i < 1000 && browserBusy(); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
             pollBrowserIndex();
         };
         setBrowserCategory (BrowserCategory::samples);
@@ -16936,13 +17069,46 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         browserSearch.setText ({}, juce::sendNotificationSync); updateBrowser();
         check (getNumRows() == 2, "clearing the search shows the folder again");
         {
-            // The reference's keys: Right opens a folder or previews a file, and Left goes up a folder.
+            // The reference's content pane: folders open in place. Right opens one, then goes into it,
+            // and previews a sound; Left closes a folder, goes to the folder holding an item, and at the
+            // top goes up a folder. Opening a folder closes the others unless Cmd is held.
             const auto rowOf = [&] (const juce::File& file) { for (int r = 0; r < (int) browserItems.size(); ++r) if (browserItems[(size_t) r].file == file) return r; return -1; };
-            browserList.selectRow (rowOf (library.getChildFile ("Drums")));
-            check (browserListKey (juce::KeyPress (juce::KeyPress::rightKey)) && browserFolder == library.getChildFile ("Drums"), "Right opens the selected folder");
+            const juce::KeyPress right (juce::KeyPress::rightKey), left (juce::KeyPress::leftKey);
+            const auto drums = library.getChildFile ("Drums"), fills = library.getChildFile ("Fills");
+            check (fills.getChildFile ("Fill.wav").getParentDirectory().createDirectory().wasOk() && fills.getChildFile ("Fill.wav").replaceWithText ({}), "a second folder");
+            scannedBrowserFolder = juce::File(); updateBrowser(); settle();
+            browserList.selectRow (rowOf (drums));
+            check (browserListKey (right) && openFolders.contains (drums) && browserFolder == library, "Right opens the selected folder in place");
             settle();
-            check (browserListKey (juce::KeyPress (juce::KeyPress::leftKey)) && browserFolder == library, "Left goes up a folder");
+            const int kick = rowOf (drums.getChildFile ("Kick.wav"));
+            check (kick > rowOf (drums) && browserItems[(size_t) kick].depth == 1 && rowOf (drums.getChildFile ("Room")) > rowOf (drums), "its items show under it, indented");
+            if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+                if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+                {
+                    browserList.selectRow (rowOf (drums.getChildFile ("Room"))); browserListKey (right); settle();
+                    juce::PNGImageFormat png; const auto output = directory.getChildFile ("browser-tree.png");
+                    if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                        && png.writeImageToStream (createComponentSnapshot (getLocalBounds(), true, 1.0f), *stream))
+                        std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                    closeBrowserFolder (drums.getChildFile ("Room")); browserList.selectRow (rowOf (drums));
+                }
+            check (browserListKey (right) && browserList.getSelectedRow() == rowOf (drums) + 1, "Right again goes into it");
+            check (browserListKey (left) && browserList.getSelectedRow() == rowOf (drums), "Left goes back to the folder holding the item");
+            check (browserListKey (left) && ! openFolders.contains (drums) && rowOf (drums.getChildFile ("Kick.wav")) < 0, "and then closes it");
+            browserList.selectRow (rowOf (drums)); browserListKey (right); settle();
+            browserList.selectRow (rowOf (fills)); browserListKey (right); settle();
+            check (openFolders.contains (fills) && ! openFolders.contains (drums) && rowOf (fills.getChildFile ("Fill.wav")) > rowOf (fills),
+                   "opening another folder closes the first");
+            browserList.selectRow (rowOf (drums)); browserListKey (juce::KeyPress (juce::KeyPress::rightKey, juce::ModifierKeys::commandModifier, 0)); settle();
+            check (openFolders.contains (fills) && openFolders.contains (drums), "unless Cmd is held");
+            activateBrowserRow (rowOf (fills));
+            check (! openFolders.contains (fills) && openFolders.contains (drums), "a double-click closes an open folder");
+            browserFolder = drums; updateBrowser(); settle();
+            browserList.selectRow (rowOf (drums.getChildFile ("Kick.wav")));
+            check (browserListKey (left) && browserFolder == library && openFolders.contains (drums), "at the top, Left goes up a folder, showing the one left open in it");
             settle();
+            check (rowOf (drums.getChildFile ("Kick.wav")) > rowOf (drums), "with its items under it");
+            closeBrowserFolder (drums); settle();
             check (audioFixture.copyFileTo (library.getChildFile ("Real.wav")), "a playable sample in the folder"); scannedBrowserFolder = juce::File(); updateBrowser(); settle();
             browserList.selectRow (rowOf (library.getChildFile ("Real.wav")));
             check (browserListKey (juce::KeyPress (juce::KeyPress::rightKey)) && session.snapshot().previewing == library.getChildFile ("Real.wav"), "Right on a file previews it");
@@ -16980,7 +17146,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         for (const auto* name : { "Hats/Hat A.wav", "Hats/Hat B.wav", "Hats/Hat C.wav" }) write (name, false);
         setBrowserCategory (BrowserCategory::samples);
         browserFolder = library; updateBrowser();
-        for (int i = 0; i < 1000 && (browserIndex.status().indexing || browserLoading); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
+        for (int i = 0; i < 1000 && browserBusy(); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
         showSimilarFiles (library.getChildFile ("Kick A.wav"));
         for (int i = 0; i < 2000 && similarIndex.status().analysing; ++i) juce::Thread::sleep (5);
         pollBrowserIndex(); updateBrowser();
@@ -17034,7 +17200,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         }
         const auto settle = [&]
         {
-            for (int i = 0; i < 1000 && (browserIndex.status().indexing || browserLoading); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
+            for (int i = 0; i < 1000 && browserBusy(); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
             pollBrowserIndex();
         };
         const auto click = [&] (juce::Point<int> at)
@@ -17064,9 +17230,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (browserCategory == BrowserCategory::place && browserFolder == userLibrary && getNumRows() == 1 && ! upButton.isEnabled() && ! folderButton.isVisible()
                    && upButton.isVisible(), "the User Library lists its folders, without Choose Folder, and Up stops at it");
         activateBrowserRow (0); settle();
-        check (browserFolder == userLibrary.getChildFile ("Samples") && rowOf (userLibrary.getChildFile ("Samples/Clap.wav")) >= 0 && upButton.isEnabled(), "a folder in it opens");
-        check (browserListKey (juce::KeyPress (juce::KeyPress::leftKey)) && browserFolder == userLibrary, "Left goes back up to the place");
-        check (browserListKey (juce::KeyPress (juce::KeyPress::leftKey)) && browserFolder == userLibrary, "and no further");
+        const auto clap = userLibrary.getChildFile ("Samples/Clap.wav");
+        check (browserFolder == userLibrary && rowOf (clap) > 0 && browserItems[(size_t) rowOf (clap)].depth == 1 && ! upButton.isEnabled(),
+               "a folder in it opens in place, Up still stopped at the place");
+        browserList.selectRow (rowOf (clap));
+        check (browserListKey (juce::KeyPress (juce::KeyPress::leftKey)) && browserList.getSelectedRow() == 0, "Left goes to the folder holding the item");
+        check (browserListKey (juce::KeyPress (juce::KeyPress::leftKey)) && rowOf (clap) < 0, "then closes it");
+        check (browserListKey (juce::KeyPress (juce::KeyPress::leftKey)) && browserFolder == userLibrary, "and goes no further than the place");
         click (browserCategories.categoryPoint (BrowserCategory::samples)); settle();
         check (browserCategory == BrowserCategory::samples && browserFolder == root.getChildFile ("Elsewhere"), "Samples returns to the folder it was left at");
         // Add Folder to Browser: the File menu offers it beside Install Pack, and the folder joins Places and opens.
@@ -20065,10 +20235,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (backupItems() == "Song [2026-01-02 103015]|-|Show in Browser|" + reveal, "the version it replaced is listed, then where backups are kept: " + backupItems());
         const auto tracks = state.tracks.size();
         menuItemSelected (menuShowBackups, 0);
-        for (int i = 0; i < 1000 && (browserIndex.status().indexing || browserLoading); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
-        check (browserCategory == BrowserCategory::place && browserPlace == currentProjectPlace && browserFolder == backup.getParentDirectory()
+        for (int i = 0; i < 1000 && browserBusy(); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
+        check (browserCategory == BrowserCategory::place && browserPlace == currentProjectPlace && browserFolder == backup.getParentDirectory().getParentDirectory()
+                   && openFolders.contains (backup.getParentDirectory())
                    && juce::isPositiveAndBelow (browserList.getSelectedRow(), (int) browserItems.size()) && browserItems[(size_t) browserList.getSelectedRow()].file == backup
-                   && browserKey (browserList.getSelectedRow()).isEmpty(), "Show in Browser lists the backups in the Current Project, the newest selected");
+                   && browserKey (browserList.getSelectedRow()).isEmpty(), "Show in Browser opens the Current Project's Backup folder, the newest backup selected");
         activateBrowserRow (browserList.getSelectedRow());
         check (state.projectFile == backup && state.tracks.size() == tracks - 1, "a project in the browser opens with a double-click: the earlier version");
         check (session.loadProject (project).wasOk(), "back to the project"); refresh();
@@ -23699,7 +23870,7 @@ int MainComponent::Impl::runSeparationStress (const juce::File& root)
     // A browser library of 3000 names in 30 folders, indexed before the take.
     setBrowserCategory (BrowserCategory::samples);
     browserFolder = root.getChildFile ("Library"); updateBrowser();
-    for (int i = 0; i < 2000 && (browserIndex.status().indexing || browserLoading); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
+    for (int i = 0; i < 2000 && browserBusy(); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
     check (browserIndex.status().entries >= 3000, "the library is indexed (" + juce::String ((int) browserIndex.status().entries) + " entries)");
 
     const int before = device->blocks();

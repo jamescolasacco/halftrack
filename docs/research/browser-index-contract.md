@@ -4,7 +4,7 @@ The reference's browser indexes the user's folders so that a search finds files 
 
 ## Indexing
 
-- **When it runs.** Choosing a folder (or moving up, or opening a folder in the list) starts indexing it on a worker thread and cancels any index still running.
+- **When it runs.** Choosing a folder, or moving up, starts indexing it on a worker thread and cancels any index still running. Folders opened in place in the list are inside it already.
 - **The worker.** It holds only standard-library data. A scan blocked inside the filesystem can therefore outlive the browser without touching its memory. At most four scans may be outstanding, cancelled ones included; beyond that the browser asks the user to try again shortly.
 - **What is indexed.** Folders and audio files (WAV, AIFF, FLAC, Ogg, MP3) at any depth, up to 64 levels. Hidden entries (names starting with `.`) are skipped. Linked folders are not followed, so a link loop cannot recurse; linked audio files are listed.
 - **Limits.** The index stops at 250,000 entries and says so ("First 250000 items").

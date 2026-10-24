@@ -17,7 +17,7 @@ Status: partial. This follows the reference's manual and static menu research. N
 ## Halftrack's behaviour
 
 - **Sidebar.** The browser's sidebar shows COLLECTIONS, then LIBRARY (Instruments, Audio Effects, MIDI Effects, Plug-Ins, Samples, Grooves), then PLACES: Packs, User Library, Current Project, each user folder in the order added, and Add Folder.... It scrolls when its rows are taller than the browser.
-- **Browsing a place.** Clicking a place lists its folder as Samples lists a folder: folders, audio files, which open, preview, import and take collections as they do there, and projects, which open ([backups contract](backups-contract.md#halftracks-behaviour)). The title row names the place at its top. Up and Left go back up a folder but no higher than the place. A search looks through the place and every folder in it, from the [browser index](browser-index-contract.md). Samples keeps its own folder: leaving a place for another row returns Samples to the folder it was left at.
+- **Browsing a place.** Clicking a place lists its folder as Samples lists a folder: folders, audio files, which open, preview, import and take collections as they do there, and projects, which open ([backups contract](backups-contract.md#halftracks-behaviour)). The title row names the place. Its folders open in place, as the [folder tree](#the-folder-tree-2026-10-24) below describes, and Left at the top goes no higher than the place. A search looks through the place and every folder in it, from the [browser index](browser-index-contract.md). Samples keeps its own folder: leaving a place for another row returns Samples to the folder it was left at.
 - **User Library.** The User Library's own folder.
 - **Current Project.** The project's media folder: `<name> Assets` beside a saved project, or the unsaved project's temporary one. Its Backup folder holds the project's [backups](backups-contract.md). It is listed again after a recording, a save or another project. Before the project has any media it says so. Its menu has Show in Finder (Show in Explorer elsewhere).
 - **Adding a folder.** File > Add Folder to Browser... and the sidebar's Add Folder... choose a folder. Folders dropped on the browser are added too. A folder joins Places last and opens; a folder already there just opens. Places are kept with the preferences, as absolute paths, and a preferences reset keeps them.
@@ -26,11 +26,18 @@ Status: partial. This follows the reference's manual and static menu research. N
 - **Show in Browser.** A clip's or slot's Show in Browser opens the place that holds its file, looking in the Current Project first, then the user folders and the User Library. Any other file opens in Samples, as before. Either way the folder is listed afresh and the file selected.
 - **Scanning.** While a place's folder is being indexed, a wheel turns beside the PLACES label.
 
+## The folder tree (2026-10-24)
+
+The reference's manual: Pack folders "can be unfolded to reveal the included Pack contents", and Left and Right "close and open folders"; holding Cmd while opening a folder keeps the others open, which otherwise close ([Working with the Browser](https://www.ableton.com/en/live-manual/12/working-with-the-browser/), sections 4.7.1 and 4.8, consulted 2026-10-24). Halftrack's file lists, in Samples and the places, do the same:
+- **Opening.** A folder opens in place, its items listed under it, indented, with a triangle showing whether it is open. A click on the triangle, a double-click, Return or Right opens it. Opening a folder closes the others outside it, unless Cmd is held. Each open folder is read on a worker of its own, as the listed folder is.
+- **Keys.** Right on an open folder goes to its first item, and on a sound previews it. Left closes an open folder, and on an item goes to the folder holding it. At the top, Left goes up a folder in Samples, the folder left showing open in its parent, and no higher than a place.
+- **Search.** Results are a flat list, as before. Opening a folder found by a search clears it and shows the folder open in the tree.
+- **Show in Browser.** The folders down to the file open, with the file selected.
+
 ## Not yet
 
 - Places are indexed when opened, not all in the background as the reference scans every added folder.
 - Splice, Cloud and Push.
-- Unfolding folders in place, as the reference's content pane does; Halftrack's browser opens a folder in place of the list.
 - Dragging a folder from the browser's list into Places, and reordering or renaming places.
 - The reference's Current Project also lists the project's Live Sets and saved presets; Halftrack lists its media.
 - Watching folders for changes.
@@ -42,8 +49,9 @@ See [open questions](../open-questions.md) for the defaults taken where the manu
 `tests/PreferencesTests.cpp` reads user folders back in order, a missing one too, refuses a relative or repeated folder, keeps them through a reset, and finds the added folder in the next Session. `tests/PersistenceTests.cpp` checks the project's media folder before and after a save and through Save a Copy.
 
 The UI suite checks:
+- the folder tree: Right opening a folder in place with its items indented under it, Right going into it, Left going back and closing it, opening another closing the first unless Cmd is held, a double-click closing a folder, and Left at the top going up a folder with the one left showing open;
 - the sidebar's order: Packs, the User Library, the Current Project, then Add Folder, after the Library;
-- the User Library listing its folders without Choose Folder, a folder in it opening, Left returning to the place and no further, and Samples returning to its own folder afterwards;
+- the User Library listing its folders without Choose Folder, a folder in it opening in place, Left going to it, closing it and going no higher than the place, and Samples returning to its own folder afterwards;
 - that the File menu offers Add Folder to Browser after Install Pack;
 - that adding a folder keeps it in the preferences and opens it, named for its folder, and that a search looks through its folders;
 - that adding a folder already in Places opens it without adding it again, and that clicking a place opens it;
