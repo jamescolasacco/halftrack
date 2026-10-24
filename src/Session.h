@@ -1507,6 +1507,9 @@ public:
     // insert marker moves the play position too only while stopped.
     juce::Result play();
     juce::Result continuePlayback();
+    // Playback's Play Arrangement Selection, as the reference's: plays from a range's start and stops
+    // at its end, watched from the message thread every 2 ms. Stopping or playing again ends the watch.
+    juce::Result playRange (double startSeconds, double endSeconds);
     void stop();
     // Record from a stop starts playback too, unless Start Playback with Record is off: then it
     // waits until Play or a Session launch starts the transport (Continue records from where it is).

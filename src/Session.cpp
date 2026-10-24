@@ -3145,7 +3145,8 @@ struct Session::Impl
     {
         std::function<void()> tick;
         void timerCallback() override { tick(); }
-    } sceneWatch;
+    } sceneWatch, rangeWatch;
+    std::optional<double> rangeEnd; // Where Play Arrangement Selection stops.
     void scheduleSceneChange (const te::Scene& scene, std::optional<te::MonotonicBeat> boundary)
     {
         SceneChange change { boundary, {}, {} };
@@ -14232,9 +14233,30 @@ Result Session::setTrackMonitor (int index, MonitorMode mode)
     t->state.setProperty (monitorProperty, static_cast<int> (mode), &impl->edit->getUndoManager());
     impl->edit->restartPlayback(); impl->finishInputChange(monitored);impl->changed(); return Result::ok();
 }
+Result Session::playRange (double startSeconds, double endSeconds)
+{
+    if (! std::isfinite (startSeconds) || ! std::isfinite (endSeconds) || startSeconds < 0 || endSeconds <= startSeconds) return Result::fail ("That range is empty.");
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
+    auto& transport = impl->edit->getTransport();
+    if (transport.isPlaying()) stop();
+    impl->recordWaiting = false;
+    transport.setPosition (te::TimePosition::fromSeconds (startSeconds));
+    transport.play (false);
+    impl->rangeEnd = endSeconds;
+    impl->rangeWatch.tick = [this]
+    {
+        auto& playing = impl->edit->getTransport();
+        if (! impl->rangeEnd || ! playing.isPlaying()) { impl->rangeEnd.reset(); impl->rangeWatch.stopTimer(); return; }
+        if (playing.getPosition().inSeconds() >= *impl->rangeEnd) { impl->rangeEnd.reset(); impl->rangeWatch.stopTimer(); stop(); }
+    };
+    impl->rangeWatch.startTimer (2);
+    sendChangeMessage(); return Result::ok();
+}
 Result Session::play()
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    impl->rangeEnd.reset();
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
     auto& transport = impl->edit->getTransport();
     // A waiting Record starts with playback, from the insert marker.
@@ -14253,6 +14275,7 @@ Result Session::continuePlayback()
 void Session::stop()
 {
     if (impl->exporting) return;
+    impl->rangeEnd.reset(); impl->rangeWatch.stopTimer();
     impl->deviceRestart.stopTimer(); // A stop after a device restart is the user's, not the engine's.
     impl->recordWaiting = false;
     // Session recordings end where the transport stops and keep their takes.

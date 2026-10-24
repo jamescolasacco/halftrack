@@ -2549,3 +2549,7 @@ Engine and UI areas. View > Undo History (Option+Cmd+Z), at the reference's plac
 
 UI area. The menu bar gains the reference's Navigate menu, between View and Options, with its focus commands: Focus Session View, Arrangement View, Clip View, Device View, Browser and Groove Pool (Option+1 to 6) and Focus Mixer (Option+Shift+M). Each shows its part of the window, gives it the keys, and makes Edit's commands act there ([menu contract](research/main-menu-contract.md)). Tab navigation, browser history and the focus commands for parts Halftrack lacks are left out. Checked in the UI suite.
 
+## Select Loop, Play Arrangement Selection, and the R and Shift+Cmd+J keys — 2026-10-24
+
+Engine and UI areas. Edit > Select Loop (Shift+Cmd+L) selects the loop's time across every track, or in the clip view the notes inside the clip's loop brace. Playback > Play Arrangement Selection (Option+Space) plays the time selection and stops at its end (`Session::playRange`), and without one reads Play from Insert Marker. In the Arrangement, R reverses and Shift+Cmd+J crops the time selection or a lone selected clip, as the reference's keys do ([menu contract](research/main-menu-contract.md), [clip menus](research/clip-menus-contract.md)). The new menu items had reached the ids kept for the Slice items, so Option+Space would have sliced the selected clip; those ranges now start at 400, and a compile-time check keeps them apart. Checked in the transport and UI suites.
+

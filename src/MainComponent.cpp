@@ -969,6 +969,7 @@ public:
             if (code == 'L' && (shift || key.getModifiers().isAltDown())) return runMenuShortcut (key);
             if (code == 'L' && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (79); return true; }
             if (code == 'J' && ! shift && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (80); return true; }
+            if (code == 'J' && shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano) { runArrangementKey (arrangementCrop); return true; }
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
             // After a click on a header, Duplicate, Cut, Copy and Paste act on the selected tracks, as the reference's headers do.
             if (code == 'D' && ! shift && ! key.getModifiers().isAltDown() && headerFocus) { duplicateSelectedHeaders(); return true; }
@@ -1057,7 +1058,7 @@ public:
         if (code == juce::KeyPress::tabKey && shift) { if (showPiano) closeClipView(); else openPianoRoll(); return true; }
         if (code == juce::KeyPress::tabKey) { if (showSession) showArrangementView(); else showSessionView(); return true; }
         if (code == juce::KeyPress::spaceKey && shift && ! cmd) { if (state.playing) session.stop(); else report (session.continuePlayback()); refresh(); return true; }
-        if (code == juce::KeyPress::spaceKey && ! cmd) { togglePlay(); return true; }
+        if (code == juce::KeyPress::spaceKey && ! cmd && ! key.getModifiers().isAltDown()) { togglePlay(); return true; }
         if (code == juce::KeyPress::homeKey) { session.returnToStart(); refresh(); return true; }
         if (code == juce::KeyPress::escapeKey) { session.stop(); session.returnToStart(); refresh(); return true; }
         if (code == juce::KeyPress::F9Key && ! cmd) { report (session.recordButton (shift)); refresh(); return true; }
@@ -1072,6 +1073,12 @@ public:
         if (key.getModifiers().isAltDown() && ! cmd && ! showSession && (code == '=' || code == '+' || code == '-'))
         { scaleTrackHeight (selectedTrack, code == '-' ? 1 / 1.25 : 1.25); return true; }
         if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'H' || code == 'h')) { optimizeHeight(); return true; }
+        if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'R' || code == 'r') && clickedArea == Area::arrangement)
+        {
+            for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused; focused = focused->getParentComponent())
+                if (dynamic_cast<juce::TextEditor*> (focused)) return false;
+            runArrangementKey (arrangementReverse); return true;
+        }
         if (! cmd && ! shift && ! showPiano && (code == 'U' || code == 'u')) { toggleFold (key.getModifiers().isAltDown()); return true; }
         if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'W' || code == 'w')) { optimizeWidth(); return true; }
         if ((key.getTextCharacter() == '+' || key.getTextCharacter() == '=') && ! cmd) { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); return true; }
@@ -7369,6 +7376,16 @@ private:
         }
         bool hasSelectedNote() const { return selectedNote() != nullptr; }
         double insertion() const { return insertionBeat; }
+        // Edit > Select Loop here: the notes starting inside the clip's loop brace.
+        void selectLoopNotes()
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr) return;
+            endGesture(); clearSelection();
+            for (const auto& note : clip->notes)
+                if (note.startBeat >= clip->loop.start - 1.0e-9 && note.startBeat < clip->loop.start + clip->loop.length - 1.0e-9) { selectedNoteIds.insert (note.id); selectedNoteId = note.id; }
+            sync();
+        }
         // View's Fold to Notes and Fold to Scale, and Options' Scale Highlighting, changed.
         void foldChanged() { foldButton.setToggleState (owner.foldToNotes, juce::dontSendNotification); updateRows(); updateScroll(); repaint(); }
         int shownRows() const { return (int) rows.size(); }
@@ -12199,8 +12216,11 @@ private:
                     menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuOverview, menuSceneSettings,
                     menuSoloSwitches, menuCueSwitches, menuSaveCopy, menuDrawMode, menuFoldToNotes, menuFoldToScale, menuScaleHighlighting, menuUndoHistory,
                     menuFocusSession, menuFocusArrangement, menuFocusClip, menuFocusDevices, menuFocusBrowser, menuFocusGroovePool, menuFocusMixer,
-                    menuSlice = 200, // Plus Session::SliceBy.
-                    menuTimeFormat = 210 }; // Plus Session::TimeFormat.
+                    menuSelectLoop, menuPlaySelection,
+                    menuLastCommand, // New commands go before this.
+                    menuSlice = 400, // Plus Session::SliceBy.
+                    menuTimeFormat = 410 }; // Plus Session::TimeFormat.
+    static_assert (menuLastCommand <= menuSlice && menuSlice + (int) Session::SliceBy::bar < menuTimeFormat, "the menu bar's command ids overlap");
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
     // Fullscreen take their Windows keys elsewhere). The command manager only holds them for the menus:
     // nothing is registered with it as a target.
@@ -12237,6 +12257,7 @@ private:
             { menuFoldToNotes, key ('f') }, { menuFoldToScale, key ('g') }, { menuScaleHighlighting, key ('k') }, { menuUndoHistory, key ('z', cmd | alt) },
             { menuFocusSession, key ('1', alt) }, { menuFocusArrangement, key ('2', alt) }, { menuFocusClip, key ('3', alt) }, { menuFocusDevices, key ('4', alt) },
             { menuFocusBrowser, key ('5', alt) }, { menuFocusGroovePool, key ('6', alt) }, { menuFocusMixer, key ('m', alt | shift) },
+            { menuSelectLoop, key ('l', cmd | shift) }, { menuPlaySelection, key (KeyPress::spaceKey, alt) },
             { 93, key ('1', cmd) }, { 94, key ('2', cmd) }, { 95, key ('3', cmd) }, { 96, key ('4', cmd) }, { 97, key ('5', cmd) }, { 13, key ('e', cmd | shift | alt) } };
         for (const auto& [id, press] : shortcuts)
         {
@@ -12460,6 +12481,43 @@ private:
             default: break;
         }
     }
+    // Edit > Select Loop, as the reference's (Shift+Cmd+L): the clip view's notes inside the clip's loop
+    // brace, or the Arrangement's loop range across every track.
+    bool canSelectLoop (EditArea area) const
+    {
+        if (area == EditArea::notes) return currentMidiClip() != nullptr && ! currentMidiClip()->notes.empty();
+        return area == EditArea::arrangement && state.loopEnd > state.loopStart && ! state.tracks.empty();
+    }
+    void selectLoop (EditArea area)
+    {
+        if (! canSelectLoop (area)) return;
+        if (area == EditArea::notes) { pianoRoll.selectLoopNotes(); return; }
+        juce::StringArray ids; for (const auto& t : state.tracks) ids.add (t.id);
+        timeSelection = { state.loopStart, state.loopEnd, ids }; selectedClipIds.clear(); selectedClip = -1;
+        refresh();
+    }
+    // Playback's Play Arrangement Selection plays the time selection and stops at its end; without one
+    // it is Play from Insert Marker, as the reference's (Option+Space).
+    bool playsSelection() const { return ! showSession && timeSelection.active(); }
+    void playSelectionFromUI()
+    {
+        if (playsSelection()) report (session.playRange (timeSelection.start, timeSelection.end));
+        else { if (state.playing) session.stop(); report (session.play()); }
+        refresh();
+    }
+    // The Arrangement's own keys for a clip command, as the reference's R (Reverse) and Shift+Cmd+J
+    // (Crop): over the time selection, or the lone clip selected.
+    void runArrangementKey (int item)
+    {
+        if (showSession || showPiano) return;
+        if (const auto* clip = loneClip(); clip != nullptr && juce::isPositiveAndBelow (selectedTrack, (int) state.tracks.size()))
+            timeSelection = { clip->start, clip->start + clip->length, { state.tracks[(size_t) selectedTrack].id } };
+        if (! timeSelection.active()) return;
+        const auto place = menuPlace();
+        const auto menu = arrangementMenu (place, std::make_shared<int> (-1));
+        for (juce::PopupMenu::MenuItemIterator items (menu, true); items.next();)
+            if (items.getItem().itemID == item && items.getItem().isEnabled) { chooseArrangementItem (item, place, -1); return; }
+    }
     // Select All: the notes, the text, every slot, or every track's content in the Arrangement.
     bool canSelectAll (EditArea area) const
     {
@@ -12587,6 +12645,7 @@ private:
             popup.addSeparator();
             add (menuSelectAll, "Select All", canSelectAll (area));
             command (menuInvertSelection, "Invert Selection");
+            add (menuSelectLoop, "Select Loop", canSelectLoop (area));
             // Loop Selection, or the loop switched on or off, as the clip menu's.
             if (area == EditArea::arrangement) command (79, "Loop Selection"); else add (79, state.looping ? "Deactivate Loop" : "Activate Loop");
             popup.addSeparator();
@@ -12669,6 +12728,7 @@ private:
         {
             add (menuPlay, state.playing ? "Stop" : "Play");
             add (menuContinue, state.playing ? "Stop" : "Continue Playback");
+            add (menuPlaySelection, playsSelection() ? "Play Arrangement Selection" : "Play from Insert Marker");
             add (menuInsertMarkerToPlayhead, "Move Insert Marker to Playhead");
             juce::PopupMenu options;
             options.addItem (menuEntry (menuFollow, "Follow", true, followPlayhead));
@@ -12842,6 +12902,8 @@ private:
                 runAreaCommand (id); return;
             case 79: if (editArea() == EditArea::arrangement) runAreaCommand (id); else session.setLoop (! state.looping, state.loopStart, state.loopEnd); break;
             case menuSelectAll: selectAll (editArea()); return;
+            case menuSelectLoop: selectLoop (editArea()); return;
+            case menuPlaySelection: playSelectionFromUI(); return;
             case 74: { const auto [a, b] = editRange(); report (session.insertTime (a, b - a)); refresh(); break; }
             case 75: { const auto [a, b] = editRange(); report (session.deleteTime (a, b - a)); timeSelection = {}; refresh(); break; }
             case 89: { const auto [a, b] = editRange(); report (session.cutTime (a, b - a)); timeSelection = {}; refresh(); break; }
@@ -15342,6 +15404,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             pianoRoll.keyPressed (undo);
             check (only (noteId) && notes().front().startBeat == 1.25, "one undo takes the copy back");
             pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+            // Edit > Select Loop in the clip view selects the notes starting inside the clip's loop brace.
+            check (session.addMidiNote (currentMidiClip()->id, 70, 6, .5f, .8f).wasOk() && session.setClipLoop (currentMidiClip()->id, { true, 0, 4 }, 0).wasOk(), "a note outside a four-beat loop"); refresh();
+            clickedArea = Area::notes; headerFocus = false;
+            menuItemSelected (menuSelectLoop, 1); refresh();
+            check (pianoRoll.selectedNoteCount() == 1 && pianoRoll.hasSelectedNote() && notes().size() == 2, "Select Loop selects the note inside the clip's loop, not the one after it");
+            session.undo(); session.undo(); refresh();
+            check (only (noteId), "two undo steps take the loop and the note back");
         }
         // Draw Mode, from its key B: a drag draws a note on each grid step at the pointer's pitch.
         check (! drawMode && handleKey (juce::KeyPress ('b')) && drawMode && drawButton.getToggleState(), "B turns Draw Mode on and lights the control bar's pencil");
@@ -16441,6 +16510,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         chooseArrangementItem (arrangementCrop, onPart, -1);
         check (state.tracks[(size_t) t].clips.size() == 1 && std::abs (clip().start - 2.02) < 1e-6 && std::abs (clip().length - .04) < 1e-6, "Crop Clip leaves the selection's part");
         session.undo(); refresh();
+        // The same from the reference's keys: Shift+Cmd+J crops and R reverses.
+        timeSelection = { 2.02, 2.06, { trackId } }; clickedArea = Area::arrangement; headerFocus = false;
+        check (handleKey (juce::KeyPress ('J', juce::ModifierKeys (juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier), 0))
+                   && state.tracks[(size_t) t].clips.size() == 1 && std::abs (clip().start - 2.02) < 1e-6 && std::abs (clip().length - .04) < 1e-6, "Shift+Cmd+J crops the clip to the selection");
+        session.undo(); refresh();
+        timeSelection = { 2.02, 2.06, { trackId } };
+        check (handleKey (juce::KeyPress ('r')) && session.undoDescription() == "Reverse clips", "R reverses the selection's audio");
+        session.undo(); refresh();
+        timeSelection = { 2.02, 2.06, { trackId } };
         const auto tracksBefore = state.tracks.size();
         chooseArrangementItem (arrangementBounceNew, onPart, -1);
         check (state.tracks.size() == tracksBefore + 1 && state.tracks[(size_t) t + 1].name.endsWith ("Bounce") && ! state.tracks[(size_t) t].clips.empty(),
@@ -18394,13 +18472,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             return juce::StringArray { session.canUndo() ? "Undo" + step (session.undoDescription()) : "Can't Undo", session.canRedo() ? "Redo" + step (session.redoDescription()) : "Can't Redo" };
         }();
         check (history[0] == "Undo Add MIDI track" && history[1] == "Can't Redo", "Edit names the step Undo takes back (" + history.joinIntoString (", ") + ")");
-        expect ("Edit", { history[0], history[1], "-", "Cut", "Copy", "Paste", "Duplicate", "Delete", "-", "Deactivate Clip", "-", "Select All", "Invert Selection", loop, "-", "Group Tracks", "Ungroup Tracks", "-",
+        expect ("Edit", { history[0], history[1], "-", "Cut", "Copy", "Paste", "Duplicate", "Delete", "-", "Deactivate Clip", "-", "Select All", "Invert Selection", "Select Loop", loop, "-", "Group Tracks", "Ungroup Tracks", "-",
                           "Cut Time (Loop Range)", "Paste Time", "Duplicate Time (Loop Range)", "Delete Time (Loop Range)", "-", "Rename", "Edit Info Text", "-", "Solo", "Arm", "-",
                           "Freeze Track", "Bounce Track in Place", "Bounce to New Track", "-", "Split", "Consolidate", "-", "Quantize", "Extract Groove", "Record Quantization >" });
         expect ("Create", { "Insert Audio Track", "Insert MIDI Track", "Insert Return Track", "Insert Take Lane", "-", "Insert Silence (Loop Range)", "Capture and Insert Scene",
                             "Consolidate Time to New Scene", "-", "Insert MIDI Clip", "Capture MIDI", "-", "Create Fade", "-", "Slice to New MIDI Track >", "-", "Add Locator",
                             "Insert Time Signature Change", "-", "Import File..." });
-        expect ("Playback", { "Play", "Continue Playback", "Move Insert Marker to Playhead", "Playback Options >", "-", "Record in Arrangement", "Arm Record in Arrangement",
+        expect ("Playback", { "Play", "Continue Playback", "Play from Insert Marker", "Move Insert Marker to Playhead", "Playback Options >", "-", "Record in Arrangement", "Arm Record in Arrangement",
                               "Record in Session", "-", "Metronome", "Metronome Only While Recording", "-", "Back to Arrangement" });
         const juce::String folds = std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return ! t.folded; }) ? "Fold All Tracks" : "Unfold All Tracks";
         juce::StringArray view { "Fullscreen", "Zoom >", "-", "Info", "Undo History", "-", "Toggle Arrangement/Session View", "-", "Clip View", "Device View", "Toggle Clip/Device View", "Hide Detail View", "-",
@@ -18482,6 +18560,25 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             auto hidden = sections; hidden.shown = false; session.setMixerSections (hidden); refresh();
             check (handleKey (juce::KeyPress ('M', juce::ModifierKeys (alt | shift), 0)) && showSession && state.mixerSections.shown, "Option+Shift+M shows the Session with its mixer");
             session.setMixerSections (sections); showArrangementView(); refresh();
+        }
+        {
+            // Edit > Select Loop selects the loop's time across the tracks; Playback's Play Arrangement
+            // Selection plays the time selection and stops at its end, or plays from the insert marker.
+            check (shortcut ("Edit", menuSelectLoop, juce::KeyPress ('l', juce::ModifierKeys (cmd | shift), 0))
+                       && shortcut ("Playback", menuPlaySelection, juce::KeyPress (juce::KeyPress::spaceKey, juce::ModifierKeys (alt), 0)),
+                   "Select Loop and Play Arrangement Selection show the reference's Shift+Cmd+L and Option+Space");
+            showArrangementView(); clickedArea = Area::arrangement; headerFocus = false; timeSelection = {}; refresh();
+            check (entry ("Playback", menuPlaySelection)->text == "Play from Insert Marker", "without a time selection it reads Play from Insert Marker");
+            const auto loopWas = std::tuple { state.looping, state.loopStart, state.loopEnd };
+            session.setLoop (state.looping, 1.0, 3.0); refresh();
+            check (handleKey (juce::KeyPress ('L', juce::ModifierKeys (cmd | shift), 0)) && timeSelection.active() && std::abs (timeSelection.start - 1) < 1e-9
+                       && std::abs (timeSelection.end - 3) < 1e-9 && timeSelection.trackIds.size() == (int) state.tracks.size(), "Shift+Cmd+L selects the loop's time across every track");
+            check (entry ("Playback", menuPlaySelection)->text == "Play Arrangement Selection", "with one it reads Play Arrangement Selection");
+            check (handleKey (juce::KeyPress (juce::KeyPress::spaceKey, juce::ModifierKeys (alt), 0)) && state.playing && std::abs (state.position - 1) < .2, "Option+Space plays from the selection's start");
+            for (int i = 0; i < 3 * 48000 / 256 && session.snapshot().playing; ++i) pumpSyntheticTestDevice (session, 1);
+            refresh();
+            check (! state.playing && state.position >= 3 - 1e-6 && state.position < 3.1, "and stops at its end (" + juce::String (state.position, 3) + " s)");
+            timeSelection = {}; session.setLoop (std::get<0> (loopWas), std::get<1> (loopWas), std::get<2> (loopWas)); refresh();
         }
         // Every item stays, greyed while it cannot act.
         check (entry ("Edit", menuCut).has_value() && ! entry ("Edit", menuCut)->isEnabled && ! entry ("View", menuZoomBack)->isEnabled,

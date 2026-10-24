@@ -63,6 +63,21 @@ int runTransportTests (const juce::File& artifacts)
         check (s.snapshot().insertMarker == 0 && s.snapshot().position == 0, "Return to Start puts the marker and play position at the beginning");
         check (! s.snapshot().dirty && ! s.canUndo(), "moving the insert marker and playing are not edits");
 
+        // Play Arrangement Selection plays a range from its start and stops at its end.
+        check (s.playRange (2, 1).failed() && ! s.snapshot().playing, "an empty range does not play");
+        ok (s.playRange (1, 1.5), "play from one second to one and a half");
+        check (s.snapshot().playing && near (s.snapshot().position, 1, slack), "the range plays from its start");
+        for (int i = 0; i < blocksPerSecond && s.snapshot().playing; ++i) pumpSyntheticTestDevice (s, 1);
+        const auto ended = s.snapshot().position;
+        check (! s.snapshot().playing && ended >= 1.5 && ended < 1.5 + .06, "and stops at its end (" + juce::String (ended, 3) + " s)");
+        check (near (s.snapshot().insertMarker, 0), "leaving the insert marker where it was");
+        ok (s.playRange (1, 1.5), "play the range again");
+        s.stop(); ok (s.play(), "Stop, then Play");
+        pumpSyntheticTestDevice (s, 2 * blocksPerSecond);
+        check (s.snapshot().playing && s.snapshot().position > 1.6, "playing after a Stop goes on past the range's end");
+        s.stop(); s.returnToStart();
+        check (! s.snapshot().dirty && ! s.canUndo(), "playing a range is not an edit");
+
         // Recording starts from the insert marker.
         ok (s.saveProject (root.getChildFile ("Transport").getChildFile ("Transport.halftrack")), "save a recording destination");
         ok (s.setTrackInput (0, s.inputNames()[0]), "route the input"); ok (s.setTrackArmed (0, true), "arm the track");

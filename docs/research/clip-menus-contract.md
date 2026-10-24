@@ -45,7 +45,7 @@ The reference's items, with what Halftrack shows:
 | Create Fade (In, Out, Crossfade, Default Crossfade), Reset Fades (always shown) | the block for audio tracks that are not frozen; the fade named by the selection against the clips' edges | Create Fade In where the selection holds its audio clips' starts but not their ends, Create Fade Out the other way round, greyed "Create Fade" otherwise. Crossfades over a selection are not made yet. Reset Fades returns the clips' fades to the default, as Delete does to a fade handle |
 | Loop Selection, or Activate / Deactivate Loop | always | the same |
 | Freeze / Unfreeze Track(s), Bounce Track(s) in Place, Bounce to New Track(s) (always shown) | not on a take lane | the same, over the tracks with content in the selection; Bounce to New Track over the time selection (see the [freeze contract](freeze-contract.md)) |
-| Crop Clip(s), Reverse Clip (always shown) | a clip under the pointer | the same (`cropRange`, `reverseRange`): Crop keeps the clips' parts inside the selection; Reverse splits at the selection's edges and plays the clips inside backwards, mirroring a MIDI clip's notes |
+| Crop Clip(s), Reverse Clip (always shown) | a clip under the pointer | the same (`cropRange`, `reverseRange`): Crop keeps the clips' parts inside the selection; Reverse splits at the selection's edges and plays the clips inside backwards, mirroring a MIDI clip's notes. The reference's keys give them too, Shift+Cmd+J and R ([Live keyboard shortcuts](https://www.ableton.com/en/live-manual/12/live-keyboard-shortcuts/), consulted 2026-10-24), over the time selection or a lone selected clip |
 | Slice to New MIDI Track, Convert Harmony, Melody and Drums to New MIDI Track | one audio clip | Slice to New MIDI Track, with Halftrack's divisions. The conversions are not implemented, and 12.2.1 never shows stem separation here |
 | the grid's items | not on a clip | Snap to Grid, the adaptive widths and fixed sizes in rows, Narrow and Widen Grid, and Triplet Grid, in the reference's order. The same items are in the editors' grid menus |
 | the clip colour grid | on a clip | Halftrack's palette; a swatch colours the selected clips in one undo step (`setClipColours`), marking the colours they use |
@@ -61,7 +61,7 @@ The UI suite builds the menus for an audio clip, a time selection holding the cl
 - a swatch colouring the clip, undone in one step;
 - a clip's info text showing in the Info view while pointing at it;
 - Create Fade In fading the clip over the selection's part, and Reset Fades returning it to the default;
-- Crop Clip leaving the selection's part;
+- Crop Clip leaving the selection's part, and Shift+Cmd+J doing the same, and R reversing the selection;
 - Bounce to New Track making a track after the clip's, removed with one undo.
 
 The range edit suite checks Crop, Reverse and clip colours directly. It renders audio reversed sample for sample, mirrors a MIDI note, and checks refusals.
