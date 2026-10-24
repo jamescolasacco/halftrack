@@ -3580,6 +3580,19 @@ struct Session::Impl
             tracks.removeIf ([root] (te::AudioTrack* t) { return inside (*t, *dynamic_cast<te::FolderTrack*> (root)); });
         return tracks;
     }
+    static bool activeWithin (te::Clip& c, double start, double end)
+    {
+        return ! c.isMuted() && c.getPosition().getStart().inSeconds() < end && c.getPosition().getEnd().inSeconds() > start;
+    }
+    // Bounce to New Track's sources: the listed tracks, returns aside, with an active Arrangement clip in the range.
+    juce::Array<te::AudioTrack*> bounceSources (const juce::StringArray& ids, double start, double end) const
+    {
+        juce::Array<te::AudioTrack*> tracks;
+        for (const auto& id : ids)
+            if (auto* t = track (id); t != nullptr && ! isReturn (*t))
+                for (auto* c : t->getClips()) if (activeWithin (*c, start, end)) { tracks.addIfNotAlreadyThere (t); break; }
+        return tracks;
+    }
     // Clips show their track's colour until they have one of their own. As the reference's clips take
     // their track's colour when made and keep it (0x1021d6554), a track about to change colour gives
     // its clips without one the colour they show; one undo step with the change.
@@ -10672,6 +10685,129 @@ Result Session::bounceTracksInPlace (const juce::StringArray& ids)
         }
     }
     impl->refreshRouting(); impl->changed(); return Result::ok();
+}
+// Bounce to New Track, after a static reading of the reference's clip-area command (enabled 0x10379c3d0):
+// each track's render of the range goes to a new audio track after it, and the bounced clips go quiet.
+Result Session::bounceToNewTracks (const juce::StringArray& trackIds, double startSeconds, double endSeconds, juce::StringArray& newTrackIds)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before bouncing tracks.");
+    if (! (std::isfinite (startSeconds) && std::isfinite (endSeconds)) || startSeconds < 0 || endSeconds <= startSeconds) return Result::fail ("Select a time range to bounce.");
+    const auto inRange = [&] (te::Clip& c) { return Impl::activeWithin (c, startSeconds, endSeconds); };
+    const auto tracks = impl->bounceSources (trackIds, startSeconds, endSeconds);
+    if (tracks.isEmpty()) return Result::fail ("The selected time has no active clips to bounce.");
+    for (auto* t : tracks)
+    {
+        // The reference deactivates a frozen source's clips inside its per-clip freeze; Halftrack's freeze
+        // is one render, which would play them on.
+        if (t->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + shownName (*t) + "\" before bouncing its clips to a new track.");
+        if (static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) && Impl::instrument (*t) == nullptr)
+            return Result::fail ("\"" + shownName (*t) + "\" has no instrument, so it has no sound to bounce.");
+    }
+    closePluginEditors();
+    auto assets = impl->assets(); if (auto r = assets.createDirectory(); r.failed()) return r;
+    // Each render, from a freeze made and undone outside history, so the source is left as it was; the
+    // range is written to the project's Assets.
+    struct Render { te::AudioTrack* track; juce::File file; double rate = 0; juce::AudioBuffer<float> audio; };
+    std::vector<Render> renders;
+    for (auto* t : tracks)
+    {
+        {
+            const te::Edit::UndoTransactionInhibitor inhibitor (*impl->edit);
+            const FreezeRender render ({ t });
+            t->state.setProperty (te::IDs::frozenIndividually, true, nullptr);
+            impl->edit->dispatchPendingUpdatesSynchronously();
+        }
+        std::unique_ptr<juce::AudioFormatReader> reader (t->isFrozen (te::Track::individualFreeze)
+            ? impl->engine.getAudioFileFormatManager().readFormatManager.createReaderFor (te::TemporaryFileManager::getFreezeFileForTrack (*t)) : nullptr);
+        Render render { t, {}, reader != nullptr ? reader->sampleRate : 0, {} };
+        if (reader != nullptr)
+        {
+            const auto first = (juce::int64) std::llround (startSeconds * reader->sampleRate), count = (juce::int64) std::llround ((endSeconds - startSeconds) * reader->sampleRate);
+            auto& audio = render.audio;
+            audio.setSize ((int) reader->numChannels, (int) count);
+            audio.clear();
+            reader->read (&audio, 0, (int) count, first, true, true); // Past the render's end stays silent.
+            render.file = assets.getNonexistentChildFile (File::createLegalFileName (shownName (*t)) + " Bounce", ".wav", true);
+            juce::WavAudioFormat format; std::unique_ptr<juce::OutputStream> stream (render.file.createOutputStream());
+            auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (reader->sampleRate).withNumChannels ((int) reader->numChannels).withBitsPerSample (32));
+            if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples())) render.file = File();
+        }
+        reader.reset();
+        t->state.setProperty (te::IDs::frozenIndividually, false, nullptr);
+        if (render.file == File()) return Result::fail ("\"" + shownName (*t) + "\" could not be rendered.");
+        renders.push_back (std::move (render));
+    }
+    impl->transaction (tracks.size() > 1 ? "Bounce to New Tracks" : "Bounce to New Track");
+    auto* undo = &impl->edit->getUndoManager();
+    juce::StringArray created;
+    for (const auto& render : renders)
+    {
+        auto* source = render.track;
+        // The new track: right after the source, in its group, with its mixer, sends, track delay,
+        // monitoring, crossfade assignment, colour and output, and their automation, as the reference's.
+        source->flushStateToValueTree();
+        auto made = impl->edit->copyTrack (te::Track::Ptr (source), te::TrackInsertPoint (*source, false));
+        auto* track = dynamic_cast<te::AudioTrack*> (made.get());
+        if (track == nullptr) { impl->changed(); return Result::fail ("Could not make the new track."); }
+        const auto monitor = source->state[monitorProperty];
+        impl->freshCopy (*track, source->state);
+        track->state.setProperty (monitorProperty, monitor, undo);
+        for (auto* plugin : track->pluginList.getPlugins())
+            if (dynamic_cast<NativeEffectPlugin*> (plugin) || dynamic_cast<te::ExternalPlugin*> (plugin) || dynamic_cast<UtilityPlugin*> (plugin)
+                || dynamic_cast<SubtractiveSynthPlugin*> (plugin) || dynamic_cast<te::FreezePointPlugin*> (plugin))
+                plugin->deleteFromParent();
+        for (auto* clip : allTrackClips (*track)) clip->removeFromParent();
+        if (auto lanes = track->state.getChildWithName (takeLanesType); lanes.isValid()) track->state.removeChild (lanes, undo);
+        track->state.setProperty (midiTrackProperty, false, undo);
+        track->state.setProperty (te::IDs::frozenIndividually, false, nullptr);
+        track->state.removeProperty (infoTextProperty, undo);
+        auto name = (Impl::ownName (*source).isNotEmpty() ? Impl::ownName (*source) : impl->automaticPart (*source));
+        if (! name.endsWith (" Bounce")) name << " Bounce";
+        track->setName (name);
+        // The render, cut at the bounced clips' edges, with a tail after one whose sound rings on.
+        struct Part { String name; double from = 0, to = 0; };
+        std::vector<Part> parts;
+        for (auto* clip : source->getClips())
+            if (inRange (*clip)) parts.push_back ({ clip->getName(), std::max (startSeconds, clip->getPosition().getStart().inSeconds()), std::min (endSeconds, clip->getPosition().getEnd().inSeconds()) });
+        std::sort (parts.begin(), parts.end(), [] (const Part& a, const Part& b) { return a.from < b.from; });
+        const auto place = [&] (const String& clipName, double from, double to)
+        {
+            if (to - from < 1.0e-4) return;
+            auto clip = te::insertWaveClip (*track, clipName, render.file,
+                                            { { te::TimePosition::fromSeconds (from), te::TimePosition::fromSeconds (to) }, te::TimeDuration::fromSeconds (from - startSeconds) }, te::DeleteExistingClips::no);
+            if (! clip) return;
+            clip->getSourceFileReference().setToFile (render.file, te::SourceFileReference::PathStyle::alwaysAbsolute, false);
+            clip->setAutoTempo (false); clip->setAutoPitch (false);
+            clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
+            giveDefaultFades (*clip, undo);
+        };
+        const auto lastSound = [&render, startSeconds] (double from, double to) -> std::optional<double>
+        {
+            const auto first = (int) std::ceil ((from - startSeconds) * render.rate), last = std::min (render.audio.getNumSamples(), (int) std::floor ((to - startSeconds) * render.rate));
+            for (int n = last; --n >= first;)
+                for (int c = 0; c < render.audio.getNumChannels(); ++c)
+                    if (std::abs (render.audio.getSample (c, n)) > 1.0e-4f) return std::min (to, startSeconds + (n + 1) / render.rate + 0.01);
+            return std::nullopt;
+        };
+        for (size_t i = 0; i < parts.size(); ++i)
+        {
+            place (parts[i].name + " Bounce", parts[i].from, parts[i].to);
+            const auto next = i + 1 < parts.size() ? parts[i + 1].from : endSeconds;
+            if (const auto tail = lastSound (parts[i].to, next)) place (parts[i].name + " Bounce Tail", parts[i].to, *tail);
+        }
+        // The source keeps its devices; its bounced clips, split at the range's edges, go quiet.
+        for (const auto at : { startSeconds, endSeconds }) splitTrackAt (*source, te::TimePosition::fromSeconds (at), undo);
+        for (auto* clip : source->getClips())
+            if (inRange (*clip) && clip->getPosition().getStart().inSeconds() >= startSeconds - 1.0e-6 && clip->getPosition().getEnd().inSeconds() <= endSeconds + 1.0e-6) clip->setMuted (true);
+        created.add (track->itemID.toString());
+    }
+    impl->refreshRouting(); impl->changed(); newTrackIds = created; return Result::ok();
+}
+bool Session::canBounceToNewTracks (const juce::StringArray& ids, double startSeconds, double endSeconds) const
+{
+    return ! impl->exporting && ! impl->anyRecording() && std::isfinite (startSeconds) && std::isfinite (endSeconds) && startSeconds >= 0 && endSeconds > startSeconds
+        && ! impl->bounceSources (ids, startSeconds, endSeconds).isEmpty();
 }
 bool Session::canBounceTracksInPlace (const juce::StringArray& ids) const
 {

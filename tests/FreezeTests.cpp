@@ -77,6 +77,46 @@ void bounceTests (const juce::File& root)
     s.redo();
     check (s.snapshot().tracks[0].clips.size() == 2 && s.snapshot().tracks[0].plugins.empty(), "redo bounces it again, without rendering");
     s.undo();
+    {
+        // Bounce to New Track: the first second's render goes to a new track after A, at A's level; A
+        // keeps its Delay, its clip deactivated.
+        ok (s.setTrackGain (0, -6), "A at -6 dB");
+        const auto count = s.snapshot().tracks.size();
+        juce::StringArray made;
+        check (s.canBounceToNewTracks ({ a }, 0, 1) && ! s.canBounceToNewTracks ({ a }, 5, 6) && ! s.canBounceToNewTracks ({ a }, 1, 0), "it can bounce a range holding an active clip");
+        ok (s.bounceToNewTracks ({ a }, 0, 1, made), "bounce A's first second to a new track");
+        const auto shot = s.snapshot();
+        const auto& n = shot.tracks[1];
+        check (made.size() == 1 && shot.tracks.size() == count + 1 && n.id == made[0] && n.plugins.empty() && n.name.endsWith ("Bounce") && std::abs (n.gainDb + 6) < 1e-3
+                   && n.clips.size() == 2 && std::abs (n.clips[0].length - .2) < 1e-3 && std::abs (n.clips[1].start - .2) < 1e-3 && n.clips[1].start + n.clips[1].length <= 1 + 1e-6,
+               "a new track after A, at A's level and without devices, holds the burst and its echoes to the second's end");
+        check (shot.tracks[0].plugins.size() == 1 && ! shot.tracks[0].clips[0].active, "A keeps its Delay, its clip deactivated");
+        const auto onNew = root.getChildFile ("bounce-new.wav");
+        ok (s.exportWav (onNew, rate, 32, 0), "render the new track's second");
+        const auto heard = read (onNew);
+        const auto scale = (float) std::pow (10.0, -6 / 20.0);
+        double worst = 0;
+        for (int c = 0; c < 2; ++c) for (int i = 0; i < std::min ((int) rate, std::min (heard.getNumSamples(), reference.getNumSamples())); ++i)
+            worst = std::max (worst, (double) std::abs (heard.getSample (c, i) - scale * reference.getSample (c, i)));
+        check (worst < juce::Decibels::decibelsToGain (-70.0f), "it plays the first second as A did, 6 dB down (max difference " + juce::String (worst, 8) + ")");
+        s.undo();
+        check (s.snapshot().tracks.size() == count && s.snapshot().tracks[0].clips.size() == 1 && s.snapshot().tracks[0].clips[0].active, "one undo removes the new track and reactivates the clip");
+        s.undo();
+        check (s.bounceToNewTracks ({ a }, 5, 6, made).failed() && s.bounceToNewTracks ({ a }, 1, 0, made).failed(), "a range without active clips, or a backward one, is refused");
+        ok (s.bounceToNewTracks ({ a }, .1, 1, made), "bounce from inside A's clip");
+        {
+            const auto split = s.snapshot();
+            const auto& kept = split.tracks[0].clips; const auto& bounced = split.tracks[1].clips;
+            check (kept.size() == 2 && kept[0].active && std::abs (kept[0].length - .1) < 1e-3 && ! kept[1].active && std::abs (kept[1].start - .1) < 1e-3
+                       && bounced.size() == 2 && std::abs (bounced[0].start - .1) < 1e-3 && std::abs (bounced[0].length - .1) < 1e-3,
+                   "A's clip is split at the range's start, the part inside deactivated, and the new track's clips start there");
+        }
+        s.undo();
+        check (s.snapshot().tracks[0].clips.size() == 1 && s.snapshot().tracks[0].clips[0].active, "undo puts A's clip back whole");
+        ok (s.setTrackFrozen (a, true), "freeze A");
+        check (s.canBounceToNewTracks ({ a }, 0, 1) && s.bounceToNewTracks ({ a }, 0, 1, made).failed(), "a frozen track is offered but refused: its one render would play the deactivated clips on");
+        s.undo();
+    }
     ok (s.addReturnTrack ("Room"), "add a return");
     const auto room = s.snapshot().tracks.back().id;
     check (! s.canBounceTracksInPlace ({ room }) && s.bounceTracksInPlace ({ room }).failed() && s.bounceTracksInPlace ({}).failed(), "returns, and nothing, are not bounced");
@@ -220,6 +260,19 @@ int runFreezeTests (const juce::File& artifacts)
         s.undo();
         check (track (s).isMidi && track (s).instrument.isNativeEffect && track (s).clips.size() == 1 && track (s).clips[0].notes.size() == 1 && ! track (s).frozen,
                "one undo restores the MIDI track with its Sampler and notes, unfrozen");
+        {
+            juce::StringArray made;
+            ok (s.bounceToNewTracks ({ id }, 0, 2, made), "bounce the MIDI track's clip to a new track");
+            const auto shot = s.snapshot();
+            const auto& n = shot.tracks.back(); const auto& midi = shot.tracks[shot.tracks.size() - 2];
+            check (made.size() == 1 && n.id == made[0] && ! n.isMidi && ! n.instrument.isNativeEffect && ! n.clips.empty() && n.clips[0].isAudio
+                       && midi.id == id && midi.instrument.isNativeEffect && midi.clips.size() == 1 && ! midi.clips[0].active,
+                   "a new audio track after the MIDI track holds its render; the MIDI track keeps its Sampler, its clip deactivated");
+            ok (s.exportWav (render, rate, 32, .5), "render the new track");
+            check (difference (read (render), reference) < 1e-5, "the new track plays as the MIDI track did (max difference " + juce::String (difference (read (render), reference), 8) + ")");
+            s.undo();
+            check (track (s).id == id && track (s).clips[0].active, "one undo removes the new track");
+        }
         ok (s.addReturnTrack ("Room"), "add a return");
         check (s.setTrackFrozen (s.snapshot().tracks.back().id, true).failed(), "returns cannot be frozen");
         {

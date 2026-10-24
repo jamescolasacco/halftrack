@@ -2383,3 +2383,7 @@ Engine and UI areas. The header menu's Save as Default Audio Track and Save as D
 ## Insert with a group selected — 2026-10-24
 
 UI area. With a group selected, Insert Audio Track and Insert MIDI Track put the new track at the group's end when it is unfolded, and after the whole group when it is folded, as the reference's selection lists a group (findings in `artifacts/reverse-engineering/tracks/`). Before, Insert went by the track selected before the group. Checked in the UI suite ([contract](research/track-names-contract.md)).
+
+## Bounce to New Track — 2026-10-24
+
+Engine area. After the static reading of the reference's command, `bounceToNewTracks` renders a time range of each track with an active clip in it to a new audio track right after it, in its group. The new track keeps the source's mixer, sends, track delay, monitoring, crossfade assignment, colour and output, with their automation, and holds the render cut at the bounced clips' edges, with tail clips. The source keeps its devices, and its clips are split at the range's edges and deactivated inside it. It is one undo step. Frozen sources are refused, because Halftrack's single freeze render would play their deactivated clips on. The interface does not offer it yet; it belongs in the clip menus, whose reference order is being read. Checked in the freeze suite ([contract](research/freeze-contract.md)).

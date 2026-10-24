@@ -971,6 +971,16 @@ public:
     // with Session clips, or MIDI tracks without an instrument, are refused for now.
     juce::Result bounceTracksInPlace (const juce::StringArray& trackIds);
     bool canBounceTracksInPlace (const juce::StringArray& trackIds) const;
+    // Bounce to New Track, as the reference's clip-area command: each of the tracks with an active clip
+    // in the time range renders the range through its devices to a new audio track right after it, in
+    // its group. The new track takes the source's mixer, sends, track delay, monitoring, crossfade
+    // assignment, colour and output, with their automation, and its name with " Bounce"; the render
+    // is cut at the bounced clips' edges. The source keeps its devices, and its clips, split at the
+    // range's edges, are deactivated there. One undo step; newTrackIds lists the new tracks. Frozen
+    // tracks and MIDI tracks without an instrument are refused when it runs, as the reference refuses
+    // the latter; canBounceToNewTracks only asks for an active clip in the range, as its menu does.
+    juce::Result bounceToNewTracks (const juce::StringArray& trackIds, double startSeconds, double endSeconds, juce::StringArray& newTrackIds);
+    bool canBounceToNewTracks (const juce::StringArray& trackIds, double startSeconds, double endSeconds) const;
     // Groups audio and MIDI tracks and groups (not returns) into a new group, placed where the first
     // of them is: inside its group, if it is in one, as the reference nests groups. What is inside a
     // chosen group moves with it. Launching or stopping a group acts on every track inside it.

@@ -23,6 +23,15 @@ Freeze and Flatten follow the reference workflow of rendering a track's devices 
   - It is one undo step. Undo restores the clips and devices, unfrozen; redo needs no render.
   - Refused for now: tracks with Session clips (the reference renders each Session clip too; Halftrack does not freeze Session clips yet) and MIDI tracks without an instrument (the reference's sErrorNoAudioBounce).
   - The clip names and the tail threshold (−80 dB, with 10 ms after the last sound) are Halftrack's; the reference's suffixes are in its encrypted text, and its tail rule was not decoded.
+- `bounceToNewTracks(ids, start, end, newIds)` is the reference's Bounce to New Track, after the same static reading (section 2 of `artifacts/reverse-engineering/bounce/findings.md`). `canBounceToNewTracks(ids, start, end)` says whether it is offered.
+  - It is offered when the listed tracks have an active Arrangement clip in the range, as the reference's clip-area menu offers it with a time selection holding a clip that is not deactivated. Returns are left out.
+  - Each source renders through a freeze made and undone outside history, so it is left as it was. The range of the render goes to the project's Assets.
+  - A new audio track goes right after each source, in its group. It is made from the source, not from a saved default track, as the reference's is. It keeps the source's mixer, sends, track delay, monitoring, crossfade assignment, colour and output, with their automation, and is named after it with " Bounce". It has no devices, clips from the source, take lanes or info text.
+  - The render is cut at the edges of the source's clips inside the range ("… Bounce"), with tail clips where the sound rings on, up to the next clip or the end of the range.
+  - The source keeps its devices. Its clips are split at the range's edges and deactivated inside it, so the new track plays in their place.
+  - It is one undo step.
+  - When it runs, MIDI tracks without an instrument are refused, as the reference refuses them. So are frozen tracks: the reference keeps a frozen source frozen with its bounced clips deactivated inside its per-clip freeze, while Halftrack's freeze is one render of the track, which would play them on. Unfreeze first.
+  - Session clips are not bounced yet, and the interface does not offer the command yet.
 - In the interface, the track header menu offers Freeze Track/Unfreeze Track and Bounce Track in Place (Tracks for more than one), as the reference's has them; its 12.2.1 has no Flatten, so the menu no longer offers it. Frozen clips show an icy hatch, and the device chain is dimmed and disabled.
 
 ## Corrections
@@ -65,9 +74,21 @@ A second part plays a constant 0.5 signal on an audio track through the syntheti
 
 A UI check freezes from the track menu handler (devices locked), flattens and undoes back.
 
+For Bounce to New Track, the freeze suite bounces the Delay track's first second at −6 dB. It checks:
+- a new track right after the source at its level, without devices, holding the burst and a tail clip that ends within the range;
+- the source keeping its Delay with its clip deactivated;
+- the new track playing the first second as the source did, 6 dB down (max difference 1e-8);
+- one undo removing the new track and reactivating the clip;
+- that a range without active clips, or a backward one, is not offered;
+- that a range starting inside the clip splits it there, deactivating the part inside, with the new track's clips starting at the split;
+- that a frozen source is offered but refused.
+
+It also bounces the Sampler MIDI track to a new audio track that renders like the live track (max difference under 1e-5), the MIDI track keeping its Sampler with its clip deactivated.
+
 ## Not implemented
 
 - Freezing and bouncing Session clips.
+- Bounce to New Track from a frozen source, and from the interface.
 - Undoing a bounce of a track frozen before it, which comes back unfrozen, as after a Flatten.
 - Portable freeze renders.
 - A partial freeze point (freezing only some devices).
