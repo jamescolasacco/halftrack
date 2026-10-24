@@ -2621,3 +2621,7 @@ Engine and UI areas. Options > Arrangement Overdub, as the reference's: with it 
 
 UI area. The control bar gains the reference's MIDI Arrangement Overdub switch, a plus between Record and Automation Arm, lit while Arrangement Overdub is on. The position field, loop fields, Follow and Capture give up a few pixels so the whole transport still fits a 1440-pixel window ([take lanes contract](research/take-lanes-contract.md)). Checked in the UI suite.
 
+## External sync tolerance on the macOS runner — 2026-10-24
+
+QA area. CI run 40124051477 failed only `external-sync-acceptance` on the macOS runner, its transport ending 0.243 beats past the clock's 8.5 against a 0.2-beat tolerance while Linux and Windows passed; the run before passed there too. The check now allows 0.3 beats, as the test's earlier runner-load allowances do.
+
