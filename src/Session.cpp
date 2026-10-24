@@ -15047,7 +15047,8 @@ Result Session::tapTempo(double seconds)
     auto& transport=impl->edit->getTransport();
     const auto& meter=impl->edit->tempoSequence.getTimeSigAt (impl->playStart());
     const int bar=juce::jmax(1,juce::roundToInt(meter.numerator.get()*4.0/meter.denominator.get()));
-    if (impl->prefs.startPlaybackWithTapTempo && ! transport.isPlaying() && ! transport.isRecording() && impl->tapsInRun==bar)
+    if (impl->prefs.startPlaybackWithTapTempo && ! transport.isPlaying() && ! transport.isRecording() && impl->tapsInRun==bar
+        && audioDeviceManager().getCurrentAudioDevice() != nullptr)
     {
         impl->tapStart=seconds+60.0/bpm;
         impl->tapWatch.tick=[this]
@@ -15059,7 +15060,7 @@ Result Session::tapTempo(double seconds)
         impl->tapWatch.startTimer(1);
     }
     // Another tap before then marks the downbeat itself.
-    else if (impl->tapsInRun>bar && impl->tapStart) { impl->tapStart.reset(); impl->tapWatch.stopTimer(); return play(); }
+    else if (impl->tapsInRun>bar && impl->tapStart) { impl->tapStart.reset(); impl->tapWatch.stopTimer(); play(); }
     return Result::ok();
 }
 std::optional<double> Session::tappedStart() const { return impl->tapStart; }
