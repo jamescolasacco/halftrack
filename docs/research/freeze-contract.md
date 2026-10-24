@@ -41,7 +41,7 @@ The frozen flag is saved with the project, but the render is an engine temporary
 
 ## Evidence
 
-The freeze suite bounces a Sampler MIDI track in place: it becomes an audio track whose clip renders like the live track, and one undo restores the MIDI track and its Sampler, unfrozen. It bounces an audio track whose Delay echoes a 0.2 s burst: the Delay goes, the render is cut at the clip's end with the echoes in a 2.3 s tail clip, the track plays as it did live but for echoes under −70 dB, undo restores it, and redo bounces it again without rendering. Returns are not bounced. The UI suite checks the menu item.
+The freeze suite bounces a Sampler MIDI track in place: it becomes an audio track whose clip renders like the live track, and one undo restores the MIDI track and its Sampler, unfrozen. It bounces an audio track whose Delay echoes a 0.2 s burst: the Delay goes, the render is cut at the clip's end with the echoes in a 2.3 s tail clip, the track plays as it did live but for echoes under −70 dB, undo restores it, and redo bounces it again without rendering. Returns are not bounced. The UI suite checks the menu item. A Sampler note held to its clip's end with a 400 ms release freezes with the release that rings on after the clip, matching the live render exactly.
 
 
 `tests/FreezeTests.cpp` uses a Sampler playing a generated stereo source, rendered at the test engine's 44.1 kHz freeze rate so no comparison includes resampling. Exports render a frozen track from its clips and devices, not from its freeze, so the export checks cover the frozen track's mixer; the freeze itself is checked through Flatten, which copies it. It checks:
@@ -68,7 +68,6 @@ A UI check freezes from the track menu handler (devices locked), flattens and un
 ## Not implemented
 
 - Freezing and bouncing Session clips.
-- Instrument releases after the last clip: instruments report no tail, so a freeze ends at the last clip and cuts a release there.
 - Undoing a bounce of a track frozen before it, which comes back unfrozen, as after a Flatten.
 - Portable freeze renders.
 - A partial freeze point (freezing only some devices).

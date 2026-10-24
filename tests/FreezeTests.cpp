@@ -222,6 +222,29 @@ int runFreezeTests (const juce::File& artifacts)
                "one undo restores the MIDI track with its Sampler and notes, unfrozen");
         ok (s.addReturnTrack ("Room"), "add a return");
         check (s.setTrackFrozen (s.snapshot().tracks.back().id, true).failed(), "returns cannot be frozen");
+        {
+            // A release ringing past the clip's end: instruments report a tail, so the freeze keeps it.
+            ok (s.addMidiTrack ("Release"), "add a MIDI track to hold a note to its clip's end");
+            juce::String held;
+            for (const auto& t : s.snapshot().tracks) if (t.userName == "Release") held = t.id;
+            const auto heldTrack = [&s, &held] { for (const auto& t : s.snapshot().tracks) if (t.id == held) return t; return Session::TrackInfo {}; };
+            ok (s.addMidiClip (held, 0, 1), "a one-beat clip");
+            ok (s.addMidiNote (heldTrack().clips.at (0).id, 60, 0, 1, 1), "a note to its end");
+            ok (s.setInstrumentSample (held, source), "played by a Sampler");
+            auto ringing = heldTrack().instrument.effect;
+            ringing.values[instruments::sampler::velocityAmp] = 0; ringing.values[instruments::sampler::ampAttack] = 0; ringing.values[instruments::sampler::ampSustain] = 1;
+            ringing.values[instruments::sampler::ampRelease] = 400;
+            ok (s.setNativeEffectSettings (heldTrack().instrument.id, ringing), "with a 400 ms release");
+            const auto shot = s.snapshot();
+            for (int t = 0; t < (int) shot.tracks.size(); ++t) if (shot.tracks[(size_t) t].id != held) ok (s.setTrackMute (t, true), "mute the others");
+            const auto liveRelease = root.getChildFile ("release-live.wav"), frozenRelease = root.getChildFile ("release-frozen.wav");
+            ok (s.exportWav (liveRelease, rate, 32, 1), "render it live with a second after it");
+            const auto live = read (liveRelease);
+            check (live.getMagnitude ((int) (rate * .55), (int) (rate * .2)) > .01f, "the release sounds after the clip's half second");
+            ok (s.setTrackFrozen (held, true), "freeze it");
+            ok (s.exportWav (frozenRelease, rate, 32, 1), "render it frozen");
+            check (difference (read (frozenRelease), live) < juce::Decibels::decibelsToGain (-70.0f), "the frozen render keeps the release (max difference " + juce::String (difference (read (frozenRelease), live), 8) + ")");
+        }
         bounceTests (root);
         sendsOnlyTests (root);
         std::cout << "Freeze passed: " << root.getFullPathName() << std::endl; return 0;
