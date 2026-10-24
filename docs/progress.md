@@ -2367,3 +2367,7 @@ Root area (CMakeLists). On the macOS runner, `metronome-acceptance` has taken 25
 Engine and UI areas, with an engine patch. After a static reading of the reference's command, `bounceTracksInPlace` replaces the selected audio and MIDI tracks' clips and devices with their render, freezing first outside history when needed. The render is cut at the original clips' edges, with tail clips where the sound rings on, and take lanes go. A MIDI track becomes an audio track, and the whole bounce is one undo step. The header menu offers it in place of Flatten, which the reference's 12.2.1 no longer has.
 
 `cmake/PatchFreezeTails.cmake` lets a freeze keep a tail through gaps of silence. Before, a Delay's echoes were cut at the first silent block, so frozen tracks lost them. Tracks with Session clips are refused until Session clips can be frozen. Checked in the freeze and UI suites ([contract](research/freeze-contract.md)).
+
+## Clip colours — 2026-10-24
+
+Engine and UI areas. Clips have colours of their own, as the reference's do, showing their track's colour until then. A recoloured track's clips keep the colour they showed, and the header menu's Assign Track Color to Clips gives them the track's again. From a group it is Assign Track Color to Clips and Grouped Tracks, which first gives the group's tracks its colour. The Arrangement, take lanes, group lanes and Session slots draw each clip in its colour. Checked in the groups and UI suites ([contract](research/track-header-menu-contract.md#clip-colours)).

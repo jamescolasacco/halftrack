@@ -126,6 +126,9 @@ const juce::Identifier noteChanceProperty { "halftrackChance" }, noteVelocityRan
 const juce::Identifier returnProperty { "halftrackReturn" };
 const juce::Identifier linkProperty { "halftrackLink" }; // Linked-track editing: tracks with the same value edit together.
 const juce::Identifier infoTextProperty { "halftrackInfoText" }; // A track's or group's own info text (Edit Info Text).
+// A clip's own colour. The engine gives every new clip a colour of its own hue, so its colour cannot
+// say whether a clip shows its track's.
+const juce::Identifier clipColourProperty { "halftrackClipColour" };
 const juce::Identifier hostedInstrumentProperty { "halftrackInstrument" }; // A hosted plug-in that is its track's instrument.
 // A hosted plug-in's sidechain tap (InputTap, Post FX by default) and whether it is off; the
 // engine's node builder reads both (see cmake/PatchSidechainTaps.cmake).
@@ -1972,6 +1975,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
     Session::ClipInfo result;
     const auto position = clip.getPosition();
     result.id = clip.itemID.toString(); result.name = clip.getName(); result.active = !clip.isMuted();
+    if (clip.state.hasProperty (clipColourProperty)) result.colour = juce::VariantConverter<juce::Colour>::fromVar (clip.state[clipColourProperty]); // Else its track's, given by the snapshot.
     result.grid = readGrid (clip.state.getChildWithName (gridType));
     result.start = position.time.getStart().inSeconds(); result.length = position.time.getLength().inSeconds();
     result.sourceOffset = position.offset.inSeconds();
@@ -2042,6 +2046,7 @@ Session::ClipInfo describeLaneClip (const juce::ValueTree& state, te::Edit& edit
 {
     Session::ClipInfo result;
     result.id = state[te::IDs::id].toString(); result.name = state[te::IDs::name].toString();
+    if (state.hasProperty (clipColourProperty)) result.colour = juce::VariantConverter<juce::Colour>::fromVar (state[clipColourProperty]);
     result.start = state[te::IDs::start]; result.length = state[te::IDs::length]; result.sourceOffset = state[te::IDs::offset];
     const auto beats = edit.tempoSequence.toBeats (te::TimeRange (te::TimePosition::fromSeconds (result.start), te::TimeDuration::fromSeconds (result.length)));
     result.startBeat = beats.getStart().inBeats(); result.lengthBeats = beats.getLength().inBeats();
@@ -3574,6 +3579,19 @@ struct Session::Impl
         for (auto* root : roots (ids)) if (dynamic_cast<te::FolderTrack*> (root) != nullptr)
             tracks.removeIf ([root] (te::AudioTrack* t) { return inside (*t, *dynamic_cast<te::FolderTrack*> (root)); });
         return tracks;
+    }
+    // Clips show their track's colour until they have one of their own. As the reference's clips take
+    // their track's colour when made and keep it (0x1021d6554), a track about to change colour gives
+    // its clips without one the colour they show; one undo step with the change.
+    void keepClipColours (te::Track& t)
+    {
+        auto* audio = dynamic_cast<te::AudioTrack*> (&t);
+        if (audio == nullptr) return;
+        auto* undo = &edit->getUndoManager();
+        const auto colour = juce::VariantConverter<juce::Colour>::toVar (t.getColour());
+        for (auto* clip : allTrackClips (*audio)) if (! clip->state.hasProperty (clipColourProperty)) clip->state.setProperty (clipColourProperty, colour, undo);
+        for (auto lane : audio->state.getChildWithName (takeLanesType))
+            for (auto clip : lane) if (! clip.hasProperty (clipColourProperty)) clip.setProperty (clipColourProperty, colour, undo);
     }
     // The headers' Copy: each copied top-most track's or group's state, in order.
     std::vector<juce::ValueTree> trackClipboard;
@@ -6729,6 +6747,9 @@ Session::Snapshot Session::snapshot() const
             for (auto clip : lane) laneInfo.clips.push_back (describeLaneClip (clip, e));
             info.takeLanes.push_back (std::move (laneInfo));
         }
+        // A clip without a colour of its own shows its track's.
+        for (auto& clip : info.clips) if (clip.colour.isTransparent()) clip.colour = info.colour;
+        for (auto& lane : info.takeLanes) for (auto& clip : lane.clips) if (clip.colour.isTransparent()) clip.colour = info.colour;
         info.launcherActive = t->playSlotClips.get() || (t->launcherOwnership.load (std::memory_order_acquire) & 1) != 0;
         if (const int channel = static_cast<int> (t->state.getProperty (midiOutChannelProperty, 0)); channel > 0) info.output = { OutputKind::midiPort, {}, t->getOutput().getOutputName(), channel };
         else if (auto* destination = t->getOutput().getDestinationTrack()) info.output = { OutputKind::track, destination->itemID.toString() };
@@ -6746,6 +6767,7 @@ Session::Snapshot Session::snapshot() const
             if (auto* c = slot->getClip())
             {
                 slotInfo.hasClip = true; slotInfo.clip = describeClip (*c);
+                if (slotInfo.clip.colour.isTransparent()) slotInfo.clip.colour = info.colour;
                 slotInfo.overdubbing = std::any_of (impl->overdubs.begin(), impl->overdubs.end(), [c] (const auto& o) { return o.clipId == c->itemID; });
                 if (auto h = c->getLaunchHandle())
                 {
@@ -10200,7 +10222,39 @@ Result Session::setTrackColours (const juce::StringArray& ids, juce::Colour colo
     }
     if (tracks.isEmpty()) return Result::ok();
     impl->transaction ("Set track colour");
-    for (auto* t : tracks) t->setColour (colour.withAlpha (1.0f));
+    for (auto* t : tracks) { impl->keepClipColours (*t); t->setColour (colour.withAlpha (1.0f)); }
+    impl->changed(); return Result::ok();
+}
+Result Session::assignTrackColourToClips (const juce::StringArray& ids, bool arrangement)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (ids.isEmpty()) return Result::fail ("Choose tracks whose clips take their colour.");
+    for (const auto& id : ids)
+    {
+        if (impl->group (id) != nullptr) continue;
+        auto* t = impl->track (id);
+        if (t == nullptr) return Result::fail ("Track not found.");
+        if (isReturn (*t)) return Result::fail ("Return tracks have no clips to colour.");
+    }
+    // As the reference's (0x1037d5828, 0x103a1db88): the tracks inside a chosen group take its colour,
+    // then the chosen tracks' and those tracks' clips take their track's: Arrangement clips from the
+    // Arrangement's headers, Session clips from the Session view's titles.
+    impl->transaction ("Assign Track Color to Clips");
+    auto* undo = &impl->edit->getUndoManager();
+    juce::Array<te::AudioTrack*> tracks;
+    for (const auto& id : ids)
+        if (auto* folder = impl->group (id))
+        {
+            for (auto* t : Impl::subtree (*folder))
+                if (t != folder && t->getColour() != folder->getColour()) { impl->keepClipColours (*t); t->setColour (folder->getColour()); }
+            for (auto* t : te::getAudioTracks (*impl->edit)) if (Impl::inside (*t, *folder)) tracks.addIfNotAlreadyThere (t);
+        }
+        else if (auto* t = impl->track (id)) tracks.addIfNotAlreadyThere (t);
+    for (auto* t : tracks)
+    {
+        if (arrangement) { for (auto* clip : t->getClips()) clip->state.removeProperty (clipColourProperty, undo); }
+        else for (auto* slot : t->getClipSlotList().getClipSlots()) if (auto* clip = slot->getClip()) clip->state.removeProperty (clipColourProperty, undo);
+    }
     impl->changed(); return Result::ok();
 }
 Result Session::renameGroup (const String& groupId, const String& name)

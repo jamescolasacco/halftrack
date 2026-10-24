@@ -368,6 +368,7 @@ public:
     struct ClipInfo
     {
         juce::String id, name;
+        juce::Colour colour; // Its own colour, or its track's while it has none.
         double start = 0, length = 0, sourceOffset = 0;
         juce::File file;
         bool isMidi = false, isAudio = false, canEditAudioRange = false, canEditAudioFades = false;
@@ -977,7 +978,14 @@ public:
     // shows it while pointing at the track's header. Empty clears it. Saved; one undo step.
     juce::Result setInfoText (const juce::String& trackOrGroupId, const juce::String& text);
     // Gives tracks and groups a colour, opaque, as the reference's header colour grid does; one undo step.
+    // As the reference's clips keep the colour they were made with, a recoloured track's clips without
+    // a colour of their own keep the one they showed.
     juce::Result setTrackColours (const juce::StringArray& trackAndGroupIds, juce::Colour);
+    // Assign Track Color to Clips, as the reference's header command: the tracks in a chosen group take
+    // its colour, then the chosen tracks' and those tracks' clips show their track's colour again,
+    // Arrangement clips (main lane) from the Arrangement, Session clips from the Session view. One
+    // undo step.
+    juce::Result assignTrackColourToClips (const juce::StringArray& trackAndGroupIds, bool arrangement);
     juce::Result ungroupTracks (const juce::String& groupId);
     // Moves tracks and groups into a group (empty for the top level), before a track or group there
     // (empty for its end, before the returns), as dragging headers does in the reference. Their

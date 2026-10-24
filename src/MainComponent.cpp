@@ -3116,7 +3116,7 @@ private:
                             for (const auto& clip : owner.state.tracks[(size_t) t].clips)
                             {
                                 const auto x = (float) ((clip.start - owner.viewStart) * owner.pixelsPerSecond);
-                                g.setColour (owner.state.tracks[(size_t) t].colour.withAlpha (clip.active ? 0.8f : 0.3f));
+                                g.setColour (clip.colour.withAlpha (clip.active ? 0.8f : 0.3f));
                                 g.fillRect (x, (float) lane.y + 12.0f, (float) juce::jmax (2.0, clip.length * owner.pixelsPerSecond), (float) lane.height - 24.0f);
                             }
                 }
@@ -3170,7 +3170,7 @@ private:
                     auto bounds = clipBounds (clip, t);
                     if (bounds.getRight() < 0 || bounds.getX() > tw) continue;
                     const bool selected = (t == owner.selectedTrack && c == owner.selectedClip) || owner.isExtraMidiClip (clip.id) || owner.linkedToSelectedClip (t, clip) || owner.isClipSelected (clip.id);
-                    auto colour = track.colour;
+                    auto colour = clip.colour; // Its own, or its track's.
                     if (colour.isTransparent()) colour = themes::colour (0xff76b5bf);
                     if (!clip.active) colour=muted;
                     g.setColour (colour.withAlpha (track.mute || !clip.active ? 0.24f : 0.72f)); g.fillRect (bounds);
@@ -3347,19 +3347,19 @@ private:
                     const juce::Rectangle<float> b ((float) ((clip.start - owner.viewStart) * owner.pixelsPerSecond), (float) lane.y + 4,
                                                     (float) juce::jmax (3.0, clip.length * owner.pixelsPerSecond), (float) lane.height - 8);
                     if (b.getRight() < 0 || b.getX() > tw) continue;
-                    g.setColour (track.colour.withAlpha (.35f)); g.fillRect (b);
+                    g.setColour (clip.colour.withAlpha (.35f)); g.fillRect (b);
                     if (clip.isAudio)
                         if (auto* thumbnail = thumbnailFor (clip.file); thumbnail != nullptr && thumbnail->getTotalLength() > 0)
-                        { g.setColour (track.colour.withAlpha (.8f)); thumbnail->drawChannels (g, b.reduced (0, 2).toNearestInt(), clip.sourceOffset, clip.sourceOffset + clip.length, .9f); }
+                        { g.setColour (clip.colour.withAlpha (.8f)); thumbnail->drawChannels (g, b.reduced (0, 2).toNearestInt(), clip.sourceOffset, clip.sourceOffset + clip.length, .9f); }
                     if (clip.isMidi)
                         for (const auto& note : clip.notes)
                         {
                             const auto x = (float) ((owner.secondsAt (clip.startBeat + note.startBeat) - clip.sourceOffset - owner.viewStart) * owner.pixelsPerSecond);
                             const auto w = (float) juce::jmax (1.0, (owner.secondsAt (clip.startBeat + note.startBeat + note.lengthBeats) - owner.secondsAt (clip.startBeat + note.startBeat)) * owner.pixelsPerSecond);
                             const auto y = b.getBottom() - (float) (note.pitch % 48) / 48.0f * b.getHeight();
-                            g.setColour (track.colour.brighter (.3f)); g.fillRect (x, y - 1, w, 2.0f);
+                            g.setColour (clip.colour.brighter (.3f)); g.fillRect (x, y - 1, w, 2.0f);
                         }
-                    g.setColour (track.colour.darker (.4f)); g.drawRect (b, 1.0f);
+                    g.setColour (clip.colour.darker (.4f)); g.drawRect (b, 1.0f);
                 }
                 if (owner.takeSelection.laneId == take.id && owner.takeSelection.end > owner.takeSelection.start)
                 {
@@ -4427,7 +4427,7 @@ private:
                     const auto cell = bounds.reduced (1, 0).withTrimmedBottom (1);
                     if (filled)
                     {
-                        const auto clipColour = slot->clip.active ? track.colour : themes::colour (0xff6a6a6a);
+                        const auto clipColour = slot->clip.active ? slot->clip.colour : themes::colour (0xff6a6a6a);
                         g.setColour (queued && blink ? clipColour.brighter (0.35f) : clipColour); g.fillRect (cell);
                         g.setColour (slot->playing ? green.brighter (0.2f) : queued ? themes::colour (0xffffffff) : dark);
                         if (slot->stopQueued) g.fillRect (cell.getX() + 6, cell.getCentreY() - 4, 8, 8);
@@ -10184,7 +10184,7 @@ private:
     // has the take lane and link items; the Session view's titles do not. A colour picked in the grid
     // is put in `colour`.
     enum HeaderItem { headerCut = 100, headerCopy, headerPaste, headerDuplicate = 1, headerDelete, headerRename, headerFreeze, headerBounce, headerInsertAudio, headerInsertMidi, headerInsertReturn,
-                      headerGroup, headerUngroup, headerSelectContent, headerEditInfo, headerClearEnvelopes, headerInsertTakeLane, headerShowTakeLanes, headerDeleteTakeLanes, headerLink, headerUnlink, headerColour };
+                      headerGroup, headerUngroup, headerSelectContent, headerEditInfo, headerClearEnvelopes, headerAssignColour, headerInsertTakeLane, headerShowTakeLanes, headerDeleteTakeLanes, headerLink, headerUnlink, headerColour };
     juce::PopupMenu headerMenu (const juce::String& id, bool arrangement, std::shared_ptr<int> colour, bool join) const
     {
         const auto ids = headerSelection();
@@ -10247,6 +10247,11 @@ private:
         }
         if (pending || menu.getNumItems() > 0) menu.addSeparator();
         menu.addCustomItem (headerColour, std::make_unique<ColourGrid> (used, colour), nullptr, "Track Colours");
+        // Assign Track Color to Clips, for audio, MIDI and group tracks, naming grouped tracks when a group is chosen.
+        const bool assignable = ! ids.isEmpty() && std::all_of (ids.begin(), ids.end(), [this] (const juce::String& t)
+        { const auto* info = trackInfo (t); return groupInfo (t) != nullptr || (info != nullptr && ! info->isReturn); });
+        const bool anyGroup = std::any_of (ids.begin(), ids.end(), [this] (const juce::String& t) { return groupInfo (t) != nullptr; });
+        if (assignable) { menu.addSeparator(); menu.addItem (headerAssignColour, anyGroup ? "Assign Track Color to Clips and Grouped Tracks" : "Assign Track Color to Clips"); }
         return menu;
     }
     void chooseHeaderItem (int result, const juce::String& id, bool arrangement, int colour, bool join)
@@ -10260,6 +10265,7 @@ private:
             case headerRename: renameHeader (id, arrangement); return;
             case headerEditInfo: editInfoTextDialog (id); return;
             case headerClearEnvelopes: report (session.clearAllEnvelopes (ids)); break;
+            case headerAssignColour: report (session.assignTrackColourToClips (ids, arrangement)); break;
             case headerFreeze: freezeTracksFromUI (freezableTracks (ids)); return;
             case headerBounce: report (session.bounceTracksInPlace (ids)); break;
             case headerInsertAudio: showPiano = false; addTrack(); resized(); return;
@@ -17462,13 +17468,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     const bool clips = ! state.tracks[(size_t) indexOf (second)].clips.empty();
                     const auto expected = juce::String ("Cut|Copy|Duplicate|Delete|-|Rename|Edit Info Text|-|") + (clips ? "Freeze Track|" : "") + "Bounce Track in Place|-|"
                         + "Insert Audio Track|Insert MIDI Track|Insert Return Track|Group Tracks|-|Select Content" + (clips ? "" : " (off)")
-                        + "|-|Insert Take Lane|Show Take Lanes|Delete All Take Lanes (off)|-|Link Tracks (off)|Unlink Tracks (off)|-|[colours]";
+                        + "|-|Insert Take Lane|Show Take Lanes|Delete All Take Lanes (off)|-|Link Tracks (off)|Unlink Tracks (off)|-|[colours]|-|Assign Track Color to Clips";
                     check (listed (headerMenu (second, true, colour, false)) == expected, "a track's menu: " + listed (headerMenu (second, true, colour, false)));
-                    check (listed (headerMenu (second, false, colour, false)) == expected.upToFirstOccurrenceOf ("Select Content", true, false) + "|-|[colours]",
+                    check (listed (headerMenu (second, false, colour, false)) == expected.upToFirstOccurrenceOf ("Select Content", true, false) + "|-|[colours]|-|Assign Track Color to Clips",
                            "a Session title's has no take lane or link items, and Select Content for its audio or MIDI track: " + listed (headerMenu (second, false, colour, false)));
                     check (selectForHeaderMenu (inner) && selectedChain == inner, "right-clicking the inner group selects it");
                     check (listed (headerMenu (inner, true, colour, false)) == "Cut|Copy|Duplicate|Delete|-|Rename|Edit Info Text|-|Insert Audio Track|Insert MIDI Track|Insert Return Track|Group Tracks|Ungroup Tracks|-|Select Content"
-                                   + juce::String (state.tracks[(size_t) indexOf (first)].clips.empty() ? " (off)" : "") + "|-|[colours]",
+                                   + juce::String (state.tracks[(size_t) indexOf (first)].clips.empty() ? " (off)" : "") + "|-|[colours]|-|Assign Track Color to Clips and Grouped Tracks",
                            "a group's: Ungroup Tracks, no take lane or link items: " + listed (headerMenu (inner, true, colour, false)));
                     check (selectForHeaderMenu (first) && selectedTrackIds() == juce::StringArray { first } && selectedChain.isEmpty(), "right-clicking the first track selects it alone");
                     check (listed (headerMenu (first, true, colour, false)).startsWith ("Copy|Duplicate|-|Rename"), "its menu leaves Cut and Delete out, as the inner group keeps its only track");
@@ -17491,6 +17497,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     session.undo(); refresh();
                     check (state.tracks[(size_t) indexOf (first)].colour != paletteColour (3), "one undo takes both colours back");
                     multiSelectedTracks.clear(); refresh();
+                    // From a Session title, Assign Track Color to Clips colours the track's Session clips,
+                    // which keep the colour they showed when the track changes colour.
+                    {
+                        selectForHeaderMenu (second);
+                        const auto slotColour = [&] { return state.tracks[(size_t) indexOf (second)].slots.at (0).clip.colour; };
+                        const auto shown = slotColour();
+                        chooseHeaderItem (headerColour, second, false, 5, false); refresh();
+                        check (state.tracks[(size_t) indexOf (second)].colour == paletteColour (5) && slotColour() == shown, "a new colour leaves the track's Session clip the colour it showed");
+                        chooseHeaderItem (headerAssignColour, second, false, -1, false); refresh();
+                        check (slotColour() == paletteColour (5), "Assign Track Color to Clips from its title gives it the track's");
+                        session.undo(); session.undo(); refresh();
+                        check (slotColour() == shown, "two undo steps put both back");
+                    }
                     // Rename edits the clicked track's name in place.
                     auto* secondName = dynamic_cast<juce::Label*> (canvas.getComponentAt (canvas.timelineWidth() + 30, laneY (indexOf (second)) + 10));
                     check (secondName != nullptr && secondName->getName() == "Track name" && renameHeader (second, true) == secondName->getParentComponent(),

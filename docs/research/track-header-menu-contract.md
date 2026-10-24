@@ -40,13 +40,17 @@ The reference's Arrangement menu, with what Halftrack shows:
 | take lanes: Insert Take Lane, Show Take Lanes, Delete All Take Lanes, Delete Unused Take Lanes | an audio or MIDI track's header, Automation Mode off | Insert Take Lane, Show Take Lanes (ticked when all selected tracks show theirs) and Delete All Take Lanes (one undo step, `removeTakeLanes`). Delete Unused Take Lanes is not yet there |
 | Link Tracks, Unlink Tracks | audio, MIDI and group tracks | for audio and MIDI tracks; Halftrack's groups do not link yet |
 | colour grid | always | Halftrack's own palette in the reference's layout, 5 rows of 14. A colour in use by a selected track is marked, and picking one colours every selected track and group in one undo step (`setTrackColours`) |
-| Assign Track Color to Clips | | not yet: Halftrack's clips have no colours of their own |
+| Assign Track Color to Clips (and Grouped Tracks with a group chosen) | the selection is audio, MIDI and group tracks | the same (`assignTrackColourToClips`): the tracks inside a chosen group take its colour, then the chosen tracks' and those tracks' clips show their track's colour, the Arrangement's main-lane clips from a header and Session clips from a title, as a later static reading of the reference's (0x1037d5828, 0x103a1db88) found. One undo step |
 | Save as Default Audio/MIDI Track | | not yet |
 | Copy LOM Path | one track selected | left out: Halftrack has no object model for it |
 
 In the Session view, a track's or group's title has the same menu without Clear All Envelopes, the take lane items and the link items. Select Content is enabled there when every selected track is audio or MIDI, and it selects their Session clips. The reference ends the Session menu with two items that show or hide a rack's chains in the mixer, shown only where they apply; Halftrack's mixer has no such strips.
 
 Right-clicking a header selects its track or group unless it is selected, keeping the selection then. The reference's menu code only marks the clicked track; how it treats the rest of the selection was not determined (see open questions).
+
+## Clip colours
+
+A clip shows its track's colour until it has one of its own (`ClipInfo::colour`). The reference's clips take their track's colour when made and keep it (0x1021d6554), so recolouring a track first gives its clips without a colour the one they showed, in the same undo step; Assign Track Color to Clips takes it away again. Copies keep their clip's colour. The colour is kept in a Halftrack property of the clip, as the engine gives every new clip a colour of its own hue. The reference's option for random clip colours is not reproduced.
 
 ## Evidence in Halftrack
 
@@ -58,6 +62,7 @@ The UI suite checks:
 - that Rename edits the clicked track's name in its header, and Select Content selects its clip's time on its track;
 - that a track's info text shows in the Info view at its header and Session title, and an undo restores the usual description (the groups suite saves and reopens info texts);
 - right-click selection;
+- that a track's new colour leaves its Session clip the colour it showed, that Assign Track Color to Clips from its title gives the clip the track's, and that undo puts both back (the groups suite checks Arrangement clips, a chosen group's tracks and an unknown track);
 - that Clear All Envelopes appears only in Automation Mode, after Delete between separators, clears an automated track's lane, and comes back with one undo (the groups suite checks a group's own lanes going without its members').
 
 The groups suite checks the return limit.

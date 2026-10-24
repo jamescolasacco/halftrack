@@ -200,6 +200,27 @@ int runGroupTests (const juce::File& artifacts)
                 n.undo(); n.undo();
                 check (groupVolume().points.empty() && n.snapshot().tracks[1].panAutomation.points.empty(), "two more undo steps remove the lanes set up here");
             }
+            {
+                // Clip colours: a clip shows its track's colour until it has its own; a recoloured track's
+                // clips keep the colour they showed, as the reference's clips keep theirs, until Assign
+                // Track Color to Clips. A chosen group's tracks take its colour first.
+                const auto clipColour = [&n] (int t) { return n.snapshot().tracks[(size_t) t].clips.at (0).colour; };
+                const auto before = n.snapshot().tracks[2].colour;
+                check (clipColour (2) == before, "c's clip shows c's colour");
+                ok (n.setTrackColours ({ ids[2] }, juce::Colours::red), "make c red");
+                check (n.snapshot().tracks[2].colour == juce::Colours::red && clipColour (2) == before, "c is red, and its clip keeps the colour it had");
+                ok (n.assignTrackColourToClips ({ ids[2] }, true), "assign c's colour to its clips");
+                check (clipColour (2) == juce::Colours::red, "its clip is red too");
+                n.undo(); check (clipColour (2) == before, "one undo gives the clip its colour back");
+                ok (n.setTrackColours ({ outer }, juce::Colours::blue), "make the outer group blue");
+                ok (n.assignTrackColourToClips ({ outer }, true), "assign the outer group's colour to its clips and tracks");
+                check (n.snapshot().tracks[0].colour == juce::Colours::blue && n.snapshot().tracks[1].colour == juce::Colours::blue && clipColour (0) == juce::Colours::blue
+                           && clipColour (1) == juce::Colours::blue && clipColour (2) == before,
+                       "a and b, inside it, and their clips turn blue; c, outside it, keeps its clip's colour");
+                check (n.assignTrackColourToClips ({ "missing" }, true).failed(), "an unknown track is refused");
+                n.undo(); n.undo(); n.undo();
+                check (n.snapshot().tracks[2].colour == before && clipColour (0) == n.snapshot().tracks[0].colour, "three more undo steps put the colours back");
+            }
             ok (n.setInfoText (top, "Everything"), "give the top group an info text"); ok (n.setInfoText (ids[0], "  The first take  "), "and a one too");
             const auto project = root.getChildFile ("Nested.halftrack");
             ok (n.saveProject (project), "save");
