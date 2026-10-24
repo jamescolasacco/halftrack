@@ -2357,3 +2357,7 @@ Engine area. A further static reading found where the reference's Paste puts tra
 ## Clear All Envelopes — 2026-10-23
 
 Engine and UI areas. In Automation Mode the header menu offers Clear All Envelopes, after a static reading of the reference's command. In one undo step it removes the selected tracks' and groups' own lanes and their Arrangement clips' envelopes for those controls, leaving the tracks inside a selected group and Session clips alone. Checked in the groups and UI suites ([contract](research/arrangement-automation-contract.md#clear-all-envelopes-2026-10-23)).
+
+## CI timeouts for two slow suites — 2026-10-23
+
+Root area (CMakeLists). On the macOS runner, `metronome-acceptance` has taken 258–285 s against a 300 s limit and `midi-monitor-acceptance` 82–88 s against 90 s, so runner variance timed both out twice on one commit while every other job passed. Their output stopped mid-run, not at an error. Their limits are now 600 s and 240 s. Locally both pass, three times in a row under load.
