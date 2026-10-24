@@ -2499,3 +2499,7 @@ Engine and UI areas. As the reference's View and scene menus switch them, Scene 
 ## The reference's Preferences window — 2026-10-24
 
 UI area, with small engine and doc edits. Preferences, Audio & MIDI Setup and Plug-Ins are now one window, as the reference's (static reading, [contract](research/preferences-contract.md)): a normal window, one at a time, its tabs down the left in the reference's order (Display & Input, Theme & Colors, Audio, Link, Tempo & MIDI, Plug-Ins, Record, Warp & Launch), remembering the tab chosen last. The Audio page follows the reference's rows: driver type, devices, channel configuration, sample rate, buffer size and the latencies. Link, Tempo & MIDI has the control surface and a ports table with each port's switches; the old dialog's MIDI input list, which the engine never read, is gone. Recording's file type and bit depth, and the count-in, moved to Record, Warp & Launch. Checked in the UI suite.
+
+## Solo and Cue Switches — 2026-10-24
+
+UI area. The Preferences research resolved the condition on the reference's Options items: they show in a normal launch. Options' Solo Switches and Cue Switches now choose the Solo/Cue mode, as the Main's switch does, greyed while there is no Cue Out of its own ([contract](research/main-menu-contract.md)). Checked in the UI suite.

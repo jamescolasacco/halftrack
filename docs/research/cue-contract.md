@@ -39,7 +39,7 @@ The UI suite switches it from the Options menu.
   - Exclusive Solo applies to cueing. A plain click on an engaged switch clears every switch, in both modes.
   - Groups cannot be cued: their switch is disabled in Cue mode.
 - **The engine.** A patch (`cmake/PatchCue.cmake`, see [dependencies](../dependencies.md#tracktion-cue-patch)) gives the engine behaviour three hooks: whether a track is cued, the cue's output device, and the cue level, which is read on the audio thread from an atomic. On the cue's device, the node builder sums the cued tracks' Post FX taps (the tap Audio From uses, before the volume plug-in and the track's muting) and the click, each through a gain node that ramps the cue level across a block and puts a mono tap on every channel. The sum goes after the master's devices and meter.
-- **The UI.** The Session mixer's master strip (MAIN, as the reference names it) has Cue Out above Main Out, the Solo/Cue switch (reading Solo or Cue) and a CUE knob. In Cue mode the tracks' switches read C.
+- **The UI.** The Session mixer's master strip (MAIN, as the reference names it) has Cue Out above Main Out, the Solo/Cue switch (reading Solo or Cue) and a CUE knob. In Cue mode the tracks' switches read C. Options' Solo Switches and Cue Switches choose the mode too, as the reference's menu does, greyed while Cue mode cannot apply.
 
 ## Evidence
 

@@ -11727,6 +11727,7 @@ private:
                     menuToggleView, menuClipView, menuDeviceView, menuToggleDetail, menuBrowser, menuGroovePool, menuSearch, menuSimilar,
                     menuFoldAll, menuFoldSelected, menuZoomSelection, menuZoomBack, menuMidiMap, menuKeyMap, menuComputerKeyboard,
                     menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuOverview, menuSceneSettings,
+                    menuSoloSwitches, menuCueSwitches,
                     menuSlice = 200, // Plus Session::SliceBy.
                     menuTimeFormat = 210 }; // Plus Session::TimeFormat.
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
@@ -12284,6 +12285,8 @@ private:
             add (95, "Triplet Grid", place.has_value(), g.tuplet == 3); add (96, "Snap to Grid", place.has_value(), g.snap);
             add (97, "Fixed Grid", place.has_value(), g.fixed);
             popup.addSeparator();
+            // The tracks' switches solo or cue, as the Main's Solo/Cue switch chooses; Cue needs a Cue Out of its own.
+            add (menuSoloSwitches, "Solo Switches", state.cueAvailable, ! state.cueMode); add (menuCueSwitches, "Cue Switches", state.cueAvailable, state.cueMode);
             add (98, "Solo in Place", true, state.soloInPlace);
             popup.addSeparator();
             add (13, "Audio Engine On", true, session.isAudioEngineEnabled());
@@ -12416,6 +12419,7 @@ private:
             case menuToggleDetail: showClipView (! showPiano); break;
             case menuBrowser: showBrowser = ! showBrowser; resized(); break;
             case menuPluginWindows: session.setPluginEditorsShown (! session.pluginEditorsShown()); return;
+            case menuSoloSwitches: case menuCueSwitches: report (session.setCueMode (id == menuCueSwitches)); break;
             case menuOverview: session.setArrangementOverview (! state.arrangementOverview); refresh(); resized(); break;
             case menuSceneSettings: session.setSceneSettingsShown (! state.sceneSettingsShown); refresh(); launcher.repaint(); break;
             case menuGroovePool: openGroovePool(); return;
@@ -17684,7 +17688,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         view.addArray ({ "-", "Mixer", "Mixer Controls >", "-", "Overview", "Scene Tempo and Time Signature", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
         expect ("View", view);
         juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "-", "External Sync", "-", "Time Ruler Format >", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
-                                    "Fixed Grid", "-", "Solo in Place", "-", "Audio Engine On" };
+                                    "Fixed Grid", "-", "Solo Switches", "Cue Switches", "Solo in Place", "-", "Audio Engine On" };
        #if ! JUCE_MAC
         options.addArray ({ "-", "Preferences..." });
        #endif
@@ -17710,6 +17714,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             blocker.exitModalState (0);
         }
         check (entry ("File", 1)->isEnabled, "and act again once it closes");
+        // Solo Switches and Cue Switches follow the Main's Solo/Cue switch: greyed while there is no Cue Out of its own.
+        check (! state.cueAvailable && ! entry ("Options", menuSoloSwitches)->isEnabled && entry ("Options", menuSoloSwitches)->isTicked
+                   && ! entry ("Options", menuCueSwitches)->isTicked, "without a Cue Out of its own, Solo Switches is ticked and greyed with Cue Switches");
         // Solo and Arm, from their keys (S and C), for the selected track.
         const auto midiIndex = (int) state.tracks.size() - 1;
         selectTrack (midiIndex); refresh();
@@ -20128,6 +20135,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (std::abs (state.cueVolumeDb + 12) < .01f, "the knob sets the cue volume");
             soloCue->triggerClick(); juce::MessageManager::getInstance()->runDispatchLoopUntil (50); refresh();
             check (! state.cueMode, "and the switch turns Solo mode on again");
+            const auto optionItem = [this] (int id)
+            {
+                const auto menu = getMenuForIndex (getMenuBarNames().indexOf ("Options"), "Options");
+                for (juce::PopupMenu::MenuItemIterator items (menu); items.next();) if (items.getItem().itemID == id) return std::pair { items.getItem().isEnabled, items.getItem().isTicked };
+                return std::pair { false, false };
+            };
+            check (optionItem (menuCueSwitches).first && optionItem (menuSoloSwitches).second, "with a Cue Out of its own, Options' Cue Switches can act, and Solo Switches is ticked");
+            menuItemSelected (menuCueSwitches, 5); refresh();
+            check (state.cueMode && soloCue->getButtonText() == "Cue" && optionItem (menuCueSwitches).second, "Options' Cue Switches turns Cue mode on, as the Main's switch does");
+            menuItemSelected (menuSoloSwitches, 5); refresh();
+            check (! state.cueMode, "and Solo Switches turns it off");
             session.undo(); refresh();
             cueOut->setSelectedId (1, juce::sendNotificationSync); refresh();
             check (state.cueOutput == outs[0] && ! soloCue->isEnabled(), "Cue Out back with the master leaves Cue mode unavailable");
