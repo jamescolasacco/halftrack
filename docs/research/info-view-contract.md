@@ -1,6 +1,6 @@
 # Info View contract
 
-Halftrack's Info View follows the reference's: a box under the browser that says what the control under the pointer is and does.
+Halftrack's Info View follows the reference's: a box under the browser (above the detail view unless View > Full Height Browser is on, see the [layout contract](window-layout-contract.md)) that says what the control under the pointer is and does.
 
 ## Behaviour
 

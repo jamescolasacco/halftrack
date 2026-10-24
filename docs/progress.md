@@ -2673,3 +2673,7 @@ UI area. The browser gains the reference's Browse Back and Browse Forward arrows
 ## The browser sidebar's keys — 2026-10-24
 
 UI area. The sidebar takes the keyboard, as the reference's does: a click focuses it, Up and Down show the row above or below through the collections, the Library and Places, and Right or Return move to the list. In the list, Left at the top now moves out to the sidebar instead of up a folder; the Up button still goes up in Samples ([contract](research/browser-places-contract.md#the-folder-tree-2026-10-24)). Checked in the UI suite through the keys' handlers.
+
+## The detail view under the browser — 2026-10-24
+
+UI area. As the reference's Full Height Browser is off by default (its song preference data and its manual's offer to "expand the browser to full height"), the detail view now spans the window under the browser by default, the browser and Info View standing above it. View > Full Height Browser, a preference, restores the old layout. Tests that assumed the clip editor's width now use its own beat mapping, and one clip-envelope check accepts Snap Automation to Grid's pull ([contract](research/window-layout-contract.md)). Checked in the UI and preferences suites, with the snapshots looked over.

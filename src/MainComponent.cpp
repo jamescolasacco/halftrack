@@ -906,6 +906,18 @@ public:
         area.removeFromBottom (statusHeight);
         // MIDI Map Mode shows its mappings in the browser's place, so the browser shows meanwhile.
         const bool browserShown = showBrowser || mapping();
+        // The detail view shows either the device chain or, for an open clip, its editor; View > Hide
+        // Detail View hides it, as the reference's does.
+        const int detailHeight = ! showDetail ? 0
+                               : showPiano ? juce::jlimit (minimumClipViewHeight, juce::jmax (minimumClipViewHeight, area.getHeight() - 140),
+                                                           juce::roundToInt (area.getHeight() * clipViewFraction))
+                                           : deviceHeight;
+        // As the reference's default, the detail view spans the window under the browser; with View >
+        // Full Height Browser the browser runs down beside it.
+        const auto work = area;
+        juce::Rectangle<int> detail;
+        const bool browserAbove = browserShown && ! session.preferences().fullHeightBrowser;
+        if (browserAbove) detail = area.removeFromBottom (detailHeight);
         browserBounds = browserShown ? area.removeFromLeft (juce::jlimit (minimumBrowserWidth, maximumBrowserWidth(), browserWidth)) : juce::Rectangle<int>();
         // The Info View sits under the browser, as in the reference, and without it keeps the corner
         // beside the detail view.
@@ -913,14 +925,8 @@ public:
         if (showInfo && browserShown) info.setBounds (browserBounds.removeFromBottom (infoHeight).reduced (6, 4));
         // MIDI Map Mode covers the working area and shows the mappings in place of the browser.
         mapOverlay.setVisible (mapping()); mappingList.setVisible (mapping());
-        if (mapping()) { mapOverlay.setBounds (area); mappingList.setBounds (browserBounds.reduced (6)); mapOverlay.toFront (false); }
-        // The detail view shows either the device chain or, for an open clip, its editor; View > Hide
-        // Detail View hides it, as the reference's does.
-        const int detailHeight = ! showDetail ? 0
-                               : showPiano ? juce::jlimit (minimumClipViewHeight, juce::jmax (minimumClipViewHeight, area.getHeight() - 140),
-                                                           juce::roundToInt (area.getHeight() * clipViewFraction))
-                                           : deviceHeight;
-        auto detail = area.removeFromBottom (detailHeight);
+        if (mapping()) { mapOverlay.setBounds (work.withTrimmedLeft (browserBounds.getWidth())); mappingList.setBounds (browserBounds.reduced (6)); mapOverlay.toFront (false); }
+        if (! browserAbove) detail = area.removeFromBottom (detailHeight);
         // Without the browser, the Info View keeps its corner beside the detail view, or below the view without either.
         if (showInfo && ! browserShown) info.setBounds ((showDetail ? detail : area.removeFromBottom (infoHeight)).removeFromLeft (infoCornerWidth).removeFromBottom (infoHeight).reduced (6, 4));
         dividerBounds = showDetail ? detail.removeFromTop (dividerHeight) : juce::Rectangle<int>();
@@ -13162,7 +13168,7 @@ private:
                     menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
                     menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
                     menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects, menuShowBackups, menuRevealBackups, menuSnapAutomation, menuSaveTemplate,
-                    menuQuantizeSettings, menuStartWithTap, menuDelayCompensation,
+                    menuQuantizeSettings, menuStartWithTap, menuDelayCompensation, menuFullHeightBrowser,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410, // Plus Session::TimeFormat.
@@ -13833,6 +13839,7 @@ private:
             add (menuDetailView, showDetail ? "Hide Detail View" : "Show Detail View");
             popup.addSeparator();
             add (menuBrowser, "Browser", ! mapping(), showBrowser || mapping()); add (menuGroovePool, "Groove Pool", true, groovePool != nullptr && groovePool->isShowing());
+            add (menuFullHeightBrowser, "Full Height Browser", true, session.preferences().fullHeightBrowser);
             popup.addSeparator();
             add (menuSearch, "Search in Browser", ! mapping()); add (menuSimilar, "Show Similar Files", browserFolder != juce::File() && similarSource().existsAsFile());
             popup.addSeparator();
@@ -13960,6 +13967,11 @@ private:
             case menuAddFolder: addFolderToBrowser(); return;
             case menuSaveTemplate: saveTemplateDialog(); return;
             case menuDelayCompensation: session.setDelayCompensation (! session.delayCompensation()); refresh(); return;
+            case menuFullHeightBrowser:
+            {
+                auto preferences = session.preferences(); preferences.fullHeightBrowser = ! preferences.fullHeightBrowser;
+                report (session.setPreferences (preferences)); resized(); repaint(); return;
+            }
             case menuQuantizeSettings: if (currentMidiClip() != nullptr) { if (! showPiano) openPianoRoll(); pianoRoll.openNoteTool (Session::NoteTool::quantize); } return;
             case menuSnapAutomation: session.setSnapAutomationToGrid (! session.snapAutomationToGrid()); refresh(); return;
             case menuRemoveUnavailableProjects: removeUnavailableProjects(); return;
@@ -17482,6 +17494,21 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         browserWidth = defaultBrowserWidth; showBrowser = browserWas; resized();
     }
     {
+        // As the reference's default, the detail view spans the window under the browser; View > Full
+        // Height Browser runs the browser down beside it instead.
+        const bool browserWas = showBrowser, detailWas = showDetail;
+        showBrowser = true; showDetail = true; resized();
+        const auto detailArea = [this] { return showPiano ? pianoRoll.getBounds().getUnion (audioClipView.getBounds()) : deviceChain.getBounds(); };
+        check (! session.preferences().fullHeightBrowser && detailArea().getX() < browserBounds.getRight() && browserBounds.getBottom() <= detailArea().getY(),
+               "at first the detail view spans the window under the browser");
+        menuItemSelected (menuFullHeightBrowser, 0);
+        check (session.preferences().fullHeightBrowser && detailArea().getX() >= browserBounds.getRight() && browserBounds.getBottom() > detailArea().getY(),
+               "View > Full Height Browser runs the browser down beside the detail view");
+        menuItemSelected (menuFullHeightBrowser, 0);
+        check (! session.preferences().fullHeightBrowser, "and back");
+        showBrowser = browserWas; showDetail = detailWas; resized();
+    }
+    {
         // Browse Back and Forward, as the reference's: the categories, places and searches shown,
         // by the arrows left of the search bar or Cmd+[ and Cmd+].
         const auto category = browserCategory; const bool browserWas = showBrowser;
@@ -20478,7 +20505,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                               "Record in Session", "-", "Metronome", "Metronome Only While Recording", "-", "Back to Arrangement" });
         const juce::String folds = std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return ! t.folded; }) ? "Fold All Tracks" : "Unfold All Tracks";
         juce::StringArray view { "Fullscreen", "Zoom >", "-", "Info", "Undo History", "-", "Toggle Arrangement/Session View", "-", "Clip View", "Device View", "Toggle Clip/Device View", "Hide Detail View", "-",
-                                 "Browser", "Groove Pool", "-", "Search in Browser", "Show Similar Files", "-", "Plug-In Windows" };
+                                 "Browser", "Groove Pool", "Full Height Browser", "-", "Search in Browser", "Show Similar Files", "-", "Plug-In Windows" };
        #if JUCE_MAC
         view.add ("Video Window");
        #endif
@@ -21057,8 +21084,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const juce::Point<float> at { area.getX() + area.getWidth() / 2, area.getBottom() - area.getHeight() * .25f };
         audioClipView.mouseDown (press (audioClipView, at, at, false, 1)); audioClipView.mouseUp (press (audioClipView, at, at, false, 1)); refresh();
         const auto envelopes = [&] { return state.tracks[0].clips[0].envelopes; };
+        // Where it is, or on the grid line within Snap Automation to Grid's reach of it.
+        const auto clickedLine = first + std::round (length / 2 / audioClipView.snapGrid()) * audioClipView.snapGrid();
         check (envelopes().size() == 1 && envelopes()[0].target == Session::EnvelopeTarget { {}, 0 } && envelopes()[0].mode == Session::EnvelopeMode::modulation
-                   && envelopes()[0].points.size() == 1 && std::abs (envelopes()[0].points[0].beat - (first + length / 2)) < length / area.getWidth() * 2
+                   && envelopes()[0].points.size() == 1
+                   && (std::abs (envelopes()[0].points[0].beat - (first + length / 2)) < length / area.getWidth() * 2 || std::abs (envelopes()[0].points[0].beat - clickedLine) < 1e-9)
                    && std::abs (envelopes()[0].points[0].value - .25f) < .02f,
                "clicking the waveform adds a volume modulation point where it is");
         const juce::Point<float> from { area.getX() + area.getWidth() * .75f, area.getBottom() - area.getHeight() * .5f }, to = from - juce::Point<float> (0, area.getHeight() * .25f);
@@ -21114,7 +21144,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             Session::EditGrid quarters; quarters.fixed = true; quarters.denominator = 4;
             check (session.setClipGrid (currentMidiClip()->id, quarters).wasOk(), "a quarter-note grid in the clip"); refresh(); pianoRoll.updateGridButton();
             setDrawMode (true);
-            const auto beatX = [&] (double beat) { return (float) (55 + beat * (pianoRoll.getWidth() - 66.0) / 4.0); };
+            const auto beatX = [&] (double beat) { return (float) (55 + (beat - pianoRoll.visibleStartBeat()) * pianoRoll.beatWidth()); }; // The lane's mapping, after its keys.
             const auto high = plotBottom - (plotBottom - plotTop) * .75f;
             const juce::Point<float> from { beatX (1.1), high }, through { beatX (2.0), high }, to { beatX (2.9), high };
             laneComponent->mouseDown (press (*laneComponent, from, from, false, 1));
@@ -21334,7 +21364,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             {
                 // In the note editor's ruler, the loop brace and the start marker drag on the note grid.
                 pianoRoll.fit();
-                const auto rollBeat = (pianoRoll.getWidth() - 55.0 - 11.0) / 4.0;
+                const auto rollBeat = pianoRoll.beatWidth(); // Fitted, within the editor's zoom limits.
                 const auto rollEvent = [&] (float x, float y, float downX, bool dragged)
                 {
                     const auto when = juce::Time::getCurrentTime();

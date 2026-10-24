@@ -4432,6 +4432,8 @@ struct Session::Impl
             const int edgeFades = number ("createFadesOnClipEdges", 1, 2), sound = number ("metronomeSound", 0, Session::metronomeSoundCount), countIn = number ("countInBars", 0, 5);
             read.countInBars = countIn;
             const int startPlayback = number ("startPlaybackWithRecord", 1, 2), locked = number ("lockEnvelopes", 0, 2), tapStart = number ("startPlaybackWithTapTempo", 1, 2);
+            const int fullHeight = number ("fullHeightBrowser", 0, 2);
+            read.fullHeightBrowser = fullHeight == 1;
             read.startPlaybackWithRecord = startPlayback == 1;
             read.startPlaybackWithTapTempo = tapStart == 1;
             read.lockEnvelopes = locked == 1;
@@ -4440,7 +4442,7 @@ struct Session::Impl
             for (auto* project : xml->getChildWithTagNameIterator ("RECENTPROJECT")) read.recentProjects.add (project->getStringAttribute ("path"));
             read.createFadesOnClipEdges = edgeFades == 1;
             read.metronomeSound = static_cast<Session::MetronomeSound> (juce::jmax (0, sound));
-            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && locked >= 0 && tapStart >= 0 && validPreferences (read);
+            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && locked >= 0 && tapStart >= 0 && fullHeight >= 0 && validPreferences (read);
         }
         if (valid) { prefs = read; fadesOnClipEdges = prefs.createFadesOnClipEdges; return; }
         // Set an unreadable file aside rather than lose it, and keep the defaults.
@@ -4468,6 +4470,7 @@ struct Session::Impl
         xml.setAttribute ("startPlaybackWithRecord", next.startPlaybackWithRecord ? 1 : 0);
         xml.setAttribute ("lockEnvelopes", next.lockEnvelopes ? 1 : 0);
         xml.setAttribute ("startPlaybackWithTapTempo", next.startPlaybackWithTapTempo ? 1 : 0);
+        xml.setAttribute ("fullHeightBrowser", next.fullHeightBrowser ? 1 : 0);
         xml.setAttribute ("preferencesTab", next.preferencesTab);
         for (const auto& folder : next.userFolders) xml.createNewChildElement ("USERFOLDER")->setAttribute ("path", folder);
         for (const auto& project : next.recentProjects) xml.createNewChildElement ("RECENTPROJECT")->setAttribute ("path", project);
