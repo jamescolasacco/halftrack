@@ -180,6 +180,26 @@ int runGroupTests (const juce::File& artifacts)
             const auto sixDown = (float) std::pow (10.0, -6.0 / 20);
             check (difference (render (n, mix), plain, sixDown, sixDown) < 1e-5, "the top group's fader moves everything inside it");
             ok (n.setGroupGain (top, 0), "back to unity");
+            {
+                // Clear All Envelopes clears the chosen tracks' and groups' own lanes, not those of the
+                // tracks inside a chosen group, in one undo step.
+                const Session::AutomationLane lane { true, { { 0, -6 }, { 4, -12 } } };
+                ok (n.setTrackAutomation (outer, Session::AutomationTarget::volume, lane), "automate the outer group's volume");
+                ok (n.setTrackAutomation (ids[1], Session::AutomationTarget::pan, { true, { { 0, -.5f }, { 4, .5f } } }), "and b's pan");
+                const auto groupVolume = [&n, &outer] { for (const auto& g : n.snapshot().groups) if (g.id == outer) return g.volumeAutomation; return Session::AutomationLane {}; };
+                check (n.canClearAllEnvelopes ({ outer }) && ! n.canClearAllEnvelopes ({ ids[0] }), "the group has envelopes to clear, a not");
+                ok (n.clearAllEnvelopes ({ outer }), "clear the outer group's envelopes");
+                check (groupVolume().points.empty() && n.snapshot().tracks[1].panAutomation.points.size() == 2, "its lane goes, and b, inside it, keeps its own");
+                ok (n.clearAllEnvelopes ({ ids[1], ids[0] }), "clear b's, with a chosen too");
+                check (n.snapshot().tracks[1].panAutomation.points.empty(), "b's lane goes");
+                n.undo();
+                check (n.snapshot().tracks[1].panAutomation.points.size() == 2 && groupVolume().points.empty(), "one undo brings b's back alone");
+                n.undo();
+                check (groupVolume().points.size() == 2, "and another the group's");
+                check (n.clearAllEnvelopes ({ ids[0] }).failed() && n.clearAllEnvelopes ({ "missing" }).failed(), "nothing to clear, or an unknown track, is refused");
+                n.undo(); n.undo();
+                check (groupVolume().points.empty() && n.snapshot().tracks[1].panAutomation.points.empty(), "two more undo steps remove the lanes set up here");
+            }
             ok (n.setInfoText (top, "Everything"), "give the top group an info text"); ok (n.setInfoText (ids[0], "  The first take  "), "and a one too");
             const auto project = root.getChildFile ("Nested.halftrack");
             ok (n.saveProject (project), "save");

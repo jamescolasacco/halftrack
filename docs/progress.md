@@ -2353,3 +2353,7 @@ UI area (the native device editor). A native device's controls now show their au
 ## Paste goes before the selection — 2026-10-23
 
 Engine area. A further static reading found where the reference's Paste puts tracks: right before the first selected track, inside its group. `pasteTracks` now does that; before, it pasted after the last selected track, as Duplicate places copies. A selection with returns has no place for copied tracks. Paste and the copying drop share one insertion step. Checked in the groups and UI suites ([contract](research/groups-contract.md#duplicating-2026-10-23)).
+
+## Clear All Envelopes — 2026-10-23
+
+Engine and UI areas. In Automation Mode the header menu offers Clear All Envelopes, after a static reading of the reference's command. In one undo step it removes the selected tracks' and groups' own lanes and their Arrangement clips' envelopes for those controls, leaving the tracks inside a selected group and Session clips alone. Checked in the groups and UI suites ([contract](research/arrangement-automation-contract.md#clear-all-envelopes-2026-10-23)).

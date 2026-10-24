@@ -3543,6 +3543,27 @@ struct Session::Impl
         }
         return Result::ok();
     }
+    // A track's or group's own Arrangement envelopes, by lane key, as the reference's Clear All
+    // Envelopes finds them (0x1037f18b4): its mixer's, its sends', and every device's in its chain,
+    // racks included; a frozen track's devices are left out. Only lanes with points.
+    juce::StringArray envelopeKeys (te::Track& t)
+    {
+        juce::StringArray keys;
+        const auto add = [&] (const String& key) { if (const auto lane = laneFor (key); lane && ! lane->read().points.empty()) keys.addIfNotAlreadyThere (key); };
+        if (volumeOf (t) != nullptr) for (const auto target : mixerTargets) add (mixerKey (t, target));
+        for (auto* plugin : t.pluginList.getPlugins())
+            if (auto* send = dynamic_cast<te::AuxSendPlugin*> (plugin)) add (sendKey (t.itemID.toString(), send->state[sendReturnProperty].toString()));
+        auto* audio = dynamic_cast<te::AudioTrack*> (&t);
+        if (audio != nullptr && audio->isFrozen (te::Track::anyFreeze)) return keys;
+        visitDevices ([&] (te::Track* holder, NativeEffectPlugin& d)
+        { if (holder == &t) for (const auto& a : deviceAutomation (d)) add (deviceKey (d.itemID.toString(), a.parameter)); });
+        for (auto [holder, list] : chains())
+            if (holder == &t)
+                for (auto* p : list->getPlugins())
+                    if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
+                        for (const auto& a : externalAutomation (*external)) add (deviceKey (external->itemID.toString(), a.parameter));
+        return keys;
+    }
     // The headers' Copy: each copied top-most track's or group's state, in order.
     std::vector<juce::ValueTree> trackClipboard;
     // A group, other than `keep`, that grouping these would leave empty, as the reference's Group Tracks never does.
@@ -10085,6 +10106,61 @@ Result Session::copyTracksTo (const juce::StringArray& ids, const String& groupI
     juce::StringArray created;
     if (auto inserted = impl->insertStates (states, parent, before, created); inserted.failed()) { impl->changed(); return inserted; }
     impl->refreshRouting(); impl->changed(); copiedIds = created; return Result::ok();
+}
+bool Session::canClearAllEnvelopes (const juce::StringArray& ids) const
+{
+    for (const auto& id : ids)
+    {
+        te::Track* t = impl->track (id);
+        if (t == nullptr) t = impl->group (id);
+        if (t != nullptr && ! impl->envelopeKeys (*t).isEmpty()) return true;
+    }
+    return false;
+}
+Result Session::clearAllEnvelopes (const juce::StringArray& ids)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before clearing envelopes.");
+    juce::Array<te::Track*> tracks;
+    for (const auto& id : ids)
+    {
+        te::Track* t = impl->track (id);
+        if (t == nullptr) t = impl->group (id);
+        if (t == nullptr) return Result::fail ("Track not found.");
+        tracks.addIfNotAlreadyThere (t);
+    }
+    if (! canClearAllEnvelopes (ids)) return Result::fail ("The selected tracks have no envelopes to clear.");
+    // One undo step, as the reference's: each selected track's own envelopes (not those of the tracks
+    // in a selected group), and its Arrangement clips' envelopes for the same controls, take lanes'
+    // included. Session clips keep theirs.
+    beginEditGesture ("Clear All Envelopes");
+    Result result = Result::ok();
+    const auto shot = snapshot();
+    for (auto* t : tracks)
+    {
+        for (const auto& key : impl->envelopeKeys (*t))
+            if (const auto lane = impl->laneFor (key); lane && result.wasOk()) result = lane->write (AutomationLane {});
+        const auto devices = [&]
+        {
+            std::set<String> own;
+            impl->visitDevices ([&] (te::Track* holder, NativeEffectPlugin& d) { if (holder == t) own.insert (d.itemID.toString()); });
+            for (auto [holder, list] : impl->chains()) if (holder == t) for (auto* p : list->getPlugins()) own.insert (p->itemID.toString());
+            return own;
+        }();
+        for (const auto& info : shot.tracks)
+            if (info.id == t->itemID.toString())
+            {
+                std::vector<const ClipInfo*> clips;
+                for (const auto& clip : info.clips) clips.push_back (&clip);
+                for (const auto& lane : info.takeLanes) for (const auto& clip : lane.clips) clips.push_back (&clip);
+                for (const auto* clip : clips)
+                    for (const auto& envelope : clip->envelopes)
+                        if (envelope.target.pluginId.isEmpty() || devices.contains (envelope.target.pluginId))
+                        { auto cleared = envelope; cleared.points.clear(); setClipEnvelope (clip->id, cleared); } // A frozen track's clips keep theirs.
+            }
+    }
+    endEditGesture();
+    impl->changed(); return result;
 }
 Result Session::setInfoText (const String& id, const String& text)
 {

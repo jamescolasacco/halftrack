@@ -92,3 +92,8 @@ Evidence:
 - **The UI suite.** The Mixer's controls offer the send named for its return. Double-clicking halfway up its lane adds a −20 dB breakpoint, one undo removes it, and the Session send knob is a mapping target.
 
 Not read in the reference: how its choosers name a send (Halftrack uses the return's name), and whether it allows mixer automation edits on a frozen track (Halftrack refuses them, as for volume and pan).
+
+## Clear All Envelopes (2026-10-23)
+
+The track header menu's Clear All Envelopes, after a static reading of the reference's (0x1037d8af4, enabled 0x1037f18b4): `clearAllEnvelopes(ids)` removes the selected tracks' and groups' own Arrangement automation, their mixers', sends' and devices' (rack devices included; a frozen track's mixer only), and their Arrangement clips' envelopes for the same controls, in one undo step. Tracks inside a selected group and Session clips keep theirs. `canClearAllEnvelopes(ids)` says whether there is anything to clear. Checked in the groups and UI suites ([menu](track-header-menu-contract.md)).
+

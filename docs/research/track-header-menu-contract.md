@@ -28,7 +28,7 @@ The reference's Arrangement menu, with what Halftrack shows:
 | Cut, Copy, Paste | Copy for tracks and groups that are not Main nor in a frozen group; Cut when Copy and Delete can act; Paste with tracks copied | the same over the tracks Halftrack copies (`copyTracks`, `cutTracks`, `pasteTracks`; returns and frozen tracks not yet). Paste puts the copies right before the first selected track, in its group, as the reference's does, and selects them. After a header or title click, Cmd+C, Cmd+X and Cmd+V do the same |
 | Duplicate | see the [groups contract](groups-contract.md#duplicating-2026-10-23) | Duplicate, when `canDuplicateTracks` |
 | Delete | see [deleting](groups-contract.md#deleting-2026-10-23) | Delete, when `canRemoveTracks` |
-| Clear All Envelopes | Automation Mode | not yet: left out |
+| Clear All Envelopes | Automation Mode; a selected track has Arrangement automation | the same (`clearAllEnvelopes`, `canClearAllEnvelopes`): in one undo step, the selected tracks' and groups' own lanes (mixer, sends, devices with racks; a frozen track's mixer only) and their Arrangement clips' envelopes for those controls go. As a later static reading of the reference's (0x1037d8af4) found, tracks inside a selected group and Session clips keep theirs |
 | Rename | not for Main | Rename: the name edits in place in the Arrangement, in a dialog from a Session title |
 | Edit Info Text | the header has editable info text | Edit Info Text, for the clicked track or group: a dialog edits its own text (`setInfoText`, saved, one undo step), which the Info view shows while pointing at its Arrangement header, Session title or Session mixer strip |
 | Freeze / Unfreeze, plural for more than one | selected tracks that can freeze; Unfreeze when all are frozen | the same, over the selected tracks with Arrangement clips or frozen. Each track's freeze is its own undo step |
@@ -57,7 +57,8 @@ The UI suite checks:
 - that the colour grid colours two selected tracks in one undo step and marks the colour in use;
 - that Rename edits the clicked track's name in its header, and Select Content selects its clip's time on its track;
 - that a track's info text shows in the Info view at its header and Session title, and an undo restores the usual description (the groups suite saves and reopens info texts);
-- right-click selection.
+- right-click selection;
+- that Clear All Envelopes appears only in Automation Mode, after Delete between separators, clears an automated track's lane, and comes back with one undo (the groups suite checks a group's own lanes going without its members').
 
 The groups suite checks the return limit.
 

@@ -10184,7 +10184,7 @@ private:
     // has the take lane and link items; the Session view's titles do not. A colour picked in the grid
     // is put in `colour`.
     enum HeaderItem { headerCut = 100, headerCopy, headerPaste, headerDuplicate = 1, headerDelete, headerRename, headerFreeze, headerFlatten, headerInsertAudio, headerInsertMidi, headerInsertReturn,
-                      headerGroup, headerUngroup, headerSelectContent, headerEditInfo, headerInsertTakeLane, headerShowTakeLanes, headerDeleteTakeLanes, headerLink, headerUnlink, headerColour };
+                      headerGroup, headerUngroup, headerSelectContent, headerEditInfo, headerClearEnvelopes, headerInsertTakeLane, headerShowTakeLanes, headerDeleteTakeLanes, headerLink, headerUnlink, headerColour };
     juce::PopupMenu headerMenu (const juce::String& id, bool arrangement, std::shared_ptr<int> colour, bool join) const
     {
         const auto ids = headerSelection();
@@ -10198,6 +10198,8 @@ private:
         if (session.hasTrackClipboard()) item (headerPaste, "Paste");
         if (session.canDuplicateTracks (ids)) item (headerDuplicate, "Duplicate");
         if (session.canRemoveTracks (ids)) item (headerDelete, "Delete");
+        // In Automation Mode, the selected tracks' envelopes can all go.
+        if (arrangement && automationMode) { separator(); if (session.canClearAllEnvelopes (ids)) item (headerClearEnvelopes, "Clear All Envelopes"); }
         separator();
         item (headerRename, "Rename");
         item (headerEditInfo, "Edit Info Text");
@@ -10252,6 +10254,7 @@ private:
             case headerDelete: deleteSelectedHeaders(); return;
             case headerRename: renameHeader (id, arrangement); return;
             case headerEditInfo: editInfoTextDialog (id); return;
+            case headerClearEnvelopes: report (session.clearAllEnvelopes (ids)); break;
             case headerFreeze: freezeTracksFromUI (freezableTracks (ids)); return;
             case headerFlatten: freezeTrackFromUI (id, true); return;
             case headerInsertAudio: showPiano = false; addTrack(); resized(); return;
@@ -17490,6 +17493,21 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     secondName->hideEditor (true); secondName->setText ("Bass", juce::sendNotificationSync); refresh();
                     check (state.tracks[(size_t) indexOf (second)].name == "Bass", "which renames it");
                     session.undo(); refresh();
+                    // In Automation Mode, a track with automation offers Clear All Envelopes.
+                    {
+                        const Session::AutomationLane lane { true, { { 0, -6 }, { 4, -12 } } };
+                        check (session.setTrackAutomation (second, Session::AutomationTarget::volume, lane).wasOk(), "automate the second track's volume"); refresh();
+                        selectForHeaderMenu (second);
+                        check (! listed (headerMenu (second, true, colour, false)).contains ("Clear All Envelopes"), "outside Automation Mode the menu has no Clear All Envelopes");
+                        setAutomationMode (true); refresh();
+                        check (listed (headerMenu (second, true, colour, false)).contains ("Delete|-|Clear All Envelopes|-|Rename"), "in Automation Mode it follows Delete, between separators");
+                        chooseHeaderItem (headerClearEnvelopes, second, true, -1, false); refresh();
+                        check (state.tracks[(size_t) indexOf (second)].volumeAutomation.points.empty() && ! listed (headerMenu (second, true, colour, false)).contains ("Clear All Envelopes"),
+                               "which clears the lane, leaving nothing to clear");
+                        session.undo(); refresh();
+                        check (state.tracks[(size_t) indexOf (second)].volumeAutomation.points.size() == 2, "one undo brings it back");
+                        session.undo(); setAutomationMode (false); refresh();
+                    }
                     // A track's own info text shows in the Info view while pointing at its header.
                     check (session.setInfoText (second, "Lead vocal, take three").wasOk(), "give the second track an info text"); refresh();
                     info.describe (secondName);

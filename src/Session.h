@@ -958,6 +958,13 @@ public:
     juce::Result groupTracks (const juce::StringArray& trackAndGroupIds, juce::String& groupId);
     // Whether groupTracks would group these, as the reference's Group Tracks command is enabled.
     bool canGroupTracks (const juce::StringArray& trackAndGroupIds) const;
+    // Clear All Envelopes, as the reference's header command: removes the selected tracks' and groups'
+    // own Arrangement automation (mixer, sends, devices; a frozen track's mixer only) and their
+    // Arrangement clips' envelopes for the same controls, take lanes' included, in one undo step.
+    // Tracks in a selected group and Session clips keep theirs.
+    juce::Result clearAllEnvelopes (const juce::StringArray& trackAndGroupIds);
+    // Whether a selected track or group has Arrangement automation for clearAllEnvelopes to clear.
+    bool canClearAllEnvelopes (const juce::StringArray& trackAndGroupIds) const;
     // A track's or group's own info text, as the reference's Edit Info Text gives one: the Info view
     // shows it while pointing at the track's header. Empty clears it. Saved; one undo step.
     juce::Result setInfoText (const juce::String& trackOrGroupId, const juce::String& text);
