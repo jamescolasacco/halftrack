@@ -1,6 +1,6 @@
 # Preferences contract
 
-Halftrack's preferences follow part of the reference's Record, Warp & Launch preferences. They live in a versioned file beside the engine's settings and are edited in the Preferences dialog (File menu).
+Halftrack's preferences follow part of the reference's Record, Warp & Launch preferences. They live in a versioned file beside the engine's settings and are edited in the Preferences dialog (the application menu on a Mac, Options elsewhere, Cmd/Ctrl+comma).
 
 ## Settings
 

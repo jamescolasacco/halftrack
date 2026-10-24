@@ -49,7 +49,7 @@ The rest comes from static reading of the reference's code (Live 12.2.1, arm64).
 - **Saving.** The grid is saved with the project as a `HALFTRACKGRID` child of the Edit. A value off the ladder reads as the default. Changing it is neither an undo step nor an unsaved change.
 - **Each clip's grid.** As in the reference, every clip has a grid of its own for its editor: `Session::clipGrid`, `setClipGrid` and `ClipInfo::grid`. It is a `HALFTRACKGRID` child of the clip, carried by its copies and saved with it. Its default is the same adaptive grid; 3835 of 3925 clips in the reference's Sets are adaptive.
   - The note editor's Grid button names the grid and opens its menu; this replaces the old 1/4–1/32 snap menu.
-  - Cmd/Ctrl+1 to 5 act on the focused editor's grid, otherwise the Arrangement's. The View menu does the same.
+  - Cmd/Ctrl+1 to 5 act on the focused editor's grid, otherwise the Arrangement's. The Options menu does the same, as the reference's.
   - The note editor and the audio clip view snap to the clip's grid at their own zoom and width, and drop snapping when it is off. The audio clip view's old rule was the coarsest step at least 12 pixels wide.
 
 ## Evidence

@@ -429,9 +429,11 @@ public:
             return std::pair { beatsAt (timeSelection.start), beatsAt (timeSelection.end) };
         };
         addAndMakeVisible (menu);
+        registerMenuShortcuts();
        #if JUCE_MAC
-        // About Halftrack sits in the application menu, as on other Mac applications.
-        juce::PopupMenu appleItems; appleItems.addItem (aboutItem, "About Halftrack");
+        // About Halftrack and Preferences sit in the application menu, where the reference has its Live menu's.
+        juce::PopupMenu appleItems;
+        appleItems.addItem (menuEntry (aboutItem, "About Halftrack")); appleItems.addSeparator(); appleItems.addItem (menuEntry (14, "Preferences..."));
         juce::MenuBarModel::setMacMainMenu (this, &appleItems);
         menu.setVisible (false);
        #endif
@@ -599,7 +601,7 @@ public:
         addMidiButton.setTooltip ("Insert an empty MIDI track | Cmd/Ctrl+Shift+T");
         newMidiClipButton.setTooltip ("Create a four-bar MIDI clip at the playhead");
         addTrackButton.setTooltip ("Insert audio track  |  Cmd/Ctrl+T");
-        importButton.onClick = [this] { importDialog(); };
+        importButton.onClick = [this] { importFileDialog(); };
         filesButton.setClickingTogglesState (false);
         pluginsButton.setClickingTogglesState (false);
         filesButton.onClick = [this] { setBrowserCategory (BrowserCategory::samples); };
@@ -792,10 +794,13 @@ public:
         for (auto* hidden : std::initializer_list<juce::Component*> { &importButton, &newMidiClipButton, &addTrackButton, &addMidiButton, &zoomIn, &zoomOut, &fitButton })
             hidden->setVisible (false);
         area.removeFromBottom (statusHeight);
-        browserBounds = area.removeFromLeft (browserWidth);
-        // The Info View sits under the browser, as in the reference.
+        // MIDI Map Mode shows its mappings in the browser's place, so the browser shows meanwhile.
+        const bool browserShown = showBrowser || mapping();
+        browserBounds = browserShown ? area.removeFromLeft (browserWidth) : juce::Rectangle<int>();
+        // The Info View sits under the browser, as in the reference, and without it keeps the corner
+        // beside the detail view.
         info.setVisible (showInfo);
-        if (showInfo) info.setBounds (browserBounds.removeFromBottom (infoHeight).reduced (6, 4));
+        if (showInfo && browserShown) info.setBounds (browserBounds.removeFromBottom (infoHeight).reduced (6, 4));
         // MIDI Map Mode covers the working area and shows the mappings in place of the browser.
         mapOverlay.setVisible (mapping()); mappingList.setVisible (mapping());
         if (mapping()) { mapOverlay.setBounds (area); mappingList.setBounds (browserBounds.reduced (6)); mapOverlay.toFront (false); }
@@ -804,6 +809,7 @@ public:
                                                            juce::roundToInt (area.getHeight() * clipViewFraction))
                                            : deviceHeight;
         auto detail = area.removeFromBottom (detailHeight);
+        if (showInfo && ! browserShown) info.setBounds (detail.removeFromLeft (infoCornerWidth).removeFromBottom (infoHeight).reduced (6, 4));
         dividerBounds = detail.removeFromTop (dividerHeight);
         deviceChain.setBounds (detail); deviceChain.setVisible (! showPiano);
         auto browser = browserBounds.reduced (6, 6);
@@ -824,7 +830,8 @@ public:
         browser.removeFromBottom (4); browser.removeFromTop (22);
         browserList.setBounds (browser);
         for (auto* part : std::initializer_list<juce::Component*> { &browserSearch, &browserCategories, &browserList })
-            part->setVisible (! mapping());
+            part->setVisible (browserShown && ! mapping());
+        if (! browserShown) for (auto* part : std::initializer_list<juce::Component*> { &folderButton, &upButton, &previewButton, &previewVolume }) part->setVisible (false);
         if (mapping()) for (auto* part : std::initializer_list<juce::Component*> { &folderButton, &upButton, &previewButton, &previewVolume }) part->setVisible (false);
         launcher.setBounds (area);
         launcher.setVisible (showSession);
@@ -888,18 +895,16 @@ public:
         { toggleBrowserCollection (browserList.getSelectedRow(), code - '1'); return true; }
         if (cmd)
         {
-            if (code == 'S') { saveProject (shift); return true; }
             // The reference's grid commands, for the Arrangement.
             if (! shift && code >= '1' && code <= '5') if (const auto place = focusedGrid()) { gridCommand (code - '0', *place); return true; }
             // View > Mixer, as in the reference, before MIDI Map Mode's Cmd/Ctrl+M.
             if ((code == 'M' || code == 'm') && key.getModifiers().isAltDown() && showSession) { menuItemSelected (109, 3); return true; }
-            if (code == 'M' && ! shift) { setMidiMapMode (! midiMapMode); return true; }
+            if (code == 'M' && ! shift && ! key.getModifiers().isAltDown()) { setMidiMapMode (! midiMapMode); return true; }
             if (code == 'K' && ! shift) { setKeyMapMode (! keyMapMode); return true; }
             if (code == 'O') { openDialog(); return true; }
             if (code == 'N') { ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) safe->startNewProject(); }); return true; }
             if (code == 'T') { if (key.getModifiers().isAltDown()) addReturnTrack(); else if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
             if (code == 'Z') { if (shift) session.redo(); else session.undo(); refresh(); return true; }
-            if (code == 'F' && ! shift) { setFollow (! followPlayhead); refresh(); return true; }
             if (code == 'L' && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (79); return true; }
             if (code == 'J' && ! shift && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (80); return true; }
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
@@ -914,12 +919,10 @@ public:
             if (shift && ! showSession && ! showPiano && (code == 'X' || code == 'V' || code == 'D')) { menuItemSelected (code == 'X' ? 89 : code == 'V' ? 101 : 102, 1); return true; }
             // Capture and Insert Scene, as in the reference.
             if (code == 'I' && shift) { menuItemSelected (68, 4); return true; }
-            if (code == 'I' && ! showSession) { menuItemSelected (74, 1); return true; }
+            if (code == 'I' && ! showSession && ! key.getModifiers().isAltDown()) { menuItemSelected (74, 1); return true; }
             if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && shift && ! showSession) { menuItemSelected (75, 1); return true; }
             if (code == 'G') { if (shift) ungroupSelectedTrack(); else groupSelectedTracks(); return true; }
-            if (code == 'I') { importDialog(); return true; }
             if ((code == 'E' || code == 'e') && shift && key.getModifiers().isAltDown()) { menuItemSelected (13, 1); return true; }
-            if (code == 'E' && shift) { exportDialog(); return true; }
             if (code == 'C' && shift) { captureFromUI(); return true; }
             if ((code == 'U' || code == 'u') && key.getModifiers().isAltDown() && ! showSession) { toggleTakeLanes(); return true; }
             if ((code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) && ! showSession && ! showPiano && timeSelection.active())
@@ -934,7 +937,7 @@ public:
                 refresh(); return true;
             }
             if (! shift && ! showSession && ! showPiano && selectedClipIds.size() > 1 && (code == 'D' || code == 'C' || code == 'X')) { clipGroupCommand ((char) code); return true; }
-            if (! shift && ! showSession && ! showPiano && (code == 'E' || code == 'D' || code == 'C' || code == 'X' || code == 'V'))
+            if (! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'E' || code == 'D' || code == 'C' || code == 'X' || code == 'V'))
             {
                 for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused != nullptr; focused = focused->getParentComponent())
                     if (dynamic_cast<juce::TextEditor*> (focused)) return false;
@@ -957,7 +960,7 @@ public:
                     audioClipCommand (code == 'E' ? 3 : code == 'D' ? 4 : code == 'C' ? 5 : 6, id); return true;
                 }
             }
-            if (code == ',') { showAudioSettings(); return true; }
+            if (code == ',') { showPreferences(); return true; }
         }
         if (key.getTextCharacter() == '?' && ! cmd)
         {
@@ -968,27 +971,6 @@ public:
             for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused; focused = focused->getParentComponent())
                 if (dynamic_cast<juce::TextEditor*> (focused)) return false;
             setComputerKeyboard (! session.isComputerKeyboardEnabled()); return true;
-        }
-        if((code=='R'||code=='r')&&cmd&&!shift&&!showPiano)
-        {
-            for(auto* focused=juce::Component::getCurrentlyFocusedComponent();focused;focused=focused->getParentComponent())
-                if(dynamic_cast<juce::TextEditor*>(focused))return false;
-            if(showSession){if(const auto* slot=selectedSlot();slot&&slot->hasClip){renameClipDialog(slot->clip.id);return true;}}
-            else if(const auto* track=currentTrack();track&&juce::isPositiveAndBelow(selectedClip,(int)track->clips.size()))
-            {renameClipDialog(track->clips[(size_t)selectedClip].id);return true;}
-            return false;
-        }
-        if (code=='0' && !cmd && !shift && !key.getModifiers().isAltDown() && !showPiano)
-        {
-            for(auto* focused=juce::Component::getCurrentlyFocusedComponent();focused;focused=focused->getParentComponent())
-                if(dynamic_cast<juce::TextEditor*>(focused))return false;
-            if(showSession)
-            {
-                if(const auto* slot=selectedSlot();slot && slot->hasClip){setClipActiveFromUI(slot->clip.id,!slot->clip.active);return true;}
-            }
-            else if(const auto* track=currentTrack();track && juce::isPositiveAndBelow(selectedClip,(int)track->clips.size()))
-            {const auto& clip=track->clips[(size_t)selectedClip];setClipActiveFromUI(clip.id,!clip.active);return true;}
-            return false;
         }
         if ((code == 'T' || code == 't') && ! cmd && shift && key.getModifiers().isAltDown() && ! showSession) { insertTakeLaneFromUI(); return true; }
         if ((code == 'T' || code == 't') && ! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && takeSelection.laneId.isNotEmpty())
@@ -1012,12 +994,12 @@ public:
         }
         if (code == juce::KeyPress::tabKey && shift) { if (showPiano) closeClipView(); else openPianoRoll(); return true; }
         if (code == juce::KeyPress::tabKey) { if (showSession) showArrangementView(); else showSessionView(); return true; }
-        if (code == juce::KeyPress::spaceKey && shift) { if (state.playing) session.stop(); else report (session.continuePlayback()); refresh(); return true; }
-        if (code == juce::KeyPress::spaceKey) { togglePlay(); return true; }
+        if (code == juce::KeyPress::spaceKey && shift && ! cmd) { if (state.playing) session.stop(); else report (session.continuePlayback()); refresh(); return true; }
+        if (code == juce::KeyPress::spaceKey && ! cmd) { togglePlay(); return true; }
         if (code == juce::KeyPress::homeKey) { session.returnToStart(); refresh(); return true; }
         if (code == juce::KeyPress::escapeKey) { session.stop(); session.returnToStart(); refresh(); return true; }
-        if (code == juce::KeyPress::F9Key) { report (session.recordButton (shift)); refresh(); return true; }
-        if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)
+        if (code == juce::KeyPress::F9Key && ! cmd) { report (session.recordButton (shift)); refresh(); return true; }
+        if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && ! cmd)
         {
             if (headerFocus) { deleteSelectedHeaders(); return true; }
             if (! showPiano && ! showSession && selectedFadeClip.isNotEmpty()) { deleteSelectedFade(); return true; }
@@ -1030,9 +1012,11 @@ public:
         if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'H' || code == 'h')) { optimizeHeight(); return true; }
         if (! cmd && ! shift && ! showPiano && (code == 'U' || code == 'u')) { toggleFold (key.getModifiers().isAltDown()); return true; }
         if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'W' || code == 'w')) { optimizeWidth(); return true; }
-        if (key.getTextCharacter() == '+' || key.getTextCharacter() == '=') { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); return true; }
-        if (key.getTextCharacter() == '-') { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); return true; }
-        return false;
+        if ((key.getTextCharacter() == '+' || key.getTextCharacter() == '=') && ! cmd) { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); return true; }
+        if (key.getTextCharacter() == '-' && ! cmd) { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); return true; }
+        for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused != nullptr; focused = focused->getParentComponent())
+            if (dynamic_cast<juce::TextEditor*> (focused) != nullptr && ! cmd) return false;
+        return runMenuShortcut (key);
     }
 
     // Crash recovery: every 30 s, unsaved work is copied to the recovery file; once saved it is removed.
@@ -1685,6 +1669,9 @@ private:
     static constexpr const char* infoTitleProperty = "infoTitle";
     static constexpr const char* infoTextProperty = "infoText";
     bool headerFocus = false;
+    // The area last clicked, which the menu bar's Edit commands act on (see editArea).
+    enum class Area { arrangement, session, headers, scenes, notes, devices };
+    Area clickedArea = Area::arrangement;
     struct HeaderFocusWatcher final : juce::MouseListener
     {
         explicit HeaderFocusWatcher (Impl& o) : owner (o) { owner.addMouseListener (this, true); }
@@ -1692,10 +1679,21 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             auto* c = e.originalComponent;
-            if (c == &owner.launcher) { owner.headerFocus = owner.launcher.titlePressed(); return; }
+            if (c == &owner.launcher)
+            {
+                owner.headerFocus = owner.launcher.titlePressed();
+                owner.clickedArea = owner.headerFocus ? Area::headers : owner.launcher.onScene (e.getEventRelativeTo (&owner.launcher).getPosition()) ? Area::scenes : Area::session;
+                return;
+            }
             if (c != nullptr && (c->getName() == "Track name" || c->getName() == "Group name")) c = c->getParentComponent();
             owner.headerFocus = c != nullptr && static_cast<bool> (c->getProperties()[arrangementHeader]);
+            if (owner.headerFocus) owner.clickedArea = Area::headers;
+            else if (within (c, owner.pianoRoll)) owner.clickedArea = Area::notes;
+            else if (within (c, owner.deviceChain)) owner.clickedArea = Area::devices;
+            else if (within (c, owner.canvas) || within (c, owner.ruler)) owner.clickedArea = Area::arrangement;
+            else if (within (c, owner.launcher)) owner.clickedArea = Area::session;
         }
+        static bool within (const juce::Component* c, const juce::Component& area) { return c != nullptr && (c == &area || area.isParentOf (c)); }
         Impl& owner;
     } headerFocusWatcher { *this };
     // What the headers' Delete and Duplicate act on: the selected group, or the selected tracks.
@@ -4533,6 +4531,9 @@ private:
             // Where dragged headers would land: a line down the columns' edge.
             if (headerDragging && owner.trackDrop && dropLineX >= 0)
             { g.setColour (orange); g.fillRect (juce::jlimit (0, juce::jmax (0, tracksWidth() - 2), dropLineX - 1), 0, 2, grid.getBottom() + stopHeight); }
+            // Where a dragged scene would land: a line across the scene column.
+            if (sceneDragging && sceneDrop >= 0)
+            { g.setColour (orange); g.fillRect (masterX(), juce::jlimit (gridTop, juce::jmax (gridTop, grid.getBottom() - 2), sceneY (sceneDrop) - 1), sceneWidth, 2); }
         }
         // A group column: header with disclosure triangle, slots that launch the members' row, and a stop button.
         void paintGroupColumn (juce::Graphics& g, int index, int x)
@@ -4658,6 +4659,7 @@ private:
             if (scene >= 0)
             {
                 owner.selectedSceneId = owner.state.scenes[(size_t) scene].id;
+                if (! event.mods.isPopupMenu() && event.x - masterX() >= 22) scenePressed = owner.state.scenes[(size_t) scene].id;
                 if (event.mods.isPopupMenu())
                 {
                     repaint();
@@ -4729,6 +4731,7 @@ private:
         }
         // Whether the press now under way is on a column's title.
         bool titlePressed() const { return headerPressed.isNotEmpty(); }
+        bool onScene (juce::Point<int> point) const { return sceneAt (point) >= 0; }
         // Pointing at a title whose track or group has its own info text gives it to the Info view.
         void mouseMove (const juce::MouseEvent& event) override
         {
@@ -4747,6 +4750,14 @@ private:
         void mouseExit (const juce::MouseEvent&) override { getProperties().set (infoTextProperty, juce::String()); }
         void mouseDrag (const juce::MouseEvent& event) override
         {
+            // A scene dragged in the scene column moves to where its line shows, as the reference's scenes do.
+            if (scenePressed.isNotEmpty())
+            {
+                if (! sceneDragging && event.getDistanceFromDragStart() <= 4) return;
+                sceneDragging = true;
+                sceneDrop = juce::jlimit (0, (int) owner.state.scenes.size(), (int) std::round ((event.y - gridTop) / (double) rowHeight + offsetScene));
+                repaint(); return;
+            }
             if (headerPressed.isNotEmpty())
             {
                 if (! headerDragging && event.getDistanceFromDragStart() <= 6) return;
@@ -4776,6 +4787,16 @@ private:
         }
         void mouseUp (const juce::MouseEvent& event) override
         {
+            if (const auto scene = std::exchange (scenePressed, {}); scene.isNotEmpty())
+            {
+                const auto drop = std::exchange (sceneDrop, -1);
+                if (std::exchange (sceneDragging, false) && drop >= 0)
+                {
+                    const auto from = owner.launcherIndices ({}, scene).second;
+                    if (from >= 0 && drop != from && drop != from + 1) { owner.report (owner.session.moveScene (scene, drop > from ? drop - 1 : drop)); owner.refresh(); }
+                }
+                repaint(); return;
+            }
             if (headerPressed.isNotEmpty())
             {
                 headerPressed.clear(); dropLineX = -1;
@@ -4935,6 +4956,10 @@ private:
         juce::String headerPressed;
         bool headerDragging = false, collapseHeadersOnUp = false;
         int dropLineX = -1;
+        // A scene pressed in the scene column, which a drag moves, and the line it would land on.
+        juce::String scenePressed;
+        bool sceneDragging = false;
+        int sceneDrop = -1;
         void releasePressed (std::pair<int, int>& cell)
         {
             if (cell.first < 0) return;
@@ -5122,7 +5147,9 @@ private:
         explicit LaunchBox (Impl& o) : owner (o)
         {
             setName ("Launch box");
-            for (auto* c : std::initializer_list<juce::Component*> { &mode, &legato, &grid, &velocity }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &mode, &legato, &grid, &velocity, &follow }) addAndMakeVisible (c);
+            follow.setName ("Follow action"); follow.setTooltip ("Follow Action: what plays after this clip, and when");
+            follow.setWantsKeyboardFocus (false); follow.onClick = [this] { owner.clipFollowDialog (clip.id); };
             mode.setName ("Launch mode");
             for (auto* text : { "Trigger", "Gate", "Toggle", "Repeat" }) mode.addItem (text, mode.getNumItems() + 1);
             mode.setTooltip ("Launch mode: Trigger starts on press, Gate plays while held, Toggle starts and stops on press, Repeat retriggers on the grid while held");
@@ -5149,7 +5176,7 @@ private:
             grid.setSelectedId ((int) clip.launch.quantisation + 1, juce::dontSendNotification);
             legato.setToggleState (clip.launch.legato, juce::dontSendNotification);
             if (! velocity.isMouseButtonDown()) velocity.setValue (clip.launch.velocityAmount * 100.0, juce::dontSendNotification);
-            for (auto* c : std::initializer_list<juce::Component*> { &mode, &legato, &grid, &velocity }) c->setEnabled (! owner.session.isExporting());
+            for (auto* c : std::initializer_list<juce::Component*> { &mode, &legato, &grid, &velocity, &follow }) c->setEnabled (! owner.session.isExporting() && ! owner.state.recording);
         }
         void resized() override
         {
@@ -5158,6 +5185,7 @@ private:
             area.removeFromTop (8); legato.setBounds (area.removeFromTop (22));
             area.removeFromTop (20); grid.setBounds (area.removeFromTop (22));
             area.removeFromTop (20); velocity.setBounds (area.removeFromTop (20));
+            area.removeFromTop (8); follow.setBounds (area.removeFromTop (22));
         }
         void paint (juce::Graphics& g) override
         {
@@ -5175,7 +5203,7 @@ private:
         Impl& owner;
         Session::ClipInfo clip;
         juce::ComboBox mode, grid;
-        juce::TextButton legato { "Legato" };
+        juce::TextButton legato { "Legato" }, follow { "Follow Action..." };
         juce::Slider velocity;
         void apply()
         {
@@ -6938,26 +6966,17 @@ private:
             const auto* clip = owner.currentMidiClip();
             const auto code = key.getKeyCode();
             if (code == juce::KeyPress::escapeKey) { clearSelection(); repaint(); return true; }
-            if (clip != nullptr && code == '0' && !key.getModifiers().isAnyModifierKeyDown()) { toggleSelectedNotes(); return true; }
+            if (clip != nullptr && code == '0' && !key.getModifiers().isAnyModifierKeyDown()) { noteCommand (NoteCommand::toggleActive); return true; }
             if ((code == juce::KeyPress::rightKey || code == juce::KeyPress::leftKey) && ! key.getModifiers().isAnyModifierKeyDown() && stepRecord (code == juce::KeyPress::rightKey)) return true;
             if (clip != nullptr && key.getModifiers().isCommandDown())
             {
-                if ((code == 'E' || code == 'e') && !key.getModifiers().isShiftDown()) { splitNotesAtMarker(); return true; }
+                if ((code == 'E' || code == 'e') && !key.getModifiers().isShiftDown()) { noteCommand (NoteCommand::split); return true; }
                 if (code == 'U' || code == 'u')
                 { transformSelected (key.getModifiers().isShiftDown() ? Session::NoteTransform::quantizeEnds : Session::NoteTransform::quantizeStarts); return true; }
-                if (code == 'C' || code == 'c') { copySelectedNotes (false); return true; }
-                if (code == 'X' || code == 'x') { copySelectedNotes (true); return true; }
-                if (code == 'V' || code == 'v') { insertNotes (noteClipboard, insertionBeat, false); return true; }
-                if (code == 'D' || code == 'd')
-                {
-                    auto notes = selectedNotes();
-                    if (! notes.empty())
-                    {
-                        const auto end = noteExtent (notes).second;
-                        insertNotes (normalisedNotes (notes), std::ceil ((end - 1.0e-9) / snapBeats()) * snapBeats(), true);
-                    }
-                    return true;
-                }
+                if (code == 'C' || code == 'c') { noteCommand (NoteCommand::copy); return true; }
+                if (code == 'X' || code == 'x') { noteCommand (NoteCommand::cut); return true; }
+                if (code == 'V' || code == 'v') { noteCommand (NoteCommand::paste); return true; }
+                if (code == 'D' || code == 'd') { noteCommand (NoteCommand::duplicate); return true; }
             }
             if (clip != nullptr && ! hasSelectedNote() && ! key.getModifiers().isCommandDown()
                 && (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey))
@@ -6965,11 +6984,7 @@ private:
                 insertionBeat = juce::jlimit (0.0, contentEndBeat (*clip), insertionBeat + (code == juce::KeyPress::leftKey ? -snapBeats() : snapBeats()));
                 revealInsertion(); repaint(); return true;
             }
-            if (clip != nullptr && key.getModifiers().isCommandDown() && (code == 'A' || code == 'a'))
-            {
-                for (const auto& note : clip->notes) selectedNoteIds.insert (note.id);
-                sync(); return true;
-            }
+            if (clip != nullptr && key.getModifiers().isCommandDown() && (code == 'A' || code == 'a')) { noteCommand (NoteCommand::selectAll); return true; }
             if (clip != nullptr && hasSelectedNote() && ! key.getModifiers().isCommandDown()
                 && (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey || code == juce::KeyPress::upKey || code == juce::KeyPress::downKey))
             {
@@ -6991,6 +7006,37 @@ private:
             return owner.handleKey (key);
         }
         bool hasSelectedNote() const { return selectedNote() != nullptr; }
+        bool canPasteNotes() const { return owner.currentMidiClip() != nullptr && ! noteClipboard.empty(); }
+        int selectedNoteCount() const { return (int) selectedNotes().size(); }
+        // Whether every selected note is deactivated, for Edit's Activate Notes.
+        bool selectionInactive() const
+        {
+            const auto notes = selectedNotes();
+            return ! notes.empty() && std::all_of (notes.begin(), notes.end(), [] (const Session::MidiNoteInfo& n) { return ! n.active; });
+        }
+        // The menu bar's Edit commands on the notes, which its keys also give.
+        enum class NoteCommand { cut, copy, paste, duplicate, remove, split, toggleActive, selectAll, quantize };
+        void noteCommand (NoteCommand command)
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr) return;
+            endGesture(); originalNotes.clear(); drawing = false; marquee = false;
+            switch (command)
+            {
+                case NoteCommand::cut: copySelectedNotes (true); break;
+                case NoteCommand::copy: copySelectedNotes (false); break;
+                case NoteCommand::paste: insertNotes (noteClipboard, insertionBeat, false); break;
+                case NoteCommand::duplicate:
+                    if (const auto notes = selectedNotes(); ! notes.empty())
+                        insertNotes (normalisedNotes (notes), std::ceil ((noteExtent (notes).second - 1.0e-9) / snapBeats()) * snapBeats(), true);
+                    break;
+                case NoteCommand::remove: deleteSelectedNote(); break;
+                case NoteCommand::split: splitNotesAtMarker(); break;
+                case NoteCommand::toggleActive: toggleSelectedNotes(); break;
+                case NoteCommand::selectAll: for (const auto& note : clip->notes) selectedNoteIds.insert (note.id); sync(); break;
+                case NoteCommand::quantize: transformSelected (Session::NoteTransform::quantizeStarts); break;
+            }
+        }
         void deleteSelectedNote()
         {
             const auto* clip = owner.currentMidiClip();
@@ -8627,7 +8673,7 @@ private:
             manageButton.onClick = [this] { owner.showPlugins(); };
             automationButton.setName ("Track automation");
             automationButton.setTooltip ("Draw track volume, track pan, or master volume changes across the arrangement.");
-            automationButton.onClick = [this] { owner.showAutomation(); };
+            automationButton.onClick = [this] { owner.showAutomation (owner.selectedChain == Session::mainChain); };
             addAndMakeVisible(masterGain);masterGain.setName("Main volume");
             masterGain.setSliderStyle(juce::Slider::LinearVertical);masterGain.setNormalisableRange(Session::levelRange(false));
             masterGain.setTextBoxStyle(juce::Slider::TextBoxBelow,false,49,20);masterGain.setDoubleClickReturnValue(true,0);
@@ -10053,19 +10099,6 @@ private:
     }
     // The headers' Duplicate: the selected group, or the selected tracks.
     void duplicateSelectedHeaders() { if (const auto ids = headerSelection(); session.canDuplicateTracks (ids)) duplicateFromUI (ids); }
-    void reorderTrack (const juce::String& trackId, int direction)
-    {
-        const auto current = session.snapshot();
-        for (int i = 0; i < (int)current.tracks.size(); ++i)
-            if (current.tracks[(size_t)i].id == trackId)
-            { report (session.moveTrack (trackId, i+direction)); refresh(); return; }
-    }
-    // A track can move to a neighbour's place unless that crosses the returns, which stay last.
-    bool canMoveTrack (int index, int direction) const
-    {
-        const auto to = index + direction;
-        return index >= 0 && juce::isPositiveAndBelow (to, (int) state.tracks.size()) && state.tracks[(size_t) index].isReturn == state.tracks[(size_t) to].isReturn;
-    }
     // Halftrack's own palette for the headers' colour grid, laid out as the reference's: 5 rows of
     // 14, a hue to a column and the last column grey, lighter rows first.
     static constexpr int paletteColumns = 14, paletteRows = 5;
@@ -11334,8 +11367,6 @@ private:
         const auto result = session.addReturnTrack ({}, insertionPoint (true)); report (result); refresh();
         if (result.wasOk()) { multiSelectedTracks.clear(); selectTrack (createdTrack (before)); showPiano = false; resized(); }
     }
-    void setClipActiveFromUI(const juce::String& id,bool active)
-    {report(session.setClipActive(id,active));refresh();}
     void deleteSelectedClip()
     {
         if (selectedClipIds.size() > 1)
@@ -11484,118 +11515,583 @@ private:
     void scrollBarMoved (juce::ScrollBar*, double start) override
     { if (state.playing) setFollow (false); viewStart = start; canvas.repaint(); ruler.repaint(); }
 
+    // The menu bar, in the reference's order (ALiveApp 0x1002b8b34; see the main menu contract). The
+    // reference's Live menu is the application menu on a Mac, which holds About Halftrack and
+    // Preferences; Help holds About elsewhere. Navigate is left out, as Halftrack has none of its focus
+    // commands. As in the reference, every item a menu builds stays there, greyed while it cannot act,
+    // and the shortcuts shown are the reference's; each works from the keyboard too (runMenuShortcut).
    #if JUCE_MAC
-    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Create", "View", "Session" }; }
+    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Create", "Playback", "View", "Options" }; }
    #else
-    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Create", "View", "Session", "Help" }; }
+    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Create", "Playback", "View", "Options", "Help" }; }
    #endif
     static constexpr int aboutItem = 91;
+    // The menu bar's own commands, beside the numbered ones it shares with the keys.
+    enum MenuItem { menuCut = 130, menuCopy, menuPaste, menuDuplicate, menuActivate, menuSelectAll, menuRename, menuInfoText, menuSolo, menuArm,
+                    menuFreeze, menuBounceInPlace, menuBounceNew, menuQuantize, menuGroove, menuCaptureMidi, menuFade, menuLocator, menuPlay,
+                    menuContinue, menuInsertMarkerToPlayhead, menuFollow, menuStartWithRecord, menuRecordArrangement, menuArmArrangement,
+                    menuRecordSession, menuMetronome, menuMetronomeRecording, menuFullscreen, menuZoomIn, menuZoomOut, menuZoomReset,
+                    menuToggleView, menuClipView, menuDeviceView, menuToggleDetail, menuBrowser, menuGroovePool, menuSearch, menuSimilar,
+                    menuFoldAll, menuFoldSelected, menuZoomSelection, menuZoomBack, menuMidiMap, menuKeyMap, menuComputerKeyboard,
+                    menuExternalSync, menuSplitStop, menuSlice = 200 }; // Plus Session::SliceBy.
+    // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
+    // Fullscreen take their Windows keys elsewhere). The command manager only holds them for the menus:
+    // nothing is registered with it as a target.
+    juce::ApplicationCommandManager menuKeys;
+    void registerMenuShortcuts()
+    {
+        using juce::KeyPress;
+        const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
+        const auto key = [] (int code, int mods = 0) { return KeyPress (code, juce::ModifierKeys (mods), 0); };
+        const std::pair<int, KeyPress> shortcuts[] {
+            { 1, key ('n', cmd) }, { 2, key ('o', cmd) }, { 3, key ('s', cmd) }, { 4, key ('s', cmd | shift) }, { 6, key ('r', cmd | shift) }, { 14, key (',', cmd) },
+           #if JUCE_MAC
+            { 20, key ('z', cmd) }, { 21, key ('z', cmd | shift) }, { menuFullscreen, key ('f', cmd | juce::ModifierKeys::ctrlModifier) },
+           #else
+            { 20, key ('z', cmd) }, { 21, key ('y', cmd) }, { menuFullscreen, key (KeyPress::F11Key) },
+           #endif
+            { menuCut, key ('x', cmd) }, { menuCopy, key ('c', cmd) }, { menuPaste, key ('v', cmd) }, { menuDuplicate, key ('d', cmd) },
+            { 22, key (KeyPress::backspaceKey) }, { menuActivate, key ('0') }, { menuSelectAll, key ('a', cmd) }, { 79, key ('l', cmd) },
+            { 72, key ('g', cmd) }, { 73, key ('g', cmd | shift) }, { 89, key ('x', cmd | shift) }, { 101, key ('v', cmd | shift) }, { 102, key ('d', cmd | shift) },
+            { 75, key (KeyPress::backspaceKey, cmd | shift) }, { menuRename, key ('r', cmd) }, { menuSolo, key ('s') }, { menuArm, key ('c') },
+            { menuFreeze, key ('f', cmd | shift | alt) }, { menuBounceNew, key ('b', cmd) }, { 76, key ('e', cmd) }, { menuSplitStop, key ('e', cmd) },
+            { 80, key ('j', cmd) }, { menuQuantize, key ('u', cmd) },
+            { 30, key ('t', cmd) }, { 33, key ('t', cmd | shift) }, { 35, key ('t', cmd | alt) }, { 39, key ('t', alt | shift) }, { 50, key ('i', cmd) }, { 74, key ('i', cmd) },
+            { 68, key ('i', cmd | shift) }, { 34, key ('m', cmd | shift) }, { menuCaptureMidi, key ('c', cmd | shift) }, { menuFade, key ('f', cmd | alt) },
+            { menuPlay, key (KeyPress::spaceKey) }, { menuContinue, key (KeyPress::spaceKey, shift) }, { menuInsertMarkerToPlayhead, key (KeyPress::spaceKey, cmd | shift) },
+            { menuFollow, key ('f', alt | shift) }, { menuRecordSession, key (KeyPress::F9Key, cmd | shift) }, { menuMetronome, key ('o') }, { 55, key (KeyPress::F10Key) },
+            { menuZoomIn, key ('+', cmd) }, { menuZoomIn, key ('=', cmd) }, { menuZoomOut, key ('-', cmd) }, { menuZoomReset, key ('0', cmd | alt) },
+            { 90, key ('?') }, { menuToggleView, key (KeyPress::tabKey) }, { menuClipView, key ('3', cmd | alt) }, { menuDeviceView, key ('4', cmd | alt) },
+            { menuToggleDetail, key (KeyPress::tabKey, shift) }, { menuBrowser, key ('5', cmd | alt) }, { menuGroovePool, key ('6', cmd | alt) },
+            { menuSearch, key ('f', cmd) }, { menuSimilar, key ('f', cmd | shift) }, { 92, key ('v', cmd | alt) }, { 109, key ('m', cmd | alt) },
+            { 103, key ('i', cmd | alt) }, { 104, key ('s', cmd | alt) }, { 108, key ('r', cmd | alt) }, { 49, key ('a') }, { menuFoldAll, key ('u', alt) },
+            { menuFoldSelected, key ('u') }, { 41, key ('+') }, { 42, key ('-') }, { menuZoomSelection, key ('z') }, { menuZoomBack, key ('x') },
+            { menuMidiMap, key ('m', cmd) }, { menuKeyMap, key ('k', cmd) }, { menuComputerKeyboard, key ('m') },
+            { 93, key ('1', cmd) }, { 94, key ('2', cmd) }, { 95, key ('3', cmd) }, { 96, key ('4', cmd) }, { 97, key ('5', cmd) }, { 13, key ('e', cmd | shift | alt) } };
+        for (const auto& [id, press] : shortcuts)
+        {
+            if (menuKeys.getCommandForID (id) == nullptr)
+            { juce::ApplicationCommandInfo info (id); info.shortName = "Menu item " + juce::String (id); menuKeys.registerCommand (info); }
+            menuKeys.getKeyMappings()->addKeyPress (id, press);
+        }
+    }
+    // Record in Arrangement and Arm Record in Arrangement swap F9 and Shift+F9 with Start Transport
+    // With Record, as the reference's (0x1002ac9ac): the plain key always does what the Record button does.
+    void syncRecordShortcuts()
+    {
+        const bool starts = session.preferences().startPlaybackWithRecord;
+        auto* mappings = menuKeys.getKeyMappings();
+        for (const auto id : { (int) menuRecordArrangement, (int) menuArmArrangement })
+        {
+            if (menuKeys.getCommandForID (id) == nullptr)
+            { juce::ApplicationCommandInfo info (id); info.shortName = "Menu item " + juce::String (id); menuKeys.registerCommand (info); }
+            mappings->clearAllKeyPresses (id);
+            const bool plain = (id == menuRecordArrangement) == starts;
+            mappings->addKeyPress (id, juce::KeyPress (juce::KeyPress::F9Key, plain ? juce::ModifierKeys() : juce::ModifierKeys (juce::ModifierKeys::shiftModifier), 0));
+        }
+    }
+    // Menu commands wait while a dialog or menu is open over the window, as the reference's do.
+    bool menusBlocked() const { return session.isExporting() || juce::ModalComponentManager::getInstance()->getNumModalComponents() > 0; }
+    juce::PopupMenu::Item menuEntry (int id, const juce::String& text, bool enabled = true, bool ticked = false)
+    {
+        juce::PopupMenu::Item item (text);
+        item.itemID = id; item.isEnabled = enabled && ! menusBlocked(); item.isTicked = ticked;
+        if (const auto keys = menuKeys.getKeyMappings()->getKeyPressesAssignedToCommand (id); ! keys.isEmpty())
+        { item.commandManager = &menuKeys; item.shortcutKeyDescription = keys.getReference (0).getTextDescriptionWithIcons(); }
+        return item;
+    }
+    // A shortcut nothing focused took runs the menu command it is shown on, when that can act.
+    bool runMenuShortcut (const juce::KeyPress& key)
+    {
+        const auto names = getMenuBarNames();
+        for (int index = 0; index < names.size(); ++index)
+        {
+            const auto menu = getMenuForIndex (index, names[index]);
+            for (juce::PopupMenu::MenuItemIterator items (menu, true); items.next();)
+                if (const auto& item = items.getItem(); item.itemID != 0 && item.isEnabled && menuKeys.getKeyMappings()->containsMapping (item.itemID, key))
+                { menuItemSelected (item.itemID, index); return true; }
+        }
+        return false;
+    }
+
+    // The area last clicked, which Edit's commands act on as the reference's find their handler from
+    // the focused view: text being typed first, then the clip view's notes, the device chain, the
+    // headers, the Session's scenes or slots, or the Arrangement.
+    enum class EditArea { text, notes, devices, headers, scenes, slots, arrangement };
+    EditArea editArea() const
+    {
+        for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused != nullptr; focused = focused->getParentComponent())
+            if (auto* editor = dynamic_cast<juce::TextEditor*> (focused); editor != nullptr && ! editor->isReadOnly()) return EditArea::text;
+        switch (clickedArea)
+        {
+            case Area::notes: if (showPiano && currentMidiClip() != nullptr) return EditArea::notes; break;
+            case Area::devices: if (! showPiano) return EditArea::devices; break;
+            case Area::headers: if (headerFocus) return EditArea::headers; break;
+            case Area::scenes: if (showSession && selectedSceneIndex() >= 0) return EditArea::scenes; break;
+            default: break;
+        }
+        return showSession ? EditArea::slots : EditArea::arrangement;
+    }
+    // A lone clip selected in the Arrangement without a time selection, which Cut, Copy, Duplicate and
+    // Delete take as a clip, as its keys do.
+    const Session::ClipInfo* loneClip() const
+    {
+        if (timeSelection.active() || selectedClipIds.size() > 1) return nullptr;
+        const auto* track = currentTrack();
+        return track != nullptr && juce::isPositiveAndBelow (selectedClip, (int) track->clips.size()) ? &track->clips[(size_t) selectedClip] : nullptr;
+    }
+    // Where the Arrangement's menu would act for the menu bar: on the selected clip's track, at the insert marker.
+    ArrangementPlace menuPlace() const
+    {
+        ArrangementPlace place { selectedTrack, {}, state.insertMarker, false };
+        if (const auto clips = menuClips(); ! clips.empty()) place.clipId = clips.front()->id;
+        return place;
+    }
+    // The id the focused area's own menu gives a menu bar command, or 0 when it has none there.
+    int areaItemId (EditArea area, int command) const
+    {
+        struct Row { int command, arrangement, slots, headers, scenes; };
+        const Row rows[] {
+            { menuCut, arrangementCut, slotCut, headerCut, 0 }, { menuCopy, arrangementCopy, slotCopy, headerCopy, 0 },
+            { menuPaste, arrangementPaste, slotPaste, headerPaste, 0 }, { menuDuplicate, arrangementDuplicate, slotDuplicate, headerDuplicate, sceneDuplicate },
+            { 22, arrangementDelete, slotDelete, headerDelete, sceneDelete }, { menuActivate, arrangementActivate, slotActivate, 0, 0 },
+            { 79, arrangementLoop, 0, 0, 0 }, { menuRename, arrangementRename, slotRename, headerRename, sceneRename },
+            { menuInfoText, arrangementInfo, slotInfo, headerEditInfo, sceneInfo }, { menuFreeze, arrangementFreeze, slotFreeze, headerFreeze, 0 },
+            { menuBounceInPlace, arrangementBounceInPlace, slotBounceInPlace, headerBounce, 0 }, { menuBounceNew, arrangementBounceNew, slotBounceNew, 0, 0 },
+            { 76, arrangementSplit, 0, 0, 0 }, { menuSplitStop, 0, slotStopButton, 0, 0 }, { 80, arrangementConsolidate, 0, 0, 0 },
+            { menuGroove, arrangementGroove, slotGroove, 0, 0 }, { 34, arrangementInsertMidi, slotInsertMidi, 0, 0 }, { menuFade, arrangementFade, 0, 0, 0 },
+            { 88, arrangementConsolidateScene, 0, 0, 0 } };
+        for (const auto& row : rows)
+            if (row.command == command)
+                return area == EditArea::arrangement ? row.arrangement : area == EditArea::slots ? row.slots : area == EditArea::headers ? row.headers
+                     : area == EditArea::scenes ? row.scenes : 0;
+        return 0;
+    }
+    // The header that a header command names: the selected group, or the selected track.
+    juce::String headerTarget() const
+    {
+        if (const auto* group = groupInfo (selectedChain)) return group->id;
+        return currentTrack() != nullptr ? currentTrack()->id : juce::String();
+    }
+    // The focused area's own menu, which the menu bar takes its commands' state and text from.
+    juce::PopupMenu areaMenu (EditArea area) const
+    {
+        switch (area)
+        {
+            case EditArea::arrangement: return arrangementMenu (menuPlace(), std::make_shared<int> (-1));
+            case EditArea::slots: return slotContextMenu (std::make_shared<int> (-1));
+            case EditArea::headers: return headerTarget().isEmpty() ? juce::PopupMenu() : headerMenu (headerTarget(), ! showSession, std::make_shared<int> (-1), false);
+            case EditArea::scenes: return sceneContextMenu (selectedSceneId);
+            default: return {};
+        }
+    }
+    // A menu bar command as the focused area offers it: its text there and whether it can act.
+    struct AreaItem { int id = 0; juce::String text; bool enabled = false; };
+    AreaItem areaItem (EditArea area, const juce::PopupMenu& menu, int command) const
+    {
+        if (area == EditArea::text) return textItem (command);
+        if (area == EditArea::notes) return noteItem (command);
+        if (area == EditArea::devices) return deviceItem (command);
+        // The Arrangement's keys take a lone clip as a clip.
+        if (const auto* clip = area == EditArea::arrangement ? loneClip() : nullptr; clip != nullptr
+            && (command == menuCut || command == menuCopy || command == menuDuplicate || command == 22))
+            return { command, {}, ! state.recording };
+        const auto id = areaItemId (area, command);
+        if (id == 0) return {};
+        for (juce::PopupMenu::MenuItemIterator items (menu, true); items.next();)
+            if (items.getItem().itemID == id) return { id, items.getItem().text, items.getItem().isEnabled };
+        return {};
+    }
+    juce::TextEditor* focusedText() const
+    {
+        for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused != nullptr; focused = focused->getParentComponent())
+            if (auto* editor = dynamic_cast<juce::TextEditor*> (focused)) return editor;
+        return nullptr;
+    }
+    // Typed text takes Cut, Copy, Paste, Delete and Select All.
+    AreaItem textItem (int command) const
+    {
+        const auto* editor = focusedText();
+        const bool selected = editor != nullptr && ! editor->getHighlightedRegion().isEmpty();
+        switch (command)
+        {
+            case menuCut: case 22: return { command, {}, selected };
+            case menuCopy: return { command, {}, selected };
+            case menuPaste: return { command, {}, editor != nullptr && juce::SystemClipboard::getTextFromClipboard().isNotEmpty() };
+            case menuSelectAll: return { command, {}, editor != nullptr && ! editor->isEmpty() };
+            default: return {};
+        }
+    }
+    // The clip view's notes take the commands its keys do.
+    AreaItem noteItem (int command) const
+    {
+        const bool selected = pianoRoll.hasSelectedNote();
+        switch (command)
+        {
+            case menuCut: case menuCopy: case menuDuplicate: case 22: case 76: return { command, {}, selected };
+            case menuPaste: return { command, {}, pianoRoll.canPasteNotes() };
+            case menuActivate:
+                return { command, juce::String (pianoRoll.selectionInactive() ? "Activate Note" : "Deactivate Note") + (pianoRoll.selectedNoteCount() > 1 ? "s" : ""), selected };
+            case menuSelectAll: case menuQuantize: return { command, {}, currentMidiClip() != nullptr && ! currentMidiClip()->notes.empty() };
+            case menuGroove: return { command, {}, currentMidiClip() != nullptr };
+            default: return {};
+        }
+    }
+    // The device chain takes Delete, and Group and Ungroup make and break racks.
+    AreaItem deviceItem (int command) const
+    {
+        const auto* track = currentTrack();
+        const bool selected = track != nullptr && ! selectedDevices.isEmpty();
+        switch (command)
+        {
+            case 22: case 72: return { command, {}, selected };
+            case 73: return { command, {}, selected && std::any_of (track->plugins.begin(), track->plugins.end(), [this] (const auto& p) { return p.isRack && selectedDevices.contains (p.id); }) };
+            default: return {};
+        }
+    }
+    // Carries out a command of the focused area, as its own menu or keys would.
+    void runAreaCommand (int command)
+    {
+        const auto area = editArea();
+        const auto menu = areaMenu (area);
+        const auto found = areaItem (area, menu, command);
+        if (! found.enabled) return;
+        if (area == EditArea::text)
+        {
+            auto* editor = focusedText();
+            if (command == menuCut) editor->cutToClipboard(); else if (command == menuCopy) editor->copyToClipboard();
+            else if (command == menuPaste) editor->pasteFromClipboard(); else if (command == 22) editor->insertTextAtCaret ({}); else if (command == menuSelectAll) editor->selectAll();
+            return;
+        }
+        if (area == EditArea::notes)
+        {
+            using Note = PianoRoll::NoteCommand;
+            if (command == menuGroove) { extractGrooveFromUI (currentMidiClip()->id); return; }
+            pianoRoll.noteCommand (command == menuCut ? Note::cut : command == menuCopy ? Note::copy : command == menuPaste ? Note::paste
+                                 : command == menuDuplicate ? Note::duplicate : command == 22 ? Note::remove : command == 76 ? Note::split
+                                 : command == menuActivate ? Note::toggleActive : command == menuSelectAll ? Note::selectAll : Note::quantize);
+            return;
+        }
+        if (area == EditArea::devices) { if (command == 22) deleteSelectedDevices(); else if (command == 72) groupSelectedDevices(); else ungroupSelectedRack(); return; }
+        if (const auto* clip = area == EditArea::arrangement ? loneClip() : nullptr; clip != nullptr && found.id == command)
+        {
+            if (command == 22) { if (selectedFadeClip.isNotEmpty()) deleteSelectedFade(); else deleteSelectedClip(); return; }
+            const int choice = command == menuDuplicate ? 4 : command == menuCopy ? 5 : 6;
+            if (clip->isMidi) midiClipCommand (choice, clip->id); else audioClipCommand (choice, clip->id);
+            return;
+        }
+        switch (area)
+        {
+            case EditArea::arrangement: chooseArrangementItem (found.id, menuPlace(), -1); break;
+            case EditArea::slots: chooseSlotItem (found.id, -1); break;
+            case EditArea::headers: chooseHeaderItem (found.id, headerTarget(), ! showSession, -1, false); break;
+            case EditArea::scenes: chooseSceneItem (found.id, selectedSceneId); break;
+            default: break;
+        }
+    }
+    // Select All: the notes, the text, every slot, or every track's content in the Arrangement.
+    bool canSelectAll (EditArea area) const
+    {
+        if (area == EditArea::text || area == EditArea::notes) return areaItem (area, {}, menuSelectAll).enabled;
+        if (area == EditArea::slots || area == EditArea::scenes) return ! state.scenes.empty() && std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return ! t.isReturn; });
+        if (area == EditArea::headers) return ! state.tracks.empty();
+        return std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return ! t.clips.empty(); });
+    }
+    void selectAll (EditArea area)
+    {
+        if (area == EditArea::text || area == EditArea::notes) { runAreaCommand (menuSelectAll); return; }
+        if (area == EditArea::slots || area == EditArea::scenes)
+        {
+            selectedSlots = slotRectangle ({ 0, 0 }, { (int) state.tracks.size() - 1, (int) state.scenes.size() - 1 });
+            if (! selectedSlots.empty()) selectLauncherSlot (selectedSlots.front().track, selectedSlots.front().scene);
+            launcher.repaint(); return;
+        }
+        if (area == EditArea::headers)
+        {
+            for (const auto& track : state.tracks) multiSelectedTracks.insert (track.id);
+            refresh(); return;
+        }
+        TimeSelection all; all.start = std::numeric_limits<double>::max();
+        for (const auto& track : state.tracks)
+        {
+            if (track.isReturn) continue;
+            all.trackIds.add (track.id);
+            for (const auto& clip : track.clips) { all.start = std::min (all.start, clip.start); all.end = std::max (all.end, clip.start + clip.length); }
+        }
+        all.start = juce::jmin (all.start, all.end);
+        selectedClipIds.clear(); timeSelection = all; canvas.repaint();
+    }
+    // Solo and Arm, for the selected tracks (and for solo, the selected group), as the reference's S and C:
+    // they follow the first, releasing the others while solo or arm is exclusive.
+    juce::StringArray soloTargets() const { return headerSelection(); }
+    bool soloed (const juce::String& id) const { if (const auto* g = groupInfo (id)) return g->solo; const auto* t = trackInfo (id); return t != nullptr && t->solo; }
+    void soloSelection()
+    {
+        const auto ids = soloTargets();
+        if (ids.isEmpty()) return;
+        const bool on = ! soloed (ids[0]);
+        if (on && session.preferences().exclusiveSolo)
+        {
+            for (int t = 0; t < (int) state.tracks.size(); ++t) if (state.tracks[(size_t) t].solo && ! ids.contains (state.tracks[(size_t) t].id)) report (session.setTrackSolo (t, false));
+            for (const auto& g : state.groups) if (g.solo && ! ids.contains (g.id)) report (session.setGroupSolo (g.id, false));
+        }
+        for (const auto& id : ids)
+            if (groupInfo (id) != nullptr) report (session.setGroupSolo (id, on)); else if (const auto t = trackIndex (id); t >= 0) report (session.setTrackSolo (t, on));
+        refresh();
+    }
+    juce::StringArray armTargets() const
+    {
+        juce::StringArray armable;
+        for (const auto& id : tracksWithin (headerSelection())) if (const auto* t = trackInfo (id); t != nullptr && ! t->isReturn) armable.add (id);
+        return armable;
+    }
+    void armSelection()
+    {
+        const auto ids = armTargets();
+        if (ids.isEmpty()) return;
+        const bool on = ! trackInfo (ids[0])->armed;
+        if (on && session.preferences().exclusiveArm)
+            for (int t = 0; t < (int) state.tracks.size(); ++t) if (state.tracks[(size_t) t].armed && ! ids.contains (state.tracks[(size_t) t].id)) report (session.setTrackArmed (t, false));
+        for (const auto& id : ids) if (const auto t = trackIndex (id); t >= 0) report (session.setTrackArmed (t, on));
+        refresh();
+    }
+    // Create > Add Locator, or Delete Locator on one at the play position.
+    const Session::LocatorInfo* locatorAtPosition() const
+    {
+        for (const auto& locator : state.locators) if (std::abs (locator.position - state.position) < 1e-3) return &locator;
+        return nullptr;
+    }
+    // View > Show Similar Files: for a sound selected in the browser, or a lone audio clip selected.
+    juce::File similarSource() const
+    {
+        if (const auto row = browserList.getSelectedRow(); browserList.hasKeyboardFocus (true) && sampleBrowser() && juce::isPositiveAndBelow (row, (int) browserItems.size())
+            && ! browserItems[(size_t) row].directory && isAudio (browserItems[(size_t) row].file)) return browserItems[(size_t) row].file;
+        const auto clips = showSession ? menuSlotClips() : menuClips();
+        return clips.size() == 1 && clips.front()->isAudio ? clips.front()->file : juce::File();
+    }
+    juce::ResizableWindow* mainWindow() const { return findParentComponentOfClass<juce::ResizableWindow>(); }
+    void setZoomPercent (int percent)
+    {
+        auto preferences = session.preferences();
+        preferences.zoomPercent = juce::jlimit (50, 200, percent);
+        report (session.setPreferences (preferences)); applyInterfaceLook();
+    }
+    // The clip view and the device view share the detail view, as the reference's do.
+    void showClipView (bool clip) { if (clip == showPiano) return; if (clip) openPianoRoll(); else closeClipView(); }
+    bool canShowClipView() const { return showPiano || (showSession ? selectedSlot() != nullptr && selectedSlot()->hasClip : (loneClip() != nullptr || currentMidiClip() != nullptr)); }
+
     juce::PopupMenu getMenuForIndex (int index, const juce::String&) override
     {
         juce::PopupMenu popup;
-        if (session.isExporting()) { popup.addItem (99, "Export in progress...", false); return popup; }
-        if (index == 0)
+        const auto add = [this, &popup] (int id, const juce::String& text, bool enabled = true, bool ticked = false) { popup.addItem (menuEntry (id, text, enabled, ticked)); };
+        const auto menuName = getMenuBarNames()[index];
+        if (menuName == "File")
         {
-            popup.addItem (1, "New Project"); popup.addItem (2, "Open Project..."); popup.addSeparator();
-            popup.addItem (3, "Save Project"); popup.addItem (4, "Save Project As..."); popup.addItem (11, "Save as Default Set", userLibrary != juce::File()); popup.addSeparator();
-            popup.addItem (5, "Import Audio...", currentTrack() == nullptr || ! currentTrack()->isReturn); popup.addItem (6, "Export Arrangement Audio...", ! state.tracks.empty()); popup.addSeparator();
-            popup.addItem (9, "Import MIDI File..."); popup.addItem (10, "Export Selected MIDI Clip...", currentMidiClip() != nullptr); popup.addSeparator();
-            popup.addItem (12, "Locate Missing Media...", ! session.missingMedia().isEmpty()); popup.addItem (15, "Install Pack...", packsFolder() != juce::File()); popup.addSeparator();
-            popup.addItem (14, "Preferences..."); popup.addItem (7, "Audio Setup..."); popup.addItem (13, "Audio Engine On", true, session.isAudioEngineEnabled()); popup.addItem (8, "Plug-Ins Settings...");
+            add (1, "New Project"); add (2, "Open Project...");
+            popup.addSeparator();
+            add (15, "Install Pack...", packsFolder() != juce::File());
+            popup.addSeparator();
+            add (12, "Locate Missing Media...", ! session.missingMedia().isEmpty());
+            popup.addSeparator();
+            // Save while there is something to save, as the reference's: changes, or a project never saved.
+            add (3, "Save Project", state.dirty || state.projectFile == juce::File()); add (4, "Save Project As...");
+            add (11, "Save as Default Set", userLibrary != juce::File());
+            popup.addSeparator();
+            add (6, "Export Audio..."); add (10, "Export MIDI Clip...", currentMidiClip() != nullptr);
         }
-        else if (index == 1)
+        else if (menuName == "Edit")
         {
-            popup.addItem (20, "Undo", session.canUndo()); popup.addItem (21, "Redo", session.canRedo()); popup.addSeparator();
+            const auto area = editArea();
+            const auto context = areaMenu (area);
+            const auto command = [&] (int id, const juce::String& text)
+            { const auto found = areaItem (area, context, id); add (id, found.text.isNotEmpty() ? found.text : text, found.enabled); };
+            add (20, "Undo", session.canUndo()); add (21, "Redo", session.canRedo());
+            popup.addSeparator();
+            command (menuCut, "Cut"); command (menuCopy, "Copy"); command (menuPaste, "Paste"); command (menuDuplicate, "Duplicate"); command (22, "Delete");
+            popup.addSeparator();
+            command (menuActivate, "Deactivate Clip");
+            popup.addSeparator();
+            add (menuSelectAll, "Select All", canSelectAll (area));
+            // Loop Selection, or the loop switched on or off, as the clip menu's.
+            if (area == EditArea::arrangement) command (79, "Loop Selection"); else add (79, state.looping ? "Deactivate Loop" : "Activate Loop");
+            popup.addSeparator();
+            // Group and Ungroup make racks in the device view, and keep their track names elsewhere, as the reference's.
+            const bool devices = area == EditArea::devices;
+            add (72, devices ? "Group" : "Group Tracks", devices ? deviceItem (72).enabled : session.canGroupTracks (groupingSelection()));
+            add (73, devices ? "Ungroup" : "Ungroup Tracks", devices ? deviceItem (73).enabled : groupInfo (selectedChain) != nullptr);
+            popup.addSeparator();
+            // Time edits use the time selection, or the loop brace when nothing is selected.
+            const bool range = (timeSelection.active() || state.loopEnd > state.loopStart) && ! showSession && ! state.recording;
+            const juce::String source = timeSelection.active() ? "" : " (Loop Range)";
+            add (89, "Cut Time" + source, range);
+            add (101, "Paste Time", session.hasRangeClipboard() && ! showSession && ! state.recording && ! state.tracks.empty());
+            add (102, "Duplicate Time" + source, range); add (75, "Delete Time" + source, range);
+            popup.addSeparator();
+            command (menuRename, "Rename"); command (menuInfoText, "Edit Info Text");
+            popup.addSeparator();
+            const auto solo = soloTargets(), arm = armTargets();
+            add (menuSolo, ! solo.isEmpty() && soloed (solo[0]) ? "Unsolo" : "Solo", ! solo.isEmpty());
+            add (menuArm, ! arm.isEmpty() && trackInfo (arm[0])->armed ? "Disarm" : "Arm", ! arm.isEmpty());
+            popup.addSeparator();
+            command (menuFreeze, "Freeze Track"); command (menuBounceInPlace, "Bounce Track in Place"); command (menuBounceNew, "Bounce to New Track");
+            popup.addSeparator();
+            // In the Session, the Split key adds and removes stop buttons, as the reference's does.
+            if (area == EditArea::slots) command (menuSplitStop, "Add Stop Button"); else command (76, "Split");
+            command (80, "Consolidate");
+            popup.addSeparator();
+            command (menuQuantize, "Quantize");
+            command (menuGroove, "Extract Groove");
             juce::PopupMenu recordingGrid;
             // In the reference's order; the two combined grids came later and take ids 120 and 121.
             const std::pair<int,const char*> grids[] {{0,"None"},{1,"1/4"},{2,"1/8"},{3,"1/8T"},{7,"1/8 + 1/8T"},{4,"1/16"},{5,"1/16T"},{8,"1/16 + 1/16T"},{6,"1/32"}};
-            for(const auto& [value,name]:grids) recordingGrid.addItem(value<7?60+value:113+value,name,!state.recording,static_cast<int>(state.recordQuantisation)==value);
-            popup.addSubMenu("Recording quantization",recordingGrid);popup.addSeparator();
-            popup.addItem (22, showPiano ? "Delete Selected Notes" : showSession ? "Clear Selected Slot" : "Delete Selected Clip", showPiano ? pianoRoll.hasSelectedNote() : showSession ? selectedSlot() != nullptr && selectedSlot()->hasClip : selectedClip >= 0);
-            // Time edits use the time selection, or the loop brace when nothing is selected.
-            popup.addSeparator();
-            const bool selection = timeSelection.active() && ! showSession && ! state.recording;
-            popup.addItem (76, "Split", selection); popup.addItem (77, "Duplicate Selection", selection);
-            popup.addItem (78, "Delete Selection", selection); popup.addItem (79, "Loop Selection", selection);
-            popup.addItem (80, "Consolidate", selection);
-            popup.addItem (82, "Cut Selection", selection); popup.addItem (81, "Copy Selection", selection);
-            popup.addItem (83, "Paste Selection", session.hasRangeClipboard() && ! showSession && ! state.recording && currentTrack() != nullptr);
-            popup.addSeparator();
-            const bool range = (selection || state.loopEnd > state.loopStart) && ! state.recording;
-            const juce::String source = selection ? "" : " (Loop Range)";
-            popup.addItem (74, "Insert Silence" + source, range); popup.addItem (89, "Cut Time" + source, range);
-            popup.addItem (101, "Paste Time", session.hasRangeClipboard() && ! showSession && ! state.recording && ! state.tracks.empty());
-            popup.addItem (102, "Duplicate Time" + source, range); popup.addItem (75, "Delete Time" + source, range);
+            for (const auto& [value, name] : grids)
+                recordingGrid.addItem (menuEntry (value < 7 ? 60 + value : 113 + value, name, ! state.recording, static_cast<int> (state.recordQuantisation) == value));
+            popup.addSubMenu ("Record Quantization", recordingGrid, ! menusBlocked());
         }
-        else if (index == 2)
+        else if (menuName == "Create")
         {
-            popup.addItem (30, "Insert Audio Track"); popup.addItem (33, "Insert MIDI Track"); popup.addItem (35, "Insert Return Track", std::count_if (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return t.isReturn; }) < Session::maximumReturnTracks);
-            popup.addItem (110, "Insert Time Signature Change", ! showSession && ! state.recording); popup.addItem (34, "Insert MIDI Clip", currentTrack() != nullptr && currentTrack()->isMidi); popup.addItem (31, "Delete Selected Track", session.canRemoveTracks (headerSelection()));
+            add (30, "Insert Audio Track"); add (33, "Insert MIDI Track");
+            add (35, "Insert Return Track", std::count_if (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return t.isReturn; }) < Session::maximumReturnTracks);
+            add (39, "Insert Take Lane", currentTrack() != nullptr && ! currentTrack()->isReturn && ! showSession);
             popup.addSeparator();
-            popup.addItem (38, "Duplicate Selected Track", session.canDuplicateTracks (headerSelection()));
-            popup.addItem (39, "Insert Take Lane", currentTrack() != nullptr && ! currentTrack()->isReturn && ! showSession);
-            popup.addItem (36, "Move Selected Track Earlier", canMoveTrack (selectedTrack, -1));
-            popup.addItem (37, "Move Selected Track Later", canMoveTrack (selectedTrack, 1));
+            // Insert Scene in the Session, Insert Silence in the Arrangement, as the reference's.
+            if (showSession) add (50, "Insert Scene", state.scenes.size() < 256 && ! state.recording);
+            else add (74, "Insert Silence" + juce::String (timeSelection.active() ? "" : " (Loop Range)"), (timeSelection.active() || state.loopEnd > state.loopStart) && ! state.recording);
+            add (68, "Capture and Insert Scene", state.playing && ! state.recording && state.scenes.size() < 256);
+            const auto arrangement = showSession ? juce::PopupMenu() : arrangementMenu (menuPlace(), std::make_shared<int> (-1));
+            const auto fromArrangement = [&] (int id, const juce::String& text)
+            { const auto found = areaItem (EditArea::arrangement, arrangement, id); add (id, found.text.isNotEmpty() ? found.text : text, ! showSession && found.enabled); };
+            fromArrangement (88, "Consolidate Time to New Scene");
             popup.addSeparator();
-            // Enabled as the reference's are: grouping that would not empty another group, and ungrouping a selected group.
-            popup.addItem (72, "Group Tracks", session.canGroupTracks (groupingSelection()));
-            popup.addItem (73, "Ungroup Tracks", groupInfo (selectedChain) != nullptr);
-            popup.addSeparator(); popup.addItem (32, "Add Plug-in...", currentTrack() != nullptr);
+            {
+                // Insert MIDI Clip fills the empty selected lanes or slots, or puts a clip at the insert marker on a MIDI track.
+                const auto area = showSession ? EditArea::slots : EditArea::arrangement;
+                const auto found = areaItem (area, showSession ? slotContextMenu (std::make_shared<int> (-1)) : arrangement, 34);
+                const bool atMarker = ! showSession && ! timeSelection.active() && currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn && ! state.recording;
+                add (34, found.text.isNotEmpty() ? found.text : "Insert MIDI Clip", found.enabled || atMarker);
+            }
+            add (menuCaptureMidi, "Capture MIDI", ! state.recording && session.hasCapturedMidi());
             popup.addSeparator();
-            popup.addItem (88, "Consolidate Time to New Scene", timeSelection.active() && ! showSession && ! state.recording && state.scenes.size() < 256);
+            fromArrangement (menuFade, "Create Fade");
+            popup.addSeparator();
+            {
+                // Slice to New MIDI Track, for one audio clip, by transients, warp markers or a division of its beats.
+                juce::PopupMenu slices;
+                juce::PopupMenu::MenuItemIterator items (arrangement, true);
+                bool any = false;
+                while (items.next())
+                    if (const auto& item = items.getItem(); item.itemID >= arrangementSlice && item.itemID <= arrangementSlice + (int) Session::SliceBy::bar)
+                    { slices.addItem (menuEntry (menuSlice + item.itemID - arrangementSlice, item.text, item.isEnabled)); any = true; }
+                popup.addSubMenu ("Slice to New MIDI Track", slices, any && ! menusBlocked());
+            }
+            popup.addSeparator();
+            add (menuLocator, locatorAtPosition() != nullptr ? "Delete Locator" : "Add Locator");
+            add (110, "Insert Time Signature Change", ! showSession && ! state.recording);
+            popup.addSeparator();
+            add (5, "Import File...", currentTrack() == nullptr || ! currentTrack()->isReturn);
         }
-        else if (index == 3)
+        else if (menuName == "Playback")
         {
-            popup.addItem (45, "Session"); popup.addItem (43, "Arrangement"); popup.addItem (44, "Piano Roll"); popup.addItem (46, "Automation..."); popup.addItem (47, "Main Volume Automation..."); popup.addSeparator();
-            popup.addItem (48, "Show Take Lanes", currentTrack() != nullptr && ! currentTrack()->isReturn && ! showSession, currentTrack() != nullptr && takeLanesShown.count (currentTrack()->id) > 0);
-            popup.addItem (49, "Automation Mode", ! showSession, automationMode); popup.addItem (90, "Info", true, showInfo);
-            // The reference keeps these in its Options menu.
+            add (menuPlay, state.playing ? "Stop" : "Play");
+            add (menuContinue, state.playing ? "Stop" : "Continue Playback");
+            add (menuInsertMarkerToPlayhead, "Move Insert Marker to Playhead");
+            juce::PopupMenu options;
+            options.addItem (menuEntry (menuFollow, "Follow", true, followPlayhead));
+            options.addItem (menuEntry (menuStartWithRecord, "Start Transport With Record", true, session.preferences().startPlaybackWithRecord));
+            popup.addSubMenu ("Playback Options", options, ! menusBlocked());
+            popup.addSeparator();
+            syncRecordShortcuts();
+            const bool armed = state.recording || state.recordWaiting;
+            add (menuRecordArrangement, ! state.playing ? "Record in Arrangement" : armed ? "Disarm Record in Arrangement" : "Arm Record in Arrangement");
+            add (menuArmArrangement, armed ? "Disarm Record in Arrangement" : "Arm Record in Arrangement");
+            add (menuRecordSession, "Record in Session", ! state.recording, state.sessionRecording);
+            popup.addSeparator();
+            add (menuMetronome, "Metronome", true, state.metronome.enabled);
+            add (menuMetronomeRecording, "Metronome Only While Recording", true, state.metronome.recordingOnly);
+            popup.addSeparator();
+            add (55, "Back to Arrangement", std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& track) { return track.launcherActive; }));
+        }
+        else if (menuName == "View")
+        {
+            const auto* window = mainWindow();
+            add (menuFullscreen, "Fullscreen", window != nullptr, window != nullptr && window->isFullScreen());
+            juce::PopupMenu zoomMenu;
+            const auto zoomPercent = session.preferences().zoomPercent;
+            zoomMenu.addItem (menuEntry (menuZoomIn, "Zoom In", zoomPercent < 200)); zoomMenu.addItem (menuEntry (menuZoomOut, "Zoom Out", zoomPercent > 50));
+            zoomMenu.addItem (menuEntry (menuZoomReset, "Reset Zoom", zoomPercent != 100));
+            popup.addSubMenu ("Zoom", zoomMenu, ! menusBlocked());
+            popup.addSeparator();
+            add (90, "Info", true, showInfo);
+            popup.addSeparator();
+            add (menuToggleView, "Toggle Arrangement/Session View");
+            popup.addSeparator();
+            add (menuClipView, "Clip View", canShowClipView(), showPiano); add (menuDeviceView, "Device View", true, ! showPiano);
+            add (menuToggleDetail, "Toggle Clip/Device View", canShowClipView());
+            popup.addSeparator();
+            add (menuBrowser, "Browser", ! mapping(), showBrowser || mapping()); add (menuGroovePool, "Groove Pool", true, groovePool != nullptr && groovePool->isShowing());
+            popup.addSeparator();
+            add (menuSearch, "Search in Browser", ! mapping()); add (menuSimilar, "Show Similar Files", browserFolder != juce::File() && similarSource().existsAsFile());
+            popup.addSeparator();
+           #if JUCE_MAC
+            add (92, "Video Window", video::supported(), videoWindow != nullptr && videoWindow->isVisible());
+            popup.addSeparator();
+           #endif
+            // The Session mixer's sections, as the reference's View menu shows and hides them.
+            const auto& shown = state.mixerSections;
+            add (109, "Mixer", showSession, shown.shown);
+            juce::PopupMenu sections;
+            sections.addItem (menuEntry (103, "In/Out", true, shown.inOut)); sections.addItem (menuEntry (104, "Sends", true, shown.sends));
+            sections.addItem (menuEntry (105, "Mixer", true, shown.mixer));
+            sections.addSeparator();
+            sections.addItem (menuEntry (106, "Track Delay", true, shown.trackDelay)); sections.addItem (menuEntry (107, "Crossfader", true, shown.crossfader));
+            sections.addSeparator();
+            sections.addItem (menuEntry (108, "Returns", true, shown.returns));
+            popup.addSubMenu ("Mixer Controls", sections, ! menusBlocked());
+            popup.addSeparator();
+            add (49, "Automation Mode", ! showSession, automationMode);
+            const bool anyUnfolded = std::any_of (state.groups.begin(), state.groups.end(), [] (const auto& g) { return ! g.folded; })
+                                  || (! showSession && std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return ! t.folded; }));
+            add (menuFoldAll, anyUnfolded ? "Fold All Tracks" : "Unfold All Tracks", ! state.groups.empty() || ! showSession);
+            const auto* group = groupInfo (selectedChain);
+            const auto* current = showSession ? nullptr : currentTrack();
+            add (menuFoldSelected, (group != nullptr ? group->folded : current != nullptr && current->folded) ? "Unfold Selected Track" : "Fold Selected Track", group != nullptr || current != nullptr);
+            popup.addSeparator();
+            const bool canZoom = ! showSession || showPiano;
+            add (41, "Zoom In", canZoom); add (42, "Zoom Out", canZoom);
+            const bool selected = timeSelection.active() || loneClip() != nullptr;
+            add (menuZoomSelection, selected ? "Zoom to Arrangement Time Selection" : "Zoom Out Completely", ! showSession);
+            add (menuZoomBack, "Zoom Back", ! showSession && zoomBack.has_value());
+        }
+        else if (menuName == "Options")
+        {
+            add (menuMidiMap, "Edit MIDI Map", true, midiMapMode); add (menuKeyMap, "Edit Key Map", true, keyMapMode);
+            add (menuComputerKeyboard, "Computer MIDI Keyboard", true, session.isComputerKeyboardEnabled());
+            popup.addSeparator();
+            add (menuExternalSync, "External Sync", session.hasSyncInputs() || session.isExternalSync(), session.isExternalSync());
             popup.addSeparator();
             const auto place = focusedGrid();
             const auto g = place ? gridAt (*place) : editGrid;
-            popup.addItem (93, "Narrow Grid", place.has_value()); popup.addItem (94, "Widen Grid", place.has_value());
-            popup.addItem (95, "Triplet Grid", place.has_value(), g.tuplet == 3); popup.addItem (96, "Snap to Grid", place.has_value(), g.snap);
-            popup.addItem (97, "Fixed Grid", place.has_value(), g.fixed);
-            popup.addItem (98, "Solo in Place", ! session.isExporting(), state.soloInPlace);
-            // The Session mixer's sections, as the reference's View menu shows and hides them.
-            juce::PopupMenu sections;
-            const auto& shown = state.mixerSections;
-            popup.addItem (109, "Mixer", showSession, shown.shown);
-            sections.addItem (103, "In/Out", true, shown.inOut); sections.addItem (104, "Sends", true, shown.sends); sections.addItem (108, "Returns", true, shown.returns);
-            sections.addItem (105, "Mixer", true, shown.mixer);
-            sections.addItem (106, "Track Delay", true, shown.trackDelay); sections.addItem (107, "Crossfader", true, shown.crossfader);
-            popup.addSubMenu ("Mixer Controls", sections);
-           #if JUCE_MAC
-            popup.addItem (92, "Video Window", video::supported(), videoWindow != nullptr && videoWindow->isVisible());
+            add (93, "Narrow Grid", place.has_value()); add (94, "Widen Grid", place.has_value());
+            add (95, "Triplet Grid", place.has_value(), g.tuplet == 3); add (96, "Snap to Grid", place.has_value(), g.snap);
+            add (97, "Fixed Grid", place.has_value(), g.fixed);
+            popup.addSeparator();
+            add (98, "Solo in Place", true, state.soloInPlace);
+            popup.addSeparator();
+            add (13, "Audio Engine On", true, session.isAudioEngineEnabled());
+           #if ! JUCE_MAC
+            popup.addSeparator(); add (14, "Preferences...");
            #endif
-            popup.addSeparator();
-            const bool canZoom = ! showSession || showPiano;
-            popup.addItem (40, showPiano ? "Fit Piano Roll" : "Fit Arrangement", canZoom); popup.addItem (41, "Zoom In", canZoom); popup.addItem (42, "Zoom Out", canZoom);
         }
-        else if (index == 5) popup.addItem (aboutItem, "About Halftrack");
-        else
-        {
-            const bool sceneSelected = selectedSceneIndex() >= 0;
-            popup.addItem (50, "Insert Scene"); popup.addItem (51, "Rename Selected Scene...", sceneSelected); popup.addItem (52, "Delete Selected Scene", sceneSelected);
-            popup.addItem(56,"Duplicate Selected Scene",sceneSelected&&!state.recording&&state.scenes.size()<256);
-            popup.addItem (68, "Capture and Insert Scene", state.playing && ! state.recording && state.scenes.size() < 256);
-            popup.addItem(57,"Move Selected Scene Up",selectedSceneIndex()>0&&!state.recording);
-            popup.addItem(58,"Move Selected Scene Down",sceneSelected&&selectedSceneIndex()+1<(int)state.scenes.size()&&!state.recording);
-            popup.addItem (59, "Selected Clip Follow Action...", selectedSlot() && selectedSlot()->hasClip && !state.recording);
-            popup.addSeparator();
-            const bool clip = selectedSlot() != nullptr && selectedSlot()->hasClip && ! state.recording;
-            popup.addItem (84, "Cut Clip", clip); popup.addItem (85, "Copy Clip", clip);
-            popup.addItem (86, "Paste Clip", selectedSlot() != nullptr && session.hasSlotClipboard() && ! state.recording);
-            popup.addItem (87, "Duplicate Clip", clip);
-            popup.addSeparator(); popup.addItem (53, "Launch Selected Scene", sceneSelected); popup.addItem (54, "Stop All Session Clips"); popup.addItem (55, "Return to Arrangement");
-        }
+        else if (menuName == "Help") add (aboutItem, "About Halftrack");
         return popup;
     }
     void menuItemSelected (int id, int) override
     {
-        if (session.isExporting()) return;
+        if (menusBlocked()) return;
         if(id>=60 && id<=66) { report(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>(id-60)));refresh();return; }
         if(id==120 || id==121) { report(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>(id-113)));refresh();return; }
+        if (id >= menuSlice && id <= menuSlice + (int) Session::SliceBy::bar)
+        { if (const auto clips = menuClips(); clips.size() == 1) sliceClip (clips.front()->id, static_cast<Session::SliceBy> (id - menuSlice)); refresh(); return; }
         switch (id)
         {
             case 1: ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) safe->startNewProject(); }); break;
@@ -11603,9 +12099,8 @@ private:
             case 2: openDialog(); break;
             case 3: saveProject (false); break;
             case 4: saveProject (true); break;
-            case 5: importDialog(); break;
+            case 5: importFileDialog(); break;
             case 6: exportDialog(); break;
-            case 7: showAudioSettings(); break;
             case 14: showPreferences(); break;
             case 15:
             {
@@ -11621,23 +12116,25 @@ private:
                 report (session.setAudioEngineEnabled (on), on ? "Audio engine on." : "Audio engine off.");
                 break;
             }
-            case 8: showPlugins(); break;
-            case 9: importMidiDialog(); break;
             case 10: exportMidiDialog(); break;
             case 12: locateMediaDialog(); break;
             case 39: insertTakeLaneFromUI(); break;
-            case 48: toggleTakeLanes(); break;
             case 49: setAutomationMode (! automationMode); break;
             case 90: showInfo = ! showInfo; resized(); break;
             case 92: toggleVideoWindow(); break;
             case aboutItem: showAbout(); break;
             case 20: session.undo(); break;
             case 21: session.redo(); break;
-            case 22: if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot(); else deleteSelectedClip(); break;
+            case menuCut: case menuCopy: case menuPaste: case menuDuplicate: case 22: case menuActivate: case menuRename: case menuInfoText:
+            case menuFreeze: case menuBounceInPlace: case menuBounceNew: case 76: case 80: case menuGroove: case menuSplitStop: case menuQuantize:
+                runAreaCommand (id); return;
+            case 79: if (editArea() == EditArea::arrangement) runAreaCommand (id); else session.setLoop (! state.looping, state.loopStart, state.loopEnd); break;
+            case menuSelectAll: selectAll (editArea()); return;
             case 74: { const auto [a, b] = editRange(); report (session.insertTime (a, b - a)); refresh(); break; }
             case 75: { const auto [a, b] = editRange(); report (session.deleteTime (a, b - a)); timeSelection = {}; refresh(); break; }
             case 89: { const auto [a, b] = editRange(); report (session.cutTime (a, b - a)); timeSelection = {}; refresh(); break; }
             case 101: report (session.pasteTime (pasteTimeTrack(), state.insertMarker)); refresh(); break;
+            case 102: { const auto [a, b] = editRange(); report (session.duplicateTime (a, b)); refresh(); break; }
             case 98: report (session.setSoloInPlace (! state.soloInPlace)); refresh(); break;
             case 109: { auto shown = state.mixerSections; shown.shown = ! shown.shown; session.setMixerSections (shown); refresh(); launcher.resized(); launcher.repaint(); break; }
             case 103: case 104: case 105: case 106: case 107: case 108:
@@ -11648,38 +12145,17 @@ private:
                 session.setMixerSections (shown); refresh(); launcher.resized(); launcher.repaint();
                 break;
             }
-            case 102: { const auto [a, b] = editRange(); report (session.duplicateTime (a, b)); refresh(); break; }
-            case 76: case 77: case 78: case 79: case 80: case 81: case 82: case 83: selectionCommand (id); break;
             case 30: showPiano = false; addTrack(); resized(); break;
             case 33: addMidiTrack(); break;
             case 35: addReturnTrack(); break;
-            case 34: if (showSession) createLauncherMidiClip(); else createMidiClip (state.insertMarker); break;
-            case 31: deleteSelectedHeaders(); break;
+            case 34: if (showSession) chooseSlotItem (slotInsertMidi, -1); else if (! emptyMidiLanes().isEmpty()) chooseArrangementItem (arrangementInsertMidi, menuPlace(), -1); else createMidiClip (state.insertMarker); break;
             case 110: insertMeterChange (beatsAt (state.insertMarker)); break;
-            case 32: addPluginMenu(); break;
-            case 36: case 37: if (const auto* track = currentTrack()) reorderTrack (track->id, id == 36 ? -1 : 1); break;
-            case 38: duplicateSelectedHeaders(); break;
-            case 72: groupSelectedTracks(); break;
-            case 73: ungroupSelectedTrack(); break;
-            case 40: if (showPiano) pianoRoll.fit(); else fitTimeline(); break;
+            case 72: if (editArea() == EditArea::devices) groupSelectedDevices(); else groupSelectedTracks(); break;
+            case 73: if (editArea() == EditArea::devices) ungroupSelectedRack(); else ungroupSelectedTrack(); break;
             case 41: if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); break;
             case 42: if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); break;
-            case 43: showArrangementView(); break;
-            case 45: showSessionView(); break;
-            case 59: if (selectedSlot() && selectedSlot()->hasClip) clipFollowDialog (selectedSlot()->clip.id); break;
-            case 50: addSceneFromUI(); break;
-            case 51: renameSceneDialog (selectedSceneIndex()); break;
-            case 56: if(selectedSceneIndex()>=0)duplicateSceneFromUI(selectedSceneId); break;
-            case 68:
-            {
-                juce::String captured;
-                const auto result = session.captureAndInsertScene (selectedSceneIndex(), captured);
-                report (result, "Captured the playing clips into a new scene.");
-                if (result.wasOk()) selectedSceneId = captured;
-                refresh(); break;
-            }
-            case 57: case 58: moveSceneFromUI(selectedSceneId,id==57?-1:1); break;
-            case 84: case 85: case 86: case 87: slotCommand (id); break;
+            case 50: insertSceneFromUI(); break;
+            case 68: captureSceneFromUI(); break;
             case 88:
             {
                 juce::String scene;
@@ -11689,13 +12165,54 @@ private:
                 refresh(); break;
             }
             case 93: case 94: case 95: case 96: case 97: if (const auto place = focusedGrid()) gridCommand (id - 92, *place); break;
-            case 52: report (session.removeScene (selectedSceneIndex())); break;
-            case 53: report (session.launchScene (selectedSceneIndex())); break;
-            case 54: report (session.stopAllLauncherClips()); break;
             case 55: report (session.returnToArrangement()); break;
-            case 44: openPianoRoll(); break;
-            case 46: showAutomation(); break;
-            case 47: showAutomation (true); break;
+            case menuSolo: soloSelection(); return;
+            case menuArm: armSelection(); return;
+            case menuCaptureMidi: captureFromUI(); return;
+            case menuFade: chooseArrangementItem (arrangementFade, menuPlace(), -1); return;
+            case menuLocator:
+                if (const auto* locator = locatorAtPosition()) report (session.removeLocator (locator->id));
+                else { juce::String added; report (session.addLocator (state.position, {}, added)); }
+                break;
+            case menuPlay: togglePlay(); return;
+            case menuContinue: if (state.playing) session.stop(); else report (session.continuePlayback()); break;
+            case menuInsertMarkerToPlayhead: session.setInsertMarker (state.position); break;
+            case menuFollow: setFollow (! followPlayhead); break;
+            case menuStartWithRecord:
+            {
+                auto preferences = session.preferences();
+                preferences.startPlaybackWithRecord = ! preferences.startPlaybackWithRecord;
+                report (session.setPreferences (preferences)); break;
+            }
+            case menuRecordArrangement: report (session.recordButton (! session.preferences().startPlaybackWithRecord)); break;
+            case menuArmArrangement: report (session.recordButton (session.preferences().startPlaybackWithRecord)); break;
+            case menuRecordSession: report (session.sessionRecord (juce::jmax (0, selectedSceneIndex()))); break;
+            case menuMetronome: case menuMetronomeRecording:
+            {
+                auto settings = state.metronome;
+                if (id == menuMetronome) settings.enabled = ! settings.enabled; else settings.recordingOnly = ! settings.recordingOnly;
+                report (session.setMetronome (settings)); break;
+            }
+            case menuFullscreen: if (auto* window = mainWindow()) window->setFullScreen (! window->isFullScreen()); return;
+            case menuZoomIn: setZoomPercent (session.preferences().zoomPercent + 25); return;
+            case menuZoomOut: setZoomPercent (session.preferences().zoomPercent - 25); return;
+            case menuZoomReset: setZoomPercent (100); return;
+            case menuToggleView: if (showSession) showArrangementView(); else showSessionView(); break;
+            case menuClipView: showClipView (! showPiano); break;
+            case menuDeviceView: showClipView (false); break;
+            case menuToggleDetail: showClipView (! showPiano); break;
+            case menuBrowser: showBrowser = ! showBrowser; resized(); break;
+            case menuGroovePool: openGroovePool(); return;
+            case menuSearch: showBrowser = true; resized(); browserSearch.grabKeyboardFocus(); return;
+            case menuSimilar: showSimilarFiles (similarSource()); return;
+            case menuFoldAll: toggleFold (true); break;
+            case menuFoldSelected: toggleFold (false); break;
+            case menuZoomSelection: if (! zoomToSelection()) fitTimeline(); return;
+            case menuZoomBack: zoomBackFromSelection(); return;
+            case menuMidiMap: setMidiMapMode (! midiMapMode); return;
+            case menuKeyMap: setKeyMapMode (! keyMapMode); return;
+            case menuComputerKeyboard: setComputerKeyboard (! session.isComputerKeyboardEnabled()); return;
+            case menuExternalSync: report (session.setExternalSync (! session.isExternalSync())); break;
             default: break;
         }
         refresh();
@@ -11783,15 +12300,6 @@ private:
                 resized();pianoRoll.fit();refresh();return;
             }
     }
-    void importMidiDialog()
-    {
-        const auto current=session.snapshot();const auto startBeat=current.position*current.tempo/60;
-        chooser=std::make_unique<juce::FileChooser>("Import MIDI File",browserFolder,"*.mid;*.midi");
-        auto safe=juce::Component::SafePointer<Impl>(this);
-        chooser->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,
-            [safe,startBeat](const juce::FileChooser& fc)
-            {if(safe!=nullptr&&fc.getResult()!=juce::File())safe->importMidiSelection(fc.getResult(),startBeat);});
-    }
     void exportMidiSelection (const juce::String& id,const juce::File& file)
     {report(session.exportMidiClip(id,file),"MIDI clip exported.");refresh();}
     void exportMidiDialog()
@@ -11809,19 +12317,23 @@ private:
                 if(safe!=nullptr&&fc.getResult()!=juce::File())safe->exportMidiSelection(id,fc.getResult());
             });
     }
-    void importDialog()
+    // Create > Import File: samples, movies and MIDI files into the selected track at the insert marker,
+    // or into the selected slot in the Session, as the reference's Import File takes them.
+    void importFileDialog()
     {
         if (currentTrack() != nullptr && currentTrack()->isReturn) return;
         if (showSession) { importSlotDialog (selectedTrack, selectedSceneIndex()); return; }
-        chooser = std::make_unique<juce::FileChooser> ("Import Audio", browserFolder, juce::String ("*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3") + (video::supported() ? ";*.mov;*.mp4;*.m4v" : ""));
+        chooser = std::make_unique<juce::FileChooser> ("Import File", browserFolder, juce::String ("*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3;*.mid;*.midi") + (video::supported() ? ";*.mov;*.mp4;*.m4v" : ""));
         auto safe = juce::Component::SafePointer<Impl> (this);
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems,
             [safe] (const juce::FileChooser& fc)
             {
                 if (safe == nullptr) return;
                 juce::StringArray files;
-                for (const auto& file : fc.getResults()) files.add (file.getFullPathName());
-                safe->importFiles (files, safe->selectedTrack, safe->state.insertMarker);
+                for (const auto& file : fc.getResults())
+                    if (file.hasFileExtension ("mid;midi")) safe->importMidiSelection (file, safe->beatsAt (safe->state.insertMarker));
+                    else files.add (file.getFullPathName());
+                if (! files.isEmpty()) safe->importFiles (files, safe->selectedTrack, safe->state.insertMarker);
             });
     }
     void importFiles (const juce::StringArray& files, int track, double at)
@@ -12609,7 +13121,8 @@ private:
         }
     };
     InfoView info;
-    bool showInfo = true;
+    bool showInfo = true, showBrowser = true;
+    static constexpr int infoCornerWidth = 200;
     static constexpr int infoHeight = 110;
     void showAudioSettings() { showDialog ("Halftrack - Audio & MIDI Setup", std::make_unique<AudioSetupPanel> (*this), 660, 680); }
     // Preferences, after the reference's Record, Warp & Launch settings.
@@ -14587,7 +15100,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         session.seek (visible * 3); refresh();
         check (viewStart == 0, "with Follow off the view stays put");
         session.stop(); refresh();
-        check (handleKey (juce::KeyPress ('F', juce::ModifierKeys::commandModifier, 0)) && followPlayhead, "Cmd/Ctrl+F turns Follow back on");
+        check (handleKey (juce::KeyPress ('F', juce::ModifierKeys (juce::ModifierKeys::altModifier | juce::ModifierKeys::shiftModifier), 0)) && followPlayhead,
+               "Option+Shift+F (the reference's Follow) turns Follow back on");
         const auto previousView = std::pair { viewStart, pixelsPerSecond };
         timeSelection = { 1, 3, { state.tracks[0].id } };
         check (handleKey (juce::KeyPress ('Z')) && std::abs (pixelsPerSecond - juce::jlimit (3.0, 650.0, canvas.timelineWidth() / 2.2)) < 1e-6 && std::abs (viewStart - .9) < 1e-6,
@@ -15373,7 +15887,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (! state.groups[0].folded && laneHeight (0) == trackHeight, "unfolding restores the member lanes");
         const auto createItem = [this] (int id)
         {
-            const auto create = getMenuForIndex (2, {});
+            const auto create = getMenuForIndex (1, "Edit");
             for (juce::PopupMenu::MenuItemIterator items (create); items.next();) if (items.getItem().itemID == id) return items.getItem().isEnabled;
             return false;
         };
@@ -15384,7 +15898,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         selectChain (state.groups[0].id);
         check (createItem (73), "with the group selected, Ungroup Tracks is enabled");
         menuItemSelected (73, 2);
-        check (state.groups.empty() && laneY (0) == 0, "the Create menu ungroups the selected group");
+        check (state.groups.empty() && laneY (0) == 0, "the Edit menu ungroups the selected group");
         session.undo(); session.undo(); refresh();
         check (state.groups.empty(), "undo leaves no group behind");
     }
@@ -15412,13 +15926,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tracks.size() == tracks, "undo removes the browser-created track");
         selectTrack (juce::jmin (instrumentTrack, (int) state.tracks.size() - 1)); refresh();
     }
-    menuItemSelected (31, 2);
+    deleteSelectedHeaders(); refresh();
     menuItemSelected (20, 1);
     menuItemSelected (21, 1);
     insertSynthTrackAndClip(); fixNoteGrid();
     check (currentMidiClip() != nullptr && currentMidiClip()->notes.empty(),
            "delete, undo, redo and new track leave the piano editor attached to live state");
-    menuItemSelected (45, 3);
+    showSessionView(); refresh();
     check (showSession && ! showPiano && state.scenes.size() == 8, "Session view opens the eight real scene rows");
     const int midiTrack = selectedTrack;
     auto launcherEvent = [&] (juce::Point<float> at)
@@ -15456,16 +15970,16 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (clipIdentities() == beforeEditorDrop && currentMidiClip()->id == launcherClipId
                && status.contains ("Choose an empty audio slot in Session"),
            "audio drop onto a Session MIDI editor preserves arrangement and slot content");
-    menuItemSelected (45, 3);
+    showSessionView(); refresh();
     launcher.mouseDown (launcherEvent (launcher.slotCentre (midiTrack, 1)));
-    menuItemSelected (44, 3);
+    openPianoRoll(); refresh();
     check (showPiano && currentMidiClip() == nullptr && selectedLauncherClipId.isEmpty() && selectedSceneIndex() == 1,
            "Piano Roll on an empty selected Session slot never opens another row's clip");
-    menuItemSelected (45, 3);
+    showSessionView(); refresh();
     launcher.mouseDown (launcherEvent (slotPoint)); launcher.mouseDoubleClick (launcherEvent (slotPoint));
     check (currentMidiClip()->id == launcherClipId && currentMidiClip()->notes.size() == 1,
            "double-click on an occupied MIDI slot opens it without replacing notes");
-    menuItemSelected (45, 3);
+    showSessionView(); refresh();
     launcher.keyPressed (juce::KeyPress (juce::KeyPress::deleteKey));
     check (! state.tracks[(size_t) midiTrack].slots.front().hasClip, "Session Delete key clears the selected slot");
     launcher.keyPressed (undo);
@@ -15487,7 +16001,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     pumpSyntheticTestDevice (session, 48); refresh();
     check (state.tracks[(size_t) midiTrack].slots.front().playing,
            "Session launch triangle starts the selected clip through the synthetic audio device");
-    menuItemSelected (44, 3);
+    openPianoRoll(); refresh();
     const auto beforeRuler = state;
     const auto sessionRuler = juce::Point<float> (415.0f, 48.0f);
     pianoRoll.mouseDown (event (sessionRuler, sessionRuler)); refresh();
@@ -15496,7 +16010,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (state.position == beforeRuler.position && afterSlot.playing == beforeSlot.playing
                && afterSlot.queued == beforeSlot.queued && afterSlot.stopQueued == beforeSlot.stopQueued,
            "Session MIDI ruler leaves global time and launch state unchanged");
-    menuItemSelected (45, 3);
+    showSessionView(); refresh();
     const auto trackStopPoint = launcher.trackStopPoint (midiTrack);
     launcher.mouseDown (launcherEvent (trackStopPoint));
     pumpSyntheticTestDevice (session, 8); refresh();
@@ -15604,16 +16118,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         pumpSyntheticTestDevice (session, 8); refresh();
         check (slotState().playing, "a Trigger clip launched with Enter keeps playing after key up");
     }
-    menuItemSelected (43, 3);
+    showArrangementView(); refresh();
     check (! showSession && state.tracks[(size_t) midiTrack].slots.front().playing,
            "switching to Arrangement does not stop a launched clip");
-    menuItemSelected (45, 3);
+    showSessionView(); refresh();
     const auto sceneCount = state.scenes.size();
+    selectedSceneId = state.scenes.back().id;
     menuItemSelected (50, 4);
     const auto addedScene = selectedSceneId;
     check (state.scenes.size() == sceneCount + 1 && selectedSceneIndex() == (int) state.scenes.size() - 1,
            "Insert Scene command adds and selects a model scene");
-    menuItemSelected (52, 4);
+    report (session.removeScene (selectedSceneIndex())); refresh();
     check (state.scenes.size() == sceneCount && selectedSceneId != addedScene && selectedSceneIndex() >= 0,
            "deleting the selected scene refreshes selection to live scene state");
     menuItemSelected (20, 1);
@@ -15660,24 +16175,24 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     pumpSyntheticTestDevice (session, 8); refresh();
     check (state.tracks[(size_t) audioColumn].slots[1].playing && ! state.tracks[(size_t) midiTrack].slots.front().playing,
            "Shift+Enter launches the selected scene and its empty MIDI slot stops the previous clip");
-    menuItemSelected (54, 4);
+    report (session.stopAllLauncherClips()); refresh();
     pumpSyntheticTestDevice (session, 8); refresh();
     check (std::all_of (state.tracks.begin(), state.tracks.end(), [] (const auto& track)
            { return std::none_of (track.slots.begin(), track.slots.end(), [] (const auto& slot) { return slot.playing || slot.queued; }); }),
            "Stop All command stops active Session clips through the audio callback");
     std::vector<bool> overrides; for (const auto& track : state.tracks) overrides.push_back (track.launcherActive);
-    menuItemSelected (43, 3);
+    showArrangementView(); refresh();
     bool unchanged = ! showSession;
     for (size_t i = 0; i < overrides.size(); ++i) unchanged = unchanged && state.tracks[i].launcherActive == overrides[i];
     check (unchanged, "switching to Arrangement leaves launcher playback ownership unchanged");
     menuItemSelected (55, 4);
     check (std::none_of (state.tracks.begin(), state.tracks.end(), [] (const auto& track) { return track.launcherActive; }),
            "Return to Arrangement explicitly releases every launcher override");
-    menuItemSelected (45, 3);
+    showSessionView(); refresh();
     selectLauncherSlot (midiTrack, 0);
     launcher.keyPressed (juce::KeyPress (juce::KeyPress::downKey));
     check (selectedSceneIndex() == 1, "Session arrow key moves the actual selected slot");
-    menuItemSelected (31, 2); menuItemSelected (20, 1); menuItemSelected (21, 1); menuItemSelected (50, 4);
+    deleteSelectedHeaders(); refresh(); menuItemSelected (20, 1); menuItemSelected (21, 1); menuItemSelected (50, 4);
     check (currentTrack() != nullptr && selectedSceneIndex() >= 0,
            "track delete, undo, redo and new scene leave Session selection attached to live state");
 
@@ -15759,7 +16274,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (sendIs (selectedTrack, firstReturnId, -6) && sendIs (sourceTrack, firstReturnId, -9),
            "MIDI send change cannot overwrite the audio source route");
     selectTrack (launcherIndices (firstReturnId, {}).first);
-    menuItemSelected (31, 2);
+    deleteSelectedHeaders(); refresh();
     check (launcherIndices (firstReturnId, {}).first < 0, "existing delete-track command removes a return");
     selectTrack (launcherIndices (midiSourceId, {}).first);
     check (currentTrack()->sends.size() == 1 && currentTrack()->sends.front().returnTrackId == secondReturnId,
@@ -15774,7 +16289,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                && sendSlider ("Echo Return")->getValue() == -100,
            "restored send controls follow stable IDs and original values");
     const int returnIndex = launcherIndices (firstReturnId, {}).first;
-    selectTrack (returnIndex); menuItemSelected (43, 3);
+    selectTrack (returnIndex); showArrangementView(); refresh();
     check (! importButton.isEnabled() && ! newMidiClipButton.isEnabled() && ! findNamed (deviceChain, "Track sends")->isVisible(),
            "selected return disables clip actions and has no outgoing-send panel");
     viewport.setViewPosition (0, returnIndex * trackHeight);
@@ -15783,7 +16298,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     filesDropped ({ audioFixture.getFullPathName() }, returnDrop.x, returnDrop.y);
     check (clipIdentities() == beforeReturnDrop && currentTrack()->clips.empty(),
            "actual Arrangement drop handler cannot create or redirect clips dropped on a return");
-    menuItemSelected (45, 3); launcher.scrollSelectionIntoView();
+    showSessionView(); refresh(); launcher.scrollSelectionIntoView();
     // The return is selected from its mixer/header; keyboard launch and deletion
     // must never treat its empty column as a clip slot.
     const auto beforeReturnKeys = clipIdentities();
@@ -15847,7 +16362,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     }
     // Multi-note regression: all edits enter through the production piano mouse,
     // key, menu and slider callbacks. Fixture notes are drawn by the mouse handler.
-    menuItemSelected (43, 3); insertSynthTrackAndClip(); pianoRoll.fit(); fixNoteGrid();
+    showArrangementView(); refresh(); insertSynthTrackAndClip(); pianoRoll.fit(); fixNoteGrid();
     const auto groupClipId = currentMidiClip()->id;
     const auto groupTrack = selectedTrack;
     const auto groupBeatWidth = (pianoRoll.getWidth() - 66.0) / 16.0;
@@ -15995,7 +16510,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (currentMidiClip() != nullptr && currentMidiClip()->id != groupClipId && ! pianoRoll.hasSelectedNote(), "switching to a new clip clears the prior note selection");
     pianoRoll.keyPressed (deleteNotes);
     check (state.tracks[(size_t) groupTrack].clips.front().notes.size() == 3, "a new clip cannot delete selected IDs from the previous clip");
-    pianoRoll.keyPressed (undo); menuItemSelected (44, 3);
+    pianoRoll.keyPressed (undo); openPianoRoll(); refresh();
     check (currentMidiClip() != nullptr && currentMidiClip()->id == groupClipId && ! pianoRoll.hasSelectedNote(), "clip creation undo resolves live clip identity without stale selection");
 
     insertSynthTrackAndClip(); pianoRoll.fit(); fixNoteGrid();
@@ -16596,6 +17111,160 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         empty.deleteRecursively();
     }
     {
+        // The menu bar, after the reference's: its menus and items in its order, every item there while it
+        // is greyed, the reference's shortcuts on them and working from the keys, and Edit's commands
+        // acting on the area last clicked.
+        check (session.newProject().wasOk() && session.addMidiTrack ("Menu MIDI").wasOk(), "a fresh project for the menu bar"); resetView(); showArrangementView();
+        if (session.isComputerKeyboardEnabled()) setComputerKeyboard (false);
+        clickedArea = Area::arrangement; headerFocus = false; timeSelection = {}; selectedClipIds.clear(); refresh();
+        const auto texts = [this] (const juce::String& name)
+        {
+            const auto menu = getMenuForIndex (getMenuBarNames().indexOf (name), name);
+            juce::StringArray result;
+            for (juce::PopupMenu::MenuItemIterator items (menu); items.next();)
+                result.add (items.getItem().isSeparator ? juce::String ("-") : items.getItem().text + (items.getItem().subMenu != nullptr ? " >" : ""));
+            return result;
+        };
+        const auto entry = [this] (const juce::String& name, int id) -> std::optional<juce::PopupMenu::Item>
+        {
+            const auto menu = getMenuForIndex (getMenuBarNames().indexOf (name), name);
+            for (juce::PopupMenu::MenuItemIterator items (menu, true); items.next();) if (items.getItem().itemID == id) return items.getItem();
+            return std::nullopt;
+        };
+       #if JUCE_MAC
+        check (getMenuBarNames() == juce::StringArray { "File", "Edit", "Create", "Playback", "View", "Options" }, "the menu bar has the reference's menus, its Live menu being the application menu");
+       #else
+        check (getMenuBarNames() == juce::StringArray { "File", "Edit", "Create", "Playback", "View", "Options", "Help" }, "the menu bar has the reference's menus, and Help");
+       #endif
+        const auto expect = [&] (const juce::String& name, const juce::StringArray& wanted)
+        { const auto shown = texts (name); check (shown == wanted, name + " holds the reference's items in its order (" + shown.joinIntoString (" | ") + ")"); };
+        expect ("File", { "New Project", "Open Project...", "-", "Install Pack...", "-", "Locate Missing Media...", "-", "Save Project", "Save Project As...", "Save as Default Set",
+                          "-", "Export Audio...", "Export MIDI Clip..." });
+        const juce::String loop = state.looping ? "Deactivate Loop" : "Activate Loop";
+        expect ("Edit", { "Undo", "Redo", "-", "Cut", "Copy", "Paste", "Duplicate", "Delete", "-", "Deactivate Clip", "-", "Select All", loop, "-", "Group Tracks", "Ungroup Tracks", "-",
+                          "Cut Time (Loop Range)", "Paste Time", "Duplicate Time (Loop Range)", "Delete Time (Loop Range)", "-", "Rename", "Edit Info Text", "-", "Solo", "Arm", "-",
+                          "Freeze Track", "Bounce Track in Place", "Bounce to New Track", "-", "Split", "Consolidate", "-", "Quantize", "Extract Groove", "Record Quantization >" });
+        expect ("Create", { "Insert Audio Track", "Insert MIDI Track", "Insert Return Track", "Insert Take Lane", "-", "Insert Silence (Loop Range)", "Capture and Insert Scene",
+                            "Consolidate Time to New Scene", "-", "Insert MIDI Clip", "Capture MIDI", "-", "Create Fade", "-", "Slice to New MIDI Track >", "-", "Add Locator",
+                            "Insert Time Signature Change", "-", "Import File..." });
+        expect ("Playback", { "Play", "Continue Playback", "Move Insert Marker to Playhead", "Playback Options >", "-", "Record in Arrangement", "Arm Record in Arrangement",
+                              "Record in Session", "-", "Metronome", "Metronome Only While Recording", "-", "Back to Arrangement" });
+        const juce::String folds = std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return ! t.folded; }) ? "Fold All Tracks" : "Unfold All Tracks";
+        juce::StringArray view { "Fullscreen", "Zoom >", "-", "Info", "-", "Toggle Arrangement/Session View", "-", "Clip View", "Device View", "Toggle Clip/Device View", "-",
+                                 "Browser", "Groove Pool", "-", "Search in Browser", "Show Similar Files", "-" };
+       #if JUCE_MAC
+        view.addArray ({ "Video Window", "-" });
+       #endif
+        view.addArray ({ "Mixer", "Mixer Controls >", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
+        expect ("View", view);
+        juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "-", "External Sync", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
+                                    "Fixed Grid", "-", "Solo in Place", "-", "Audio Engine On" };
+       #if ! JUCE_MAC
+        options.addArray ({ "-", "Preferences..." });
+       #endif
+        expect ("Options", options);
+        // The reference's shortcuts, shown on the items.
+        const auto shortcut = [&] (const juce::String& name, int id, const juce::KeyPress& key)
+        {
+            const auto item = entry (name, id);
+            return item.has_value() && item->commandManager == &menuKeys && item->shortcutKeyDescription.isNotEmpty() && menuKeys.getKeyMappings()->containsMapping (id, key);
+        };
+        const auto cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
+        check (shortcut ("File", 3, juce::KeyPress ('s', cmd, 0)) && shortcut ("File", 6, juce::KeyPress ('r', juce::ModifierKeys (cmd | shift), 0))
+               && shortcut ("Edit", menuBounceNew, juce::KeyPress ('b', cmd, 0)) && shortcut ("Create", 34, juce::KeyPress ('m', juce::ModifierKeys (cmd | shift), 0))
+               && shortcut ("Playback", menuFollow, juce::KeyPress ('f', juce::ModifierKeys (alt | shift), 0)) && shortcut ("View", menuSearch, juce::KeyPress ('f', cmd, 0))
+               && shortcut ("Options", 13, juce::KeyPress ('e', juce::ModifierKeys (cmd | shift | alt), 0)),
+               "the items show the reference's shortcuts: Save Cmd+S, Export Shift+Cmd+R, Bounce to New Track Cmd+B, Insert MIDI Clip Shift+Cmd+M, Follow Option+Shift+F, Search Cmd+F");
+        // Every item stays, greyed while it cannot act.
+        check (entry ("Edit", menuCut).has_value() && ! entry ("Edit", menuCut)->isEnabled && ! entry ("View", menuZoomBack)->isEnabled,
+               "with nothing selected, Cut and Zoom Back stay in their menus, greyed");
+        {
+            juce::Component blocker; blocker.enterModalState (false);
+            check (! entry ("File", 1)->isEnabled && ! runMenuShortcut (juce::KeyPress ('o')), "while a dialog or menu is open over the window, the menus wait");
+            blocker.exitModalState (0);
+        }
+        check (entry ("File", 1)->isEnabled, "and act again once it closes");
+        // Solo and Arm, from their keys (S and C), for the selected track.
+        const auto midiIndex = (int) state.tracks.size() - 1;
+        selectTrack (midiIndex); refresh();
+        check (handleKey (juce::KeyPress ('s')) && state.tracks[(size_t) midiIndex].solo && entry ("Edit", menuSolo)->text == "Unsolo", "S solos the selected track, and Edit offers Unsolo");
+        check (handleKey (juce::KeyPress ('s')) && ! state.tracks[(size_t) midiIndex].solo, "and S again unsolos it");
+        // Arm needs an input: the computer keyboard gives the MIDI track one (its keys then play notes, so the item is chosen).
+        check (session.setComputerKeyboardEnabled (true).wasOk() && session.setTrackInput (midiIndex, Session::computerKeyboardName).wasOk(), "give the MIDI track an input"); refresh();
+        menuItemSelected (menuArm, 1); refresh();
+        check (state.tracks[(size_t) midiIndex].armed && entry ("Edit", menuArm)->text == "Disarm", "Edit's Arm arms it, and then offers Disarm");
+        menuItemSelected (menuArm, 1); refresh();
+        check (! state.tracks[(size_t) midiIndex].armed, "and Disarm disarms it");
+        check (session.setComputerKeyboardEnabled (false).wasOk(), "computer keyboard off again"); refresh();
+        check (menuKeys.getKeyMappings()->containsMapping (menuArm, juce::KeyPress ('c')), "Arm takes the reference's C");
+        // Playback: the metronome's key, and Start Transport With Record swapping F9 and Shift+F9.
+        const bool clicking = state.metronome.enabled;
+        check (handleKey (juce::KeyPress ('o')) && state.metronome.enabled != clicking, "O switches the metronome");
+        handleKey (juce::KeyPress ('o'));
+        const auto starts = session.preferences().startPlaybackWithRecord;
+        const auto plainRecords = [&] { texts ("Playback"); return menuKeys.getKeyMappings()->containsMapping (menuRecordArrangement, juce::KeyPress (juce::KeyPress::F9Key)); };
+        check (plainRecords() == starts, "F9 is Record in Arrangement while Start Transport With Record is on, and Arm Record otherwise");
+        menuItemSelected (menuStartWithRecord, 3); refresh();
+        check (session.preferences().startPlaybackWithRecord != starts && plainRecords() != starts, "Start Transport With Record swaps the two shortcuts");
+        menuItemSelected (menuStartWithRecord, 3); refresh();
+        // Create: Add Locator at the play position, then Delete Locator there.
+        session.seek (1.0); refresh();
+        menuItemSelected (menuLocator, 2); refresh();
+        check (state.locators.size() == 1 && std::abs (state.locators[0].position - 1.0) < 1e-6 && entry ("Create", menuLocator)->text == "Delete Locator",
+               "Add Locator puts one at the play position, where the item then deletes it");
+        menuItemSelected (menuLocator, 2); refresh();
+        check (state.locators.empty(), "Delete Locator removes it");
+        session.seek (0); refresh();
+        // View: the browser hides, and Search in Browser brings it back.
+        menuItemSelected (menuBrowser, 4);
+        check (! showBrowser && ! browserSearch.isVisible() && ! entry ("View", menuBrowser)->isTicked, "View's Browser hides the browser");
+        menuItemSelected (menuSearch, 4);
+        check (showBrowser && browserSearch.isVisible(), "Search in Browser shows it again");
+        menuItemSelected (menuToggleView, 4);
+        check (showSession && texts ("Create").contains ("Insert Scene"), "Toggle Arrangement/Session View switches views, and Create then offers Insert Scene");
+        // In the Session, Cmd+I inserts a scene below the selected one.
+        const auto scenes = state.scenes.size();
+        selectedSceneId = state.scenes.front().id;
+        check (handleKey (juce::KeyPress ('i', cmd, 0)) && state.scenes.size() == scenes + 1 && selectedSceneIndex() == 1, "Cmd+I inserts a scene below the selected one");
+        session.undo(); refresh();
+        // Edit acts on the area last clicked: the slots, where Cmd+E adds and removes stop buttons.
+        selectLauncherSlot (midiIndex, 0); clickedArea = Area::session; refresh();
+        check (entry ("Edit", menuSplitStop).has_value() && ! entry ("Edit", 76).has_value() && entry ("Edit", menuSplitStop)->text == "Remove Stop Button",
+               "in the Session, Edit's Split adds and removes the selected slots' stop buttons");
+        check (handleKey (juce::KeyPress ('e', cmd, 0)) && ! state.tracks[(size_t) midiIndex].slots[0].stopButton, "Cmd+E removes the slot's stop button");
+        session.undo(); refresh();
+        // A scene clicked: Duplicate duplicates it.
+        clickedArea = Area::scenes; selectedSceneId = state.scenes.front().id; refresh();
+        check (entry ("Edit", menuDuplicate)->isEnabled, "with a scene clicked, Edit's Duplicate acts on it");
+        menuItemSelected (menuDuplicate, 1); refresh();
+        check (state.scenes.size() == scenes + 1, "Edit's Duplicate duplicates the scene");
+        session.undo(); refresh();
+        // The headers clicked: Duplicate duplicates the selected track.
+        showArrangementView(); selectTrack (midiIndex); headerFocus = true; clickedArea = Area::headers; refresh();
+        const auto tracks = state.tracks.size();
+        check (entry ("Edit", menuDuplicate)->isEnabled, "with the headers clicked, Edit's Duplicate acts on the selected tracks");
+        menuItemSelected (menuDuplicate, 1); refresh();
+        check (state.tracks.size() == tracks + 1, "Edit's Duplicate duplicates the track");
+        session.undo(); refresh();
+        // A lone clip in the Arrangement: Cut takes it as a clip, Paste puts it back at the insert marker, and Select All takes every clip's time.
+        headerFocus = false; clickedArea = Area::arrangement;
+        check (session.addMidiClip (state.tracks[(size_t) midiIndex].id, 0, 4).wasOk(), "a clip for the Arrangement's Edit commands"); refresh();
+        const auto clipId = state.tracks[(size_t) midiIndex].clips[0].id;
+        selectArrangementClip (clipId); timeSelection = {}; refresh();
+        check (entry ("Edit", menuCut)->isEnabled && entry ("Edit", menuActivate)->text == "Deactivate Clip", "a lone selected clip can be cut, and deactivated");
+        menuItemSelected (menuCut, 1); refresh();
+        check (state.tracks[(size_t) midiIndex].clips.empty() && session.hasMidiClipClipboard(), "Edit's Cut cuts the clip");
+        session.seek (0); selectTrack (midiIndex); refresh();
+        check (entry ("Edit", menuPaste)->isEnabled, "and Paste can put it back");
+        menuItemSelected (menuPaste, 1); refresh();
+        check (state.tracks[(size_t) midiIndex].clips.size() == 1, "Edit's Paste pastes it at the insert marker");
+        timeSelection = {}; selectedClip = -1;
+        menuItemSelected (menuSelectAll, 1);
+        check (timeSelection.active() && timeSelection.trackIds.contains (state.tracks[(size_t) midiIndex].id) && std::abs (timeSelection.end - secondsAt (4.0)) < 1e-6,
+               "Select All selects every track's content in the Arrangement");
+        timeSelection = {}; refresh();
+    }
+    {
         // About Halftrack: in the application menu on a Mac and the Help menu elsewhere, it names
         // this build's version, commit and platform in selectable text, its license and where
         // settings live.
@@ -16607,9 +17276,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto help = getMenuForIndex (getMenuBarNames().indexOf ("Help"), "Help");
         juce::PopupMenu::MenuItemIterator items (help);
        #endif
-        bool listed = false;
-        while (items.next()) listed = listed || (items.getItem().itemID == aboutItem && items.getItem().text == "About Halftrack");
+        bool listed = false, preferences = false;
+        while (items.next())
+        {
+            listed = listed || (items.getItem().itemID == aboutItem && items.getItem().text == "About Halftrack");
+            preferences = preferences || (items.getItem().itemID == 14 && items.getItem().text == "Preferences..." && items.getItem().commandManager == &menuKeys);
+        }
         check (listed, "About Halftrack is in the menu");
+       #if JUCE_MAC
+        check (preferences && menuKeys.getKeyMappings()->containsMapping (14, juce::KeyPress (',', juce::ModifierKeys::commandModifier, 0)),
+               "Preferences is in it too, with the reference's Cmd+comma");
+       #else
+        juce::ignoreUnused (preferences);
+       #endif
         check (juce::JUCEApplicationBase::getInstance() == nullptr || juce::JUCEApplicationBase::getInstance()->getApplicationVersion() == buildinfo::version(),
                "the application reports the build's version");
         check (buildinfo::version().matchesWildcard ("*.*.*", false) && buildinfo::commit().isNotEmpty() && buildinfo::platform().isNotEmpty(),
@@ -17063,7 +17742,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (launcher.keyPressed (commandKey ('V')) && slots()[0].hasClip && slots()[0].clip.id != id, "Cmd/Ctrl+V pastes it into the selected slot");
             check (launcher.keyPressed (commandKey ('D')) && slots()[1].hasClip && selectedSceneIndex() == 1, "Cmd/Ctrl+D duplicates it into the slot below and selects the copy");
             check (launcher.keyPressed (commandKey ('X')) && ! slots()[1].hasClip, "Cmd/Ctrl+X cuts it");
-            menuItemSelected (86, 4);
+            slotCommand (86); refresh();
             check (slots()[1].hasClip, "Session > Paste Clip pastes it back");
             // The same clipboard pastes into the Arrangement.
             showArrangementView(); selectTrack (t); session.setInsertMarker (secondsAt (8)); refresh();
@@ -17657,11 +18336,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(session.newProject().wasOk(),"prepare MIDI interchange UI fixture");refresh();
     const auto midiMenuEnabled=[&](int id)
     {
-        const auto fileMenu=getMenuForIndex(0,{});juce::PopupMenu::MenuItemIterator items(fileMenu);
+        const auto name=juce::String(id==5?"Create":"File");const auto menu=getMenuForIndex(getMenuBarNames().indexOf(name),name);juce::PopupMenu::MenuItemIterator items(menu);
         while(items.next())if(items.getItem().itemID==id)return items.getItem().isEnabled;
         throw std::runtime_error("Expected MIDI menu item is missing");
     };
-    check(midiMenuEnabled(9)&&!midiMenuEnabled(10),"MIDI import is enabled and export requires a selected MIDI clip");
+    check(midiMenuEnabled(5)&&!midiMenuEnabled(10),"Import File, which takes MIDI files, is enabled and MIDI export requires a selected MIDI clip");
     juce::TemporaryFile midiInput(".mid"),midiOutput(".mid");
     {juce::MidiMessageSequence notes;auto on=juce::MidiMessage::noteOn(3,62,(juce::uint8)90);on.setTimeStamp(240);notes.addEvent(on);
     auto off=juce::MidiMessage::noteOff(3,62);off.setTimeStamp(720);notes.addEvent(off);juce::MidiFile file;file.setTicksPerQuarterNote(960);file.addTrack(notes);
@@ -17768,26 +18447,31 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     auto* orderingName=dynamic_cast<juce::Label*>(findNamed(*arrangementOrderRow,"Track name"));
     check(orderingName!=nullptr,"find actual rename control before reordering");orderingName->showEditor();
     auto* orderingEditor=orderingName->getCurrentTextEditor();check(orderingEditor!=nullptr,"open actual track rename editor");orderingEditor->setText("Renamed after move");
-    menuItemSelected(36,2);
+    const auto moveTrackBy=[this](const juce::String& id,int direction)
+    {
+        const auto current=session.snapshot();
+        for(int i=0;i<(int)current.tracks.size();++i)if(current.tracks[(size_t)i].id==id){report(session.moveTrack(id,i+direction));refresh();return;}
+    };
+    moveTrackBy(currentTrack()->id,-1);
     check(selectedTrack==1&&currentTrack()->id==orderMidiId&&currentMidiClip()->id==orderClipId
         &&findRow(canvas,orderMidiId)==arrangementOrderRow&&findRow(launcher,orderMidiId)==sessionOrderRow
-        &&orderingName->getCurrentTextEditor()==orderingEditor,"track menu moves both views while preserving active editor and selected clip");
+        &&orderingName->getCurrentTextEditor()==orderingEditor,"moving a track moves both views while preserving the active editor and selected clip");
     orderingName->hideEditor(false);refresh();
     check(currentTrack()->name=="Renamed after move"&&state.tracks[2].name!="Renamed after move","rename completion still edits the moved identity");
     session.undo();refresh();session.undo();refresh();
     check(selectedTrack==2&&currentTrack()->id==orderMidiId&&currentMidiClip()->id==orderClipId,"undo order preserves selection identity");
     session.redo();refresh();check(selectedTrack==1&&currentTrack()->id==orderMidiId,"redo order follows selected identity");
     showSessionView();selectLauncherSlot(1,0);const auto orderedSlot=selectedSlot()->id;
-    menuItemSelected(37,2);check(selectedTrack==2&&currentTrack()->id==orderMidiId&&selectedSlot()->id==orderedSlot,"Session ordering preserves selected slot identity");
-    const auto orderSelected=currentTrack()->id;reorderTrack(orderReturnId,-1);
+    moveTrackBy(currentTrack()->id,1);check(selectedTrack==2&&currentTrack()->id==orderMidiId&&selectedSlot()->id==orderedSlot,"Session ordering preserves selected slot identity");
+    const auto orderSelected=currentTrack()->id;moveTrackBy(orderReturnId,-1);
     check(currentTrack()->id==orderSelected&&state.tracks[3].id==orderReturnId,"the return stays after the other tracks, as in the reference");
-    const auto orderAudioId=state.tracks[0].id;reorderTrack(orderAudioId,1);
+    const auto orderAudioId=state.tracks[0].id;moveTrackBy(orderAudioId,1);
     check(currentTrack()->id==orderSelected&&state.tracks[1].id==orderAudioId,"captured header command reorders its original track after selection changes");
     const auto beforeStale=state.tracks;check(state.tracks[3].id==orderReturnId&&session.removeTrack(3).wasOk(),"remove context-menu target before completion");refresh();
-    reorderTrack(orderReturnId,-1);check(state.tracks.size()==beforeStale.size()-1&&currentTrack()->id==orderSelected,"stale header command cannot reorder replacement index");
+    moveTrackBy(orderReturnId,-1);check(state.tracks.size()==beforeStale.size()-1&&currentTrack()->id==orderSelected,"stale header command cannot reorder replacement index");
 
     const auto trackCountBeforeCopy=state.tracks.size();const auto selectedBeforeCopy=currentTrack()->id;
-    menuItemSelected(38,2);
+    duplicateSelectedHeaders();refresh();
     check(state.tracks.size()==trackCountBeforeCopy+1&&currentTrack()->id!=selectedBeforeCopy&&currentTrack()->isMidi
         &&currentTrack()->clips.size()==1&&selectedSlot()->hasClip,"Track-menu duplication selects a complete independent MIDI track in Session");
     const auto selectedCopy=currentTrack()->id;session.undo();refresh();
@@ -17972,7 +18656,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(canvas.keyPressed(juce::KeyPress('0'))&&!state.tracks[0].clips[0].active,"Arrangement 0 deactivates the selected audio clip");
     session.undo();refresh();check(state.tracks[0].clips[0].active,"clip activation shortcut undoes once");session.redo();refresh();
     selectArrangementClip(activationMidi);check(canvas.keyPressed(juce::KeyPress('0'))&&!currentMidiClip()->active,"Arrangement 0 also deactivates MIDI");
-    setClipActiveFromUI(activationAudio,true);check(state.tracks[0].clips[0].active&&!currentMidiClip()->active,"context action uses captured identity rather than the current selection");
+    check(session.setClipActive(activationAudio,true).wasOk(),"reactivate the audio clip");refresh();
     {
         juce::TextEditor editor;juce::DocumentWindow focusWindow("Halftrack activation shortcut test",panel,juce::DocumentWindow::closeButton);
         focusWindow.setUsingNativeTitleBar(true);focusWindow.setContentNonOwned(&editor,false);focusWindow.centreWithSize(300,70);focusWindow.setVisible(true);
@@ -17997,13 +18681,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto old=host->getBounds();host->setSize(1100,720);refresh();
             juce::PNGImageFormat png;auto image=host->createComponentSnapshot(host->getLocalBounds(),true,1.0f);
             {auto output=directory.getChildFile("inactive-session-1100x720.png").createOutputStream();check(output&&png.writeImageToStream(image,*output),"capture inactive Session presentation");}
-            showArrangementView();setClipActiveFromUI(activationAudio,false);image=host->createComponentSnapshot(host->getLocalBounds(),true,1.0f);
+            showArrangementView();report(session.setClipActive(activationAudio,false));refresh();image=host->createComponentSnapshot(host->getLocalBounds(),true,1.0f);
             {auto output=directory.getChildFile("inactive-arrangement-1100x720.png").createOutputStream();check(output&&png.writeImageToStream(image,*output),"capture inactive Arrangement presentation");}
             host->setBounds(old);
         }
     }
-    check(session.removeClip(0,0).wasOk()&&session.importAudio(audioFixture,0).wasOk(),"replace the clip after its context action was captured");refresh();
-    setClipActiveFromUI(activationAudio,false);check(state.tracks[0].clips[0].active&&state.tracks[0].clips[0].id!=activationAudio,"stale context identity cannot deactivate a replacement clip");
     check(session.newProject().wasOk()&&session.addMidiTrack("Split notes").wasOk(),"prepare note split UI");refresh();
     const auto splitTrack=state.tracks.back().id;check(session.addMidiClip(splitTrack,0,16).wasOk(),"prepare marker split clip");refresh();
     const auto splitClip=state.tracks.back().clips[0].id;juce::StringArray splitSource;
@@ -18050,18 +18732,18 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     renameClipDialog(slotSplit);check(session.clearSlot(2,0).wasOk()&&session.addMidiClipToSlot(splitTrack,0,16).wasOk(),"replace slot while its rename dialog is open");refresh();finishRename("Stale name",1);
     check(state.tracks[2].slots[0].clip.id!=slotSplit&&state.tracks[2].slots[0].clip.name!="Stale name","stale rename dialog cannot retarget a new clip");
     check(session.importAudioToSlot(audioFixture,0,0).wasOk(),"add audio beside scene MIDI");refresh();showSessionView();selectLauncherSlot(2,0);
-    const auto copiedSceneSource=state.scenes[0].id;const auto originalSceneCount=state.scenes.size();menuItemSelected(56,4);
+    const auto copiedSceneSource=state.scenes[0].id;const auto originalSceneCount=state.scenes.size();duplicateSceneFromUI(selectedSceneId);refresh();
     const auto newSceneId=selectedSceneId;check(state.scenes.size()==originalSceneCount+1&&selectedSceneIndex()==1&&newSceneId!=copiedSceneSource&&state.tracks[0].slots[1].hasClip&&state.tracks[2].slots[1].hasClip,"Session menu duplicates and selects the complete next scene");
     session.undo();refresh();check(state.scenes.size()==originalSceneCount,"scene-copy menu action undoes once");session.redo();refresh();check(state.scenes[1].id==newSceneId,"scene-copy menu redo retains identity");
     check(session.removeScene(0).wasOk(),"remove captured scene before delayed copy");refresh();const auto countAfterRemoval=state.scenes.size();duplicateSceneFromUI(copiedSceneSource);
     check(state.scenes.size()==countAfterRemoval&&state.scenes[0].id==newSceneId,"stale scene-copy target does not duplicate the replacement row");
     check(session.addReturnTrack("Scene selection return").wasOk(),"add return for scene selection");refresh();selectTrack((int)state.tracks.size()-1);
     selectLauncherSlot(2,0);const auto movingScene=selectedSceneId;const auto movingSceneClip=selectedLauncherClipId;
-    menuItemSelected(58,4);check(selectedSceneIndex()==1&&selectedSceneId==movingScene&&selectedLauncherClipId==movingSceneClip&&state.tracks[2].slots[1].clip.id==movingSceneClip,"moving a scene keeps its selected MIDI clip");
+    moveSceneFromUI(selectedSceneId,1);refresh();check(selectedSceneIndex()==1&&selectedSceneId==movingScene&&selectedLauncherClipId==movingSceneClip&&state.tracks[2].slots[1].clip.id==movingSceneClip,"moving a scene keeps its selected MIDI clip");
     session.undo();refresh();check(selectedSceneIndex()==0&&selectedLauncherClipId==movingSceneClip,"undo follows the same selected scene back to its row");
-    session.redo();refresh();menuItemSelected(57,4);check(selectedSceneIndex()==0&&state.tracks[2].slots[0].clip.id==movingSceneClip,"Move Up restores the selected row and its clips");
+    session.redo();refresh();moveSceneFromUI(selectedSceneId,-1);refresh();check(selectedSceneIndex()==0&&state.tracks[2].slots[0].clip.id==movingSceneClip,"Move Up restores the selected row and its clips");
     selectTrack((int)state.tracks.size()-1);
-    const auto selectedReturn=currentTrack()->id;selectedSceneId=newSceneId;menuItemSelected(56,4);
+    const auto selectedReturn=currentTrack()->id;selectedSceneId=newSceneId;duplicateSceneFromUI(selectedSceneId);refresh();
     check(selectedSceneIndex()==1&&selectedSceneId!=newSceneId&&currentTrack()->id==selectedReturn,"scene duplication selects its new row even with a return track selected");
     session.undo();refresh();
     selectLauncherSlot(2,0);openPianoRoll();pianoRoll.fit();const auto activationClip=selectedLauncherClipId;
@@ -18575,7 +19257,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 }
                 check (grab (laneY (indexOf (second)) + 10, "Track name"), "press the second track's name"); release (laneY (indexOf (second)) + 10);
                 headerFocusWatcher.mouseDown (event (0, false));
-                menuItemSelected (38, 2); refresh();
+                duplicateSelectedHeaders(); refresh(); refresh();
                 check (state.tracks.size() == 3 && state.tracks[2].groupId == group && selectedTrack == 2 && state.tracks[2].id != second,
                        "Duplicate Selected Track copies the second track after it, selecting the copy");
                 session.undo(); refresh();
@@ -19008,9 +19690,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (audioClipView.isVisible() && box && box->isVisible() && mode && ! midiLaunch.isVisible(), "a Session audio clip shows its Launch box in the audio clip view");
         mode->setSelectedId (4, juce::sendNotificationSync);
         check (selectedSlot()->clip.launch.mode == Session::LaunchMode::repeat, "the audio clip view's Launch box edits the Session clip");
-        session.undo(); refresh(); closeClipView(); refresh();
+        session.undo(); refresh();
+        auto* follow = dynamic_cast<juce::Button*> (findNamed (audioClipView, "Follow action"));
+        check (follow != nullptr && follow->isVisible() && box->getLocalBounds().contains (follow->getBounds()), "the Launch box offers the clip's follow action");
+        if (follow != nullptr) follow->onClick();
+        closeClipView(); refresh();
     }
-    menuItemSelected (59, 4); check (alerts.back() != nullptr, "Session menu opens follow-action controls");
+    check (alerts.back() != nullptr, "the Launch box's Follow Action opens its controls");
     const auto finishFollowDialog = [&] (int action, const juce::String& beats, int result)
     {
         auto dialog = alerts.back(); check (dialog != nullptr, "follow-action dialog remains valid");
@@ -19141,7 +19827,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (session.setTrackAutomation (automationTrackId, Session::AutomationTarget::volume, {}).wasOk(),
         "clear automation from the selected mixer"); refresh();
     check (automatedGain->isEnabled() && automatedGain->findColour (juce::Slider::thumbColourId) == orange, "clearing the lane restores the plain fader");
-    menuItemSelected (46, 3);
+    showAutomation(); refresh();
     check (!automationWindows.empty() && automationWindows.back() != nullptr,
         "View menu opens an automation editor for the selected track");
     auto* automationWindow = automationWindows.back().getComponent();
@@ -19174,7 +19860,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         "Clear keeps the manual master level set during the override");
     session.undo(); refresh(); check (! state.masterVolumeAutomation.enabled && state.masterVolumeAutomation.points.size() == 2 && master->findColour (juce::Slider::thumbColourId) == muted, "undo master Clear restores the overridden lane");
     session.redo(); refresh(); check (state.masterVolumeAutomation.points.empty() && master->findColour (juce::Slider::thumbColourId) == orange, "redo master Clear restores the plain fader");
-    menuItemSelected (47, 3);
+    showAutomation (true); refresh();
     auto* masterWindow = automationWindows.back().getComponent();
     auto* masterDestination = dynamic_cast<juce::ComboBox*> (findNamed (*masterWindow, "automation-track"));
     auto* masterTarget = dynamic_cast<juce::ComboBox*> (findNamed (*masterWindow, "automation-target"));
@@ -19204,7 +19890,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (emptyDestination && emptyDestination->getText() == "Main" && emptyDestination->getNumItems() == 1,
         "empty-project Automation button opens Master without a track selection");
     automationWindows.back()->closeButtonPressed();
-    menuItemSelected (46, 3);
+    showAutomation(); refresh();
     emptyDestination = dynamic_cast<juce::ComboBox*> (findNamed (*automationWindows.back(), "automation-track"));
     check (emptyDestination && emptyDestination->getText() == "Main", "empty-project View Automation opens Main");
     automationWindows.back()->closeButtonPressed();

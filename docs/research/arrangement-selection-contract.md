@@ -36,7 +36,7 @@ The Arrangement has a time selection, after the reference's selection editing ([
   - Cmd/Ctrl+L loops the selection.
   - Cmd/Ctrl+J consolidates it.
   - Insert Silence and Delete Time use it instead of the loop range.
-- The Edit menu lists Split, Duplicate Selection, Delete Selection, Loop Selection and Consolidate.
+- The Edit menu's Cut, Copy, Paste, Duplicate and Delete act on the selection, beside Loop Selection, Split and Consolidate (see the [main menu contract](main-menu-contract.md)).
 - With a MIDI clip selected and no time selection, Cmd/Ctrl+E splits that clip at the playhead.
 
 ## Evidence

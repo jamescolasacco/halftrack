@@ -4,7 +4,7 @@ The Arrangement and piano roll follow the playhead and zoom to selections, after
 
 ## Behaviour
 
-- **Follow** (control bar button, Cmd/Ctrl+F) is on by default. While playing, a playhead that leaves the visible time turns the view to the page that starts at the playhead.
+- **Follow** (control bar button, Playback > Playback Options > Follow, Option+Shift+F as in the reference) is on by default. While playing, a playhead that leaves the visible time turns the view to the page that starts at the playhead.
   - The Arrangement follows the global playhead, and the piano roll follows its clip's playhead (the launched slot's position for Session clips).
   - Scrolling by hand while playing, with the scroll bar or a horizontal or Shift scroll, turns Follow off, as the button shows.
 - **Zoom**:
@@ -25,7 +25,7 @@ The UI suite checks:
 - the paging rule for visible, later and earlier playheads;
 - the Arrangement turning to a page one and a half views ahead while playing;
 - a hand scroll turning Follow off, with the view then staying put;
-- Cmd/Ctrl+F turning it back on;
+- Option+Shift+F turning it back on;
 - Z fitting a two-second selection and X restoring the exact previous view;
 - the piano roll paging to its playhead at beat 24 of a 64-beat clip;
 - a clip dragged past the timeline's right edge scrolling the time on and landing under the pointer, and one undo putting it back;

@@ -88,7 +88,7 @@ A right-click on a slot that is not selected selects it alone, its track and sce
 | Select on Launch, the clip colour grid | a clip | the colour grid, colouring the clips in one undo step. Halftrack has no Select on Launch preference yet |
 | Copy LOM Path | one slot | left out |
 
-Halftrack's own slot items are gone: Launch Clip, Edit MIDI Notes, the audio clip gain dialog, Create MIDI Clip, Import Audio Here, Stop Track Clips and the follow action dialog. Each is still reached where the reference has it: a slot's launch button, a double-click into the clip view, the clip view's gain, Insert MIDI Clip, File > Import Audio with a slot selected, the track's stop button, and Session > Selected Clip Follow Action.
+Halftrack's own slot items are gone: Launch Clip, Edit MIDI Notes, the audio clip gain dialog, Create MIDI Clip, Import Audio Here, Stop Track Clips and the follow action dialog. Each is still reached where the reference has it: a slot's launch button, a double-click into the clip view, the clip view's gain, Insert MIDI Clip, Create > Import File with a slot selected, the track's stop button, and the clip view's Launch box, which opens the follow action.
 
 Away from any slot, below the last scene or under the scenes' column, the reference selects the track there and the last scene, and shows Insert Audio Track, Insert MIDI Track and Insert Return Track, then Insert Scene and Capture and Insert Scene (0x103a39ae0). Halftrack does the same. The reference also adds Paste there, but its handler is not on that view, so it is left out (low to medium confidence).
 
@@ -107,7 +107,7 @@ The reference's order (0x1039e7c54), with what Halftrack shows:
 | Reset Color and the scene colour grid | the same (`setSceneColours`, one undo step, saved): a scene's cell shows its colour, and Reset Color takes it away |
 | Copy LOM Path | left out |
 
-Halftrack's own scene items are gone: Launch Scene, which the scene's launch button does, and Move Scene Up and Down, which the Session menu keeps.
+Halftrack's own scene items are gone: Launch Scene, which the scene's launch button does, and Move Scene Up and Down: a scene drags in the scene column to a new place, as the reference's do.
 
 ### Evidence in Halftrack
 

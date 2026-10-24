@@ -30,7 +30,7 @@ The reference's Session View moves clips around its grid by drag-and-drop and ha
 **In the UI.**
 
 - Dragging a clip by its name to another slot moves it, outlining the slot it will land on. Holding Option (Mac) or Ctrl (Windows, Linux) copies it, with the copying cursor.
-- With the grid focused, Cmd/Ctrl+X, C, V and D cut, copy, paste and duplicate the selected slot's clip. The Session menu offers the same as Cut Clip, Copy Clip, Paste Clip and Duplicate Clip.
+- With the grid focused, Cmd/Ctrl+X, C, V and D cut, copy, paste and duplicate the selected slot's clip. The Edit menu's Cut, Copy, Paste and Duplicate do the same with the slots last clicked.
 - A moved or duplicated clip's slot is selected.
 
 ## Several slots (2026-10-22)
@@ -82,7 +82,7 @@ For several slots, the UI suite checks:
 - Cmd/Ctrl+C and V pasting the group at the selected slot;
 - a rubber band drawn from an empty slot.
 
-The UI suite drags a clip to another slot and copy-drags one with the platform's modifier. It also checks Cmd/Ctrl+C, V, D and X on the grid, Session > Paste Clip, and Cmd/Ctrl+V in the Arrangement pasting the copied Session clip at the insert marker, with nine undo steps restoring the project.
+The UI suite drags a clip to another slot and copy-drags one with the platform's modifier. It also checks Cmd/Ctrl+C, V, D and X on the grid, pasting a clip into a slot, and Cmd/Ctrl+V in the Arrangement pasting the copied Session clip at the insert marker, with nine undo steps restoring the project.
 
 ## Not yet covered
 

@@ -16,13 +16,13 @@ The reference keeps Solo in Place with the Set, on at first and not an undo step
 
 A soloed group counts as soloed sources: the returns stay open, fed by the group's sends and its tracks' ([group sends](groups-contract.md#group-sends-2026-10-23)).
 
-Halftrack does the same: `Session::setSoloInPlace`, kept with the project and not an undo step, from the View menu's Solo in Place (where Halftrack keeps the reference's Options items). `tests/SendReturnTests.cpp` renders, sample by sample:
+Halftrack does the same: `Session::setSoloInPlace`, kept with the project and not an undo step, from the Options menu's Solo in Place, as the reference's. `tests/SendReturnTests.cpp` renders, sample by sample:
 
 - a soloed source heard with its return, and without it once Solo in Place is off;
 - that undo then takes back neither the switch nor the solo, but the edit before them;
 - that soloing a return beside a source mutes the other return.
 
-The UI suite switches it from the View menu.
+The UI suite switches it from the Options menu.
 
 ## Halftrack
 

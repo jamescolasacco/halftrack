@@ -821,3 +821,11 @@ Track header menu ([contract](research/track-header-menu-contract.md)). Defaults
 - **Insertion.** Insert Audio, MIDI and Return Track insert after the selected track, as Halftrack's Create menu does; where the reference's insert was not decoded.
 - **Default tracks.** Save as Default Audio/MIDI Track saves to the User Library only. The reference saves into the current project instead when it already has a default for the kind, and loads a project's defaults first; Halftrack has no per-project defaults. Whether its overwrite prompt's Cancel stops the save was not determined; Halftrack's does.
 
+Main menu bar ([contract](research/main-menu-contract.md)). Defaults where the reference's details are not read:
+
+- **Windows and Linux.** Only the reference's macOS build was read. Elsewhere Halftrack puts About Halftrack in a Help menu and Preferences at the end of Options, and takes Redo as Ctrl+Y and Fullscreen as F11, as the reference's platform switch does; other Option shortcuts stay on Alt.
+- **Focus.** Edit's commands act on the area last clicked, standing in for the reference's focused view; typed text always comes first.
+- **Metronome While Recording.** Taken as Halftrack's metronome's only-while-recording switch.
+- **Labels.** Items are named plainly for their commands, as the reference's English text is in its encrypted language file. Undo and Redo do not name the step to undo.
+- **Preferences.** Preferences, Audio & MIDI Setup and Plug-Ins are still three windows; the reference's one Preferences window with tabs is not built yet.
+

@@ -12,7 +12,7 @@ The reference's Capture and Insert Scene (Create menu, Cmd/Ctrl+Shift+I) makes a
 - **Refusals.** Nothing playing (or the transport stopped) is refused, as is a full scene list of 256.
 - **Undo.** It is one undo step.
 
-The Session menu offers it while the transport plays; Cmd/Ctrl+Shift+I runs it.
+The Create menu offers it while the transport plays, as the reference's; Cmd/Ctrl+Shift+I runs it.
 
 ## Evidence
 
