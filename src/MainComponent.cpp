@@ -2487,7 +2487,7 @@ private:
             if (columnLayout) { syncSends (track); syncOutput (track); }
             if (! columnLayout) syncAutomation (track);
             if (! delay.isMouseButtonDown()) delay.setValue (track.delayMs, juce::dontSendNotification);
-            delay.setEnabled (! track.frozen && ! owner.session.isExporting());
+            delay.setEnabled (! track.frozen && ! owner.session.isExporting() && owner.session.delayCompensation()); // Unavailable without Delay Compensation, as the reference's.
             if (columnLayout)
             {
                 // Crossfader sides: A and B are exclusive toggles; neither leaves the track unassigned.
@@ -13048,7 +13048,7 @@ private:
                     menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
                     menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
                     menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects, menuShowBackups, menuRevealBackups, menuSnapAutomation, menuSaveTemplate,
-                    menuQuantizeSettings, menuStartWithTap,
+                    menuQuantizeSettings, menuStartWithTap, menuDelayCompensation,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410, // Plus Session::TimeFormat.
@@ -13788,6 +13788,7 @@ private:
             add (menuBrowserPreHear, "Browser Pre-Hear", true, previewButton.getToggleState());
             popup.addSeparator();
             add (menuExternalSync, "External Sync", session.hasSyncInputs() || session.isExternalSync(), session.isExternalSync());
+            add (menuDelayCompensation, "Delay Compensation", true, session.delayCompensation());
             popup.addSeparator();
             juce::PopupMenu formats;
             const std::pair<Session::TimeFormat, const char*> timeFormats[] {
@@ -13844,6 +13845,7 @@ private:
             case menuSaveCopy: saveCopyDialog(); return;
             case menuAddFolder: addFolderToBrowser(); return;
             case menuSaveTemplate: saveTemplateDialog(); return;
+            case menuDelayCompensation: session.setDelayCompensation (! session.delayCompensation()); refresh(); return;
             case menuQuantizeSettings: if (currentMidiClip() != nullptr) { if (! showPiano) openPianoRoll(); pianoRoll.openNoteTool (Session::NoteTool::quantize); } return;
             case menuSnapAutomation: session.setSnapAutomationToGrid (! session.snapAutomationToGrid()); refresh(); return;
             case menuRemoveUnavailableProjects: removeUnavailableProjects(); return;
@@ -20130,7 +20132,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         view.addArray ({ "-", "Mixer", "Mixer Controls >", "Arrangement Track Controls >", "-", "Overview", "Scene Tempo and Time Signature", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Fold to Notes", "Fold to Scale", "-",
                          "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
         expect ("View", view);
-        juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "MIDI Prelisten", "Browser Pre-Hear", "-", "External Sync", "-", "Time Ruler Format >", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
+        juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "MIDI Prelisten", "Browser Pre-Hear", "-", "External Sync", "Delay Compensation", "-", "Time Ruler Format >", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
                                     "Snap Automation to Grid", "Fixed Grid", "-", "Draw Mode", "-", "Scale Highlighting", "-", "Solo Switches", "Cue Switches", "Solo in Place", "-", "Lock Envelopes", "Arrangement Overdub", "-", "Audio Engine On" };
        #if ! JUCE_MAC
         options.addArray ({ "-", "Preferences..." });
@@ -22826,6 +22828,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         trackDelay->setValue (-12.5, juce::sendNotificationSync); refresh();
         bool delayed = false; for (const auto& track : state.tracks) delayed = delayed || std::abs (track.delayMs + 12.5) < 1e-9;
         check (delayed, "the delay field edits the real track delay");
+        menuItemSelected (menuDelayCompensation, 0);
+        check (! session.delayCompensation() && ! trackDelay->isEnabled(), "Options > Delay Compensation switches it off, and Track Delay is unavailable meanwhile");
+        menuItemSelected (menuDelayCompensation, 0);
+        check (session.delayCompensation() && trackDelay->isEnabled(), "and on again");
         session.stop(); check (session.newProject().wasOk(), "reset after the group checks"); refresh();
         // Audio To, edited from the strip.
         auto* output = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Track output"));

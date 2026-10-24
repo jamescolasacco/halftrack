@@ -252,6 +252,13 @@ int runTrackOrderTests (const juce::File& artifacts)
             ok (s.saveProject (mixed), "save it off"); ok (s.newProject(), "a new project for Snap Automation to Grid");
             check (s.snapAutomationToGrid(), "which has it on");
             ok (s.loadProject (mixed), "reopen with it off"); check (! s.snapAutomationToGrid(), "and the saved project keeps it off");
+            // And Delay Compensation, on at first as in the reference's default Set, kept with the project.
+            check (s.delayCompensation(), "Delay Compensation is on at first");
+            s.setDelayCompensation (false);
+            check (! s.delayCompensation() && ! s.canUndo() && s.snapshot().dirty, "switching it off is view state, outside the undo history");
+            ok (s.saveProject (mixed), "save it off"); ok (s.newProject(), "a new project for Delay Compensation");
+            check (s.delayCompensation(), "which has it on");
+            ok (s.loadProject (mixed), "reopen with it off"); check (! s.delayCompensation(), "and the saved project keeps it off");
         }
         {
             // Where Insert puts a track, and automatic names, as the reference's (static reading of its code).

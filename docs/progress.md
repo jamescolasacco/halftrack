@@ -2657,3 +2657,7 @@ Engine and UI areas. The note tools gain Quantize, after the reference's MIDI to
 ## Start Playback with Tap Tempo — 2026-10-24
 
 Engine and UI areas. As the reference's preference (on by default) and its manual's "four taps to start song playback" in 4/4: a bar of taps while stopped schedules playback from the insert marker a tapped beat after the last tap, at the tapped tempo; a further tap before then starts it at that tap, and Stop cancels it. It is `Preferences::startPlaybackWithTapTempo`, in the Record page's new Tap Tempo section and in Playback > Playback Options as Start Transport With Tap Tempo ([preferences contract](research/preferences-contract.md)). Checked in the transport suite on the synthetic device (playback began 8 ms after the scheduled beat), and in the preferences and UI suites.
+
+## Delay Compensation — 2026-10-24
+
+Engine and UI areas. Options > Delay Compensation, after the reference's: kept with the project, on at first as in its default Set, whose value statically decodes as compensation on without Reduced Latency When Monitoring. Off, Tracktion's player is built without compensation, so each device's delay is heard, and Track Delay is bypassed with its controls greyed, as the manual says; renders keep compensating ([contract](research/delay-compensation-contract.md)). Checked in the audio engine suite on the synthetic device (a Limiter's click lands 48 samples late with it off, in line with it on), and in the track order and UI suites.

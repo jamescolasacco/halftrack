@@ -64,7 +64,7 @@ const juce::Identifier firstClipNameProperty { "halftrackFirstClipName" }, first
 const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsProperty { "halftrackMixerSends" }, mixerReturnsProperty { "halftrackMixerReturns" }, mixerVolumeProperty { "halftrackMixerVolume" },
                        mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" }, mixerShownProperty { "halftrackMixerInSession" },
                        arrangementOverviewProperty { "halftrackArrangementOverview" }, timeRulerFormatProperty { "halftrackTimeRulerFormat" },
-                       snapAutomationProperty { "halftrackSnapAutomationToGrid" }, arrangementInOutProperty { "halftrackArrangementInOut" },
+                       snapAutomationProperty { "halftrackSnapAutomationToGrid" }, delayCompensationProperty { "halftrackDelayCompensation" }, arrangementInOutProperty { "halftrackArrangementInOut" },
                        arrangementVolumeProperty { "halftrackArrangementVolume" }, arrangementTrackOptionsProperty { "halftrackArrangementTrackOptions" },
                        arrangementReturnsProperty { "halftrackArrangementReturns" }, arrangementOverdubProperty { "halftrackArrangementOverdub" },
                        sceneSettingsShownProperty { "halftrackSceneSettingsShown" };
@@ -1005,7 +1005,10 @@ public:
     {
         milliseconds.referTo (state, trackDelayProperty, getUndoManager(), 0.0);
         delayMs.store (milliseconds.get(), std::memory_order_relaxed);
+        compensated.store (edit.state.getProperty (delayCompensationProperty, true), std::memory_order_relaxed);
     }
+    // Without Delay Compensation the delay does nothing, as the reference's Track Delay is unavailable then.
+    std::atomic<bool> compensated { true };
     juce::String getName() const override { return "Track Delay"; }
     juce::String getPluginType() override { return xmlTypeName; }
     juce::String getSelectableDescription() override { return getName(); }
@@ -1014,7 +1017,7 @@ public:
     bool producesAudioWhenNoAudioInput() override { return milliseconds.get() > 0; }
     int getNumOutputChannelsGivenInputs (int inputs) override { return juce::jmax (1, juce::jmin (2, inputs)); }
     BusLayout getBusses() const override { return BusLayout::singleStereoInOut(); }
-    double getLatencySeconds() override { return juce::jmax (0.0, -milliseconds.get()) / 1000.0; }
+    double getLatencySeconds() override { return compensated.load (std::memory_order_relaxed) ? juce::jmax (0.0, -milliseconds.get()) / 1000.0 : 0.0; }
     void initialise (const te::PluginInitialisationInfo& info) override
     {
         rate = info.sampleRate;
@@ -1027,7 +1030,7 @@ public:
     {
         auto* buffer = context.destBuffer;
         const int capacity = ring.getNumSamples();
-        if (buffer == nullptr || capacity == 0) return;
+        if (buffer == nullptr || capacity == 0 || ! compensated.load (std::memory_order_relaxed)) return;
         const int delay = juce::jlimit (0, capacity - 1, (int) std::lround (juce::jmax (0.0, delayMs.load (std::memory_order_relaxed)) * rate / 1000.0));
         const int channels = juce::jmin (2, buffer->getNumChannels());
         for (int c = 0; c < channels; ++c)
@@ -5788,11 +5791,21 @@ struct Session::Impl
         edit->dispatchPendingUpdatesSynchronously();
     }
     void resetTapTempo() { lastTap=-1; numTapIntervals=nextTapInterval=tapsInRun=0; tapStart.reset(); }
+    // The project's Delay Compensation, given to the engine's player and each Track Delay.
+    void applyDelayCompensation()
+    {
+        const bool on = edit->state.getProperty (delayCompensationProperty, true);
+        for (auto* t : te::getAudioTracks (*edit))
+            for (auto* p : t->pluginList) if (auto* d = dynamic_cast<TrackDelayPlugin*> (p)) d->compensated.store (on, std::memory_order_relaxed);
+        edit->setLatencyCompensationEnabled (on);
+        edit->restartPlayback(); // Track Delays report their latency when the graph is built.
+    }
     void prepareEdit()
     {
         edit->state.setProperty (faderLawProperty, faderLaw, nullptr); // Its positions follow the installed laws.
         refreshCrossfade(); // Loaded and new projects apply their saved crossfade gains.
         resetTapTempo();
+        applyDelayCompensation();
         edit->editFileRetriever = [this] { return editLocation(); };
         grooveWatcher.watch (edit->state);
         pluginEditorWatch.sync(); // Plug-in editors' moves, from now on (it keeps up on a timer).
@@ -14159,6 +14172,14 @@ void Session::setArrangementOverdub (bool on)
 {
     if (on == arrangementOverdub()) return;
     impl->edit->state.setProperty (arrangementOverdubProperty, on, nullptr);
+    impl->viewStateChanged();
+}
+bool Session::delayCompensation() const { return impl->edit->state.getProperty (delayCompensationProperty, true); }
+void Session::setDelayCompensation (bool on)
+{
+    if (on == delayCompensation()) return;
+    impl->edit->state.setProperty (delayCompensationProperty, on, nullptr);
+    impl->applyDelayCompensation();
     impl->viewStateChanged();
 }
 bool Session::snapAutomationToGrid() const { return impl->edit->state.getProperty (snapAutomationProperty, true); }

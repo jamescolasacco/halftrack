@@ -818,6 +818,12 @@ public:
     // reference's default Set.
     bool snapAutomationToGrid() const;
     void setSnapAutomationToGrid (bool);
+    // Options > Delay Compensation, as the reference's: on, the engine holds every path back to line
+    // up with the most delayed one; off, each device's delay is heard and Track Delay does nothing.
+    // Kept with the project, outside the undo history; on at first, as in the reference's default Set.
+    // Renders keep compensating.
+    bool delayCompensation() const;
+    void setDelayCompensation (bool);
     // Kept with the project as view state, as the reference's Set keeps its SmpteFormat (minutes and
     // seconds in its default Set).
     TimeFormat timeRulerFormat() const;
