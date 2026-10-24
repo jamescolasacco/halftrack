@@ -4386,10 +4386,10 @@ struct Session::Impl
             && std::isfinite (p.driverErrorCompensationMs) && std::abs (p.driverErrorCompensationMs) <= 200
             && juce::isPositiveAndBelow ((int) p.metronomeSound, Session::metronomeSoundCount)
             && (p.countInBars == 0 || p.countInBars == 1 || p.countInBars == 2 || p.countInBars == 4)
-            && validUserFolders (p.userFolders);
+            && validPaths (p.userFolders) && validPaths (p.recentProjects);
     }
-    // Places are absolute paths, each folder once.
-    static bool validUserFolders (const juce::StringArray& folders)
+    // Places and recent projects are absolute paths, each once.
+    static bool validPaths (const juce::StringArray& folders)
     {
         for (int i = 0; i < folders.size(); ++i)
         {
@@ -4432,6 +4432,7 @@ struct Session::Impl
             read.startPlaybackWithRecord = startPlayback == 1;
             read.preferencesTab = xml->getStringAttribute ("preferencesTab");
             for (auto* folder : xml->getChildWithTagNameIterator ("USERFOLDER")) read.userFolders.add (folder->getStringAttribute ("path"));
+            for (auto* project : xml->getChildWithTagNameIterator ("RECENTPROJECT")) read.recentProjects.add (project->getStringAttribute ("path"));
             read.createFadesOnClipEdges = edgeFades == 1;
             read.metronomeSound = static_cast<Session::MetronomeSound> (juce::jmax (0, sound));
             valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && validPreferences (read);
@@ -4462,6 +4463,7 @@ struct Session::Impl
         xml.setAttribute ("startPlaybackWithRecord", next.startPlaybackWithRecord ? 1 : 0);
         xml.setAttribute ("preferencesTab", next.preferencesTab);
         for (const auto& folder : next.userFolders) xml.createNewChildElement ("USERFOLDER")->setAttribute ("path", folder);
+        for (const auto& project : next.recentProjects) xml.createNewChildElement ("RECENTPROJECT")->setAttribute ("path", project);
         const auto file = prefsFile();
         if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
         juce::TemporaryFile temporary (file);
@@ -7847,14 +7849,19 @@ Result Session::setPreferences (const Preferences& next)
     const bool sound = next.metronomeSound != impl->prefs.metronomeSound;
     if (next.countInBars != impl->prefs.countInBars && impl->edit->getTransport().isRecording())
         return Result::fail ("Stop recording before changing the count-in.");
+    // The lists kept with the preferences, the browser's places and the recent projects, leave the project unchanged.
+    const auto settings = [] (Preferences p) { p.userFolders.clear(); p.recentProjects.clear(); p.preferencesTab.clear(); return p; };
+    const bool listsOnly = settings (next) == settings (impl->prefs);
     if (auto r = impl->savePreferences (next); r.failed()) return r;
+    if (listsOnly) return Result::ok();
     if (sound) impl->applyMetronomeSound();
     impl->edit->setCountInMode (countInMode (next.countInBars));
     impl->changed(); return Result::ok();
 }
 Result Session::resetPreferences()
 {
-    Preferences defaults; defaults.userFolders = impl->prefs.userFolders; // The browser's places are not settings.
+    // The browser's places and the recent projects are lists, not settings.
+    Preferences defaults; defaults.userFolders = impl->prefs.userFolders; defaults.recentProjects = impl->prefs.recentProjects;
     return setPreferences (defaults);
 }
 void Session::setPreferencesTab (const String& tab)

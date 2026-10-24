@@ -104,12 +104,14 @@ int runPreferencesTests (const juce::File& artifacts)
         auto [newer, newerProblem] = reopen ("<HALFTRACKPREFERENCES version=\"7\" exclusiveArm=\"0\" futureSetting=\"42\"/>");
         expected = {}; expected.exclusiveArm = false;
         check (newer == expected && newerProblem.isEmpty(), "a newer file's unknown settings are ignored");
-        // The browser's Places: user folders in the order added, missing ones kept.
+        // The browser's Places: user folders in the order added, missing ones kept; and the recent projects.
         juce::XmlElement withPlaces ("HALFTRACKPREFERENCES"); withPlaces.setAttribute ("version", 1);
         for (const auto* name : { "Loops", "Gone" }) withPlaces.createNewChildElement ("USERFOLDER")->setAttribute ("path", root.getChildFile (name).getFullPathName());
+        for (const auto* name : { "Song B.halftrack", "Song A.halftrack" }) withPlaces.createNewChildElement ("RECENTPROJECT")->setAttribute ("path", root.getChildFile (name).getFullPathName());
         auto [places, placesProblem] = reopen (withPlaces.toString());
         expected = {}; expected.userFolders = { root.getChildFile ("Loops").getFullPathName(), root.getChildFile ("Gone").getFullPathName() };
-        check (places == expected && placesProblem.isEmpty(), "user folders are read back in the order added, a missing one too");
+        expected.recentProjects = { root.getChildFile ("Song B.halftrack").getFullPathName(), root.getChildFile ("Song A.halftrack").getFullPathName() };
+        check (places == expected && placesProblem.isEmpty(), "user folders and recent projects are read back in their order, missing ones too");
         {
             Session s (false);
             auto added = s.preferences(); added.userFolders.add (root.getChildFile ("Drums").getFullPathName());
@@ -118,11 +120,14 @@ int runPreferencesTests (const juce::File& artifacts)
             check (s.setPreferences (relative).failed() && s.preferences() == added, "a relative folder is refused");
             auto twice = added; twice.userFolders.add (root.getChildFile ("Loops").getFullPathName());
             check (s.setPreferences (twice).failed() && s.preferences() == added, "and so is a folder added twice");
+            check (! s.snapshot().dirty, "adding a folder leaves the project unchanged");
+            auto repeated = added; repeated.recentProjects.add (repeated.recentProjects[0]);
+            check (s.setPreferences (repeated).failed() && s.preferences() == added, "and a recent project listed twice");
             auto changed = added; changed.exclusiveArm = false;
             ok (s.setPreferences (changed), "change a setting");
             ok (s.resetPreferences(), "reset");
-            Session::Preferences defaults; defaults.userFolders = added.userFolders;
-            check (s.preferences() == defaults, "a reset restores the settings and keeps the user folders, which are places rather than settings");
+            Session::Preferences defaults; defaults.userFolders = added.userFolders; defaults.recentProjects = added.recentProjects;
+            check (s.preferences() == defaults, "a reset restores the settings and keeps the user folders and recent projects, which are lists rather than settings");
         }
         {
             Session s (false);

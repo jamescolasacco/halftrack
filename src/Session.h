@@ -1266,6 +1266,8 @@ public:
         // to Browser, in the order added, as absolute paths. A folder that is gone keeps its place
         // until it is located again or removed.
         juce::StringArray userFolders;
+        // File > Open Recent Project: projects opened and saved, the latest first, as absolute paths.
+        juce::StringArray recentProjects;
         bool operator== (const Preferences&) const = default;
     };
     // The audio device's latency as it reports it, with Driver Error Compensation. Recordings are placed
@@ -1278,8 +1280,10 @@ public:
     AudioLatency audioLatency() const;
     static constexpr int preferencesVersion = 1;
     Preferences preferences() const;
+    // A change to a setting counts as a change to the project; a change only to the lists kept with
+    // the preferences (user folders, recent projects) does not.
     juce::Result setPreferences (const Preferences&);
-    // Every setting back to its default; the browser's user folders stay.
+    // Every setting back to its default; the browser's user folders and the recent projects stay.
     juce::Result resetPreferences();
     // Remembers the Preferences window's tab, an application setting, not a change to the project.
     void setPreferencesTab (const juce::String&);

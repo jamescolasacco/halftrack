@@ -837,6 +837,11 @@ Browser Places ([contract](research/browser-places-contract.md)). Defaults where
 - **A folder added.** It joins Places last and opens; one already there opens. A folder removed while showing returns the browser to Samples. Places are kept with the preferences and survive a preferences reset, as the reference keeps them apart from its settings.
 - **Show in Browser.** A file opens in the place holding it, the Current Project first, then the user folders, then the User Library; elsewhere, in Samples. Where the reference shows a file outside every place was not read.
 
+Open Recent Project ([menu contract](research/main-menu-contract.md)). Defaults where the reference was not read:
+
+- **What joins the list.** A project opened, or saved under a new name, joins the top; Save a Copy does not. The list keeps ten, kept with the preferences, and a preferences reset keeps it. The reference's own limit was not read.
+- **Names.** Each entry shows its project's file name, with its folder in brackets when another entry has the same name.
+
 Note editor clicks and Draw Mode ([contract](research/note-drawing-contract.md)). Defaults where the manual is silent:
 
 - **A new note's length and velocity.** A double-clicked or drawn note is one grid step long, the step the editor's grid shows, and takes the editor's Velocity (the last selected note's). The reference's note length and velocity were not read.

@@ -12557,6 +12557,8 @@ private:
             else { selectedClip = -1; selectedLauncherClipId.clear(); }
         }
         if (state.recording && ! previous.recording) recordingStart = state.position;
+        // Projects opened or saved join Open Recent Project, the latest first.
+        if (state.projectFile != previous.projectFile && state.projectFile != juce::File()) rememberRecentProject (state.projectFile);
         // The Current Project lists the project's media again after a recording, a save or another project.
         if (browserCategory == BrowserCategory::place && browserPlace == currentProjectPlace
             && (state.projectFile != previous.projectFile || (previous.recording && ! state.recording) || (previous.dirty && ! state.dirty)))
@@ -12948,11 +12950,13 @@ private:
                     menuSelectLoop, menuPlaySelection, menuSetClipStart, menuSetLoopStart, menuSetLoopEnd, menuSetClipEnd,
                     menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
                     menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
-                    menuAddFolder,
+                    menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
-                    menuTimeFormat = 410 }; // Plus Session::TimeFormat.
-    static_assert (menuLastCommand <= menuSlice && menuSlice + (int) Session::SliceBy::bar < menuTimeFormat, "the menu bar's command ids overlap");
+                    menuTimeFormat = 410, // Plus Session::TimeFormat.
+                    menuRecentProject = 420 }; // Plus the project's place in the list.
+    static_assert (menuLastCommand <= menuSlice && menuSlice + (int) Session::SliceBy::bar < menuTimeFormat
+                   && menuTimeFormat + (int) Session::TimeFormat::smpte2997 < menuRecentProject, "the menu bar's command ids overlap");
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
     // Fullscreen take their Windows keys elsewhere). The command manager only holds them for the menus:
     // nothing is registered with it as a target.
@@ -13438,6 +13442,15 @@ private:
         if (menuName == "File")
         {
             add (1, "New Project"); add (2, "Open Project...");
+            // Open Recent Project, as the reference's Open Recent: the projects, greyed when gone, then its two list commands.
+            juce::PopupMenu recent;
+            const auto projects = session.preferences().recentProjects;
+            for (int i = 0; i < projects.size(); ++i) recent.addItem (menuEntry (menuRecentProject + i, recentProjectName (projects, i), juce::File (projects[i]).existsAsFile()));
+            if (! projects.isEmpty()) recent.addSeparator();
+            recent.addItem (menuEntry (menuRemoveUnavailableProjects, "Remove Unavailable Projects",
+                                       std::any_of (projects.begin(), projects.end(), [] (const juce::String& path) { return ! juce::File (path).existsAsFile(); })));
+            recent.addItem (menuEntry (menuClearRecentProjects, "Clear List"));
+            popup.addSubMenu ("Open Recent Project", recent, ! menusBlocked());
             popup.addSeparator();
             add (15, "Install Pack...", packsFolder() != juce::File()); add (menuAddFolder, "Add Folder to Browser...");
             popup.addSeparator();
@@ -13701,6 +13714,7 @@ private:
         if (menusBlocked()) return;
         if(id>=60 && id<=66) { report(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>(id-60)));refresh();return; }
         if(id==120 || id==121) { report(session.setRecordQuantisation(static_cast<Session::RecordQuantisation>(id-113)));refresh();return; }
+        if (id >= menuRecentProject && id < menuRecentProject + maximumRecentProjects) { openRecentProject (id - menuRecentProject); return; }
         if (id >= menuTimeFormat && id <= menuTimeFormat + (int) Session::TimeFormat::smpte2997)
         { session.setTimeRulerFormat (static_cast<Session::TimeFormat> (id - menuTimeFormat)); refresh(); timeRuler.repaint(); return; }
         if (id >= menuSlice && id <= menuSlice + (int) Session::SliceBy::bar)
@@ -13714,6 +13728,8 @@ private:
             case 4: saveProject (true); break;
             case menuSaveCopy: saveCopyDialog(); return;
             case menuAddFolder: addFolderToBrowser(); return;
+            case menuRemoveUnavailableProjects: removeUnavailableProjects(); return;
+            case menuClearRecentProjects: setRecentProjects ({}); return;
             case 5: importFileDialog(); break;
             case 6: exportDialog(); break;
             case 14: showPreferences(); break;
@@ -13919,6 +13935,52 @@ private:
     {
         int found = 0; const auto result = session.locateMissingMedia (folder, found); refresh();
         report (result, "Found " + juce::String (found) + " of " + juce::String (total) + " missing file" + (total == 1 ? "." : "s."));
+    }
+    // Open Recent Project's list, kept with the preferences: the latest first, at most ten.
+    static constexpr int maximumRecentProjects = 10;
+    void setRecentProjects (const juce::StringArray& projects)
+    {
+        auto preferences = session.preferences();
+        if (preferences.recentProjects == projects) return;
+        preferences.recentProjects = projects;
+        if (const auto result = session.setPreferences (preferences); result.failed()) report (result);
+    }
+    void rememberRecentProject (const juce::File& file)
+    {
+        auto projects = session.preferences().recentProjects;
+        for (int i = projects.size(); --i >= 0;) if (juce::File (projects[i]) == file) projects.remove (i);
+        projects.insert (0, file.getFullPathName());
+        while (projects.size() > maximumRecentProjects) projects.remove (projects.size() - 1);
+        setRecentProjects (projects);
+    }
+    void removeUnavailableProjects()
+    {
+        auto projects = session.preferences().recentProjects;
+        for (int i = projects.size(); --i >= 0;) if (! juce::File (projects[i]).existsAsFile()) projects.remove (i);
+        setRecentProjects (projects);
+    }
+    // A project's name in the list, with its folder when another has the same name.
+    static juce::String recentProjectName (const juce::StringArray& projects, int index)
+    {
+        const juce::File file (projects[index]);
+        for (int i = 0; i < projects.size(); ++i)
+            if (i != index && juce::File (projects[i]).getFileNameWithoutExtension() == file.getFileNameWithoutExtension())
+                return file.getFileNameWithoutExtension() + " (" + file.getParentDirectory().getFileName() + ")";
+        return file.getFileNameWithoutExtension();
+    }
+    void openRecentProject (int index)
+    {
+        const auto projects = session.preferences().recentProjects;
+        if (! juce::isPositiveAndBelow (index, projects.size())) return;
+        const juce::File file (projects[index]);
+        if (! file.existsAsFile()) { report (juce::Result::fail ("\"" + file.getFullPathName() + "\" is no longer there.")); return; }
+        auto safe = juce::Component::SafePointer<Impl> (this);
+        ensureSaved ([safe, file]
+        {
+            if (safe == nullptr) return;
+            safe->session.closePluginEditors();
+            safe->reportOpened (safe->session.loadProject (file)); safe->resetView();
+        });
     }
     void openDialog()
     {
@@ -19521,7 +19583,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         session.undo(); session.undo(); refresh();
         auto* reset = dynamic_cast<juce::Button*> (findNamed (panel, "Reset preferences"));
         check (reset != nullptr, "the panel offers a reset"); reset->onClick();
-        check (session.preferences() == Session::Preferences {} && exclusive->getToggleState(), "reset restores the defaults");
+        Session::Preferences defaults; defaults.userFolders = session.preferences().userFolders; defaults.recentProjects = session.preferences().recentProjects;
+        check (session.preferences() == defaults && exclusive->getToggleState(), "reset restores the defaults, keeping the browser's places and the recent projects");
         auto* edgeFades = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Create fades on clip edges"));
         check (edgeFades != nullptr && edgeFades->getButtonText() == "Create Fades on Clip Edges" && edgeFades->getToggleState(),
                "the panel offers Create Fades on Clip Edges, on by default as in the reference");
@@ -19642,6 +19705,48 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         empty.deleteRecursively();
     }
     {
+        // Open Recent Project, as the reference's File menu has it: projects opened or saved, the latest
+        // first, greyed when gone, then Remove Unavailable Projects and Clear List.
+        const auto kept = session.preferences().recentProjects;
+        setRecentProjects ({});
+        check (session.newProject().wasOk(), "a fresh project for the recent list"); refresh();
+        const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-recent-ui-" + juce::Uuid().toString());
+        const auto first = root.getChildFile ("One/Song.halftrack"), second = root.getChildFile ("Two/Song.halftrack"), other = root.getChildFile ("Other.halftrack");
+        for (const auto& file : { first, second, other }) check (session.saveProjectCopy (file).wasOk(), "save a project to open again");
+        const auto recentItems = [this]
+        {
+            juce::StringArray texts;
+            const auto fileMenu = getMenuForIndex (0, {});
+            for (juce::PopupMenu::MenuItemIterator items (fileMenu); items.next();)
+                if (items.getItem().text == "Open Recent Project" && items.getItem().subMenu != nullptr)
+                    for (juce::PopupMenu::MenuItemIterator inner (*items.getItem().subMenu); inner.next();)
+                        texts.add (inner.getItem().isSeparator ? "-" : inner.getItem().text + (inner.getItem().isEnabled ? "" : " (off)"));
+            return texts.joinIntoString ("|");
+        };
+        check (recentItems() == "Remove Unavailable Projects (off)|Clear List", "with nothing opened yet, the list has only its commands");
+        for (const auto& file : { first, second, other, first }) rememberRecentProject (file);
+        check (recentItems() == "Song (One)|Other|Song (Two)|-|Remove Unavailable Projects (off)|Clear List",
+               "projects are listed latest first, each once, named with their folder when names repeat: " + recentItems());
+        check (other.deleteFile(), "a project goes away");
+        check (recentItems() == "Song (One)|Other (off)|Song (Two)|-|Remove Unavailable Projects|Clear List", "it shows greyed, and Remove Unavailable Projects is offered");
+        menuItemSelected (menuRemoveUnavailableProjects, 0);
+        check (recentItems() == "Song (One)|Song (Two)|-|Remove Unavailable Projects (off)|Clear List", "Remove Unavailable Projects takes it out of the list");
+        menuItemSelected (menuRecentProject + 1, 0);
+        check (state.projectFile == second && ! state.dirty, "choosing a project opens it");
+        check (session.preferences().recentProjects == juce::StringArray { second.getFullPathName(), first.getFullPathName() }, "and it moves to the top");
+        const auto renamed = root.getChildFile ("Three.halftrack");
+        check (session.saveProject (renamed).wasOk(), "save the project under a new name"); refresh();
+        check (session.preferences().recentProjects[0] == renamed.getFullPathName(), "a project saved under a new name joins the list at the top");
+        for (int i = 0; i < 12; ++i) rememberRecentProject (root.getChildFile ("Many " + juce::String (i) + ".halftrack"));
+        check (session.preferences().recentProjects.size() == maximumRecentProjects && session.preferences().recentProjects[0].endsWith ("Many 11.halftrack"),
+               "the list keeps the latest ten");
+        menuItemSelected (menuClearRecentProjects, 0);
+        check (session.preferences().recentProjects.isEmpty() && recentItems() == "Remove Unavailable Projects (off)|Clear List", "Clear List empties it");
+        check (session.newProject().wasOk(), "leave the recent projects"); refresh();
+        setRecentProjects (kept);
+        root.deleteRecursively();
+    }
+    {
         // The menu bar, after the reference's: its menus and items in its order, every item there while it
         // is greyed, the reference's shortcuts on them and working from the keys, and Edit's commands
         // acting on the area last clicked.
@@ -19669,7 +19774,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
        #endif
         const auto expect = [&] (const juce::String& name, const juce::StringArray& wanted)
         { const auto shown = texts (name); check (shown == wanted, name + " holds the reference's items in its order (" + shown.joinIntoString (" | ") + ")"); };
-        expect ("File", { "New Project", "Open Project...", "-", "Install Pack...", "Add Folder to Browser...", "-", "Locate Missing Media...", "-", "Save Project", "Save Project As...", "Save a Copy...", "Save as Default Set",
+        expect ("File", { "New Project", "Open Project...", "Open Recent Project >", "-", "Install Pack...", "Add Folder to Browser...", "-", "Locate Missing Media...", "-", "Save Project", "Save Project As...", "Save a Copy...", "Save as Default Set",
                           "-", "Export Audio...", "Export MIDI Clip..." });
         const juce::String loop = state.looping ? "Deactivate Loop" : "Activate Loop";
         const auto history = [this]
