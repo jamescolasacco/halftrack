@@ -4415,6 +4415,7 @@ struct Session::Impl
             read.countInBars = countIn;
             const int startPlayback = number ("startPlaybackWithRecord", 1, 2);
             read.startPlaybackWithRecord = startPlayback == 1;
+            read.preferencesTab = xml->getStringAttribute ("preferencesTab");
             read.createFadesOnClipEdges = edgeFades == 1;
             read.metronomeSound = static_cast<Session::MetronomeSound> (juce::jmax (0, sound));
             valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && validPreferences (read);
@@ -4443,6 +4444,7 @@ struct Session::Impl
         xml.setAttribute ("metronomeSound", (int) next.metronomeSound);
         xml.setAttribute ("countInBars", next.countInBars);
         xml.setAttribute ("startPlaybackWithRecord", next.startPlaybackWithRecord ? 1 : 0);
+        xml.setAttribute ("preferencesTab", next.preferencesTab);
         const auto file = prefsFile();
         if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
         juce::TemporaryFile temporary (file);
@@ -7808,6 +7810,12 @@ Result Session::setPreferences (const Preferences& next)
     impl->changed(); return Result::ok();
 }
 Result Session::resetPreferences() { return setPreferences ({}); }
+void Session::setPreferencesTab (const String& tab)
+{
+    if (tab == impl->prefs.preferencesTab) return;
+    auto next = impl->prefs; next.preferencesTab = tab;
+    impl->savePreferences (next); // Kept with the preferences, without marking the project changed.
+}
 std::array<Session::MetronomeRhythm, 10> Session::metronomeRhythms()
 {
     // The reference's Rhythm menu, its values in crotchets (its triplets as single floats).

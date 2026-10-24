@@ -47,7 +47,7 @@ Each rebuild of the playback graph, after a settings change for example, restart
 
 - The instrument chooser ends with No Instrument. The device view then says the track has none and points to MIDI To.
 - A strip's output chooser on such a track becomes MIDI To: No Output, then a submenu of channels for each port whose Track switch is on (and for its current port). It shows, for example, "IAC Bus 1 | Ch. 5".
-- Audio & MIDI Setup has a MIDI Ports menu with Track and Sync for each output. It no longer shows the device selector's MIDI output chooser, which set an output the engine never used.
+- Preferences' Link, Tempo & MIDI page has a ports table, as the reference's has: Track and Sync for each output, Sync and MPE for each input. It shows no MIDI input or output chooser of JUCE's device selector, which set ports the engine never used.
 
 ## Engine
 
@@ -81,7 +81,7 @@ On systems that cannot make virtual MIDI ports (Windows, or Linux without the AL
 
 ## External Sync (2026-10-22)
 
-**Following a clock.** An input port's Sync switch (Audio & MIDI Setup > MIDI Ports, kept with the engine's settings) lets it send MIDI Clock. Halftrack opens such ports itself, beside the engine's own input, so their notes still play into tracks. Their clock and transport messages reach the message thread through a fixed ring. Once an input's Sync is on, the control bar shows EXT before TAP. With External Sync on:
+**Following a clock.** An input port's Sync switch (Preferences > Link, Tempo & MIDI, kept with the engine's settings) lets it send MIDI Clock. Halftrack opens such ports itself, beside the engine's own input, so their notes still play into tracks. Their clock and transport messages reach the message thread through a fixed ring. Once an input's Sync is on, the control bar shows EXT before TAP. With External Sync on:
 
 - **Tempo.** It comes from a least-squares line through the last beat's 24 clock ticks, so one late tick barely moves it.
 - **Phase.** While playing, the tempo is raised while the transport is behind the clock's position and lowered while it is ahead, by the distance in beats beyond 0.02 (the fixed latency of reading either), 10% at most.

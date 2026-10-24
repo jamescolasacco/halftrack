@@ -2,7 +2,7 @@
 
 Halftrack's outputs follow the reference's:
 
-- the Output Config dialog in Audio & MIDI Setup;
+- the Output Config menu on Preferences' Audio page;
 - a track's Audio To "Ext. Out";
 - the master track's Master Out.
 
@@ -43,7 +43,7 @@ The UI suite checks:
 
 - that a strip's Audio To offers Ext. Out to the other outputs and routes there;
 - that the master strip's Master Out chooser moves the master and back;
-- that Audio & MIDI Setup lays out Output Config beside Input Config.
+- that Preferences' Audio page lays out Output Config beside Input Config.
 
 ## Cue
 

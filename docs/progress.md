@@ -2495,3 +2495,7 @@ Engine and UI areas. As the reference's Arrangement has one, a time ruler under 
 ## Scene tempo and time signature fields — 2026-10-24
 
 Engine and UI areas. As the reference's View and scene menus switch them, Scene Tempo and Time Signature shows each scene's tempo and time signature fields at the right of its cell, hidden at first as in the reference's default Set and kept with the project. A field shows the scene's own value, or the song's dimmed, and a click on it opens its dialog. The scene menu's two dialog items gave way to the reference's switch ([contract](research/scene-tempo-contract.md)). Checked in the UI suite and the track order suite.
+
+## The reference's Preferences window — 2026-10-24
+
+UI area, with small engine and doc edits. Preferences, Audio & MIDI Setup and Plug-Ins are now one window, as the reference's (static reading, [contract](research/preferences-contract.md)): a normal window, one at a time, its tabs down the left in the reference's order (Display & Input, Theme & Colors, Audio, Link, Tempo & MIDI, Plug-Ins, Record, Warp & Launch), remembering the tab chosen last. The Audio page follows the reference's rows: driver type, devices, channel configuration, sample rate, buffer size and the latencies. Link, Tempo & MIDI has the control surface and a ports table with each port's switches; the old dialog's MIDI input list, which the engine never read, is gone. Recording's file type and bit depth, and the count-in, moved to Record, Warp & Launch. Checked in the UI suite.

@@ -13,7 +13,7 @@ Halftrack's MPE support follows the reference's MPE note editing and recording: 
   - Each note's channel gets a 48-semitone pitch bend range (RPN 0) as the note starts.
   - The built-in synth and the native instruments honour RPN 0 on each channel, so they bend MPE notes correctly whatever their own Bend range. Other MIDI keeps the device's range.
 - **Recording.**
-  - A MIDI input switched to MPE (Audio & MIDI Setup's MPE Inputs menu, kept with the device settings) records its notes with their own bend and pressure.
+  - A MIDI input switched to MPE (its MPE switch on Preferences' Link, Tempo & MIDI page, kept with the device settings) records its notes with their own bend and pressure.
   - Its bends are read at 48 semitones in a lower zone of 15 member channels.
 - **The editor.**
   - The piano roll's lane chooser has a Note Expression (MPE) submenu: Note Pitch Bend, Note Slide and Note Pressure.

@@ -1,6 +1,6 @@
 # Plug-in sources contract
 
-Halftrack's Plug-Ins settings follow the reference's (Options > Plug-Ins Settings, or Manage in the device chain). The reference's manual, consulted 2026-10-22, describes:
+Halftrack's Plug-Ins settings follow the reference's, on Preferences' Plug-Ins page (or Manage in the device chain). The reference's manual, consulted 2026-10-22, describes:
 
 - the Plug-In Sources section;
 - "Use Audio Units";

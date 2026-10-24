@@ -63,7 +63,7 @@ Then it builds a surface from two virtual MIDI ports the test makes; the Session
 - a rename reaching the strip;
 - removing the surface.
 
-The UI suite chooses and removes a surface from Audio & MIDI Setup. Systems that cannot make virtual MIDI ports skip both port checks.
+The UI suite chooses and removes a surface from Preferences' Link, Tempo & MIDI page. Systems that cannot make virtual MIDI ports skip both port checks.
 
 ## Not yet covered
 

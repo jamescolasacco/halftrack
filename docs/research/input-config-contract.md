@@ -10,7 +10,7 @@ Halftrack's input configuration follows the reference's Input Config dialog. It 
 - **On and off.** Each input can be switched off and on.
 - **Names.** Inputs are named by their channels (for example "Generated left" and "Generated right" for the two mono halves of the test device's pair). A track keeps an input that still exists after a change.
 - **Persistence.** The layout is kept with the device settings, so the next Session opens with it. Changes are refused while recording.
-- **The UI.** Audio & MIDI Setup's Input Config menu offers Stereo or Two Mono for each pair and an on/off switch for each input.
+- **The UI.** The Input Config menu on Preferences' Audio page offers Stereo or Two Mono for each pair and an on/off switch for each input.
 
 ## Evidence
 

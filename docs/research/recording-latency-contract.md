@@ -33,7 +33,7 @@ So what was heard through an output is recorded where it played. JUCE's CoreAudi
 - **compensation of 200 samples** (4.17 ms) puts it back to 0.0, and the overall latency includes it;
 - compensation beyond 200 ms is refused.
 
-The UI suite reads the readout in Audio & MIDI Setup, types a compensation and sees it in the overall latency, and checks that 500 ms is refused.
+The UI suite reads the readout on Preferences' Audio page, types a compensation and sees it in the overall latency, and checks that 500 ms is refused.
 
 ## Not yet covered
 

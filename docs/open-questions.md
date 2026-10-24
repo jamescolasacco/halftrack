@@ -827,5 +827,5 @@ Main menu bar ([contract](research/main-menu-contract.md)). Defaults where the r
 - **Focus.** Edit's commands act on the area last clicked, standing in for the reference's focused view; typed text always comes first.
 - **Metronome While Recording.** Taken as Halftrack's metronome's only-while-recording switch.
 - **Labels.** Items are named plainly for their commands, as the reference's English text is in its encrypted language file. Undo and Redo do not name the step to undo.
-- **Preferences.** Preferences, Audio & MIDI Setup and Plug-Ins are still three windows; the reference's one Preferences window with tabs is not built yet.
+- **Preferences.** Preferences is one window with the reference's tabs (see the [preferences contract](research/preferences-contract.md)).
 

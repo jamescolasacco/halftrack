@@ -481,7 +481,7 @@ public:
         tapButton.setName("Tap tempo");tapButton.setTooltip("Tap a steady beat to set tempo. A pause over three seconds starts a new estimate.");
         // EXT, after the reference: shown once an input's Sync is on, it follows that input's MIDI Clock.
         extButton.setName ("External sync"); extButton.setClickingTogglesState (true);
-        extButton.setTooltip ("External Sync: follow the MIDI Clock of the inputs whose Sync is on in Audio & MIDI Setup > MIDI Ports");
+        extButton.setTooltip ("External Sync: follow the MIDI Clock of the inputs whose Sync is on in Preferences > Link, Tempo & MIDI");
         extButton.setColour (juce::TextButton::buttonOnColourId, orange); extButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
         extButton.onClick = [this] { report (session.setExternalSync (extButton.getToggleState())); refresh(); };
         tapButton.onClick=[this]{report(session.tapTempo(juce::Time::getMillisecondCounterHiRes()*.001));refresh();};
@@ -664,6 +664,7 @@ public:
         session.knownPlugins().removeChangeListener (this);
         session.closePluginEditors();
         for (auto& window : automationWindows) if (window != nullptr) delete window.getComponent();
+        if (preferencesWindow != nullptr) delete preferencesWindow.getComponent();
         for (auto& dialog : dialogs) if (dialog != nullptr) delete dialog.getComponent();
         for (auto& alert : alerts) if (alert != nullptr) delete alert.getComponent();
        #if JUCE_MAC
@@ -10370,7 +10371,7 @@ private:
             if (const auto& o = choices[(size_t) i].output; o && sameOutput (*o, current)) selected = i + 1;
         box.setSelectedId (selected, juce::dontSendNotification);
     }
-    // A choice from an Audio To chooser. Configure... opens Audio & MIDI Setup, as the reference's opens
+    // A choice from an Audio To chooser. Configure... opens Preferences' Audio tab, as the reference's opens
     // its output preferences, and leaves the output as it was.
     void chooseOutput (const juce::String& id, const juce::ComboBox& box, const std::vector<OutputChoice>& choices)
     {
@@ -11501,7 +11502,7 @@ private:
         juce::StringArray names;
         for (const auto& t : state.tracks) for (const auto& p : t.plugins) if (p.missing) names.addIfNotAlreadyThere (p.name);
         return names.isEmpty() ? juce::String()
-                               : "Missing plug-ins kept as placeholders: " + names.joinIntoString (", ") + ". Rescan in Plug-Ins Settings and reopen the project to use them.";
+                               : "Missing plug-ins kept as placeholders: " + names.joinIntoString (", ") + ". Rescan in Preferences > Plug-Ins and reopen the project to use them.";
     }
     juce::String missingMediaSummary() const
     {
@@ -13068,20 +13069,43 @@ private:
                                             : std::make_unique<AutomationEditor> (session, track->id);
         automationWindows.emplace_back (new Window (std::move (editor), theme, *this));
     }
-    // Audio & MIDI Setup: the device selector, then the file type and bit depth takes are recorded in.
-    class AudioSetupPanel final : public juce::Component, private juce::ChangeListener
+    // Preferences pages lay out a heading and rows: a label at the left and its control beside it.
+    static void preferenceHeading (juce::Rectangle<int>& area, juce::Label& heading)
+    {
+        area.removeFromTop (6); heading.setBounds (area.removeFromTop (20)); area.removeFromTop (4);
+    }
+    static void preferenceRow (juce::Rectangle<int>& area, juce::Component& label, juce::Component& control, int controlWidth = 190)
+    {
+        auto row = area.removeFromTop (24); label.setBounds (row.removeFromLeft (170)); control.setBounds (row.removeFromLeft (juce::jmin (controlWidth, row.getWidth())));
+        area.removeFromTop (5);
+    }
+    static void styleHeading (juce::Label& heading, const juce::String& text) { heading.setText (text, juce::dontSendNotification); heading.setFont (font (12.0f, true)); }
+    // Preferences' Audio page, in the reference's order (static reading): the driver type, the input and
+    // output devices with their channel configuration, the sample rate, and the latencies, where Driver
+    // Error Compensation is set. A driver type without separate inputs and outputs has one device chooser.
+    class AudioPage final : public juce::Component, private juce::ChangeListener
     {
     public:
-        // The engine keeps its own MIDI outputs, so the device selector's MIDI output chooser, which
-        // sets one the engine never reads, is left out; MIDI Ports sets them.
-        explicit AudioSetupPanel (Impl& o) : owner (o), devices (o.session.audioDeviceManager(), 0, 128, 0, 128, true, false, true, false)
+        explicit AudioPage (Impl& o) : owner (o)
         {
-            addAndMakeVisible (devices);
-            for (auto* c : std::initializer_list<juce::Component*> { &typeLabel, &type, &depthLabel, &depth, &mpe, &inputConfig, &outputConfig, &midiPorts, &surface, &compensationLabel, &compensation, &latency })
+            for (auto* c : std::initializer_list<juce::Component*> { &deviceHeading, &typeLabel, &type, &inputLabel, &input, &outputLabel, &output, &configLabel, &inputConfig, &outputConfig,
+                                                                    &rateHeading, &rateLabel, &rate, &latencyHeading, &bufferLabel, &buffer, &inputLatencyLabel, &inputLatency,
+                                                                    &outputLatencyLabel, &outputLatency, &compensationLabel, &compensation, &overallLabel, &overall })
                 addAndMakeVisible (c);
+            styleHeading (deviceHeading, "Audio Device"); styleHeading (rateHeading, "Sample Rate"); styleHeading (latencyHeading, "Latency");
+            typeLabel.setText ("Driver Type", juce::dontSendNotification); configLabel.setText ("Channel Configuration", juce::dontSendNotification);
+            rateLabel.setText ("In/Out Sample Rate", juce::dontSendNotification); bufferLabel.setText ("Buffer Size", juce::dontSendNotification);
+            inputLatencyLabel.setText ("Input Latency", juce::dontSendNotification); outputLatencyLabel.setText ("Output Latency", juce::dontSendNotification);
+            compensationLabel.setText ("Driver Error Compensation", juce::dontSendNotification); overallLabel.setText ("Overall Latency", juce::dontSendNotification);
+            type.setName ("Driver type"); input.setName ("Audio input device"); output.setName ("Audio output device"); rate.setName ("Sample rate"); buffer.setName ("Buffer size");
+            inputLatency.setName ("Input latency"); outputLatency.setName ("Output latency"); overall.setName ("Overall latency");
+            type.onChange = [this] { if (! syncing) { manager().setCurrentAudioDeviceType (type.getText(), true); sync(); } };
+            input.onChange = [this] { if (! syncing) chooseDevice (true); };
+            output.onChange = [this] { if (! syncing) chooseDevice (false); };
+            rate.onChange = [this] { if (! syncing) changeSetup ([this] (auto& setup) { setup.sampleRate = rate.getSelectedId(); }); };
+            buffer.onChange = [this] { if (! syncing) changeSetup ([this] (auto& setup) { setup.bufferSize = buffer.getSelectedId(); }); };
             // Driver Error Compensation, after the reference's: moves recordings earlier, for a driver that
-            // reports its latency wrongly; the device's latency as it reports it beside.
-            compensationLabel.setText ("Driver Error Compensation", juce::dontSendNotification);
+            // reports its latency wrongly.
             compensation.setName ("Driver error compensation"); compensation.setEditable (true);
             compensation.setTooltip ("Driver Error Compensation: recordings move this many milliseconds earlier, -200 to 200, to correct a driver's reported latency");
             compensation.setColour (juce::Label::backgroundColourId, themes::colour (0xff1c1c1c)); compensation.setColour (juce::Label::outlineColourId, line);
@@ -13091,197 +13115,272 @@ private:
                 next.driverErrorCompensationMs = compensation.getText().upToFirstOccurrenceOf ("ms", false, true).trim().getDoubleValue();
                 owner.report (owner.session.setPreferences (next)); sync();
             };
-            latency.setName ("Audio latency");
-            owner.session.audioDeviceManager().addChangeListener (this);
-            // Control Surface, after the reference's: a Mackie Control surface's input and output ports.
-            surface.setName ("Control surface"); surface.setTooltip ("Control Surface: the MIDI ports of a Mackie Control surface (or one in Mackie mode)");
-            surface.onClick = [this]
-            {
-                juce::PopupMenu menu, inputs, outputs;
-                const auto current = owner.session.controlSurface();
-                const auto inNames = owner.session.midiInputPorts();
-                juce::StringArray outNames;
-                for (const auto& port : owner.session.midiOutputPorts()) outNames.add (port.name);
-                menu.addItem (1, "No Control Surface", true, current.input.isEmpty());
-                for (int i = 0; i < inNames.size(); ++i) inputs.addItem (100 + i, inNames[i], true, current.input == inNames[i]);
-                outputs.addItem (200 - 1, "No Output", current.input.isNotEmpty(), current.input.isNotEmpty() && current.output.isEmpty());
-                for (int i = 0; i < outNames.size(); ++i) outputs.addItem (200 + i, outNames[i], current.input.isNotEmpty(), current.output == outNames[i]);
-                if (inNames.isEmpty()) inputs.addItem (-1, "No MIDI inputs", false);
-                menu.addSubMenu ("Mackie Control Input", inputs); menu.addSubMenu ("Mackie Control Output", outputs, current.input.isNotEmpty());
-                auto safe = juce::Component::SafePointer<AudioSetupPanel> (this);
-                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&surface), [safe, inNames, outNames] (int chosen)
-                { if (safe != nullptr) safe->chooseSurface (inNames, outNames, chosen); });
-            };
-            // MIDI Ports, after the reference's: an output's Track offers it to MIDI tracks' MIDI To and
-            // its Sync sends it MIDI Clock while the transport plays; an input's Sync lets External Sync
-            // follow its clock.
-            midiPorts.setName ("MIDI ports"); midiPorts.setTooltip ("MIDI Ports: Track lets MIDI tracks play to an output; Sync sends it MIDI Clock, or follows an input's");
-            midiPorts.onClick = [this]
-            {
-                juce::PopupMenu menu;
-                const auto ports = owner.session.midiOutputPorts();
-                menu.addSectionHeader ("Outputs");
-                for (int i = 0; i < (int) ports.size(); ++i)
-                {
-                    menu.addSectionHeader (ports[(size_t) i].name);
-                    menu.addItem (1 + i * 2, "Track", true, ports[(size_t) i].track);
-                    menu.addItem (2 + i * 2, "Sync", true, ports[(size_t) i].sync);
-                }
-                if (ports.empty()) menu.addItem (-1, "No MIDI outputs", false);
-                const auto inputs = owner.session.midiInputPorts();
-                menu.addSeparator(); menu.addSectionHeader ("Inputs");
-                for (int i = 0; i < inputs.size(); ++i) menu.addItem (inputSyncItem + i, inputs[i] + ": Sync", true, owner.session.isMidiInputSync (inputs[i]));
-                if (inputs.isEmpty()) menu.addItem (-2, "No MIDI inputs", false);
-                auto safe = juce::Component::SafePointer<AudioSetupPanel> (this);
-                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&midiPorts), [safe, ports, inputs] (int chosen)
-                {
-                    if (safe == nullptr) return;
-                    if (juce::isPositiveAndBelow (chosen - inputSyncItem, inputs.size())) safe->toggleInputSync (inputs[chosen - inputSyncItem]);
-                    else safe->toggleMidiPort (ports, chosen);
-                });
-            };
             // Input Config: each pair of input channels as one stereo input or two mono ones, and which are on.
             inputConfig.setName ("Input config"); inputConfig.setTooltip ("Input Config: use each pair of input channels as one stereo input or two mono inputs, and choose which inputs are on");
-            inputConfig.onClick = [this]
-            {
-                juce::PopupMenu menu;
-                const auto groups = owner.session.audioInputGroups();
-                auto* device = owner.session.audioDeviceManager().getCurrentAudioDevice();
-                const int channels = device != nullptr ? device->getInputChannelNames().size() : 0;
-                for (int first = 0; first + 1 < channels; first += 2)
-                {
-                    const auto stereo = std::any_of (groups.begin(), groups.end(), [first] (const auto& g) { return g.firstChannel == first && g.channels == 2; });
-                    menu.addSectionHeader ("Inputs " + juce::String (first + 1) + "/" + juce::String (first + 2));
-                    menu.addItem (1000 + first, "Stereo", true, stereo); menu.addItem (2000 + first, "Two Mono", true, ! stereo);
-                }
-                menu.addSectionHeader ("On");
-                for (int i = 0; i < (int) groups.size(); ++i) menu.addItem (i + 1, groups[(size_t) i].name, true, groups[(size_t) i].enabled);
-                auto safe = juce::Component::SafePointer<AudioSetupPanel> (this);
-                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&inputConfig), [safe, groups] (int chosen)
-                {
-                    if (safe == nullptr || chosen <= 0) return;
-                    auto& session = safe->owner.session;
-                    if (chosen >= 2000) safe->owner.report (session.setAudioInputPairStereo (chosen - 2000, false));
-                    else if (chosen >= 1000) safe->owner.report (session.setAudioInputPairStereo (chosen - 1000, true));
-                    else if (juce::isPositiveAndBelow (chosen - 1, (int) groups.size()))
-                        safe->owner.report (session.setAudioInputEnabled (groups[(size_t) chosen - 1].name, ! groups[(size_t) chosen - 1].enabled));
-                    safe->owner.refresh();
-                });
-            };
-            // Output Config, as the reference's: each pair of output channels as one stereo output or
-            // two mono ones, and which are on. Tracks reach them with Audio To Ext. Out.
+            inputConfig.onClick = [this] { configure (true); };
+            // Output Config, as the reference's: each pair of output channels as one stereo output or two
+            // mono ones, and which are on. Tracks reach them with Audio To Ext. Out.
             outputConfig.setName ("Output config"); outputConfig.setTooltip ("Output Config: use each pair of output channels as one stereo output or two mono outputs, and choose which outputs are on");
-            outputConfig.onClick = [this]
-            {
-                juce::PopupMenu menu;
-                const auto groups = owner.session.audioOutputGroups();
-                auto* device = owner.session.audioDeviceManager().getCurrentAudioDevice();
-                const int channels = device != nullptr ? device->getOutputChannelNames().size() : 0;
-                for (int first = 0; first + 1 < channels; first += 2)
-                {
-                    const auto stereo = std::any_of (groups.begin(), groups.end(), [first] (const auto& g) { return g.firstChannel == first && g.channels == 2; });
-                    menu.addSectionHeader ("Outputs " + juce::String (first + 1) + "/" + juce::String (first + 2));
-                    menu.addItem (1000 + first, "Stereo", true, stereo); menu.addItem (2000 + first, "Two Mono", true, ! stereo);
-                }
-                menu.addSectionHeader ("On");
-                for (int i = 0; i < (int) groups.size(); ++i) menu.addItem (i + 1, groups[(size_t) i].name, true, groups[(size_t) i].enabled);
-                auto safe = juce::Component::SafePointer<AudioSetupPanel> (this);
-                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&outputConfig), [safe, groups] (int chosen)
-                {
-                    if (safe == nullptr || chosen <= 0) return;
-                    auto& session = safe->owner.session;
-                    if (chosen >= 2000) safe->owner.report (session.setAudioOutputPairStereo (chosen - 2000, false));
-                    else if (chosen >= 1000) safe->owner.report (session.setAudioOutputPairStereo (chosen - 1000, true));
-                    else if (juce::isPositiveAndBelow (chosen - 1, (int) groups.size()))
-                        safe->owner.report (session.setAudioOutputEnabled (groups[(size_t) chosen - 1].name, ! groups[(size_t) chosen - 1].enabled));
-                    safe->owner.refresh();
-                });
-            };
-            // MPE controllers record their notes' own pitch bend, slide and pressure.
-            mpe.setName ("MPE inputs"); mpe.setTooltip ("MPE: choose the MIDI inputs that are MPE controllers");
-            mpe.onClick = [this]
-            {
-                juce::PopupMenu menu;
-                const auto names = owner.session.inputNames (true);
-                for (int i = 0; i < names.size(); ++i) menu.addItem (i + 1, names[i], true, owner.session.isMidiInputMpe (names[i]));
-                if (names.isEmpty()) menu.addItem (-1, "No MIDI inputs", false);
-                auto safe = juce::Component::SafePointer<AudioSetupPanel> (this);
-                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&mpe), [safe, names] (int chosen)
-                {
-                    if (safe == nullptr || ! juce::isPositiveAndBelow (chosen - 1, names.size())) return;
-                    const auto& name = names[chosen - 1];
-                    safe->owner.report (safe->owner.session.setMidiInputMpe (name, ! safe->owner.session.isMidiInputMpe (name)));
-                });
-            };
-            typeLabel.setText ("Record File Type", juce::dontSendNotification); depthLabel.setText ("Bit Depth", juce::dontSendNotification);
-            type.setName ("Record file type"); depth.setName ("Record bit depth");
-            type.addItem ("WAV", 1); type.addItem ("AIFF", 2); type.addItem ("FLAC", 3);
-            depth.addItem ("16", 16); depth.addItem ("24", 24); depth.addItem ("32", 32);
-            type.onChange = depth.onChange = [this]
-            {
-                const auto chosen = Session::RecordingFormat { static_cast<Session::RecordingFileType> (type.getSelectedId() - 1), depth.getSelectedId() };
-                owner.report (owner.session.setRecordingFormat (chosen));
-                sync();
-            };
+            outputConfig.onClick = [this] { configure (false); };
+            manager().addChangeListener (this);
             sync();
         }
-        // Item 1 removes the surface, 100 + i chooses input i, 199 no output and 200 + i output i.
-        void chooseSurface (const juce::StringArray& inputs, const juce::StringArray& outputs, int chosen)
-        {
-            auto next = owner.session.controlSurface();
-            if (chosen == 1) next = {};
-            else if (juce::isPositiveAndBelow (chosen - 100, inputs.size())) next.input = inputs[chosen - 100];
-            else if (chosen == 199) next.output = {};
-            else if (juce::isPositiveAndBelow (chosen - 200, outputs.size())) next.output = outputs[chosen - 200];
-            else return;
-            owner.report (owner.session.setControlSurface (next), next.input.isEmpty() ? "No control surface." : "Mackie Control on " + next.input + ".");
-        }
-        // Item 1 + 2i is port i's Track switch and 2 + 2i its Sync switch.
-        static constexpr int inputSyncItem = 1000; // Input i's Sync switch.
-        void toggleInputSync (const juce::String& input)
-        {
-            owner.report (owner.session.setMidiInputSync (input, ! owner.session.isMidiInputSync (input))); owner.refresh(); owner.resized();
-        }
-        void toggleMidiPort (const std::vector<Session::MidiOutputPortInfo>& ports, int chosen)
-        {
-            const int index = (chosen - 1) / 2;
-            if (chosen <= 0 || ! juce::isPositiveAndBelow (index, (int) ports.size())) return;
-            const auto& port = ports[(size_t) index];
-            const bool track = chosen % 2 == 1 ? ! port.track : port.track, sync = chosen % 2 == 0 ? ! port.sync : port.sync;
-            owner.report (owner.session.setMidiOutputPort (port.name, track, sync)); owner.refresh();
-        }
-        ~AudioSetupPanel() override { owner.session.audioDeviceManager().removeChangeListener (this); }
+        ~AudioPage() override { manager().removeChangeListener (this); }
+        juce::AudioDeviceManager& manager() const { return owner.session.audioDeviceManager(); }
         void sync()
         {
-            const auto format = owner.session.recordingFormat();
-            type.setSelectedId (static_cast<int> (format.type) + 1, juce::dontSendNotification);
-            depth.setSelectedId (format.bitDepth, juce::dontSendNotification);
+            const juce::ScopedValueSetter<bool> quiet (syncing, true);
+            auto& devices = manager();
+            type.clear (juce::dontSendNotification);
+            for (int i = 0; i < devices.getAvailableDeviceTypes().size(); ++i) type.addItem (devices.getAvailableDeviceTypes()[i]->getTypeName(), i + 1);
+            type.setText (devices.getCurrentAudioDeviceType(), juce::dontSendNotification);
+            auto* kind = devices.getCurrentDeviceTypeObject();
+            const auto setup = devices.getAudioDeviceSetup();
+            separate = kind == nullptr || kind->hasSeparateInputsAndOutputs();
+            const auto fill = [&] (juce::ComboBox& box, bool inputs, const juce::String& current)
+            {
+                box.clear (juce::dontSendNotification);
+                if (kind == nullptr) return;
+                const auto names = kind->getDeviceNames (inputs);
+                for (int i = 0; i < names.size(); ++i) box.addItem (names[i], i + 1);
+                if (separate) box.addItem ("No Device", names.size() + 1);
+                box.setText (current.isNotEmpty() ? current : separate ? juce::String ("No Device") : juce::String(), juce::dontSendNotification);
+            };
+            fill (input, true, setup.inputDeviceName); fill (output, false, setup.outputDeviceName);
+            input.setVisible (separate); inputLabel.setVisible (separate);
+            inputLabel.setText ("Audio Input Device", juce::dontSendNotification); outputLabel.setText (separate ? "Audio Output Device" : "Audio Device", juce::dontSendNotification);
+            auto* device = devices.getCurrentAudioDevice();
+            rate.clear (juce::dontSendNotification); buffer.clear (juce::dontSendNotification);
+            if (device != nullptr)
+            {
+                for (const auto r : device->getAvailableSampleRates()) rate.addItem (juce::String (juce::roundToInt (r)), juce::roundToInt (r));
+                for (const auto b : device->getAvailableBufferSizes()) buffer.addItem (juce::String (b) + " Samples", b);
+                rate.setSelectedId (juce::roundToInt (device->getCurrentSampleRate()), juce::dontSendNotification);
+                buffer.setSelectedId (device->getCurrentBufferSizeSamples(), juce::dontSendNotification);
+            }
+            for (auto* c : std::initializer_list<juce::Component*> { &rate, &buffer, &inputConfig, &outputConfig }) c->setEnabled (device != nullptr);
             const auto now = owner.session.audioLatency();
+            inputLatency.setText (juce::String (now.inputMs, 2) + " ms", juce::dontSendNotification);
+            outputLatency.setText (juce::String (now.outputMs, 2) + " ms", juce::dontSendNotification);
             compensation.setText (juce::String (now.compensationMs, 2) + " ms", juce::dontSendNotification);
-            latency.setText ("Input " + juce::String (now.inputMs, 2) + " ms   Output " + juce::String (now.outputMs, 2) + " ms   Overall " + juce::String (now.overallMs(), 2) + " ms",
-                             juce::dontSendNotification);
+            overall.setText (juce::String (now.overallMs(), 2) + " ms", juce::dontSendNotification);
+            resized();
         }
         void resized() override
         {
-            auto area = getLocalBounds();
-            auto row = area.removeFromBottom (40).reduced (16, 8);
-            for (auto* b : { &inputConfig, &outputConfig, &mpe, &midiPorts }) { b->setBounds (row.removeFromLeft (112)); row.removeFromLeft (8); }
-            surface.setBounds (row.removeFromLeft (112));
-            row = area.removeFromBottom (36).reduced (16, 4);
-            typeLabel.setBounds (row.removeFromLeft (120)); type.setBounds (row.removeFromLeft (90)); row.removeFromLeft (24);
-            depthLabel.setBounds (row.removeFromLeft (80)); depth.setBounds (row.removeFromLeft (70));
-            row = area.removeFromBottom (32).reduced (16, 4);
-            compensationLabel.setBounds (row.removeFromLeft (170)); compensation.setBounds (row.removeFromLeft (80)); row.removeFromLeft (16);
-            latency.setBounds (row);
-            devices.setBounds (area);
+            auto area = getLocalBounds().reduced (16, 8);
+            preferenceHeading (area, deviceHeading);
+            preferenceRow (area, typeLabel, type);
+            if (separate) preferenceRow (area, inputLabel, input);
+            preferenceRow (area, outputLabel, output);
+            auto row = area.removeFromTop (24); configLabel.setBounds (row.removeFromLeft (170));
+            inputConfig.setBounds (row.removeFromLeft (92)); row.removeFromLeft (6); outputConfig.setBounds (row.removeFromLeft (92));
+            area.removeFromTop (5);
+            preferenceHeading (area, rateHeading);
+            preferenceRow (area, rateLabel, rate, 110);
+            preferenceHeading (area, latencyHeading);
+            preferenceRow (area, bufferLabel, buffer, 130);
+            preferenceRow (area, inputLatencyLabel, inputLatency, 110); preferenceRow (area, outputLatencyLabel, outputLatency, 110);
+            preferenceRow (area, compensationLabel, compensation, 80); preferenceRow (area, overallLabel, overall, 110);
         }
     private:
         void changeListenerCallback (juce::ChangeBroadcaster*) override { sync(); }
+        // A device chosen: on a driver type with one device chooser it serves both directions.
+        void chooseDevice (bool inputs)
+        {
+            const auto name = (inputs ? input : output).getText();
+            changeSetup ([&] (auto& setup)
+            {
+                const auto chosen = name == "No Device" ? juce::String() : name;
+                if (inputs || ! separate) { setup.inputDeviceName = separate ? chosen : name; setup.useDefaultInputChannels = true; }
+                if (! inputs || ! separate) { setup.outputDeviceName = separate ? chosen : name; setup.useDefaultOutputChannels = true; }
+            });
+        }
+        template <typename Change> void changeSetup (Change&& change)
+        {
+            auto setup = manager().getAudioDeviceSetup();
+            change (setup);
+            if (const auto error = manager().setAudioDeviceSetup (setup, true); error.isNotEmpty()) owner.report (juce::Result::fail (error));
+            sync();
+        }
+        void configure (bool inputs)
+        {
+            if (inputs) configureGroups (owner.session.audioInputGroups(), true); else configureGroups (owner.session.audioOutputGroups(), false);
+        }
+        template <typename Groups> void configureGroups (const Groups& groups, bool inputs)
+        {
+            juce::PopupMenu menu;
+            auto* device = manager().getCurrentAudioDevice();
+            const int channels = device != nullptr ? (inputs ? device->getInputChannelNames() : device->getOutputChannelNames()).size() : 0;
+            for (int first = 0; first + 1 < channels; first += 2)
+            {
+                const auto stereo = std::any_of (groups.begin(), groups.end(), [first] (const auto& g) { return g.firstChannel == first && g.channels == 2; });
+                menu.addSectionHeader ((inputs ? "Inputs " : "Outputs ") + juce::String (first + 1) + "/" + juce::String (first + 2));
+                menu.addItem (1000 + first, "Stereo", true, stereo); menu.addItem (2000 + first, "Two Mono", true, ! stereo);
+            }
+            menu.addSectionHeader ("On");
+            for (int i = 0; i < (int) groups.size(); ++i) menu.addItem (i + 1, groups[(size_t) i].name, true, groups[(size_t) i].enabled);
+            auto safe = juce::Component::SafePointer<AudioPage> (this);
+            menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (inputs ? &inputConfig : &outputConfig), [safe, groups, inputs] (int chosen)
+            {
+                if (safe == nullptr || chosen <= 0) return;
+                auto& session = safe->owner.session;
+                if (chosen >= 2000) safe->owner.report (inputs ? session.setAudioInputPairStereo (chosen - 2000, false) : session.setAudioOutputPairStereo (chosen - 2000, false));
+                else if (chosen >= 1000) safe->owner.report (inputs ? session.setAudioInputPairStereo (chosen - 1000, true) : session.setAudioOutputPairStereo (chosen - 1000, true));
+                else if (juce::isPositiveAndBelow (chosen - 1, (int) groups.size()))
+                {
+                    const auto& group = groups[(size_t) chosen - 1];
+                    safe->owner.report (inputs ? session.setAudioInputEnabled (group.name, ! group.enabled) : session.setAudioOutputEnabled (group.name, ! group.enabled));
+                }
+                safe->owner.refresh();
+            });
+        }
         Impl& owner;
-        juce::AudioDeviceSelectorComponent devices;
-        juce::Label typeLabel, depthLabel, compensationLabel, compensation, latency;
-        juce::ComboBox type, depth;
-        juce::TextButton mpe { "MPE Inputs..." }, inputConfig { "Input Config..." }, outputConfig { "Output Config..." }, midiPorts { "MIDI Ports..." }, surface { "Control Surface..." };
+        bool syncing = false, separate = true;
+        juce::Label deviceHeading, typeLabel, inputLabel, outputLabel, configLabel, rateHeading, rateLabel, latencyHeading, bufferLabel, inputLatencyLabel, inputLatency,
+                    outputLatencyLabel, outputLatency, compensationLabel, compensation, overallLabel, overall;
+        juce::ComboBox type, input, output, rate, buffer;
+        juce::TextButton inputConfig { "Input Config" }, outputConfig { "Output Config" };
+    };
+    // Preferences' Link, Tempo & MIDI page: its MIDI section, after the reference's (static reading). The
+    // control surface's script and ports, then each port's switches: an input's Sync (External Sync
+    // follows its clock) and MPE, an output's Track (MIDI tracks can play to it) and Sync (it gets MIDI
+    // Clock). Halftrack has one control surface, Mackie Control, and no Link, tempo follower, takeover or
+    // Remote switches.
+    class MidiPage final : public juce::Component, private juce::Timer
+    {
+    public:
+        explicit MidiPage (Impl& o) : owner (o)
+        {
+            for (auto* c : std::initializer_list<juce::Component*> { &heading, &surfaceTitle, &inputTitle, &outputTitle, &surface, &surfaceInput, &surfaceOutput, &portsHeading, &ports })
+                addAndMakeVisible (c);
+            styleHeading (heading, "MIDI"); styleHeading (portsHeading, "MIDI Ports");
+            surfaceTitle.setText ("Control Surface", juce::dontSendNotification); inputTitle.setText ("Input", juce::dontSendNotification); outputTitle.setText ("Output", juce::dontSendNotification);
+            for (auto* title : { &surfaceTitle, &inputTitle, &outputTitle }) title->setColour (juce::Label::textColourId, muted);
+            surface.setName ("Control surface"); surfaceInput.setName ("Control surface input"); surfaceOutput.setName ("Control surface output");
+            surface.setTooltip ("Control Surface: a Mackie Control surface (or one in Mackie mode) on these MIDI ports");
+            surface.addItem ("None", 1); surface.addItem ("Mackie Control", 2);
+            surface.onChange = [this] { if (! syncing) chooseSurface(); };
+            surfaceInput.onChange = surfaceOutput.onChange = [this] { if (! syncing) chooseSurfacePorts(); };
+            ports.setViewedComponent (&rows, false); ports.setScrollBarsShown (true, false);
+            sync(); startTimerHz (2);
+        }
+        ~MidiPage() override { rows.deleteAllChildren(); }
+        void sync()
+        {
+            const juce::ScopedValueSetter<bool> quiet (syncing, true);
+            const auto inputs = owner.session.midiInputPorts();
+            juce::StringArray outputs; for (const auto& port : owner.session.midiOutputPorts()) outputs.add (port.name);
+            const auto current = owner.session.controlSurface();
+            if (current.input.isNotEmpty()) mackie = true;
+            surface.setSelectedId (mackie ? 2 : 1, juce::dontSendNotification);
+            surfaceInput.clear (juce::dontSendNotification); surfaceOutput.clear (juce::dontSendNotification);
+            surfaceInput.addItem ("None", 1); for (int i = 0; i < inputs.size(); ++i) surfaceInput.addItem (inputs[i], i + 2);
+            surfaceOutput.addItem ("None", 1); for (int i = 0; i < outputs.size(); ++i) surfaceOutput.addItem (outputs[i], i + 2);
+            surfaceInput.setSelectedId (inputs.contains (current.input) ? inputs.indexOf (current.input) + 2 : 1, juce::dontSendNotification);
+            surfaceOutput.setSelectedId (outputs.contains (current.output) ? outputs.indexOf (current.output) + 2 : 1, juce::dontSendNotification);
+            surfaceInput.setEnabled (mackie); surfaceOutput.setEnabled (mackie && current.input.isNotEmpty());
+            // The ports' rows, rebuilt when the ports change.
+            if (inputs != shownInputs || outputs != shownOutputs)
+            {
+                shownInputs = inputs; shownOutputs = outputs;
+                rows.deleteAllChildren(); switches.clear();
+                const auto addLabel = [this] (const juce::String& text, bool title)
+                {
+                    auto* label = new juce::Label ({}, text); label->setFont (font (title ? 10.5f : 11.0f, title)); if (title) label->setColour (juce::Label::textColourId, muted);
+                    rows.addAndMakeVisible (label); return label;
+                };
+                const auto addSwitch = [this] (const juce::String& name, std::function<void (bool)> set)
+                {
+                    auto* button = new juce::ToggleButton(); button->setName (name); rows.addAndMakeVisible (button);
+                    button->onClick = [button, set] { set (button->getToggleState()); };
+                    switches.push_back (button); return button;
+                };
+                int y = 0;
+                const auto header = [&] (const juce::String& title, const juce::StringArray& columns)
+                {
+                    addLabel (title, true)->setBounds (0, y, 170, 20);
+                    for (int c = 0; c < columns.size(); ++c) addLabel (columns[c], true)->setBounds (170 + c * 60, y, 60, 20);
+                    y += 22;
+                };
+                header ("Input Ports", { "Sync", "MPE" });
+                for (const auto& name : inputs)
+                {
+                    addLabel (name, false)->setBounds (0, y, 170, 22);
+                    addSwitch ("Input sync " + name, [this, name] (bool on) { owner.report (owner.session.setMidiInputSync (name, on)); owner.refresh(); owner.resized(); })->setBounds (178, y, 40, 22);
+                    addSwitch ("Input MPE " + name, [this, name] (bool on) { owner.report (owner.session.setMidiInputMpe (name, on)); })->setBounds (238, y, 40, 22);
+                    y += 24;
+                }
+                if (inputs.isEmpty()) { addLabel ("No MIDI inputs", false)->setBounds (0, y, 300, 22); y += 24; }
+                y += 6;
+                header ("Output Ports", { "Track", "Sync" });
+                for (const auto& name : outputs)
+                {
+                    addLabel (name, false)->setBounds (0, y, 170, 22);
+                    addSwitch ("Output track " + name, [this, name] (bool on) { setPort (name, on, std::nullopt); })->setBounds (178, y, 40, 22);
+                    addSwitch ("Output sync " + name, [this, name] (bool on) { setPort (name, std::nullopt, on); })->setBounds (238, y, 40, 22);
+                    y += 24;
+                }
+                if (outputs.isEmpty()) { addLabel ("No MIDI outputs", false)->setBounds (0, y, 300, 22); y += 24; }
+                rows.setSize (juce::jmax (1, ports.getMaximumVisibleWidth()), y);
+            }
+            const auto outputPorts = owner.session.midiOutputPorts();
+            for (auto* button : switches)
+            {
+                const auto name = button->getName();
+                bool on = false;
+                if (name.startsWith ("Input sync ")) on = owner.session.isMidiInputSync (name.fromFirstOccurrenceOf ("Input sync ", false, false));
+                else if (name.startsWith ("Input MPE ")) on = owner.session.isMidiInputMpe (name.fromFirstOccurrenceOf ("Input MPE ", false, false));
+                else for (const auto& port : outputPorts)
+                {
+                    if (name == "Output track " + port.name) on = port.track;
+                    if (name == "Output sync " + port.name) on = port.sync;
+                }
+                button->setToggleState (on, juce::dontSendNotification);
+            }
+        }
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced (16, 8);
+            preferenceHeading (area, heading);
+            auto titles = area.removeFromTop (18);
+            surfaceTitle.setBounds (titles.removeFromLeft (150)); titles.removeFromLeft (6); inputTitle.setBounds (titles.removeFromLeft (110)); titles.removeFromLeft (6); outputTitle.setBounds (titles);
+            auto row = area.removeFromTop (24);
+            surface.setBounds (row.removeFromLeft (150)); row.removeFromLeft (6); surfaceInput.setBounds (row.removeFromLeft (110)); row.removeFromLeft (6); surfaceOutput.setBounds (row);
+            area.removeFromTop (8);
+            preferenceHeading (area, portsHeading);
+            ports.setBounds (area);
+            rows.setSize (juce::jmax (1, ports.getMaximumVisibleWidth()), rows.getHeight());
+        }
+    private:
+        void timerCallback() override { if (isShowing()) sync(); }
+        void chooseSurface()
+        {
+            mackie = surface.getSelectedId() == 2;
+            if (! mackie && owner.session.controlSurface().input.isNotEmpty()) owner.report (owner.session.setControlSurface ({}), "No control surface.");
+            sync();
+        }
+        void chooseSurfacePorts()
+        {
+            Session::ControlSurface next;
+            next.input = surfaceInput.getSelectedId() > 1 ? surfaceInput.getText() : juce::String();
+            next.output = next.input.isNotEmpty() && surfaceOutput.getSelectedId() > 1 ? surfaceOutput.getText() : juce::String();
+            owner.report (owner.session.setControlSurface (next), next.input.isEmpty() ? "No control surface." : "Mackie Control on " + next.input + ".");
+            sync();
+        }
+        void setPort (const juce::String& name, std::optional<bool> track, std::optional<bool> sync)
+        {
+            for (const auto& port : owner.session.midiOutputPorts())
+                if (port.name == name) { owner.report (owner.session.setMidiOutputPort (name, track.value_or (port.track), sync.value_or (port.sync))); owner.refresh(); return; }
+        }
+        Impl& owner;
+        bool syncing = false, mackie = false;
+        juce::Label heading, surfaceTitle, inputTitle, outputTitle, portsHeading;
+        juce::ComboBox surface, surfaceInput, surfaceOutput;
+        juce::Viewport ports;
+        juce::Component rows;
+        std::vector<juce::ToggleButton*> switches;
+        juce::StringArray shownInputs { "-" }, shownOutputs { "-" };
     };
     // The Info View, after the reference's: what the control under the pointer is and does, from its
     // name and tooltip, and when it cannot be used now.
@@ -13339,30 +13438,99 @@ private:
     bool showInfo = true, showBrowser = true, showDetail = true;
     static constexpr int infoCornerWidth = 200;
     static constexpr int infoHeight = 110;
-    void showAudioSettings() { showDialog ("Halftrack - Audio & MIDI Setup", std::make_unique<AudioSetupPanel> (*this), 660, 680); }
     // Preferences, after the reference's Record, Warp & Launch settings.
-    class PreferencesPanel final : public juce::Component
+    // Preferences' Display & Input page: the display zoom and Follow Behavior.
+    class DisplayPage final : public juce::Component
     {
     public:
-        explicit PreferencesPanel (Impl& o) : owner (o)
+        explicit DisplayPage (Impl& o) : owner (o)
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord, &startPlayback, &warpLabel, &warp, &modeLabel, &mode, &gridLabel, &grid, &themeLabel, &theme, &zoomLabel, &zoom, &followLabel, &follow, &reset })
-                addAndMakeVisible (c);
-            // Look: the interface theme and the display zoom.
-            themeLabel.setText ("Theme", juce::dontSendNotification); zoomLabel.setText ("Zoom Display", juce::dontSendNotification);
-            followLabel.setText ("Follow Behavior", juce::dontSendNotification); follow.setName ("Follow behavior");
-            follow.addItem ("Page", 1); follow.addItem ("Scroll", 2);
-            theme.setName ("Interface theme"); zoom.setName ("Display zoom");
-            for (int kind = 0; kind < themes::kindCount; ++kind) theme.addItem (themes::name ((themes::Kind) kind), kind + 1);
+            for (auto* c : std::initializer_list<juce::Component*> { &heading, &zoomLabel, &zoom, &followLabel, &follow }) addAndMakeVisible (c);
+            styleHeading (heading, "Display");
+            zoomLabel.setText ("Zoom Display", juce::dontSendNotification); followLabel.setText ("Follow Behavior", juce::dontSendNotification);
+            zoom.setName ("Display zoom"); follow.setName ("Follow behavior");
             for (int percent = 50; percent <= 200; percent += 25) zoom.addItem (juce::String (percent) + "%", percent);
+            follow.addItem ("Page", 1); follow.addItem ("Scroll", 2);
+            zoom.onChange = follow.onChange = [this] { apply(); };
+            sync();
+        }
+        void sync()
+        {
+            const auto p = owner.session.preferences();
+            zoom.setSelectedId (p.zoomPercent, juce::dontSendNotification); follow.setSelectedId (p.scrollFollow ? 2 : 1, juce::dontSendNotification);
+        }
+        void apply()
+        {
+            auto p = owner.session.preferences();
+            p.zoomPercent = zoom.getSelectedId() > 0 ? zoom.getSelectedId() : 100; p.scrollFollow = follow.getSelectedId() == 2;
+            owner.report (owner.session.setPreferences (p)); owner.applyInterfaceLook(); sync();
+        }
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced (16, 8);
+            preferenceHeading (area, heading); preferenceRow (area, zoomLabel, zoom, 110); preferenceRow (area, followLabel, follow, 110);
+        }
+    private:
+        Impl& owner;
+        juce::Label heading, zoomLabel, followLabel;
+        juce::ComboBox zoom, follow;
+    };
+    // Preferences' Theme & Colors page: the interface's theme, Halftrack's own.
+    class ThemePage final : public juce::Component
+    {
+    public:
+        explicit ThemePage (Impl& o) : owner (o)
+        {
+            for (auto* c : std::initializer_list<juce::Component*> { &heading, &themeLabel, &theme }) addAndMakeVisible (c);
+            styleHeading (heading, "Theme"); themeLabel.setText ("Theme", juce::dontSendNotification);
+            theme.setName ("Interface theme");
+            for (int kind = 0; kind < themes::kindCount; ++kind) theme.addItem (themes::name ((themes::Kind) kind), kind + 1);
+            theme.onChange = [this]
+            {
+                auto p = owner.session.preferences();
+                p.theme = juce::jlimit (0, Session::Preferences::themeCount - 1, theme.getSelectedId() - 1);
+                owner.report (owner.session.setPreferences (p)); owner.applyInterfaceLook(); sync();
+            };
+            sync();
+        }
+        void sync() { theme.setSelectedId (owner.session.preferences().theme + 1, juce::dontSendNotification); }
+        void resized() override { auto area = getLocalBounds().reduced (16, 8); preferenceHeading (area, heading); preferenceRow (area, themeLabel, theme, 160); }
+    private:
+        Impl& owner;
+        juce::Label heading, themeLabel;
+        juce::ComboBox theme;
+    };
+    // Preferences' Record, Warp & Launch page, in the reference's sections: Record, Warp and fades, and
+    // Launch.
+    class RecordPage final : public juce::Component
+    {
+    public:
+        explicit RecordPage (Impl& o) : owner (o)
+        {
+            for (auto* c : std::initializer_list<juce::Component*> { &recordHeading, &typeLabel, &type, &depthLabel, &depth, &countInLabel, &countIn, &exclusiveArm, &exclusiveSolo,
+                                                                    &sceneRecord, &startPlayback, &warpHeading, &autoWarp, &warpLabel, &warp, &edgeFades, &launchHeading, &modeLabel, &mode,
+                                                                    &gridLabel, &grid })
+                addAndMakeVisible (c);
+            styleHeading (recordHeading, "Record"); styleHeading (warpHeading, "Warp and Fades"); styleHeading (launchHeading, "Launch");
+            typeLabel.setText ("File Type", juce::dontSendNotification); depthLabel.setText ("Bit Depth", juce::dontSendNotification);
+            countInLabel.setText ("Count-In", juce::dontSendNotification);
+            type.setName ("Record file type"); depth.setName ("Record bit depth"); countIn.setName ("Count-in");
+            type.addItem ("WAV", 1); type.addItem ("AIFF", 2); type.addItem ("FLAC", 3);
+            depth.addItem ("16", 16); depth.addItem ("24", 24); depth.addItem ("32", 32);
+            countIn.addItem ("None", 1); countIn.addItem ("1 Bar", 2); countIn.addItem ("2 Bars", 3); countIn.addItem ("4 Bars", 5);
+            type.onChange = depth.onChange = [this]
+            {
+                const auto chosen = Session::RecordingFormat { static_cast<Session::RecordingFileType> (type.getSelectedId() - 1), depth.getSelectedId() };
+                owner.report (owner.session.setRecordingFormat (chosen));
+                sync();
+            };
             exclusiveArm.setName ("Exclusive arm"); exclusiveSolo.setName ("Exclusive solo"); autoWarp.setName ("Auto-warp long samples");
-            sceneRecord.setName ("Start recording on scene launch");
-            startPlayback.setName ("Start playback with record");
+            sceneRecord.setName ("Start recording on scene launch"); startPlayback.setName ("Start playback with record");
             startPlayback.setTooltip ("Start Playback with Record: Record starts playback too. Off, it waits for Play or a Session launch; Shift-click reverses it");
             edgeFades.setName ("Create fades on clip edges");
             edgeFades.setTooltip ("Create Fades on Clip Edges: new audio clips, and the edges a split makes, fade over 4 ms, and touching clips crossfade");
             sceneRecord.setTooltip ("Start Recording on Scene Launch: launching a scene also records into its empty slots on armed tracks");
-            warp.setName ("Default warp mode"); mode.setName ("Default launch mode"); grid.setName ("Default launch quantization"); reset.setName ("Reset preferences");
+            warp.setName ("Default warp mode"); mode.setName ("Default launch mode"); grid.setName ("Default launch quantization");
             warpLabel.setText ("Default Warp Mode", juce::dontSendNotification); modeLabel.setText ("Default Launch Mode", juce::dontSendNotification);
             gridLabel.setText ("Default Launch Quantization", juce::dontSendNotification);
             int id = 1;
@@ -13371,13 +13539,16 @@ private:
             for (const auto* name : { "Trigger", "Gate", "Toggle", "Repeat" }) mode.addItem (name, id++);
             for (const auto& [name, value] : Session::clipQuantisations()) grid.addItem (name, (int) value + 1);
             for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord, &startPlayback }) b->onClick = [this] { apply(); };
-            warp.onChange = mode.onChange = grid.onChange = theme.onChange = zoom.onChange = follow.onChange = [this] { apply(); };
-            reset.onClick = [this] { owner.report (owner.session.resetPreferences(), "Preferences reset to their defaults."); sync(); };
+            warp.onChange = mode.onChange = grid.onChange = countIn.onChange = [this] { apply(); };
             sync();
         }
         void sync()
         {
             const auto p = owner.session.preferences();
+            const auto format = owner.session.recordingFormat();
+            type.setSelectedId (static_cast<int> (format.type) + 1, juce::dontSendNotification);
+            depth.setSelectedId (format.bitDepth, juce::dontSendNotification);
+            countIn.setSelectedId (p.countInBars + 1, juce::dontSendNotification);
             exclusiveArm.setToggleState (p.exclusiveArm, juce::dontSendNotification); exclusiveSolo.setToggleState (p.exclusiveSolo, juce::dontSendNotification);
             autoWarp.setToggleState (p.autoWarpLongSamples, juce::dontSendNotification);
             sceneRecord.setToggleState (p.startRecordingOnSceneLaunch, juce::dontSendNotification);
@@ -13385,44 +13556,43 @@ private:
             edgeFades.setToggleState (p.createFadesOnClipEdges, juce::dontSendNotification);
             for (int i = 0; i < (int) std::size (warpModes); ++i) if (warpModes[i] == p.defaultWarpMode) warp.setSelectedId (i + 1, juce::dontSendNotification);
             mode.setSelectedId ((int) p.defaultLaunchMode + 1, juce::dontSendNotification); grid.setSelectedId ((int) p.defaultLaunchQuantisation + 1, juce::dontSendNotification);
-            theme.setSelectedId (p.theme + 1, juce::dontSendNotification); zoom.setSelectedId (p.zoomPercent, juce::dontSendNotification);
-            follow.setSelectedId (p.scrollFollow ? 2 : 1, juce::dontSendNotification);
         }
         void apply()
         {
-            // Settings shown elsewhere, such as Driver Error Compensation, are kept.
+            // Settings on other pages, such as Driver Error Compensation, are kept.
             auto p = owner.session.preferences();
             p.exclusiveArm = exclusiveArm.getToggleState(); p.exclusiveSolo = exclusiveSolo.getToggleState(); p.autoWarpLongSamples = autoWarp.getToggleState();
             p.startRecordingOnSceneLaunch = sceneRecord.getToggleState();
             p.startPlaybackWithRecord = startPlayback.getToggleState();
             p.createFadesOnClipEdges = edgeFades.getToggleState();
+            p.countInBars = juce::jmax (0, countIn.getSelectedId() - 1);
             p.defaultWarpMode = warpModes[(size_t) juce::jlimit (0, (int) std::size (warpModes) - 1, warp.getSelectedId() - 1)];
             p.defaultLaunchMode = (Session::LaunchMode) juce::jlimit (0, 3, mode.getSelectedId() - 1);
             p.defaultLaunchQuantisation = (Session::ClipQuantisation) juce::jlimit (0, (int) Session::clipQuantisations().size() - 1, grid.getSelectedId() - 1);
-            p.theme = juce::jlimit (0, Session::Preferences::themeCount - 1, theme.getSelectedId() - 1);
-            p.zoomPercent = zoom.getSelectedId() > 0 ? zoom.getSelectedId() : 100;
-            p.scrollFollow = follow.getSelectedId() == 2;
-            owner.report (owner.session.setPreferences (p)); owner.applyInterfaceLook(); sync();
+            owner.report (owner.session.setPreferences (p)); sync();
         }
         void resized() override
         {
-            auto area = getLocalBounds().reduced (16);
-            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord, &startPlayback }) { b->setBounds (area.removeFromTop (26)); area.removeFromTop (4); }
-            for (auto [label, box] : { std::pair<juce::Label*, juce::ComboBox*> { &warpLabel, &warp }, { &modeLabel, &mode }, { &gridLabel, &grid }, { &themeLabel, &theme }, { &zoomLabel, &zoom }, { &followLabel, &follow } })
-            { auto row = area.removeFromTop (26); label->setBounds (row.removeFromLeft (190)); box->setBounds (row.removeFromLeft (180)); area.removeFromTop (6); }
-            area.removeFromTop (10); reset.setBounds (area.removeFromTop (26).removeFromLeft (160));
+            auto area = getLocalBounds().reduced (16, 8);
+            preferenceHeading (area, recordHeading);
+            preferenceRow (area, typeLabel, type, 100); preferenceRow (area, depthLabel, depth, 100); preferenceRow (area, countInLabel, countIn, 100);
+            for (auto* b : { &exclusiveArm, &exclusiveSolo, &sceneRecord, &startPlayback }) { b->setBounds (area.removeFromTop (22)); area.removeFromTop (3); }
+            preferenceHeading (area, warpHeading);
+            autoWarp.setBounds (area.removeFromTop (22)); area.removeFromTop (3);
+            preferenceRow (area, warpLabel, warp, 160);
+            edgeFades.setBounds (area.removeFromTop (22)); area.removeFromTop (3);
+            preferenceHeading (area, launchHeading);
+            preferenceRow (area, modeLabel, mode, 120); preferenceRow (area, gridLabel, grid, 120);
         }
     private:
         Impl& owner;
         static constexpr Session::WarpMode warpModes[] { Session::WarpMode::beats, Session::WarpMode::tones, Session::WarpMode::texture, Session::WarpMode::repitch,
                                                          Session::WarpMode::stretch, Session::WarpMode::complexPro, Session::WarpMode::efficient };
+        juce::Label recordHeading, typeLabel, depthLabel, countInLabel, warpHeading, warpLabel, launchHeading, modeLabel, gridLabel;
+        juce::ComboBox type, depth, countIn, warp, mode, grid;
         juce::ToggleButton exclusiveArm { "Exclusive Arm" }, exclusiveSolo { "Exclusive Solo" }, autoWarp { "Auto-Warp Long Samples" },
                            edgeFades { "Create Fades on Clip Edges" }, sceneRecord { "Start Recording on Scene Launch" }, startPlayback { "Start Playback with Record" };
-        juce::Label warpLabel, modeLabel, gridLabel, themeLabel, zoomLabel, followLabel;
-        juce::ComboBox warp, mode, grid, theme, zoom, follow;
-        juce::TextButton reset { "Reset to Defaults" };
     };
-    void showPreferences() { showDialog ("Halftrack - Preferences", std::make_unique<PreferencesPanel> (*this), 440, 486); }
     // What this copy of Halftrack is: its version, source commit and platform (selectable, to paste
     // into a report), its license, and where it keeps settings and the User Library.
     class AboutPanel final : public juce::Component
@@ -13461,10 +13631,10 @@ private:
     // Plug-Ins settings, after the reference's: the plug-in sources, and Rescan, which looks for new,
     // changed and removed plug-ins (Alt/Option-click forgets the list and scans everything afresh).
     // Changing a source rescans once any scan running has stopped.
-    class PluginsPanel final : public juce::Component, private juce::Timer
+    class PluginsPage final : public juce::Component, private juce::Timer
     {
     public:
-        explicit PluginsPanel (Impl& o) : owner (o)
+        explicit PluginsPage (Impl& o) : owner (o)
         {
             for (auto* c : std::initializer_list<juce::Component*> { &heading, &audioUnits, &vst3System, &vst3Custom, &folderLabel, &folder, &browse, &rescanLabel, &rescan, &status })
                 addAndMakeVisible (c);
@@ -13509,7 +13679,7 @@ private:
             chooser = std::make_unique<juce::FileChooser> ("Choose the VST3 Plug-In Custom Folder",
                                                            juce::File::isAbsolutePath (current) ? juce::File (current) : juce::File::getSpecialLocation (juce::File::userHomeDirectory));
             chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
-                                  [safe = juce::Component::SafePointer<PluginsPanel> (this)] (const juce::FileChooser& c)
+                                  [safe = juce::Component::SafePointer<PluginsPage> (this)] (const juce::FileChooser& c)
             {
                 if (safe == nullptr || ! c.getResult().isDirectory()) return;
                 safe->setFolder (c.getResult());
@@ -13535,14 +13705,14 @@ private:
         }
         void resized() override
         {
-            auto area = getLocalBounds().reduced (16);
-            heading.setBounds (area.removeFromTop (22)); area.removeFromTop (6);
+            auto area = getLocalBounds().reduced (16, 8);
+            preferenceHeading (area, heading);
             for (auto* b : { &audioUnits, &vst3System, &vst3Custom })
-                if (b->isVisible()) { b->setBounds (area.removeFromTop (26)); area.removeFromTop (4); }
-            auto row = area.removeFromTop (26); folderLabel.setBounds (row.removeFromLeft (190)); browse.setBounds (row.removeFromRight (80)); row.removeFromRight (6); folder.setBounds (row);
-            area.removeFromTop (10);
-            row = area.removeFromTop (26); rescanLabel.setBounds (row.removeFromLeft (190)); rescan.setBounds (row.removeFromLeft (100));
-            area.removeFromTop (8); status.setBounds (area.removeFromTop (22));
+                if (b->isVisible()) { b->setBounds (area.removeFromTop (22)); area.removeFromTop (3); }
+            auto row = area.removeFromTop (24); folderLabel.setBounds (row.removeFromLeft (190)); browse.setBounds (row.removeFromRight (80));
+            area.removeFromTop (3); folder.setBounds (area.removeFromTop (22)); area.removeFromTop (8);
+            row = area.removeFromTop (24); rescanLabel.setBounds (row.removeFromLeft (170)); rescan.setBounds (row.removeFromLeft (100));
+            area.removeFromTop (6); status.setBounds (area.removeFromTop (22));
         }
     private:
         void timerCallback() override
@@ -13561,7 +13731,108 @@ private:
         std::unique_ptr<juce::FileChooser> chooser;
         bool pending = false, pendingEverything = false;
     };
-    void showPlugins() { showDialog ("Halftrack - Plug-Ins", std::make_unique<PluginsPanel> (*this), 560, 270); }
+    // The Preferences window's content, after the reference's window (static reading; see the
+    // preferences contract): its tabs down the left in the reference's order, those holding settings
+    // Halftrack has, and the chosen tab's page beside them. The tab chosen last opens next time.
+    // Reset to Defaults, Halftrack's own, sits under the tabs.
+    class PreferencesView final : public juce::Component
+    {
+    public:
+        static constexpr int width = 556, height = 589, tabWidth = 141;
+        struct Tab { const char* title; const char* id; };
+        static constexpr Tab tabs[] { { "Display & Input", "DisplayLanguageInput" }, { "Theme & Colors", "ThemeColors" }, { "Audio", "audio" },
+                                      { "Link, Tempo & MIDI", "midi" }, { "Plug-Ins", "Plugins" }, { "Record, Warp & Launch", "RecordWarpLaunch" } };
+        explicit PreferencesView (Impl& o) : owner (o), display (o), themePage (o), audio (o), midi (o), plugins (o), record (o)
+        {
+            setName ("Preferences");
+            for (const auto& tab : tabs)
+            {
+                auto* button = buttons.add (new juce::TextButton (tab.title));
+                button->setName (juce::String (tab.id) + "TabButton"); button->setRadioGroupId (1);
+                button->setColour (juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+                button->setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff4a4a4a));
+                button->setColour (juce::TextButton::textColourOnId, ink); button->setColour (juce::TextButton::textColourOffId, ink.withAlpha (0.75f));
+                button->onClick = [this, id = juce::String (tab.id)] { showTab (id); };
+                addAndMakeVisible (button);
+            }
+            for (auto* page : pages()) { addChildComponent (page); compact (*page); }
+            reset.setName ("Reset preferences");
+            reset.onClick = [this] { owner.report (owner.session.resetPreferences(), "Preferences reset to their defaults."); owner.applyInterfaceLook(); sync(); };
+            addAndMakeVisible (reset);
+            showTab (owner.session.preferences().preferencesTab);
+        }
+        std::array<juce::Component*, std::size (tabs)> pages() { return { &display, &themePage, &audio, &midi, &plugins, &record }; }
+        // Shows a tab by its id, as the reference's links name them, or the first for an unknown one.
+        void showTab (const juce::String& id)
+        {
+            int index = 0;
+            for (int i = 0; i < (int) std::size (tabs); ++i) if (id == tabs[i].id) index = i;
+            current = tabs[index].id;
+            for (int i = 0; i < (int) std::size (tabs); ++i) { pages()[(size_t) i]->setVisible (i == index); buttons[i]->setToggleState (i == index, juce::dontSendNotification); }
+            owner.session.setPreferencesTab (current);
+            resized();
+        }
+        juce::String currentTab() const { return current; }
+        // The pages' row labels in the window's small type; headings keep theirs.
+        static void compact (juce::Component& parent)
+        {
+            for (auto* child : parent.getChildren())
+            {
+                if (auto* label = dynamic_cast<juce::Label*> (child); label != nullptr && ! label->getFont().isBold()) label->setFont (font (11.5f));
+                compact (*child);
+            }
+        }
+        void sync() { display.sync(); themePage.sync(); audio.sync(); midi.sync(); plugins.sync(); record.sync(); }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (panel);
+            g.setColour (themes::colour (0xff262626)); g.fillRect (getLocalBounds().removeFromLeft (tabWidth));
+            g.setColour (line); g.drawVerticalLine (tabWidth, 0.0f, (float) getHeight());
+        }
+        void resized() override
+        {
+            auto area = getLocalBounds();
+            auto column = area.removeFromLeft (tabWidth).reduced (6, 8);
+            reset.setBounds (column.removeFromBottom (24));
+            for (auto* button : buttons) { button->setBounds (column.removeFromTop (24)); column.removeFromTop (2); }
+            for (auto* page : pages()) page->setBounds (area.withTrimmedLeft (1));
+        }
+    private:
+        Impl& owner;
+        DisplayPage display; ThemePage themePage; AudioPage audio; MidiPage midi; PluginsPage plugins; RecordPage record;
+        juce::OwnedArray<juce::TextButton> buttons;
+        juce::TextButton reset { "Reset to Defaults" };
+        juce::String current;
+    };
+    // The Preferences window: a normal window, one at a time, as the reference's.
+    class PreferencesWindow final : public juce::DocumentWindow
+    {
+    public:
+        PreferencesWindow (Impl& owner, juce::LookAndFeel& look)
+            : DocumentWindow ("Halftrack - Preferences", panel, juce::DocumentWindow::closeButton), view (std::make_unique<PreferencesView> (owner))
+        {
+            setLookAndFeel (&look); setUsingNativeTitleBar (true); setResizable (false, false);
+            view->setSize (PreferencesView::width, PreferencesView::height);
+            setContentNonOwned (view.get(), true);
+            centreAroundComponent (&owner, getWidth(), getHeight());
+            setVisible (true);
+        }
+        ~PreferencesWindow() override { clearContentComponent(); setLookAndFeel (nullptr); }
+        void closeButtonPressed() override { delete this; }
+        PreferencesView& content() { return *view; }
+    private:
+        std::unique_ptr<PreferencesView> view;
+    };
+    juce::Component::SafePointer<PreferencesWindow> preferencesWindow;
+    // Opens Preferences at a tab, or at the one chosen last, bringing an open window to the front.
+    void showPreferences (const juce::String& tab = {})
+    {
+        if (preferencesWindow == nullptr) preferencesWindow = new PreferencesWindow (*this, theme);
+        if (tab.isNotEmpty()) preferencesWindow->content().showTab (tab);
+        preferencesWindow->toFront (true);
+    }
+    void showAudioSettings() { showPreferences ("audio"); }
+    void showPlugins() { showPreferences ("Plugins"); }
     // Devices selected in the track's device chain, for grouping, ungrouping and deleting.
     juce::StringArray selectedDevices;
     std::vector<juce::String> trackDeviceIds() const
@@ -17233,8 +17504,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (info.isVisible(), "and shows it again");
     }
     {
-        // Preferences: the panel's switches edit them, and solo clicks follow Exclusive Solo.
-        PreferencesPanel panel (*this); panel.setSize (440, 486);
+        // Preferences: the window's switches edit them, and solo clicks follow Exclusive Solo.
+        PreferencesView panel (*this); panel.setSize (PreferencesView::width, PreferencesView::height);
         auto* exclusive = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Exclusive solo"));
         check (exclusive != nullptr && exclusive->getToggleState() == session.preferences().exclusiveSolo, "the Preferences panel shows Exclusive Solo");
         exclusive->setToggleState (false, juce::dontSendNotification); exclusive->onClick();
@@ -17252,12 +17523,21 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         edgeFades->setToggleState (false, juce::dontSendNotification); edgeFades->onClick();
         check (! session.preferences().createFadesOnClipEdges, "switching it off saves the preference");
         auto* resetButton = findNamed (panel, "Reset preferences");
-        check (resetButton != nullptr && panel.getLocalBounds().contains (resetButton->getBounds()), "every preference fits in the panel");
+        bool fits = resetButton != nullptr && panel.getLocalBounds().contains (resetButton->getBounds());
+        for (const auto& tab : PreferencesView::tabs)
+        {
+            panel.showTab (tab.id);
+            for (auto* page : panel.pages())
+                if (page->isVisible())
+                    for (auto* child : page->getChildren())
+                        if (child->isVisible()) fits = fits && page->getLocalBounds().contains (child->getBounds());
+        }
+        check (fits, "every preference fits on its page");
     }
     {
         // Themes: choosing one in Preferences recolours the look-and-feel, the colours components
         // set on themselves and the painting; switching back restores Dark exactly.
-        PreferencesPanel panel (*this); panel.setSize (440, 486);
+        PreferencesView panel (*this); panel.setSize (PreferencesView::width, PreferencesView::height);
         auto* themeChooser = dynamic_cast<juce::ComboBox*> (findNamed (panel, "Interface theme"));
         auto* zoomChooser = dynamic_cast<juce::ComboBox*> (findNamed (panel, "Display zoom"));
         check (themeChooser != nullptr && themeChooser->getNumItems() == themes::kindCount && themeChooser->getText() == "Dark" && zoomChooser != nullptr && zoomChooser->getText() == "100%",
@@ -17327,7 +17607,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto folder = fixture != nullptr ? juce::File (fixture).getParentDirectory() : empty;
         auto p = session.preferences(); p.useAudioUnits = false; p.useVst3SystemFolders = false; p.useVst3CustomFolder = true; p.vst3CustomFolder = folder.getFullPathName();
         check (session.setPreferences (p).wasOk(), "use only the custom VST3 folder");
-        PluginsPanel panel (*this); panel.setSize (560, 270);
+        PluginsPage panel (*this); panel.setSize (PreferencesView::width - PreferencesView::tabWidth, PreferencesView::height);
         auto* custom = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Use VST3 custom folder"));
         auto* system = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Use VST3 system folders"));
         auto* rescanButton = dynamic_cast<juce::Button*> (findNamed (panel, "Rescan plug-ins"));
@@ -17622,14 +17902,67 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             }
     }
     {
-        // Audio & MIDI Setup lays out its recording and input settings inside the dialog.
-        AudioSetupPanel panel (*this); panel.setSize (660, 680);
-        auto* inputs = findNamed (panel, "Input config"); auto* mpeInputs = findNamed (panel, "MPE inputs"); auto* fileType = findNamed (panel, "Record file type");
-        auto* outputs = findNamed (panel, "Output config"); auto* surfaceButton = findNamed (panel, "Control surface");
-        check (inputs && mpeInputs && fileType && outputs && panel.getLocalBounds().contains (inputs->getBounds()) && panel.getLocalBounds().contains (mpeInputs->getBounds())
-                   && panel.getLocalBounds().contains (fileType->getBounds()) && panel.getLocalBounds().contains (outputs->getBounds()) && ! inputs->getBounds().intersects (mpeInputs->getBounds())
-                   && ! outputs->getBounds().intersects (inputs->getBounds()) && (surfaceButton == nullptr || panel.getLocalBounds().contains (surfaceButton->getBounds())),
-               "Audio & MIDI Setup shows Input Config, Output Config and MPE Inputs beside the recording format");
+        // The Preferences window, after the reference's: a normal window, one at a time, its tabs in the
+        // reference's order, and the tab chosen last opening next time.
+        const auto modal = juce::ModalComponentManager::getInstance()->getNumModalComponents();
+        showPreferences ("audio");
+        auto* window = preferencesWindow.getComponent();
+        check (window != nullptr && window->isVisible() && juce::ModalComponentManager::getInstance()->getNumModalComponents() == modal,
+               "Preferences opens a normal window, not a modal dialog");
+        juce::StringArray titles; for (const auto& tab : PreferencesView::tabs) titles.add (tab.title);
+        check (titles == juce::StringArray { "Display & Input", "Theme & Colors", "Audio", "Link, Tempo & MIDI", "Plug-Ins", "Record, Warp & Launch" },
+               "its tabs are the reference's, in its order, of those holding settings Halftrack has");
+        check (window->content().currentTab() == "audio" && session.preferences().preferencesTab == "audio", "a link opens the Audio tab, which it remembers");
+        showPreferences ("midi");
+        check (preferencesWindow.getComponent() == window && window->content().currentTab() == "midi", "opening it again keeps the one window, at the tab asked for");
+        window->closeButtonPressed();
+        showPreferences();
+        check (preferencesWindow != nullptr && preferencesWindow->content().currentTab() == "midi", "reopened, it shows the tab chosen last");
+        // The Audio page, in the reference's order: the driver type and device, the channel configuration, the sample rate and the latencies.
+        auto& view = preferencesWindow->content();
+        view.showTab ("audio");
+        juce::Component* audioPage = nullptr; for (auto* page : view.pages()) if (page->isVisible()) audioPage = page;
+        auto* driver = dynamic_cast<juce::ComboBox*> (findNamed (*audioPage, "Driver type"));
+        auto* device = dynamic_cast<juce::ComboBox*> (findNamed (*audioPage, "Audio output device"));
+        auto* rate = dynamic_cast<juce::ComboBox*> (findNamed (*audioPage, "Sample rate"));
+        auto* buffer = dynamic_cast<juce::ComboBox*> (findNamed (*audioPage, "Buffer size"));
+        auto* current = session.audioDeviceManager().getCurrentAudioDevice();
+        check (driver != nullptr && device != nullptr && rate != nullptr && buffer != nullptr && current != nullptr
+                   && driver->getText() == session.audioDeviceManager().getCurrentAudioDeviceType() && device->getText() == current->getName()
+                   && rate->getSelectedId() == juce::roundToInt (current->getCurrentSampleRate()) && buffer->getSelectedId() == current->getCurrentBufferSizeSamples(),
+               "the Audio page shows the driver type, the device, its sample rate and its buffer size");
+        std::vector<int> rows;
+        for (const auto* name : { "Driver type", "Audio output device", "Input config", "Sample rate", "Buffer size", "Input latency", "Output latency", "Driver error compensation", "Overall latency" })
+            if (auto* c = findNamed (*audioPage, name); c != nullptr && audioPage->getLocalBounds().contains (c->getBounds())) rows.push_back (c->getY());
+        check (rows.size() == 9 && std::is_sorted (rows.begin(), rows.end()), "its rows run in the reference's order, all on the page");
+        const int before = current->getCurrentBufferSizeSamples();
+        const int other = before == 512 ? 256 : 512;
+        if (buffer->indexOfItemId (other) >= 0)
+        {
+            buffer->setSelectedId (other, juce::sendNotificationSync);
+            check (session.audioDeviceManager().getCurrentAudioDevice()->getCurrentBufferSizeSamples() == other, "choosing a buffer size sets the device's");
+            buffer->setSelectedId (before, juce::sendNotificationSync);
+            check (session.audioDeviceManager().getCurrentAudioDevice()->getCurrentBufferSizeSamples() == before, "and choosing it back restores it");
+        }
+        // The Link, Tempo & MIDI page: the control surface and the ports' switches.
+        view.showTab ("midi");
+        juce::Component* midiPage = nullptr; for (auto* page : view.pages()) if (page->isVisible()) midiPage = page;
+        check (midiPage != nullptr && findNamed (*midiPage, "Control surface") != nullptr && findNamed (*midiPage, "Control surface input") != nullptr
+                   && findNamed (*midiPage, "Control surface output") != nullptr, "the Link, Tempo & MIDI page offers a control surface with its ports");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+                for (const auto& tab : PreferencesView::tabs)
+                {
+                    view.showTab (tab.id);
+                    juce::PNGImageFormat png; const auto output = directory.getChildFile (juce::String ("preferences-") + tab.id + ".png");
+                    if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                        && png.writeImageToStream (view.createComponentSnapshot (view.getLocalBounds(), true, 1.0f), *stream))
+                        std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                }
+        preferencesWindow->closeButtonPressed();
+        check (preferencesWindow == nullptr, "closing it closes the window");
+        check (session.resetPreferences().wasOk(), "reset the preferences");
+        useHardClipEdges (session);
     }
     check (session.newProject().wasOk() && session.importAudio(audioFixture,0).wasOk(), "prepare arrangement audio command fixture"); refresh();
     {
@@ -19880,33 +20213,45 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (midiTo != nullptr && midiTo->getText() == "No Output", "its strip's output chooser becomes MIDI To");
             if (const auto ports = session.midiOutputPorts(); ! ports.empty())
             {
-                AudioSetupPanel setup (*this); setup.setSize (660, 680);
-                setup.toggleMidiPort (ports, 1); refresh();
+                MidiPage setup (*this); setup.setSize (PreferencesView::width - PreferencesView::tabWidth, PreferencesView::height);
+                const auto flip = [&] (const juce::String& name)
+                {
+                    auto* button = dynamic_cast<juce::ToggleButton*> (findNamed (setup, name));
+                    check (button != nullptr, "the MIDI page has " + name);
+                    button->setToggleState (! button->getToggleState(), juce::dontSendNotification); button->onClick(); refresh();
+                };
+                flip ("Output track " + ports[0].name);
                 check (session.midiOutputPorts()[0].track && midiTo->indexOfItemId (1004) >= 0, "MIDI Ports switches the suite's port's Track on, and MIDI To offers its channels");
                 midiTo->setSelectedId (1004, juce::sendNotificationSync); refresh();
                 check ((state.tracks[(size_t) lane].output == Session::TrackOutput { Session::OutputKind::midiPort, {}, ports[0].name, 5 }) && midiTo->getText() == ports[0].name + " | Ch. 5",
                        "choosing a port's channel plays the track there");
                 session.undo(); refresh();
                 check (state.tracks[(size_t) lane].output.kind == Session::OutputKind::master && midiTo->getText() == "No Output", "undo returns it to No Output");
-                setup.toggleMidiPort (session.midiOutputPorts(), 1); refresh();
+                flip ("Output track " + ports[0].name);
                 check (! session.midiOutputPorts()[0].track, "and MIDI Ports switches Track off again");
                 // Control Surface chooses a Mackie Control input and output, and None removes it.
                 juce::StringArray inputs;
                 for (int i = 0; i < 50 && (inputs = session.midiInputPorts()).isEmpty(); ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
                 juce::StringArray outputs; for (const auto& p : session.midiOutputPorts()) outputs.add (p.name);
                 check (inputs.size() == 1 && inputs[0].endsWith ("Surface"), "Control Surface offers the suite's surface port");
-                setup.chooseSurface (inputs, outputs, 100); setup.chooseSurface (inputs, outputs, 200);
+                setup.sync();
+                auto* surface = dynamic_cast<juce::ComboBox*> (findNamed (setup, "Control surface"));
+                auto* surfaceIn = dynamic_cast<juce::ComboBox*> (findNamed (setup, "Control surface input"));
+                auto* surfaceOut = dynamic_cast<juce::ComboBox*> (findNamed (setup, "Control surface output"));
+                surface->setSelectedId (2, juce::sendNotificationSync);
+                check (surfaceIn->isEnabled() && surfaceIn->getNumItems() == inputs.size() + 1, "choosing Mackie Control offers its input ports");
+                surfaceIn->setSelectedId (2, juce::sendNotificationSync); surfaceOut->setSelectedId (2, juce::sendNotificationSync);
                 check ((session.controlSurface() == Session::ControlSurface { inputs[0], outputs[0] }), "choosing its input and output sets the surface");
-                setup.chooseSurface (inputs, outputs, 1);
-                check (session.controlSurface() == Session::ControlSurface {}, "No Control Surface removes it");
+                surface->setSelectedId (1, juce::sendNotificationSync);
+                check (session.controlSurface() == Session::ControlSurface {}, "None removes it");
                 // An input's Sync shows EXT beside TAP, which follows its clock and keeps the tempo from edits.
                 check (! extButton.isVisible(), "EXT is hidden while no input sends clock");
-                setup.toggleInputSync (inputs[0]); refresh();
+                setup.sync(); flip ("Input sync " + inputs[0]);
                 check (session.isMidiInputSync (inputs[0]) && extButton.isVisible() && extButton.getX() < tapButton.getX(), "switching on an input's Sync in MIDI Ports shows EXT before TAP");
                 extButton.setToggleState (true, juce::dontSendNotification); extButton.onClick(); refresh();
                 check (session.isExternalSync() && ! tempo.isEditable() && ! tapButton.isEnabled(), "EXT turns on External Sync and the tempo steps aside");
                 extButton.setToggleState (false, juce::dontSendNotification); extButton.onClick(); refresh();
-                setup.toggleInputSync (inputs[0]); refresh();
+                setup.sync(); flip ("Input sync " + inputs[0]);
                 check (! session.isExternalSync() && tempo.isEditable() && ! extButton.isVisible(), "turning both off hides EXT and frees the tempo");
             }
             else std::cout << "SKIP UI MIDI To ports: this system cannot make a virtual MIDI port" << std::endl;
@@ -19975,24 +20320,27 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         menuItemSelected (13, 1);
         check (session.isAudioEngineEnabled() && session.audioDeviceManager().getCurrentAudioDevice() != nullptr, "and on again");
         {
-            // Audio & MIDI Setup's Recording row sets the take file type and bit depth.
-            AudioSetupPanel setup (*this);
-            auto* fileType = dynamic_cast<juce::ComboBox*> (findNamed (setup, "Record file type"));
-            auto* bitDepth = dynamic_cast<juce::ComboBox*> (findNamed (setup, "Record bit depth"));
-            check (fileType != nullptr && bitDepth != nullptr && fileType->getText() == "WAV", "Audio Setup shows the recording file type");
+            // Preferences' Record page sets the take file type and bit depth.
+            RecordPage record (*this);
+            auto* fileType = dynamic_cast<juce::ComboBox*> (findNamed (record, "Record file type"));
+            auto* bitDepth = dynamic_cast<juce::ComboBox*> (findNamed (record, "Record bit depth"));
+            check (fileType != nullptr && bitDepth != nullptr && fileType->getText() == "WAV", "the Record page shows the recording file type");
             fileType->setSelectedId (2, juce::sendNotificationSync); bitDepth->setSelectedId (16, juce::sendNotificationSync);
             check (session.recordingFormat() == Session::RecordingFormat { Session::RecordingFileType::aiff, 16 }, "and sets it with the bit depth");
             fileType->setSelectedId (3, juce::sendNotificationSync); bitDepth->setSelectedId (32, juce::sendNotificationSync);
             check (session.recordingFormat().type == Session::RecordingFileType::flac && session.recordingFormat().bitDepth == 16 && bitDepth->getSelectedId() == 16,
                    "a depth the type cannot hold is refused and the chooser shows the kept one");
             check (session.setRecordingFormat ({}).wasOk(), "back to WAV at 24 bits");
-            // Driver Error Compensation beside the device's reported latency.
+            // Driver Error Compensation among the device's reported latencies.
+            AudioPage setup (*this);
             auto* compensation = dynamic_cast<juce::Label*> (findNamed (setup, "Driver error compensation"));
-            auto* latency = dynamic_cast<juce::Label*> (findNamed (setup, "Audio latency"));
-            check (compensation != nullptr && latency != nullptr && compensation->getText() == "0.00 ms" && latency->getText().contains ("Overall"),
-                   "Audio Setup shows Driver Error Compensation and the overall latency");
+            auto* latency = dynamic_cast<juce::Label*> (findNamed (setup, "Overall latency"));
+            const auto overall = [&] { return latency->getText().upToFirstOccurrenceOf (" ms", false, false).getDoubleValue(); };
+            const auto reported = latency != nullptr ? overall() : 0.0;
+            check (compensation != nullptr && latency != nullptr && compensation->getText() == "0.00 ms" && latency->getText().endsWith (" ms"),
+                   "the Audio page shows Driver Error Compensation and the overall latency");
             compensation->setText ("2.5", juce::sendNotificationSync);
-            check (session.preferences().driverErrorCompensationMs == 2.5 && compensation->getText() == "2.50 ms" && latency->getText().contains ("Overall 2.50 ms"),
+            check (session.preferences().driverErrorCompensationMs == 2.5 && compensation->getText() == "2.50 ms" && std::abs (overall() - reported - 2.5) < 1e-6,
                    "typing a compensation sets it and adds it to the overall latency");
             compensation->setText ("500", juce::sendNotificationSync);
             check (session.preferences().driverErrorCompensationMs == 2.5 && compensation->getText() == "2.50 ms", "a compensation beyond 200 ms is refused");

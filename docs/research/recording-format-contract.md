@@ -5,7 +5,7 @@ Halftrack's recording file type and bit depth follow the reference's recording p
 ## Behaviour
 
 - **Choosing.** `setRecordingFormat ({ type, bitDepth })` sets WAV, AIFF or FLAC at a bit depth the type can hold: 8, 16, 24 or 32 for WAV and AIFF, and 16 or 24 for FLAC. Other depths are refused with the depths the type allows, and so are changes while recording. The setting is applied to every audio input, and to inputs that appear later. Each input keeps it in the engine's settings, so it lasts between launches. `recordingFormat()` reports it. WAV at 24 bits is the default.
-- **The UI.** Audio & MIDI Setup has a Recording row with Record File Type and Bit Depth choosers. A refused choice leaves the chooser on the kept value.
+- **The UI.** Preferences' Record, Warp & Launch page has File Type and Bit Depth choosers. A refused choice leaves the chooser on the kept value.
 - **Unwritable folders.** Before recording an audio take, in the Arrangement or a Session slot, Halftrack checks that it can write into the project's assets folder. If it cannot, recording is refused with the folder and what to do. Previously recording started and the take was lost without a warning.
 
 ## Evidence

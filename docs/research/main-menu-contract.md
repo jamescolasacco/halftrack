@@ -46,7 +46,7 @@ Select All selects every track's content in the Arrangement, every slot in the S
 What moved with the rebuild:
 - Halftrack's Session menu is gone. Its scene commands are in the scene menu and Edit; a scene drags in the scene column to a new place, as the reference's do; Stop All Clips is the Session's button; a clip's follow action opens from the clip view's Launch box.
 - View's Session, Arrangement and Piano Roll items became Toggle Arrangement/Session View and Clip View. The automation window opens from the device view's automation button, for the Main when its chain is shown.
-- Audio & MIDI Setup and Plug-Ins open from their buttons. Halftrack's preferences are not yet one window with the reference's tabs.
+- Audio & MIDI Setup and Plug-Ins became tabs of the one Preferences window, as the reference's (see the [preferences contract](preferences-contract.md)).
 - Import Audio and Import MIDI File became Import File, which takes both. Cmd+F searches the browser, and Follow moved to Option+Shift+F; Cmd+I inserts a scene in the Session; Shift+Cmd+R exports; Option+Cmd+O is the overview's, not Open's.
 
 ## Left out

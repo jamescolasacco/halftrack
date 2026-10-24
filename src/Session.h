@@ -1233,6 +1233,9 @@ public:
         // playback too. Off, it waits, lit, until Play or a Session launch starts the transport.
         bool startPlaybackWithRecord = true;
         juce::String vst3CustomFolder;
+        // The Preferences window's tab, by the reference's id ("audio", "midi"...), which opens next time
+        // as the reference's window remembers its tab.
+        juce::String preferencesTab;
         bool operator== (const Preferences&) const = default;
     };
     // The audio device's latency as it reports it, with Driver Error Compensation. Recordings are placed
@@ -1247,6 +1250,8 @@ public:
     Preferences preferences() const;
     juce::Result setPreferences (const Preferences&);
     juce::Result resetPreferences();
+    // Remembers the Preferences window's tab, an application setting, not a change to the project.
+    void setPreferencesTab (const juce::String&);
     juce::File preferencesFile() const;
     // Why the preferences file could not be read when the Session started, or empty.
     juce::String preferencesProblem() const;
