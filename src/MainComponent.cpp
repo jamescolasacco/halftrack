@@ -954,6 +954,7 @@ public:
         // In the browser, 1 to 7 put the selected item in a collection or take it out.
         if (! cmd && ! shift && ! key.getModifiers().isAltDown() && code >= '1' && code <= '7' && browserList.hasKeyboardFocus (true) && browserList.getSelectedRow() >= 0)
         { toggleBrowserCollection (browserList.getSelectedRow(), code - '1'); return true; }
+        if (browserList.hasKeyboardFocus (true) && browserListKey (key)) return true;
         if (cmd)
         {
             // The reference's grid commands, for the Arrangement.
@@ -10128,6 +10129,31 @@ private:
                 if (type.createIdentifierString() == value) { DeviceRow row { type.name }; row.pluginId = value; return row; }
         return std::nullopt;
     }
+    // The reference's other browser keys: Right opens the selected folder or previews the selected
+    // file, Left goes up a folder, and 0 takes the selected item out of every collection.
+    bool browserListKey (const juce::KeyPress& key)
+    {
+        const auto code = key.getKeyCode();
+        if (key.getModifiers().isAnyModifierKeyDown()) return false;
+        const auto row = browserList.getSelectedRow();
+        if (code == '0' && row >= 0)
+        {
+            const auto item = browserKey (row);
+            if (item.isNotEmpty())
+                for (int collection = 0; collection < 7; ++collection)
+                    if (collections.contains (item, collection)) report (collections.toggle (item, collection));
+            updateBrowser(); browserList.repaint(); return true;
+        }
+        if (! sampleBrowser()) return false;
+        if (code == juce::KeyPress::rightKey && juce::isPositiveAndBelow (row, (int) browserItems.size()))
+        {
+            if (browserItems[(size_t) row].directory) activateBrowserRow (row);
+            else if (const auto file = browserItems[(size_t) row].file; session.snapshot().previewing != file) report (session.previewFile (file));
+            return true;
+        }
+        if (code == juce::KeyPress::leftKey) { upButton.onClick(); return true; }
+        return false;
+    }
     void toggleBrowserCollection (int row, int collection)
     {
         const auto key = browserKey (row);
@@ -16074,6 +16100,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (status.contains ("has moved or been deleted") && getNumRows() == 0, "using a result that has gone says so and searches again");
         browserSearch.setText ({}, juce::sendNotificationSync); updateBrowser();
         check (getNumRows() == 2, "clearing the search shows the folder again");
+        {
+            // The reference's keys: Right opens a folder or previews a file, and Left goes up a folder.
+            const auto rowOf = [&] (const juce::File& file) { for (int r = 0; r < (int) browserItems.size(); ++r) if (browserItems[(size_t) r].file == file) return r; return -1; };
+            browserList.selectRow (rowOf (library.getChildFile ("Drums")));
+            check (browserListKey (juce::KeyPress (juce::KeyPress::rightKey)) && browserFolder == library.getChildFile ("Drums"), "Right opens the selected folder");
+            settle();
+            check (browserListKey (juce::KeyPress (juce::KeyPress::leftKey)) && browserFolder == library, "Left goes up a folder");
+            settle();
+            check (audioFixture.copyFileTo (library.getChildFile ("Real.wav")), "a playable sample in the folder"); scannedBrowserFolder = juce::File(); updateBrowser(); settle();
+            browserList.selectRow (rowOf (library.getChildFile ("Real.wav")));
+            check (browserListKey (juce::KeyPress (juce::KeyPress::rightKey)) && session.snapshot().previewing == library.getChildFile ("Real.wav"), "Right on a file previews it");
+            session.stopPreview();
+        }
         browserFolder = folder; updateBrowser(); setBrowserCategory (category);
         library.deleteRecursively();
     }
@@ -22038,6 +22077,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             showBrowserCollection (0); toggleBrowserCollection (0, 0);
             check (deviceItems.empty() && ! collections.contains (saturatorKey, 0), "toggling it again takes it out");
             setBrowserCategory (BrowserCategory::audioEffects);
+            // 0 takes the selected item out of every collection, as the reference's key does.
+            toggleBrowserCollection (row - 1, 0); toggleBrowserCollection (row - 1, 4);
+            browserList.selectRow (row - 1);
+            check (collections.contains (saturatorKey, 0) && collections.contains (saturatorKey, 4) && browserListKey (juce::KeyPress ('0'))
+                       && ! collections.contains (saturatorKey, 0) && ! collections.contains (saturatorKey, 4), "0 takes the selected item out of every collection");
         }
         {
             // Plug-in presets in the user library are listed under their plug-in.

@@ -60,6 +60,7 @@ From the reference's list of keys ([Live keyboard shortcuts](https://www.ableton
 - **F1 to F8** switch the tracks numbered 1 to 8 on and off, groups counted, as their activators do.
 - **Escape** jumps to the selected track's title bar: the headers then take Edit's commands.
 - **Cmd+6 to Cmd+9 and Cmd+0** set the global launch quantization to 1/16, 1/8, 1/4, 1 Bar and None.
+- **In the browser:** Right opens the selected folder or previews the selected sample, Left goes up a folder, and 0 takes the selected item out of every collection (1 to 7 already put it in one). Halftrack's browser opens folders in place of the reference's tree, so Right and Left move into and out of them.
 - **In the Session:** Cmd+Return stops the selected slot's track; Return launches the scene when its column was clicked (Shift+Return still launches it, Halftrack's); Page Up and Page Down move eight scenes; Home and End go to the first and last track; Cmd with Left and Right moves the selected track, and with Up and Down the selected scene, each one undo step.
 
 ## Left out
@@ -79,7 +80,7 @@ The UI suite compares each menu with the reference's order, filtered to Halftrac
 - Draw Mode showing B, ticked while on, and following the control bar's pencil;
 - Shift+Cmd+L selecting the loop's time across every track, Play Arrangement Selection's two names, and Option+Space playing the selection from its start and stopping at its end (the transport suite checks the stop within 60 ms, 12 ms locally, as Halftrack watches the range from the message thread every 2 ms; the reference's precision was not measured); Select Loop in the clip view selecting the notes in the clip's loop;
 - F1 switching track 1 off and on, and Cmd+Option+Delete deleting a fade (in the Arrangement menu checks);
-- the Session keys above, Escape giving the headers Edit's commands, and Cmd+6 to 9 and Cmd+0 setting the global quantization;
+- the Session keys above, Escape giving the headers Edit's commands, Cmd+6 to 9 and Cmd+0 setting the global quantization, and the browser's Right, Left and 0;
 - Navigate's Option+1 and Option+2 showing the Session and Arrangement Views with Edit acting there, Focus Device View and Focus Clip View likewise, Focus Browser showing the browser, and Option+Shift+M showing the Session's hidden mixer;
 - Undo History opening from Option+Cmd+Z without undoing, listing the steps from the start with the latest selected, a click on an earlier step undoing back to it and on the latest redoing, the main window's menus working while it is open, and choosing it again closing it;
 - Plug-In Windows hiding and showing the plug-in windows (the plug-in editor suite hides an open editor's window, shows it again, and sees opening an editor bring the windows back);
