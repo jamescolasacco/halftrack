@@ -1716,6 +1716,10 @@ public:
     juce::Result setPluginParameter (int trackIndex, int pluginIndex, int parameterIndex, float normalisedValue);
     juce::Result showPluginEditor (int trackIndex, int pluginIndex);
     void closePluginEditors();
+    // The open plug-in windows hide and show together, as the reference's View > Plug-In Windows
+    // does. Opening an editor shows them all again.
+    bool pluginEditorsShown() const;
+    void setPluginEditorsShown (bool);
 
 private:
     juce::Result startProject (bool builtInDefaultSet);

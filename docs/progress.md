@@ -2479,3 +2479,7 @@ UI area, from the reference's menu bar ([contract](research/main-menu-contract.m
 
 Checked in the UI suite.
 
+## Plug-In Windows — 2026-10-24
+
+Engine and UI areas. As the reference's View > Plug-In Windows (Option+Cmd+P) does, the open device windows hide and show together (`setPluginEditorsShown`), keeping their windows; opening any editor shows them again. Checked in the plug-in editor suite and the UI suite ([contract](research/main-menu-contract.md)).
+

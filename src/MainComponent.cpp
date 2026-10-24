@@ -11545,7 +11545,7 @@ private:
                     menuRecordSession, menuMetronome, menuMetronomeRecording, menuFullscreen, menuZoomIn, menuZoomOut, menuZoomReset,
                     menuToggleView, menuClipView, menuDeviceView, menuToggleDetail, menuBrowser, menuGroovePool, menuSearch, menuSimilar,
                     menuFoldAll, menuFoldSelected, menuZoomSelection, menuZoomBack, menuMidiMap, menuKeyMap, menuComputerKeyboard,
-                    menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuSlice = 200 }; // Plus Session::SliceBy.
+                    menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuSlice = 200 }; // Plus Session::SliceBy.
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
     // Fullscreen take their Windows keys elsewhere). The command manager only holds them for the menus:
     // nothing is registered with it as a target.
@@ -11575,7 +11575,7 @@ private:
             { menuZoomIn, key ('+', cmd) }, { menuZoomIn, key ('=', cmd) }, { menuZoomOut, key ('-', cmd) }, { menuZoomReset, key ('0', cmd | alt) },
             { 90, key ('?') }, { menuToggleView, key (KeyPress::tabKey) }, { menuClipView, key ('3', cmd | alt) }, { menuDeviceView, key ('4', cmd | alt) },
             { menuToggleDetail, key (KeyPress::tabKey, shift) }, { menuDetailView, key ('l', cmd | alt) }, { menuBrowser, key ('5', cmd | alt) }, { menuGroovePool, key ('6', cmd | alt) },
-            { menuSearch, key ('f', cmd) }, { menuSimilar, key ('f', cmd | shift) }, { 92, key ('v', cmd | alt) }, { 109, key ('m', cmd | alt) },
+            { menuSearch, key ('f', cmd) }, { menuSimilar, key ('f', cmd | shift) }, { menuPluginWindows, key ('p', cmd | alt) }, { 92, key ('v', cmd | alt) }, { 109, key ('m', cmd | alt) },
             { 103, key ('i', cmd | alt) }, { 104, key ('s', cmd | alt) }, { 108, key ('r', cmd | alt) }, { 49, key ('a') }, { menuFoldAll, key ('u', alt) },
             { menuFoldSelected, key ('u') }, { 41, key ('+') }, { 42, key ('-') }, { menuZoomSelection, key ('z') }, { menuZoomBack, key ('x') },
             { menuMidiMap, key ('m', cmd) }, { menuKeyMap, key ('k', cmd) }, { menuComputerKeyboard, key ('m') },
@@ -12047,10 +12047,11 @@ private:
             popup.addSeparator();
             add (menuSearch, "Search in Browser", ! mapping()); add (menuSimilar, "Show Similar Files", browserFolder != juce::File() && similarSource().existsAsFile());
             popup.addSeparator();
+            add (menuPluginWindows, "Plug-In Windows", true, session.pluginEditorsShown());
            #if JUCE_MAC
             add (92, "Video Window", video::supported(), videoWindow != nullptr && videoWindow->isVisible());
-            popup.addSeparator();
            #endif
+            popup.addSeparator();
             // The Session mixer's sections, as the reference's View menu shows and hides them.
             const auto& shown = state.mixerSections;
             add (109, "Mixer", showSession, shown.shown);
@@ -12219,6 +12220,7 @@ private:
             case menuDetailView: showDetail = ! showDetail; resized(); break;
             case menuToggleDetail: showClipView (! showPiano); break;
             case menuBrowser: showBrowser = ! showBrowser; resized(); break;
+            case menuPluginWindows: session.setPluginEditorsShown (! session.pluginEditorsShown()); return;
             case menuGroovePool: openGroovePool(); return;
             case menuSearch: showBrowser = true; resized(); browserSearch.grabKeyboardFocus(); return;
             case menuSimilar: showSimilarFiles (similarSource()); return;
@@ -17199,11 +17201,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                               "Record in Session", "-", "Metronome", "Metronome Only While Recording", "-", "Back to Arrangement" });
         const juce::String folds = std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return ! t.folded; }) ? "Fold All Tracks" : "Unfold All Tracks";
         juce::StringArray view { "Fullscreen", "Zoom >", "-", "Info", "-", "Toggle Arrangement/Session View", "-", "Clip View", "Device View", "Toggle Clip/Device View", "Hide Detail View", "-",
-                                 "Browser", "Groove Pool", "-", "Search in Browser", "Show Similar Files", "-" };
+                                 "Browser", "Groove Pool", "-", "Search in Browser", "Show Similar Files", "-", "Plug-In Windows" };
        #if JUCE_MAC
-        view.addArray ({ "Video Window", "-" });
+        view.add ("Video Window");
        #endif
-        view.addArray ({ "Mixer", "Mixer Controls >", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
+        view.addArray ({ "-", "Mixer", "Mixer Controls >", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
         expect ("View", view);
         juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "-", "External Sync", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
                                     "Fixed Grid", "-", "Solo in Place", "-", "Audio Engine On" };
@@ -17273,6 +17275,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const bool looping = state.looping;
         check (handleKey (juce::KeyPress ('l', juce::ModifierKeys (cmd | alt), 0)) && showDetail && deviceChain.isVisible() && state.looping == looping,
                "and shows it again, leaving the loop alone");
+        menuItemSelected (menuPluginWindows, 4);
+        check (! session.pluginEditorsShown() && ! entry ("View", menuPluginWindows)->isTicked, "View's Plug-In Windows hides the plug-in windows");
+        menuItemSelected (menuPluginWindows, 4);
+        check (session.pluginEditorsShown() && entry ("View", menuPluginWindows)->isTicked, "and shows them again");
         menuItemSelected (menuToggleView, 4);
         check (showSession && texts ("Create").contains ("Insert Scene"), "Toggle Arrangement/Session View switches views, and Create then offers Insert Scene");
         // In the Session, Cmd+I inserts a scene below the selected one.

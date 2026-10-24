@@ -3958,6 +3958,7 @@ struct Session::Impl
     }
     // Opens a device's own window, a plug-in's editor or a native device's.
     Result showEditor (te::Plugin&);
+    void showWindow (te::Plugin&);
     // A group's or the Main's chain, by its id.
     te::PluginList* effectChain (const String& id) const
     {
@@ -5997,6 +5998,7 @@ struct Session::Impl
         void timerCallback() override { tick(); }
     } remoteRest;
     bool remoteGesture = false;
+    bool editorsHidden = false; // View > Plug-In Windows is off.
     // A control surface's ports, opened by Halftrack itself. Its MIDI thread hands each message to
     // the message thread through a fixed ring.
     struct SurfacePort final : juce::MidiInputCallback, private juce::AsyncUpdater
@@ -10447,7 +10449,7 @@ Result Session::showInstrumentEditor (int trackIndex)
     auto* track = impl->track (trackIndex);
     auto* native = track ? Impl::nativeInstrument (*track) : nullptr;
     if (! native) return Result::fail ("This track uses the built-in synthesizer panel.");
-    native->windowState->showWindowExplicitly();
+    impl->showWindow (*native);
     auto* window = dynamic_cast<PluginWindow*> (native->windowState->pluginWindow.get());
     if (window == nullptr || ! window->isVisible() || window->getContentComponent() == nullptr) return Result::fail ("This instrument has no available editor.");
     return Result::ok();
@@ -15390,7 +15392,7 @@ Result Session::showDeviceEditor (const String& deviceId)
     te::Plugin* plugin = impl->nativeDevice (deviceId);
     if (plugin == nullptr) plugin = impl->utility (deviceId);
     if (plugin == nullptr) return Result::fail ("Device not found.");
-    plugin->windowState->showWindowExplicitly();
+    impl->showWindow (*plugin);
     auto* window = dynamic_cast<PluginWindow*> (plugin->windowState->pluginWindow.get());
     if (window == nullptr || ! window->isVisible() || window->getContentComponent() == nullptr) return Result::fail ("This device has no available editor.");
     return Result::ok();
@@ -15997,16 +15999,32 @@ Result Session::Impl::showEditor (te::Plugin& device)
             return Result::fail (error.isNotEmpty() ? error : "This plug-in could not be loaded.");
         }
     }
-    plugin->windowState->showWindowExplicitly();
+    showWindow (*plugin);
     auto* window = dynamic_cast<PluginWindow*> (plugin->windowState->pluginWindow.get());
     if (window == nullptr || ! window->isVisible() || window->getContentComponent() == nullptr)
         return Result::fail ("This plug-in has no available editor.");
     return Result::ok();
+}
+// Opens a device's window, bringing back the plug-in windows View > Plug-In Windows hid.
+void Session::Impl::showWindow (te::Plugin& device)
+{
+    if (std::exchange (editorsHidden, false))
+        for (auto* other : te::getAllPlugins (*edit, true))
+            if (other->windowState->pluginWindow != nullptr) other->windowState->pluginWindow->setVisible (true);
+    device.windowState->showWindowExplicitly();
 }
 void Session::closePluginEditors()
 {
     if (impl->exporting) return;
     if (impl && impl->edit)
         for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* p : t->pluginList.getPlugins()) p->windowState->closeWindowExplicitly();
+}
+bool Session::pluginEditorsShown() const { return ! impl->editorsHidden; }
+void Session::setPluginEditorsShown (bool shown)
+{
+    if (impl->exporting || impl->edit == nullptr) return;
+    impl->editorsHidden = ! shown;
+    for (auto* plugin : te::getAllPlugins (*impl->edit, true))
+        if (plugin->windowState->pluginWindow != nullptr) plugin->windowState->pluginWindow->setVisible (shown);
 }
 }

@@ -296,6 +296,14 @@ void loadingAndSuccess (const std::shared_ptr<Probe>& probe)
     check (probe->editors == 0 && plugin->getAudioPluginInstance()->getActiveEditor() == nullptr,
            "closing an editor unregisters it before destruction");
     window = visibleEditor (session);
+    check (session.pluginEditorsShown(), "plug-in windows show by default");
+    session.setPluginEditorsShown (false);
+    check (! session.pluginEditorsShown() && ! window->isVisible() && plugin->windowState->pluginWindow.get() == window, "Plug-In Windows off hides the open window, keeping it");
+    session.setPluginEditorsShown (true);
+    check (session.pluginEditorsShown() && window->isVisible(), "and on shows it again");
+    session.setPluginEditorsShown (false);
+    ok (session.showPluginEditor (0, 0), "open the editor while the windows are hidden");
+    check (session.pluginEditorsShown() && window->isVisible(), "opening an editor brings the plug-in windows back");
     juce::Component::SafePointer<juce::Component> editor (window->getContentComponent());
     ok (session.removePlugin (0, 0), "remove ready plug-in");
     check (editor == nullptr && probe->editors == 0, "removal destroys editor before processor retirement");
