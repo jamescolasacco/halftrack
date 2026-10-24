@@ -10593,6 +10593,21 @@ private:
     // order, or after the other tracks when that is a return. A return goes after a selected return.
     juce::String insertionPoint (bool forReturn) const
     {
+        // A selected group, as the reference's selection lists it (0x102434b60): unfolded, its last
+        // visible item, so a new track goes in at its end; folded, the group, so it goes after it.
+        if (const auto* group = groupInfo (selectedChain))
+        {
+            if (forReturn) return {};
+            juce::String last = group->id;
+            if (! group->folded)
+                for (const auto& item : visualOrder())
+                {
+                    const auto& parent = item.group ? state.groups[(size_t) item.index].parentId : state.tracks[(size_t) item.index].groupId;
+                    if ((parent == group->id || groupInside (parent, group->id)) && ! anyFolded (parent))
+                        last = item.group ? state.groups[(size_t) item.index].id : state.tracks[(size_t) item.index].id;
+                }
+            return last;
+        }
         const auto ids = selectedTrackIds();
         if (ids.isEmpty()) return {};
         for (const auto& t : state.tracks) if (t.id == ids[ids.size() - 1]) return t.isReturn == forReturn ? t.id : juce::String();
@@ -17383,6 +17398,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (state.tracks[0].id == second && state.tracks[0].groupId == inner && ! groupInfo (inner)->folded && laneHeight (0) > 0, "dropping it there opens the group");
                 session.undo(); refresh();
                 check (state.tracks[1].id == second && state.tracks[1].groupId == group && ! groupInfo (inner)->folded, "one undo moves it back, leaving the group open");
+                // Insert Audio Track with a group selected goes in at its end, or after it when it is folded.
+                {
+                    selectChain (inner); refresh();
+                    addTrack(); refresh();
+                    const auto inserted = state.tracks.size() == 3 ? state.tracks[1] : Session::TrackInfo {};
+                    check (inserted.groupId == inner && state.tracks[0].id == first && state.tracks[2].id == second, "with the inner group selected, a new track goes in at its end");
+                    session.undo(); refresh();
+                    check (session.setGroupFolded (inner, true).wasOk(), "fold the inner group"); refresh();
+                    selectChain (inner); addTrack(); refresh();
+                    const auto after = state.tracks.size() == 3 ? state.tracks[1] : Session::TrackInfo {};
+                    check (after.groupId == group && state.tracks[0].id == first && state.tracks[2].id == second, "folded, it goes after the group, in the outer group");
+                    session.undo(); session.setGroupFolded (inner, false); refresh();
+                }
                 // In the Arrangement too, U folds a selected group rather than a track.
                 selectChain (inner); refresh();
                 check (handleKey (juce::KeyPress ('u', {}, 'u')) && groupInfo (inner)->folded && laneHeight (indexOf (first)) == 0 && ! state.tracks[(size_t) indexOf (first)].folded,

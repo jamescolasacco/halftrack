@@ -12,7 +12,7 @@ Where Insert puts a new track, and how tracks name themselves, follow a static r
 
 `addReturnTrack (name, after)` puts a return right after the return `after` names, otherwise after the other returns. Each insertion is one undo step.
 
-The interface's Insert Audio Track (Cmd/Ctrl+T), Insert MIDI Track (Cmd/Ctrl+Shift+T) and Insert Return Track (Cmd/Ctrl+Option/Alt+T) pass the last selected track in track order. The reference uses the last entry of its selection in the same way. The new track is then selected alone. Insert MIDI Track makes an empty MIDI track, as the reference's does: no clip (Insert MIDI Clip adds one) and no instrument until one is dropped on it, so it shows n-MIDI. It is one undo step. Before, Halftrack's Insert MIDI Track also made and opened a clip and gave the track the built-in synth. `Session::addMidiTrack`, which the suites and imports use, still gives the track the built-in synth.
+The interface's Insert Audio Track (Cmd/Ctrl+T), Insert MIDI Track (Cmd/Ctrl+Shift+T) and Insert Return Track (Cmd/Ctrl+Option/Alt+T) pass the last selected track in track order. The reference uses the last entry of its selection in the same way. With a group selected, its selection lists the group's visible tracks when it is unfolded and the group when it is folded, so a new track goes in at the group's end, or after the whole group; Halftrack's Insert does the same. The new track is then selected alone. Insert MIDI Track makes an empty MIDI track, as the reference's does: no clip (Insert MIDI Clip adds one) and no instrument until one is dropped on it, so it shows n-MIDI. It is one undo step. Before, Halftrack's Insert MIDI Track also made and opened a clip and gave the track the built-in synth. `Session::addMidiTrack`, which the suites and imports use, still gives the track the built-in synth.
 
 ## Names
 
@@ -54,6 +54,7 @@ Moving tracks renumbers automatic names, so the track-order suite's identity che
 
 - Insert MIDI Track making an empty track without an instrument, named n-MIDI, as one undo step, and Insert MIDI Clip adding the clip;
 - Insert Audio Track after the selected track, selected, with the tracks after it renumbered;
+- with a group selected (UI suite), a new track at the end of the unfolded group, or after the folded group, in the group around it;
 - Cmd/Ctrl+Option/Alt+T inserting a return named A-Return, whose activator shows A;
 - a return renamed from its label shown after its letter, and editing the shown name not repeating the letter.
 

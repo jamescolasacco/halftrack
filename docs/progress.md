@@ -2379,3 +2379,7 @@ Engine and UI areas. The header menu's take lane items gain Delete Unused Take L
 ## Default tracks — 2026-10-24
 
 Engine and UI areas. The header menu's Save as Default Audio Track and Save as Default MIDI Track save the clicked track's devices and mixer, without clips, automation, take lanes or sends, to the User Library, as the reference keeps its default tracks. New tracks of that kind then start from it with a new colour. Replacing an earlier default asks first, and the file is written atomically. New projects and Slice to New MIDI Track keep plain tracks. Checked in the track duplicate and UI suites ([contract](research/track-header-menu-contract.md)).
+
+## Insert with a group selected — 2026-10-24
+
+UI area. With a group selected, Insert Audio Track and Insert MIDI Track put the new track at the group's end when it is unfolded, and after the whole group when it is folded, as the reference's selection lists a group (findings in `artifacts/reverse-engineering/tracks/`). Before, Insert went by the track selected before the group. Checked in the UI suite ([contract](research/track-names-contract.md)).
