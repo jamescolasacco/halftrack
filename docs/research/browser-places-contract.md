@@ -34,6 +34,16 @@ The reference's manual: Pack folders "can be unfolded to reveal the included Pac
 - **Search.** Results are a flat list, as before. Opening a folder found by a search clears it and shows the folder open in the tree.
 - **Show in Browser.** The folders down to the file open, with the file selected.
 
+## Dragging (2026-10-24)
+
+The reference's manual: devices can be dragged "into tracks or drop areas in the Session and Arrangement Views, or into the Device View", and presets onto a track's title bar or device chain ([Working with Instruments and Effects](https://www.ableton.com/en/live-manual/12/working-with-instruments-and-effects/), sections 23.2 and 23.2.3, consulted 2026-10-24). Halftrack's browser items drag out:
+- **Sounds** land where they are dropped, as files dropped from the desktop do: on an Arrangement track at the time under the pointer, or in a Session slot.
+- **Devices, presets and plug-ins** go onto the Arrangement track or Session column under the pointer, or onto the chain the device view shows, as a double-click would put them on the selected track. Dropped below the Arrangement's tracks, a device gets a new track of its own.
+- **Anything with a collection key** dropped on a collection in the sidebar joins it.
+- Dragging a sound over the Arrangement highlights it, as a desktop file does.
+
+Not yet: dropping a preset on a device to replace it, Session's drop area for new tracks, dragging grooves onto clips, and dragging several items at once.
+
 ## History (2026-10-24)
 
 The reference's manual: the arrow buttons left of the search bar, Browse Back and Browse Forward, go back and forward through the browser's previous searches and navigation, also with Cmd+[ and Cmd+] ([Working with the Browser](https://www.ableton.com/en/live-manual/12/working-with-the-browser/), section 4.3, consulted 2026-10-24). Halftrack's browser has the two arrows and keys. A state is the category, collection or place shown, its listed and open folders, and the search. One joins the history when the browser leaves it for another category or folder or settles on one, and a search when Return is pressed or the field is left. Stepping back and forward restores a state; a new state drops the ones ahead, and the history keeps the last 100.
@@ -53,6 +63,7 @@ See [open questions](../open-questions.md) for the defaults taken where the manu
 `tests/PreferencesTests.cpp` reads user folders back in order, a missing one too, refuses a relative or repeated folder, keeps them through a reset, and finds the added folder in the next Session. `tests/PersistenceTests.cpp` checks the project's media folder before and after a save and through Save a Copy.
 
 The UI suite checks:
+- a device row dragging as its device; dropped on a track's lane, in the device view and below the tracks (a new track); a sound dropped on a lane importing there; and an item dropped on a collection joining it;
 - Browse Back left of the search bar, offered after moving about; Back returning to a search, Cmd+[ going back before it and to an earlier category, Cmd+] going forward, and a new category dropping the states ahead;
 - the folder tree: Right opening a folder in place with its items indented under it, Right going into it, Left going back and closing it, opening another closing the first unless Cmd is held, a double-click closing a folder, Left at the top moving out rather than up, and Up going up a folder with the one left showing open;
 - the sidebar's Down and Up showing the rows below and above, running on from the Library into Places, and Right moving to the list with its first row selected;

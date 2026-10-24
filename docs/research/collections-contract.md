@@ -5,6 +5,7 @@ Halftrack's browser collections follow the reference browser's Collections: a se
 ## Behaviour
 
 - **Collections.** There are seven: Favorites, Red, Yellow, Green, Blue, Purple and Grey. The colour names are Halftrack's default; the reference's own names and colours are not recorded here.
+- **Dragging.** A browser item dropped on a collection in the sidebar joins it ([dragging](browser-places-contract.md#dragging-2026-10-24)).
 - **Names and colours.** As the reference's labels can be renamed and given colours ([Working with the Browser](https://www.ableton.com/en/live-manual/12/working-with-the-browser/), section 4.5, consulted 2026-10-24), a collection's right-click menu has Rename... and the colour grid of the tracks' and clips' palette. A name is trimmed and at most 64 characters; an empty one gives the collection its usual name again. Names and colours are saved in `Collections.xml` with the items.
 - **Tagging.** With a browser item selected, the keys 1 to 7 toggle it in a collection. A right-click lists the collections, ticked where the item belongs, and toggles the one chosen. A tagged item shows its collections' colours at the right of its row.
 - **Items.** Each item is named by a key: `device:<kind>` for built-in devices, `preset:<kind>:<path>` for presets, `groove:<name>` and `groovefile:<path>` for grooves, `sample:<path>` for audio files and `plugin:<identifier>` for plug-ins. An item whose file or plug-in no longer exists is left out of the collection's list until it returns.
@@ -24,4 +25,4 @@ The UI suite checks a collection's menu (Rename and its colours), colours one fr
 
 ## Not yet covered
 
-Hiding collections in the reference's Edit mode, dragging items onto them, library-wide search outside the current category, and comparison with the reference's browser behaviour.
+Hiding collections in the reference's Edit mode, library-wide search outside the current category, and comparison with the reference's browser behaviour.

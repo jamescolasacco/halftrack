@@ -2689,3 +2689,7 @@ UI area. The Sampler's waveform and a Drum Sampler's selected pad gain the refer
 ## Renaming and colouring collections — 2026-10-24
 
 UI and library areas. As the reference's labels can be, collections can be renamed and coloured: a collection's right-click menu in the sidebar has Rename... and the palette's colour grid. `Collections` now keeps per-library names and colours, saved in `Collections.xml` with the items ([contract](research/collections-contract.md)). Checked in the collections and UI suites.
+
+## Dragging from the browser — 2026-10-24
+
+UI area. Browser items now drag, as the reference's do: sounds land where they are dropped (an Arrangement track at the pointer's time, or a Session slot), devices, presets and plug-ins go onto the track or column under the pointer or the chain in the device view (below the Arrangement's tracks, onto a new track), and items dropped on a collection join it. Activation's device branch is now `useDeviceRow`, shared by double-clicks and drops ([contract](research/browser-places-contract.md#dragging-2026-10-24)). Checked in the UI suite through the drop handler.

@@ -468,7 +468,9 @@ class MainComponent::Impl final : public juce::Component,
                                   private juce::MenuBarModel,
                                   private juce::ListBoxModel,
                                   private juce::ScrollBar::Listener,
-                                  public juce::FileDragAndDropTarget
+                                  public juce::FileDragAndDropTarget,
+                                  public juce::DragAndDropContainer,
+                                  public juce::DragAndDropTarget
 {
 public:
     explicit Impl (Session& s) : session (s), menu (this), canvas (*this), ruler (*this), launcher (*this), pianoRoll (*this), deviceChain (*this)
@@ -2160,6 +2162,11 @@ private:
             if (placeBounds (placeRows()).contains (at)) owner.addFolderToBrowser();
         }
         juce::Point<int> collectionPoint (int collection) const { return collectionBounds (collection).getCentre(); }
+        int collectionAt (juce::Point<int> at) const
+        {
+            for (int i = 0; i < Collections::count; ++i) if (collectionBounds (i).contains (at)) return i;
+            return -1;
+        }
         juce::Point<int> categoryPoint (BrowserCategory category) const
         {
             if (category == BrowserCategory::packs) return placeBounds (0).getCentre();
@@ -16508,9 +16515,14 @@ private:
             else if (isProject (item.file)) openProject (item.file);
             else useBrowserSample (item.file);
         }
-        else
+        else useDeviceRow (deviceItems[(size_t) row]);
+    }
+    // A device list's item used as a double-click uses it: on the selected track or chain, making a
+    // track for it when needed.
+    void useDeviceRow (const DeviceRow& item)
+    {
         {
-            const auto item = deviceItems[(size_t) row]; if (item.header) return;
+            if (item.header) return;
             if (item.sample != juce::File()) { useBrowserSample (item.sample); return; }
             if (item.projectTemplate != juce::File()) { openTemplate (item.projectTemplate); return; }
             if (item.pack != juce::File()) { browserFolder = item.pack; browserSearch.clear(); setBrowserCategory (BrowserCategory::samples); return; }
@@ -16554,6 +16566,70 @@ private:
         }
     }
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { activateBrowserRow (row); }
+    // Browser items drag out, as the reference's do: sounds into the Arrangement or a Session slot,
+    // devices, presets and plug-ins onto a track or the device view, and anything onto a collection.
+    static constexpr const char* browserDragPrefix = "halftrack-browser:";
+    juce::var getDragSourceDescription (const juce::SparseSet<int>& rows) override
+    {
+        if (rows.size() != 1) return {};
+        const int row = rows[0];
+        if (sampleBrowser())
+        {
+            if (! juce::isPositiveAndBelow (row, (int) browserItems.size()) || ! isAudio (browserItems[(size_t) row].file)) return {};
+            return browserDragPrefix + juce::String ("sample:") + browserItems[(size_t) row].file.getFullPathName();
+        }
+        const auto key = browserKey (row);
+        return key.isEmpty() ? juce::var() : juce::var (browserDragPrefix + key);
+    }
+    bool isInterestedInDragSource (const SourceDetails& details) override { return details.description.toString().startsWith (browserDragPrefix); }
+    void itemDragEnter (const SourceDetails& details) override { itemDragMove (details); }
+    void itemDragMove (const SourceDetails& details) override
+    {
+        const bool over = details.description.toString().startsWith (juce::String (browserDragPrefix) + "sample:") && ! showSession && viewport.getBounds().contains (details.localPosition);
+        if (over != canvas.dragHover) { canvas.dragHover = over; canvas.repaint(); }
+    }
+    void itemDragExit (const SourceDetails&) override { canvas.dragHover = false; canvas.repaint(); }
+    void itemDropped (const SourceDetails& details) override
+    {
+        canvas.dragHover = false; canvas.repaint();
+        browserItemDropped (details.description.toString().fromFirstOccurrenceOf (browserDragPrefix, false, false), details.localPosition);
+    }
+    // Where a dragged browser item lands, by its key ("sample:", "device:", "preset:", "plugin:"...).
+    void browserItemDropped (const juce::String& key, juce::Point<int> at)
+    {
+        // Onto a collection: it joins it.
+        if (browserSidebar.isVisible() && browserSidebar.getBounds().contains (at))
+        {
+            if (const int collection = browserCategories.collectionAt (browserCategories.getLocalPoint (this, at)); collection >= 0 && ! collections.contains (key, collection))
+            { report (collections.toggle (key, collection), "Added to " + collections.name (collection) + "."); updateBrowser(); }
+            return;
+        }
+        if (key.startsWith ("sample:"))
+        {
+            // A sound imports where it lands, as a dropped file does.
+            filesDropped (juce::StringArray { key.fromFirstOccurrenceOf ("sample:", false, false) }, at.x, at.y);
+            return;
+        }
+        const auto row = collectionRow (key);
+        if (! row) return;
+        // A device goes onto the track under it, or the chain the device view shows; below the tracks a new one is made.
+        if (deviceChain.isVisible() && deviceChain.getBounds().contains (at)) { useDeviceRow (*row); return; }
+        if (showSession)
+        {
+            const auto cell = launcher.cellAt (launcher.getLocalPoint (this, at));
+            if (cell.first < 0) return;
+            selectedChain.clear(); selectTrack (cell.first); refresh();
+        }
+        else
+        {
+            if (! viewport.getBounds().contains (at)) return;
+            const auto index = trackAtY (canvas.getLocalPoint (this, at).y);
+            selectedChain.clear();
+            if (index >= 0) { selectTrack (index); refresh(); }
+            else selectedTrack = -1; // Without a track under it, useDeviceRow makes one (a refresh would select the first).
+        }
+        useDeviceRow (*row);
+    }
     // Right-click: the collections the item belongs to, ticked, each toggled by its choice (or keys 1 to 7).
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override
     {
@@ -20578,6 +20654,41 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (session.resetPreferences().wasOk(), "restore the default sources");
         useHardClipEdges (session);
         empty.deleteRecursively();
+    }
+    {
+        // Dragging from the browser, as the reference's: sounds land in the Arrangement where they are
+        // dropped, devices on the track under them or in the device view, and anything on a collection.
+        check (session.newProject().wasOk(), "a fresh project for browser drags"); refresh();
+        showArrangementView(); selectTrack (0); closeClipView(); showBrowser = true; refresh(); resized();
+        setBrowserCategory (BrowserCategory::audioEffects);
+        int saturatorRow = -1;
+        for (int r = 0; r < (int) deviceItems.size(); ++r) if (deviceItems[(size_t) r].kind == (int) Session::EffectKind::saturator && deviceItems[(size_t) r].preset == juce::File()) saturatorRow = r;
+        juce::SparseSet<int> rows; rows.addRange ({ saturatorRow, saturatorRow + 1 });
+        const auto description = getDragSourceDescription (rows).toString();
+        check (description == juce::String (browserDragPrefix) + "device:" + juce::String ((int) Session::EffectKind::saturator), "a device row drags as the device (" + description + ")");
+        const auto onTrack = [this] (int t) { return localPointToGlobal (juce::Point<int>()), getLocalPoint (&canvas, juce::Point<int> (canvas.timelineWidth() / 2, laneY (t) + laneHeight (t) / 2)); };
+        const auto now = [this] { return state; };
+        itemDropped (SourceDetails (description, &browserList, onTrack (1)));
+        check (now().tracks[1].plugins.size() == 1 && now().tracks[1].plugins[0].effect.kind == Session::EffectKind::saturator && now().tracks[0].plugins.empty(),
+               "dropped on track 2's lane, the Saturator joins its chain");
+        selectTrack (0); refresh(); resized();
+        itemDropped (SourceDetails (description, &browserList, deviceChain.getBounds().getCentre()));
+        check (now().tracks[0].plugins.size() == 1 && now().tracks[0].plugins[0].effect.kind == Session::EffectKind::saturator, "dropped on the device view, it joins the chain shown");
+        const auto tracks = now().tracks.size();
+        const auto below = getLocalPoint (&canvas, juce::Point<int> (canvas.timelineWidth() / 2, laneY ((int) tracks - 1) + laneHeight ((int) tracks - 1) + 12));
+        check (viewport.getBounds().contains (below), "room below the tracks");
+        itemDropped (SourceDetails (description, &browserList, below));
+        check (now().tracks.size() == tracks + 1 && now().tracks.back().plugins.size() == 1, "dropped below the tracks, it gets a new track of its own");
+        const auto sound = juce::String (browserDragPrefix) + "sample:" + audioFixture.getFullPathName();
+        const auto clipsBefore = now().tracks[0].clips.size();
+        itemDropped (SourceDetails (sound, &browserList, onTrack (0)));
+        check (now().tracks[0].clips.size() == clipsBefore + 1, "a sound dropped on track 1's lane imports there");
+        itemDropped (SourceDetails (juce::String (browserDragPrefix) + "device:" + juce::String ((int) Session::EffectKind::saturator), &browserList,
+                                    getLocalPoint (&browserCategories, browserCategories.collectionPoint (3))));
+        const auto key = "device:" + juce::String ((int) Session::EffectKind::saturator);
+        check (collections.contains (key, 3), "dropped on a collection, an item joins it");
+        report (collections.toggle (key, 3));
+        check (session.newProject().wasOk(), "leave the drags"); refresh();
     }
     {
         // Hot-Swap, as the reference's: Q or a device's button links it to the browser, which shows it
