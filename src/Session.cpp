@@ -5798,10 +5798,12 @@ struct Session::Impl
     void applyDelayCompensation()
     {
         const bool on = edit->state.getProperty (delayCompensationProperty, true);
+        bool changed = false;
         for (auto* t : te::getAudioTracks (*edit))
-            for (auto* p : t->pluginList) if (auto* d = dynamic_cast<TrackDelayPlugin*> (p)) d->compensated.store (on, std::memory_order_relaxed);
-        edit->setLatencyCompensationEnabled (on);
-        edit->restartPlayback(); // Track Delays report their latency when the graph is built.
+            for (auto* p : t->pluginList)
+                if (auto* d = dynamic_cast<TrackDelayPlugin*> (p)) changed = d->compensated.exchange (on, std::memory_order_relaxed) != on || changed;
+        edit->setLatencyCompensationEnabled (on); // Rebuilds the graph when it changes.
+        if (changed) edit->restartPlayback(); // Track Delays report their latency when the graph is built.
     }
     void prepareEdit()
     {
