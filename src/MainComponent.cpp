@@ -10482,7 +10482,7 @@ private:
                            arrangementZoom, arrangementZoomBack, arrangementRename, arrangementGroove, arrangementActivate, arrangementSplit,
                            arrangementConsolidate, arrangementConsolidateScene, arrangementExportMidi, arrangementInsertMidi, arrangementVideo,
                            arrangementReveal, arrangementSimilar, arrangementFade, arrangementResetFades, arrangementLoop, arrangementFreeze,
-                           arrangementBounceInPlace, arrangementBounceNew, arrangementCrop, arrangementReverse, arrangementColour, arrangementInfo,
+                           arrangementBounceInPlace, arrangementBounceNew, arrangementCrop, arrangementReverse, arrangementColour, arrangementInfo, arrangementShowInBrowser,
                            arrangementSlice = 450 }; // Plus Session::SliceBy.
     // A right-click's selection, as the reference prepares it (0x1037c6280): an unselected clip is
     // selected alone, with the time selection on its lane at its edges; a click inside the selection keeps
@@ -10675,9 +10675,12 @@ private:
            #if JUCE_MAC
             if (clicked != nullptr && clicked->videoFile != juce::File()) item (arrangementVideo, "Video Window", video::supported(), videoWindow != nullptr && videoWindow->isVisible());
            #endif
-            // The sample's file: Halftrack's browser has no Show in Browser yet.
+            // The sample's file.
             if (single != nullptr && single->isAudio && single->file.existsAsFile())
-            { separator(); item (arrangementReveal, "Reveal in Finder"); item (arrangementSimilar, "Show Similar Files", browserFolder != juce::File()); }
+            {
+                separator(); item (arrangementShowInBrowser, "Show in Browser"); item (arrangementReveal, "Reveal in Finder");
+                item (arrangementSimilar, "Show Similar Files", browserFolder != juce::File());
+            }
             separator();
             // The fades, for audio tracks that are not frozen.
             const auto tracks = selection ? timeSelection.trackIds : menuTracks();
@@ -10790,6 +10793,7 @@ private:
                 session.endEditGesture(); break;
             }
             case arrangementVideo: toggleVideoWindow(); break;
+            case arrangementShowInBrowser: if (single != nullptr) showInBrowser (single->file); return;
             case arrangementReveal: if (single != nullptr) single->file.revealToUser(); return;
             case arrangementSimilar: if (single != nullptr) showSimilarFiles (single->file); return;
             case arrangementFade: createSelectionFades(); return;
@@ -10846,7 +10850,7 @@ private:
         return slots;
     }
     enum SlotItem { slotCut = 500, slotCopy, slotPaste, slotDuplicate, slotDelete, slotClearEnvelopes, slotRename, slotGroove, slotActivate, slotExportMidi,
-                    slotReveal, slotSimilar, slotFreeze, slotBounceInPlace, slotBounceNew, slotInsertMidi, slotColour, slotInfo, slotStopButton, slotCrop };
+                    slotReveal, slotSimilar, slotFreeze, slotBounceInPlace, slotBounceNew, slotInsertMidi, slotColour, slotInfo, slotStopButton, slotCrop, slotShowInBrowser };
     // A Session slot's menu, in the reference's order (LSlotManager 0x103a38ce4): commands that cannot act
     // are left out, while Freeze and the bounces stay, greyed when they cannot act.
     juce::PopupMenu slotContextMenu (std::shared_ptr<int> colour) const
@@ -10874,7 +10878,7 @@ private:
         }
         if (single != nullptr && single->isMidi) item (slotExportMidi, "Export MIDI Clip...");
         if (single != nullptr && single->isAudio && single->file.existsAsFile())
-        { separator(); item (slotReveal, "Reveal in Finder"); item (slotSimilar, "Show Similar Files", browserFolder != juce::File()); }
+        { separator(); item (slotShowInBrowser, "Show in Browser"); item (slotReveal, "Reveal in Finder"); item (slotSimilar, "Show Similar Files", browserFolder != juce::File()); }
         if (hasClip)
         {
             separator();
@@ -10935,6 +10939,7 @@ private:
                 session.endEditGesture(); break;
             }
             case slotExportMidi: exportMidiDialog(); return;
+            case slotShowInBrowser: if (single != nullptr) showInBrowser (single->file); return;
             case slotReveal: if (single != nullptr) single->file.revealToUser(); return;
             case slotSimilar: if (single != nullptr) showSimilarFiles (single->file); return;
             case slotFreeze: freezeTracksFromUI (freezableTracks (tracks)); return;
@@ -13564,7 +13569,7 @@ private:
             allBrowserItems.push_back ({ browserFolder.getChildFile (juce::String::fromUTF8 (entry.name.data(), (int) entry.name.size())), entry.directory });
         std::sort (allBrowserItems.begin(), allBrowserItems.end(), [] (const auto& a, const auto& b)
         { return a.directory != b.directory ? a.directory : a.file.getFileName().compareNatural (b.file.getFileName()) < 0; });
-        updateBrowser();
+        updateBrowser(); selectShownBrowserFile();
     }
     // While the folder is indexed, a search's results grow and the browser shows how far it has got.
     void pollBrowserIndex()
@@ -13913,6 +13918,26 @@ private:
     static constexpr int showSimilarItem = 100, maximumSimilarFiles = 50;
     // Show Similar Files, after the reference's: the folder's sounds most like this one, nearest
     // first, filling in as they are measured. A search or another folder leaves it.
+    // Show in Browser: the browser's samples at the file's folder, with the file selected, as the
+    // reference's clip menus show a clip's sample.
+    void showInBrowser (const juce::File& file)
+    {
+        if (! file.existsAsFile()) return;
+        showBrowser = true; similarFile = juce::File();
+        browserSearch.setText ({}, juce::dontSendNotification);
+        browserFolder = file.getParentDirectory(); shownBrowserFile = file;
+        setBrowserCategory (BrowserCategory::samples);
+        selectShownBrowserFile();
+    }
+    // The file Show in Browser asked for, selected once its folder is listed.
+    juce::File shownBrowserFile;
+    void selectShownBrowserFile()
+    {
+        if (shownBrowserFile == juce::File() || ! sampleBrowser()) return;
+        for (int row = 0; row < (int) browserItems.size(); ++row)
+            if (browserItems[(size_t) row].file == shownBrowserFile)
+            { browserList.selectRow (row); browserList.scrollToEnsureRowIsOnscreen (row); shownBrowserFile = juce::File(); return; }
+    }
     void showSimilarFiles (const juce::File& file)
     {
         if (browserFolder == juce::File() || ! file.existsAsFile()) return;
@@ -15215,9 +15240,20 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const juce::String paste = session.hasRangeClipboard() || session.hasAudioClipClipboard() ? "Paste|" : "";
         const auto clipMenu = listed (arrangementMenu (onClip, colour));
         check (clipMenu == "Cut|Copy|" + paste + "Duplicate|Delete|-|Zoom to Arrangement Time Selection|-|Rename|Edit Info Text|Deactivate Clip|Consolidate|Consolidate Time to New Scene|-|"
-                               "Reveal in Finder|Show Similar Files (off)|-|Create Fade (off)|Reset Fades (off)|Loop Selection|-|Freeze Track|Bounce Track in Place|"
+                               "Show in Browser|Reveal in Finder|Show Similar Files (off)|-|Create Fade (off)|Reset Fades (off)|Loop Selection|-|Freeze Track|Bounce Track in Place|"
                                "Bounce to New Track|-|Crop Clip (off)|Reverse Clip|-|Slice to New MIDI Track|-|[Clip Colours]",
                "an audio clip's menu lists the reference's commands in its order, ending with the clip colours: " + clipMenu);
+        // Show in Browser opens the sample's folder in the browser, with the sample selected.
+        {
+            const auto category = browserCategory; const auto folder = browserFolder;
+            chooseArrangementItem (arrangementShowInBrowser, onClip, -1);
+            for (int i = 0; i < 1000 && browserLoading; ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
+            const auto row = browserList.getSelectedRow();
+            check (showBrowser && browserCategory == BrowserCategory::samples && browserFolder == clip().file.getParentDirectory()
+                       && juce::isPositiveAndBelow (row, (int) browserItems.size()) && browserItems[(size_t) row].file == clip().file,
+                   "Show in Browser shows the sample's folder in the browser, the sample selected");
+            browserFolder = folder; setBrowserCategory (category);
+        }
         // The colour grid colours the clip.
         chooseArrangementItem (arrangementColour, onClip, 5);
         check (clip().colour == paletteColour (5), "a swatch gives the clip its colour");
@@ -15241,7 +15277,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (timeSelection.active() && std::abs (timeSelection.start - 1.0) < 1e-6, "a right-click inside the time selection keeps it");
         const auto selectionMenu = listed (arrangementMenu (inside, colour));
         check (selectionMenu == "Cut|Copy|" + paste + "Duplicate|Delete|-|Zoom to Arrangement Time Selection|-|Rename|Edit Info Text|Deactivate Clip|Split|Consolidate|Consolidate Time to New Scene|-|"
-                                    "Reveal in Finder|Show Similar Files (off)|-|Create Fade In|Reset Fades (off)|Loop Selection|-|Freeze Track|Bounce Track in Place|"
+                                    "Show in Browser|Reveal in Finder|Show Similar Files (off)|-|Create Fade In|Reset Fades (off)|Loop Selection|-|Freeze Track|Bounce Track in Place|"
                                     "Bounce to New Track|-|Slice to New MIDI Track|-|Snap to Grid (on)|[Adaptive Grid]|[Fixed Grid]|-|Narrow Grid|Widen Grid|-|Triplet Grid",
                "a time selection's menu has Split and Create Fade In, and the grid's items in place of the colours: " + selectionMenu);
         chooseArrangementItem (arrangementFade, inside, -1);

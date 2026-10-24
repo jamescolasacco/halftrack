@@ -2467,3 +2467,7 @@ UI area, with small cross-area edits to the manual test script and contracts tha
 
 Checked in the UI suite: each menu against the reference's order, shortcuts on the items, greyed items, the blocking while a dialog is open, the new keys and commands, and Edit acting on the slots, a scene, the headers and a lone clip.
 
+## Show in Browser — 2026-10-24
+
+UI area. The Arrangement clip menu and the Session slot menu now offer Show in Browser for an audio clip with a file, before Reveal in Finder, as the reference's do. It opens the sample's folder in the browser's samples, showing the browser if it is hidden, and selects the sample once the folder is listed. Checked in the UI suite ([contract](research/clip-menus-contract.md)).
+

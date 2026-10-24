@@ -41,7 +41,7 @@ The reference's items, with what Halftrack shows:
 | Export MIDI Clip | one MIDI clip | the same |
 | Insert MIDI Clip(s) | selected MIDI lanes with no clip in the selection | the same: a clip filling the selection on each lane, in one undo step |
 | Video Window | a clip with video | the same |
-| Show in Browser, Reveal in Finder, Show Similar Files | one audio clip with a file | Reveal in Finder and Show Similar Files. Halftrack's browser cannot show a file yet |
+| Show in Browser, Reveal in Finder, Show Similar Files | one audio clip with a file | the same: Show in Browser opens the sample's folder in the browser's samples, the sample selected |
 | Create Fade (In, Out, Crossfade, Default Crossfade), Reset Fades (always shown) | the block for audio tracks that are not frozen; the fade named by the selection against the clips' edges | Create Fade In where the selection holds its audio clips' starts but not their ends, Create Fade Out the other way round, greyed "Create Fade" otherwise. Crossfades over a selection are not made yet. Reset Fades returns the clips' fades to the default, as Delete does to a fade handle |
 | Loop Selection, or Activate / Deactivate Loop | always | the same |
 | Freeze / Unfreeze Track(s), Bounce Track(s) in Place, Bounce to New Track(s) (always shown) | not on a take lane | the same, over the tracks with content in the selection; Bounce to New Track over the time selection (see the [freeze contract](freeze-contract.md)) |
@@ -57,6 +57,7 @@ Halftrack's own clip menu items are gone: the gain, fades and range dialog, spli
 
 The UI suite builds the menus for an audio clip, a time selection holding the clip's start, and an empty lane. It compares each with the reference's order. It also checks:
 - the right-click selections;
+- Show in Browser showing the sample's folder in the browser with the sample selected;
 - a swatch colouring the clip, undone in one step;
 - a clip's info text showing in the Info view while pointing at it;
 - Create Fade In fading the clip over the selection's part, and Reset Fades returning it to the default;
@@ -77,7 +78,7 @@ A right-click on a slot that is not selected selects it alone, its track and sce
 | Extract Grooves | MIDI clips, or audio with a warped sample | the same |
 | Deactivate / Activate Clip(s) | clips | the same |
 | Export MIDI Clip | one MIDI clip | the same |
-| Show in Browser, Reveal in Finder, Show Similar Files | one audio clip with a file | Reveal in Finder and Show Similar Files |
+| Show in Browser, Reveal in Finder, Show Similar Files | one audio clip with a file | the same |
 | Freeze / Unfreeze Track(s), Bounce Track(s) in Place, Bounce to New Track(s) (always shown) | a clip | the same. Freeze stays greyed for a track without Arrangement clips, as Halftrack's freeze renders the Arrangement only. Bounce to New Track renders the selected clips into the same slots of a new track (`bounceSlotsToNewTracks`; see the [freeze contract](freeze-contract.md#session-clips)) |
 | Crop Clip(s) (always shown) | a clip that can be cropped | the same (`cropSessionClips`), greyed on an empty slot: each clip keeps only what it plays, its loop or its span from its start, which then begins it. A MIDI clip loses the notes outside, cut at the edges; a warped audio clip gets a new sample in the project's Assets holding that audio. Audio clips with warp markers stay greyed |
 | Slice to New MIDI Track and the conversions | one audio clip | left out: Halftrack slices Arrangement clips only |
