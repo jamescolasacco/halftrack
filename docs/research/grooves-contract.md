@@ -42,6 +42,7 @@ The note keeps its length. On playback a note moved before the clip start sounds
 - **Pool edits.** Each is one undo step.
   - `addGroove` copies a groove into the pool with a new id, and numbers repeated names.
   - `extractGroove(clipId)` makes a groove from a MIDI clip's active notes. A looping clip uses its loop.
+  - From a warped audio clip, as the reference extracts one from a warped sample (2026-10-24), it makes an event at each transient within the content the clip plays, through its warp markers or tempo. Each event is as loud as the sound's peak in the 20 ms after it, against the loudest. A sound already striking where the content starts counts as an onset there.
   - `setGroove` replaces a groove's name, Base, amounts and pattern.
   - `removeGroove` also sets the clips that used the groove to None.
   - `setGrooveAmount` sets Global Amount, 0–130%.
@@ -61,7 +62,7 @@ The engine does not watch Halftrack's groove state. A watcher on the Session's c
 - **Groove section.** Every MIDI clip's editor has a Groove section beside the note editor. It holds the clip's groove chooser, Commit and Groove Pool.
 - **Groove Pool window.** It lists each groove's name (double-click to rename), Base, Quantize, Timing, Random and Velocity, with a remove button. It also has Global Amount and Add Groove, which offers the library, a groove file, or extraction from the selected clip.
 - **Browser.** The Grooves category lists the library and `.agr` files in `User Library/Grooves`. Return or double-click adds a groove to the pool and gives it to the selected MIDI clip.
-- **Clip menus.** Arrangement and Session MIDI clip menus offer Extract Groove.
+- **Clip menus.** Arrangement and Session clip menus offer Extract Groove for MIDI clips and warped audio clips.
 
 ## Projects
 

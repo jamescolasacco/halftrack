@@ -3658,6 +3658,60 @@ struct Session::Impl
         }
         return sources;
     }
+    // A warped audio clip's groove, as the reference extracts one from a warped sample (0x10379d48c): an
+    // event at each transient within the content the clip plays, as loud as the sound's peak in the 20 ms
+    // after it, against the loudest. Returns the groove added to the pool.
+    Result extractAudioGroove (const String& clipId, String& grooveId)
+    {
+        auto* wave = audioClip (clipId);
+        if (wave == nullptr || ! wave->getAutoTempo()) return Result::fail ("Grooves are extracted from MIDI clips and warped audio clips.");
+        const auto info = describeClip (*wave);
+        const auto from = info.loop.on ? info.loop.start : info.contentStartBeat;
+        const auto to = info.loop.on ? info.loop.start + info.loop.length : info.contentStartBeat + info.lengthBeats;
+        // Content beats to source seconds and back, through the clip's warp markers or its tempo.
+        const auto& markers = info.warpMarkers;
+        const auto toSource = [&] (double beat)
+        {
+            if (markers.size() < 2) return beat * 60 / info.warp.bpm;
+            size_t i = 1; while (i + 1 < markers.size() && markers[i].beat < beat) ++i;
+            const auto t = (beat - markers[i - 1].beat) / std::max (1e-9, markers[i].beat - markers[i - 1].beat);
+            return markers[i - 1].sourceSeconds + t * (markers[i].sourceSeconds - markers[i - 1].sourceSeconds);
+        };
+        const auto toBeat = [&] (double seconds)
+        {
+            if (markers.size() < 2) return seconds * info.warp.bpm / 60;
+            size_t i = 1; while (i + 1 < markers.size() && markers[i].sourceSeconds < seconds) ++i;
+            const auto t = (seconds - markers[i - 1].sourceSeconds) / std::max (1e-9, markers[i].sourceSeconds - markers[i - 1].sourceSeconds);
+            return markers[i - 1].beat + t * (markers[i].beat - markers[i - 1].beat);
+        };
+        std::unique_ptr<juce::AudioFormatReader> reader (engine.getAudioFileFormatManager().readFormatManager.createReaderFor (wave->getSourceFileReference().getFile()));
+        if (reader == nullptr || reader->lengthInSamples <= 0) return Result::fail ("The clip's audio could not be read.");
+        const auto first = (juce::int64) std::floor (std::max (0.0, toSource (from)) * reader->sampleRate);
+        const auto last = std::min (reader->lengthInSamples, (juce::int64) std::ceil (toSource (to) * reader->sampleRate));
+        if (last - first > (juce::int64) (reader->sampleRate * 600)) return Result::fail ("Extract grooves from clips of up to ten minutes.");
+        juce::AudioBuffer<float> audio ((int) reader->numChannels, (int) std::max<juce::int64> (1, last - first));
+        reader->read (&audio, 0, audio.getNumSamples(), first, true, true);
+        std::vector<std::pair<double, float>> onsets;
+        const int window = (int) (reader->sampleRate * .02);
+        const auto peakAt = [&] (long long frame)
+        {
+            float peak = 0;
+            for (int c = 0; c < audio.getNumChannels(); ++c) peak = std::max (peak, audio.getMagnitude (c, (int) frame, std::max (1, std::min (window, audio.getNumSamples() - (int) frame))));
+            return peak;
+        };
+        auto frames = warp::findTransients (audio, reader->sampleRate);
+        // A sound already striking as the content starts has no onset before it to detect.
+        if ((frames.empty() || frames.front() > window) && peakAt (0) > 0.01f) frames.insert (frames.begin(), 0);
+        for (const auto frame : frames) onsets.push_back ({ toBeat ((double) (first + frame) / reader->sampleRate) - from, peakAt (frame) });
+        float loudest = 0;
+        for (const auto& [beat, peak] : onsets) loudest = std::max (loudest, peak);
+        std::vector<MidiNoteInfo> notes;
+        for (const auto& [beat, peak] : onsets)
+            if (loudest > 0 && beat >= -1e-6) notes.push_back ({ {}, 60, std::max (0.0, beat), .1, peak / loudest, true });
+        const auto groove = grooves::extract (wave->getName(), notes, to - from);
+        if (groove.events.empty()) return Result::fail ("The clip has no transients to extract a groove from.");
+        return owner.addGroove (groove, grooveId);
+    }
     // The devices a bounce takes off a track: everything before its mixer, and the engine's freeze point.
     static bool bouncedDevice (te::Plugin* plugin)
     {
@@ -10023,7 +10077,8 @@ Result Session::addGroove (const GrooveInfo& groove, String& grooveId)
 }
 Result Session::extractGroove (const String& clipId, String& grooveId)
 {
-    auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("Grooves are extracted from MIDI clips.");
+    auto* clip = impl->midiClip (clipId);
+    if (clip == nullptr) return impl->extractAudioGroove (clipId, grooveId);
     // A looping clip's groove is its loop, measured from the loop start.
     auto notes = describeClip (*clip).notes;
     const bool looping = clip->isLooping();

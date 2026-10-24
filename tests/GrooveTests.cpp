@@ -282,6 +282,31 @@ int runGrooveTests (const juce::File& artifacts)
         }
         ok (s.addMidiClip (trackId, 24, 2), "an empty clip");
         check (s.extractGroove (s.snapshot().tracks.back().clips[2].id, unused).failed(), "an empty clip has no groove to extract");
+        {
+            // From warped audio: an event at each click, as loud as the click against the loudest.
+            const auto clicks = root.getChildFile ("clicks.wav");
+            {
+                juce::AudioBuffer<float> audio (1, 2 * 48000); audio.clear();
+                for (int b = 0; b < 4; ++b)
+                    for (int n = 0; n < 480; ++n) audio.setSample (0, b * 24000 + n, (b % 2 == 0 ? .8f : .2f) * std::exp (-n / 80.0f) * (n % 2 == 0 ? 1.0f : -1.0f));
+                juce::WavAudioFormat wav; std::unique_ptr<juce::OutputStream> stream (clicks.createOutputStream());
+                auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (1).withBitsPerSample (24));
+                check (writer != nullptr && writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples()), "write four beats of clicks");
+            }
+            ok (s.addAudioTrack ("Clicks"), "an audio track");
+            const auto clickTrack = (int) s.snapshot().tracks.size() - 1;
+            ok (s.importAudio (clicks, clickTrack, 0), "import the clicks");
+            const auto clickClip = s.snapshot().tracks[(size_t) clickTrack].clips.at (0).id;
+            check (s.extractGroove (clickClip, unused).failed(), "an unwarped audio clip has no groove to extract");
+            ok (s.setAudioClipWarp (clickClip, { Session::WarpMode::beats, 120 }), "warp it at 120 BPM");
+            juce::String clickGroove; ok (s.extractGroove (clickClip, clickGroove), "extract the clicks' groove");
+            const auto pool = s.snapshot().grooves;
+            const auto& g = pool.back();
+            check (g.id == clickGroove && near (g.lengthBeats, 4, 1e-6) && g.events.size() == 4 && near (g.events[0].beat, 0, .01) && near (g.events[1].beat, 1, .01)
+                       && near (g.events[2].beat, 2, .01) && near (g.events[0].velocity, 127, .51) && g.events[1].velocity < 40 && g.events[1].velocity > 20,
+                   "the groove has an event at each click, the quiet ones softer");
+            ok (s.removeGroove (clickGroove), "remove that groove"); ok (s.removeTrack (clickTrack), "and the clicks' track");
+        }
 
         // Groove files.
         {

@@ -2450,3 +2450,7 @@ Engine and UI areas. As the reference's scene menu ends, Reset Color and a colou
 ## Cropping Session clips — 2026-10-24
 
 Engine and UI areas. The slot menu's Crop Clip keeps only what each selected Session clip plays: its loop, or its span from its start, which then begins the clip (`cropSessionClips`, one undo step). A MIDI clip loses the notes outside it, cut at its edges. A warped audio clip without warp markers gets a new sample in the project's Assets holding exactly that audio. As the reference adds it, the item is always there, greyed on an empty slot. Checked in the clip loops and UI suites ([contract](research/clip-menus-contract.md)).
+
+## Grooves from warped audio — 2026-10-24
+
+Engine and UI areas. As the reference extracts grooves from warped samples, Extract Groove now works on warped audio clips too. It makes an event at each transient within the content the clip plays, as loud as the sound's peak just after it, against the loudest. A sound striking where the content starts counts too, since onset detection cannot see one there. The Arrangement and Session clip menus offer it for warped audio. Checked in the grooves suite: four clicks give four events, the quiet ones a quarter as loud ([contract](research/grooves-contract.md)).

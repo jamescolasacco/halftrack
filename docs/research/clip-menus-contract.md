@@ -34,7 +34,7 @@ The reference's items, with what Halftrack shows:
 | Cut, Copy, Paste, Duplicate, Delete | a time selection with content; Paste when the clipboard fits | the same over the time selection (`copyRange`, `pasteRange`, `duplicateRange`, `deleteRange`), or over the selected clips when several are selected without one. Paste takes a copied time selection, or a copied clip of the track's kind |
 | Zoom to Arrangement Time Selection, Zoom Back | a time selection; Zoom Back always | Zoom Back only after a zoom to return from, as Halftrack keeps no other view to go back to |
 | Rename, Edit Info Text | one clip | the same: Edit Info Text gives the clip its own text (`setInfoText`, saved, one undo step), which the Info view shows while pointing at the clip |
-| Extract Grooves | clips that are MIDI, or audio with a warped sample | MIDI clips only: Halftrack does not extract grooves from audio yet |
+| Extract Grooves | clips that are MIDI, or audio with a warped sample | the same: a warped audio clip's groove has an event at each transient (see the [grooves contract](grooves-contract.md)) |
 | Deactivate / Activate Clip(s) | clips in the selection | the same, Activate when all are deactivated, in one undo step |
 | Split | clips cut by the selection's edges | the same, or at the insert marker without a selection |
 | Consolidate, Consolidate Time to New Scene | a time selection | the same; the reference also tests an engine state that was not decoded |
@@ -74,7 +74,7 @@ A right-click on a slot that is not selected selects it alone, its track and sce
 | Cut, Copy, Paste, Duplicate, Delete | a selected slot holds a clip; Paste when the clipboard fits | the same, over the selected slots (`copySlotClips`, `pasteSlotClip`, `duplicateSlotClip`, `clearSlots`) |
 | Clear All Envelopes | a selected clip has envelopes | the same, in one undo step |
 | Rename, Edit Info Text | one clip | the same: Edit Info Text gives the clip its own text (`setInfoText`, saved, one undo step), which the Info view shows while pointing at the clip |
-| Extract Grooves | MIDI clips, or audio with a warped sample | MIDI clips only |
+| Extract Grooves | MIDI clips, or audio with a warped sample | the same |
 | Deactivate / Activate Clip(s) | clips | the same |
 | Export MIDI Clip | one MIDI clip | the same |
 | Show in Browser, Reveal in Finder, Show Similar Files | one audio clip with a file | Reveal in Finder and Show Similar Files |

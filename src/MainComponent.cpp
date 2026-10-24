@@ -10626,7 +10626,8 @@ private:
         {
             if (clicked != nullptr || single != nullptr) item (arrangementRename, "Rename");
             if (single != nullptr) item (arrangementInfo, "Edit Info Text");
-            if (! clips.empty() && std::all_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return c->isMidi; }))
+            // Grooves come from MIDI clips and warped audio, as the reference's Extract Grooves takes them.
+            if (! clips.empty() && std::all_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return c->isMidi || (c->isAudio && c->warp.mode != Session::WarpMode::off); }))
                 item (arrangementGroove, clips.size() > 1 ? "Extract Grooves" : "Extract Groove");
             if (! clips.empty())
             {
@@ -10831,7 +10832,8 @@ private:
         if (std::any_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return ! c->envelopes.empty(); })) item (slotClearEnvelopes, "Clear All Envelopes");
         separator();
         if (single != nullptr) { item (slotRename, "Rename"); item (slotInfo, "Edit Info Text"); }
-        if (hasClip && std::all_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return c->isMidi; })) item (slotGroove, clips.size() > 1 ? "Extract Grooves" : "Extract Groove");
+        if (hasClip && std::all_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return c->isMidi || (c->isAudio && c->warp.mode != Session::WarpMode::off); }))
+            item (slotGroove, clips.size() > 1 ? "Extract Grooves" : "Extract Groove");
         if (hasClip)
         {
             const bool allOff = std::all_of (clips.begin(), clips.end(), [] (const Session::ClipInfo* c) { return ! c->active; });
