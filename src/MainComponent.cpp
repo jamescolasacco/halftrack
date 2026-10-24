@@ -6980,7 +6980,8 @@ private:
             g.drawText ("Length", labelX[1], 0, 45, headerHeight, juce::Justification::centredLeft);
             g.drawText ("Velocity", labelX[2], 0, 52, headerHeight, juce::Justification::centredLeft);
             g.drawText ("Lane", labelX[3], 0, 30, headerHeight, juce::Justification::centredLeft);
-            g.drawText ((selectedNoteIds.empty() ? juce::String() : juce::String ((int) selectedNoteIds.size()) + " selected  |  ")
+            g.drawText ((typedVelocity.isNotEmpty() ? "Velocity " + typedVelocity + "_  |  " : juce::String())
+                        + (selectedNoteIds.empty() ? juce::String() : juce::String ((int) selectedNoteIds.size()) + " selected  |  ")
                         + "Insert " + juce::String (insertionBeat + 1, 2), infoX, 0, juce::jmax (0, getWidth() - infoX - 14), headerHeight, juce::Justification::centredRight);
             if (clip == nullptr)
             {
@@ -7356,8 +7357,19 @@ private:
             endGesture(); originalNotes.clear(); drawing = false; marquee = false; erasing = false;
             const auto* clip = owner.currentMidiClip();
             const auto code = key.getKeyCode();
+            const auto mods = key.getModifiers();
+            // A velocity typed for the selected notes, as in the reference: digits, then Return.
+            if (clip != nullptr && hasSelectedNote() && ! mods.isAnyModifierKeyDown() && code >= '0' && code <= '9' && (code != '0' || typedVelocity.isNotEmpty()))
+            { if (typedVelocity.length() < 3) typedVelocity << juce::String::charToString ((juce::juce_wchar) code); repaint(); return true; }
+            if (typedVelocity.isNotEmpty())
+            {
+                const auto typed = typedVelocity; typedVelocity.clear(); repaint();
+                if (code == juce::KeyPress::returnKey && clip != nullptr) { setSelectedVelocity (juce::jlimit (1, 127, typed.getIntValue())); return true; }
+                if (code == juce::KeyPress::escapeKey) return true;
+            }
             if (code == juce::KeyPress::escapeKey) { clearSelection(); repaint(); return true; }
             if (clip != nullptr && code == '0' && !key.getModifiers().isAnyModifierKeyDown()) { noteCommand (NoteCommand::toggleActive); return true; }
+            if (clip != nullptr && editorKey (key)) return true;
             if ((code == juce::KeyPress::rightKey || code == juce::KeyPress::leftKey) && ! key.getModifiers().isAnyModifierKeyDown() && stepRecord (code == juce::KeyPress::rightKey)) return true;
             if (clip != nullptr && key.getModifiers().isCommandDown())
             {
@@ -7376,7 +7388,7 @@ private:
                 revealInsertion(); repaint(); return true;
             }
             if (clip != nullptr && key.getModifiers().isCommandDown() && (code == 'A' || code == 'a')) { noteCommand (NoteCommand::selectAll); return true; }
-            if (clip != nullptr && hasSelectedNote() && ! key.getModifiers().isCommandDown()
+            if (clip != nullptr && hasSelectedNote() && ! key.getModifiers().isCommandDown() && ! key.getModifiers().isAltDown()
                 && (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey || code == juce::KeyPress::upKey || code == juce::KeyPress::downKey))
             {
                 double beatDelta = 0; int pitchDelta = 0;
@@ -7398,6 +7410,57 @@ private:
         }
         bool hasSelectedNote() const { return selectedNote() != nullptr; }
         double insertion() const { return insertionBeat; }
+        juce::String velocityTyped() const { return typedVelocity; }
+        bool isNoteSelected (const juce::String& id) const { return selectedNoteIds.contains (id); }
+        int topShownPitch() const { return pitchAtRow (topRow()); }
+        double beatWidth() const { return pixelsPerBeat; }
+        // The reference's other note editor keys (its shortcut list's MIDI Note Editor section): Cmd with Up
+        // and Down nudges the selected notes' velocity, with Shift their velocity range and with Option
+        // their chance; Option with Up and Down selects the previous or next note, and with Left and Right
+        // the previous or next on the same key; Home and End take the insert marker to the content's ends;
+        // Page Up and Down scroll a page (a row with Shift, sideways with Cmd); W fits the clip's width;
+        // Z zooms to the selected notes and X back; Cmd+J joins the selected notes on each key.
+        bool editorKey (const juce::KeyPress& key)
+        {
+            const auto* clip = owner.currentMidiClip();
+            const auto code = key.getKeyCode();
+            const auto mods = key.getModifiers();
+            const bool vertical = code == juce::KeyPress::upKey || code == juce::KeyPress::downKey, up = code == juce::KeyPress::upKey;
+            // The computer MIDI keyboard's own keys play it instead, as in the reference.
+            if (owner.session.isComputerKeyboardEnabled() && ! mods.isCommandDown() && ! mods.isAltDown() && ComputerKeyboard::handles (key.getTextCharacter())) return false;
+            if (mods.isCommandDown() && vertical && hasSelectedNote())
+            {
+                if (mods.isAltDown()) nudgeChance (up ? .01f : -.01f);
+                else if (mods.isShiftDown()) nudgeVelocityRange (up ? 1 : -1);
+                else
+                {
+                    auto notes = selectedNotes();
+                    for (auto& note : notes) note.velocity = (float) juce::jlimit (1, 127, juce::roundToInt (note.velocity * 127.0f) + (up ? 1 : -1)) / 127.0f;
+                    updateNotes (clip->id, notes, "Note velocity");
+                }
+                return true;
+            }
+            if (mods.isAltDown() && ! mods.isCommandDown() && ! mods.isShiftDown()
+                && (vertical || code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey) && ! clip->notes.empty())
+            {
+                selectNeighbour (vertical, vertical ? ! up : code == juce::KeyPress::rightKey); return true;
+            }
+            if (! mods.isAnyModifierKeyDown() && (code == juce::KeyPress::homeKey || code == juce::KeyPress::endKey))
+            { insertionBeat = code == juce::KeyPress::homeKey ? 0.0 : contentEndBeat (*clip); revealInsertion(); repaint(); return true; }
+            if (code == juce::KeyPress::pageUpKey || code == juce::KeyPress::pageDownKey)
+            {
+                const auto sign = code == juce::KeyPress::pageUpKey ? -1 : 1;
+                if (mods.isCommandDown()) { viewBeat = juce::jmax (0.0, viewBeat + sign * gridBounds().getWidth() / pixelsPerBeat); if (owner.state.playing) owner.setFollow (false); }
+                else topPitch = pitchAtRow (topRow() + sign * (mods.isShiftDown() ? 1 : juce::jmax (1, gridBounds().getHeight() / rowHeight)));
+                updateScroll(); repaint(); return true;
+            }
+            if (! mods.isAnyModifierKeyDown() && (code == 'W' || code == 'w')) { fit(); return true; }
+            if (! mods.isAnyModifierKeyDown() && (code == 'Z' || code == 'z')) { zoomToNotes(); return true; }
+            if (! mods.isAnyModifierKeyDown() && (code == 'X' || code == 'x'))
+            { if (zoomBack) { std::tie (viewBeat, pixelsPerBeat, topPitch) = *zoomBack; zoomBack.reset(); updateScroll(); updateGridButton(); repaint(); } return true; }
+            if (mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown() && (code == 'J' || code == 'j')) { joinSelectedNotes(); return true; }
+            return false;
+        }
         // Edit > Select Loop here: the notes starting inside the clip's loop brace.
         void selectLoopNotes()
         {
@@ -7944,6 +8007,93 @@ private:
         int topPitch = 77;
         float drawVelocity = 0.8f;
         bool gesture = false, resizeNote = false, drawing = false, marquee = false, erasing = false, pitchLocked = false, velocityDrag = false, copyDrag = false, copied = false;
+        juce::String typedVelocity; // Digits typed for the selected notes' velocity, until Return.
+        std::optional<std::tuple<double, double, int>> zoomBack; // The view before Z, for X.
+        void setSelectedVelocity (int value)
+        {
+            auto notes = selectedNotes();
+            if (notes.empty()) return;
+            for (auto& note : notes) note.velocity = (float) value / 127.0f;
+            updateNotes (owner.currentMidiClip()->id, notes, "Note velocity");
+        }
+        // Each selected note's range or chance moved by a step, as one undo step.
+        void nudgeVelocityRange (int step)
+        {
+            const auto clipId = owner.currentMidiClip()->id;
+            std::map<int, juce::StringArray> byRange;
+            for (const auto& note : selectedNotes()) byRange[juce::jlimit (-127, 127, note.velocityRange + step)].add (note.id);
+            owner.session.beginEditGesture ("Velocity range");
+            for (const auto& [range, ids] : byRange) owner.report (owner.session.setMidiNotesVelocityRange (clipId, ids, range));
+            owner.session.endEditGesture(); owner.refresh();
+        }
+        void nudgeChance (float step)
+        {
+            const auto clipId = owner.currentMidiClip()->id;
+            std::map<int, juce::StringArray> byChance;
+            for (const auto& note : selectedNotes()) byChance[juce::jlimit (0, 100, juce::roundToInt ((note.chance + step) * 100.0f))].add (note.id);
+            owner.session.beginEditGesture ("Note chance");
+            for (const auto& [chance, ids] : byChance) owner.report (owner.session.setMidiNotesChance (clipId, ids, (float) chance / 100.0f));
+            owner.session.endEditGesture(); owner.refresh();
+        }
+        // The next or previous note in time, or on the selected note's key, selected and shown.
+        void selectNeighbour (bool anyKey, bool next)
+        {
+            const auto* clip = owner.currentMidiClip();
+            auto notes = clip->notes;
+            const auto* current = selectedNote();
+            if (! anyKey && current != nullptr) std::erase_if (notes, [pitch = current->pitch] (const auto& n) { return n.pitch != pitch; });
+            std::sort (notes.begin(), notes.end(), [] (const auto& a, const auto& b) { return std::tie (a.startBeat, a.pitch) < std::tie (b.startBeat, b.pitch); });
+            if (notes.empty()) return;
+            auto at = current == nullptr ? notes.end() : std::find_if (notes.begin(), notes.end(), [current] (const auto& n) { return n.id == current->id; });
+            const auto& chosen = at == notes.end() ? (next ? notes.front() : notes.back())
+                               : next ? *(std::next (at) == notes.end() ? at : std::next (at)) : *(at == notes.begin() ? at : std::prev (at));
+            selectOnly (chosen.id);
+            const auto visibleBeats = gridBounds().getWidth() / pixelsPerBeat;
+            if (chosen.startBeat < viewBeat || chosen.startBeat > viewBeat + visibleBeats) viewBeat = juce::jmax (0.0, chosen.startBeat - visibleBeats / 4);
+            const auto visibleRows = juce::jmax (1, gridBounds().getHeight() / rowHeight);
+            if (rowIndex[(size_t) chosen.pitch] >= 0 && (rowIndex[(size_t) chosen.pitch] < topRow() || rowIndex[(size_t) chosen.pitch] >= topRow() + visibleRows))
+                topPitch = pitchAtRow (rowIndex[(size_t) chosen.pitch] - visibleRows / 2);
+            updateScroll(); sync(); sound ({ { chosen.pitch, chosen.velocity } }, true);
+        }
+        // Z: the view fits the selected notes, or all of them, as the reference's Zoom to Clip Selection.
+        void zoomToNotes()
+        {
+            const auto* clip = owner.currentMidiClip();
+            auto notes = selectedNotes();
+            if (notes.empty()) notes = clip->notes;
+            if (notes.empty()) return;
+            zoomBack = std::tuple { viewBeat, pixelsPerBeat, topPitch };
+            double from = notes.front().startBeat, to = from; int high = 0, low = 127;
+            for (const auto& n : notes) { from = std::min (from, n.startBeat); to = std::max (to, n.startBeat + n.lengthBeats); high = std::max (high, n.pitch); low = std::min (low, n.pitch); }
+            pixelsPerBeat = juce::jlimit (12.0, 240.0, gridBounds().getWidth() / juce::jmax (1.0 / 4, to - from));
+            viewBeat = juce::jmax (0.0, from);
+            const auto visibleRows = juce::jmax (1, gridBounds().getHeight() / rowHeight);
+            if (rowIndex[(size_t) high] >= 0) topPitch = pitchAtRow (rowIndex[(size_t) high] - juce::jmax (0, (visibleRows - (rowIndex[(size_t) low] - rowIndex[(size_t) high] + 1)) / 2));
+            updateScroll(); updateGridButton(); repaint();
+        }
+        // Cmd+J: on each key, the selected notes become one, from the first's start to the last's end.
+        void joinSelectedNotes()
+        {
+            const auto* clip = owner.currentMidiClip();
+            std::map<int, std::vector<Session::MidiNoteInfo>> byKey;
+            for (const auto& note : selectedNotes()) byKey[note.pitch].push_back (note);
+            std::vector<Session::MidiNoteInfo> joined; juce::StringArray gone;
+            for (auto& [pitch, notes] : byKey)
+            {
+                if (notes.size() < 2) continue;
+                std::sort (notes.begin(), notes.end(), [] (const auto& a, const auto& b) { return a.startBeat < b.startBeat; });
+                auto one = notes.front();
+                for (const auto& n : notes) one.lengthBeats = std::max (one.lengthBeats, n.startBeat + n.lengthBeats - one.startBeat);
+                joined.push_back (one);
+                for (size_t i = 1; i < notes.size(); ++i) gone.add (notes[i].id);
+            }
+            if (joined.empty()) return;
+            const auto clipId = clip->id;
+            owner.session.beginEditGesture ("Join notes");
+            owner.report (owner.session.removeMidiNotes (clipId, gone));
+            owner.report (owner.session.updateMidiNotes (clipId, joined));
+            owner.session.endEditGesture(); owner.refresh();
+        }
         // Draw Mode's notes in the drag under way, by grid step: the note's id and pitch.
         std::map<int, std::pair<juce::String, int>> drawn;
         int drawFirstStep = 0, drawLastStep = 0, drawPitch = 60;
@@ -15516,6 +15666,63 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (pianoRoll.selectedNoteCount() == 1 && pianoRoll.hasSelectedNote() && notes().size() == 2, "Select Loop selects the note inside the clip's loop, not the one after it");
             session.undo(); session.undo(); refresh();
             check (only (noteId), "two undo steps take the loop and the note back");
+        }
+        {
+            // The reference's other note editor keys.
+            const auto historyBefore = session.undoSteps().size();
+            juce::StringArray added;
+            check (session.addMidiNotes (currentMidiClip()->id, { { {}, 60, 2.0, .5, .5f }, { {}, 60, 3.0, .5, .5f }, { {}, 67, 2.5, .5, .5f } }, added).wasOk(), "three more notes"); refresh();
+            const auto noteOf = [&] (const juce::String& id) { for (const auto& n : notes()) if (n.id == id) return n; return Session::MidiNoteInfo {}; };
+            const auto key = [&] (int code, int modifiers = 0) { return pianoRoll.keyPressed (juce::KeyPress (code, juce::ModifierKeys (modifiers), 0)); };
+            const int command = juce::ModifierKeys::commandModifier, option = juce::ModifierKeys::altModifier, shiftKey = juce::ModifierKeys::shiftModifier;
+            click (point (1.4, 64));
+            const auto velocity = juce::roundToInt (noteOf (noteId).velocity * 127);
+            key (juce::KeyPress::upKey, command);
+            check (juce::roundToInt (noteOf (noteId).velocity * 127) == velocity + 1 && noteOf (noteId).pitch == 64, "Cmd+Up raises the selected note's velocity a step, without moving it");
+            key (juce::KeyPress::downKey, command);
+            check (juce::roundToInt (noteOf (noteId).velocity * 127) == velocity, "Cmd+Down lowers it");
+            key (juce::KeyPress::upKey, command | shiftKey);
+            check (noteOf (noteId).velocityRange == 1, "Cmd+Shift+Up widens its velocity range");
+            key (juce::KeyPress::downKey, command | option);
+            check (std::abs (noteOf (noteId).chance - .99f) < 1e-4f, "Cmd+Option+Down lowers its chance by 1%");
+            key ('1'); key ('0'); key ('0');
+            check (pianoRoll.velocityTyped() == "100" && juce::roundToInt (noteOf (noteId).velocity * 127) == velocity, "typed digits wait for Return, shown in the header");
+            key (juce::KeyPress::returnKey);
+            check (juce::roundToInt (noteOf (noteId).velocity * 127) == 100 && pianoRoll.velocityTyped().isEmpty(), "Return gives the selected notes the velocity typed");
+            const auto selected = [&] { auto picked = notes(); std::erase_if (picked, [&] (const auto& n) { return ! pianoRoll.isNoteSelected (n.id); }); return picked.size() == 1 ? std::pair { picked[0].pitch, picked[0].startBeat } : std::pair { -1, -1.0 }; };
+            key (juce::KeyPress::downKey, option);
+            check (selected() == std::pair { 60, 2.0 }, "Option+Down selects the next note in time");
+            key (juce::KeyPress::downKey, option);
+            check (selected() == std::pair { 67, 2.5 }, "and the next");
+            key (juce::KeyPress::upKey, option);
+            check (selected() == std::pair { 60, 2.0 }, "Option+Up selects the previous note");
+            key (juce::KeyPress::rightKey, option);
+            check (selected() == std::pair { 60, 3.0 }, "Option+Right selects the next note on the same key");
+            key (juce::KeyPress::homeKey);
+            check (pianoRoll.insertion() == 0, "Home takes the insert marker to the start");
+            key (juce::KeyPress::endKey);
+            check (std::abs (pianoRoll.insertion() - contentEndBeat (*currentMidiClip())) < 1e-9, "End takes it to the end");
+            const auto top = pianoRoll.topShownPitch();
+            key (juce::KeyPress::pageDownKey);
+            const auto paged = pianoRoll.topShownPitch();
+            check (paged < top - 5, "Page Down scrolls a page down");
+            key (juce::KeyPress::pageUpKey, shiftKey);
+            check (pianoRoll.topShownPitch() == paged + 1, "Shift+Page Up scrolls one row up");
+            const auto zoomed = pianoRoll.beatWidth();
+            key ('Z');
+            check (pianoRoll.beatWidth() > zoomed, "Z zooms to the selected note");
+            key ('X');
+            check (pianoRoll.beatWidth() == zoomed && pianoRoll.topShownPitch() == paged + 1, "X zooms back");
+            key (juce::KeyPress::pageUpKey); key (juce::KeyPress::pageDownKey, shiftKey);
+            check (pianoRoll.topShownPitch() == top, "Page Up and Shift+Page Down return the view");
+            key ('A', command); key ('J', command);
+            const auto all = notes();
+            const auto low = std::count_if (all.begin(), all.end(), [] (const auto& n) { return n.pitch == 60; });
+            check (low == 1 && std::any_of (all.begin(), all.end(), [] (const auto& n) { return n.pitch == 60 && n.startBeat == 2.0 && n.lengthBeats == 1.5; }),
+                   "Cmd+J joins the selected notes on each key into one, leaving keys with a single note alone");
+            while (session.undoSteps().size() > historyBefore && session.canUndo()) session.undo();
+            refresh(); pianoRoll.fit();
+            check (only (noteId), "undo takes every change back");
         }
         // Draw Mode, from its key B: a drag draws a note on each grid step at the pointer's pitch.
         check (! drawMode && handleKey (juce::KeyPress ('b')) && drawMode && drawButton.getToggleState(), "B turns Draw Mode on and lights the control bar's pencil");

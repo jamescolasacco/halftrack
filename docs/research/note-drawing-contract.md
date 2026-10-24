@@ -29,12 +29,22 @@ In the lanes, Draw Mode draws too:
 - In automation and clip envelopes, steps as wide as the grid, or freehand with Cmd held (Alt elsewhere) or snapping off ([automation contract](arrangement-automation-contract.md#draw-mode-2026-10-24)).
 - In the velocity and Chance lanes, each grid step the pointer passes gives its value to the notes starting in it, only the selected notes when there are any. With Cmd held (Alt elsewhere) or snapping off, it sets just the notes under the pointer. With Option held (Alt elsewhere) the values follow a straight line from the press, level with Shift. Each drag is one undo step.
 
+## Keys
+
+From the MIDI Note Editor section of the reference's key list ([Live keyboard shortcuts](https://www.ableton.com/en/live-manual/12/live-keyboard-shortcuts/), consulted 2026-10-24):
+- **Velocity, range and chance.** Cmd+Up and Cmd+Down move the selected notes' velocity a step; with Shift, their velocity range; with Option, their chance by 1%. Typing a velocity (up to three digits, shown in the header) and Return gives it to the selected notes; Escape or another key drops it. A 0 typed first still deactivates the notes.
+- **Moving through notes.** Option+Up and Option+Down select the previous and next note in time; Option+Left and Option+Right the previous and next on the selected note's key. The view follows, and the note sounds with Preview on.
+- **The view.** Home and End take the insert marker to the content's start and end. Page Up and Page Down scroll a page of rows, a row with Shift, and a page of beats with Cmd. W fits the clip's width; Z zooms to the selected notes, or all of them, and X zooms back.
+- **Joining.** Cmd+J joins the selected notes on each key into one, from the first's start to the last's end, keeping the first's velocity. Keys with a single selected note are left alone.
+- With the computer MIDI keyboard on, its keys play it instead.
+
 ## Not yet
 
 - Holding B to switch Draw Mode for the moment.
 - Draw Mode in take lanes.
 - The Display & Input setting "Draw Mode with Pitch Lock", which makes pitch-locked drawing the default.
 - The timespan a background drag selects: Halftrack selects notes only.
+- The key list's Chop (Cmd+E with a drag), Split at an exact place (hold E), Fit Notes to Time Range (Cmd+Option+J), H, note groups (Cmd+G), Apply MIDI Tool (Cmd+Return), Show MIDI Note Filters, and Shift with Left and Right moving the clip region.
 
 See [open questions](../open-questions.md) for the defaults taken where the manual is silent.
 
@@ -48,4 +58,5 @@ The UI suite checks:
 - a Draw Mode click deleting a note and the drag erasing more, with one undo for each drag;
 - a Cmd-drag raising a note's velocity by 20 steps without moving it, and an Option-drag leaving a copy, each one undo step;
 - velocities drawn over three grid steps, and along a straight line with Option, each one undo step; and steps drawn in a clip envelope lane;
-- that a double-click's note sounds while the button is held with Preview on.
+- that a double-click's note sounds while the button is held with Preview on;
+- the keys above: velocity, range and chance nudges, a typed velocity, moving through notes, Home and End, the page keys, Z and X, and Cmd+J joining a key's notes, all undone after.

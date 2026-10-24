@@ -2561,3 +2561,7 @@ UI area. The Loop box gains the reference's Set buttons beside Start, End, Posit
 
 UI area. As the reference's keys do, F1 to F8 switch the tracks numbered 1 to 8 on and off, groups counted, and Cmd+Option+Delete deletes the selected Arrangement clips' fades ([menu contract](research/main-menu-contract.md#keys-outside-the-menus)). Checked in the UI suite.
 
+## The note editor's keys — 2026-10-24
+
+UI area. From the reference's key list, the note editor gains Cmd+Up and Cmd+Down for velocity (with Shift the velocity range, with Option the chance), a typed velocity and Return, Option with the arrows to step through notes, Home and End, Page Up and Page Down, W, Z and X, and Cmd+J to join the selected notes on each key ([note drawing contract](research/note-drawing-contract.md#keys)). Checked in the UI suite.
+
