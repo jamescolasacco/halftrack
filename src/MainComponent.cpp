@@ -774,7 +774,7 @@ public:
         if (! mapping()) // The mapping list replaces the browser in MIDI and Key Map Modes.
         g.drawText (browserCategory == BrowserCategory::instruments ? "INSTRUMENTS" : browserCategory == BrowserCategory::audioEffects ? "AUDIO EFFECTS"
                         : browserCategory == BrowserCategory::midiEffects ? "MIDI EFFECTS" : pluginBrowser() ? "PLUG-INS"
-                        : browserCategory == BrowserCategory::grooves ? "GROOVES" : browserCategory == BrowserCategory::packs ? "PACKS"
+                        : browserCategory == BrowserCategory::grooves ? "GROOVES" : browserCategory == BrowserCategory::templates ? "TEMPLATES" : browserCategory == BrowserCategory::packs ? "PACKS"
                         : browserCategory == BrowserCategory::place && similarFile == juce::File() && browserFolder == browserPlaceRoot ? placeName (browserPlace).toUpperCase()
                         : browserFolder == juce::File() ? "SAMPLES"
                         : similarFile != juce::File() ? "SIMILAR TO " + similarFile.getFileNameWithoutExtension().toUpperCase() : browserFolder.getFileName().toUpperCase(),
@@ -785,12 +785,13 @@ public:
             g.drawText (indexText, browserList.getRight() - 4 - indexWidth, browserList.getY() - 22, indexWidth, 20, juce::Justification::centredRight, true);
             g.setFont (font (10.0f, true));
         }
-        if (! mapping() && (pluginBrowser() || sampleBrowser() || browserCategory == BrowserCategory::packs) && getNumRows() == 0)
+        if (! mapping() && (pluginBrowser() || sampleBrowser() || browserCategory == BrowserCategory::packs || browserCategory == BrowserCategory::templates) && getNumRows() == 0)
         {
             g.setFont (font (12.0f));
             juce::String message;
             if (pluginBrowser()) message = "No scanned plug-ins.\nUse Manage to scan your\nAudio Units and VST3 library.";
             else if (browserCategory == BrowserCategory::packs) message = "No packs installed.\nInstall one with\nFile > Install Pack...";
+            else if (browserCategory == BrowserCategory::templates) message = "No templates yet.\nSave one with\nFile > Save as Template...";
             else if (browserCategory == BrowserCategory::place && browserPlace == currentProjectPlace && ! projectMediaThere)
                 message = "This project has no audio\nfiles yet. Its recordings\nand saved media show here.";
             else if (browserCategory == BrowserCategory::place && ! placeAvailable (browserPlace))
@@ -2001,7 +2002,7 @@ private:
         std::string error;
     };
 
-    enum class BrowserCategory { instruments, audioEffects, midiEffects, plugins, samples, grooves, packs, collection, place };
+    enum class BrowserCategory { instruments, audioEffects, midiEffects, plugins, samples, grooves, templates, packs, collection, place };
     // Left column of the browser, as the reference's sidebar: the collections, the Library's
     // categories, then Places: Packs, the User Library, the Current Project, the folders added, and
     // Add Folder. It scrolls inside the browser when taller.
@@ -2077,9 +2078,10 @@ private:
         juce::Rectangle<int> rowBounds (int i) const { return { 0, categoriesTop() + i * rowHeight, getWidth() - 1, rowHeight }; }
         juce::Rectangle<int> placeBounds (int i) const { return { 0, placesTop() + i * rowHeight, getWidth() - 1, rowHeight }; }
         Impl& owner;
-        const std::array<std::pair<BrowserCategory, const char*>, 6> entries {{ { BrowserCategory::instruments, "Instruments" },
+        const std::array<std::pair<BrowserCategory, const char*>, 7> entries {{ { BrowserCategory::instruments, "Instruments" },
             { BrowserCategory::audioEffects, "Audio Effects" }, { BrowserCategory::midiEffects, "MIDI Effects" },
-            { BrowserCategory::plugins, "Plug-Ins" }, { BrowserCategory::samples, "Samples" }, { BrowserCategory::grooves, "Grooves" } }};
+            { BrowserCategory::plugins, "Plug-Ins" }, { BrowserCategory::samples, "Samples" }, { BrowserCategory::grooves, "Grooves" },
+            { BrowserCategory::templates, "Templates" } }};
     };
 
     // A linked track's header indicator: hovering outlines the tracks in its link; clicking selects them.
@@ -10354,7 +10356,8 @@ private:
     // A row of the device lists. In a collection, samples and plug-ins are rows too.
     struct DeviceRow { juce::String label; bool header = false; int kind = -1; juce::File preset; int groove = -1; juce::File grooveFile; juce::File sample; juce::String pluginId;
                        juce::String detail; // detail: a plug-in's role, format and channels, or a pack's version and author.
-                       juce::File pack; juce::String packId; };
+                       juce::File pack; juce::String packId;
+                       juce::File projectTemplate; }; // A template in the User Library's Templates folder.
     // Packs install into the User Library's Packs folder.
     juce::File packsFolder() const { return userLibrary != juce::File() ? userLibrary.getChildFile ("Packs") : juce::File(); }
     void installPack (const juce::File& archive)
@@ -10520,7 +10523,7 @@ private:
         if (row < 0 || row >= const_cast<Impl*> (this)->getNumRows()) return {};
         if (sampleBrowser()) return browserItems[(size_t) row].directory || ! isAudio (browserItems[(size_t) row].file) ? juce::String() : "sample:" + browserItems[(size_t) row].file.getFullPathName();
         const auto& item = deviceItems[(size_t) row];
-        if (item.header) return {};
+        if (item.header || item.projectTemplate != juce::File()) return {};
         if (item.sample != juce::File()) return "sample:" + item.sample.getFullPathName();
         if (item.preset != juce::File()) return "preset:" + juce::String (item.kind) + ":" + item.preset.getFullPathName();
         if (item.pluginId.isNotEmpty()) return "plugin:" + item.pluginId;
@@ -10594,6 +10597,57 @@ private:
     juce::File presetFolder (const juce::String& device) const
     { return userLibrary == juce::File() ? juce::File() : userLibrary.getChildFile ("Presets").getChildFile (juce::File::createLegalFileName (device)); }
     juce::File defaultSetFile() const { return userLibrary == juce::File() ? juce::File() : userLibrary.getChildFile ("Default Set.halftrack"); }
+    // Templates, as the reference's: projects saved to the User Library's Templates folder, each opening
+    // as a new untitled project. They are written as the default set is, its media where it was.
+    juce::File templateFolder() const { return userLibrary == juce::File() ? juce::File() : userLibrary.getChildFile ("Templates"); }
+    juce::Result saveTemplate (const juce::File& file)
+    {
+        if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
+        const auto result = session.saveDefaultSet (file);
+        if (browserCategory == BrowserCategory::templates) updateBrowser();
+        return result;
+    }
+    void saveTemplateDialog()
+    {
+        if (userLibrary == juce::File()) return;
+        auto* dialog = new juce::AlertWindow ("Save as Template", "Name the template. It is kept in the User Library's Templates folder.", juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor ("name", state.name, "Name");
+        dialog->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey)); dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
+        auto safe = juce::Component::SafePointer<Impl> (this); auto safeDialog = juce::Component::SafePointer<juce::AlertWindow> (dialog);
+        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog] (int result)
+        {
+            if (! safe || ! safeDialog || result != 1) return;
+            const auto name = safeDialog->getTextEditorContents ("name").trim();
+            if (name.isEmpty()) { safe->report (juce::Result::fail ("A template needs a name.")); return; }
+            const auto file = safe->templateFolder().getChildFile (juce::File::createLegalFileName (name) + ".halftrack");
+            if (! file.exists()) { safe->report (safe->saveTemplate (file), "Saved the template " + name + "."); return; }
+            // Replacing an existing template is the user's choice.
+            juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::QuestionIcon).withTitle ("Replace template?")
+                .withMessage (name + " already exists. Replace it?").withButton ("Replace").withButton ("Cancel"),
+                [safe, file, name] (int choice) { if (safe && choice == 1) safe->report (safe->saveTemplate (file), "Replaced the template " + name + "."); });
+        }), true);
+    }
+    void openTemplate (const juce::File& file)
+    {
+        auto safe = juce::Component::SafePointer<Impl> (this);
+        ensureSaved ([safe, file]
+        {
+            if (safe == nullptr) return;
+            safe->session.closePluginEditors();
+            safe->report (safe->session.newProjectFromDefaultSet (file)); safe->resetView();
+        });
+    }
+    // A template's Set Default Set, as the reference's context menu has it: new projects start from it.
+    void setDefaultSetFrom (const juce::File& file)
+    {
+        const auto target = defaultSetFile();
+        if (target == juce::File()) return;
+        juce::TemporaryFile temporary (target);
+        if (! file.copyFileTo (temporary.getFile()) || ! temporary.overwriteTargetFileWithTemporary())
+        { report (juce::Result::fail ("The default set could not be written to " + target.getFullPathName() + ".")); return; }
+        report (juce::Result::ok(), file.getFileNameWithoutExtension() + " is now the default set for new projects.");
+    }
     // Save as Default Audio/MIDI Track's files, where the reference keeps its own in a library.
     juce::File defaultTrackFile (bool midi) const
     {
@@ -12966,7 +13020,7 @@ private:
                     menuSelectLoop, menuPlaySelection, menuSetClipStart, menuSetLoopStart, menuSetLoopEnd, menuSetClipEnd,
                     menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
                     menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
-                    menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects, menuShowBackups, menuRevealBackups, menuSnapAutomation,
+                    menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects, menuShowBackups, menuRevealBackups, menuSnapAutomation, menuSaveTemplate,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410, // Plus Session::TimeFormat.
@@ -13487,7 +13541,7 @@ private:
             popup.addSeparator();
             // Save while there is something to save, as the reference's: changes, or a project never saved.
             add (3, "Save Project", state.dirty || state.projectFile == juce::File()); add (4, "Save Project As..."); add (menuSaveCopy, "Save a Copy...");
-            add (11, "Save as Default Set", userLibrary != juce::File());
+            add (menuSaveTemplate, "Save as Template...", userLibrary != juce::File()); add (11, "Save as Default Set", userLibrary != juce::File());
             popup.addSeparator();
             add (6, "Export Audio..."); add (10, "Export MIDI Clip...", currentMidiClip() != nullptr);
         }
@@ -13760,6 +13814,7 @@ private:
             case 4: saveProject (true); break;
             case menuSaveCopy: saveCopyDialog(); return;
             case menuAddFolder: addFolderToBrowser(); return;
+            case menuSaveTemplate: saveTemplateDialog(); return;
             case menuSnapAutomation: session.setSnapAutomationToGrid (! session.snapAutomationToGrid()); refresh(); return;
             case menuRemoveUnavailableProjects: removeUnavailableProjects(); return;
             case menuShowBackups: if (const auto kept = session.projectBackups(); ! kept.isEmpty()) showInBrowser (kept[0]); return;
@@ -15645,7 +15700,8 @@ private:
         browserSearch.setTextToShowWhenEmpty ("Search (" + juce::String (browserCategory == BrowserCategory::collection ? Collections::name (browserCollection)
             : browserCategory == BrowserCategory::instruments ? "Instruments"
             : browserCategory == BrowserCategory::audioEffects ? "Audio Effects" : browserCategory == BrowserCategory::midiEffects ? "MIDI Effects"
-            : pluginBrowser() ? "Plug-Ins" : browserCategory == BrowserCategory::grooves ? "Grooves" : browserCategory == BrowserCategory::packs ? "Packs"
+            : pluginBrowser() ? "Plug-Ins" : browserCategory == BrowserCategory::grooves ? "Grooves" : browserCategory == BrowserCategory::templates ? "Templates"
+            : browserCategory == BrowserCategory::packs ? "Packs"
             : browserCategory == BrowserCategory::place ? placeName (browserPlace) : "Samples") + ")", muted);
         if (browserFolder != scannedBrowserFolder) startBrowserScan();
         const auto matches = [&query] (const juce::String& label) { return query.isEmpty() || label.containsIgnoreCase (query); };
@@ -15698,6 +15754,14 @@ private:
                     row.detail = installed.manifest.version + (installed.manifest.author.isNotEmpty() ? juce::String::charToString (0x00b7) + installed.manifest.author : juce::String());
                     deviceItems.push_back (row);
                 }
+        }
+        else if (browserCategory == BrowserCategory::templates)
+        {
+            // The User Library's templates, as the reference's Templates label lists them.
+            auto files = templateFolder().findChildFiles (juce::File::findFiles, true, "*.halftrack");
+            files.sort();
+            for (const auto& f : files)
+                if (matches (f.getFileNameWithoutExtension())) { DeviceRow row { f.getFileNameWithoutExtension() }; row.projectTemplate = f; deviceItems.push_back (row); }
         }
         else if (browserCategory == BrowserCategory::grooves)
         {
@@ -15805,6 +15869,12 @@ private:
             {
                 g.drawRect (indent + 3, height / 2 - 5, 9, 11); g.drawHorizontalLine (height / 2 - 2, (float) indent + 1, (float) indent + 14); g.drawHorizontalLine (height / 2 + 3, (float) indent + 1, (float) indent + 14);
             }
+            else if (item.projectTemplate != juce::File())
+            {
+                // A template: a page with lines on it, as projects show in the file lists.
+                g.drawRect (indent + 4, height / 2 - 6, 9, 12);
+                for (int i = 0; i < 3; ++i) g.fillRect (indent + 6, height / 2 - 3 + i * 3, 5, 1);
+            }
             else if (item.groove >= 0 || item.grooveFile != juce::File())
             {
                 // A groove: a short swung pulse train.
@@ -15890,6 +15960,7 @@ private:
         {
             const auto item = deviceItems[(size_t) row]; if (item.header) return;
             if (item.sample != juce::File()) { useBrowserSample (item.sample); return; }
+            if (item.projectTemplate != juce::File()) { openTemplate (item.projectTemplate); return; }
             if (item.pack != juce::File()) { browserFolder = item.pack; browserSearch.clear(); setBrowserCategory (BrowserCategory::samples); return; }
             if (item.pluginId.isNotEmpty() && item.preset == juce::File())
             {
@@ -15935,6 +16006,13 @@ private:
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override
     {
         if (! e.mods.isPopupMenu()) return;
+        if (browserCategory == BrowserCategory::templates && juce::isPositiveAndBelow (row, (int) deviceItems.size()) && deviceItems[(size_t) row].projectTemplate != juce::File())
+        {
+            juce::PopupMenu templateMenu; templateMenu.addItem (1, "Set Default Set");
+            templateMenu.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), file = deviceItems[(size_t) row].projectTemplate] (int choice)
+            { if (safe != nullptr && choice == 1) safe->setDefaultSetFrom (file); });
+            return;
+        }
         if (browserCategory == BrowserCategory::packs && juce::isPositiveAndBelow (row, (int) deviceItems.size()) && deviceItems[(size_t) row].packId.isNotEmpty())
         {
             juce::PopupMenu packMenu; packMenu.addItem (1, "Uninstall Pack");
@@ -19782,6 +19860,37 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         empty.deleteRecursively();
     }
     {
+        // Templates, as the reference's: Save as Template keeps the project in the User Library's
+        // Templates folder, the Library's Templates category lists it, opening one starts a new untitled
+        // project from it, and Set Default Set makes new projects start from it.
+        const auto category = browserCategory; const auto library = userLibrary;
+        const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-templates-ui-" + juce::Uuid().toString());
+        userLibrary = root.getChildFile ("User Library");
+        check (session.newProject().wasOk() && session.addMidiTrack ("Template Keys").wasOk(), "a project to keep as a template"); refresh();
+        const auto tracks = state.tracks.size();
+        bool offered = false;
+        { const auto fileMenu = getMenuForIndex (0, {}); for (juce::PopupMenu::MenuItemIterator items (fileMenu); items.next();) offered = offered || (items.getItem().itemID == menuSaveTemplate && items.getItem().isEnabled); }
+        check (offered, "the File menu offers Save as Template");
+        setBrowserCategory (BrowserCategory::templates);
+        check (getNumRows() == 0 && browserCategories.categoryPoint (BrowserCategory::templates).y > browserCategories.categoryPoint (BrowserCategory::grooves).y,
+               "the Library's Templates category, after Grooves, is empty before any is saved");
+        const auto file = templateFolder().getChildFile ("Keys.halftrack");
+        check (saveTemplate (file).wasOk() && file.existsAsFile(), "Save as Template writes the project into the User Library's Templates folder");
+        check (getNumRows() == 1 && deviceItems[0].label == "Keys" && browserKey (0).isEmpty(), "the Templates category lists it by name");
+        check (session.newProject().wasOk(), "another project"); refresh();
+        activateBrowserRow (0);
+        check (state.tracks.size() == tracks && state.tracks.back().isMidi && state.projectFile == juce::File() && ! state.dirty,
+               "opening a template starts a new, untitled, unchanged project from it");
+        check (session.newProject().wasOk(), "and another"); refresh();
+        setDefaultSetFrom (file);
+        startNewProject();
+        check (defaultSetFile().existsAsFile() && state.tracks.size() == tracks && state.tracks.back().isMidi && state.projectFile == juce::File(),
+               "Set Default Set makes new projects start from the template");
+        check (session.newProject().wasOk(), "leave the templates"); refresh();
+        userLibrary = library; setBrowserCategory (category);
+        root.deleteRecursively();
+    }
+    {
         // Open Recent Project, as the reference's File menu has it: projects opened or saved, the latest
         // first, greyed when gone, then Remove Unavailable Projects and Clear List.
         const auto kept = session.preferences().recentProjects;
@@ -19894,7 +20003,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
        #endif
         const auto expect = [&] (const juce::String& name, const juce::StringArray& wanted)
         { const auto shown = texts (name); check (shown == wanted, name + " holds the reference's items in its order (" + shown.joinIntoString (" | ") + ")"); };
-        expect ("File", { "New Project", "Open Project...", "Open Recent Project >", "-", "Install Pack...", "Add Folder to Browser...", "-", "Locate Missing Media...", "Backups >", "-", "Save Project", "Save Project As...", "Save a Copy...", "Save as Default Set",
+        expect ("File", { "New Project", "Open Project...", "Open Recent Project >", "-", "Install Pack...", "Add Folder to Browser...", "-", "Locate Missing Media...", "Backups >", "-", "Save Project", "Save Project As...", "Save a Copy...", "Save as Template...", "Save as Default Set",
                           "-", "Export Audio...", "Export MIDI Clip..." });
         const juce::String loop = state.looping ? "Deactivate Loop" : "Activate Loop";
         const auto history = [this]

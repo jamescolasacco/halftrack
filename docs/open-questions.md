@@ -842,6 +842,11 @@ Open Recent Project ([menu contract](research/main-menu-contract.md)). Defaults 
 - **What joins the list.** A project opened, or saved under a new name, joins the top; Save a Copy does not. The list keeps ten, kept with the preferences, and a preferences reset keeps it. The reference's own limit was not read.
 - **Names.** Each entry shows its project's file name, with its folder in brackets when another entry has the same name.
 
+Templates ([contract](research/templates-contract.md)). Defaults where the manual is silent:
+
+- **Saving.** Save as Template asks for a name, the project's at first, and asks before replacing a template of that name.
+- **Media.** A template keeps its media where it was, as the default set does; nothing is collected into the Templates folder.
+
 Snap Automation to Grid ([automation contract](research/arrangement-automation-contract.md#snap-automation-to-grid-2026-10-24)). Defaults where the reference was not read:
 
 - **How near.** A breakpoint within 6 pixels of a grid line snaps to it; the reference's distance was not read. Its snapping to neighbouring breakpoints' times is not done.

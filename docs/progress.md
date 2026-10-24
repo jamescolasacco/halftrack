@@ -2641,3 +2641,7 @@ Engine and UI areas. Saving over a project keeps the version it replaces, as the
 ## Snap Automation to Grid, and Lock Envelopes as a preference — 2026-10-24
 
 Engine and UI areas. Options > Snap Automation to Grid, after the reference's (its Set keeps it, on in its default Set): automation breakpoints placed or moved within 6 pixels of a grid line snap to it, in the Arrangement's lanes and now in clip envelopes too, as the manual describes; elsewhere they stay where placed, where the Arrangement's used to jump to the nearest line. It is kept with the project, on at first. Lock Envelopes moves to the preferences (`Preferences::lockEnvelopes`), as the reference keeps it with its song preference data rather than in Sets; a project's saved setting is no longer read. Changing preferences no longer marks the project changed ([automation contract](research/arrangement-automation-contract.md#snap-automation-to-grid-2026-10-24), [preferences contract](research/preferences-contract.md)). Checked in the preferences, track order, automation and UI suites.
+
+## Templates — 2026-10-24
+
+UI area. File > Save as Template..., after the reference's: the project, named in a dialog, is written to the User Library's Templates folder as the default set is, asking before replacing one. The Library gains Templates after Grooves, listing them; a double-click opens one as a new untitled project, and its right-click Set Default Set makes new projects start from it ([contract](research/templates-contract.md)). Checked in the UI suite.
