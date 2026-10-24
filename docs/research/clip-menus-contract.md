@@ -81,7 +81,8 @@ A right-click on a slot that is not selected selects it alone, its track and sce
 | Freeze / Unfreeze Track(s), Bounce Track(s) in Place, Bounce to New Track(s) (always shown) | a clip | the same. Freeze stays greyed for a track without Arrangement clips, as Halftrack's freeze renders the Arrangement only. Bounce to New Track renders the selected clips into the same slots of a new track (`bounceSlotsToNewTracks`; see the [freeze contract](freeze-contract.md#session-clips)) |
 | Crop Clip(s) (always shown) | a clip that can be cropped | left out: Session clips cannot be cropped yet |
 | Slice to New MIDI Track and the conversions | one audio clip | left out: Halftrack slices Arrangement clips only |
-| Add / Remove Stop Button, Create Follow Action Chain | slots; a clip | left out: not implemented |
+| Add / Remove Stop Button | any slot selected; Remove while one has a stop button | the same (`setSlotStopButtons`, one undo step): an empty slot without one shows no button, and launching it or its scene leaves its track playing, as a group slot's launch does |
+| Create Follow Action Chain | a clip | left out: not implemented |
 | Insert MIDI Clip(s) | selected empty slots on MIDI tracks | the same, a four-beat clip in each |
 | Record on Launch | group slots only | left out: Halftrack's group slots have no menu yet |
 | Select on Launch, the clip colour grid | a clip | the colour grid, colouring the clips in one undo step. Halftrack has no Select on Launch preference yet |
@@ -119,6 +120,7 @@ The UI suite compares these menus with the reference's order:
 It also checks:
 - a swatch colouring the slot's clip;
 - Insert MIDI Clip filling the empty slot;
+- Remove Stop Button taking the slot's away and offering Add Stop Button (the launcher suite hears a track play on through a scene's empty slot without one, and the slot itself launch nothing);
 - Select Scene Content selecting the scene's slots;
 - Insert Scene going right below the selected scene;
 - Bounce to New Track from a slot, removed with one undo.

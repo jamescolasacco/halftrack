@@ -439,6 +439,7 @@ public:
         juce::String id;
         bool hasClip = false, playing = false, queued = false, stopQueued = false;
         bool recording = false; // A Session recording is capturing into this empty slot.
+        bool stopButton = true; // Empty, launching it (or its scene) stops its track; without one the track plays on.
         bool overdubbing = false; // Session Record is adding the notes played to this MIDI clip.
         ClipInfo clip;
         double playPositionBeats = -1;
@@ -841,6 +842,9 @@ public:
     struct SlotRef { int track = -1, scene = -1; auto operator<=> (const SlotRef&) const = default; };
     juce::Result moveSlotClips (const std::vector<SlotRef>&, int trackDelta, int sceneDelta, bool copy = false);
     juce::Result clearSlots (const std::vector<SlotRef>&);
+    // Add or Remove Stop Button, after the reference's slot command: an empty slot without a stop button
+    // launches nothing, so launching it or its scene leaves its track playing. One undo step.
+    juce::Result setSlotStopButtons (const std::vector<SlotRef>&, bool stopButton);
     juce::Result copySlotClips (const std::vector<SlotRef>&, bool cut = false);
     juce::Result launchSlot (int trackIndex, int sceneIndex);
     // A launch button press/release applying the slot clip's launch mode. velocity is a pressing

@@ -2438,3 +2438,7 @@ Engine area. As the reference lists them, return tracks are now Audio From sourc
 ## Clip and scene info texts — 2026-10-24
 
 Engine and UI areas. Clips and scenes have info texts of their own, as the reference's Edit Info Text gives them. The Arrangement clip menu, the Session slot menu and the scene menu offer Edit Info Text. The Info view shows a clip's text while pointing at it in the Arrangement or its slot, and a scene's while pointing at the scene. The texts are saved, and each edit is one undo step. Checked in the groups and UI suites ([contract](research/clip-menus-contract.md)).
+
+## Slot stop buttons — 2026-10-24
+
+Engine and UI areas. As the reference's slot command does, Add Stop Button and Remove Stop Button in the slot menu give empty slots a stop button or take it away (`setSlotStopButtons`). An empty slot without one shows no button, and launching it, its scene or its group's slot leaves its track playing. Checked in the launcher and UI suites ([contract](research/clip-menus-contract.md)).

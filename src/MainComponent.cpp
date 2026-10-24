@@ -4477,7 +4477,7 @@ private:
                             // On an armed track an empty slot's button records into it.
                             g.setColour (themes::colour (0xff9a4a46)); g.drawEllipse ((float) cell.getX() + 6, (float) cell.getCentreY() - 4, 8, 8, 1.5f);
                         }
-                        else
+                        else if (slot == nullptr || slot->stopButton)
                         {
                             g.setColour (queued ? orange.withAlpha (blink ? 1.0f : 0.45f) : themes::colour (0xff4d4d4d));
                             g.fillRect (cell.getX() + 7, cell.getCentreY() - 3, 6, 6);
@@ -4501,8 +4501,6 @@ private:
             {
                 const auto cell = juce::Rectangle<int> (sceneX, sceneY (scene), sceneWidth, rowHeight).reduced (1, 0).withTrimmedBottom (1);
                 const bool selected = owner.state.scenes[(size_t) scene].id == owner.selectedSceneId;
-                g.setColour (selected ? themes::colour (0xff4a4a4a) : themes::colour (0xff383838)); g.fillRect (cell);
-                // A scene that changes the tempo or meter shows them and lights its launch button.
                 const auto& info = owner.state.scenes[(size_t) scene];
                 const auto settings = sceneSettingsText (info);
                 g.setColour (selected ? orange : settings.isNotEmpty() ? green : ink.withAlpha (0.8f)); drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
@@ -4660,8 +4658,9 @@ private:
                 {
                     repaint();
                     const auto id = owner.state.scenes[(size_t) scene].id;
-                    owner.sceneContextMenu().showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (&owner), id] (int result)
-                    { if (safe != nullptr && result != 0) safe->chooseSceneItem (result, id); });
+                    auto colour = std::make_shared<int> (-1);
+                    owner.sceneContextMenu (id, colour).showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (&owner), id, colour] (int result)
+                    { if (safe != nullptr && result != 0) safe->chooseSceneItem (result, id, *colour); });
                     return;
                 }
                 else if (event.x - masterX() < 22) { owner.report (owner.session.launchScene (scene)); owner.refresh(); }
@@ -10809,7 +10808,7 @@ private:
         return slots;
     }
     enum SlotItem { slotCut = 500, slotCopy, slotPaste, slotDuplicate, slotDelete, slotClearEnvelopes, slotRename, slotGroove, slotActivate, slotExportMidi,
-                    slotReveal, slotSimilar, slotFreeze, slotBounceInPlace, slotBounceNew, slotInsertMidi, slotColour };
+                    slotReveal, slotSimilar, slotFreeze, slotBounceInPlace, slotBounceNew, slotInsertMidi, slotColour, slotInfo, slotStopButton };
     // A Session slot's menu, in the reference's order (LSlotManager 0x103a38ce4): commands that cannot act
     // are left out, while Freeze and the bounces stay, greyed when they cannot act.
     juce::PopupMenu slotContextMenu (std::shared_ptr<int> colour) const
@@ -10850,6 +10849,10 @@ private:
             item (slotBounceNew, tracks.size() > 1 ? "Bounce to New Tracks" : "Bounce to New Track", session.canBounceSlotsToNewTracks (clipIds));
         }
         separator();
+        // Add or Remove Stop Button: Remove while any selected slot has one (0x103a3ce34).
+        if (const auto slots = menuSlots(); ! slots.empty())
+            item (slotStopButton, std::any_of (slots.begin(), slots.end(), [this] (const Session::SlotRef& r) { return state.tracks[(size_t) r.track].slots[(size_t) r.scene].stopButton; })
+                                      ? "Remove Stop Button" : "Add Stop Button");
         if (const auto empty = emptyMidiSlots(); ! empty.empty()) item (slotInsertMidi, empty.size() > 1 ? "Insert MIDI Clips" : "Insert MIDI Clip");
         if (hasClip)
         {
@@ -10906,6 +10909,12 @@ private:
                 session.endEditGesture(); break;
             }
             case slotColour: if (colour >= 0) report (session.setClipColours (clipIds, paletteColour (colour))); break;
+            case slotStopButton:
+            {
+                const auto slots = menuSlots();
+                const bool any = std::any_of (slots.begin(), slots.end(), [this] (const Session::SlotRef& r) { return state.tracks[(size_t) r.track].slots[(size_t) r.scene].stopButton; });
+                report (session.setSlotStopButtons (slots, ! any)); break;
+            }
             default: return;
         }
         refresh();
@@ -10969,7 +10978,7 @@ private:
     // A scene's menu, in the reference's order (LSceneManager 0x1039e7c54). Halftrack has no scene clipboard,
     // info text or colours yet, and edits a scene's tempo and time signature in place of the reference's
     // switch that shows them.
-    juce::PopupMenu sceneContextMenu() const
+    juce::PopupMenu sceneContextMenu (const juce::String& sceneId = {}, std::shared_ptr<int> colour = std::make_shared<int> (-1)) const
     {
         juce::PopupMenu menu;
         if (state.scenes.size() < 256) menu.addItem (sceneDuplicate, "Duplicate");
@@ -10985,7 +10994,7 @@ private:
         menu.addItem (sceneTempo, "Scene Tempo..."); menu.addItem (sceneSignature, "Scene Time Signature...");
         return menu;
     }
-    void chooseSceneItem (int result, const juce::String& sceneId)
+    void chooseSceneItem (int result, const juce::String& sceneId, int colour = -1)
     {
         const auto index = launcherIndices ({}, sceneId).second;
         if (index < 0) return;
@@ -14756,13 +14765,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         selectedSlots.clear(); selectLauncherSlot (t, 0);
         const juce::String paste = session.hasSlotClipboard() ? "Paste|" : "";
         const auto filled = listed (slotContextMenu (colour));
-        check (filled == "Cut|Copy|" + paste + "Duplicate|Delete|-|Rename|Edit Info Text|Extract Groove|Deactivate Clip|Export MIDI Clip...|-|Freeze Track (off)|Bounce Track in Place|Bounce to New Track|-|[Clip Colours]",
+        check (filled == "Cut|Copy|" + paste + "Duplicate|Delete|-|Rename|Edit Info Text|Extract Groove|Deactivate Clip|Export MIDI Clip...|-|Freeze Track (off)|Bounce Track in Place|Bounce to New Track|-|Remove Stop Button|-|[Clip Colours]",
                "a filled slot's menu lists the reference's commands in its order: " + filled);
         chooseSlotItem (slotColour, 7);
         check (state.tracks[(size_t) t].slots[0].clip.colour == paletteColour (7), "a swatch colours the slot's clip");
         session.undo(); refresh();
         selectLauncherSlot (t, 1);
-        check (listed (slotContextMenu (colour)) == paste + "Insert MIDI Clip", "an empty slot on a MIDI track offers Insert MIDI Clip: " + listed (slotContextMenu (colour)));
+        check (listed (slotContextMenu (colour)) == paste + juce::String (paste.isEmpty() ? "" : "-|") + "Remove Stop Button|Insert MIDI Clip",
+               "an empty slot on a MIDI track offers Remove Stop Button and Insert MIDI Clip: " + listed (slotContextMenu (colour)));
+        chooseSlotItem (slotStopButton, -1);
+        check (! state.tracks[(size_t) t].slots[1].stopButton && listed (slotContextMenu (colour)).contains ("Add Stop Button"), "Remove Stop Button takes the slot's stop button away, and Add Stop Button is offered");
+        session.undo(); refresh();
         chooseSlotItem (slotInsertMidi, -1);
         check (state.tracks[(size_t) t].slots[1].hasClip && state.tracks[(size_t) t].slots[1].clip.isMidi, "Insert MIDI Clip puts a clip in the empty slot");
         session.undo(); refresh();

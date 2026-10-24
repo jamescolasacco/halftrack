@@ -129,6 +129,8 @@ const juce::Identifier infoTextProperty { "halftrackInfoText" }; // A track's or
 // A clip's own colour. The engine gives every new clip a colour of its own hue, so its colour cannot
 // say whether a clip shows its track's.
 const juce::Identifier clipColourProperty { "halftrackClipColour" };
+// A Session slot without a stop button: empty, launching it or its scene leaves its track playing.
+const juce::Identifier noStopButtonProperty { "halftrackNoStopButton" };
 // A grouped track or group whose Audio To leaves its group; the engine then plays it where its output goes.
 const juce::Identifier outsideGroupProperty { "halftrackOutsideGroup" };
 const juce::Identifier hostedInstrumentProperty { "halftrackInstrument" }; // A hosted plug-in that is its track's instrument.
@@ -7024,6 +7026,7 @@ Session::Snapshot Session::snapshot() const
         {
             SlotInfo slotInfo;
             slotInfo.id = slot->itemID.toString();
+            slotInfo.stopButton = ! static_cast<bool> (slot->state.getProperty (noStopButtonProperty, false));
             slotInfo.recording = impl->slotRecording (slot->itemID) != nullptr;
             if (auto* c = slot->getClip())
             {
@@ -8936,6 +8939,25 @@ struct OneUndoStep
     Session& session;
     const bool own;
 };
+Result Session::setSlotStopButtons (const std::vector<SlotRef>& slots, bool stopButton)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    std::vector<te::ClipSlot*> found;
+    for (const auto& ref : slots)
+    {
+        auto* slot = impl->slot (ref.track, ref.scene);
+        if (slot == nullptr || isReturn (*impl->track (ref.track))) return Result::fail ("Slot not found.");
+        if (static_cast<bool> (slot->state.getProperty (noStopButtonProperty, false)) == stopButton) found.push_back (slot);
+    }
+    if (found.empty()) return Result::ok();
+    impl->transaction (stopButton ? "Add stop buttons" : "Remove stop buttons");
+    for (auto* slot : found)
+    {
+        if (stopButton) slot->state.removeProperty (noStopButtonProperty, &impl->edit->getUndoManager());
+        else slot->state.setProperty (noStopButtonProperty, true, &impl->edit->getUndoManager());
+    }
+    impl->changed(); return Result::ok();
+}
 Result Session::importAudioToSlot (const File& source, int trackIndex, int sceneIndex)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -9418,6 +9440,7 @@ Result Session::launchSlot (int trackIndex, int sceneIndex)
     auto* slot = impl->slot (trackIndex, sceneIndex);
     if (! slot) return Result::fail ("Slot not found.");
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
+    if (slot->getClip() == nullptr && static_cast<bool> (slot->state.getProperty (noStopButtonProperty, false))) return Result::ok();
     impl->edit->dispatchPendingUpdatesSynchronously();
     impl->edit->getTransport().ensureContextAllocated();
     impl->queueTrack (*impl->track (trackIndex), slot->getClip(), impl->clipBoundary (slot->getClip()));
@@ -9448,7 +9471,8 @@ Result Session::launchScene (int sceneIndex)
     const auto tracks = te::getAudioTracks (*impl->edit);
     for (int i = 0; i < (int) tracks.size(); ++i)
         if (! isReturn (*tracks[i]) && std::find (recording.begin(), recording.end(), i) == recording.end())
-            impl->queueTrack (*tracks[i], tracks[i]->getClipSlotList().getClipSlots()[sceneIndex]->getClip(), boundary);
+            if (auto* slot = tracks[i]->getClipSlotList().getClipSlots()[sceneIndex]; slot->getClip() != nullptr || ! static_cast<bool> (slot->state.getProperty (noStopButtonProperty, false)))
+                impl->queueTrack (*tracks[i], slot->getClip(), boundary);
     impl->scheduleSceneChange (*impl->edit->getSceneList().getScenes()[sceneIndex], boundary);
     {
         auto& transport = impl->edit->getTransport();
@@ -9479,7 +9503,9 @@ Result Session::launchGroupSlot (const String& groupId, int sceneIndex)
     impl->edit->getTransport().ensureContextAllocated();
     const auto boundary = impl->launchBoundary();
     for (auto* track : te::getAudioTracks (*impl->edit))
-        if (Impl::inside (*track, *folder)) impl->queueTrack (*track, track->getClipSlotList().getClipSlots()[sceneIndex]->getClip(), boundary);
+        if (Impl::inside (*track, *folder))
+            if (auto* slot = track->getClipSlotList().getClipSlots()[sceneIndex]; slot->getClip() != nullptr || ! static_cast<bool> (slot->state.getProperty (noStopButtonProperty, false)))
+                impl->queueTrack (*track, slot->getClip(), boundary);
     if (! impl->edit->getTransport().isPlaying()) impl->edit->getTransport().play (false);
     recordIfWaiting(); // Launching starts a waiting Record, as the reference's does.
     sendChangeMessage(); return Result::ok();

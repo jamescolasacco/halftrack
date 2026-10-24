@@ -321,6 +321,18 @@ void audioTests (const juce::File& root, const juce::File& first, const juce::Fi
     auto emptyStop = player.process (4096);
     checkFinite (emptyStop);
     check (emptyStop.getMagnitude (1, 1024, 3072) < 0.00001f && emptyStop.getMagnitude (0, 1024, 3072) > 0.1f, "empty scene slot stops previous clip on its track");
+    // Without its stop button, the empty slot leaves its track playing, as the reference's Remove Stop Button does.
+    ok (session.launchScene (1), "both tracks play again"); player.process (4096);
+    ok (session.setSlotStopButtons ({ { 1, 0 } }, false), "remove the stop button from the second track's empty slot");
+    check (! session.snapshot().tracks[1].slots[0].stopButton && session.snapshot().tracks[0].slots[0].stopButton, "only that slot reports no stop button");
+    ok (session.launchScene (0), "launch the scene again");
+    auto playsOn = player.process (4096);
+    check (playsOn.getMagnitude (1, 1024, 3072) > 0.1f && playsOn.getMagnitude (0, 1024, 3072) > 0.1f, "the second track plays on through the slot without a stop button");
+    ok (session.launchSlot (1, 0), "launch that empty slot");
+    auto stillPlaying = player.process (4096);
+    check (stillPlaying.getMagnitude (1, 1024, 3072) > 0.1f, "it launches nothing");
+    session.undo();
+    check (session.snapshot().tracks[1].slots[0].stopButton, "one undo puts the stop button back");
     ok (session.stopAllLauncherClips(), "stop every launcher clip");
     auto allStopped = player.process (4096);
     check (magnitude (allStopped, 1024, 3072) < 0.00001f, "stop-all audible output is silent");
