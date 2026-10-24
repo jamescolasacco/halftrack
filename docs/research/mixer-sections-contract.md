@@ -38,3 +38,15 @@ The UI suite checks:
 - that showing In/Out again brings them back;
 - that hiding the Returns removes the return's column, and showing them brings it back;
 - that Cmd/Ctrl+Option+M hides the whole mixer and shows it again, leaving MIDI Map Mode alone.
+
+## Arrangement Track Controls (2026-10-24)
+
+The reference's View menu has an Arrangement Track Controls submenu (In/Out, Volume, Track Options, then Returns: `aio`, `avol`, `atop`, `aret`), and its default Set keeps them as ArrangerIO, ArrangerVolume, ArrangerTrackOptions and ArrangerReturns: In/Out, Volume and Returns on, Track Options off. Halftrack's `Session::ArrangementControls` keeps them with the project as view state, outside the undo history.
+- **In/Out** shows the Arrangement headers' input and monitor (a return's send position).
+- **Volume** shows their volume and pan.
+- **Track Options** shows Track Delay under them, on a header tall enough.
+- **Returns** shows the return tracks in the Arrangement; hidden, their lanes take no height.
+- In the Arrangement, Option+Cmd+I and Option+Cmd+R toggle In/Out and Returns, as the reference's keys there do; in the Session they stay the mixer's.
+
+The track order suite saves and reopens chosen controls; the UI suite hides and shows each part of a header and the returns.
+

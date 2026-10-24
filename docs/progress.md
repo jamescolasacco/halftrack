@@ -2605,3 +2605,7 @@ UI area. As the reference's key list describes, A, B, S, Z, Tab and F1 to F8 act
 
 UI area. As in the reference, a background drag in the note editor now selects its timespan as well as the notes it touches. Cmd+L (and Edit > Loop Selection) loops the clip over it, Cmd+E splits notes at its edges, Cmd+Option+J fits the selected notes into it, and Shift+Cmd+E splits an Arrangement clip at its edges or at the insert marker ([note drawing contract](research/note-drawing-contract.md)). Checked in the UI suite.
 
+## Arrangement Track Controls — 2026-10-24
+
+Engine and UI areas. View > Arrangement Track Controls shows and hides the Arrangement headers' routing, volume and pan, and Track Delay, and the return tracks, with the reference's default Set's defaults; Option+Cmd+I and Option+Cmd+R toggle In/Out and Returns in the Arrangement. They are kept with the project ([mixer sections contract](research/mixer-sections-contract.md#arrangement-track-controls-2026-10-24)). Checked in the track order and UI suites.
+

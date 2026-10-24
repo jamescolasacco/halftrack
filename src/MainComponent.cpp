@@ -993,6 +993,9 @@ public:
             // Capture and Insert Scene, as in the reference.
             if (code == 'I' && shift) { menuItemSelected (68, 4); return true; }
             if (code == 'I' && ! showSession && ! key.getModifiers().isAltDown()) { menuItemSelected (74, 1); return true; }
+            // In the Arrangement, Option+Cmd+I and Option+Cmd+R show and hide its In/Out and returns, as the reference's keys do.
+            if ((code == 'I' || code == 'R') && ! shift && key.getModifiers().isAltDown() && ! showSession)
+            { menuItemSelected (code == 'I' ? menuArrangementInOut : menuArrangementReturns, 4); return true; }
             if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && shift && ! showSession) { menuItemSelected (75, 1); return true; }
             // Cmd+Delete clears the envelope last clicked, as the reference's key does.
             if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && ! shift && ! key.getModifiers().isAltDown() && automationMode && ! showSession && ! showPiano
@@ -1639,7 +1642,8 @@ private:
             }
             const int t = item.index;
             const auto& track = state.tracks[(size_t) t];
-            const int height = anyFolded (track.groupId) ? 0 : track.folded ? foldedTrackHeight : track.height > 0 ? track.height : trackHeight;
+            const int height = anyFolded (track.groupId) || (track.isReturn && ! state.arrangementControls.returns) ? 0
+                             : track.folded ? foldedTrackHeight : track.height > 0 ? track.height : trackHeight;
             lanes.push_back ({ false, t, y, height }); y += height;
             if (height > 0 && ! track.folded && takeLanesShown.count (track.id))
                 for (int k = 0; k < (int) track.takeLanes.size(); ++k) { lanes.push_back ({ false, t, y, takeLaneHeight, -1, k }); y += takeLaneHeight; }
@@ -2185,20 +2189,22 @@ private:
             }
             for (auto* label : { &leftLabel, &rightLabel })
             { addChildComponent (*label); label->setFont (font (9.5f)); label->setJustificationType (juce::Justification::centred); label->setColour (juce::Label::textColourId, muted); }
+            // Track Delay, in milliseconds; negative values play the track early. In the Arrangement it shows
+            // with View > Arrangement Track Controls > Track Options.
+            if (columnLayout) addAndMakeVisible (delay); else addChildComponent (delay);
+            delay.setName ("Track delay");
+            delay.setSliderStyle (juce::Slider::LinearBar); delay.setRange (-Session::maximumTrackDelayMs, Session::maximumTrackDelayMs, .1);
+            delay.setDoubleClickReturnValue (true, 0); delay.setWantsKeyboardFocus (false);
+            delay.setColour (juce::Slider::trackColourId, themes::colour (0xff4a4a4a)); delay.setColour (juce::Slider::textBoxTextColourId, ink);
+            delay.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " ms"; };
+            delay.valueFromTextFunction = [] (const juce::String& text) { return text.retainCharacters ("-.0123456789").getDoubleValue(); };
+            delay.setTooltip ("Track delay: positive values play this track later, negative values earlier. Double-click for 0 ms.");
+            delay.onDragStart = [this] { owner.session.beginEditGesture ("Track delay"); };
+            delay.onDragEnd = [this] { owner.session.endEditGesture(); };
+            delay.onValueChange = [this] { owner.report (owner.session.setTrackDelay (trackId, delay.getValue())); };
+            delay.updateText();
             if (columnLayout)
             {
-                // Track Delay, in milliseconds; negative values play the track early.
-                addAndMakeVisible (delay); delay.setName ("Track delay");
-                delay.setSliderStyle (juce::Slider::LinearBar); delay.setRange (-Session::maximumTrackDelayMs, Session::maximumTrackDelayMs, .1);
-                delay.setDoubleClickReturnValue (true, 0); delay.setWantsKeyboardFocus (false);
-                delay.setColour (juce::Slider::trackColourId, themes::colour (0xff4a4a4a)); delay.setColour (juce::Slider::textBoxTextColourId, ink);
-                delay.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " ms"; };
-                delay.valueFromTextFunction = [] (const juce::String& text) { return text.retainCharacters ("-.0123456789").getDoubleValue(); };
-                delay.setTooltip ("Track delay: positive values play this track later, negative values earlier. Double-click for 0 ms.");
-                delay.onDragStart = [this] { owner.session.beginEditGesture ("Track delay"); };
-                delay.onDragEnd = [this] { owner.session.endEditGesture(); };
-                delay.onValueChange = [this] { owner.report (owner.session.setTrackDelay (trackId, delay.getValue())); };
-                delay.updateText();
                 // Audio To: Master, Sends Only (only the sends are heard) or another audio track.
                 addAndMakeVisible (output); output.setName ("Track output");
                 output.setTooltip ("Audio To: where this track plays. With Sends Only, only its sends are heard.");
@@ -2356,10 +2362,10 @@ private:
             monitor.setMode (track.monitor);
             if (columnLayout) { syncSends (track); syncOutput (track); }
             if (! columnLayout) syncAutomation (track);
+            if (! delay.isMouseButtonDown()) delay.setValue (track.delayMs, juce::dontSendNotification);
+            delay.setEnabled (! track.frozen && ! owner.session.isExporting());
             if (columnLayout)
             {
-                if (! delay.isMouseButtonDown()) delay.setValue (track.delayMs, juce::dontSendNotification);
-                delay.setEnabled (! track.frozen && ! owner.session.isExporting());
                 // Crossfader sides: A and B are exclusive toggles; neither leaves the track unassigned.
                 if (sideA == nullptr)
                 {
@@ -2397,8 +2403,16 @@ private:
         {
             const bool automating = owner.automationMode;
             choosers.setVisible (automating); automationLane.setVisible (automating);
-            if (automating) { for (auto* c : std::initializer_list<juce::Component*> { &input, &inputDetail, &monitor, &gain, &sendMode }) c->setVisible (false); showPans (false); }
-            else { gain.setVisible (true); showPans (true); inputDetail.setVisible (! returnTrack && inputDetailShown); }
+            const auto& controls = owner.state.arrangementControls;
+            if (automating) { for (auto* c : std::initializer_list<juce::Component*> { &input, &inputDetail, &monitor, &gain, &sendMode, &delay }) c->setVisible (false); showPans (false); }
+            else
+            {
+                // View > Arrangement Track Controls: the routing, the volume and pan, and Track Delay.
+                input.setVisible (controls.inOut && ! returnTrack); monitor.setVisible (controls.inOut && ! returnTrack);
+                inputDetail.setVisible (controls.inOut && ! returnTrack && inputDetailShown); sendMode.setVisible (controls.inOut && returnTrack);
+                gain.setVisible (controls.volume); showPans (controls.volume);
+                delay.setVisible (controls.trackOptions);
+            }
             if (! automating) return;
             automationLane.setEnabled (choosers.sync (track));
         }
@@ -2566,6 +2580,7 @@ private:
             monitor.setBounds (40 + half, 27, w - 44 - half, 18);
             sendMode.setBounds (76, 27, w - 80, 18);
             gain.setBounds (32, 49, half + 4, 20); pan.setBounds (40 + half, 49, w - 44 - half, 20);
+            delay.setBounds (32, 71, half + 4, 18); // Track Options' Track Delay, on a tall enough header.
             // The split pans share the pan's place, Left beside Right.
             const int pans = w - 44 - half;
             leftSplit.setBounds (40 + half, 49, pans / 2 - 1, 20); rightSplit.setBounds (41 + half + pans / 2, 49, pans - pans / 2 - 1, 20);
@@ -12683,6 +12698,7 @@ private:
                     menuFocusSession, menuFocusArrangement, menuFocusClip, menuFocusDevices, menuFocusBrowser, menuFocusGroovePool, menuFocusMixer,
                     menuSelectLoop, menuPlaySelection, menuSetClipStart, menuSetLoopStart, menuSetLoopEnd, menuSetClipEnd,
                     menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
+                    menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410 }; // Plus Session::TimeFormat.
@@ -13347,6 +13363,14 @@ private:
             sections.addSeparator();
             sections.addItem (menuEntry (108, "Returns", true, shown.returns));
             popup.addSubMenu ("Mixer Controls", sections, ! menusBlocked());
+            // The Arrangement headers' controls, as the reference's Arrangement Track Controls submenu.
+            const auto& arranged = state.arrangementControls;
+            juce::PopupMenu controls;
+            controls.addItem (menuEntry (menuArrangementInOut, "In/Out", true, arranged.inOut)); controls.addItem (menuEntry (menuArrangementVolume, "Volume", true, arranged.volume));
+            controls.addItem (menuEntry (menuArrangementTrackOptions, "Track Options", true, arranged.trackOptions));
+            controls.addSeparator();
+            controls.addItem (menuEntry (menuArrangementReturns, "Returns", true, arranged.returns));
+            popup.addSubMenu ("Arrangement Track Controls", controls, ! menusBlocked());
             popup.addSeparator();
             add (menuOverview, "Overview", ! showSession, state.arrangementOverview);
             add (menuSceneSettings, "Scene Tempo and Time Signature", true, state.sceneSettingsShown);
@@ -13572,6 +13596,13 @@ private:
             case menuComputerKeyboard: setComputerKeyboard (! session.isComputerKeyboardEnabled()); return;
             case menuDrawMode: setDrawMode (! drawMode); return;
             case menuLockEnvelopes: session.setLockEnvelopes (! session.lockEnvelopes()); refresh(); return;
+            case menuArrangementInOut: case menuArrangementVolume: case menuArrangementTrackOptions: case menuArrangementReturns:
+            {
+                auto controls = state.arrangementControls;
+                auto& flag = id == menuArrangementInOut ? controls.inOut : id == menuArrangementVolume ? controls.volume : id == menuArrangementTrackOptions ? controls.trackOptions : controls.returns;
+                flag = ! flag;
+                session.setArrangementControls (controls); refresh(); resized(); canvas.repaint(); return;
+            }
             case menuMidiPrelisten: session.setNotePreview (! session.notePreview()); pianoRoll.sync(); refresh(); return;
             case menuBrowserPreHear: previewButton.setToggleState (! previewButton.getToggleState(), juce::dontSendNotification); previewButton.onClick(); return;
             case menuFoldToNotes: setFold (! foldToNotes, foldToScale); return;
@@ -19246,7 +19277,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
        #if JUCE_MAC
         view.add ("Video Window");
        #endif
-        view.addArray ({ "-", "Mixer", "Mixer Controls >", "-", "Overview", "Scene Tempo and Time Signature", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Fold to Notes", "Fold to Scale", "-",
+        view.addArray ({ "-", "Mixer", "Mixer Controls >", "Arrangement Track Controls >", "-", "Overview", "Scene Tempo and Time Signature", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Fold to Notes", "Fold to Scale", "-",
                          "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
         expect ("View", view);
         juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "MIDI Prelisten", "Browser Pre-Hear", "-", "External Sync", "-", "Time Ruler Format >", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
@@ -19430,6 +19461,41 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             auto hidden = sections; hidden.shown = false; session.setMixerSections (hidden); refresh();
             check (handleKey (juce::KeyPress ('M', juce::ModifierKeys (alt | shift), 0)) && showSession && state.mixerSections.shown, "Option+Shift+M shows the Session with its mixer");
             session.setMixerSections (sections); showArrangementView(); refresh();
+        }
+        {
+            // View > Arrangement Track Controls shows and hides the Arrangement headers' routing, volume and pan,
+            // and Track Delay, and the return tracks; Option+Cmd+I and Option+Cmd+R toggle In/Out and Returns there.
+            showArrangementView(); automationMode = false; refresh();
+            check (state.arrangementControls == Session::ArrangementControls {}, "In/Out, Volume and Returns show at first and Track Options not, as in the reference's default Set");
+            const bool addedReturn = std::none_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return t.isReturn; });
+            if (addedReturn) { check (session.addReturnTrack ("Controls").wasOk(), "a return for the controls"); refresh(); }
+            int ordinary = -1, returned = -1;
+            for (int i = 0; i < (int) state.tracks.size(); ++i)
+            { if (state.tracks[(size_t) i].isReturn) { if (returned < 0) returned = i; } else if (ordinary < 0) ordinary = i; }
+            check (ordinary >= 0 && returned >= 0, "a track and a return for the controls");
+            const auto header = [&]
+            {
+                auto* row = canvas.getComponentAt (canvas.timelineWidth() + 120, laneY (ordinary) + 4);
+                while (row != nullptr && row->getParentComponent() != &canvas) row = row->getParentComponent();
+                return row;
+            };
+            const auto shown = [&] (const juce::String& name) { auto* row = header(); auto* c = row != nullptr ? findNamed (*row, name) : nullptr; return c != nullptr && c->isVisible(); };
+            const auto input = state.tracks[(size_t) ordinary].isMidi ? "Track MIDI input" : "Track audio input";
+            check (shown (input) && shown ("Track volume") && ! shown ("Track delay"), "the header shows its routing and volume");
+            menuItemSelected (menuArrangementInOut, 4); refresh();
+            check (! shown (input) && shown ("Track volume") && ! state.arrangementControls.inOut, "In/Out off hides the routing");
+            check (handleKey (juce::KeyPress ('I', juce::ModifierKeys (cmd | alt), 0)) && shown (input), "and Option+Cmd+I shows it again");
+            menuItemSelected (menuArrangementVolume, 4); refresh();
+            check (! shown ("Track volume"), "Volume off hides the volume and pan");
+            menuItemSelected (menuArrangementVolume, 4); menuItemSelected (menuArrangementTrackOptions, 4); refresh();
+            check (shown ("Track volume") && shown ("Track delay"), "Track Options shows Track Delay");
+            menuItemSelected (menuArrangementTrackOptions, 4); refresh();
+            const auto returnHeight = laneHeight (returned);
+            check (returnHeight > 0 && handleKey (juce::KeyPress ('R', juce::ModifierKeys (cmd | alt), 0)) && laneHeight (returned) == 0 && ! state.arrangementControls.returns,
+                   "Option+Cmd+R hides the return tracks from the Arrangement");
+            check (handleKey (juce::KeyPress ('R', juce::ModifierKeys (cmd | alt), 0)) && laneHeight (returned) == returnHeight, "and shows them again");
+            check (state.arrangementControls == Session::ArrangementControls {}, "every control as it was");
+            if (addedReturn) { session.undo(); refresh(); }
         }
         {
             // Edit > Select Loop selects the loop's time across the tracks; Playback's Play Arrangement

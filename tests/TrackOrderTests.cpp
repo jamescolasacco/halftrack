@@ -223,6 +223,22 @@ int runTrackOrderTests (const juce::File& artifacts)
             ok (s.saveProject (mixed), "save them shown"); ok (s.newProject(), "a new project for the scenes");
             check (! s.sceneSettingsShown(), "which hides them");
             ok (s.loadProject (mixed), "reopen with them shown"); check (s.sceneSettingsShown(), "and the saved project shows them");
+            // And the Arrangement's track controls, as the reference's default Set has them at first.
+            check (s.arrangementControls() == Session::ArrangementControls {} && s.snapshot().arrangementControls.returns && ! s.snapshot().arrangementControls.trackOptions,
+                   "the Arrangement shows In/Out, Volume and Returns at first, without Track Options");
+            Session::ArrangementControls controls; controls.inOut = false; controls.trackOptions = true; controls.returns = false;
+            s.setArrangementControls (controls);
+            check (s.snapshot().arrangementControls == controls && ! s.canUndo() && s.snapshot().dirty, "choosing them is view state, outside the undo history");
+            ok (s.saveProject (mixed), "save the Arrangement's controls"); ok (s.newProject(), "a new project for the controls");
+            check (s.arrangementControls() == Session::ArrangementControls {}, "which has the defaults");
+            ok (s.loadProject (mixed), "reopen with the controls"); check (s.arrangementControls() == controls, "and the saved controls come back");
+            // And Lock Envelopes, off at first.
+            check (! s.lockEnvelopes(), "Lock Envelopes is off at first");
+            s.setLockEnvelopes (true);
+            check (s.lockEnvelopes() && ! s.canUndo(), "turning it on is view state, outside the undo history");
+            ok (s.saveProject (mixed), "save it on"); ok (s.newProject(), "a new project for Lock Envelopes");
+            check (! s.lockEnvelopes(), "which has it off");
+            ok (s.loadProject (mixed), "reopen with it on"); check (s.lockEnvelopes(), "and the saved project keeps it on");
         }
         {
             // Where Insert puts a track, and automatic names, as the reference's (static reading of its code).

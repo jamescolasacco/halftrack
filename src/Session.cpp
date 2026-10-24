@@ -64,7 +64,9 @@ const juce::Identifier firstClipNameProperty { "halftrackFirstClipName" }, first
 const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsProperty { "halftrackMixerSends" }, mixerReturnsProperty { "halftrackMixerReturns" }, mixerVolumeProperty { "halftrackMixerVolume" },
                        mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" }, mixerShownProperty { "halftrackMixerInSession" },
                        arrangementOverviewProperty { "halftrackArrangementOverview" }, timeRulerFormatProperty { "halftrackTimeRulerFormat" },
-                       lockEnvelopesProperty { "halftrackLockEnvelopes" },
+                       lockEnvelopesProperty { "halftrackLockEnvelopes" }, arrangementInOutProperty { "halftrackArrangementInOut" },
+                       arrangementVolumeProperty { "halftrackArrangementVolume" }, arrangementTrackOptionsProperty { "halftrackArrangementTrackOptions" },
+                       arrangementReturnsProperty { "halftrackArrangementReturns" },
                        sceneSettingsShownProperty { "halftrackSceneSettingsShown" };
 constexpr float defaultCueVolumeDb = -6.0f; // As the reference's default Set has it.
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
@@ -7013,7 +7015,7 @@ Session::Snapshot Session::snapshot() const
     s.cueMode = s.cueModeChosen && s.cueAvailable;
     s.soloInPlace = soloInPlace();
     s.loopIsSongStart = loopIsSongStart();
-    s.mixerSections = mixerSections(); s.arrangementOverview = arrangementOverview(); s.timeRulerFormat = timeRulerFormat(); s.sceneSettingsShown = sceneSettingsShown();
+    s.mixerSections = mixerSections(); s.arrangementControls = arrangementControls(); s.arrangementOverview = arrangementOverview(); s.timeRulerFormat = timeRulerFormat(); s.sceneSettingsShown = sceneSettingsShown();
     for (const auto& m : e.state.getChildWithName (midiMapType))
         if (auto mapping = readMidiMapping (m); isMappableTarget (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
     s.midiLearnTarget = impl->midiLearnTarget;
@@ -14017,6 +14019,21 @@ void Session::setMixerSections (const MixerSections& sections)
     s.setProperty (mixerInOutProperty, sections.inOut, nullptr); s.setProperty (mixerSendsProperty, sections.sends, nullptr); s.setProperty (mixerReturnsProperty, sections.returns, nullptr);
     s.setProperty (mixerVolumeProperty, sections.mixer, nullptr); s.setProperty (mixerTrackDelayProperty, sections.trackDelay, nullptr);
     s.setProperty (mixerCrossfaderProperty, sections.crossfader, nullptr); s.setProperty (mixerShownProperty, sections.shown, nullptr);
+    impl->viewStateChanged();
+}
+Session::ArrangementControls Session::arrangementControls() const
+{
+    const auto& s = impl->edit->state;
+    const ArrangementControls fallback;
+    return { s.getProperty (arrangementInOutProperty, fallback.inOut), s.getProperty (arrangementVolumeProperty, fallback.volume),
+             s.getProperty (arrangementTrackOptionsProperty, fallback.trackOptions), s.getProperty (arrangementReturnsProperty, fallback.returns) };
+}
+void Session::setArrangementControls (const ArrangementControls& controls)
+{
+    if (controls == arrangementControls()) return;
+    auto s = impl->edit->state;
+    s.setProperty (arrangementInOutProperty, controls.inOut, nullptr); s.setProperty (arrangementVolumeProperty, controls.volume, nullptr);
+    s.setProperty (arrangementTrackOptionsProperty, controls.trackOptions, nullptr); s.setProperty (arrangementReturnsProperty, controls.returns, nullptr);
     impl->viewStateChanged();
 }
 bool Session::lockEnvelopes() const { return impl->edit->state.getProperty (lockEnvelopesProperty, false); }

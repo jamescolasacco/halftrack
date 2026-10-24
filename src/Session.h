@@ -627,6 +627,14 @@ public:
         bool shown = true; // The whole mixer in the Session View, as the reference's View > Mixer.
         bool operator== (const MixerSections&) const = default;
     };
+    // View > Arrangement Track Controls, as the reference's: the Arrangement headers' routing (In/Out),
+    // volume and pan (Volume) and Track Delay (Track Options), and the return tracks in the
+    // Arrangement. Its default Set's ArrangerIO, ArrangerVolume, ArrangerTrackOptions and ArrangerReturns.
+    struct ArrangementControls
+    {
+        bool inOut = true, volume = true, trackOptions = false, returns = true;
+        bool operator== (const ArrangementControls&) const = default;
+    };
     // How the Arrangement's time ruler counts, as the reference's Options > Time Ruler Format offers:
     // minutes and seconds, or SMPTE frames at 24, 25 or 30 a second, 30 drop-frame (at 29.97) or
     // 29.97 without dropping.
@@ -672,6 +680,7 @@ public:
         bool soloInPlace = true;
         bool loopIsSongStart = false; // The loop brace's Set Song Start Time Here.
         MixerSections mixerSections;
+        ArrangementControls arrangementControls;
         bool arrangementOverview = true;
         TimeFormat timeRulerFormat = TimeFormat::minutesSeconds;
         bool sceneSettingsShown = false;
@@ -786,6 +795,9 @@ public:
     // it. Kept with the project as view state, not as an undo step.
     bool arrangementOverview() const;
     void setArrangementOverview (bool);
+    // Kept with the project as view state, outside the undo history, as mixerSections is.
+    ArrangementControls arrangementControls() const;
+    void setArrangementControls (const ArrangementControls&);
     // Options > Lock Envelopes: automation stays at its place in the song instead of moving with clips.
     // Kept with the project, outside the undo history; off at first, as the reference's.
     bool lockEnvelopes() const;
