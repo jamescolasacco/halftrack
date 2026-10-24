@@ -833,7 +833,7 @@ Main menu bar ([contract](research/main-menu-contract.md)). Defaults where the r
 Note editor clicks and Draw Mode ([contract](research/note-drawing-contract.md)). Defaults where the manual is silent:
 
 - **A new note's length and velocity.** A double-clicked or drawn note is one grid step long, the step the editor's grid shows, and takes the editor's Velocity (the last selected note's). The reference's note length and velocity were not read.
-- **The selection box.** A drag selects the notes the box touches, as Halftrack's Shift-drag did. Whether the reference's needs a note wholly inside, and the timespan it also selects, were not determined.
+- **The selection box.** A drag selects the notes the box touches, as Halftrack's Shift-drag did, and the box's timespan snapped to the grid. Whether the reference's needs a note wholly inside was not determined.
 - **Draw Mode's drag.** A drag that starts on a note goes on erasing the notes it crosses. A melodic drag gives each step one note that follows the pointer's pitch on that step, and a drawn note replaces the notes it covers at its pitch. Steps follow the grid even with snapping off.
 - **Saving Draw Mode.** Draw Mode belongs to the window and starts off; whether the reference keeps it between launches was not read.
 - **Clip markers.** The Set buttons round the play position to the nearest step of the global launch quantization; Edit > Clip Markers uses the note editor's insert marker while stopped and works for MIDI clips. The reference's choices for a stopped transport and for audio clips were not read.

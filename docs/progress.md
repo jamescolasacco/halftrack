@@ -2601,3 +2601,7 @@ UI area. As the reference's key list gives them, the Arrangement's Left and Righ
 
 UI area. As the reference's key list describes, A, B, S, Z, Tab and F1 to F8 act when pressed, and when held for about 500 ms letting go returns what they changed (Z zooming back). Their repeats while held now do nothing; before, holding one flipped its switch over and over ([menu contract](research/main-menu-contract.md#keys-outside-the-menus)). Checked in the UI suite with a stood-in key state and clock.
 
+## The note editor's timespan — 2026-10-24
+
+UI area. As in the reference, a background drag in the note editor now selects its timespan as well as the notes it touches. Cmd+L (and Edit > Loop Selection) loops the clip over it, Cmd+E splits notes at its edges, Cmd+Option+J fits the selected notes into it, and Shift+Cmd+E splits an Arrangement clip at its edges or at the insert marker ([note drawing contract](research/note-drawing-contract.md)). Checked in the UI suite.
+

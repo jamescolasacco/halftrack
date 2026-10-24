@@ -12,7 +12,8 @@ Status: partial. This follows the reference's manual. No reference output was me
 ## Halftrack's behaviour
 
 Outside Draw Mode:
-- A click on the grid places the insert marker on the nearest grid line and clears the selection. Dragging selects the notes the box touches.
+- A click on the grid places the insert marker on the nearest grid line and clears the selection. Dragging selects the notes the box touches and its timespan, on the grid unless snapping is bypassed, with the insert marker at its start; the timespan shows as a band across the editor until a click elsewhere, Escape or another clip.
+- The timespan's commands, as the reference's key list gives them: Cmd+L (or Edit > Loop Selection) loops the clip over it; Cmd+E splits the selected notes, or all of them, at its edges; Cmd+Option+J fits the selected notes into it; Shift+Cmd+E splits an Arrangement clip at its edges, or at the insert marker without one (the reference's hidden-menu Split Clip From Within). Each is one undo step.
 - Shift-clicking a note adds it to the selection or takes it out; Shift-dragging adds the notes it touches.
 - A double-click on the grid adds a note one grid step long, on the step clicked, at the row's pitch, at the editor's Velocity. It is selected, and the drag that follows moves it. A double-click on a note deletes it. Each is one undo step.
 - With Cmd held at the press (Alt elsewhere), dragging a note up or down changes the selected notes' velocity by one step a pixel, without moving them. Cmd pressed during a drag still bypasses the grid.
@@ -42,8 +43,7 @@ From the MIDI Note Editor section of the reference's key list ([Live keyboard sh
 
 - Draw Mode in take lanes.
 - The Display & Input setting "Draw Mode with Pitch Lock", which makes pitch-locked drawing the default.
-- The timespan a background drag selects: Halftrack selects notes only.
-- The key list's Chop (Cmd+E with a drag), Split at an exact place (hold E), Fit Notes to Time Range (Cmd+Option+J), H, note groups (Cmd+G), Apply MIDI Tool (Cmd+Return), Show MIDI Note Filters, and Shift with Left and Right moving the clip region.
+- The key list's Chop (Cmd+E with a drag), Split at an exact place (hold E), H, note groups (Cmd+G), Apply MIDI Tool (Cmd+Return), Show MIDI Note Filters, and Shift with Left and Right moving the clip region.
 
 See [open questions](../open-questions.md) for the defaults taken where the manual is silent.
 
@@ -58,4 +58,5 @@ The UI suite checks:
 - a Cmd-drag raising a note's velocity by 20 steps without moving it, and an Option-drag leaving a copy, each one undo step;
 - velocities drawn over three grid steps, and along a straight line with Option, each one undo step; and steps drawn in a clip envelope lane;
 - that a double-click's note sounds while the button is held with Preview on;
+- a background drag's timespan on the grid, looping, splitting and fitting notes over it, splitting the Arrangement clip at its edges, and a click dropping it;
 - the keys above: velocity, range and chance nudges, a typed velocity, moving through notes, Home and End, the page keys, Z and X, and Cmd+J joining a key's notes, all undone after.

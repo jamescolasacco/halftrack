@@ -6993,7 +6993,7 @@ private:
             auto id = clip == nullptr ? juce::String() : clip->id;
             if (id != loadedClip)
             {
-                endGesture(); loadedClip = id; clearSelection(); originalNotes.clear(); marquee = false; viewBeat = 0; insertionBeat = 0;
+                endGesture(); loadedClip = id; clearSelection(); originalNotes.clear(); marquee = false; viewBeat = 0; insertionBeat = 0; timeRange.reset();
                 if (clip != nullptr && ! clip->notes.empty())
                 {
                     int high = 60; for (const auto& note : clip->notes) high = juce::jmax (high, note.pitch);
@@ -7118,6 +7118,11 @@ private:
                     g.setColour (themes::colour (0xff344149)); g.setFont (font (9.5f, true));
                     g.drawText (pitchName (pitch), 7, y, 32, rowHeight, juce::Justification::centredLeft); // C3 is note 60, as on the notes.
                 }
+            }
+            if (timeRange)
+            {
+                const auto from = (float) (keysWidth + (timeRange->first - viewBeat) * pixelsPerBeat), to = (float) (keysWidth + (timeRange->second - viewBeat) * pixelsPerBeat);
+                g.setColour (orange.withAlpha (0.10f)); g.fillRect (juce::Rectangle<float>::leftTopRightBottom (from, (float) gridTop, to, (float) grid.getBottom()));
             }
             for (double beat = std::floor (viewBeat / snapBeats()) * snapBeats(); beat <= viewBeat + grid.getWidth() / pixelsPerBeat; beat += snapBeats())
             {
@@ -7364,6 +7369,11 @@ private:
                                                                            juce::jmax (dragOrigin.x, e.position.x), juce::jmax (dragOrigin.y, e.position.y)).getIntersection (gridBounds().toFloat());
                 selectedNoteIds = marqueeBase;
                 for (const auto& note : clip->notes) if (marqueeBounds.intersects (noteBounds (note))) selectedNoteIds.insert (note.id);
+                // The drag selects its timespan too, on the note grid unless snapping is bypassed, as the reference's does.
+                const auto snapped = [&] (double beat) { return juce::jlimit (0.0, contentEndBeat (*clip), snapsNotes (e.mods) ? std::round (beat / snapBeats()) * snapBeats() : beat); };
+                const auto from = snapped (std::min (beatAt (dragOrigin.x), beatAt (e.position.x))), to = snapped (std::max (beatAt (dragOrigin.x), beatAt (e.position.x)));
+                timeRange.reset();
+                if (to > from + 1.0e-9) { timeRange = std::pair { from, to }; insertionBeat = from; }
                 sync(); return;
             }
             if (originalNotes.empty() || selectedNoteIds.empty()) return;
@@ -7429,7 +7439,7 @@ private:
             updateRows(); updateScroll(); repaint();
             if (marquee)
             {
-                if (! e.mouseWasDraggedSinceMouseDown()) clearSelection();
+                if (! e.mouseWasDraggedSinceMouseDown()) { clearSelection(); timeRange.reset(); }
                 marquee = false; sync();
             }
         }
@@ -7468,8 +7478,9 @@ private:
                 if (code == juce::KeyPress::returnKey && clip != nullptr) { setSelectedVelocity (juce::jlimit (1, 127, typed.getIntValue())); return true; }
                 if (code == juce::KeyPress::escapeKey) return true;
             }
-            if (code == juce::KeyPress::escapeKey) { clearSelection(); repaint(); return true; }
+            if (code == juce::KeyPress::escapeKey) { clearSelection(); timeRange.reset(); repaint(); return true; }
             if (clip != nullptr && code == '0' && !key.getModifiers().isAnyModifierKeyDown()) { noteCommand (NoteCommand::toggleActive); return true; }
+            if (clip != nullptr && timeRangeKey (key)) return true;
             if (clip != nullptr && editorKey (key)) return true;
             if ((code == juce::KeyPress::rightKey || code == juce::KeyPress::leftKey) && ! key.getModifiers().isAnyModifierKeyDown() && stepRecord (code == juce::KeyPress::rightKey)) return true;
             if (clip != nullptr && key.getModifiers().isCommandDown())
@@ -7513,6 +7524,60 @@ private:
         double insertion() const { return insertionBeat; }
         juce::String velocityTyped() const { return typedVelocity; }
         bool isNoteSelected (const juce::String& id) const { return selectedNoteIds.contains (id); }
+        std::optional<std::pair<double, double>> selectedTimespan() const { return timeRange; }
+        // The commands on the timespan a background drag selected, as the reference's: Cmd+L loops the clip
+        // over it, Cmd+E splits the notes at its edges, Shift+Cmd+E splits an Arrangement clip there (or at
+        // the insert marker without one), and Cmd+Option+J fits the selected notes into it.
+        bool timeRangeKey (const juce::KeyPress& key)
+        {
+            const auto code = key.getKeyCode();
+            const auto mods = key.getModifiers();
+            if (! mods.isCommandDown()) return false;
+            if ((code == 'L' || code == 'l') && ! mods.isShiftDown() && ! mods.isAltDown() && timeRange) { loopTimeRange(); return true; }
+            if ((code == 'E' || code == 'e') && ! mods.isShiftDown() && ! mods.isAltDown() && timeRange) { splitNotesAtRange(); return true; }
+            if ((code == 'E' || code == 'e') && mods.isShiftDown() && ! mods.isAltDown()) { owner.splitClipFromWithin(); return true; }
+            if ((code == 'J' || code == 'j') && mods.isAltDown() && ! mods.isShiftDown() && timeRange) { fitNotesToRange(); return true; }
+            return false;
+        }
+        void loopTimeRange()
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr || ! timeRange) return;
+            auto start = clip->contentStartBeat;
+            if (start < timeRange->first || start >= timeRange->second) start = timeRange->first;
+            endGesture();
+            owner.report (owner.session.setClipLoop (clip->id, { true, timeRange->first, timeRange->second - timeRange->first }, start)); owner.refresh();
+        }
+        void splitNotesAtRange()
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr || ! timeRange) return;
+            const auto clipId = clip->id;
+            endGesture();
+            owner.session.beginEditGesture ("Split notes");
+            for (const auto at : { timeRange->first, timeRange->second })
+            {
+                juce::StringArray crossing, inserted;
+                if (const auto* now = owner.currentMidiClip())
+                    for (const auto& note : now->notes)
+                        if ((selectedNoteIds.empty() || selectedNoteIds.contains (note.id)) && note.startBeat < at - 1.0e-9 && note.startBeat + note.lengthBeats > at + 1.0e-9) crossing.add (note.id);
+                if (crossing.isEmpty()) continue;
+                owner.report (owner.session.splitMidiNotes (clipId, crossing, at, inserted)); owner.refresh();
+            }
+            owner.session.endEditGesture(); owner.refresh();
+        }
+        void fitNotesToRange()
+        {
+            const auto* clip = owner.currentMidiClip();
+            auto notes = selectedNotes();
+            if (clip == nullptr || ! timeRange || notes.empty()) return;
+            double first = notes.front().startBeat, last = first;
+            for (const auto& n : notes) { first = std::min (first, n.startBeat); last = std::max (last, n.startBeat + n.lengthBeats); }
+            if (! (last > first)) return;
+            const auto scale = (timeRange->second - timeRange->first) / (last - first);
+            for (auto& n : notes) { n.startBeat = timeRange->first + (n.startBeat - first) * scale; n.lengthBeats = std::max (1.0 / 64, n.lengthBeats * scale); }
+            updateNotes (clip->id, notes, "Fit notes to time range");
+        }
         int topShownPitch() const { return pitchAtRow (topRow()); }
         double beatWidth() const { return pixelsPerBeat; }
         // The reference's other note editor keys (its shortcut list's MIDI Note Editor section): Cmd with Up
@@ -8109,6 +8174,7 @@ private:
         float drawVelocity = 0.8f;
         bool gesture = false, resizeNote = false, drawing = false, marquee = false, erasing = false, pitchLocked = false, velocityDrag = false, copyDrag = false, copied = false;
         juce::String typedVelocity; // Digits typed for the selected notes' velocity, until Return.
+        std::optional<std::pair<double, double>> timeRange; // The timespan a background drag selected, in content beats.
         std::optional<std::tuple<double, double, int>> zoomBack; // The view before Z, for X.
         void setSelectedVelocity (int value)
         {
@@ -12912,6 +12978,30 @@ private:
         else { if (state.playing) session.stop(); report (session.play()); }
         refresh();
     }
+    // Split Clip From Within (Shift+Cmd+E in the clip view), the reference's hidden-menu command: the
+    // Arrangement MIDI clip in the note editor splits at the edges of its selected timespan, or at the
+    // insert marker without one, each as the clip plays it first.
+    void splitClipFromWithin()
+    {
+        const auto* clip = currentMidiClip();
+        if (clip == nullptr || ! selectedLauncherClipId.isEmpty()) return;
+        std::vector<double> cuts;
+        if (const auto range = pianoRoll.selectedTimespan()) cuts = { range->first, range->second }; else cuts = { pianoRoll.insertion() };
+        const auto clipId = clip->id;
+        const auto start = clip->startBeat, contentStart = clip->contentStartBeat, length = clip->lengthBeats;
+        session.beginEditGesture ("Split clip");
+        juce::String splitting = clipId;
+        // From the latest cut, so the earlier one still falls in the part that keeps the id.
+        std::sort (cuts.begin(), cuts.end(), std::greater<double>());
+        for (const auto cut : cuts)
+        {
+            const auto into = cut - contentStart;
+            if (into <= 1.0e-6 || into >= length - 1.0e-6) continue;
+            juce::String right;
+            report (session.splitMidiClip (splitting, secondsAt (start + into), right));
+        }
+        session.endEditGesture(); refresh();
+    }
     // The reference's arrows in the Arrangement: Left and Right nudge the selected clips by the grid, their
     // automation following, or a time selection; from the headers they fold and unfold the selected track.
     // Up and Down select the track above or below, taking a time selection along.
@@ -13112,7 +13202,9 @@ private:
             command (menuInvertSelection, "Invert Selection");
             add (menuSelectLoop, "Select Loop", canSelectLoop (area));
             // Loop Selection, or the loop switched on or off, as the clip menu's.
-            if (area == EditArea::arrangement) command (79, "Loop Selection"); else add (79, state.looping ? "Deactivate Loop" : "Activate Loop");
+            if (area == EditArea::arrangement) command (79, "Loop Selection");
+            else if (area == EditArea::notes && pianoRoll.selectedTimespan()) add (79, "Loop Selection");
+            else add (79, state.looping ? "Deactivate Loop" : "Activate Loop");
             juce::PopupMenu markers;
             markers.addItem (menuEntry (menuSetClipStart, "Set Clip Start", canSetClipMarker (ClipMarker::start)));
             markers.addItem (menuEntry (menuSetLoopStart, "Set Loop Start", canSetClipMarker (ClipMarker::loopStart)));
@@ -13376,7 +13468,11 @@ private:
             case menuFreeze: case menuBounceInPlace: case menuBounceNew: case 76: case 80: case menuGroove: case menuSplitStop: case menuQuantize:
             case menuInvertSelection:
                 runAreaCommand (id); return;
-            case 79: if (editArea() == EditArea::arrangement) runAreaCommand (id); else session.setLoop (! state.looping, state.loopStart, state.loopEnd); break;
+            case 79:
+                if (editArea() == EditArea::arrangement) runAreaCommand (id);
+                else if (editArea() == EditArea::notes && pianoRoll.selectedTimespan()) pianoRoll.loopTimeRange();
+                else session.setLoop (! state.looping, state.loopStart, state.loopEnd);
+                break;
             case menuSelectAll: selectAll (editArea()); return;
             case menuSelectLoop: selectLoop (editArea()); return;
             case menuSetClipStart: clipMarkerFromMenu (ClipMarker::start); return;
@@ -15951,6 +16047,49 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             while (session.undoSteps().size() > historyBefore && session.canUndo()) session.undo();
             refresh(); pianoRoll.fit();
             check (only (noteId), "undo takes every change back");
+        }
+        {
+            // A background drag selects its timespan as well as the notes it touches, and the timespan's commands act on it.
+            const auto historyBefore = session.undoSteps().size();
+            const auto clipBefore = *currentMidiClip();
+            const auto key = [&] (int code, int modifiers) { return pianoRoll.keyPressed (juce::KeyPress (code, juce::ModifierKeys (modifiers), 0)); };
+            const int command = juce::ModifierKeys::commandModifier;
+            const auto dragSpan = [&] (double from, double to)
+            {
+                const auto a = point (from, 75), b = point (to, 75);
+                pianoRoll.mouseDown (event (a, a)); pianoRoll.mouseDrag (event (b, a, true)); pianoRoll.mouseUp (event (b, a, true));
+            };
+            dragSpan (4.05, 7.95);
+            check (pianoRoll.selectedTimespan() == std::optional { std::pair { 4.0, 8.0 } } && pianoRoll.insertion() == 4, "a background drag selects its timespan on the grid, the insert marker at its start");
+            key ('L', command);
+            check (currentMidiClip()->loop == Session::ClipLoop { true, 4, 4 } && currentMidiClip()->contentStartBeat == 4, "Cmd+L loops the clip over the timespan");
+            session.undo(); refresh();
+            juce::StringArray added;
+            check (session.addMidiNotes (currentMidiClip()->id, { { {}, 60, 3.5, 1, .8f }, { {}, 62, 7.5, 1, .8f } }, added).wasOk(), "two notes across the timespan's edges"); refresh();
+            dragSpan (4.05, 7.95);
+            key ('E', command);
+            check (notes().size() == 5, "Cmd+E splits the notes crossing the timespan's edges");
+            session.undo(); refresh();
+            check (notes().size() == 3, "one undo joins them again");
+            dragSpan (4.05, 7.95); key ('A', command);
+            key ('J', command | juce::ModifierKeys::altModifier);
+            const auto fitted = notes();
+            double first = 99, last = 0;
+            for (const auto& n : fitted) { first = std::min (first, n.startBeat); last = std::max (last, n.startBeat + n.lengthBeats); }
+            check (std::abs (first - 4) < 1e-6 && std::abs (last - 8) < 1e-3, "Cmd+Option+J fits the selected notes into the timespan");
+            session.undo(); refresh();
+            const auto clips = [&] { return state.tracks[(size_t) selectedTrack].clips.size(); };
+            const auto clipsBefore = clips();
+            dragSpan (4.05, 7.95);
+            key ('E', command | juce::ModifierKeys::shiftModifier);
+            check (clips() == clipsBefore + 2, "Shift+Cmd+E splits the Arrangement clip at the timespan's edges");
+            session.undo(); refresh();
+            check (clips() == clipsBefore, "one undo joins it again");
+            click (point (10.1, 75));
+            check (! pianoRoll.selectedTimespan(), "a click elsewhere drops the timespan");
+            while (session.undoSteps().size() > historyBefore && session.canUndo()) session.undo();
+            refresh(); pianoRoll.fit();
+            check (only (noteId) && currentMidiClip()->loop == clipBefore.loop, "undo takes every change back");
         }
         // Draw Mode, from its key B: a drag draws a note on each grid step at the pointer's pitch.
         check (! drawMode && handleKey (juce::KeyPress ('b')) && drawMode && drawButton.getToggleState(), "B turns Draw Mode on and lights the control bar's pencil");
