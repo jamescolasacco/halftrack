@@ -63,7 +63,8 @@ const juce::Identifier firstClipNameProperty { "halftrackFirstClipName" }, first
 // The Session mixer's sections shown, as view state.
 const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsProperty { "halftrackMixerSends" }, mixerReturnsProperty { "halftrackMixerReturns" }, mixerVolumeProperty { "halftrackMixerVolume" },
                        mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" }, mixerShownProperty { "halftrackMixerInSession" },
-                       arrangementOverviewProperty { "halftrackArrangementOverview" }, timeRulerFormatProperty { "halftrackTimeRulerFormat" };
+                       arrangementOverviewProperty { "halftrackArrangementOverview" }, timeRulerFormatProperty { "halftrackTimeRulerFormat" },
+                       sceneSettingsShownProperty { "halftrackSceneSettingsShown" };
 constexpr float defaultCueVolumeDb = -6.0f; // As the reference's default Set has it.
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
 te::Edit::CountIn countInMode (int bars)
@@ -6998,7 +6999,7 @@ Session::Snapshot Session::snapshot() const
     s.cueMode = s.cueModeChosen && s.cueAvailable;
     s.soloInPlace = soloInPlace();
     s.loopIsSongStart = loopIsSongStart();
-    s.mixerSections = mixerSections(); s.arrangementOverview = arrangementOverview(); s.timeRulerFormat = timeRulerFormat();
+    s.mixerSections = mixerSections(); s.arrangementOverview = arrangementOverview(); s.timeRulerFormat = timeRulerFormat(); s.sceneSettingsShown = sceneSettingsShown();
     for (const auto& m : e.state.getChildWithName (midiMapType))
         if (auto mapping = readMidiMapping (m); isMappableTarget (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
     s.midiLearnTarget = impl->midiLearnTarget;
@@ -13937,6 +13938,13 @@ void Session::setTimeRulerFormat (TimeFormat format)
 {
     if (format == timeRulerFormat()) return;
     impl->edit->state.setProperty (timeRulerFormatProperty, static_cast<int> (format), nullptr);
+    impl->viewStateChanged();
+}
+bool Session::sceneSettingsShown() const { return impl->edit->state.getProperty (sceneSettingsShownProperty, false); }
+void Session::setSceneSettingsShown (bool shown)
+{
+    if (shown == sceneSettingsShown()) return;
+    impl->edit->state.setProperty (sceneSettingsShownProperty, shown, nullptr);
     impl->viewStateChanged();
 }
 bool Session::loopIsSongStart() const { return impl->edit->state.getProperty (loopIsSongStartProperty, false); }

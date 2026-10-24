@@ -674,6 +674,7 @@ public:
         MixerSections mixerSections;
         bool arrangementOverview = true;
         TimeFormat timeRulerFormat = TimeFormat::minutesSeconds;
+        bool sceneSettingsShown = false;
         bool automationOverridden = false; // Some lane with points is switched off.
         float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
@@ -786,6 +787,10 @@ public:
     // seconds in its default Set).
     TimeFormat timeRulerFormat() const;
     void setTimeRulerFormat (TimeFormat);
+    // Whether the scenes show their tempo and time signature fields, as the reference's View and scene
+    // menus switch them; its default Set hides them. Kept with the project as view state.
+    bool sceneSettingsShown() const;
+    void setSceneSettingsShown (bool);
     juce::Result addMidiClip (const juce::String& trackId, double startBeat, double lengthBeats);
     // Take lanes. Arrangement recording puts each pass on an armed track in a take lane (reusing a lane
     // with nothing at or after the pass's start) as well as the main lane. Comping copies a lane's

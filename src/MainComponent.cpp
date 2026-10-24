@@ -4477,13 +4477,12 @@ private:
     };
     TimeRuler timeRuler { *this };
 
-    // A scene's tempo and meter as its launcher cell shows them, or empty.
-    static juce::String sceneSettingsText (const Session::SceneInfo& scene)
+    // A scene's tempo and time signature fields' texts: its own, or the song's, which its field shows dimmed.
+    juce::String sceneTempoText (const Session::SceneInfo& scene) const { return juce::String (scene.tempo.value_or (state.tempo), 2); }
+    juce::String sceneSignatureText (const Session::SceneInfo& scene) const
     {
-        juce::String text;
-        if (scene.tempo) text << juce::String (*scene.tempo, 2);
-        if (scene.timeSignature) text << (text.isEmpty() ? "" : "  ") << scene.timeSignature->numerator << "/" << scene.timeSignature->denominator;
-        return text;
+        const auto meter = scene.timeSignature.value_or (state.timeSignatures.empty() ? Session::TimeSignature {} : state.timeSignatures.front().meter);
+        return juce::String (meter.numerator) + "/" + juce::String (meter.denominator);
     }
     class LauncherGrid final : public juce::Component, private juce::ScrollBar::Listener
     {
@@ -4670,15 +4669,22 @@ private:
                 // A scene with a colour of its own fills its cell with it, lighter while selected.
                 const bool coloured = ! info.colour.isTransparent();
                 g.setColour (coloured ? (selected ? info.colour.brighter (0.25f) : info.colour) : selected ? themes::colour (0xff4a4a4a) : themes::colour (0xff383838)); g.fillRect (cell);
-                // A scene that changes the tempo or meter shows them and lights its launch button.
-                const auto settings = sceneSettingsText (info);
-                g.setColour (selected ? orange : settings.isNotEmpty() ? green : ink.withAlpha (0.8f)); drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
+                // A scene that changes the tempo or meter lights its launch button.
+                const bool settings = info.tempo.has_value() || info.timeSignature.has_value();
+                g.setColour (selected ? orange : settings ? green : ink.withAlpha (0.8f)); drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
                 auto nameArea = cell.withTrimmedLeft (20).withTrimmedRight (6);
-                if (settings.isNotEmpty())
+                // Its tempo and time signature fields, while they show: its own, or the song's dimmed.
+                if (owner.state.sceneSettingsShown)
                 {
-                    const juce::Font small (font (9.5f));
-                    g.setColour (muted); g.setFont (small);
-                    g.drawText (settings, nameArea.removeFromRight (juce::jmin (76, juce::GlyphArrangement::getStringWidthInt (small, settings) + 6)), juce::Justification::centredRight, false);
+                    const auto [tempoField, signatureField] = sceneFields (scene);
+                    nameArea.setRight (tempoField.getX() - 2);
+                    g.setFont (font (9.5f));
+                    for (const auto& [field, text, own] : { std::tuple { tempoField, owner.sceneTempoText (info), info.tempo.has_value() },
+                                                           std::tuple { signatureField, owner.sceneSignatureText (info), info.timeSignature.has_value() } })
+                    {
+                        g.setColour (themes::colour (0xff1e1e1e).withAlpha (0.85f)); g.fillRect (field);
+                        g.setColour (own ? ink : muted.withAlpha (0.7f)); g.drawText (text, field, juce::Justification::centred, false);
+                    }
                 }
                 g.setColour (coloured ? themes::colour (0xff141414) : ink); g.setFont (font (10.5f)); g.drawText (info.name, nameArea, juce::Justification::centredLeft, true);
             }
@@ -4826,6 +4832,9 @@ private:
             if (scene >= 0)
             {
                 owner.selectedSceneId = owner.state.scenes[(size_t) scene].id;
+                if (const auto [tempoField, signatureField] = sceneFields (scene); owner.state.sceneSettingsShown && ! event.mods.isPopupMenu()
+                    && (tempoField.contains (event.getPosition()) || signatureField.contains (event.getPosition())))
+                { repaint(); owner.sceneSettingsDialog (scene, tempoField.contains (event.getPosition())); return; }
                 if (! event.mods.isPopupMenu() && event.x - masterX() >= 22) scenePressed = owner.state.scenes[(size_t) scene].id;
                 if (event.mods.isPopupMenu())
                 {
@@ -4899,6 +4908,14 @@ private:
         // Whether the press now under way is on a column's title.
         bool titlePressed() const { return headerPressed.isNotEmpty(); }
         bool onScene (juce::Point<int> point) const { return sceneAt (point) >= 0; }
+        // A scene's tempo and time signature fields, at the right of its cell while they show.
+        std::pair<juce::Rectangle<int>, juce::Rectangle<int>> sceneFields (int scene) const
+        {
+            auto cell = juce::Rectangle<int> (masterX(), sceneY (scene), sceneWidth, rowHeight).reduced (1, 0).withTrimmedBottom (1).withTrimmedRight (3);
+            const auto signature = cell.removeFromRight (28).reduced (0, 4);
+            cell.removeFromRight (2);
+            return { cell.removeFromRight (40).reduced (0, 4), signature };
+        }
         // Pointing at a title whose track or group has its own info text gives it to the Info view.
         void mouseMove (const juce::MouseEvent& event) override
         {
@@ -11194,11 +11211,10 @@ private:
         sessionSpaceMenu().showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this)] (int result)
         { if (safe != nullptr && result != 0) safe->chooseSessionSpaceItem (result); });
     }
-    enum SceneItem { sceneDuplicate = 560, sceneDelete, sceneRename, sceneInsert, sceneCapture, sceneSelectContent, sceneTempo, sceneSignature, sceneInfo,
+    enum SceneItem { sceneDuplicate = 560, sceneDelete, sceneRename, sceneInsert, sceneCapture, sceneSelectContent, sceneShowSettings, sceneInfo,
                      sceneResetColour, sceneColour };
-    // A scene's menu, in the reference's order (LSceneManager 0x1039e7c54). Halftrack has no scene clipboard,
-    // info text or colours yet, and edits a scene's tempo and time signature in place of the reference's
-    // switch that shows them.
+    // A scene's menu, in the reference's order (LSceneManager 0x1039e7c54). Halftrack has no scene clipboard.
+    // Scene Tempo and Time Signature shows and hides the scenes' fields, where a click edits them.
     juce::PopupMenu sceneContextMenu (const juce::String& sceneId = {}, std::shared_ptr<int> colour = std::make_shared<int> (-1)) const
     {
         juce::PopupMenu menu;
@@ -11212,7 +11228,7 @@ private:
         menu.addSeparator();
         menu.addItem (sceneSelectContent, "Select Scene Content");
         menu.addSeparator();
-        menu.addItem (sceneTempo, "Scene Tempo..."); menu.addItem (sceneSignature, "Scene Time Signature...");
+        menu.addItem (sceneShowSettings, "Scene Tempo and Time Signature", true, state.sceneSettingsShown);
         // Reset Color and the colour grid, as the reference's scene menu ends.
         menu.addSeparator();
         menu.addItem (sceneResetColour, "Reset Color");
@@ -11238,7 +11254,7 @@ private:
                 selectedSlots = slotRectangle ({ 0, index }, { (int) state.tracks.size() - 1, index });
                 if (! selectedSlots.empty()) selectLauncherSlot (selectedSlots.front().track, index);
                 launcher.repaint(); return;
-            case sceneTempo: case sceneSignature: sceneSettingsDialog (index, result == sceneTempo); return;
+            case sceneShowSettings: session.setSceneSettingsShown (! state.sceneSettingsShown); break;
             case sceneResetColour: report (session.setSceneColours ({ sceneId }, std::nullopt)); break;
             case sceneColour: if (colour >= 0) report (session.setSceneColours ({ sceneId }, paletteColour (colour))); break;
             default: return;
@@ -11709,7 +11725,7 @@ private:
                     menuRecordSession, menuMetronome, menuMetronomeRecording, menuFullscreen, menuZoomIn, menuZoomOut, menuZoomReset,
                     menuToggleView, menuClipView, menuDeviceView, menuToggleDetail, menuBrowser, menuGroovePool, menuSearch, menuSimilar,
                     menuFoldAll, menuFoldSelected, menuZoomSelection, menuZoomBack, menuMidiMap, menuKeyMap, menuComputerKeyboard,
-                    menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuOverview,
+                    menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuOverview, menuSceneSettings,
                     menuSlice = 200, // Plus Session::SliceBy.
                     menuTimeFormat = 210 }; // Plus Session::TimeFormat.
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
@@ -12231,6 +12247,7 @@ private:
             popup.addSubMenu ("Mixer Controls", sections, ! menusBlocked());
             popup.addSeparator();
             add (menuOverview, "Overview", ! showSession, state.arrangementOverview);
+            add (menuSceneSettings, "Scene Tempo and Time Signature", true, state.sceneSettingsShown);
             popup.addSeparator();
             add (49, "Automation Mode", ! showSession, automationMode);
             const bool anyUnfolded = std::any_of (state.groups.begin(), state.groups.end(), [] (const auto& g) { return ! g.folded; })
@@ -12399,6 +12416,7 @@ private:
             case menuBrowser: showBrowser = ! showBrowser; resized(); break;
             case menuPluginWindows: session.setPluginEditorsShown (! session.pluginEditorsShown()); return;
             case menuOverview: session.setArrangementOverview (! state.arrangementOverview); refresh(); resized(); break;
+            case menuSceneSettings: session.setSceneSettingsShown (! state.sceneSettingsShown); refresh(); launcher.repaint(); break;
             case menuGroovePool: openGroovePool(); return;
             case menuSearch: showBrowser = true; resized(); browserSearch.grabKeyboardFocus(); return;
             case menuSimilar: showSimilarFiles (similarSource()); return;
@@ -15543,7 +15561,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tracks[(size_t) t].slots[1].hasClip && state.tracks[(size_t) t].slots[1].clip.isMidi, "Insert MIDI Clip puts a clip in the empty slot");
         session.undo(); refresh();
         const auto sceneMenu = listed (sceneContextMenu());
-        check (sceneMenu == "Duplicate|Delete|-|Rename|Edit Info Text|-|Insert Scene|Capture and Insert Scene|-|Select Scene Content|-|Scene Tempo...|Scene Time Signature...|-|Reset Color|[Scene Colours]",
+        check (sceneMenu == "Duplicate|Delete|-|Rename|Edit Info Text|-|Insert Scene|Capture and Insert Scene|-|Select Scene Content|-|Scene Tempo and Time Signature|-|Reset Color|[Scene Colours]",
                "a scene's menu: " + sceneMenu);
         chooseSceneItem (sceneColour, state.scenes[0].id, 9);
         check (state.scenes[0].colour == paletteColour (9), "a swatch gives the scene its colour");
@@ -17383,7 +17401,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
        #if JUCE_MAC
         view.add ("Video Window");
        #endif
-        view.addArray ({ "-", "Mixer", "Mixer Controls >", "-", "Overview", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
+        view.addArray ({ "-", "Mixer", "Mixer Controls >", "-", "Overview", "Scene Tempo and Time Signature", "-", "Automation Mode", folds, "Fold Selected Track", "-", "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
         expect ("View", view);
         juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "-", "External Sync", "-", "Time Ruler Format >", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
                                     "Fixed Grid", "-", "Solo in Place", "-", "Audio Engine On" };
@@ -19911,20 +19929,29 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tracks[0].inputTap == Session::InputTap::postFX && tapChooser->getText() == "Post FX", "the chooser under it picks the tap");
         session.undo(); session.undo(); refresh();
         check (state.tracks[0].inputTrackId.isEmpty() && inputChooser->getSelectedId() == inputBefore, "undo returns the choosers to the earlier input");
-        // Scene tempo and time signature, from the scene menu's dialogs.
+        // Scene tempo and time signature: the fields show from the scene menu's switch, and a click on one edits it.
         const auto answer = [&] (const juce::String& text)
         {
             alerts.back()->getTextEditor ("value")->setText (text); alerts.back()->exitModalState (1);
             juce::MessageManager::getInstance()->runDispatchLoopUntil (100); refresh();
         };
+        check (! state.sceneSettingsShown, "the scenes' tempo and time signature are hidden at first, as in the reference's default Set");
+        chooseSceneItem (sceneShowSettings, state.scenes[1].id); refresh();
+        check (state.sceneSettingsShown, "the scene menu's Scene Tempo and Time Signature shows them");
         const auto sceneAlerts = alerts.size();
-        sceneSettingsDialog (1, true);
-        check (alerts.size() == sceneAlerts + 1 && alerts.back()->getTextEditor ("value")->getText().isEmpty(), "Scene Tempo asks for a tempo");
-        answer ("140");
-        check (state.scenes[1].tempo == 140.0, "the dialog sets the scene's tempo");
-        sceneSettingsDialog (1, false); answer ("7/8");
-        check (state.scenes[1].timeSignature == Session::TimeSignature { 7, 8 }, "and its time signature");
-        check (sceneSettingsText (state.scenes[1]) == "140.00  7/8", "the scene shows both beside its name");
+        {
+            const auto [tempoField, signatureField] = launcher.sceneFields (1);
+            const auto now = juce::Time::getCurrentTime();
+            const auto click = [&] (juce::Point<int> at)
+            { launcher.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at.toFloat(), juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0, &launcher, &launcher, now, at.toFloat(), now, 1, false)); };
+            check (sceneTempoText (state.scenes[1]) == juce::String (state.tempo, 2), "an unset tempo field shows the song's tempo, dimmed");
+            click (tempoField.getCentre());
+            check (alerts.size() == sceneAlerts + 1 && alerts.back()->getTextEditor ("value")->getText().isEmpty(), "a click on the tempo field asks for the scene's tempo");
+            answer ("140");
+            check (state.scenes[1].tempo == 140.0 && sceneTempoText (state.scenes[1]) == "140.00", "the dialog sets the scene's tempo, which its field shows");
+            click (signatureField.getCentre()); answer ("7/8");
+            check (state.scenes[1].timeSignature == Session::TimeSignature { 7, 8 } && sceneSignatureText (state.scenes[1]) == "7/8", "and a click on the time signature field sets that");
+        }
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
             {
@@ -19941,9 +19968,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (! state.scenes[1].tempo && state.scenes[1].timeSignature, "an empty field clears the tempo");
         session.undo(); session.undo(); session.undo(); refresh();
         check (! state.scenes[1].tempo && ! state.scenes[1].timeSignature, "each dialog is one undo step");
-        // Audio Engine On, from the File menu.
+        session.setSceneSettingsShown (false); refresh();
+        // Audio Engine On, from the Options menu.
         menuItemSelected (13, 1);
-        check (! session.isAudioEngineEnabled() && status.contains ("Audio engine off"), "File > Audio Engine On turns the engine off");
+        check (! session.isAudioEngineEnabled() && status.contains ("Audio engine off"), "Options > Audio Engine On turns the engine off");
         menuItemSelected (13, 1);
         check (session.isAudioEngineEnabled() && session.audioDeviceManager().getCurrentAudioDevice() != nullptr, "and on again");
         {

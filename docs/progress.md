@@ -2491,3 +2491,7 @@ Engine and UI areas. As the reference's default Set shows it, the Arrangement ha
 ## Time ruler — 2026-10-24
 
 Engine and UI areas. As the reference's Arrangement has one, a time ruler under the tracks counts minutes and seconds, or SMPTE frames at 24, 25, 30, 30 drop-frame or 29.97, chosen from Options > Time Ruler Format and kept with the project ([contract](research/timeline-navigation-contract.md)). Checked in the UI suite (labels, steps, placement, the menu) and the track order suite (kept with the project).
+
+## Scene tempo and time signature fields — 2026-10-24
+
+Engine and UI areas. As the reference's View and scene menus switch them, Scene Tempo and Time Signature shows each scene's tempo and time signature fields at the right of its cell, hidden at first as in the reference's default Set and kept with the project. A field shows the scene's own value, or the song's dimmed, and a click on it opens its dialog. The scene menu's two dialog items gave way to the reference's switch ([contract](research/scene-tempo-contract.md)). Checked in the UI suite and the track order suite.

@@ -216,6 +216,13 @@ int runTrackOrderTests (const juce::File& artifacts)
             ok (s.saveProject (mixed), "save the format"); ok (s.newProject(), "a new project for the format");
             check (s.timeRulerFormat() == Session::TimeFormat::minutesSeconds, "which counts minutes and seconds");
             ok (s.loadProject (mixed), "reopen with the format"); check (s.timeRulerFormat() == Session::TimeFormat::smpte30Drop, "and the format comes back");
+            // And whether the scenes show their tempo and time signature: hidden at first, as in the default Set.
+            check (! s.sceneSettingsShown(), "the scenes' tempo and time signature are hidden at first");
+            s.setSceneSettingsShown (true);
+            check (s.snapshot().sceneSettingsShown && ! s.canUndo(), "showing them is view state, outside the undo history");
+            ok (s.saveProject (mixed), "save them shown"); ok (s.newProject(), "a new project for the scenes");
+            check (! s.sceneSettingsShown(), "which hides them");
+            ok (s.loadProject (mixed), "reopen with them shown"); check (s.sceneSettingsShown(), "and the saved project shows them");
         }
         {
             // Where Insert puts a track, and automatic names, as the reference's (static reading of its code).

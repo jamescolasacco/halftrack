@@ -678,7 +678,7 @@ Generated native-driver tests check source sound before and after copying, copie
 
 A clip's own grid (`clipGrid`, `setClipGrid`, `ClipInfo::grid`) is the same child on the clip. The UI's `GridPlace` names a grid and its view (clip, pixels per beat, visible beats, width), and every grid helper takes one. `Session::EditGrid` is stored as a `HALFTRACKGRID` child of the Edit without an undo manager, so changing it is neither an undo step nor an unsaved change. `editGrid()` validates on every read, and an invalid value reads as the default. The step computation (`gridLadder`, `gridValue`, `gridValueBeats`, `gridValueName`) is static and needs only the zoom, the view's width in beats and the meter. The UI caches the grid on refresh. It routes every Arrangement snap through `snaps (mods)`, `toGrid` and `snapSeconds`, and uses `bypassesGrid`: Cmd on the Mac, Alt elsewhere.
 
-The menus' view state, `mixerSections`, `arrangementOverview` and `timeRulerFormat`, is kept as Edit properties outside the undo history. Unlike the grid, choosing it marks the project changed (`Impl::viewStateChanged`), a new project's too.
+The menus' view state, `mixerSections`, `arrangementOverview`, `timeRulerFormat` and `sceneSettingsShown`, is kept as Edit properties outside the undo history. Unlike the grid, choosing it marks the project changed (`Impl::viewStateChanged`), a new project's too.
 
 ## Session clip moving and copying
 

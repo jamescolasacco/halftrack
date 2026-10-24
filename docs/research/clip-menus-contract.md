@@ -104,7 +104,7 @@ The reference's order (0x1039e7c54), with what Halftrack shows:
 | Insert Scene, Capture and Insert Scene | the same. Insert Scene puts the new scene right below the selected one and selects it, in one undo step |
 | Select Scene Content | the same: every slot in the scene is selected |
 | Cancel Scene Launch, Select Next Scene on Launch, Record on Launch | left out: not implemented |
-| Scene Tempo and Time Signature (a switch that shows them) | Scene Tempo and Scene Time Signature, Halftrack's editors for them |
+| Scene Tempo and Time Signature (a switch that shows them) | the same: it shows and hides the scenes' tempo and time signature fields, where a click edits them |
 | Reset Color and the scene colour grid | the same (`setSceneColours`, one undo step, saved): a scene's cell shows its colour, and Reset Color takes it away |
 | Copy LOM Path | left out |
 

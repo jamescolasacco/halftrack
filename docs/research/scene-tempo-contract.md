@@ -13,7 +13,7 @@ Halftrack's scene tempo and time signature follow the reference's [Session View 
   The message thread compares the engine's sync point with the boundary and applies the change once the engine has processed up to it, so the scene's clips play their first block at the new tempo when the boundary ends a block. The clips keep their launch boundary and beat phase. A scene with neither setting changes nothing, and leaves an earlier launch's change waiting.
 - **Cancelling.** Stop, locating, Return to Arrangement and replacing the project cancel a change still waiting.
 - **Exceptions.** An automated tempo (more than one tempo point) and a meter with several changes are left as they are. Nothing is changed while the Arrangement records or an export runs.
-- **The UI.** A scene cell shows its tempo and meter right of its name, and its launch triangle is green while it has either. The scene menu's Scene Tempo… and Scene Time Signature… dialogs set them; an empty field clears the value and an invalid one is refused with the range.
+- **The UI.** As the reference's View and scene menus switch them (2026-10-24), Scene Tempo and Time Signature shows each scene's tempo and time signature fields at the right of its cell; the reference's default Set hides them (`ShouldSceneTempoAndTimeSignatureBeVisible` false), and the choice is kept with the project as view state (`Session::setSceneSettingsShown`). A field shows the scene's own value, or the song's dimmed. A click on a field opens its dialog; an empty value clears it and an invalid one is refused with the range. The launch triangle is green while the scene has either. The reference sets the fields by dragging and clicking, which Halftrack does not yet do.
 
 ## Evidence
 
@@ -26,7 +26,7 @@ Halftrack's scene tempo and time signature follow the reference's [Session View 
 - Stop cancelling a waiting change;
 - Duplicate Scene keeping the settings, saving and reopening, and refusing three malformed projects while keeping the open one.
 
-The UI suite sets both settings through the dialogs, checks the cell text, refuses 7/9 with its reason, clears the tempo and undoes all three.
+The UI suite finds the fields hidden at first, shows them from the scene menu, sets both settings by clicking the fields, checks the fields' text, refuses 7/9 with its reason, clears the tempo and undoes all three. The track order suite keeps the switch with the project.
 
 ## Not yet covered
 
