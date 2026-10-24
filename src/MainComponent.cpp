@@ -1063,7 +1063,8 @@ public:
         if (code == juce::KeyPress::spaceKey && shift && ! cmd) { if (state.playing) session.stop(); else report (session.continuePlayback()); refresh(); return true; }
         if (code == juce::KeyPress::spaceKey && ! cmd && ! key.getModifiers().isAltDown()) { togglePlay(); return true; }
         if (code == juce::KeyPress::homeKey) { session.returnToStart(); refresh(); return true; }
-        if (code == juce::KeyPress::escapeKey) { session.stop(); session.returnToStart(); refresh(); return true; }
+        // Escape jumps to the selected track's title bar, as the reference's does: the headers then take Edit's commands.
+        if (code == juce::KeyPress::escapeKey) { if (currentTrack() != nullptr || groupInfo (selectedChain) != nullptr) { headerFocus = true; clickedArea = Area::headers; refresh(); } return true; }
         if (code == juce::KeyPress::F9Key && ! cmd) { report (session.recordButton (shift)); refresh(); return true; }
         // F1 to F8 switch tracks 1 to 8 on and off by their numbers, groups counted, as the reference's keys do.
         if (! cmd && ! shift && ! key.getModifiers().isAltDown() && code >= juce::KeyPress::F1Key && code <= juce::KeyPress::F8Key) { toggleNumberedTrack (code - juce::KeyPress::F1Key + 1); return true; }
@@ -5159,11 +5160,53 @@ private:
         {
             if (owner.session.isExporting()) return true;
             const auto code = key.getKeyCode();
+            const auto mods = key.getModifiers();
+            // The reference's Session keys: Cmd+Return stops the selected slot's track; Return launches the
+            // scene when its column was clicked; Page Up and Down move eight scenes; Home and End go to the
+            // first and last track; Cmd with Left and Right moves the selected track, with Up and Down the
+            // selected scene.
+            if (code == juce::KeyPress::returnKey && mods.isCommandDown())
+            {
+                if (const auto* track = owner.currentTrack(); track != nullptr && ! track->isReturn) owner.report (owner.session.stopLauncherTrack (owner.selectedTrack));
+                owner.refresh(); return true;
+            }
+            if (! owner.state.tracks.empty() && ! owner.state.scenes.empty() && ! mods.isAnyModifierKeyDown()
+                && (code == juce::KeyPress::pageUpKey || code == juce::KeyPress::pageDownKey || code == juce::KeyPress::homeKey || code == juce::KeyPress::endKey))
+            {
+                int track = juce::jmax (0, owner.selectedTrack), scene = juce::jmax (0, owner.selectedSceneIndex());
+                if (code == juce::KeyPress::pageUpKey || code == juce::KeyPress::pageDownKey) scene += code == juce::KeyPress::pageUpKey ? -8 : 8;
+                else if (code == juce::KeyPress::homeKey) track = 0;
+                else for (int t = 0; t < (int) owner.state.tracks.size(); ++t) if (! owner.state.tracks[(size_t) t].isReturn) track = t;
+                owner.selectLauncherSlot (juce::jlimit (0, (int) owner.state.tracks.size() - 1, track), juce::jlimit (0, (int) owner.state.scenes.size() - 1, scene));
+                scrollSelectionIntoView(); owner.refresh(); return true;
+            }
+            if (mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown() && (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey))
+            {
+                if (const auto* track = owner.currentTrack(); track != nullptr && ! track->isReturn)
+                {
+                    const auto to = owner.selectedTrack + (code == juce::KeyPress::leftKey ? -1 : 1);
+                    if (juce::isPositiveAndBelow (to, (int) owner.state.tracks.size()) && ! owner.state.tracks[(size_t) to].isReturn)
+                    {
+                        const auto id = track->id;
+                        owner.report (owner.session.moveTrack (id, to)); owner.refresh();
+                        for (int t = 0; t < (int) owner.state.tracks.size(); ++t) if (owner.state.tracks[(size_t) t].id == id) owner.selectTrack (t);
+                        owner.refresh();
+                    }
+                }
+                return true;
+            }
+            if (mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown() && (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey))
+            {
+                const auto scene = owner.selectedSceneIndex(), to = scene + (code == juce::KeyPress::upKey ? -1 : 1);
+                if (scene >= 0 && juce::isPositiveAndBelow (to, (int) owner.state.scenes.size()))
+                { owner.report (owner.session.moveScene (owner.selectedSceneId, to)); owner.refresh(); scrollSelectionIntoView(); }
+                return true;
+            }
             if (code == juce::KeyPress::returnKey)
             {
                 if (keyCell.first >= 0) return true; // Key repeat while Enter is held.
                 const auto scene = owner.selectedSceneIndex();
-                if (scene >= 0 && key.getModifiers().isShiftDown()) owner.report (owner.session.launchScene (scene));
+                if (scene >= 0 && (key.getModifiers().isShiftDown() || owner.clickedArea == Area::scenes)) owner.report (owner.session.launchScene (scene));
                 else if (scene >= 0 && owner.currentTrack() != nullptr && ! owner.currentTrack()->isReturn)
                 {
                     keyCell = { owner.selectedTrack, scene }; owner.report (owner.session.pressSlot (owner.selectedTrack, scene));
@@ -18861,6 +18904,53 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto index = (size_t) std::distance (state.tracks.begin(), first);
             check (handleKey (juce::KeyPress (juce::KeyPress::F1Key)) && state.tracks[index].mute, "F1 switches track 1 off");
             check (handleKey (juce::KeyPress (juce::KeyPress::F1Key)) && ! state.tracks[index].mute, "and on again");
+        }
+        {
+            // The reference's Session keys, and Escape jumping to the selected track's title bar.
+            showSessionView(); refresh();
+            const auto historyBefore = session.undoSteps().size();
+            while ((int) state.scenes.size() < 10) { check (session.addScene().wasOk(), "a scene for the page keys"); refresh(); }
+            const auto lastScene = (int) state.scenes.size() - 1;
+            int firstTrack = -1, secondTrack = -1, lastTrack = -1;
+            for (int t = 0; t < (int) state.tracks.size(); ++t)
+                if (! state.tracks[(size_t) t].isReturn) { if (firstTrack < 0) firstTrack = t; else if (secondTrack < 0) secondTrack = t; lastTrack = t; }
+            check (secondTrack > firstTrack && firstTrack >= 0, "two tracks for the Session keys");
+            selectLauncherSlot (firstTrack, 0); clickedArea = Area::session; headerFocus = false; refresh();
+            const auto key = [&] (int code, int modifiers = 0) { return launcher.keyPressed (juce::KeyPress (code, juce::ModifierKeys (modifiers), 0)); };
+            key (juce::KeyPress::pageDownKey);
+            check (selectedSceneIndex() == 8, "Page Down moves eight scenes down");
+            key (juce::KeyPress::pageUpKey);
+            check (selectedSceneIndex() == 0, "Page Up eight up");
+            key (juce::KeyPress::endKey);
+            check (selectedTrack == lastTrack, "End goes to the last track");
+            key (juce::KeyPress::homeKey);
+            check (selectedTrack == 0, "Home to the first");
+            selectLauncherSlot (firstTrack, 0); refresh();
+            const auto movedId = state.tracks[(size_t) firstTrack].id;
+            key (juce::KeyPress::rightKey, juce::ModifierKeys::commandModifier);
+            check (state.tracks[(size_t) firstTrack + 1].id == movedId && selectedTrack == firstTrack + 1, "Cmd+Right moves the selected track right, keeping it selected");
+            key (juce::KeyPress::leftKey, juce::ModifierKeys::commandModifier);
+            check (state.tracks[(size_t) firstTrack].id == movedId, "Cmd+Left moves it back");
+            const auto sceneId = state.scenes[0].id;
+            key (juce::KeyPress::downKey, juce::ModifierKeys::commandModifier);
+            check (state.scenes[1].id == sceneId && selectedSceneIndex() == 1, "Cmd+Down moves the selected scene down");
+            key (juce::KeyPress::upKey, juce::ModifierKeys::commandModifier);
+            check (state.scenes[0].id == sceneId, "Cmd+Up moves it back");
+            check (session.importAudioToSlot (audioFixture, firstTrack, 0).wasOk(), "a clip to launch"); refresh();
+            selectLauncherSlot (firstTrack, 0); refresh();
+            check (session.launchSlot (firstTrack, 0).wasOk(), "launch it"); pumpSyntheticTestDevice (session, 48000 / 256); refresh();
+            check (state.tracks[(size_t) firstTrack].slots[0].playing || state.tracks[(size_t) firstTrack].slots[0].queued, "it plays");
+            key (juce::KeyPress::returnKey, juce::ModifierKeys::commandModifier);
+            pumpSyntheticTestDevice (session, 2 * 48000 / 256); refresh();
+            check (! state.tracks[(size_t) firstTrack].slots[0].playing, "Cmd+Return stops the selected slot's track");
+            session.stop(); clickedArea = Area::scenes; refresh();
+            key (juce::KeyPress::returnKey); refresh();
+            check (state.tracks[(size_t) firstTrack].slots[0].playing || state.tracks[(size_t) firstTrack].slots[0].queued, "Return with the scene column clicked launches the scene");
+            session.stopAllLauncherClips(); session.stop(); pumpSyntheticTestDevice (session, 8); refresh();
+            check (handleKey (juce::KeyPress (juce::KeyPress::escapeKey)) && headerFocus && editArea() == EditArea::headers, "Escape jumps to the selected track's title bar, where Edit's commands then act");
+            headerFocus = false; clickedArea = Area::session;
+            while (session.undoSteps().size() > historyBefore && session.canUndo()) session.undo();
+            showArrangementView(); refresh();
         }
         {
             // Navigate's focus commands show their part of the window and give it Edit's commands.

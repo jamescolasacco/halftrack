@@ -2565,3 +2565,7 @@ UI area. As the reference's keys do, F1 to F8 switch the tracks numbered 1 to 8 
 
 UI area. From the reference's key list, the note editor gains Cmd+Up and Cmd+Down for velocity (with Shift the velocity range, with Option the chance), a typed velocity and Return, Option with the arrows to step through notes, Home and End, Page Up and Page Down, W, Z and X, and Cmd+J to join the selected notes on each key ([note drawing contract](research/note-drawing-contract.md#keys)). Checked in the UI suite.
 
+## Session keys and Escape — 2026-10-24
+
+UI area. As in the reference's key list: in the Session, Cmd+Return stops the selected slot's track, Return launches the scene when its column was clicked, Page Up and Page Down move eight scenes, Home and End go to the first and last track, and Cmd with the arrows moves the selected track or scene. Escape now jumps to the selected track's title bar instead of stopping, which was Halftrack's own ([menu contract](research/main-menu-contract.md#keys-outside-the-menus), [transport contract](research/transport-contract.md)). Checked in the UI suite.
+

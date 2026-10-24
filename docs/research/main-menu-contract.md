@@ -58,6 +58,8 @@ From the reference's list of keys ([Live keyboard shortcuts](https://www.ableton
 - **R** reverses, and **Shift+Cmd+J** crops, the Arrangement's time selection or a lone selected clip ([clip menus](clip-menus-contract.md)).
 - **Cmd+Option+Delete** deletes the fades and crossfades of the selected Arrangement clips, as Reset Fades does.
 - **F1 to F8** switch the tracks numbered 1 to 8 on and off, groups counted, as their activators do.
+- **Escape** jumps to the selected track's title bar: the headers then take Edit's commands.
+- **In the Session:** Cmd+Return stops the selected slot's track; Return launches the scene when its column was clicked (Shift+Return still launches it, Halftrack's); Page Up and Page Down move eight scenes; Home and End go to the first and last track; Cmd with Left and Right moves the selected track, and with Up and Down the selected scene, each one undo step.
 
 ## Left out
 
@@ -76,6 +78,7 @@ The UI suite compares each menu with the reference's order, filtered to Halftrac
 - Draw Mode showing B, ticked while on, and following the control bar's pencil;
 - Shift+Cmd+L selecting the loop's time across every track, Play Arrangement Selection's two names, and Option+Space playing the selection from its start and stopping at its end (the transport suite checks the stop within 60 ms, 12 ms locally, as Halftrack watches the range from the message thread every 2 ms; the reference's precision was not measured); Select Loop in the clip view selecting the notes in the clip's loop;
 - F1 switching track 1 off and on, and Cmd+Option+Delete deleting a fade (in the Arrangement menu checks);
+- the Session keys above, and Escape giving the headers Edit's commands;
 - Navigate's Option+1 and Option+2 showing the Session and Arrangement Views with Edit acting there, Focus Device View and Focus Clip View likewise, Focus Browser showing the browser, and Option+Shift+M showing the Session's hidden mixer;
 - Undo History opening from Option+Cmd+Z without undoing, listing the steps from the start with the latest selected, a click on an earlier step undoing back to it and on the latest redoing, the main window's menus working while it is open, and choosing it again closing it;
 - Plug-In Windows hiding and showing the plug-in windows (the plug-in editor suite hides an open editor's window, shows it again, and sees opening an editor bring the windows back);
