@@ -2430,3 +2430,7 @@ Engine, UI and root areas, with an engine patch. After a static reading of the r
 The chooser lists the reference's order: Ext. Out and Configure..., Main and the group, the tracks, and Sends Only. Configure... opens Audio & MIDI Setup.
 
 `cmake/PatchGroupOutputs.cmake` lets the engine leave a track out of its group's sum. Routes that would loop are still refused, now followed through groups and sends as well, and a project whose routes loop does not open. Checked in the routing, sends and UI suites ([contract](research/routing-contract.md)).
+
+## Returns as Audio From sources — 2026-10-24
+
+Engine area. As the reference lists them, return tracks are now Audio From sources, so a track can take a return's audio at Pre FX, Post FX or Post Mixer. A send into a return is refused while the track takes that return's audio, and a track sending to a return is not offered it as a source. Opening a project now follows track inputs in its loop check, in place of refusing every input taken from a return. Groups and the Main ("Resampling") are not sources yet: the engine has no input device for them. Checked in the Audio From and sends suites ([contract](research/audio-from-contract.md)).

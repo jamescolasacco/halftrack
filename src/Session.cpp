@@ -772,6 +772,23 @@ Result validateRouting (const juce::ValueTree& state, bool legacyFaders)
                 if (plugin.hasType (te::IDs::PLUGIN) && plugin[te::IDs::type].toString() == te::AuxSendPlugin::xmlTypeName)
                     next.push_back (plugin[sendReturnProperty].toString());
         }
+        // A track taking another's audio: the source's input device names its destinations, tracks or their slots.
+        std::map<String, String> slotTracks;
+        for (const auto& track : tracks)
+            for (const auto& slot : track.getChildWithName (te::IDs::CLIPSLOTS)) slotTracks[slot[te::IDs::id].toString()] = track[te::IDs::id].toString();
+        const auto inputs = [&] (auto&& self, const juce::ValueTree& node) -> void
+        {
+            if (node.hasType (te::IDs::INPUTDEVICE) && node.hasProperty (te::IDs::sourceTrack))
+                for (const auto& destination : node)
+                    if (destination.hasType (te::IDs::INPUTDEVICEDESTINATION))
+                    {
+                        auto target = te::EditItemID::fromVar (destination[te::IDs::targetID]).toString();
+                        if (const auto slot = slotTracks.find (target); slot != slotTracks.end()) target = slot->second;
+                        fed[te::EditItemID::fromVar (node[te::IDs::sourceTrack]).toString()].push_back (target);
+                    }
+            for (const auto& child : node) self (self, child);
+        };
+        inputs (inputs, state);
         std::map<String, int> marks; // 1 while being visited, 2 once done.
         const auto loops = [&] (auto&& self, const String& id) -> bool
         {
@@ -844,8 +861,8 @@ Result validateRouting (const juce::ValueTree& state, bool legacyFaders)
     if (validated.size() != routePlugins.size()) return Result::fail ("Auxiliary routing is only supported directly on audio tracks and groups.");
     const auto checkInputs = [&] (auto&& self, const juce::ValueTree& node) -> bool
     {
+        // A return takes no input, though it may be another track's source.
         if (node.hasType (te::IDs::INPUTDEVICEDESTINATION) && returnInputTargets.contains (te::EditItemID::fromVar (node[te::IDs::targetID]).toString())) return false;
-        if (node.hasType (te::IDs::INPUTDEVICE) && destinations.contains (te::EditItemID::fromVar (node[te::IDs::sourceTrack]).toString())) return false;
         for (const auto& child : node) if (! self (self, child)) return false;
         return true;
     };
@@ -4869,6 +4886,8 @@ struct Session::Impl
         const auto before = send != nullptr ? send->gain->getCurrentValue() : 0.0f, after = te::decibelsToSendFaderPosition (decibels);
         auto* audio = dynamic_cast<te::AudioTrack*> (&source);
         const auto link = [&] { if (audio != nullptr) moveLinked (*audio, Linked::send, destinationID, before, after); };
+        // A send may not lead a return's sound back into it, as a track taking the return's audio would.
+        if (decibels > -100.0f && send == nullptr && feeds (destination, source)) return Result::fail ("That send would lead the return's sound back into it.");
         if (capturing()) { capture (key, decibels); link(); changed(); return Result::ok(); }
         if (! send && decibels == -100.0f) { link(); return Result::ok(); }
         transaction ("Send level");
@@ -8325,8 +8344,10 @@ juce::StringArray Session::inputSources (const String& trackId) const
     juce::StringArray result;
     auto* destination = impl->track (trackId);
     if (destination == nullptr || isReturn (*destination) || static_cast<bool> (destination->state.getProperty (midiTrackProperty, false))) return result;
+    // Every other audio, instrument and return track, as the reference lists returns among the sources
+    // (0x1024473d4), but not one this track's sound already reaches.
     for (auto* t : te::getAudioTracks (*impl->edit))
-        if (t != destination && ! isReturn (*t) && ! impl->feeds (*destination, *t)) result.add (t->itemID.toString());
+        if (t != destination && ! impl->feeds (*destination, *t)) result.add (t->itemID.toString());
     return result;
 }
 Result Session::setTrackInputTrack (const String& trackId, const String& sourceTrackId, InputTap tap)

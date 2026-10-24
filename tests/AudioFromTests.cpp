@@ -110,7 +110,21 @@ int runAudioFromTests (const juce::File& artifacts)
         check (s.inputSources (b).contains (keys) && s.setTrackInputTrack (keys, a).failed(), "an instrument track is a source, but takes MIDI rather than audio");
         ok (s.addReturnTrack ("Return"), "add a return");
         const auto ret = s.snapshot().tracks.back().id;
-        check (! s.inputSources (b).contains (ret) && s.setTrackInputTrack (ret, a).failed(), "returns are neither sources nor destinations");
+        check (s.setTrackInputTrack (ret, a).failed(), "a return takes no recording input");
+        // A return is a source, as the reference lists it: B hears A's send through it.
+        ok (s.setTrackSendGain (0, ret, 0), "send A to the return at 0 dB");
+        check (s.inputSources (b).contains (ret), "the return is offered as a source");
+        ok (s.setTrackInputTrack (b, ret, Session::InputTap::postMixer), "B takes the return's audio");
+        ok (s.setTrackMonitor (1, Session::MonitorMode::on), "monitor B In, as a new input resets it");
+        ok (s.setTrackOutput (ret, { Session::OutputKind::sendsOnly, {} }), "the return Sends Only, so only B plays it");
+        pumpSyntheticTestDevice (s, 8);
+        check (near (heard (s), .5f), "B hears A's send through the return's Post Mixer tap");
+        check (s.setTrackSendGain (1, ret, 0).failed(), "B cannot send into the return whose audio it takes");
+        ok (s.setTrackInputTrack (b, a, Session::InputTap::postMixer), "B takes A again");
+        ok (s.setTrackMonitor (1, Session::MonitorMode::on), "monitor B In again");
+        ok (s.setTrackOutput (ret, {}), "the return to Main again");
+        ok (s.setTrackSendGain (0, ret, -100), "A's send off");
+        check (! s.inputSources (a).contains (ret), "A, which has a send to the return, cannot take its audio");
 
         // Resampling A into B.
         ok (s.setTrackArmed (1, true), "arm B");
