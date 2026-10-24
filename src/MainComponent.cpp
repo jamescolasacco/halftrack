@@ -804,14 +804,17 @@ public:
         // MIDI Map Mode covers the working area and shows the mappings in place of the browser.
         mapOverlay.setVisible (mapping()); mappingList.setVisible (mapping());
         if (mapping()) { mapOverlay.setBounds (area); mappingList.setBounds (browserBounds.reduced (6)); mapOverlay.toFront (false); }
-        // The detail view shows either the device chain or, for an open clip, its editor.
-        const int detailHeight = showPiano ? juce::jlimit (minimumClipViewHeight, juce::jmax (minimumClipViewHeight, area.getHeight() - 140),
+        // The detail view shows either the device chain or, for an open clip, its editor; View > Hide
+        // Detail View hides it, as the reference's does.
+        const int detailHeight = ! showDetail ? 0
+                               : showPiano ? juce::jlimit (minimumClipViewHeight, juce::jmax (minimumClipViewHeight, area.getHeight() - 140),
                                                            juce::roundToInt (area.getHeight() * clipViewFraction))
                                            : deviceHeight;
         auto detail = area.removeFromBottom (detailHeight);
-        if (showInfo && ! browserShown) info.setBounds (detail.removeFromLeft (infoCornerWidth).removeFromBottom (infoHeight).reduced (6, 4));
-        dividerBounds = detail.removeFromTop (dividerHeight);
-        deviceChain.setBounds (detail); deviceChain.setVisible (! showPiano);
+        // Without the browser, the Info View keeps its corner beside the detail view, or below the view without either.
+        if (showInfo && ! browserShown) info.setBounds ((showDetail ? detail : area.removeFromBottom (infoHeight)).removeFromLeft (infoCornerWidth).removeFromBottom (infoHeight).reduced (6, 4));
+        dividerBounds = showDetail ? detail.removeFromTop (dividerHeight) : juce::Rectangle<int>();
+        deviceChain.setBounds (detail); deviceChain.setVisible (! showPiano && showDetail);
         auto browser = browserBounds.reduced (6, 6);
         browserSearch.setBounds (browser.removeFromTop (24));
         browser.removeFromTop (6);
@@ -835,22 +838,22 @@ public:
         if (mapping()) for (auto* part : std::initializer_list<juce::Component*> { &folderButton, &upButton, &previewButton, &previewVolume }) part->setVisible (false);
         launcher.setBounds (area);
         launcher.setVisible (showSession);
-        const bool audioClip = showPiano && selectedAudioClip() != nullptr;
+        const bool clipShown = showPiano && showDetail, audioClip = clipShown && selectedAudioClip() != nullptr;
         // A Session MIDI clip shows its Launch box to the left of the note editor.
-        const auto* launchClip = showPiano && ! audioClip ? sessionMidiClip() : nullptr;
+        const auto* launchClip = clipShown && ! audioClip ? sessionMidiClip() : nullptr;
         auto editor = deviceChain.getBounds();
         midiLaunch.setVisible (launchClip != nullptr);
         if (launchClip != nullptr) { midiLaunch.setBounds (editor.removeFromLeft (LaunchBox::width).reduced (0, 6).withTrimmedLeft (6)); midiLaunch.setClip (*launchClip); }
         // Every MIDI clip shows its Loop box: Start, End, Loop, Position and Length.
-        const auto* loopClip = showPiano && ! audioClip ? currentMidiClip() : nullptr;
+        const auto* loopClip = clipShown && ! audioClip ? currentMidiClip() : nullptr;
         clipLoop.setVisible (loopClip != nullptr);
         if (loopClip != nullptr) { clipLoop.setBounds (editor.removeFromLeft (LoopBox::width).reduced (0, 6).withTrimmedLeft (6)); clipLoop.setClip (*loopClip); }
         // Every MIDI clip shows its Groove section beside the note editor.
-        const auto* grooveClip = showPiano && ! audioClip ? currentMidiClip() : nullptr;
+        const auto* grooveClip = clipShown && ! audioClip ? currentMidiClip() : nullptr;
         clipGroove.setVisible (grooveClip != nullptr);
         if (grooveClip != nullptr) { clipGroove.setBounds (editor.removeFromLeft (GrooveBox::width).reduced (0, 6).withTrimmedLeft (6)); clipGroove.setClip (*grooveClip); }
         pianoRoll.setBounds (editor);
-        pianoRoll.setVisible (showPiano && ! audioClip);
+        pianoRoll.setVisible (clipShown && ! audioClip);
         audioClipView.setBounds (deviceChain.getBounds());
         audioClipView.setVisible (audioClip);
         if (audioClip) audioClipView.sync();
@@ -905,6 +908,7 @@ public:
             if (code == 'N') { ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) safe->startNewProject(); }); return true; }
             if (code == 'T') { if (key.getModifiers().isAltDown()) addReturnTrack(); else if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
             if (code == 'Z') { if (shift) session.redo(); else session.undo(); refresh(); return true; }
+            if (code == 'L' && (shift || key.getModifiers().isAltDown())) return runMenuShortcut (key);
             if (code == 'L' && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (79); return true; }
             if (code == 'J' && ! shift && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (80); return true; }
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
@@ -7015,7 +7019,7 @@ private:
             return ! notes.empty() && std::all_of (notes.begin(), notes.end(), [] (const Session::MidiNoteInfo& n) { return ! n.active; });
         }
         // The menu bar's Edit commands on the notes, which its keys also give.
-        enum class NoteCommand { cut, copy, paste, duplicate, remove, split, toggleActive, selectAll, quantize };
+        enum class NoteCommand { cut, copy, paste, duplicate, remove, split, toggleActive, selectAll, invertSelection, quantize };
         void noteCommand (NoteCommand command)
         {
             const auto* clip = owner.currentMidiClip();
@@ -7034,6 +7038,9 @@ private:
                 case NoteCommand::split: splitNotesAtMarker(); break;
                 case NoteCommand::toggleActive: toggleSelectedNotes(); break;
                 case NoteCommand::selectAll: for (const auto& note : clip->notes) selectedNoteIds.insert (note.id); sync(); break;
+                case NoteCommand::invertSelection:
+                    for (const auto& note : clip->notes) if (! selectedNoteIds.erase (note.id)) selectedNoteIds.insert (note.id);
+                    sync(); break;
                 case NoteCommand::quantize: transformSelected (Session::NoteTransform::quantizeStarts); break;
             }
         }
@@ -9812,7 +9819,7 @@ private:
         if (track != nullptr && track->isMidi && currentMidiClip() == nullptr && ! showSession)
             for (int i = 0; i < (int) track->clips.size(); ++i)
                 if (track->clips[(size_t) i].isMidi) { selectedClip = i; break; }
-        showPiano = true;
+        showPiano = true; showDetail = true;
         pianoRoll.sync(); resized(); pianoRoll.grabKeyboardFocus();
     }
     void createMidiClip (double seconds)
@@ -11538,7 +11545,7 @@ private:
                     menuRecordSession, menuMetronome, menuMetronomeRecording, menuFullscreen, menuZoomIn, menuZoomOut, menuZoomReset,
                     menuToggleView, menuClipView, menuDeviceView, menuToggleDetail, menuBrowser, menuGroovePool, menuSearch, menuSimilar,
                     menuFoldAll, menuFoldSelected, menuZoomSelection, menuZoomBack, menuMidiMap, menuKeyMap, menuComputerKeyboard,
-                    menuExternalSync, menuSplitStop, menuSlice = 200 }; // Plus Session::SliceBy.
+                    menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuSlice = 200 }; // Plus Session::SliceBy.
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
     // Fullscreen take their Windows keys elsewhere). The command manager only holds them for the menus:
     // nothing is registered with it as a target.
@@ -11556,7 +11563,7 @@ private:
             { 20, key ('z', cmd) }, { 21, key ('y', cmd) }, { menuFullscreen, key (KeyPress::F11Key) },
            #endif
             { menuCut, key ('x', cmd) }, { menuCopy, key ('c', cmd) }, { menuPaste, key ('v', cmd) }, { menuDuplicate, key ('d', cmd) },
-            { 22, key (KeyPress::backspaceKey) }, { menuActivate, key ('0') }, { menuSelectAll, key ('a', cmd) }, { 79, key ('l', cmd) },
+            { 22, key (KeyPress::backspaceKey) }, { menuActivate, key ('0') }, { menuSelectAll, key ('a', cmd) }, { menuInvertSelection, key ('a', cmd | shift) }, { 79, key ('l', cmd) },
             { 72, key ('g', cmd) }, { 73, key ('g', cmd | shift) }, { 89, key ('x', cmd | shift) }, { 101, key ('v', cmd | shift) }, { 102, key ('d', cmd | shift) },
             { 75, key (KeyPress::backspaceKey, cmd | shift) }, { menuRename, key ('r', cmd) }, { menuSolo, key ('s') }, { menuArm, key ('c') },
             { menuFreeze, key ('f', cmd | shift | alt) }, { menuBounceNew, key ('b', cmd) }, { 76, key ('e', cmd) }, { menuSplitStop, key ('e', cmd) },
@@ -11567,7 +11574,7 @@ private:
             { menuFollow, key ('f', alt | shift) }, { menuRecordSession, key (KeyPress::F9Key, cmd | shift) }, { menuMetronome, key ('o') }, { 55, key (KeyPress::F10Key) },
             { menuZoomIn, key ('+', cmd) }, { menuZoomIn, key ('=', cmd) }, { menuZoomOut, key ('-', cmd) }, { menuZoomReset, key ('0', cmd | alt) },
             { 90, key ('?') }, { menuToggleView, key (KeyPress::tabKey) }, { menuClipView, key ('3', cmd | alt) }, { menuDeviceView, key ('4', cmd | alt) },
-            { menuToggleDetail, key (KeyPress::tabKey, shift) }, { menuBrowser, key ('5', cmd | alt) }, { menuGroovePool, key ('6', cmd | alt) },
+            { menuToggleDetail, key (KeyPress::tabKey, shift) }, { menuDetailView, key ('l', cmd | alt) }, { menuBrowser, key ('5', cmd | alt) }, { menuGroovePool, key ('6', cmd | alt) },
             { menuSearch, key ('f', cmd) }, { menuSimilar, key ('f', cmd | shift) }, { 92, key ('v', cmd | alt) }, { 109, key ('m', cmd | alt) },
             { 103, key ('i', cmd | alt) }, { 104, key ('s', cmd | alt) }, { 108, key ('r', cmd | alt) }, { 49, key ('a') }, { menuFoldAll, key ('u', alt) },
             { menuFoldSelected, key ('u') }, { 41, key ('+') }, { 42, key ('-') }, { menuZoomSelection, key ('z') }, { menuZoomBack, key ('x') },
@@ -11737,7 +11744,7 @@ private:
             case menuPaste: return { command, {}, pianoRoll.canPasteNotes() };
             case menuActivate:
                 return { command, juce::String (pianoRoll.selectionInactive() ? "Activate Note" : "Deactivate Note") + (pianoRoll.selectedNoteCount() > 1 ? "s" : ""), selected };
-            case menuSelectAll: case menuQuantize: return { command, {}, currentMidiClip() != nullptr && ! currentMidiClip()->notes.empty() };
+            case menuSelectAll: case menuInvertSelection: case menuQuantize: return { command, {}, currentMidiClip() != nullptr && ! currentMidiClip()->notes.empty() };
             case menuGroove: return { command, {}, currentMidiClip() != nullptr };
             default: return {};
         }
@@ -11774,7 +11781,8 @@ private:
             if (command == menuGroove) { extractGrooveFromUI (currentMidiClip()->id); return; }
             pianoRoll.noteCommand (command == menuCut ? Note::cut : command == menuCopy ? Note::copy : command == menuPaste ? Note::paste
                                  : command == menuDuplicate ? Note::duplicate : command == 22 ? Note::remove : command == 76 ? Note::split
-                                 : command == menuActivate ? Note::toggleActive : command == menuSelectAll ? Note::selectAll : Note::quantize);
+                                 : command == menuActivate ? Note::toggleActive : command == menuSelectAll ? Note::selectAll
+                                 : command == menuInvertSelection ? Note::invertSelection : Note::quantize);
             return;
         }
         if (area == EditArea::devices) { if (command == 22) deleteSelectedDevices(); else if (command == 72) groupSelectedDevices(); else ungroupSelectedRack(); return; }
@@ -11917,6 +11925,7 @@ private:
             command (menuActivate, "Deactivate Clip");
             popup.addSeparator();
             add (menuSelectAll, "Select All", canSelectAll (area));
+            command (menuInvertSelection, "Invert Selection");
             // Loop Selection, or the loop switched on or off, as the clip menu's.
             if (area == EditArea::arrangement) command (79, "Loop Selection"); else add (79, state.looping ? "Deactivate Loop" : "Activate Loop");
             popup.addSeparator();
@@ -12032,6 +12041,7 @@ private:
             popup.addSeparator();
             add (menuClipView, "Clip View", canShowClipView(), showPiano); add (menuDeviceView, "Device View", true, ! showPiano);
             add (menuToggleDetail, "Toggle Clip/Device View", canShowClipView());
+            add (menuDetailView, showDetail ? "Hide Detail View" : "Show Detail View");
             popup.addSeparator();
             add (menuBrowser, "Browser", ! mapping(), showBrowser || mapping()); add (menuGroovePool, "Groove Pool", true, groovePool != nullptr && groovePool->isShowing());
             popup.addSeparator();
@@ -12132,6 +12142,7 @@ private:
             case 21: session.redo(); break;
             case menuCut: case menuCopy: case menuPaste: case menuDuplicate: case 22: case menuActivate: case menuRename: case menuInfoText:
             case menuFreeze: case menuBounceInPlace: case menuBounceNew: case 76: case 80: case menuGroove: case menuSplitStop: case menuQuantize:
+            case menuInvertSelection:
                 runAreaCommand (id); return;
             case 79: if (editArea() == EditArea::arrangement) runAreaCommand (id); else session.setLoop (! state.looping, state.loopStart, state.loopEnd); break;
             case menuSelectAll: selectAll (editArea()); return;
@@ -12203,8 +12214,9 @@ private:
             case menuZoomOut: setZoomPercent (session.preferences().zoomPercent - 25); return;
             case menuZoomReset: setZoomPercent (100); return;
             case menuToggleView: if (showSession) showArrangementView(); else showSessionView(); break;
-            case menuClipView: showClipView (! showPiano); break;
-            case menuDeviceView: showClipView (false); break;
+            case menuClipView: showDetail = true; showClipView (! showPiano); resized(); break;
+            case menuDeviceView: showDetail = true; showClipView (false); resized(); break;
+            case menuDetailView: showDetail = ! showDetail; resized(); break;
             case menuToggleDetail: showClipView (! showPiano); break;
             case menuBrowser: showBrowser = ! showBrowser; resized(); break;
             case menuGroovePool: openGroovePool(); return;
@@ -13126,7 +13138,7 @@ private:
         }
     };
     InfoView info;
-    bool showInfo = true, showBrowser = true;
+    bool showInfo = true, showBrowser = true, showDetail = true;
     static constexpr int infoCornerWidth = 200;
     static constexpr int infoHeight = 110;
     void showAudioSettings() { showDialog ("Halftrack - Audio & MIDI Setup", std::make_unique<AudioSetupPanel> (*this), 660, 680); }
@@ -17177,7 +17189,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         expect ("File", { "New Project", "Open Project...", "-", "Install Pack...", "-", "Locate Missing Media...", "-", "Save Project", "Save Project As...", "Save as Default Set",
                           "-", "Export Audio...", "Export MIDI Clip..." });
         const juce::String loop = state.looping ? "Deactivate Loop" : "Activate Loop";
-        expect ("Edit", { "Undo", "Redo", "-", "Cut", "Copy", "Paste", "Duplicate", "Delete", "-", "Deactivate Clip", "-", "Select All", loop, "-", "Group Tracks", "Ungroup Tracks", "-",
+        expect ("Edit", { "Undo", "Redo", "-", "Cut", "Copy", "Paste", "Duplicate", "Delete", "-", "Deactivate Clip", "-", "Select All", "Invert Selection", loop, "-", "Group Tracks", "Ungroup Tracks", "-",
                           "Cut Time (Loop Range)", "Paste Time", "Duplicate Time (Loop Range)", "Delete Time (Loop Range)", "-", "Rename", "Edit Info Text", "-", "Solo", "Arm", "-",
                           "Freeze Track", "Bounce Track in Place", "Bounce to New Track", "-", "Split", "Consolidate", "-", "Quantize", "Extract Groove", "Record Quantization >" });
         expect ("Create", { "Insert Audio Track", "Insert MIDI Track", "Insert Return Track", "Insert Take Lane", "-", "Insert Silence (Loop Range)", "Capture and Insert Scene",
@@ -17186,7 +17198,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         expect ("Playback", { "Play", "Continue Playback", "Move Insert Marker to Playhead", "Playback Options >", "-", "Record in Arrangement", "Arm Record in Arrangement",
                               "Record in Session", "-", "Metronome", "Metronome Only While Recording", "-", "Back to Arrangement" });
         const juce::String folds = std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return ! t.folded; }) ? "Fold All Tracks" : "Unfold All Tracks";
-        juce::StringArray view { "Fullscreen", "Zoom >", "-", "Info", "-", "Toggle Arrangement/Session View", "-", "Clip View", "Device View", "Toggle Clip/Device View", "-",
+        juce::StringArray view { "Fullscreen", "Zoom >", "-", "Info", "-", "Toggle Arrangement/Session View", "-", "Clip View", "Device View", "Toggle Clip/Device View", "Hide Detail View", "-",
                                  "Browser", "Groove Pool", "-", "Search in Browser", "Show Similar Files", "-" };
        #if JUCE_MAC
         view.addArray ({ "Video Window", "-" });
@@ -17256,6 +17268,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (! showBrowser && ! browserSearch.isVisible() && ! entry ("View", menuBrowser)->isTicked, "View's Browser hides the browser");
         menuItemSelected (menuSearch, 4);
         check (showBrowser && browserSearch.isVisible(), "Search in Browser shows it again");
+        check (handleKey (juce::KeyPress ('l', juce::ModifierKeys (cmd | alt), 0)) && ! showDetail && ! deviceChain.isVisible() && entry ("View", menuDetailView)->text == "Show Detail View",
+               "Option+Cmd+L hides the detail view, and View then offers Show Detail View");
+        const bool looping = state.looping;
+        check (handleKey (juce::KeyPress ('l', juce::ModifierKeys (cmd | alt), 0)) && showDetail && deviceChain.isVisible() && state.looping == looping,
+               "and shows it again, leaving the loop alone");
         menuItemSelected (menuToggleView, 4);
         check (showSession && texts ("Create").contains ("Insert Scene"), "Toggle Arrangement/Session View switches views, and Create then offers Insert Scene");
         // In the Session, Cmd+I inserts a scene below the selected one.
@@ -17294,6 +17311,18 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (entry ("Edit", menuPaste)->isEnabled, "and Paste can put it back");
         menuItemSelected (menuPaste, 1); refresh();
         check (state.tracks[(size_t) midiIndex].clips.size() == 1, "Edit's Paste pastes it at the insert marker");
+        // In the clip view, Invert Selection selects the notes that were not.
+        {
+            selectArrangementClip (state.tracks[(size_t) midiIndex].clips[0].id); openPianoRoll(); refresh();
+            check (session.addMidiNote (currentMidiClip()->id, 60, 0, 1, .8f).wasOk() && session.addMidiNote (currentMidiClip()->id, 64, 1, 1, .8f).wasOk(), "two notes to select"); refresh();
+            clickedArea = Area::notes;
+            check (entry ("Edit", menuInvertSelection)->isEnabled, "with the clip view clicked, Invert Selection acts on its notes");
+            menuItemSelected (menuInvertSelection, 1);
+            check (pianoRoll.selectedNoteCount() == 2, "inverting no selection selects every note");
+            menuItemSelected (menuInvertSelection, 1);
+            check (pianoRoll.selectedNoteCount() == 0, "and inverting again selects none");
+            session.undo(); session.undo(); closeClipView(); clickedArea = Area::arrangement; refresh();
+        }
         timeSelection = {}; selectedClip = -1;
         menuItemSelected (menuSelectAll, 1);
         check (timeSelection.active() && timeSelection.trackIds.contains (state.tracks[(size_t) midiIndex].id) && std::abs (timeSelection.end - secondsAt (4.0)) < 1e-6,

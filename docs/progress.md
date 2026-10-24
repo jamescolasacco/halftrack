@@ -2471,3 +2471,11 @@ Checked in the UI suite: each menu against the reference's order, shortcuts on t
 
 UI area. The Arrangement clip menu and the Session slot menu now offer Show in Browser for an audio clip with a file, before Reveal in Finder, as the reference's do. It opens the sample's folder in the browser's samples, showing the browser if it is hidden, and selects the sample once the folder is listed. Checked in the UI suite ([contract](research/clip-menus-contract.md)).
 
+## Detail View and Invert Selection — 2026-10-24
+
+UI area, from the reference's menu bar ([contract](research/main-menu-contract.md)):
+- **View > Hide Detail View** (Option+Cmd+L) hides the device view and the clip view, and Show Detail View brings them back; opening a clip, or View's Clip View or Device View, shows it again. Without the browser too, the Info View keeps a corner below the view.
+- **Edit > Invert Selection** (Shift+Cmd+A) selects the clip view's notes that were not selected, as the reference's clip view does.
+
+Checked in the UI suite.
+

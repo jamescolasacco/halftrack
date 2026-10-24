@@ -26,7 +26,7 @@ The reference finds an Edit command's handler from the focused view. Halftrack k
 - **Slots:** the slot menu's command. Split becomes Add or Remove Stop Button, as the reference's Cmd+E does in the Session.
 - **Headers:** the header menu's command for the selected tracks or group.
 - **A scene:** Duplicate, Delete, Rename and Edit Info Text from the scene menu.
-- **Notes:** Cut, Copy, Paste, Duplicate, Delete, Split, Deactivate, Select All and Quantize on the notes, as the clip view's keys do.
+- **Notes:** Cut, Copy, Paste, Duplicate, Delete, Split, Deactivate, Select All and Quantize on the notes, as the clip view's keys do, and Invert Selection, which only the clip view has, as in the reference.
 - **Devices:** Delete, and Group and Ungroup making and breaking racks.
 - **Text:** Cut, Copy, Paste, Delete and Select All on the text.
 
@@ -37,10 +37,10 @@ Select All selects every track's content in the Arrangement, every slot in the S
 | Menu | Halftrack's items, in the reference's order |
 |---|---|
 | File | New Project (Cmd+N), Open Project... (Cmd+O); Install Pack...; Locate Missing Media..., at Manage Projects' place; Save Project (Cmd+S, while there are changes or it was never saved), Save Project As... (Shift+Cmd+S), Save as Default Set; Export Audio... (Shift+Cmd+R), Export MIDI Clip... |
-| Edit | Undo, Redo; Cut, Copy, Paste, Duplicate, Delete; Deactivate (0); Select All (Cmd+A), Loop Selection (Cmd+L); Group Tracks (Cmd+G), Ungroup Tracks; Cut, Paste, Duplicate and Delete Time; Rename (Cmd+R), Edit Info Text; Solo (S), Arm (C); Freeze Track (Option+Shift+Cmd+F), Bounce Track in Place, Bounce to New Track (Cmd+B); Split (Cmd+E), Consolidate (Cmd+J); Quantize (Cmd+U), Extract Groove, Record Quantization |
+| Edit | Undo, Redo; Cut, Copy, Paste, Duplicate, Delete; Deactivate (0); Select All (Cmd+A), Invert Selection (Shift+Cmd+A, the clip view's notes), Loop Selection (Cmd+L); Group Tracks (Cmd+G), Ungroup Tracks; Cut, Paste, Duplicate and Delete Time; Rename (Cmd+R), Edit Info Text; Solo (S), Arm (C); Freeze Track (Option+Shift+Cmd+F), Bounce Track in Place, Bounce to New Track (Cmd+B); Split (Cmd+E), Consolidate (Cmd+J); Quantize (Cmd+U), Extract Groove, Record Quantization |
 | Create | Insert Audio, MIDI and Return Track (Cmd+T, Shift+Cmd+T, Option+Cmd+T), Insert Take Lane (Option+Shift+T); Insert Scene in the Session or Insert Silence in the Arrangement (Cmd+I), Capture and Insert Scene (Shift+Cmd+I), Consolidate Time to New Scene; Insert MIDI Clip (Shift+Cmd+M), Capture MIDI (Shift+Cmd+C); Create Fade (Option+Cmd+F); Slice to New MIDI Track; Add Locator, Insert Time Signature Change; Import File... |
 | Playback | Play (Space), Continue Playback (Shift+Space), Move Insert Marker to Playhead (Shift+Cmd+Space), Playback Options (Follow, Option+Shift+F; Start Transport With Record); Record in Arrangement and Arm Record in Arrangement, which swap F9 and Shift+F9 with Start Transport With Record; Record in Session (Shift+Cmd+F9); Metronome (O), Metronome Only While Recording; Back to Arrangement (F10) |
-| View | Fullscreen (Ctrl+Cmd+F), Zoom (the display zoom: Cmd+plus, Cmd+minus, Option+Cmd+0); Info (?); Toggle Arrangement/Session View (Tab); Clip View (Option+Cmd+3), Device View (Option+Cmd+4), Toggle Clip/Device View (Shift+Tab); Browser (Option+Cmd+5), Groove Pool (Option+Cmd+6); Search in Browser (Cmd+F), Show Similar Files (Shift+Cmd+F); Video Window (Option+Cmd+V, Mac); Mixer (Option+Cmd+M), Mixer Controls; Automation Mode (A), Fold All Tracks (Option+U), Fold Selected Track (U); Zoom In (+), Zoom Out (−), Zoom to Arrangement Time Selection or Zoom Out Completely (Z), Zoom Back (X) |
+| View | Fullscreen (Ctrl+Cmd+F), Zoom (the display zoom: Cmd+plus, Cmd+minus, Option+Cmd+0); Info (?); Toggle Arrangement/Session View (Tab); Clip View (Option+Cmd+3), Device View (Option+Cmd+4), Toggle Clip/Device View (Shift+Tab), Hide or Show Detail View (Option+Cmd+L); Browser (Option+Cmd+5), Groove Pool (Option+Cmd+6); Search in Browser (Cmd+F), Show Similar Files (Shift+Cmd+F); Video Window (Option+Cmd+V, Mac); Mixer (Option+Cmd+M), Mixer Controls; Automation Mode (A), Fold All Tracks (Option+U), Fold Selected Track (U); Zoom In (+), Zoom Out (−), Zoom to Arrangement Time Selection or Zoom Out Completely (Z), Zoom Back (X) |
 | Options | Edit MIDI Map (Cmd+M), Edit Key Map (Cmd+K), Computer MIDI Keyboard (M); External Sync; Narrow, Widen, Triplet, Snap to and Fixed Grid (Cmd+1 to 5); Solo in Place; Audio Engine On (Option+Shift+Cmd+E) |
 
 What moved with the rebuild:
@@ -51,7 +51,7 @@ What moved with the rebuild:
 
 ## Left out
 
-Close Window, Add Folder to Browser, Backups, Save a Copy, Collect All and Save, Save as Template, Invert Selection, Select Loop, Clip Markers, Apply Algorithm, the note span command, Quantize Settings, Automation Fitting, Emoji & Symbols, the Convert to MIDI commands, Play Arrangement Selection, Return Play Position, Start Transport With Tap Tempo, Link, Second Window, Lessons, File Manager, Undo History, Expand Clip Detail View, Detail View, the clip view layouts and editors, Tuning Pool, Mod Matrix, Full Height Browser, Plug-In Windows, Max for Live, Arrangement Track Controls, Overview, Scene Tempo and Time Signature, Fold to Notes and Scale, Accessibility, MIDI Prelisten, Browser Pre-Hear, Delay Compensation, the time ruler formats, Snap Automation to Grid, Draw Mode, Step Input, Scale Highlighting, Chase MIDI Notes, the controller and retune options, Solo and Cue Switches, Lock Envelopes, Arrangement Overdub, Legacy HiQ, and Help's items. Halftrack has none of these commands yet.
+Close Window, Add Folder to Browser, Backups, Save a Copy, Collect All and Save, Save as Template, Select Loop, Clip Markers, Apply Algorithm, the note span command, Quantize Settings, Automation Fitting, Emoji & Symbols, the Convert to MIDI commands, Play Arrangement Selection, Return Play Position, Start Transport With Tap Tempo, Link, Second Window, Lessons, File Manager, Undo History, Expand Clip Detail View, the clip view layouts and editors, Tuning Pool, Mod Matrix, Full Height Browser, Plug-In Windows, Max for Live, Arrangement Track Controls, Overview, Scene Tempo and Time Signature, Fold to Notes and Scale, Accessibility, MIDI Prelisten, Browser Pre-Hear, Delay Compensation, the time ruler formats, Snap Automation to Grid, Draw Mode, Step Input, Scale Highlighting, Chase MIDI Notes, the controller and retune options, Solo and Cue Switches, Lock Envelopes, Arrangement Overdub, Legacy HiQ, and Help's items. Halftrack has none of these commands yet.
 
 ## Evidence in Halftrack
 
@@ -60,7 +60,8 @@ The UI suite compares each menu with the reference's order, filtered to Halftrac
 - Cut and Zoom Back staying greyed with nothing to act on, and every item greyed while a dialog is open;
 - S and C (Solo and Arm) on the selected track, O for the metronome, and Start Transport With Record swapping F9 and Shift+F9;
 - Add and Delete Locator at the play position;
-- View's Browser hiding the browser and Search in Browser showing it;
+- View's Browser hiding the browser and Search in Browser showing it, and Option+Cmd+L hiding and showing the detail view;
+- Invert Selection on the clip view's notes;
 - Cmd+I inserting a scene below the selected one;
 - Edit acting on the slots (Cmd+E removing a stop button), a scene and the headers (Duplicate), and a lone Arrangement clip (Cut, then Paste at the insert marker), and Select All in the Arrangement;
 - the Launch box opening a clip's follow action.
