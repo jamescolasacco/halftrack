@@ -1089,6 +1089,13 @@ public:
             else if (timeSelection.active()) selectionCommand (78); else deleteSelectedClip();
             return true;
         }
+        if (! cmd && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano
+            && (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey || code == juce::KeyPress::upKey || code == juce::KeyPress::downKey))
+        {
+            for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused; focused = focused->getParentComponent())
+                if (dynamic_cast<juce::TextEditor*> (focused)) return false;
+            if (arrangementArrow (code)) return true;
+        }
         if (key.getModifiers().isAltDown() && ! cmd && ! showSession && (code == '=' || code == '+' || code == '-'))
         { scaleTrackHeight (selectedTrack, code == '-' ? 1 / 1.25 : 1.25); return true; }
         // H, W, U, T, R and X also take Shift, as the reference's alternates do.
@@ -12866,6 +12873,55 @@ private:
         else { if (state.playing) session.stop(); report (session.play()); }
         refresh();
     }
+    // The reference's arrows in the Arrangement: Left and Right nudge the selected clips by the grid, their
+    // automation following, or a time selection; from the headers they fold and unfold the selected track.
+    // Up and Down select the track above or below, taking a time selection along.
+    bool arrangementArrow (int code)
+    {
+        const bool horizontal = code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey, back = code == juce::KeyPress::leftKey;
+        if (headerFocus && horizontal)
+        {
+            const auto* group = groupInfo (selectedChain);
+            const auto* track = currentTrack();
+            if (group == nullptr && track == nullptr) return false;
+            if (back != (group != nullptr ? group->folded : track->folded)) toggleFold (false);
+            return true;
+        }
+        if (! horizontal)
+        {
+            const auto to = selectedTrack + (code == juce::KeyPress::upKey ? -1 : 1);
+            if (! juce::isPositiveAndBelow (to, (int) state.tracks.size())) return true;
+            selectTrack (to);
+            if (timeSelection.active()) timeSelection.trackIds = { state.tracks[(size_t) to].id };
+            refresh(); return true;
+        }
+        std::vector<Session::ClipInfo> clips;
+        for (const auto& id : selectedClipIds) if (const auto [t, c] = arrangementClipIndex (id); t >= 0) clips.push_back (state.tracks[(size_t) t].clips[(size_t) c]);
+        if (clips.empty()) if (const auto* clip = loneClip()) clips.push_back (*clip);
+        const auto step = (back ? -1.0 : 1.0) * gridBeats();
+        if (clips.empty())
+        {
+            if (! timeSelection.active()) return false;
+            const auto length = timeSelection.end - timeSelection.start, start = secondsAt (juce::jmax (0.0, beatsAt (timeSelection.start) + step));
+            timeSelection.start = start; timeSelection.end = start + length; refresh(); return true;
+        }
+        for (const auto& clip : clips) if (beatsAt (clip.start) + step < -1.0e-9) return true;
+        session.beginEditGesture ("Nudge clips");
+        juce::StringArray ids; double offset = 0;
+        for (const auto& clip : clips)
+        {
+            const auto [t, c] = arrangementClipIndex (clip.id);
+            if (t < 0) continue;
+            const auto start = secondsAt (beatsAt (clip.start) + step);
+            const auto& trackId = state.tracks[(size_t) t].id;
+            const auto result = clip.isMidi ? session.moveMidiClip (clip.id, trackId, start, false) : session.moveAudioClip (clip.id, trackId, start, false);
+            if (result.failed()) { report (result); break; }
+            ids.add (clip.id); offset = start - clip.start;
+        }
+        if (! ids.isEmpty()) report (session.moveAutomationWithClips (ids, offset));
+        session.endEditGesture(); refresh();
+        return true;
+    }
     // A track or group by the number its activator shows, switched on or off.
     void toggleNumberedTrack (int number)
     {
@@ -16980,6 +17036,30 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         timeSelection = { 2.02, 2.06, { trackId } };
         check (handleKey (juce::KeyPress ('r')) && session.undoDescription() == "Reverse clips", "R reverses the selection's audio");
         session.undo(); refresh();
+        {
+            // The reference's arrows: Left and Right nudge the selected clip by the grid, or the time selection
+            // without one; from its header they fold and unfold the track; Up and Down select the next track.
+            const auto startBefore = clip().start;
+            timeSelection = {}; selectedClipIds.clear(); selectTrack (t); selectedClip = 0; clickedArea = Area::arrangement; headerFocus = false; refresh();
+            const auto later = secondsAt (beatsAt (startBefore) + gridBeats());
+            check (handleKey (juce::KeyPress (juce::KeyPress::rightKey)) && std::abs (clip().start - later) < 1e-6, "Right nudges the selected clip a grid step later");
+            check (handleKey (juce::KeyPress (juce::KeyPress::leftKey)) && std::abs (clip().start - startBefore) < 1e-6, "Left nudges it back");
+            session.undo(); refresh();
+            check (std::abs (clip().start - later) < 1e-6, "each nudge is one undo step");
+            session.undo(); refresh();
+            selectedClip = -1; timeSelection = { 2.02, 2.06, { trackId } };
+            check (handleKey (juce::KeyPress (juce::KeyPress::rightKey)) && timeSelection.start > 2.02 && std::abs (timeSelection.end - timeSelection.start - .04) < 1e-6,
+                   "without a clip selected, Right moves the time selection");
+            headerFocus = true; clickedArea = Area::headers;
+            check (handleKey (juce::KeyPress (juce::KeyPress::leftKey)) && state.tracks[(size_t) t].folded, "Left on a header folds its track");
+            check (handleKey (juce::KeyPress (juce::KeyPress::rightKey)) && ! state.tracks[(size_t) t].folded, "and Right unfolds it");
+            headerFocus = false; clickedArea = Area::arrangement;
+            if (t > 0)
+            {
+                check (handleKey (juce::KeyPress (juce::KeyPress::upKey)) && selectedTrack == t - 1, "Up selects the track above");
+                check (handleKey (juce::KeyPress (juce::KeyPress::downKey)) && selectedTrack == t, "and Down the one below");
+            }
+        }
         timeSelection = { 2.02, 2.06, { trackId } };
         const auto tracksBefore = state.tracks.size();
         chooseArrangementItem (arrangementBounceNew, onPart, -1);

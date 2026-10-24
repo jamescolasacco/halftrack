@@ -2593,3 +2593,7 @@ UI area. Options gains the reference's MIDI Prelisten and Browser Pre-Hear, afte
 
 Engine and UI areas. As the reference's does, a clip moved along its track now takes its span of the track's automation along: the vacated span keeps its edge values, and the moved shape replaces what was where it lands. Drags hand the move over once at their end so automation they pass over is untouched; copying drags copy it. Options > Lock Envelopes, kept with the project, leaves automation in place ([automation contract](research/arrangement-automation-contract.md#automation-follows-clips-and-lock-envelopes-2026-10-24)). Moves to another track and clipboard edits do not carry automation yet. Checked in the automation and UI suites.
 
+## Arrangement arrows — 2026-10-24
+
+UI area. As the reference's key list gives them, the Arrangement's Left and Right nudge the selected clips a grid step, their automation following, or move the time selection without one; from the headers they fold and unfold the selected track; Up and Down select the track above or below ([menu contract](research/main-menu-contract.md#keys-outside-the-menus)). Checked in the UI suite.
+
