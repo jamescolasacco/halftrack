@@ -2697,3 +2697,7 @@ UI area. Browser items now drag, as the reference's do: sounds land where they a
 ## Dropping a device over another — 2026-10-24
 
 UI area. A device, preset or plug-in dragged from the browser over a device of its type in the device view takes its place in one undo step, as the reference's presets do, through `hotSwapDevice` ([contract](research/browser-places-contract.md#dragging-2026-10-24)). Checked in the UI suite.
+
+## The Library's All label — 2026-10-24
+
+UI area. The Library gains the reference's All label, first in its list: every label's devices, plug-ins, grooves and templates under their headings, devices first, and with a search also the sounds the Samples folder's index finds. The categories' listings moved into `categoryRows`, which All combines ([contract](research/browser-places-contract.md#all-2026-10-24)). Checked in the UI suite.

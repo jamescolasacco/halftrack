@@ -795,7 +795,7 @@ public:
         const auto indexText = mapping() ? juce::String() : browserIndexText();
         const int indexWidth = indexText.isEmpty() ? 0 : 118;
         if (! mapping()) // The mapping list replaces the browser in MIDI and Key Map Modes.
-        g.drawText (browserCategory == BrowserCategory::instruments ? "INSTRUMENTS" : browserCategory == BrowserCategory::audioEffects ? "AUDIO EFFECTS"
+        g.drawText (browserCategory == BrowserCategory::all ? "ALL" : browserCategory == BrowserCategory::instruments ? "INSTRUMENTS" : browserCategory == BrowserCategory::audioEffects ? "AUDIO EFFECTS"
                         : browserCategory == BrowserCategory::midiEffects ? "MIDI EFFECTS" : pluginBrowser() ? "PLUG-INS"
                         : browserCategory == BrowserCategory::grooves ? "GROOVES" : browserCategory == BrowserCategory::templates ? "TEMPLATES" : browserCategory == BrowserCategory::packs ? "PACKS"
                         : browserCategory == BrowserCategory::place && similarFile == juce::File() && browserFolder == browserPlaceRoot ? placeName (browserPlace).toUpperCase()
@@ -2065,7 +2065,7 @@ private:
         std::string error;
     };
 
-    enum class BrowserCategory { instruments, audioEffects, midiEffects, plugins, samples, grooves, templates, packs, collection, place };
+    enum class BrowserCategory { instruments, audioEffects, midiEffects, plugins, samples, grooves, templates, packs, collection, place, all };
     // Left column of the browser, as the reference's sidebar: the collections, the Library's
     // categories, then Places: Packs, the User Library, the Current Project, the folders added, and
     // Add Folder. It scrolls inside the browser when taller.
@@ -2214,7 +2214,7 @@ private:
         juce::Rectangle<int> rowBounds (int i) const { return { 0, categoriesTop() + i * rowHeight, getWidth() - 1, rowHeight }; }
         juce::Rectangle<int> placeBounds (int i) const { return { 0, placesTop() + i * rowHeight, getWidth() - 1, rowHeight }; }
         Impl& owner;
-        const std::array<std::pair<BrowserCategory, const char*>, 7> entries {{ { BrowserCategory::instruments, "Instruments" },
+        const std::array<std::pair<BrowserCategory, const char*>, 8> entries {{ { BrowserCategory::all, "All" }, { BrowserCategory::instruments, "Instruments" },
             { BrowserCategory::audioEffects, "Audio Effects" }, { BrowserCategory::midiEffects, "MIDI Effects" },
             { BrowserCategory::plugins, "Plug-Ins" }, { BrowserCategory::samples, "Samples" }, { BrowserCategory::grooves, "Grooves" },
             { BrowserCategory::templates, "Templates" } }};
@@ -16170,7 +16170,7 @@ private:
     void setBrowserCategory (BrowserCategory category)
     {
         if (hotSwap && hotSwap->sample) { if (category != BrowserCategory::samples && category != BrowserCategory::place && category != BrowserCategory::collection) endHotSwap(); }
-        else if (hotSwap && category != BrowserCategory::plugins && category != BrowserCategory::collection)
+        else if (hotSwap && category != BrowserCategory::plugins && category != BrowserCategory::collection && category != BrowserCategory::all)
             if (const auto device = hotSwapDevice (hotSwap->chainId, hotSwap->pluginId); ! device || device->second != category) endHotSwap();
         noteBrowserState();
         browserCategory = category; browserList.deselectAllRows(); updateBrowser(); resized();
@@ -16224,31 +16224,12 @@ private:
         browserList.deselectAllRows(); updateBrowser(); resized();
         updateHistoryButtons();
     }
-    void updateBrowser()
+    // A device category's rows, filtered by the search: its devices and presets, plug-ins under their
+    // makers, packs, templates or grooves.
+    std::vector<DeviceRow> categoryRows (BrowserCategory category, const std::function<bool (const juce::String&)>& matches)
     {
-        browserItems.clear(); deviceItems.clear();
-        updatePlaces();
-        if (browserCategory == BrowserCategory::place && ! juce::isPositiveAndBelow (browserPlace, placeCount())) { leavePlace(); browserCategory = BrowserCategory::samples; }
-        // A place's folder can change under it: the Current Project's follows the project.
-        if (browserCategory == BrowserCategory::place)
-            if (const auto root = placeFolder (browserPlace); root != browserPlaceRoot) { browserPlaceRoot = root; browserFolder = root; similarFile = juce::File(); }
-        const auto query = browserSearch.getText().trim();
-        folderButton.setButtonText (pluginBrowser() ? "Manage / Scan..." : "Choose Folder...");
-        upButton.setEnabled (browserCanGoUp());
-        browserSearch.setTextToShowWhenEmpty ("Search (" + juce::String (browserCategory == BrowserCategory::collection ? collections.name (browserCollection)
-            : browserCategory == BrowserCategory::instruments ? "Instruments"
-            : browserCategory == BrowserCategory::audioEffects ? "Audio Effects" : browserCategory == BrowserCategory::midiEffects ? "MIDI Effects"
-            : pluginBrowser() ? "Plug-Ins" : browserCategory == BrowserCategory::grooves ? "Grooves" : browserCategory == BrowserCategory::templates ? "Templates"
-            : browserCategory == BrowserCategory::packs ? "Packs"
-            : browserCategory == BrowserCategory::place ? placeName (browserPlace) : "Samples") + ")", muted);
-        if (browserFolder != scannedBrowserFolder) startBrowserScan();
-        const auto matches = [&query] (const juce::String& label) { return query.isEmpty() || label.containsIgnoreCase (query); };
-        if (browserCategory == BrowserCategory::collection)
-        {
-            for (const auto& key : collections.keys (browserCollection))
-                if (auto row = collectionRow (key); row && matches (row->label)) deviceItems.push_back (*row);
-        }
-        else if (pluginBrowser())
+        std::vector<DeviceRow> rows;
+        if (category == BrowserCategory::plugins)
         {
             // Plug-ins under their makers, as in the reference, each with its role, format and channels
             // and its presets from the user library under it.
@@ -16262,10 +16243,116 @@ private:
                 std::vector<DeviceRow> presets; addPresetRows (presets, type.name, pluginPresetKind, matches);
                 for (auto& preset : presets) preset.pluginId = type.createIdentifierString();
                 if (! matches (type.name) && ! matches (maker (type)) && presets.empty()) continue;
-                if (maker (type) != shownMaker) { shownMaker = maker (type); deviceItems.push_back ({ shownMaker, true, -1 }); }
+                if (maker (type) != shownMaker) { shownMaker = maker (type); rows.push_back ({ shownMaker, true, -1 }); }
                 DeviceRow row { type.name }; row.pluginId = type.createIdentifierString(); row.detail = Session::pluginSummary (type);
-                deviceItems.push_back (row); deviceItems.insert (deviceItems.end(), presets.begin(), presets.end());
+                rows.push_back (row); rows.insert (rows.end(), presets.begin(), presets.end());
             }
+        }
+        else if (category == BrowserCategory::packs)
+        {
+            // Installed packs, each opening its files in the sample browser.
+            for (const auto& installed : packs::installed (packsFolder()))
+                if (matches (installed.manifest.name) || matches (installed.manifest.author))
+                {
+                    DeviceRow row { installed.manifest.name }; row.pack = installed.folder; row.packId = installed.manifest.id;
+                    row.detail = installed.manifest.version + (installed.manifest.author.isNotEmpty() ? juce::String::charToString (0x00b7) + installed.manifest.author : juce::String());
+                    rows.push_back (row);
+                }
+        }
+        else if (category == BrowserCategory::templates)
+        {
+            // The User Library's templates, as the reference's Templates label lists them.
+            auto files = templateFolder().findChildFiles (juce::File::findFiles, true, "*.halftrack");
+            files.sort();
+            for (const auto& f : files)
+                if (matches (f.getFileNameWithoutExtension())) { DeviceRow row { f.getFileNameWithoutExtension() }; row.projectTemplate = f; rows.push_back (row); }
+        }
+        else if (category == BrowserCategory::grooves)
+        {
+            const auto library = Session::grooveLibrary();
+            for (int i = 0; i < (int) library.size(); ++i)
+                if (matches (library[(size_t) i].name)) { DeviceRow row { library[(size_t) i].name }; row.groove = i; rows.push_back (row); }
+            if (grooveFolder().isDirectory())
+            {
+                auto files = grooveFolder().findChildFiles (juce::File::findFiles, true, "*.agr");
+                files.sort();
+                std::vector<DeviceRow> userGrooves;
+                for (const auto& f : files) if (matches (f.getFileNameWithoutExtension())) { DeviceRow row { f.getFileNameWithoutExtension() }; row.grooveFile = f; userGrooves.push_back (row); }
+                if (! userGrooves.empty()) { rows.push_back ({ "User Library", true, -1 }); rows.insert (rows.end(), userGrooves.begin(), userGrooves.end()); }
+            }
+        }
+        else if (category == BrowserCategory::instruments)
+        {
+            if (matches ("Halftrack Synth")) rows.push_back ({ "Halftrack Synth", false, -2 });
+            for (int kind = 0; kind < Session::deviceKindCount; ++kind)
+            {
+                if (! effectIsInstrument ((Session::EffectKind) kind) || Session::isRackKind ((Session::EffectKind) kind)) continue;
+                const juce::String device = effectName ((Session::EffectKind) kind);
+                std::vector<DeviceRow> presets; addPresetRows (presets, device, kind, matches);
+                if (matches (device) || ! presets.empty()) rows.push_back ({ device, false, kind });
+                rows.insert (rows.end(), presets.begin(), presets.end());
+            }
+            for (const auto kind : { Session::EffectKind::instrumentRack, Session::EffectKind::drumRack })
+                if (matches (effectName (kind))) rows.push_back ({ effectName (kind), false, (int) kind });
+        }
+        else
+        {
+            const bool midi = category == BrowserCategory::midiEffects;
+            juce::StringArray groups;
+            for (int kind = 0; kind < Session::deviceKindCount; ++kind)
+                if (! Session::isRackKind ((Session::EffectKind) kind) && effectIsMidi ((Session::EffectKind) kind) == midi && ! effectIsInstrument ((Session::EffectKind) kind))
+                    groups.addIfNotAlreadyThere (effectCategory ((Session::EffectKind) kind));
+            // Racks, then Utilities (the Tuner and the Utility), close the list.
+            if (! midi) { groups.removeString ("Utilities"); groups.addIfNotAlreadyThere ("Racks"); groups.add ("Utilities"); }
+            for (const auto& group : groups)
+            {
+                std::vector<DeviceRow> groupRows;
+                for (int kind = 0; kind < Session::deviceKindCount; ++kind)
+                    if (! Session::isRackKind ((Session::EffectKind) kind) && group == effectCategory ((Session::EffectKind) kind))
+                    {
+                        const juce::String device = effectName ((Session::EffectKind) kind);
+                        std::vector<DeviceRow> presets; addPresetRows (presets, device, kind, matches);
+                        if (matches (device) || ! presets.empty()) groupRows.push_back ({ device, false, kind });
+                        groupRows.insert (groupRows.end(), presets.begin(), presets.end());
+                    }
+                if (group == "Utilities")
+                {
+                    std::vector<DeviceRow> presets; addPresetRows (presets, "Utility", -3, matches);
+                    if (matches ("Utility") || ! presets.empty()) groupRows.push_back ({ "Utility", false, -3 });
+                    groupRows.insert (groupRows.end(), presets.begin(), presets.end());
+                }
+                if (group == "MIDI Effects" && matches (effectName (Session::EffectKind::midiEffectRack))) groupRows.push_back ({ effectName (Session::EffectKind::midiEffectRack), false, (int) Session::EffectKind::midiEffectRack });
+                if (group == "Racks" && matches (effectName (Session::EffectKind::audioEffectRack))) groupRows.push_back ({ effectName (Session::EffectKind::audioEffectRack), false, (int) Session::EffectKind::audioEffectRack });
+                if (groupRows.empty()) continue;
+                if (! midi) rows.push_back ({ group, true, -1 });
+                rows.insert (rows.end(), groupRows.begin(), groupRows.end());
+            }
+        }
+        return rows;
+    }
+    void updateBrowser()
+    {
+        browserItems.clear(); deviceItems.clear();
+        updatePlaces();
+        if (browserCategory == BrowserCategory::place && ! juce::isPositiveAndBelow (browserPlace, placeCount())) { leavePlace(); browserCategory = BrowserCategory::samples; }
+        // A place's folder can change under it: the Current Project's follows the project.
+        if (browserCategory == BrowserCategory::place)
+            if (const auto root = placeFolder (browserPlace); root != browserPlaceRoot) { browserPlaceRoot = root; browserFolder = root; similarFile = juce::File(); }
+        const auto query = browserSearch.getText().trim();
+        folderButton.setButtonText (pluginBrowser() ? "Manage / Scan..." : "Choose Folder...");
+        upButton.setEnabled (browserCanGoUp());
+        browserSearch.setTextToShowWhenEmpty ("Search (" + juce::String (browserCategory == BrowserCategory::collection ? collections.name (browserCollection)
+            : browserCategory == BrowserCategory::all ? "All" : browserCategory == BrowserCategory::instruments ? "Instruments"
+            : browserCategory == BrowserCategory::audioEffects ? "Audio Effects" : browserCategory == BrowserCategory::midiEffects ? "MIDI Effects"
+            : pluginBrowser() ? "Plug-Ins" : browserCategory == BrowserCategory::grooves ? "Grooves" : browserCategory == BrowserCategory::templates ? "Templates"
+            : browserCategory == BrowserCategory::packs ? "Packs"
+            : browserCategory == BrowserCategory::place ? placeName (browserPlace) : "Samples") + ")", muted);
+        if (browserFolder != scannedBrowserFolder) startBrowserScan();
+        const auto matches = [&query] (const juce::String& label) { return query.isEmpty() || label.containsIgnoreCase (query); };
+        if (browserCategory == BrowserCategory::collection)
+        {
+            for (const auto& key : collections.keys (browserCollection))
+                if (auto row = collectionRow (key); row && matches (row->label)) deviceItems.push_back (*row);
         }
         else if (sampleBrowser())
         {
@@ -16282,86 +16369,29 @@ private:
                     browserItems.push_back ({ juce::File (juce::String::fromUTF8 (entry.path.data(), (int) entry.path.size())), entry.directory, true });
             else browserItems = treeRows();
         }
-        else if (browserCategory == BrowserCategory::packs)
+        else if (browserCategory == BrowserCategory::all)
         {
-            // Installed packs, each opening its files in the sample browser.
-            for (const auto& installed : packs::installed (packsFolder()))
-                if (matches (installed.manifest.name) || matches (installed.manifest.author))
-                {
-                    DeviceRow row { installed.manifest.name }; row.pack = installed.folder; row.packId = installed.manifest.id;
-                    row.detail = installed.manifest.version + (installed.manifest.author.isNotEmpty() ? juce::String::charToString (0x00b7) + installed.manifest.author : juce::String());
-                    deviceItems.push_back (row);
-                }
-        }
-        else if (browserCategory == BrowserCategory::templates)
-        {
-            // The User Library's templates, as the reference's Templates label lists them.
-            auto files = templateFolder().findChildFiles (juce::File::findFiles, true, "*.halftrack");
-            files.sort();
-            for (const auto& f : files)
-                if (matches (f.getFileNameWithoutExtension())) { DeviceRow row { f.getFileNameWithoutExtension() }; row.projectTemplate = f; deviceItems.push_back (row); }
-        }
-        else if (browserCategory == BrowserCategory::grooves)
-        {
-            const auto library = Session::grooveLibrary();
-            for (int i = 0; i < (int) library.size(); ++i)
-                if (matches (library[(size_t) i].name)) { DeviceRow row { library[(size_t) i].name }; row.groove = i; deviceItems.push_back (row); }
-            if (grooveFolder().isDirectory())
+            // All, as the reference's: every label's items in one list, devices first, then files.
+            for (const auto& [category, title] : { std::pair { BrowserCategory::instruments, "Instruments" }, std::pair { BrowserCategory::audioEffects, "Audio Effects" },
+                                                   std::pair { BrowserCategory::midiEffects, "MIDI Effects" }, std::pair { BrowserCategory::plugins, "Plug-Ins" },
+                                                   std::pair { BrowserCategory::grooves, "Grooves" }, std::pair { BrowserCategory::templates, "Templates" } })
             {
-                auto files = grooveFolder().findChildFiles (juce::File::findFiles, true, "*.agr");
-                files.sort();
-                std::vector<DeviceRow> rows;
-                for (const auto& f : files) if (matches (f.getFileNameWithoutExtension())) { DeviceRow row { f.getFileNameWithoutExtension() }; row.grooveFile = f; rows.push_back (row); }
-                if (! rows.empty()) { deviceItems.push_back ({ "User Library", true, -1 }); deviceItems.insert (deviceItems.end(), rows.begin(), rows.end()); }
-            }
-        }
-        else if (browserCategory == BrowserCategory::instruments)
-        {
-            if (matches ("Halftrack Synth")) deviceItems.push_back ({ "Halftrack Synth", false, -2 });
-            for (int kind = 0; kind < Session::deviceKindCount; ++kind)
-            {
-                if (! effectIsInstrument ((Session::EffectKind) kind) || Session::isRackKind ((Session::EffectKind) kind)) continue;
-                const juce::String device = effectName ((Session::EffectKind) kind);
-                std::vector<DeviceRow> presets; addPresetRows (presets, device, kind, matches);
-                if (matches (device) || ! presets.empty()) deviceItems.push_back ({ device, false, kind });
-                deviceItems.insert (deviceItems.end(), presets.begin(), presets.end());
-            }
-            for (const auto kind : { Session::EffectKind::instrumentRack, Session::EffectKind::drumRack })
-                if (matches (effectName (kind))) deviceItems.push_back ({ effectName (kind), false, (int) kind });
-        }
-        else
-        {
-            const bool midi = browserCategory == BrowserCategory::midiEffects;
-            juce::StringArray groups;
-            for (int kind = 0; kind < Session::deviceKindCount; ++kind)
-                if (! Session::isRackKind ((Session::EffectKind) kind) && effectIsMidi ((Session::EffectKind) kind) == midi && ! effectIsInstrument ((Session::EffectKind) kind))
-                    groups.addIfNotAlreadyThere (effectCategory ((Session::EffectKind) kind));
-            // Racks, then Utilities (the Tuner and the Utility), close the list.
-            if (! midi) { groups.removeString ("Utilities"); groups.addIfNotAlreadyThere ("Racks"); groups.add ("Utilities"); }
-            for (const auto& group : groups)
-            {
-                std::vector<DeviceRow> rows;
-                for (int kind = 0; kind < Session::deviceKindCount; ++kind)
-                    if (! Session::isRackKind ((Session::EffectKind) kind) && group == effectCategory ((Session::EffectKind) kind))
-                    {
-                        const juce::String device = effectName ((Session::EffectKind) kind);
-                        std::vector<DeviceRow> presets; addPresetRows (presets, device, kind, matches);
-                        if (matches (device) || ! presets.empty()) rows.push_back ({ device, false, kind });
-                        rows.insert (rows.end(), presets.begin(), presets.end());
-                    }
-                if (group == "Utilities")
-                {
-                    std::vector<DeviceRow> presets; addPresetRows (presets, "Utility", -3, matches);
-                    if (matches ("Utility") || ! presets.empty()) rows.push_back ({ "Utility", false, -3 });
-                    rows.insert (rows.end(), presets.begin(), presets.end());
-                }
-                if (group == "MIDI Effects" && matches (effectName (Session::EffectKind::midiEffectRack))) rows.push_back ({ effectName (Session::EffectKind::midiEffectRack), false, (int) Session::EffectKind::midiEffectRack });
-                if (group == "Racks" && matches (effectName (Session::EffectKind::audioEffectRack))) rows.push_back ({ effectName (Session::EffectKind::audioEffectRack), false, (int) Session::EffectKind::audioEffectRack });
+                auto rows = categoryRows (category, matches);
+                std::erase_if (rows, [] (const DeviceRow& r) { return r.header; }); // One heading a label.
                 if (rows.empty()) continue;
-                if (! midi) deviceItems.push_back ({ group, true, -1 });
+                deviceItems.push_back ({ title, true, -1 });
                 deviceItems.insert (deviceItems.end(), rows.begin(), rows.end());
             }
+            // A search also finds sounds in the Samples folder, from its index.
+            if (query.isNotEmpty() && scannedBrowserFolder != juce::File())
+            {
+                std::vector<DeviceRow> sounds;
+                for (const auto& entry : browserIndex.search (query.toStdString(), 200))
+                    if (! entry.directory) { const juce::File file (juce::String::fromUTF8 (entry.path.data(), (int) entry.path.size())); DeviceRow row { file.getFileName() }; row.sample = file; sounds.push_back (row); }
+                if (! sounds.empty()) { deviceItems.push_back ({ "Samples", true, -1 }); deviceItems.insert (deviceItems.end(), sounds.begin(), sounds.end()); }
+            }
         }
+        else deviceItems = categoryRows (browserCategory, matches);
         browserList.updateContent(); browserList.repaint(); browserCategories.repaint(); repaint();
     }
     int getNumRows() override
@@ -17850,6 +17880,32 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (browserCategory == BrowserCategory::packs, "they run on from the Library into Places");
         browserList.deselectAllRows();
         check (browserCategories.keyPressed (juce::KeyPress (juce::KeyPress::rightKey)) && (getNumRows() == 0 || browserList.getSelectedRow() == 0), "Right moves to the list, its first row selected");
+        // All, as the reference's: every label's items in one list, devices first; a search looks across them.
+        setBrowserCategory (BrowserCategory::all);
+        juce::StringArray headings;
+        for (const auto& row : deviceItems) if (row.header) headings.add (row.label);
+        check (headings.indexOf ("Instruments") == 0 && headings.indexOf ("Audio Effects") > 0 && headings.contains ("MIDI Effects")
+                   && browserCategories.categoryPoint (BrowserCategory::all).y < browserCategories.categoryPoint (BrowserCategory::instruments).y,
+               "All, first in the Library, lists every label's items under their headings, instruments first (" + headings.joinIntoString (", ") + ")");
+        browserSearch.setText ("Saturator", juce::sendNotificationSync); updateBrowser();
+        const auto found = std::count_if (deviceItems.begin(), deviceItems.end(), [] (const DeviceRow& r) { return ! r.header && r.kind == (int) Session::EffectKind::saturator && r.preset == juce::File(); });
+        check (found == 1 && std::none_of (deviceItems.begin(), deviceItems.end(), [] (const DeviceRow& r) { return ! r.header && r.kind == (int) Session::EffectKind::eqThree; }),
+               "a search in All finds the Saturator among the labels, and nothing that does not match");
+        browserSearch.setText ({}, juce::sendNotificationSync);
+        {
+            // The User Library's groove files list under its heading in Grooves.
+            const auto library = userLibrary;
+            const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-grooves-ui-" + juce::Uuid().toString());
+            userLibrary = root.getChildFile ("User Library");
+            check (userLibrary.getChildFile ("Grooves/Swing Feel.agr").getParentDirectory().createDirectory().wasOk()
+                       && userLibrary.getChildFile ("Grooves/Swing Feel.agr").replaceWithText ("groove"), "a groove file in the User Library");
+            setBrowserCategory (BrowserCategory::grooves);
+            const auto heading = std::find_if (deviceItems.begin(), deviceItems.end(), [] (const DeviceRow& r) { return r.header && r.label == "User Library"; });
+            check (heading != deviceItems.end() && heading + 1 != deviceItems.end() && (heading + 1)->grooveFile.getFileName() == "Swing Feel.agr"
+                       && std::count_if (deviceItems.begin(), deviceItems.end(), [] (const DeviceRow& r) { return r.grooveFile.getFileName() == "Swing Feel.agr"; }) == 1,
+                   "Grooves lists the User Library's groove files once, under their heading");
+            userLibrary = library; root.deleteRecursively();
+        }
         browserSearch.setText ({}, juce::sendNotificationSync);
         {
             // A collection's right-click menu, as the reference's labels have: Rename and a colour.

@@ -16,7 +16,7 @@ Status: partial. This follows the reference's manual and static menu research. N
 
 ## Halftrack's behaviour
 
-- **Sidebar.** The browser's sidebar shows COLLECTIONS, then LIBRARY (Instruments, Audio Effects, MIDI Effects, Plug-Ins, Samples, Grooves), then PLACES: Packs, User Library, Current Project, each user folder in the order added, and Add Folder.... It scrolls when its rows are taller than the browser.
+- **Sidebar.** The browser's sidebar shows COLLECTIONS, then LIBRARY (All, Instruments, Audio Effects, MIDI Effects, Plug-Ins, Samples, Grooves, Templates), then PLACES: Packs, User Library, Current Project, each user folder in the order added, and Add Folder.... It scrolls when its rows are taller than the browser.
 - **Browsing a place.** Clicking a place lists its folder as Samples lists a folder: folders, audio files, which open, preview, import and take collections as they do there, and projects, which open ([backups contract](backups-contract.md#halftracks-behaviour)). The title row names the place. Its folders open in place, as the [folder tree](#the-folder-tree-2026-10-24) below describes, and Left at the top goes no higher than the place. A search looks through the place and every folder in it, from the [browser index](browser-index-contract.md). Samples keeps its own folder: leaving a place for another row returns Samples to the folder it was left at.
 - **User Library.** The User Library's own folder.
 - **Current Project.** The project's media folder: `<name> Assets` beside a saved project, or the unsaved project's temporary one. Its Backup folder holds the project's [backups](backups-contract.md). It is listed again after a recording, a save or another project. Before the project has any media it says so. Its menu has Show in Finder (Show in Explorer elsewhere).
@@ -33,6 +33,10 @@ The reference's manual: Pack folders "can be unfolded to reveal the included Pac
 - **Keys.** Right on an open folder goes to its first item, and on a sound previews it. Left closes an open folder, and on an item goes to the folder holding it. At the top, Left moves out to the sidebar, as the manual's arrows "move between the sidebar and content pane": there Up and Down show the row above or below, through the collections, the Library and Places (Add Folder left to clicks, a missing User Library skipped), and Right or Return move back to the list, its first row selected. The Up button goes up a folder in Samples, the folder left showing open in its parent.
 - **Search.** Results are a flat list, as before. Opening a folder found by a search clears it and shows the folder open in the tree.
 - **Show in Browser.** The folders down to the file open, with the file selected.
+
+## All (2026-10-24)
+
+The reference's manual: the All label shows "all items from every label of the browser in a single list with devices at the start and file types after" ([Working with the Browser](https://www.ableton.com/en/live-manual/12/working-with-the-browser/), section 4.6, consulted 2026-10-24). Halftrack's All, first in the Library, lists the Instruments, Audio Effects, MIDI Effects, Plug-Ins, Grooves and Templates under their headings, each with its presets. The search filters them all; with text in it, All also lists the sounds the Samples folder's index finds (at most 200), after the devices. This is Halftrack's library-wide search.
 
 ## Dragging (2026-10-24)
 
@@ -63,6 +67,7 @@ See [open questions](../open-questions.md) for the defaults taken where the manu
 `tests/PreferencesTests.cpp` reads user folders back in order, a missing one too, refuses a relative or repeated folder, keeps them through a reset, and finds the added folder in the next Session. `tests/PersistenceTests.cpp` checks the project's media folder before and after a save and through Save a Copy.
 
 The UI suite checks:
+- All, first in the Library, listing every label's items under their headings, instruments first, and a search there finding the Saturator and nothing that does not match;
 - a device row dragging as its device; dropped on a track's lane, in the device view, over a device there (taking its place) and below the tracks (a new track); a sound dropped on a lane importing there; and an item dropped on a collection joining it;
 - Browse Back left of the search bar, offered after moving about; Back returning to a search, Cmd+[ going back before it and to an earlier category, Cmd+] going forward, and a new category dropping the states ahead;
 - the folder tree: Right opening a folder in place with its items indented under it, Right going into it, Left going back and closing it, opening another closing the first unless Cmd is held, a double-click closing a folder, Left at the top moving out rather than up, and Up going up a folder with the one left showing open;
