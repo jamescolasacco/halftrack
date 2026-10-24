@@ -1270,6 +1270,9 @@ public:
         // Start Playback with Record, after the reference's (on): Record pressed while stopped starts
         // playback too. Off, it waits, lit, until Play or a Session launch starts the transport.
         bool startPlaybackWithRecord = true;
+        // Start Playback with Tap Tempo, after the reference's (on): a bar of taps while stopped starts
+        // playback at the tapped tempo, a beat after the last tap.
+        bool startPlaybackWithTapTempo = true;
         juce::String vst3CustomFolder;
         // The Preferences window's tab, by the reference's id ("audio", "midi"...), which opens next time
         // as the reference's window remembers its tab.
@@ -1627,6 +1630,10 @@ public:
     // quintuplet, and bars as "1/1", "2/1".
     static juce::String gridValueName (GridValue, int tuplet);
     juce::Result tapTempo (double monotonicSeconds); // Message-thread tap time, not project time.
+    // When a bar of taps (its beats in crotchets: four in 4/4, three in 6/8) has scheduled playback,
+    // the tap clock's time it starts at, a tapped beat after the last tap; it starts from the insert
+    // marker as Play does. Stop cancels it, and another tap before then starts it at that tap.
+    std::optional<double> tappedStart() const;
     juce::Result setMetronome (const MetronomeSettings&);
     juce::Result setRecordQuantisation (RecordQuantisation);
     // The Arrangement loop: its switch and brace. Saved with the project; as in the reference, not an

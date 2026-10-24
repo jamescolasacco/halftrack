@@ -98,6 +98,9 @@ int runPreferencesTests (const juce::File& artifacts)
         auto [sceneRecording, sceneRecordingProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" startRecordingOnSceneLaunch=\"1\"/>");
         expected = {}; expected.startRecordingOnSceneLaunch = true;
         check (sceneRecording == expected && sceneRecordingProblem.isEmpty(), "Start Recording on Scene Launch is read back");
+        auto [untapped, untappedProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" startPlaybackWithTapTempo=\"0\"/>");
+        expected = {}; expected.startPlaybackWithTapTempo = false;
+        check (untapped == expected && untappedProblem.isEmpty() && Session::Preferences {}.startPlaybackWithTapTempo, "Start Playback with Tap Tempo, on by default, is read back off");
         auto [locked, lockedProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" lockEnvelopes=\"1\"/>");
         expected = {}; expected.lockEnvelopes = true;
         check (locked == expected && lockedProblem.isEmpty() && ! Session::Preferences {}.lockEnvelopes, "Lock Envelopes, off by default, is read back");

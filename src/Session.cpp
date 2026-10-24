@@ -3148,7 +3148,7 @@ struct Session::Impl
     {
         std::function<void()> tick;
         void timerCallback() override { tick(); }
-    } sceneWatch, rangeWatch;
+    } sceneWatch, rangeWatch, tapWatch;
     std::optional<double> rangeEnd; // Where Play Arrangement Selection stops.
     void scheduleSceneChange (const te::Scene& scene, std::optional<te::MonotonicBeat> boundary)
     {
@@ -4428,15 +4428,16 @@ struct Session::Impl
             read.vst3CustomFolder = xml->getStringAttribute ("vst3CustomFolder");
             const int edgeFades = number ("createFadesOnClipEdges", 1, 2), sound = number ("metronomeSound", 0, Session::metronomeSoundCount), countIn = number ("countInBars", 0, 5);
             read.countInBars = countIn;
-            const int startPlayback = number ("startPlaybackWithRecord", 1, 2), locked = number ("lockEnvelopes", 0, 2);
+            const int startPlayback = number ("startPlaybackWithRecord", 1, 2), locked = number ("lockEnvelopes", 0, 2), tapStart = number ("startPlaybackWithTapTempo", 1, 2);
             read.startPlaybackWithRecord = startPlayback == 1;
+            read.startPlaybackWithTapTempo = tapStart == 1;
             read.lockEnvelopes = locked == 1;
             read.preferencesTab = xml->getStringAttribute ("preferencesTab");
             for (auto* folder : xml->getChildWithTagNameIterator ("USERFOLDER")) read.userFolders.add (folder->getStringAttribute ("path"));
             for (auto* project : xml->getChildWithTagNameIterator ("RECENTPROJECT")) read.recentProjects.add (project->getStringAttribute ("path"));
             read.createFadesOnClipEdges = edgeFades == 1;
             read.metronomeSound = static_cast<Session::MetronomeSound> (juce::jmax (0, sound));
-            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && locked >= 0 && validPreferences (read);
+            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && locked >= 0 && tapStart >= 0 && validPreferences (read);
         }
         if (valid) { prefs = read; fadesOnClipEdges = prefs.createFadesOnClipEdges; return; }
         // Set an unreadable file aside rather than lose it, and keep the defaults.
@@ -4463,6 +4464,7 @@ struct Session::Impl
         xml.setAttribute ("countInBars", next.countInBars);
         xml.setAttribute ("startPlaybackWithRecord", next.startPlaybackWithRecord ? 1 : 0);
         xml.setAttribute ("lockEnvelopes", next.lockEnvelopes ? 1 : 0);
+        xml.setAttribute ("startPlaybackWithTapTempo", next.startPlaybackWithTapTempo ? 1 : 0);
         xml.setAttribute ("preferencesTab", next.preferencesTab);
         for (const auto& folder : next.userFolders) xml.createNewChildElement ("USERFOLDER")->setAttribute ("path", folder);
         for (const auto& project : next.recentProjects) xml.createNewChildElement ("RECENTPROJECT")->setAttribute ("path", project);
@@ -5785,7 +5787,7 @@ struct Session::Impl
         refreshCrossfade();
         edit->dispatchPendingUpdatesSynchronously();
     }
-    void resetTapTempo() { lastTap=-1; numTapIntervals=nextTapInterval=0; }
+    void resetTapTempo() { lastTap=-1; numTapIntervals=nextTapInterval=tapsInRun=0; tapStart.reset(); }
     void prepareEdit()
     {
         edit->state.setProperty (faderLawProperty, faderLaw, nullptr); // Its positions follow the installed laws.
@@ -6689,6 +6691,8 @@ struct Session::Impl
     double lastTap=-1;
     std::array<double,4> tapIntervals {};
     int numTapIntervals=0, nextTapInterval=0;
+    int tapsInRun=0; // Taps since the last pause, for Start Playback with Tap Tempo.
+    std::optional<double> tapStart;
     File scratch, projectFile;
     juce::ValueTree audioClipboard, midiClipboard;
     double midiClipboardBeats = 0, midiClipboardOffsetBeats = 0;
@@ -14511,6 +14515,7 @@ void Session::stop()
 {
     if (impl->exporting) return;
     impl->rangeEnd.reset(); impl->rangeWatch.stopTimer();
+    impl->tapStart.reset(); impl->tapWatch.stopTimer();
     impl->deviceRestart.stopTimer(); // A stop after a device restart is the user's, not the engine's.
     impl->recordWaiting = false;
     // Session recordings end where the transport stops and keep their takes.
@@ -15003,11 +15008,12 @@ Result Session::tapTempo(double seconds)
     const double interval=seconds-impl->lastTap;
     if (impl->lastTap<0 || interval>60.0/te::TempoSetting::minBPM+1e-9)
     {
-        impl->resetTapTempo();impl->lastTap=seconds;return Result::ok();
+        impl->resetTapTempo();impl->lastTap=seconds;impl->tapsInRun=1;return Result::ok();
     }
     // Ignore switch bounce without advancing the anchor or touching history.
     if (interval<60.0/te::TempoSetting::maxBPM-1e-9) return Result::ok();
     impl->lastTap=seconds;
+    ++impl->tapsInRun;
     impl->tapIntervals[(size_t)impl->nextTapInterval]=interval;
     impl->nextTapInterval=(impl->nextTapInterval+1)%4;
     impl->numTapIntervals=std::min(4,impl->numTapIntervals+1);
@@ -15015,9 +15021,27 @@ Result Session::tapTempo(double seconds)
     for (int i=0;i<impl->numTapIntervals;++i) elapsed+=impl->tapIntervals[(size_t)i];
     const double bpm=juce::jlimit(te::TempoSetting::minBPM,te::TempoSetting::maxBPM,60.0*impl->numTapIntervals/elapsed);
     auto* tempo=impl->edit->tempoSequence.getTempo(0);
-    if (std::abs(tempo->getBpm()-bpm)<1e-9) return Result::ok();
-    impl->transaction("Tap tempo");impl->changeTempo(*tempo,bpm,&impl->edit->getUndoManager());impl->changed();return Result::ok();
+    if (std::abs(tempo->getBpm()-bpm)>=1e-9) { impl->transaction("Tap tempo");impl->changeTempo(*tempo,bpm,&impl->edit->getUndoManager());impl->changed(); }
+    // Start Playback with Tap Tempo: a bar of taps while stopped starts playback a tapped beat later.
+    auto& transport=impl->edit->getTransport();
+    const auto& meter=impl->edit->tempoSequence.getTimeSigAt (impl->playStart());
+    const int bar=juce::jmax(1,juce::roundToInt(meter.numerator.get()*4.0/meter.denominator.get()));
+    if (impl->prefs.startPlaybackWithTapTempo && ! transport.isPlaying() && ! transport.isRecording() && impl->tapsInRun==bar)
+    {
+        impl->tapStart=seconds+60.0/bpm;
+        impl->tapWatch.tick=[this]
+        {
+            if (! impl->tapStart || impl->edit->getTransport().isPlaying()) { impl->tapStart.reset(); impl->tapWatch.stopTimer(); return; }
+            if (juce::Time::getMillisecondCounterHiRes()*.001 < *impl->tapStart) return;
+            impl->tapStart.reset(); impl->tapWatch.stopTimer(); play();
+        };
+        impl->tapWatch.startTimer(1);
+    }
+    // Another tap before then marks the downbeat itself.
+    else if (impl->tapsInRun>bar && impl->tapStart) { impl->tapStart.reset(); impl->tapWatch.stopTimer(); return play(); }
+    return Result::ok();
 }
+std::optional<double> Session::tappedStart() const { return impl->tapStart; }
 Result Session::setMetronome (const MetronomeSettings& settings)
 {
     if(impl->exporting) return Result::fail("Finish or cancel the current export first.");

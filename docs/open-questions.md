@@ -114,7 +114,7 @@ Default: use the native master-volume stage and fader law, from silence (-100 dB
 
 ### Tap tempo
 
-Default: update after the second tap, average at most four recent intervals, ignore taps faster than the supported maximum, and restart after a pause over three seconds. Do not auto-start playback. Each resulting tempo change undoes once; tapping the same tempo and the first anchor do not dirty the document. Normal tempo edits, history and project replacement clear the transient estimate. No claimed match to an undocumented reference tap algorithm.
+Default: update after the second tap, average at most four recent intervals, ignore taps faster than the supported maximum, and restart after a pause over three seconds. With Start Playback with Tap Tempo on (the reference's default; Preferences > Record, Warp & Launch > Tap Tempo, or Playback > Playback Options), a bar of taps while stopped (its beats in crotchets, rounded: four in 4/4, three in 3/4 and 6/8) starts playback from the insert marker one tapped beat after the last tap, as the manual's "four taps to start song playback" in 4/4 has it; another tap before then starts it at that tap, and Stop cancels it. Which beat the reference's realtime tap processor starts on was not read. Each resulting tempo change undoes once; tapping the same tempo and the first anchor do not dirty the document. Normal tempo edits, history and project replacement clear the transient estimate. No claimed match to an undocumented reference tap algorithm.
 
 
 ### Clip activation while playing

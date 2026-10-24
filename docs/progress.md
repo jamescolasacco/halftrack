@@ -2653,3 +2653,7 @@ UI area. The browser's right edge drags to resize it, as the reference's border 
 ## The Quantize tool and Quantize Settings — 2026-10-24
 
 Engine and UI areas. The note tools gain Quantize, after the reference's MIDI tool: starts, ends or both move an Amount of the way to the current grid or one of the reference's nine grids (1/4 to 1/32, triplets and the combined straight-and-triplet ones), moving the notes themselves so they keep their identities, chance and expression. Edit > Quantize and Cmd+U now apply its last settings, and the new Edit > Quantize Settings... (Shift+Cmd+U, which used to quantize ends) opens its window, as in the reference. Every note tool keeps its last settings while Halftrack runs ([contract](research/midi-tools-contract.md#quantize-2026-10-24)). Checked in the MIDI tools and UI suites.
+
+## Start Playback with Tap Tempo — 2026-10-24
+
+Engine and UI areas. As the reference's preference (on by default) and its manual's "four taps to start song playback" in 4/4: a bar of taps while stopped schedules playback from the insert marker a tapped beat after the last tap, at the tapped tempo; a further tap before then starts it at that tap, and Stop cancels it. It is `Preferences::startPlaybackWithTapTempo`, in the Record page's new Tap Tempo section and in Playback > Playback Options as Start Transport With Tap Tempo ([preferences contract](research/preferences-contract.md)). Checked in the transport suite on the synthetic device (playback began 8 ms after the scheduled beat), and in the preferences and UI suites.

@@ -13048,7 +13048,7 @@ private:
                     menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
                     menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
                     menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects, menuShowBackups, menuRevealBackups, menuSnapAutomation, menuSaveTemplate,
-                    menuQuantizeSettings,
+                    menuQuantizeSettings, menuStartWithTap,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410, // Plus Session::TimeFormat.
@@ -13686,6 +13686,7 @@ private:
             juce::PopupMenu options;
             options.addItem (menuEntry (menuFollow, "Follow", true, followPlayhead));
             options.addItem (menuEntry (menuStartWithRecord, "Start Transport With Record", true, session.preferences().startPlaybackWithRecord));
+            options.addItem (menuEntry (menuStartWithTap, "Start Transport With Tap Tempo", true, session.preferences().startPlaybackWithTapTempo));
             popup.addSubMenu ("Playback Options", options, ! menusBlocked());
             popup.addSeparator();
             syncRecordShortcuts();
@@ -13943,6 +13944,12 @@ private:
             {
                 auto preferences = session.preferences();
                 preferences.startPlaybackWithRecord = ! preferences.startPlaybackWithRecord;
+                report (session.setPreferences (preferences)); break;
+            }
+            case menuStartWithTap:
+            {
+                auto preferences = session.preferences();
+                preferences.startPlaybackWithTapTempo = ! preferences.startPlaybackWithTapTempo;
                 report (session.setPreferences (preferences)); break;
             }
             case menuRecordArrangement: report (session.recordButton (! session.preferences().startPlaybackWithRecord)); break;
@@ -15139,9 +15146,9 @@ private:
         {
             for (auto* c : std::initializer_list<juce::Component*> { &recordHeading, &typeLabel, &type, &depthLabel, &depth, &countInLabel, &countIn, &exclusiveArm, &exclusiveSolo,
                                                                     &sceneRecord, &startPlayback, &warpHeading, &autoWarp, &warpLabel, &warp, &edgeFades, &launchHeading, &modeLabel, &mode,
-                                                                    &gridLabel, &grid })
+                                                                    &gridLabel, &grid, &tapHeading, &tapStart })
                 addAndMakeVisible (c);
-            styleHeading (recordHeading, "Record"); styleHeading (warpHeading, "Warp and Fades"); styleHeading (launchHeading, "Launch");
+            styleHeading (recordHeading, "Record"); styleHeading (warpHeading, "Warp and Fades"); styleHeading (launchHeading, "Launch"); styleHeading (tapHeading, "Tap Tempo");
             typeLabel.setText ("File Type", juce::dontSendNotification); depthLabel.setText ("Bit Depth", juce::dontSendNotification);
             countInLabel.setText ("Count-In", juce::dontSendNotification);
             type.setName ("Record file type"); depth.setName ("Record bit depth"); countIn.setName ("Count-in");
@@ -15160,6 +15167,8 @@ private:
             edgeFades.setName ("Create fades on clip edges");
             edgeFades.setTooltip ("Create Fades on Clip Edges: new audio clips, and the edges a split makes, fade over 4 ms, and touching clips crossfade");
             sceneRecord.setTooltip ("Start Recording on Scene Launch: launching a scene also records into its empty slots on armed tracks");
+            tapStart.setName ("Start playback with tap tempo");
+            tapStart.setTooltip ("Start Playback with Tap Tempo: a bar of taps while stopped starts playback at the tapped tempo, a beat after the last tap");
             warp.setName ("Default warp mode"); mode.setName ("Default launch mode"); grid.setName ("Default launch quantization");
             warpLabel.setText ("Default Warp Mode", juce::dontSendNotification); modeLabel.setText ("Default Launch Mode", juce::dontSendNotification);
             gridLabel.setText ("Default Launch Quantization", juce::dontSendNotification);
@@ -15168,7 +15177,7 @@ private:
             id = 1;
             for (const auto* name : { "Trigger", "Gate", "Toggle", "Repeat" }) mode.addItem (name, id++);
             for (const auto& [name, value] : Session::clipQuantisations()) grid.addItem (name, (int) value + 1);
-            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord, &startPlayback }) b->onClick = [this] { apply(); };
+            for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord, &startPlayback, &tapStart }) b->onClick = [this] { apply(); };
             warp.onChange = mode.onChange = grid.onChange = countIn.onChange = [this] { apply(); };
             sync();
         }
@@ -15183,6 +15192,7 @@ private:
             autoWarp.setToggleState (p.autoWarpLongSamples, juce::dontSendNotification);
             sceneRecord.setToggleState (p.startRecordingOnSceneLaunch, juce::dontSendNotification);
             startPlayback.setToggleState (p.startPlaybackWithRecord, juce::dontSendNotification);
+            tapStart.setToggleState (p.startPlaybackWithTapTempo, juce::dontSendNotification);
             edgeFades.setToggleState (p.createFadesOnClipEdges, juce::dontSendNotification);
             for (int i = 0; i < (int) std::size (warpModes); ++i) if (warpModes[i] == p.defaultWarpMode) warp.setSelectedId (i + 1, juce::dontSendNotification);
             mode.setSelectedId ((int) p.defaultLaunchMode + 1, juce::dontSendNotification); grid.setSelectedId ((int) p.defaultLaunchQuantisation + 1, juce::dontSendNotification);
@@ -15194,6 +15204,7 @@ private:
             p.exclusiveArm = exclusiveArm.getToggleState(); p.exclusiveSolo = exclusiveSolo.getToggleState(); p.autoWarpLongSamples = autoWarp.getToggleState();
             p.startRecordingOnSceneLaunch = sceneRecord.getToggleState();
             p.startPlaybackWithRecord = startPlayback.getToggleState();
+            p.startPlaybackWithTapTempo = tapStart.getToggleState();
             p.createFadesOnClipEdges = edgeFades.getToggleState();
             p.countInBars = juce::jmax (0, countIn.getSelectedId() - 1);
             p.defaultWarpMode = warpModes[(size_t) juce::jlimit (0, (int) std::size (warpModes) - 1, warp.getSelectedId() - 1)];
@@ -15213,15 +15224,18 @@ private:
             edgeFades.setBounds (area.removeFromTop (22)); area.removeFromTop (3);
             preferenceHeading (area, launchHeading);
             preferenceRow (area, modeLabel, mode, 120); preferenceRow (area, gridLabel, grid, 120);
+            preferenceHeading (area, tapHeading);
+            tapStart.setBounds (area.removeFromTop (22));
         }
     private:
         Impl& owner;
         static constexpr Session::WarpMode warpModes[] { Session::WarpMode::beats, Session::WarpMode::tones, Session::WarpMode::texture, Session::WarpMode::repitch,
                                                          Session::WarpMode::stretch, Session::WarpMode::complexPro, Session::WarpMode::efficient };
-        juce::Label recordHeading, typeLabel, depthLabel, countInLabel, warpHeading, warpLabel, launchHeading, modeLabel, gridLabel;
+        juce::Label recordHeading, typeLabel, depthLabel, countInLabel, warpHeading, warpLabel, launchHeading, modeLabel, gridLabel, tapHeading;
         juce::ComboBox type, depth, countIn, warp, mode, grid;
         juce::ToggleButton exclusiveArm { "Exclusive Arm" }, exclusiveSolo { "Exclusive Solo" }, autoWarp { "Auto-Warp Long Samples" },
-                           edgeFades { "Create Fades on Clip Edges" }, sceneRecord { "Start Recording on Scene Launch" }, startPlayback { "Start Playback with Record" };
+                           edgeFades { "Create Fades on Clip Edges" }, sceneRecord { "Start Recording on Scene Launch" }, startPlayback { "Start Playback with Record" },
+                           tapStart { "Start Playback with Tap Tempo" };
     };
     // What this copy of Halftrack is: its version, source commit and platform (selectable, to paste
     // into a report), its license, and where it keeps settings and the User Library.
@@ -19898,6 +19912,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                    "the panel offers Start Playback with Record, on by default");
             startPlaybackToggle->setToggleState (false, juce::sendNotificationSync); refresh();
             check (! session.preferences().startPlaybackWithRecord && session.preferences().startRecordingOnSceneLaunch, "switching it off sets it, keeping the others");
+            auto* tapToggle = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Start playback with tap tempo"));
+            check (tapToggle != nullptr && tapToggle->getButtonText() == "Start Playback with Tap Tempo" && tapToggle->getToggleState(),
+                   "the Record page's Tap Tempo section offers Start Playback with Tap Tempo, on by default as in the reference");
+            tapToggle->setToggleState (false, juce::sendNotificationSync); refresh();
+            check (! session.preferences().startPlaybackWithTapTempo && ! session.preferences().startPlaybackWithRecord, "switching it off sets it");
+            tapToggle->setToggleState (true, juce::sendNotificationSync); refresh();
         }
         check (session.resetPreferences().wasOk(), "reset the preferences");
         useHardClipEdges (session);
@@ -20388,6 +20408,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         menuItemSelected (menuStartWithRecord, 3); refresh();
         check (session.preferences().startPlaybackWithRecord != starts && plainRecords() != starts, "Start Transport With Record swaps the two shortcuts");
         menuItemSelected (menuStartWithRecord, 3); refresh();
+        {
+            const auto taps = session.preferences().startPlaybackWithTapTempo;
+            menuItemSelected (menuStartWithTap, 3);
+            check (session.preferences().startPlaybackWithTapTempo != taps, "Playback Options > Start Transport With Tap Tempo switches it");
+            menuItemSelected (menuStartWithTap, 3);
+        }
         // Create: Add Locator at the play position, then Delete Locator there.
         session.seek (1.0); refresh();
         menuItemSelected (menuLocator, 2); refresh();

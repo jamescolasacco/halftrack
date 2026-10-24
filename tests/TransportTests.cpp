@@ -262,6 +262,42 @@ int runTransportTests (const juce::File& artifacts)
         // The marker keeps its beat when the tempo changes: beat 6 is 3 s at 120 BPM and 6 s at 60 BPM.
         s.setTempo (60);
         check (near (s.snapshot().insertMarker, 6, 1e-3), "the insert marker keeps its beat through a tempo change");
+        {
+            // Start Playback with Tap Tempo, on by default as in the reference: a bar of taps while
+            // stopped starts playback at the tapped tempo, a tapped beat after the last tap.
+            Session tapped (false, makeSyntheticTestDeviceType());
+            pumpSyntheticTestDevice (tapped, 8);
+            check (tapped.preferences().startPlaybackWithTapTempo, "Start Playback with Tap Tempo is on by default");
+            const double now = juce::Time::getMillisecondCounterHiRes() * .001;
+            for (int i = 0; i < 3; ++i) ok (tapped.tapTempo (now + i * .5), "tap");
+            check (! tapped.snapshot().playing && ! tapped.tappedStart(), "three taps in 4/4 leave the transport stopped");
+            ok (tapped.tapTempo (now + 1.5), "the fourth tap");
+            check (tapped.tappedStart() && near (*tapped.tappedStart(), now + 2, 1e-9) && near (tapped.snapshot().tempo, 120, 1e-6),
+                   "the fourth schedules playback a tapped beat later, at the tapped 120 BPM");
+            const auto deadline = juce::Time::getMillisecondCounterHiRes() + 5000;
+            while (! tapped.snapshot().playing && juce::Time::getMillisecondCounterHiRes() < deadline)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (5);
+            const auto late = juce::Time::getMillisecondCounterHiRes() * .001 - (now + 2);
+            check (tapped.snapshot().playing && late >= 0 && late < .1 && ! tapped.tappedStart(), "playback starts then (" + juce::String (late * 1000, 1) + " ms after)");
+            tapped.stop();
+            const double later = now + 10; // A new bar after a pause, its start far ahead of the clock.
+            for (int i = 0; i < 4; ++i) ok (tapped.tapTempo (later + i * .5), "a new bar of taps");
+            check (tapped.tappedStart().has_value() && ! tapped.snapshot().playing, "schedules another start");
+            ok (tapped.tapTempo (later + 1.9), "a fifth tap before it");
+            check (tapped.snapshot().playing && ! tapped.tappedStart(), "starts playback at that tap");
+            tapped.stop();
+            for (int i = 0; i < 4; ++i) ok (tapped.tapTempo (later + 10 + i * .5), "another bar");
+            tapped.stop();
+            check (! tapped.tappedStart() && ! tapped.snapshot().playing, "Stop cancels a scheduled start");
+            ok (tapped.setTimeSignature (3, 4), "a bar of three");
+            for (int i = 0; i < 3; ++i) ok (tapped.tapTempo (later + 20 + i * .5), "three taps");
+            check (tapped.tappedStart().has_value(), "in 3/4 three taps schedule the start");
+            tapped.stop();
+            auto off = tapped.preferences(); off.startPlaybackWithTapTempo = false; ok (tapped.setPreferences (off), "switch it off");
+            for (int i = 0; i < 4; ++i) ok (tapped.tapTempo (later + 30 + i * .5), "a bar of taps with it off");
+            check (! tapped.tappedStart() && ! tapped.snapshot().playing, "with it off, taps only set the tempo");
+            off.startPlaybackWithTapTempo = true; ok (tapped.setPreferences (off), "and on again");
+        }
         std::cout << "Transport passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL transport: " << e.what() << std::endl; return 1; }

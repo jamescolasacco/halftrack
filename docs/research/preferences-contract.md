@@ -34,6 +34,7 @@ A research agent read the reference's Preferences window statically (Live 12.2.1
 | Count-In | None | Bars recording waits for: None, 1, 2 or 4 ([metronome contract](metronome-contract.md#count-in)). |
 | Metronome Sound | Classic | The metronome's ticks: Classic, Click or Wood ([metronome contract](metronome-contract.md)). |
 | Theme, Zoom Display | Dark, 100% | The interface's theme (Dark, Light or High Contrast) and scale, 50-200% in steps of 25 ([themes contract](themes-contract.md)). |
+| Start Playback with Tap Tempo | on | A bar of taps while stopped starts playback at the tapped tempo, a tapped beat after the last tap, as the manual's four taps in 4/4 (Record, Warp & Launch's Tap Tempo section; also Playback > Playback Options). The reference's default is on (static reading: `ASongPrefData::mpStartTransportWithTapTempo`). |
 | Lock Envelopes | off | Options > Lock Envelopes: automation stays where it is when clips move. The reference keeps it with its song preference data (static reading: `ASongPrefData::mpLockEnvelope`, off), not in Sets ([automation contract](arrangement-automation-contract.md#automation-follows-clips-and-lock-envelopes-2026-10-24)). |
 
 Two lists are kept beside the settings: the browser's user folders ([Places](browser-places-contract.md)) and File > Open Recent Project's projects ([menu contract](main-menu-contract.md)). Reset to Defaults keeps them.
