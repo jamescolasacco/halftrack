@@ -7,7 +7,7 @@ Halftrack's take lanes follow the reference's [comping chapter](https://www.able
 - **Storage.** Each Arrangement track can keep take lanes below its main lane: a `HALFTRACKTAKELANES` child of the track with `TAKELANE` children (id, name), each holding clip states. Take lane clips do not play.
 - **Recording.** Stopping an Arrangement recording, for each pass on an armed track:
   - keeps a copy, with fresh identities, in the first take lane holding nothing at or after the pass's start, or in a new lane named "Take N";
-  - replaces the main lane's earlier material under the pass, splitting it at the pass's edges. With Options > Arrangement Overdub on, a MIDI pass first takes the notes and controller points of the MIDI clips beneath it, so they play on with the new notes, as the reference's Arrangement Overdub merges MIDI (`Session::arrangementOverdub`, kept with the project, off at first).
+  - replaces the main lane's earlier material under the pass, splitting it at the pass's edges. With Options > Arrangement Overdub on, a MIDI pass first takes the notes and controller points of the MIDI clips beneath it, so they play on with the new notes, as the reference's Arrangement Overdub merges MIDI (`Session::arrangementOverdub`, kept with the project, off at first). The control bar's MIDI Arrangement Overdub switch, a plus between Record and Automation Arm as in the reference, shows and sets it too.
 
   Both are part of the take's undo step.
 - **Comping.** `compTake (laneId, start, end)` splits the main lane at the range's edges, removes its material inside, and copies each lane clip's part of the range into it at its own timing (start and offset adjusted). The copies record their source lane. It is one undo step.

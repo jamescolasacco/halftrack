@@ -2617,3 +2617,7 @@ UI area. The envelope's context menu offers the reference's waveform shapes, sin
 
 Engine and UI areas. Options > Arrangement Overdub, as the reference's: with it on, a MIDI take recorded in the Arrangement keeps the notes of the clips it records over, merging them into the take, instead of replacing them. It is kept with the project and off at first ([take lanes contract](research/take-lanes-contract.md)). Also removed a leftover debug print from a UI test that read a temporary snapshot after its lifetime. Checked in the take lanes and UI suites.
 
+## The control bar's MIDI Arrangement Overdub switch — 2026-10-24
+
+UI area. The control bar gains the reference's MIDI Arrangement Overdub switch, a plus between Record and Automation Arm, lit while Arrangement Overdub is on. The position field, loop fields, Follow and Capture give up a few pixels so the whole transport still fits a 1440-pixel window ([take lanes contract](research/take-lanes-contract.md)). Checked in the UI suite.
+

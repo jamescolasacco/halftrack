@@ -390,6 +390,22 @@ private:
     Kind kind;
 };
 
+// The control bar's MIDI Arrangement Overdub switch, a plus beside Record, lit while it is on, as the reference's.
+class OverdubButton final : public juce::Button
+{
+public:
+    OverdubButton() : juce::Button ("MIDI Arrangement Overdub") { setClickingTogglesState (false); setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); }
+    void paintButton (juce::Graphics& g, bool over, bool down) override
+    {
+        g.setColour ((over || down) ? raised.brighter (0.08f) : raised);
+        g.fillRect (getLocalBounds().reduced (1));
+        g.setColour (line); g.drawRect (getLocalBounds().reduced (1));
+        const auto r = getLocalBounds().toFloat().withSizeKeepingCentre (getHeight() * .4f, getHeight() * .4f);
+        g.setColour (getToggleState() ? red.brighter (0.3f) : ink);
+        g.fillRect (r.withSizeKeepingCentre (r.getWidth(), 2.2f)); g.fillRect (r.withSizeKeepingCentre (2.2f, r.getHeight()));
+    }
+};
+
 // The control bar's Draw Mode switch, a pencil lit while Draw Mode is on, as the reference's.
 class DrawModeButton final : public juce::Button
 {
@@ -485,7 +501,7 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &nudgeDown, &nudgeUp, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
+                 &playButton, &stopButton, &recordButton, &overdubButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &nudgeDown, &nudgeUp, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &info, &overview, &ruler, &timeRuler, &viewport,
                  &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain })
@@ -587,6 +603,8 @@ public:
         playButton.onClick = [this] { togglePlay(); };
         stopButton.onClick = [this] { if (state.playing || state.recording) session.stop(); else session.returnToStart(); refresh(); };
         recordButton.onClick = [this] { report (session.recordButton (juce::ModifierKeys::getCurrentModifiers().isShiftDown())); refresh(); };
+        overdubButton.setTooltip ("MIDI Arrangement Overdub: MIDI recorded in the Arrangement adds its notes to the clips it records over");
+        overdubButton.onClick = [this] { session.setArrangementOverdub (! session.arrangementOverdub()); refresh(); };
         automationArmButton.setTooltip ("Automation Arm: while recording, moving a fader or device control records its automation");
         automationArmButton.onClick = [this] { report (session.setAutomationArm (! state.automationArm)); refresh(); };
         sessionRecordButton.setTooltip ("Session Record: record new clips into the selected scene on armed tracks, and overdub their MIDI clips; press again to play them");
@@ -815,10 +833,10 @@ public:
         // Transport is centred on the window, independent of the side groups, and kept clear of them.
         // In a narrow window the less essential sections give way first, as the reference's do.
         struct Section { std::vector<juce::Component*> parts; int width; };
-        const Section punch { { &punchInButton, &punchOutButton }, 30 + 2 + 30 }, loop { { &loopStartLabel, &loopButton, &loopLengthLabel }, 78 + 3 + 48 + 3 + 78 + 2 },
-                      follow { { &followButton }, 50 + 10 }, capture { { &captureButton, &sessionRecordButton }, 54 + 2 + 28 + 4 },
-                      automation { { &automationArmButton, &reEnableButton }, 2 * 28 + 4 };
-        int transportWidth = 92 + 6 + 3 * 28 + 2 + automation.width + capture.width + follow.width + punch.width + loop.width;
+        const Section punch { { &punchInButton, &punchOutButton }, 30 + 2 + 30 }, loop { { &loopStartLabel, &loopButton, &loopLengthLabel }, 72 + 3 + 48 + 3 + 72 + 2 },
+                      follow { { &followButton }, 48 + 8 }, capture { { &captureButton, &sessionRecordButton }, 50 + 2 + 28 + 4 },
+                      automation { { &overdubButton, &automationArmButton, &reEnableButton }, 3 * 28 + 4 };
+        int transportWidth = 86 + 6 + 3 * 28 + 2 + automation.width + capture.width + follow.width + punch.width + loop.width;
         std::set<const Section*> dropped;
         for (const auto* section : { &punch, &loop, &follow, &capture, &automation })
             if (transportWidth > bar.getWidth()) { dropped.insert (section); transportWidth -= section->width; }
@@ -826,19 +844,23 @@ public:
             for (auto* part : section->parts) part->setVisible (! dropped.count (section));
         const auto x = juce::jlimit (bar.getX(), juce::jmax (bar.getX(), bar.getRight() - transportWidth), getWidth() / 2 - transportWidth / 2);
         auto centre = juce::Rectangle<int> (x, bar.getY(), transportWidth, bar.getHeight());
-        positionLabel.setBounds (centre.removeFromLeft (92)); centre.removeFromLeft (6);
+        positionLabel.setBounds (centre.removeFromLeft (86)); centre.removeFromLeft (6);
         playButton.setBounds (centre.removeFromLeft (28));
         stopButton.setBounds (centre.removeFromLeft (28));
         recordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (2);
-        if (! dropped.count (&automation)) { automationArmButton.setBounds (centre.removeFromLeft (28)); reEnableButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4); }
-        if (! dropped.count (&capture)) { captureButton.setBounds (centre.removeFromLeft (54)); centre.removeFromLeft (2); sessionRecordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4); }
-        if (! dropped.count (&follow)) { followButton.setBounds (centre.removeFromLeft (50)); centre.removeFromLeft (10); }
+        if (! dropped.count (&automation))
+        {
+            overdubButton.setBounds (centre.removeFromLeft (28));
+            automationArmButton.setBounds (centre.removeFromLeft (28)); reEnableButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4);
+        }
+        if (! dropped.count (&capture)) { captureButton.setBounds (centre.removeFromLeft (50)); centre.removeFromLeft (2); sessionRecordButton.setBounds (centre.removeFromLeft (28)); centre.removeFromLeft (4); }
+        if (! dropped.count (&follow)) { followButton.setBounds (centre.removeFromLeft (48)); centre.removeFromLeft (8); }
         if (! dropped.count (&punch)) { punchInButton.setBounds (centre.removeFromLeft (30)); centre.removeFromLeft (2); }
         if (! dropped.count (&loop))
         {
-            loopStartLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (3);
+            loopStartLabel.setBounds (centre.removeFromLeft (72)); centre.removeFromLeft (3);
             loopButton.setBounds (centre.removeFromLeft (48)); centre.removeFromLeft (3);
-            loopLengthLabel.setBounds (centre.removeFromLeft (78)); centre.removeFromLeft (2);
+            loopLengthLabel.setBounds (centre.removeFromLeft (72)); centre.removeFromLeft (2);
         }
         if (! dropped.count (&punch)) punchOutButton.setBounds (centre.removeFromLeft (30));
         auto status = bar.withLeft (centre.getRight() + 12);
@@ -9820,6 +9842,7 @@ private:
     TransportButton playButton { TransportButton::play }, stopButton { TransportButton::stop }, recordButton { TransportButton::record },
                     sessionRecordButton { TransportButton::sessionRecord };
     AutomationButton automationArmButton { AutomationButton::arm }, reEnableButton { AutomationButton::reEnable };
+    OverdubButton overdubButton;
     juce::TextButton captureButton { "Capture" };
     juce::TextButton punchInButton { "In" }, punchOutButton { "Out" };
     juce::TextButton extButton { "EXT" };
@@ -12357,6 +12380,7 @@ private:
         recordButton.setToggleState (state.recording || state.recordWaiting, juce::dontSendNotification);
         sessionRecordButton.setToggleState (state.sessionRecording, juce::dontSendNotification); sessionRecordButton.setEnabled (! state.recording);
         automationArmButton.setToggleState (state.automationArm, juce::dontSendNotification);
+        overdubButton.setToggleState (session.arrangementOverdub(), juce::dontSendNotification);
         reEnableButton.setToggleState (state.automationOverridden, juce::dontSendNotification); reEnableButton.setEnabled (state.automationOverridden);
         loopButton.setToggleState (state.looping, juce::dontSendNotification);
         punchInButton.setToggleState (state.punchIn, juce::dontSendNotification); punchOutButton.setToggleState (state.punchOut, juce::dontSendNotification);
@@ -19379,9 +19403,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (session.notePreview() == notes && previewButton.getToggleState() == samples, "and both back");
             check (! entry ("Options", menuArrangementOverdub)->isTicked, "Arrangement Overdub is off at first");
             menuItemSelected (menuArrangementOverdub, 6);
-            check (session.arrangementOverdub() && entry ("Options", menuArrangementOverdub)->isTicked, "Options > Arrangement Overdub turns it on");
-            menuItemSelected (menuArrangementOverdub, 6);
-            check (! session.arrangementOverdub(), "and off");
+            check (session.arrangementOverdub() && entry ("Options", menuArrangementOverdub)->isTicked && overdubButton.getToggleState(), "Options > Arrangement Overdub turns it on, lighting the control bar's plus");
+            overdubButton.onClick(); refresh();
+            check (! session.arrangementOverdub() && ! overdubButton.getToggleState(), "and the plus turns it off");
+            check (overdubButton.isVisible() && overdubButton.getX() > recordButton.getRight() - 1 && overdubButton.getRight() <= automationArmButton.getX() + 1,
+                   "the plus sits between Record and Automation Arm, as in the reference");
         }
         check (shortcut ("Options", menuDrawMode, juce::KeyPress ('b')) && ! entry ("Options", menuDrawMode)->isTicked, "Draw Mode shows the reference's B, unticked while off");
         menuItemSelected (menuDrawMode, 5); refresh();
