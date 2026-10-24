@@ -108,7 +108,7 @@ For Session clips, the freeze suite gives the Sampler track a Session clip with 
 
 ## Not implemented
 
-- Freezing Session clips: Halftrack's freeze renders the Arrangement only.
+- Freezing Session clips: Halftrack's freeze renders the Arrangement only. The engine plays a frozen track from its render alone, with its devices off, so a frozen track's Session clips are silent until it is unfrozen. The reference renders each Session clip into its freeze and plays those.
 - Bounce to New Track from a frozen source, and from the interface.
 - Undoing a bounce of a track frozen before it, which comes back unfrozen, as after a Flatten.
 - Portable freeze renders.
