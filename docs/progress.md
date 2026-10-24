@@ -2645,3 +2645,7 @@ Engine and UI areas. Options > Snap Automation to Grid, after the reference's (i
 ## Templates — 2026-10-24
 
 UI area. File > Save as Template..., after the reference's: the project, named in a dialog, is written to the User Library's Templates folder as the default set is, asking before replacing one. The Library gains Templates after Grooves, listing them; a double-click opens one as a new untitled project, and its right-click Set Default Set makes new projects start from it ([contract](research/templates-contract.md)). Checked in the UI suite.
+
+## Resizable browser — 2026-10-24
+
+UI area. The browser's right edge drags to resize it, as the reference's border does: from 220 pixels to the smaller of 640 and half the window, starting at 300, with a left-right cursor over the edge. Checked in the UI suite, which drags it wider and past both limits.

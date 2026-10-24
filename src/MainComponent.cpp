@@ -889,7 +889,7 @@ public:
         area.removeFromBottom (statusHeight);
         // MIDI Map Mode shows its mappings in the browser's place, so the browser shows meanwhile.
         const bool browserShown = showBrowser || mapping();
-        browserBounds = browserShown ? area.removeFromLeft (browserWidth) : juce::Rectangle<int>();
+        browserBounds = browserShown ? area.removeFromLeft (juce::jlimit (minimumBrowserWidth, maximumBrowserWidth(), browserWidth)) : juce::Rectangle<int>();
         // The Info View sits under the browser, as in the reference, and without it keeps the corner
         // beside the detail view.
         info.setVisible (showInfo);
@@ -976,17 +976,32 @@ public:
         updateScroll();
     }
 
-    void mouseDown (const juce::MouseEvent& e) override { draggingDivider = showPiano && dividerBounds.expanded (0, 3).contains (e.getPosition()); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        draggingBrowserEdge = onBrowserEdge (e.getPosition());
+        draggingDivider = ! draggingBrowserEdge && showPiano && dividerBounds.expanded (0, 3).contains (e.getPosition());
+    }
     void mouseDrag (const juce::MouseEvent& e) override
     {
+        if (draggingBrowserEdge) { browserWidth = juce::jlimit (minimumBrowserWidth, maximumBrowserWidth(), e.x - browserBounds.getX()); resized(); repaint(); return; }
         if (! draggingDivider) return;
         const auto main = getLocalBounds().withTrimmedTop (toolbarBounds.getBottom()).withTrimmedBottom (statusHeight);
         clipViewFraction = juce::jlimit (.25, .85, (main.getBottom() - e.y) / (double) juce::jmax (1, main.getHeight()));
         resized();
     }
-    void mouseUp (const juce::MouseEvent&) override { draggingDivider = false; }
-    juce::MouseCursor getMouseCursor() override { return showPiano ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor; }
-    bool draggingDivider = false;
+    void mouseUp (const juce::MouseEvent&) override { draggingDivider = draggingBrowserEdge = false; }
+    juce::MouseCursor getMouseCursor() override
+    {
+        if (onBrowserEdge (getMouseXYRelative())) return juce::MouseCursor::LeftRightResizeCursor;
+        return showPiano ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor;
+    }
+    bool draggingDivider = false, draggingBrowserEdge = false;
+    // The browser's right edge drags to resize it, as the reference's does; the width lasts while the window is open.
+    int browserWidth = defaultBrowserWidth;
+    static constexpr int defaultBrowserWidth = 300, minimumBrowserWidth = 220;
+    int maximumBrowserWidth() const { return juce::jmax (minimumBrowserWidth, juce::jmin (640, getWidth() / 2)); }
+    bool onBrowserEdge (juce::Point<int> p) const
+    { return ! browserBounds.isEmpty() && std::abs (p.x - browserBounds.getRight()) <= 4 && p.y >= browserBounds.getY() && p.y < getHeight() - statusHeight; }
     bool handleKey (const juce::KeyPress& key)
     {
         if (session.isExporting()) return true;
@@ -1990,7 +2005,7 @@ private:
     double clipViewFraction = .58;
     juce::Rectangle<int> dividerBounds;
     static constexpr float automationMagnet = 6; // How near a grid line, in pixels, a breakpoint snaps to it.
-    static constexpr int categoryWidth = 98, browserWidth = 300, trackWidth = 252, trackHeight = 72, rulerHeight = 60,
+    static constexpr int categoryWidth = 98, trackWidth = 252, trackHeight = 72, rulerHeight = 60,
                          deviceHeight = 268, statusHeight = 24;
     struct BrowserItem { juce::File file; bool directory = false, found = false; }; // found: a search result from the index.
     struct FolderScan
@@ -17090,6 +17105,30 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (session.setPreferences (before).wasOk(), "restore the preferences");
         leavePlace(); userLibrary = library; browserFolder = folder; setBrowserCategory (category); showBrowser = browserWas; resized();
         root.deleteRecursively();
+    }
+    {
+        // The browser's right edge drags to resize it, as the reference's does, within limits.
+        const bool browserWas = showBrowser;
+        showBrowser = true; resized();
+        const auto now = juce::Time::getCurrentTime();
+        const auto drag = [&] (int toX)
+        {
+            const juce::Point<float> down ((float) browserBounds.getRight(), (float) browserBounds.getY() + 40), to ((float) toX, down.y);
+            const auto event = [&] (juce::Point<float> at, bool dragged)
+            { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys(), 1.0f, 0, 0, 0, 0, this, this, now, down, now, 1, dragged); };
+            mouseDown (event (down, false)); mouseDrag (event (to, true)); mouseUp (event (to, true));
+        };
+        const auto listWidth = browserList.getWidth(), startWidth = browserBounds.getWidth();
+        check (startWidth == juce::jmin (defaultBrowserWidth, maximumBrowserWidth()) && onBrowserEdge ({ browserBounds.getRight(), browserBounds.getY() + 40 }),
+               "the browser starts 300 pixels wide where the window allows, its edge draggable");
+        drag (browserBounds.getRight() + 40);
+        const auto wider = juce::jlimit (minimumBrowserWidth, maximumBrowserWidth(), startWidth + 40);
+        check (browserBounds.getWidth() == wider && wider > startWidth && browserList.getWidth() == listWidth + (wider - startWidth), "dragging its edge widens it, and its list with it");
+        drag (20);
+        check (browserBounds.getWidth() == minimumBrowserWidth, "no narrower than its minimum");
+        drag (getWidth());
+        check (browserBounds.getWidth() == maximumBrowserWidth(), "and no wider than its maximum");
+        browserWidth = defaultBrowserWidth; showBrowser = browserWas; resized();
     }
     {
         // MIDI Map Mode: the switch covers the work area, clicking a control learns it, and the list edits its mapping.
