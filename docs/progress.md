@@ -2540,3 +2540,8 @@ UI area. The note editor's keys named middle C "C4" while its notes named the sa
 ## Suite timeouts on the macOS runner — 2026-10-24
 
 Root area (CMakeLists). CI run 40101484168 timed out `ui-acceptance` on the macOS runner at its 90 s limit, after 89.2 s on the last green run; its output stopped mid-run, not at an error, while Linux and Windows passed. On the same run `midi-input-acceptance` took 275 s of 300 s, `sends-acceptance` 134 s of 180 s and `audio-export-acceptance` 125 s of 180 s. Their limits are now 300 s, 600 s, 360 s and 360 s.
+
+## Undo History — 2026-10-24
+
+Engine and UI areas. View > Undo History (Option+Cmd+Z), at the reference's place after Info, opens a window beside the main one listing the project's steps from the start, by Edit's step names (`Session::undoSteps`, `redoSteps`). The current step is selected and the steps Redo would do again are dimmed; a click undoes or redoes to the step clicked, while the main window keeps working ([menu contract](research/main-menu-contract.md)). Checked in the UI suite.
+

@@ -1590,6 +1590,10 @@ public:
     // none, as the reference's Edit menu names them.
     juce::String undoDescription() const;
     juce::String redoDescription() const;
+    // The history, as the reference's Undo History lists it: the steps Undo would take back, the
+    // latest first, and those Redo would do again, the next first. Empty while they cannot run.
+    juce::StringArray undoSteps() const;
+    juce::StringArray redoSteps() const;
     juce::Result exportAudio (const juce::File&, const AudioExportSettings&);
     juce::Result exportAudio (const juce::File&, ExportFormat, double sampleRate = 48000, int bitDepth = 24, double tailSeconds = 0);
     juce::Result exportWav (const juce::File&, double sampleRate = 48000, int bitDepth = 24, double tailSeconds = 0);

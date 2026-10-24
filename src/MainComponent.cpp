@@ -714,6 +714,7 @@ public:
         session.closePluginEditors();
         for (auto& window : automationWindows) if (window != nullptr) delete window.getComponent();
         if (preferencesWindow != nullptr) delete preferencesWindow.getComponent();
+        if (undoHistoryWindow != nullptr) delete undoHistoryWindow.getComponent();
         for (auto& dialog : dialogs) if (dialog != nullptr) delete dialog.getComponent();
         for (auto& alert : alerts) if (alert != nullptr) delete alert.getComponent();
        #if JUCE_MAC
@@ -964,7 +965,7 @@ public:
             if (code == 'O' && ! shift && ! key.getModifiers().isAltDown()) { openDialog(); return true; }
             if (code == 'N') { ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) safe->startNewProject(); }); return true; }
             if (code == 'T') { if (key.getModifiers().isAltDown()) addReturnTrack(); else if (shift) addMidiTrack(); else { showPiano = false; addTrack(); resized(); } return true; }
-            if (code == 'Z') { if (shift) session.redo(); else session.undo(); refresh(); return true; }
+            if (code == 'Z' && ! key.getModifiers().isAltDown()) { if (shift) session.redo(); else session.undo(); refresh(); return true; }
             if (code == 'L' && (shift || key.getModifiers().isAltDown())) return runMenuShortcut (key);
             if (code == 'L' && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (79); return true; }
             if (code == 'J' && ! shift && timeSelection.active() && ! showSession && ! showPiano) { selectionCommand (80); return true; }
@@ -5635,6 +5636,49 @@ private:
 
     // The Groove Pool: every groove in the project with its Base, Quantize, Timing, Random and
     // Velocity, and the Global Amount that scales Timing, Random and Velocity for all of them.
+    // View > Undo History, after the reference's: the project's history from its start, oldest first.
+    // The current step is selected, the steps Redo would do again are dimmed, and a click undoes or
+    // redoes to the step clicked.
+    class UndoHistoryPanel final : public juce::Component, private juce::ListBoxModel
+    {
+    public:
+        explicit UndoHistoryPanel (Impl& o) : owner (o)
+        {
+            setName ("Undo History");
+            addAndMakeVisible (list); list.setName ("Undo steps"); list.setModel (this); list.setRowHeight (22);
+            list.setColour (juce::ListBox::backgroundColourId, background);
+            sync();
+        }
+        void sync()
+        {
+            const auto undoNow = owner.session.undoSteps(), redoNow = owner.session.redoSteps();
+            if (undoNow == undo && redoNow == redo && list.getNumSelectedRows() == 1) return;
+            undo = undoNow; redo = redoNow;
+            list.updateContent(); list.selectRow (currentRow(), false, true); list.repaint();
+        }
+        int rowCount() const { return 1 + undo.size() + redo.size(); }
+        int currentRow() const { return undo.size(); }
+        // The start, then each step by its name, as Edit's Undo and Redo name it.
+        juce::String rowText (int row) const
+        {
+            const auto step = row == 0 ? juce::String ("Start") : row <= undo.size() ? undo[undo.size() - row] : redo[row - undo.size() - 1];
+            return step.isEmpty() ? juce::String ("Edit") : step.substring (0, 1).toUpperCase() + step.substring (1);
+        }
+        void clickRow (int row) { owner.moveInHistory (row - currentRow()); }
+        void resized() override { list.setBounds (getLocalBounds()); }
+    private:
+        Impl& owner;
+        juce::ListBox list;
+        juce::StringArray undo, redo;
+        int getNumRows() override { return rowCount(); }
+        void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override
+        {
+            if (selected) g.fillAll (orange.withAlpha (.25f));
+            g.setColour (row > currentRow() ? muted : ink); g.setFont (font (12.0f));
+            g.drawText (rowText (row), 10, 0, width - 20, height, juce::Justification::centredLeft, true);
+        }
+        void listBoxItemClicked (int row, const juce::MouseEvent&) override { clickRow (row); }
+    };
     class GroovePoolPanel final : public juce::Component
     {
     public:
@@ -9601,6 +9645,41 @@ private:
     }
     GrooveBox clipGroove { *this };
     juce::Component::SafePointer<GroovePoolPanel> groovePool;
+    // Undo History's window leaves the main window working, as Preferences' does.
+    class UndoHistoryWindow final : public juce::DocumentWindow
+    {
+    public:
+        UndoHistoryWindow (Impl& owner, juce::LookAndFeel& look)
+            : DocumentWindow ("Halftrack - Undo History", panel, juce::DocumentWindow::closeButton), list (std::make_unique<UndoHistoryPanel> (owner))
+        {
+            setLookAndFeel (&look); setUsingNativeTitleBar (true); setResizable (true, false);
+            list->setSize (300, 380);
+            setContentNonOwned (list.get(), true);
+            centreAroundComponent (&owner, getWidth(), getHeight());
+            setVisible (true);
+        }
+        ~UndoHistoryWindow() override { clearContentComponent(); setLookAndFeel (nullptr); }
+        void closeButtonPressed() override { delete this; }
+        UndoHistoryPanel& content() { return *list; }
+    private:
+        std::unique_ptr<UndoHistoryPanel> list;
+    };
+    juce::Component::SafePointer<UndoHistoryWindow> undoHistoryWindow;
+    UndoHistoryPanel* undoHistory() const { return undoHistoryWindow != nullptr ? &undoHistoryWindow->content() : nullptr; }
+    // View > Undo History opens its window, or closes it when open.
+    void toggleUndoHistory()
+    {
+        if (undoHistoryWindow != nullptr) { delete undoHistoryWindow.getComponent(); return; }
+        undoHistoryWindow = new UndoHistoryWindow (*this, theme);
+        undoHistoryWindow->toFront (true);
+    }
+    // Undo History's clicks: undo or redo that many steps.
+    void moveInHistory (int steps)
+    {
+        for (; steps < 0 && session.canUndo(); ++steps) session.undo();
+        for (; steps > 0 && session.canRedo(); --steps) session.redo();
+        refresh();
+    }
     int selectedDrumPad = 0; // The Drum Sampler pad that browser samples load into.
     DeviceChain deviceChain;
     juce::Viewport viewport;
@@ -11765,6 +11844,7 @@ private:
         if (clipGroove.isVisible()) if (const auto* clip = currentMidiClip()) clipGroove.setClip (*clip);
         if (clipLoop.isVisible()) if (const auto* clip = currentMidiClip()) clipLoop.setClip (*clip);
         if (groovePool != nullptr) groovePool->sync();
+        if (auto* history = undoHistory()) history->sync();
         newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
         importButton.setEnabled (currentTrack() == nullptr || ! currentTrack()->isReturn);
         {
@@ -12090,7 +12170,7 @@ private:
                     menuToggleView, menuClipView, menuDeviceView, menuToggleDetail, menuBrowser, menuGroovePool, menuSearch, menuSimilar,
                     menuFoldAll, menuFoldSelected, menuZoomSelection, menuZoomBack, menuMidiMap, menuKeyMap, menuComputerKeyboard,
                     menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuOverview, menuSceneSettings,
-                    menuSoloSwitches, menuCueSwitches, menuSaveCopy, menuDrawMode, menuFoldToNotes, menuFoldToScale, menuScaleHighlighting,
+                    menuSoloSwitches, menuCueSwitches, menuSaveCopy, menuDrawMode, menuFoldToNotes, menuFoldToScale, menuScaleHighlighting, menuUndoHistory,
                     menuSlice = 200, // Plus Session::SliceBy.
                     menuTimeFormat = 210 }; // Plus Session::TimeFormat.
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
@@ -12126,7 +12206,7 @@ private:
             { menuOverview, key ('o', cmd | alt) }, { 103, key ('i', cmd | alt) }, { 104, key ('s', cmd | alt) }, { 108, key ('r', cmd | alt) }, { 49, key ('a') }, { menuFoldAll, key ('u', alt) },
             { menuFoldSelected, key ('u') }, { 41, key ('+') }, { 42, key ('-') }, { menuZoomSelection, key ('z') }, { menuZoomBack, key ('x') },
             { menuMidiMap, key ('m', cmd) }, { menuKeyMap, key ('k', cmd) }, { menuComputerKeyboard, key ('m') }, { menuDrawMode, key ('b') },
-            { menuFoldToNotes, key ('f') }, { menuFoldToScale, key ('g') }, { menuScaleHighlighting, key ('k') },
+            { menuFoldToNotes, key ('f') }, { menuFoldToScale, key ('g') }, { menuScaleHighlighting, key ('k') }, { menuUndoHistory, key ('z', cmd | alt) },
             { 93, key ('1', cmd) }, { 94, key ('2', cmd) }, { 95, key ('3', cmd) }, { 96, key ('4', cmd) }, { 97, key ('5', cmd) }, { 13, key ('e', cmd | shift | alt) } };
         for (const auto& [id, press] : shortcuts)
         {
@@ -12586,7 +12666,7 @@ private:
             zoomMenu.addItem (menuEntry (menuZoomReset, "Reset Zoom", zoomPercent != 100));
             popup.addSubMenu ("Zoom", zoomMenu, ! menusBlocked());
             popup.addSeparator();
-            add (90, "Info", true, showInfo);
+            add (90, "Info", true, showInfo); add (menuUndoHistory, "Undo History", true, undoHistoryWindow != nullptr);
             popup.addSeparator();
             add (menuToggleView, "Toggle Arrangement/Session View");
             popup.addSeparator();
@@ -12800,6 +12880,7 @@ private:
             case menuOverview: session.setArrangementOverview (! state.arrangementOverview); refresh(); resized(); break;
             case menuSceneSettings: session.setSceneSettingsShown (! state.sceneSettingsShown); refresh(); launcher.repaint(); break;
             case menuGroovePool: openGroovePool(); return;
+            case menuUndoHistory: toggleUndoHistory(); return;
             case menuSearch: showBrowser = true; resized(); browserSearch.grabKeyboardFocus(); return;
             case menuSimilar: showSimilarFiles (similarSource()); return;
             case menuFoldAll: toggleFold (true); break;
@@ -18280,7 +18361,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         expect ("Playback", { "Play", "Continue Playback", "Move Insert Marker to Playhead", "Playback Options >", "-", "Record in Arrangement", "Arm Record in Arrangement",
                               "Record in Session", "-", "Metronome", "Metronome Only While Recording", "-", "Back to Arrangement" });
         const juce::String folds = std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return ! t.folded; }) ? "Fold All Tracks" : "Unfold All Tracks";
-        juce::StringArray view { "Fullscreen", "Zoom >", "-", "Info", "-", "Toggle Arrangement/Session View", "-", "Clip View", "Device View", "Toggle Clip/Device View", "Hide Detail View", "-",
+        juce::StringArray view { "Fullscreen", "Zoom >", "-", "Info", "Undo History", "-", "Toggle Arrangement/Session View", "-", "Clip View", "Device View", "Toggle Clip/Device View", "Hide Detail View", "-",
                                  "Browser", "Groove Pool", "-", "Search in Browser", "Show Similar Files", "-", "Plug-In Windows" };
        #if JUCE_MAC
         view.add ("Video Window");
@@ -18314,6 +18395,28 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         session.undo(); refresh();
         check (entry ("Edit", 21)->text == "Redo Add MIDI track" && entry ("Edit", 21)->isEnabled, "and after it, the step Redo would do again");
         session.redo(); refresh();
+        {
+            // View > Undo History (Option+Cmd+Z) lists the history from its start; a click undoes or redoes to a step.
+            check (session.addMidiTrack ("History").wasOk() && session.addMidiTrack ("History 2").wasOk(), "two more steps for the history"); refresh();
+            const auto tracks = state.tracks.size();
+            check (shortcut ("View", menuUndoHistory, juce::KeyPress ('z', juce::ModifierKeys (cmd | alt), 0)) && ! entry ("View", menuUndoHistory)->isTicked,
+                   "View > Undo History shows Option+Cmd+Z");
+            check (handleKey (juce::KeyPress ('Z', juce::ModifierKeys (cmd | alt), 0)) && undoHistory() != nullptr && undoHistory()->isShowing() && entry ("View", menuUndoHistory)->isTicked
+                       && state.tracks.size() == tracks, "Option+Cmd+Z opens the Undo History, ticked in View, undoing nothing");
+            auto* history = undoHistory();
+            const auto rows = history->rowCount(), current = history->currentRow();
+            check (current == rows - 1 && history->rowText (current) == "Add MIDI track" && history->rowText (current - 1) == "Add MIDI track" && history->rowText (0) == "Start",
+                   "it lists the steps after the start, the latest selected");
+            history->clickRow (current - 2); refresh();
+            check (state.tracks.size() == tracks - 2 && history->currentRow() == current - 2 && history->rowCount() == rows,
+                   "clicking an earlier step undoes back to it, the later steps staying to redo");
+            check (! menusBlocked() && entry ("File", 1)->isEnabled, "the history's window leaves the main window's menus working");
+            history->clickRow (current); refresh();
+            check (state.tracks.size() == tracks && history->currentRow() == current && ! session.canRedo(), "clicking the latest step redoes them");
+            menuItemSelected (menuUndoHistory, 4); refresh();
+            check (undoHistory() == nullptr && ! entry ("View", menuUndoHistory)->isTicked, "choosing it again closes the window");
+            session.undo(); session.undo(); refresh();
+        }
         // Every item stays, greyed while it cannot act.
         check (entry ("Edit", menuCut).has_value() && ! entry ("Edit", menuCut)->isEnabled && ! entry ("View", menuZoomBack)->isEnabled,
                "with nothing selected, Cut and Zoom Back stay in their menus, greyed");

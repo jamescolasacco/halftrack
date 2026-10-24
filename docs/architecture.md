@@ -16,7 +16,7 @@ Runtime media references use absolute paths. Loading resolves portable paths in 
 
 Load parses and validates the envelope into a candidate edit before replacing the active one. Unsupported versions, missing media, and unavailable synchronous external plug-ins produce errors while preserving the active project. Monitoring/arming are reset on load to prevent accidental capture. Unknown asynchronous plug-in failures still need a stronger recovery story; no universal crash-recovery guarantee is made.
 
-Undo/redo uses the engine UndoManager. Continuous UI gestures call `beginEditGesture` / `endEditGesture`; one drag is one undo. Commands name their transactions, which `undoDescription` and `redoDescription` report for the Edit menu. Snapshot dirty state combines engine notifications with an explicit user-edit flag because deferred engine initialization can otherwise clear a just-made edit.
+Undo/redo uses the engine UndoManager. Continuous UI gestures call `beginEditGesture` / `endEditGesture`; one drag is one undo. Commands name their transactions, which `undoDescription` and `redoDescription` report for the Edit menu and `undoSteps` and `redoSteps` list for View > Undo History, which moves through them with `undo` and `redo`. Snapshot dirty state combines engine notifications with an explicit user-edit flag because deferred engine initialization can otherwise clear a just-made edit.
 
 ## Threads and boundaries
 
