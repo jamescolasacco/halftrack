@@ -2545,3 +2545,7 @@ Root area (CMakeLists). CI run 40101484168 timed out `ui-acceptance` on the macO
 
 Engine and UI areas. View > Undo History (Option+Cmd+Z), at the reference's place after Info, opens a window beside the main one listing the project's steps from the start, by Edit's step names (`Session::undoSteps`, `redoSteps`). The current step is selected and the steps Redo would do again are dimmed; a click undoes or redoes to the step clicked, while the main window keeps working ([menu contract](research/main-menu-contract.md)). Checked in the UI suite.
 
+## The Navigate menu — 2026-10-24
+
+UI area. The menu bar gains the reference's Navigate menu, between View and Options, with its focus commands: Focus Session View, Arrangement View, Clip View, Device View, Browser and Groove Pool (Option+1 to 6) and Focus Mixer (Option+Shift+M). Each shows its part of the window, gives it the keys, and makes Edit's commands act there ([menu contract](research/main-menu-contract.md)). Tab navigation, browser history and the focus commands for parts Halftrack lacks are left out. Checked in the UI suite.
+

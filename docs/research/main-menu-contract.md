@@ -13,7 +13,7 @@ Nothing was launched, no preferences or Sets were read, and nothing was decrypte
 
 ## Rules
 
-- **The menus.** The reference's bar is Live, File, Edit, Create, Playback, View, Navigate, Options and Help, the same in both views. Halftrack's is File, Edit, Create, Playback, View and Options. On a Mac the application menu takes the Live menu's place: About Halftrack, then Preferences (Cmd+comma), then the system's items. Elsewhere Help holds About Halftrack and Options ends with Preferences; the reference's Windows layout was not read. Navigate is left out, as Halftrack has none of its focus commands.
+- **The menus.** The reference's bar is Live, File, Edit, Create, Playback, View, Navigate, Options and Help, the same in both views. Halftrack's is File, Edit, Create, Playback, View, Navigate and Options. On a Mac the application menu takes the Live menu's place: About Halftrack, then Preferences (Cmd+comma), then the system's items. Elsewhere Help holds About Halftrack and Options ends with Preferences; the reference's Windows layout was not read.
 - **Every item stays.** Unlike the reference's context menus, its menu bar never leaves out an item that cannot act: the item is greyed. Halftrack does the same. It leaves out only the reference's items for features it does not have.
 - **Shortcuts.** Each item shows the reference's shortcut (macOS; Redo and Fullscreen take their Windows keys elsewhere). A key that nothing focused takes runs the menu command it is shown on, when that can act (`runMenuShortcut`). On a Mac the items carry their shortcuts natively; JUCE does not show a plain Delete key there, so Edit's Delete shows none.
 - **While a dialog or menu is open**, every item is greyed and the shortcuts wait, as the reference blocks its menu commands.
@@ -21,7 +21,7 @@ Nothing was launched, no preferences or Sets were read, and nothing was decrypte
 
 ## Edit acts on the area last clicked
 
-The reference finds an Edit command's handler from the focused view. Halftrack keeps the area last clicked (`editArea`): text being typed first, then the clip view's notes, the device view, the headers, a scene, the Session's slots, or the Arrangement. In each, the command does what that area's own menu or keys do:
+The reference finds an Edit command's handler from the focused view. Halftrack keeps the area last clicked, or last focused from Navigate (`editArea`): text being typed first, then the clip view's notes, the device view, the headers, a scene, the Session's slots, or the Arrangement. In each, the command does what that area's own menu or keys do:
 - **Arrangement:** the clip menu's command over the time selection or the selected clips. A lone clip selected without a time selection is cut, copied, duplicated or deleted as a clip, as its keys do.
 - **Slots:** the slot menu's command. Split becomes Add or Remove Stop Button, as the reference's Cmd+E does in the Session.
 - **Headers:** the header menu's command for the selected tracks or group.
@@ -41,6 +41,7 @@ Select All selects every track's content in the Arrangement, every slot in the S
 | Create | Insert Audio, MIDI and Return Track (Cmd+T, Shift+Cmd+T, Option+Cmd+T), Insert Take Lane (Option+Shift+T); Insert Scene in the Session or Insert Silence in the Arrangement (Cmd+I), Capture and Insert Scene (Shift+Cmd+I), Consolidate Time to New Scene; Insert MIDI Clip (Shift+Cmd+M), Capture MIDI (Shift+Cmd+C); Create Fade (Option+Cmd+F); Slice to New MIDI Track; Add Locator, Insert Time Signature Change; Import File... |
 | Playback | Play (Space), Continue Playback (Shift+Space), Move Insert Marker to Playhead (Shift+Cmd+Space), Playback Options (Follow, Option+Shift+F; Start Transport With Record); Record in Arrangement and Arm Record in Arrangement, which swap F9 and Shift+F9 with Start Transport With Record; Record in Session (Shift+Cmd+F9); Metronome (O), Metronome Only While Recording; Back to Arrangement (F10) |
 | View | Fullscreen (Ctrl+Cmd+F), Zoom (the display zoom: Cmd+plus, Cmd+minus, Option+Cmd+0); Info (?), Undo History (Option+Cmd+Z); Toggle Arrangement/Session View (Tab); Clip View (Option+Cmd+3), Device View (Option+Cmd+4), Toggle Clip/Device View (Shift+Tab), Hide or Show Detail View (Option+Cmd+L); Browser (Option+Cmd+5), Groove Pool (Option+Cmd+6); Search in Browser (Cmd+F), Show Similar Files (Shift+Cmd+F); Plug-In Windows (Option+Cmd+P), Video Window (Option+Cmd+V, Mac); Mixer (Option+Cmd+M), Mixer Controls; Overview (Option+Cmd+O, the Arrangement's), Scene Tempo and Time Signature; Automation Mode (A), Fold All Tracks (Option+U), Fold Selected Track (U); Fold to Notes (F), Fold to Scale (G), for the note editor ([scale contract](scales-contract.md#folding)); Zoom In (+), Zoom Out (−), Zoom to Arrangement Time Selection or Zoom Out Completely (Z), Zoom Back (X) |
+| Navigate | Focus Session View (Option+1), Focus Arrangement View (Option+2), Focus Clip View (Option+3, with a clip selected), Focus Device View (Option+4), Focus Browser (Option+5), Focus Groove Pool (Option+6); Focus Mixer (Option+Shift+M, showing the Session's mixer). Each shows its part and gives it the keys and Edit's commands |
 | Options | Edit MIDI Map (Cmd+M), Edit Key Map (Cmd+K), Computer MIDI Keyboard (M); External Sync; Time Ruler Format (Min:Sec and the SMPTE rates); Narrow, Widen, Triplet, Snap to and Fixed Grid (Cmd+1 to 5); Draw Mode (B, see the [note drawing contract](note-drawing-contract.md)); Scale Highlighting (K); Solo Switches, Cue Switches, Solo in Place; Audio Engine On (Option+Shift+Cmd+E) |
 
 What moved with the rebuild:
@@ -53,7 +54,7 @@ What moved with the rebuild:
 
 ## Left out
 
-Close Window, Add Folder to Browser, Backups, Collect All and Save, Save as Template, Select Loop, Clip Markers, Apply Algorithm, the note span command, Quantize Settings, Automation Fitting, Emoji & Symbols, the Convert to MIDI commands, Play Arrangement Selection, Return Play Position, Start Transport With Tap Tempo, Link, Second Window, Lessons, File Manager, Expand Clip Detail View, the clip view layouts and editors, Tuning Pool, Mod Matrix, Full Height Browser, Max for Live, Arrangement Track Controls, Accessibility, MIDI Prelisten, Browser Pre-Hear, Delay Compensation, Snap Automation to Grid, Step Input, Chase MIDI Notes, the controller and retune options, Lock Envelopes, Arrangement Overdub, Legacy HiQ, and Help's items. Halftrack has none of these commands yet.
+Navigate's Focus Transport, Help, Tuning and Clip Panels, its previous and next focus commands, browser history and Tab navigation options; Close Window, Add Folder to Browser, Backups, Collect All and Save, Save as Template, Select Loop, Clip Markers, Apply Algorithm, the note span command, Quantize Settings, Automation Fitting, Emoji & Symbols, the Convert to MIDI commands, Play Arrangement Selection, Return Play Position, Start Transport With Tap Tempo, Link, Second Window, Lessons, File Manager, Expand Clip Detail View, the clip view layouts and editors, Tuning Pool, Mod Matrix, Full Height Browser, Max for Live, Arrangement Track Controls, Accessibility, MIDI Prelisten, Browser Pre-Hear, Delay Compensation, Snap Automation to Grid, Step Input, Chase MIDI Notes, the controller and retune options, Lock Envelopes, Arrangement Overdub, Legacy HiQ, and Help's items. Halftrack has none of these commands yet.
 
 ## Evidence in Halftrack
 
@@ -66,6 +67,7 @@ The UI suite compares each menu with the reference's order, filtered to Halftrac
 - Invert Selection on the clip view's notes;
 - Solo Switches and Cue Switches greyed without a Cue Out of their own, and switching the Solo/Cue mode with one;
 - Draw Mode showing B, ticked while on, and following the control bar's pencil;
+- Navigate's Option+1 and Option+2 showing the Session and Arrangement Views with Edit acting there, Focus Device View and Focus Clip View likewise, Focus Browser showing the browser, and Option+Shift+M showing the Session's hidden mixer;
 - Undo History opening from Option+Cmd+Z without undoing, listing the steps from the start with the latest selected, a click on an earlier step undoing back to it and on the latest redoing, the main window's menus working while it is open, and choosing it again closing it;
 - Plug-In Windows hiding and showing the plug-in windows (the plug-in editor suite hides an open editor's window, shows it again, and sees opening an editor bring the windows back);
 - Cmd+I inserting a scene below the selected one;

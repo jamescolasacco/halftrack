@@ -952,7 +952,7 @@ public:
         const auto cmd = key.getModifiers().isCommandDown();
         const auto shift = key.getModifiers().isShiftDown();
         // In the browser, 1 to 7 put the selected item in a collection or take it out.
-        if (! cmd && ! shift && code >= '1' && code <= '7' && browserList.hasKeyboardFocus (true) && browserList.getSelectedRow() >= 0)
+        if (! cmd && ! shift && ! key.getModifiers().isAltDown() && code >= '1' && code <= '7' && browserList.hasKeyboardFocus (true) && browserList.getSelectedRow() >= 0)
         { toggleBrowserCollection (browserList.getSelectedRow(), code - '1'); return true; }
         if (cmd)
         {
@@ -9673,6 +9673,33 @@ private:
         undoHistoryWindow = new UndoHistoryWindow (*this, theme);
         undoHistoryWindow->toFront (true);
     }
+    // Navigate's focus commands, as the reference's: the part shows and takes the keys, and Edit's
+    // commands act there.
+    void focusPart (int command)
+    {
+        headerFocus = false;
+        switch (command)
+        {
+            case menuFocusSession: showSessionView(); clickedArea = Area::session; launcher.grabKeyboardFocus(); break;
+            case menuFocusArrangement: showArrangementView(); clickedArea = Area::arrangement; canvas.grabKeyboardFocus(); break;
+            case menuFocusClip:
+                showDetail = true; showClipView (true); resized();
+                if (currentMidiClip() != nullptr && pianoRoll.isVisible()) { clickedArea = Area::notes; pianoRoll.grabKeyboardFocus(); }
+                else audioClipView.grabKeyboardFocus();
+                break;
+            case menuFocusDevices: showDetail = true; showClipView (false); resized(); clickedArea = Area::devices; deviceChain.grabKeyboardFocus(); break;
+            case menuFocusBrowser: showBrowser = true; resized(); browserList.grabKeyboardFocus(); break;
+            case menuFocusGroovePool: openGroovePool(); break;
+            case menuFocusMixer:
+                // The Session's mixer, shown if it was hidden.
+                showSessionView();
+                if (! state.mixerSections.shown) { auto shown = state.mixerSections; shown.shown = true; session.setMixerSections (shown); refresh(); launcher.resized(); }
+                clickedArea = Area::session; launcher.grabKeyboardFocus();
+                break;
+            default: break;
+        }
+        refresh();
+    }
     // Undo History's clicks: undo or redo that many steps.
     void moveInHistory (int steps)
     {
@@ -12157,9 +12184,9 @@ private:
     // commands. As in the reference, every item a menu builds stays there, greyed while it cannot act,
     // and the shortcuts shown are the reference's; each works from the keyboard too (runMenuShortcut).
    #if JUCE_MAC
-    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Create", "Playback", "View", "Options" }; }
+    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Create", "Playback", "View", "Navigate", "Options" }; }
    #else
-    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Create", "Playback", "View", "Options", "Help" }; }
+    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "Create", "Playback", "View", "Navigate", "Options", "Help" }; }
    #endif
     static constexpr int aboutItem = 91;
     // The menu bar's own commands, beside the numbered ones it shares with the keys.
@@ -12171,6 +12198,7 @@ private:
                     menuFoldAll, menuFoldSelected, menuZoomSelection, menuZoomBack, menuMidiMap, menuKeyMap, menuComputerKeyboard,
                     menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuOverview, menuSceneSettings,
                     menuSoloSwitches, menuCueSwitches, menuSaveCopy, menuDrawMode, menuFoldToNotes, menuFoldToScale, menuScaleHighlighting, menuUndoHistory,
+                    menuFocusSession, menuFocusArrangement, menuFocusClip, menuFocusDevices, menuFocusBrowser, menuFocusGroovePool, menuFocusMixer,
                     menuSlice = 200, // Plus Session::SliceBy.
                     menuTimeFormat = 210 }; // Plus Session::TimeFormat.
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
@@ -12207,6 +12235,8 @@ private:
             { menuFoldSelected, key ('u') }, { 41, key ('+') }, { 42, key ('-') }, { menuZoomSelection, key ('z') }, { menuZoomBack, key ('x') },
             { menuMidiMap, key ('m', cmd) }, { menuKeyMap, key ('k', cmd) }, { menuComputerKeyboard, key ('m') }, { menuDrawMode, key ('b') },
             { menuFoldToNotes, key ('f') }, { menuFoldToScale, key ('g') }, { menuScaleHighlighting, key ('k') }, { menuUndoHistory, key ('z', cmd | alt) },
+            { menuFocusSession, key ('1', alt) }, { menuFocusArrangement, key ('2', alt) }, { menuFocusClip, key ('3', alt) }, { menuFocusDevices, key ('4', alt) },
+            { menuFocusBrowser, key ('5', alt) }, { menuFocusGroovePool, key ('6', alt) }, { menuFocusMixer, key ('m', alt | shift) },
             { 93, key ('1', cmd) }, { 94, key ('2', cmd) }, { 95, key ('3', cmd) }, { 96, key ('4', cmd) }, { 97, key ('5', cmd) }, { 13, key ('e', cmd | shift | alt) } };
         for (const auto& [id, press] : shortcuts)
         {
@@ -12717,6 +12747,16 @@ private:
             add (menuZoomSelection, selected ? "Zoom to Arrangement Time Selection" : "Zoom Out Completely", ! showSession);
             add (menuZoomBack, "Zoom Back", ! showSession && zoomBack.has_value());
         }
+        else if (menuName == "Navigate")
+        {
+            // The reference's focus commands: each shows its part of the window and gives it the keys,
+            // and Edit's commands then act there.
+            add (menuFocusSession, "Focus Session View"); add (menuFocusArrangement, "Focus Arrangement View");
+            add (menuFocusClip, "Focus Clip View", currentMidiClip() != nullptr || selectedAudioClip() != nullptr); add (menuFocusDevices, "Focus Device View");
+            add (menuFocusBrowser, "Focus Browser"); add (menuFocusGroovePool, "Focus Groove Pool");
+            popup.addSeparator();
+            add (menuFocusMixer, "Focus Mixer");
+        }
         else if (menuName == "Options")
         {
             add (menuMidiMap, "Edit MIDI Map", true, midiMapMode); add (menuKeyMap, "Edit Key Map", true, keyMapMode);
@@ -12881,6 +12921,8 @@ private:
             case menuSceneSettings: session.setSceneSettingsShown (! state.sceneSettingsShown); refresh(); launcher.repaint(); break;
             case menuGroovePool: openGroovePool(); return;
             case menuUndoHistory: toggleUndoHistory(); return;
+            case menuFocusSession: case menuFocusArrangement: case menuFocusClip: case menuFocusDevices: case menuFocusBrowser: case menuFocusGroovePool: case menuFocusMixer:
+                focusPart (id); return;
             case menuSearch: showBrowser = true; resized(); browserSearch.grabKeyboardFocus(); return;
             case menuSimilar: showSimilarFiles (similarSource()); return;
             case menuFoldAll: toggleFold (true); break;
@@ -18337,9 +18379,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             return std::nullopt;
         };
        #if JUCE_MAC
-        check (getMenuBarNames() == juce::StringArray { "File", "Edit", "Create", "Playback", "View", "Options" }, "the menu bar has the reference's menus, its Live menu being the application menu");
+        check (getMenuBarNames() == juce::StringArray { "File", "Edit", "Create", "Playback", "View", "Navigate", "Options" }, "the menu bar has the reference's menus, its Live menu being the application menu");
        #else
-        check (getMenuBarNames() == juce::StringArray { "File", "Edit", "Create", "Playback", "View", "Options", "Help" }, "the menu bar has the reference's menus, and Help");
+        check (getMenuBarNames() == juce::StringArray { "File", "Edit", "Create", "Playback", "View", "Navigate", "Options", "Help" }, "the menu bar has the reference's menus, and Help");
        #endif
         const auto expect = [&] (const juce::String& name, const juce::StringArray& wanted)
         { const auto shown = texts (name); check (shown == wanted, name + " holds the reference's items in its order (" + shown.joinIntoString (" | ") + ")"); };
@@ -18374,6 +18416,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
        #if ! JUCE_MAC
         options.addArray ({ "-", "Preferences..." });
        #endif
+        expect ("Navigate", { "Focus Session View", "Focus Arrangement View", "Focus Clip View", "Focus Device View", "Focus Browser", "Focus Groove Pool", "-", "Focus Mixer" });
         expect ("Options", options);
         // The reference's shortcuts, shown on the items.
         const auto shortcut = [&] (const juce::String& name, int id, const juce::KeyPress& key)
@@ -18416,6 +18459,29 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             menuItemSelected (menuUndoHistory, 4); refresh();
             check (undoHistory() == nullptr && ! entry ("View", menuUndoHistory)->isTicked, "choosing it again closes the window");
             session.undo(); session.undo(); refresh();
+        }
+        {
+            // Navigate's focus commands show their part of the window and give it Edit's commands.
+            check (shortcut ("Navigate", menuFocusSession, juce::KeyPress ('1', juce::ModifierKeys (alt), 0)) && shortcut ("Navigate", menuFocusMixer, juce::KeyPress ('m', juce::ModifierKeys (alt | shift), 0)),
+                   "Navigate shows the reference's Option+1 and Option+Shift+M");
+            check (handleKey (juce::KeyPress ('1', juce::ModifierKeys (alt), 0)) && showSession && editArea() == EditArea::slots, "Option+1 shows the Session View, where Edit's commands then act");
+            check (handleKey (juce::KeyPress ('2', juce::ModifierKeys (alt), 0)) && ! showSession && editArea() == EditArea::arrangement, "Option+2 shows the Arrangement View");
+            menuItemSelected (menuFocusDevices, 5);
+            check (showDetail && ! showPiano && editArea() == EditArea::devices, "Focus Device View shows the device view, where Edit's commands then act");
+            const auto lastTrack = (int) state.tracks.size() - 1;
+            check (state.tracks[(size_t) lastTrack].isMidi && session.addMidiClip (state.tracks[(size_t) lastTrack].id, 0, 4).wasOk(), "a MIDI clip for the clip view"); refresh();
+            selectTrack (lastTrack); selectedClip = 0; refresh();
+            check (entry ("Navigate", menuFocusClip)->isEnabled, "with a clip selected, Focus Clip View can act");
+            menuItemSelected (menuFocusClip, 5);
+            check (showPiano && editArea() == EditArea::notes, "Focus Clip View shows the clip's notes, where Edit's commands then act");
+            session.undo(); selectedClip = -1; closeClipView(); refresh();
+            showBrowser = false; resized();
+            menuItemSelected (menuFocusBrowser, 5);
+            check (showBrowser, "Focus Browser shows the browser");
+            const auto sections = state.mixerSections;
+            auto hidden = sections; hidden.shown = false; session.setMixerSections (hidden); refresh();
+            check (handleKey (juce::KeyPress ('M', juce::ModifierKeys (alt | shift), 0)) && showSession && state.mixerSections.shown, "Option+Shift+M shows the Session with its mixer");
+            session.setMixerSections (sections); showArrangementView(); refresh();
         }
         // Every item stays, greyed while it cannot act.
         check (entry ("Edit", menuCut).has_value() && ! entry ("Edit", menuCut)->isEnabled && ! entry ("View", menuZoomBack)->isEnabled,
