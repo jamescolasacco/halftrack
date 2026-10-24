@@ -821,4 +821,5 @@ Track header menu ([contract](research/track-header-menu-contract.md)). Defaults
 - **Colours.** The colour grid uses Halftrack's own palette, in the reference's 5 by 14 layout.
 - **Freeze.** Freezing several tracks from the menu makes an undo step for each track.
 - **Insertion.** Insert Audio, MIDI and Return Track insert after the selected track, as Halftrack's Create menu does; where the reference's insert was not decoded.
+- **Default tracks.** Save as Default Audio/MIDI Track saves to the User Library only. The reference saves into the current project instead when it already has a default for the kind, and loads a project's defaults first; Halftrack has no per-project defaults. Whether its overwrite prompt's Cancel stops the save was not determined; Halftrack's does.
 

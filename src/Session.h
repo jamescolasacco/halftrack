@@ -704,6 +704,12 @@ public:
     // `after` names and everything in it; with `after` empty or naming a return it goes after the
     // other tracks, before the returns. A return track goes right after the return `after` names,
     // otherwise after the other returns. An empty name is automatic (see renameTrack). One undo step.
+    // Save as Default Audio/MIDI Track, as the reference's: writes the track's devices and mixer at
+    // their current values, without clips, automation, take lanes or sends, to a file. Frozen tracks
+    // are refused. With the files named by setDefaultTrackFiles, new audio and MIDI tracks start from
+    // them (not those of a new project, nor Slice to New MIDI Track's), with a new colour.
+    juce::Result saveTrackAsDefault (const juce::String& trackId, const juce::File& file);
+    void setDefaultTrackFiles (const juce::File& audio, const juce::File& midi);
     juce::Result addAudioTrack (juce::String name = {}, const juce::String& after = {});
     juce::Result addMidiTrack (juce::String name = {}, const juce::String& after = {});
     juce::Result addReturnTrack (juce::String name = {}, const juce::String& after = {});

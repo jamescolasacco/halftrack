@@ -9145,6 +9145,13 @@ private:
     juce::File presetFolder (const juce::String& device) const
     { return userLibrary == juce::File() ? juce::File() : userLibrary.getChildFile ("Presets").getChildFile (juce::File::createLegalFileName (device)); }
     juce::File defaultSetFile() const { return userLibrary == juce::File() ? juce::File() : userLibrary.getChildFile ("Default Set.halftrack"); }
+    // Save as Default Audio/MIDI Track's files, where the reference keeps its own in a library.
+    juce::File defaultTrackFile (bool midi) const
+    {
+        if (userLibrary == juce::File()) return {};
+        return userLibrary.getChildFile ("Defaults").getChildFile ("Creating Tracks").getChildFile (midi ? "MIDI Track" : "Audio Track")
+                          .getChildFile (midi ? "Default MIDI Track.halftrack" : "Default Audio Track.halftrack");
+    }
     // Rows for a device's presets, after its own row.
     void addPresetRows (std::vector<DeviceRow>& rows, const juce::String& device, int kind, const std::function<bool (const juce::String&)>& matches)
     {
@@ -10160,6 +10167,21 @@ private:
         }), true);
         return nullptr;
     }
+    // Save as Default Audio/MIDI Track: asks before replacing a default saved earlier.
+    void saveDefaultTrackDialog (const juce::String& id)
+    {
+        const auto* track = trackInfo (id);
+        if (track == nullptr) return;
+        const auto file = defaultTrackFile (track->isMidi);
+        if (! file.existsAsFile()) { report (session.saveTrackAsDefault (id, file)); return; }
+        auto* dialog = new juce::AlertWindow (track->isMidi ? "Replace the default MIDI track?" : "Replace the default audio track?",
+                                              "New " + juce::String (track->isMidi ? "MIDI" : "audio") + " tracks will start from " + track->name + " instead.", juce::MessageBoxIconType::QuestionIcon);
+        dialog->addButton ("Replace", 1); dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
+        auto safe = juce::Component::SafePointer<Impl> (this);
+        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, id, file] (int result)
+        { if (safe != nullptr && result == 1) safe->report (safe->session.saveTrackAsDefault (id, file)); }), true);
+    }
     // Edit Info Text, for the clicked track or group: its own text for the Info view.
     void editInfoTextDialog (const juce::String& id)
     {
@@ -10184,7 +10206,8 @@ private:
     // has the take lane and link items; the Session view's titles do not. A colour picked in the grid
     // is put in `colour`.
     enum HeaderItem { headerCut = 100, headerCopy, headerPaste, headerDuplicate = 1, headerDelete, headerRename, headerFreeze, headerBounce, headerInsertAudio, headerInsertMidi, headerInsertReturn,
-                      headerGroup, headerUngroup, headerSelectContent, headerEditInfo, headerClearEnvelopes, headerAssignColour, headerDeleteUnusedTakeLanes, headerInsertTakeLane, headerShowTakeLanes, headerDeleteTakeLanes, headerLink, headerUnlink, headerColour };
+                      headerGroup, headerUngroup, headerSelectContent, headerEditInfo, headerClearEnvelopes, headerAssignColour, headerDeleteUnusedTakeLanes,
+                      headerSaveDefault, headerInsertTakeLane, headerShowTakeLanes, headerDeleteTakeLanes, headerLink, headerUnlink, headerColour };
     juce::PopupMenu headerMenu (const juce::String& id, bool arrangement, std::shared_ptr<int> colour, bool join) const
     {
         const auto ids = headerSelection();
@@ -10253,6 +10276,12 @@ private:
         { const auto* info = trackInfo (t); return groupInfo (t) != nullptr || (info != nullptr && ! info->isReturn); });
         const bool anyGroup = std::any_of (ids.begin(), ids.end(), [this] (const juce::String& t) { return groupInfo (t) != nullptr; });
         if (assignable) { menu.addSeparator(); menu.addItem (headerAssignColour, anyGroup ? "Assign Track Color to Clips and Grouped Tracks" : "Assign Track Color to Clips"); }
+        // Save as Default, for the clicked audio or MIDI track, unless it is frozen or selected with others.
+        if (track != nullptr && ! track->isReturn && userLibrary != juce::File())
+        {
+            menu.addSeparator();
+            menu.addItem (headerSaveDefault, track->isMidi ? "Save as Default MIDI Track" : "Save as Default Audio Track", ! track->frozen && selectedTrackIds().size() <= 1);
+        }
         return menu;
     }
     void chooseHeaderItem (int result, const juce::String& id, bool arrangement, int colour, bool join)
@@ -10267,6 +10296,7 @@ private:
             case headerEditInfo: editInfoTextDialog (id); return;
             case headerClearEnvelopes: report (session.clearAllEnvelopes (ids)); break;
             case headerAssignColour: report (session.assignTrackColourToClips (ids, arrangement)); break;
+            case headerSaveDefault: saveDefaultTrackDialog (id); return;
             case headerFreeze: freezeTracksFromUI (freezableTracks (ids)); return;
             case headerBounce: report (session.bounceTracksInPlace (ids)); break;
             case headerInsertAudio: showPiano = false; addTrack(); resized(); return;
@@ -17512,6 +17542,26 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                         session.undo(); session.undo(); refresh();
                         check (slotColour() == shown, "two undo steps put both back");
                     }
+                    {
+                        // Save as Default Audio Track, from the menu, saves into the User Library, and new
+                        // audio tracks start from it.
+                        const auto library = userLibrary;
+                        const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-default-track-" + juce::Uuid().toString());
+                        setUserLibrary (root.getChildFile ("User Library"));
+                        selectForHeaderMenu (second);
+                        check (listed (headerMenu (second, true, colour, false)).endsWith ("|-|Save as Default Audio Track"), "the menu ends with Save as Default Audio Track");
+                        check (session.addNativeEffect (indexOf (second), Session::EffectKind::channelEq).wasOk(), "a Channel EQ on the second track"); refresh();
+                        chooseHeaderItem (headerSaveDefault, second, true, -1, false);
+                        check (defaultTrackFile (false).existsAsFile(), "choosing it saves the default audio track there");
+                        session.undo(); refresh();
+                        const auto count = state.tracks.size();
+                        check (session.addAudioTrack().wasOk() && state.tracks.size() == count && session.snapshot().tracks.size() == count + 1, "Insert Audio Track");
+                        refresh();
+                        check (std::any_of (state.tracks.begin(), state.tracks.end(), [&] (const auto& t) { return t.plugins.size() == 1 && t.plugins[0].effect.kind == Session::EffectKind::channelEq && t.id != second; }),
+                               "makes a track with the default's Channel EQ");
+                        session.undo(); setUserLibrary (library); refresh();
+                        root.deleteRecursively();
+                    }
                     // Rename edits the clicked track's name in place.
                     auto* secondName = dynamic_cast<juce::Label*> (canvas.getComponentAt (canvas.timelineWidth() + 30, laneY (indexOf (second)) + 10));
                     check (secondName != nullptr && secondName->getName() == "Track name" && renameHeader (second, true) == secondName->getParentComponent(),
@@ -18714,6 +18764,7 @@ void MainComponent::enableRecovery (const juce::File& file) { impl->enableRecove
 void MainComponent::Impl::setUserLibrary (const juce::File& folder)
 {
     userLibrary = folder;
+    session.setDefaultTrackFiles (defaultTrackFile (false), defaultTrackFile (true)); // New tracks start from those saved there.
     if (auto loaded = collections.load (folder == juce::File() ? juce::File() : folder.getChildFile ("Collections.xml")); loaded.failed()) report (loaded);
     updateBrowser();
 }

@@ -41,7 +41,7 @@ The reference's Arrangement menu, with what Halftrack shows:
 | Link Tracks, Unlink Tracks | audio, MIDI and group tracks | for audio and MIDI tracks; Halftrack's groups do not link yet |
 | colour grid | always | Halftrack's own palette in the reference's layout, 5 rows of 14. A colour in use by a selected track is marked, and picking one colours every selected track and group in one undo step (`setTrackColours`) |
 | Assign Track Color to Clips (and Grouped Tracks with a group chosen) | the selection is audio, MIDI and group tracks | the same (`assignTrackColourToClips`): the tracks inside a chosen group take its colour, then the chosen tracks' and those tracks' clips show their track's colour, the Arrangement's main-lane clips from a header and Session clips from a title, as a later static reading of the reference's (0x1037d5828, 0x103a1db88) found. One undo step |
-| Save as Default Audio/MIDI Track | | not yet |
+| Save as Default Audio/MIDI Track | an audio or MIDI track; greyed when frozen or selected with others | the same (`saveTrackAsDefault`): the clicked track's devices and mixer at their current values, without clips, automation, take lanes, sends or info text, go to the User Library's `Defaults/Creating Tracks/Audio Track/Default Audio Track.halftrack` (or MIDI), as the reference keeps its own (0x1023f7af0, 0x1002e01c8). Replacing one saved earlier asks first. New tracks of that kind, from Insert and from imports making a track, start from it with a new colour (`setDefaultTrackFiles`); a new project's tracks and Slice to New MIDI Track's do not, and an unreadable file makes a plain track |
 | Copy LOM Path | one track selected | left out: Halftrack has no object model for it |
 
 In the Session view, a track's or group's title has the same menu without Clear All Envelopes, the take lane items and the link items. Select Content is enabled there when every selected track is audio or MIDI, and it selects their Session clips. The reference ends the Session menu with two items that show or hide a rack's chains in the mixer, shown only where they apply; Halftrack's mixer has no such strips.
@@ -62,6 +62,7 @@ The UI suite checks:
 - that Rename edits the clicked track's name in its header, and Select Content selects its clip's time on its track;
 - that a track's info text shows in the Info view at its header and Session title, and an undo restores the usual description (the groups suite saves and reopens info texts);
 - right-click selection;
+- that the menu ends with Save as Default Audio Track, which saves into the User Library, after which Insert Audio Track makes a track with the saved Channel EQ (the track duplicate suite checks the file without clip or info text, MIDI tracks and new projects staying plain, refusals and an unreadable file);
 - that a track's new colour leaves its Session clip the colour it showed, that Assign Track Color to Clips from its title gives the clip the track's, and that undo puts both back (the groups suite checks Arrangement clips, a chosen group's tracks and an unknown track);
 - that Clear All Envelopes appears only in Automation Mode, after Delete between separators, clears an automated track's lane, and comes back with one undo (the groups suite checks a group's own lanes going without its members').
 

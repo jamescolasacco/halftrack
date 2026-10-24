@@ -3593,6 +3593,33 @@ struct Session::Impl
         for (auto lane : audio->state.getChildWithName (takeLanesType))
             for (auto clip : lane) if (! clip.hasProperty (clipColourProperty)) clip.setProperty (clipColourProperty, colour, undo);
     }
+    // Save as Default Audio/MIDI Track, as the reference's: the files new tracks of each kind start
+    // from, when the interface names them, and whether the track being made must be a plain one.
+    juce::File defaultTracks[2];
+    bool plainTracks = false;
+    static constexpr const char* defaultTrackTag = "HALFTRACKDEFAULTTRACK";
+    // A new track from the saved default of its kind, placed as addAudioTrack and addMidiTrack place
+    // theirs, with a new colour, as the reference gives one (0x1021d4f68). False when there is none,
+    // or it cannot be read, so a plain track is made instead.
+    bool addFromDefault (bool midi, const String& name, const String& after, juce::Colour colour)
+    {
+        const auto file = defaultTracks[midi ? 1 : 0];
+        if (plainTracks || ! file.existsAsFile()) return false;
+        auto xml = juce::XmlDocument::parse (file);
+        auto* saved = xml != nullptr && xml->hasTagName (defaultTrackTag) && xml->getStringAttribute ("kind") == (midi ? "midi" : "audio") ? xml->getChildByName ("TRACK") : nullptr;
+        if (saved == nullptr) return false;
+        const auto state = juce::ValueTree::fromXml (*saved);
+        if (! state.hasType (te::IDs::TRACK) || static_cast<bool> (state.getProperty (midiTrackProperty, false)) != midi || static_cast<bool> (state.getProperty (returnProperty, false))) return false;
+        juce::ValueTree original;
+        auto* track = dynamic_cast<te::AudioTrack*> (appendCopy (state, original));
+        if (track == nullptr) return false;
+        freshCopy (*track, original);
+        if (name.trim().isNotEmpty()) track->setName (name.trim());
+        track->setColour (colour);
+        track->getClipSlotList().ensureNumberOfSlots (edit->getSceneList().getNumScenes());
+        placeNewTrack (*track, after); lastCreated = track;
+        return true;
+    }
     // The headers' Copy: each copied top-most track's or group's state, in order.
     std::vector<juce::ValueTree> trackClipboard;
     // A group, other than `keep`, that grouping these would leave empty, as the reference's Group Tracks never does.
@@ -6847,6 +6874,7 @@ Result Session::newProject() { return startProject (false); }
 Result Session::newBuiltInDefaultProject() { return startProject (true); }
 Result Session::startProject (bool builtInDefaultSet)
 {
+    const juce::ScopedValueSetter<bool> plain (impl->plainTracks, true); // A new project's tracks are the built-in ones.
     impl->endNudge();
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     endEditGesture();
@@ -7301,7 +7329,7 @@ Result Session::sliceToNewMidiTrack (const String& clipId, SliceBy by, String& t
     const auto sourceIndex = te::getAudioTracks (*impl->edit).indexOf (dynamic_cast<te::AudioTrack*> (clip->getTrack()));
 
     beginEditGesture ("Slice to New MIDI Track");
-    auto result = addMidiTrack (clip->getName() + " Slices");
+    auto result = [&] { const juce::ScopedValueSetter<bool> plain (impl->plainTracks, true); return addMidiTrack (clip->getName() + " Slices"); }();
     const auto created = result.wasOk();
     if (created)
     {
@@ -7763,6 +7791,7 @@ Result Session::addAudioTrack (String name, const String& after)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     impl->transaction ("Add audio track");
     const auto count = te::getAudioTracks (*impl->edit).size();
+    if (impl->addFromDefault (false, name, after, juce::Colour (std::array<juce::uint32, 6> { 0xffd0a35e, 0xff86a395, 0xff899bbb, 0xffb98579, 0xffaaa179, 0xffa58aaa }[(size_t) count % 6]))) { impl->changed(); return Result::ok(); }
     impl->edit->ensureNumberOfAudioTracks (count + 1);
     auto* t = impl->track (count);
     if (! t) return Result::fail ("Could not create an audio track.");
@@ -7780,6 +7809,7 @@ Result Session::addMidiTrack (String name, const String& after)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     impl->transaction ("Add MIDI track");
+    if (impl->addFromDefault (true, name, after, juce::Colour (0xff9d91bc))) { impl->changed(); return Result::ok(); }
     const auto count = te::getAudioTracks (*impl->edit).size();
     impl->edit->ensureNumberOfAudioTracks (count + 1);
     auto* track = impl->track (count);
@@ -10210,6 +10240,41 @@ Result Session::clearAllEnvelopes (const juce::StringArray& ids)
     endEditGesture();
     impl->changed(); return result;
 }
+Result Session::saveTrackAsDefault (const String& trackId, const File& file)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* t = impl->track (trackId);
+    if (t == nullptr || isReturn (*t)) return Result::fail ("Save an audio or MIDI track as the default.");
+    if (t->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze the track before saving it as the default.");
+    // As the reference's: the devices and the mixer at their current values, with neither clips nor
+    // automation; and no take lanes, sends, link or input, which belong to this project.
+    t->flushStateToValueTree();
+    auto state = t->state.createCopy();
+    const std::function<void (juce::ValueTree)> strip = [&] (juce::ValueTree node)
+    {
+        for (int i = node.getNumChildren(); --i >= 0;)
+        {
+            auto child = node.getChild (i);
+            const bool clip = child.hasType (te::IDs::AUDIOCLIP) || child.hasType (te::IDs::MIDICLIP) || child.hasType (te::IDs::STEPCLIP) || child.hasType (te::IDs::EDITCLIP);
+            const bool send = child.hasType (te::IDs::PLUGIN) && child[te::IDs::type].toString() == te::AuxSendPlugin::xmlTypeName;
+            if (clip || send || child.hasType (te::IDs::AUTOMATIONCURVE) || child.hasType (takeLanesType)) node.removeChild (i, nullptr);
+            else strip (child);
+        }
+    };
+    strip (state);
+    for (const auto& property : { linkProperty, infoTextProperty }) state.removeProperty (property, nullptr);
+    state.removeProperty (te::IDs::frozenIndividually, nullptr);
+    juce::XmlElement root (Impl::defaultTrackTag);
+    root.setAttribute ("version", 1);
+    root.setAttribute ("kind", static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) ? "midi" : "audio");
+    if (auto xml = state.createXml()) root.addChildElement (xml.release());
+    // Written beside the file, then moved over it, so a failed save leaves the earlier default.
+    if (! file.getParentDirectory().createDirectory()) return Result::fail ("Could not make the folder for the default track.");
+    juce::TemporaryFile temporary (file);
+    if (! root.writeTo (temporary.getFile()) || ! temporary.overwriteTargetFileWithTemporary()) return Result::fail ("Could not save the default track.");
+    return Result::ok();
+}
+void Session::setDefaultTrackFiles (const File& audio, const File& midi) { impl->defaultTracks[0] = audio; impl->defaultTracks[1] = midi; }
 Result Session::setInfoText (const String& id, const String& text)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

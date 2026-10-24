@@ -2375,3 +2375,7 @@ Engine and UI areas. Clips have colours of their own, as the reference's do, sho
 ## Delete Unused Take Lanes — 2026-10-24
 
 Engine and UI areas. The header menu's take lane items gain Delete Unused Take Lanes. A lane is in use while the main lane plays something that came from it, by comping or recording, as the reference counts a lane used when one of its takes is in the main lane. A recorded pass now notes the lane that keeps it, so cycling back from a fresh pass reaches the take before it; before, it chose the take already playing. Checked in the take lanes and UI suites ([contract](research/take-lanes-contract.md)).
+
+## Default tracks — 2026-10-24
+
+Engine and UI areas. The header menu's Save as Default Audio Track and Save as Default MIDI Track save the clicked track's devices and mixer, without clips, automation, take lanes or sends, to the User Library, as the reference keeps its default tracks. New tracks of that kind then start from it with a new colour. Replacing an earlier default asks first, and the file is written atomically. New projects and Slice to New MIDI Track keep plain tracks. Checked in the track duplicate and UI suites ([contract](research/track-header-menu-contract.md)).

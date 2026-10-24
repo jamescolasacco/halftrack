@@ -159,13 +159,43 @@ void captureTests(const juce::File& root)
     session.stop();
 }
 }
+// Save as Default Audio Track: new audio tracks start from the saved devices and mixer, without the
+// saved track's clips, as the reference's default track; MIDI tracks and new projects stay plain.
+void defaultTrackTests (const juce::File& root)
+{
+    Session session (false);
+    ok (session.importAudio (root.getChildFile ("duplicate-source.wav"), 0), "a clip on the first track");
+    const auto first = session.snapshot().tracks[0].id;
+    ok (session.addNativeEffect (0, Session::EffectKind::channelEq), "a Channel EQ on it"); ok (session.setTrackGain (0, -6), "at -6 dB");
+    ok (session.setInfoText (first, "Vocal chain"), "and an info text");
+    const auto file = root.getChildFile ("Defaults").getChildFile ("Creating Tracks").getChildFile ("Audio Track").getChildFile ("Default Audio Track.halftrack");
+    ok (session.saveTrackAsDefault (first, file), "save it as the default audio track");
+    check (file.existsAsFile() && ! file.loadFileAsString().contains ("AUDIOCLIP") && ! file.loadFileAsString().contains ("Vocal chain"), "the file keeps neither its clip nor its info text");
+    session.setDefaultTrackFiles (file, {});
+    const auto before = session.snapshot().tracks.size();
+    ok (session.addAudioTrack(), "add an audio track");
+    auto made = session.snapshot().tracks;
+    check (made.size() == before + 1, "one more track");
+    const auto& added = made[before];
+    check (added.id != first && added.plugins.size() == 1 && added.plugins[0].isNativeEffect && added.plugins[0].effect.kind == Session::EffectKind::channelEq
+               && std::abs (added.gainDb + 6) < 1e-3f && added.clips.empty() && added.infoText.isEmpty() && added.plugins[0].id != session.snapshot().tracks[0].plugins[0].id,
+           "it has the default's own Channel EQ and level, and no clip");
+    session.undo(); check (session.snapshot().tracks.size() == before, "one undo removes it");
+    ok (session.addMidiTrack(), "a MIDI track"); check (session.snapshot().tracks.back().plugins.empty(), "has no default and stays plain");
+    ok (session.addReturnTrack(), "add a return");
+    check (session.saveTrackAsDefault (session.snapshot().tracks.back().id, file).failed() && session.saveTrackAsDefault ("missing", file).failed(), "returns and unknown tracks are not defaults");
+    ok (session.newProject(), "a new project");
+    check (session.snapshot().tracks.size() == 2 && session.snapshot().tracks[0].plugins.empty(), "keeps its plain tracks");
+    file.replaceWithText ("not a track");
+    ok (session.addAudioTrack(), "an unreadable default"); check (session.snapshot().tracks.back().plugins.empty(), "makes a plain track");
+}
 int runTrackDuplicateTests (const juce::File& artifacts)
 {
     try
     {
         useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root=artifacts.getChildFile("track-duplicate-"+juce::Uuid().toString());ok(root.createDirectory(),"create isolated fixtures");
-        audioTests(root);midiTests(root);captureTests(root);std::cout<<"Track duplication tests passed: "<<root.getFullPathName()<<std::endl;return 0;
+        audioTests(root);midiTests(root);captureTests(root);defaultTrackTests(root);std::cout<<"Track duplication tests passed: "<<root.getFullPathName()<<std::endl;return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL track duplicate: "<<e.what()<<std::endl;return 1;}
 }
