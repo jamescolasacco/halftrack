@@ -1470,6 +1470,7 @@ private:
     }
     void dragTracks (const juce::String& id, juce::Point<int> at, bool copy = false)
     {
+        canvas.scrollForDrag (at, false);
         copyingTracks = copy;
         const auto returns = draggedReturns (id);
         aimTrackDrop (returns ? trackDropAt (at, *returns) : std::nullopt); canvas.repaint();
@@ -2514,6 +2515,7 @@ private:
             heightAtDown = onSplitLine (e.getPosition()) && ! folded && ! e.mods.isPopupMenu() ? getHeight() : 0;
             if (heightAtDown > 0) return;
             dragArmed = ! columnLayout && ! e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name);
+            if (dragArmed) owner.canvas.beginDragScroll();
             if (! columnLayout && ! e.mods.isPopupMenu() && e.originalComponent == this && e.x < 18 && e.y < 22)
             { owner.selectTrack (index); owner.foldTracks (e.mods.isAltDown() ? owner.allArrangementTracks() : juce::StringArray { trackId }, ! folded); return; }
             const auto within = [&e] (juce::Component& c) { return e.originalComponent == &c || c.isParentOf (e.originalComponent); };
@@ -2792,6 +2794,7 @@ private:
             if (e.mods.isPopupMenu() && (within (pan) || within (leftSplit) || within (rightSplit))) { owner.groupPanModeMenu (groupId, ! splitPan); return; }
             if (e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name)) { owner.showHeaderMenu (groupId, ! columnLayout); return; }
             dragArmed = ! columnLayout && ! e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name);
+            if (dragArmed) owner.canvas.beginDragScroll();
             // Clicking the group shows its device chain.
             if (! e.mods.isPopupMenu()) owner.selectChain (groupId);
         }
@@ -3420,6 +3423,9 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             if (e.x >= timelineWidth()) return;
+            // A held press without a move then gets no drag events from the auto-repeat.
+            lastDrag = std::make_tuple (e.x, e.y, owner.viewStart, owner.viewport.getViewPositionY(), e.mods.getRawFlags());
+            if (! e.mods.isPopupMenu()) beginDragScroll();
             // A take lane selects a time range to comp.
             if (const auto* lane = owner.laneAt (e.y); lane != nullptr && lane->take >= 0)
             {
@@ -3550,6 +3556,12 @@ private:
         }
         void mouseDrag (const juce::MouseEvent& e) override
         {
+            if (owner.envelopeKey.isEmpty() && (selectingTake || selecting || draggedClip >= 0) && ! e.mods.isPopupMenu() && e.mouseWasDraggedSinceMouseDown())
+                scrollForDrag (e.getPosition(), true);
+            // While the pointer rests, the auto-repeat sends the same event again; only a move or a scroll changes anything.
+            const auto drag = std::make_tuple (e.x, e.y, owner.viewStart, owner.viewport.getViewPositionY(), e.mods.getRawFlags());
+            if (lastDrag == drag) return;
+            lastDrag = drag;
             if (selectingTake)
             {
                 const auto at = owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods);
@@ -3808,11 +3820,52 @@ private:
         }
         bool keyPressed (const juce::KeyPress& key) override { return owner.handleKey (key); }
         bool dragHover = false;
+        // A drag that may scroll the view starts: see scrollForDrag. While the pointer rests, drag events keep coming.
+        void beginDragScroll() { dragClock = false; verticalCarry = 0; beginDragAutoRepeat (30); }
+        // When the last drag event came, once the drag has moved; each scrolls by the time since the one before.
+        double lastDragScroll = 0;
+        // Dragging to the timeline's left or right edge scrolls it, when the drag moves along time, and to
+        // the top or bottom of the lanes shown scrolls them, faster the further the pointer goes and on
+        // while it rests there, so a drag reaches what is out of view. A drag along time keeps its anchor
+        // at the same time, so what is dragged stays under the pointer. The speeds are Halftrack's own.
+        void scrollForDrag (juce::Point<int> at, bool alongTime)
+        {
+            constexpr int border = 16;
+            const auto now = juce::Time::getMillisecondCounterHiRes();
+            const auto elapsed = std::exchange (dragClock, true) ? juce::jlimit (0.0, 0.1, (now - lastDragScroll) / 1000.0) : 0.0;
+            lastDragScroll = now;
+            // From 60 pixels a second at the border to 2400 at 100 pixels into or past it.
+            const auto speed = [] (int depth) { return depth == 0 ? 0.0 : std::copysign (juce::jlimit (60.0, 2400.0, std::abs (depth) * 24.0), (double) depth); };
+            const auto width = timelineWidth();
+            if (const auto pixels = alongTime ? speed (at.x < border ? at.x - border : at.x > width - border ? at.x - (width - border) : 0) * elapsed : 0.0; pixels != 0)
+            {
+                const auto before = owner.viewStart;
+                owner.viewStart = juce::jmax (0.0, owner.viewStart + pixels / owner.pixelsPerSecond);
+                if (owner.viewStart != before)
+                {
+                    if (owner.state.playing) owner.setFollow (false);
+                    dragStartX -= (owner.viewStart - before) * owner.pixelsPerSecond;
+                    owner.updateScroll(); owner.ruler.repaint(); repaint();
+                }
+            }
+            const auto y = owner.viewport.getLocalPoint (this, at).y, height = owner.viewport.getMaximumVisibleHeight();
+            const auto depth = y < border ? y - border : y > height - border ? y - (height - border) : 0;
+            verticalCarry = depth == 0 ? 0 : verticalCarry + speed (depth) * elapsed;
+            if (const auto step = (int) verticalCarry; step != 0)
+            {
+                verticalCarry -= step;
+                owner.viewport.setViewPosition (0, owner.viewport.getViewPositionY() + step);
+            }
+        }
     private:
         Impl& owner;
         std::vector<std::unique_ptr<TrackRow>> rows;
+        bool dragClock = false;
+        double verticalCarry = 0; // The part of a pixel the lanes have yet to scroll by.
+        std::optional<std::tuple<int, int, double, int, int>> lastDrag;
         std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbnails;
-        int draggedClip = -1, dragStartX = 0, selectionAnchorTrack = -1;
+        int draggedClip = -1, selectionAnchorTrack = -1;
+        double dragStartX = 0;
         double originalStart = 0, originalFade = 0, selectionAnchorTime = 0;
         bool selecting = false;
         int fadeDrag = 0, rangeDrag = 0;
@@ -13894,6 +13947,81 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "Z zooms to the time selection");
         check (handleKey (juce::KeyPress ('X')) && viewStart == previousView.first && pixelsPerSecond == previousView.second, "X returns to the view before it");
         timeSelection = {}; session.seek (0); refresh();
+    }
+    {
+        // Dragging a clip or a time selection past the timeline's edge scrolls the Arrangement on, the
+        // clip staying under the pointer, and dragging below the lanes shown scrolls them down.
+        showArrangementView(); refresh();
+        const int previousTrack = selectedTrack;
+        check (session.addMidiTrack ("Scrolling").wasOk(), "add a track to drag on"); refresh();
+        selectTrack (lastOrdinaryTrack()); refresh();
+        const int t = selectedTrack; const auto trackId = currentTrack()->id;
+        check (session.addMidiClip (trackId, 0, 2).wasOk(), "a one-second clip at the start"); refresh();
+        viewStart = 0; updateScroll(); viewport.setViewPosition (0, laneY (t)); selectedClipIds.clear(); refresh();
+        const auto grid = session.editGrid();
+        { auto free = grid; free.snap = false; check (session.setEditGrid (free).wasOk(), "snapping off"); refresh(); }
+        const auto now = juce::Time::getCurrentTime();
+        const auto event = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged)
+        {
+            return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                     &canvas, &canvas, now, down, now, 1, dragged);
+        };
+        // Each drag event scrolls by the time since the last; the test lets 100 ms pass before each.
+        const auto dragTo = [&] (juce::Point<float> at, juce::Point<float> down, int events)
+        { for (int step = 0; step < events; ++step) { canvas.lastDragScroll -= 100; canvas.mouseDrag (event (at, down, true)); } };
+        const auto y = (float) (laneY (t) + laneHeight (t) / 2);
+        const juce::Point<float> grab { (float) std::round (.5 * pixelsPerSecond), y }, past { (float) canvas.timelineWidth() + 40, y };
+        canvas.mouseDown (event (grab, grab, false)); dragTo (past, grab, 3); canvas.mouseUp (event (past, grab, true)); refresh();
+        const auto scrolled = viewStart;
+        check (scrolled > 0 && std::abs (state.tracks[(size_t) t].clips.at (0).start - (scrolled + past.x / pixelsPerSecond - grab.x / pixelsPerSecond)) < 1.5 / pixelsPerSecond,
+               "dragging a clip past the timeline's right edge scrolls it on, the clip staying under the pointer (view at " + juce::String (scrolled) + " s, clip at "
+                   + juce::String (state.tracks[(size_t) t].clips.at (0).start) + " s, " + juce::String (pixelsPerSecond) + " px/s)");
+        session.undo(); refresh();
+        check (std::abs (state.tracks[(size_t) t].clips.at (0).start) < 1e-9, "one undo puts the clip back");
+        viewStart = 0; updateScroll(); refresh();
+        const juce::Point<float> empty { (float) std::round (1.5 * pixelsPerSecond), y };
+        canvas.mouseDown (event (empty, empty, false)); dragTo (past, empty, 2); canvas.mouseUp (event (past, empty, true)); refresh();
+        check (viewStart > 0 && timeSelection.active() && timeSelection.end > canvas.timelineWidth() / pixelsPerSecond
+                   && std::abs (timeSelection.end - (viewStart + past.x / pixelsPerSecond)) < 1.5 / pixelsPerSecond,
+               "dragging a time selection past the edge scrolls on and selects up to the time under the pointer");
+        // Enough tracks to scroll the lanes.
+        int added = 0;
+        while (canvas.getHeight() <= viewport.getMaximumVisibleHeight() + 200 && added < 40) { check (session.addMidiTrack ("Filler").wasOk(), "add a track"); ++added; refresh(); }
+        timeSelection = {}; viewStart = 0; updateScroll(); viewport.setViewPosition (0, laneY (t)); refresh();
+        const auto top = viewport.getViewPositionY();
+        const juce::Point<float> start { empty.x, (float) laneY (t) + 4 }, below { empty.x, (float) (top + viewport.getMaximumVisibleHeight() + 40) };
+        canvas.mouseDown (event (start, start, false)); dragTo (below, start, 2); canvas.mouseUp (event (below, start, true)); refresh();
+        check (canvas.getHeight() > viewport.getMaximumVisibleHeight() && viewport.getViewPositionY() > top, "dragging below the lanes shown scrolls them down");
+        timeSelection = {};
+        // So does dragging a track's header there.
+        viewport.setViewPosition (0, laneY (t)); refresh();
+        const auto headerTop = viewport.getViewPositionY();
+        const juce::Point<int> onHeader { canvas.timelineWidth() + 60, laneY (t) + 6 };
+        auto* header = canvas.getComponentAt (onHeader);
+        while (header != nullptr && header->getParentComponent() != &canvas) header = header->getParentComponent();
+        check (header != nullptr, "the track's header");
+        if (header != nullptr)
+        {
+            const auto order = [&] { juce::StringArray ids; for (const auto& track : state.tracks) ids.add (track.id); return ids; };
+            const auto before = order();
+            const auto press = header->getLocalPoint (&canvas, onHeader).toFloat();
+            const auto low = header->getLocalPoint (&canvas, juce::Point<int> (onHeader.x, headerTop + viewport.getMaximumVisibleHeight() + 40)).toFloat();
+            const auto headerEvent = [&] (juce::Point<float> at, bool dragged)
+            {
+                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                         header, header, now, press, now, 1, dragged);
+            };
+            header->mouseDown (headerEvent (press, false));
+            for (int step = 0; step < 3; ++step) { canvas.lastDragScroll -= 100; header->mouseDrag (headerEvent (low, true)); }
+            header->mouseUp (headerEvent (low, true)); refresh();
+            check (viewport.getViewPositionY() > headerTop, "dragging a track's header below the lanes shown scrolls them down");
+            if (order() != before) { session.undo(); refresh(); } // It moved where it was dropped.
+            check (order() == before, "the tracks are in their order again");
+        }
+        for (int step = 0; step < added; ++step) session.undo();
+        refresh();
+        check (session.removeTrack (t).wasOk(), "remove the track"); refresh();
+        check (session.setEditGrid (grid).wasOk(), "snapping back"); selectTrack (previousTrack); viewStart = 0; updateScroll(); refresh();
     }
     {
         // Take lanes, as in the reference: Cmd+Option+U shows a track's take lanes below it, a range
