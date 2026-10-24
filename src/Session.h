@@ -846,6 +846,12 @@ public:
     struct SlotRef { int track = -1, scene = -1; auto operator<=> (const SlotRef&) const = default; };
     juce::Result moveSlotClips (const std::vector<SlotRef>&, int trackDelta, int sceneDelta, bool copy = false);
     juce::Result clearSlots (const std::vector<SlotRef>&);
+    // Crop for Session clips, after the reference's slot command (enabled 0x103a40a4c): each clip keeps only
+    // the content it plays, its loop or its span from its start, which then begins the clip. A MIDI clip
+    // loses its notes outside it, cut at its edges; a warped audio clip without warp markers gets a new
+    // sample in the project's Assets holding only that audio. One undo step.
+    juce::Result cropSessionClips (const juce::StringArray& clipIds);
+    bool canCropSessionClips (const juce::StringArray& clipIds) const;
     // Add or Remove Stop Button, after the reference's slot command: an empty slot without a stop button
     // launches nothing, so launching it or its scene leaves its track playing. One undo step.
     juce::Result setSlotStopButtons (const std::vector<SlotRef>&, bool stopButton);

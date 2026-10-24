@@ -79,7 +79,7 @@ A right-click on a slot that is not selected selects it alone, its track and sce
 | Export MIDI Clip | one MIDI clip | the same |
 | Show in Browser, Reveal in Finder, Show Similar Files | one audio clip with a file | Reveal in Finder and Show Similar Files |
 | Freeze / Unfreeze Track(s), Bounce Track(s) in Place, Bounce to New Track(s) (always shown) | a clip | the same. Freeze stays greyed for a track without Arrangement clips, as Halftrack's freeze renders the Arrangement only. Bounce to New Track renders the selected clips into the same slots of a new track (`bounceSlotsToNewTracks`; see the [freeze contract](freeze-contract.md#session-clips)) |
-| Crop Clip(s) (always shown) | a clip that can be cropped | left out: Session clips cannot be cropped yet |
+| Crop Clip(s) (always shown) | a clip that can be cropped | the same (`cropSessionClips`), greyed on an empty slot: each clip keeps only what it plays, its loop or its span from its start, which then begins it. A MIDI clip loses the notes outside, cut at the edges; a warped audio clip gets a new sample in the project's Assets holding that audio. Audio clips with warp markers stay greyed |
 | Slice to New MIDI Track and the conversions | one audio clip | left out: Halftrack slices Arrangement clips only |
 | Add / Remove Stop Button | any slot selected; Remove while one has a stop button | the same (`setSlotStopButtons`, one undo step): an empty slot without one shows no button, and launching it or its scene leaves its track playing, as a group slot's launch does |
 | Create Follow Action Chain | a clip | left out: not implemented |
@@ -119,7 +119,7 @@ The UI suite compares these menus with the reference's order:
 
 It also checks:
 - a swatch colouring the slot's clip;
-- Insert MIDI Clip filling the empty slot;
+- Insert MIDI Clip filling the empty slot (the clip loops suite crops a Session MIDI clip to its loop, sounding as before, and an audio clip to a new one-second sample holding exactly that audio);
 - Remove Stop Button taking the slot's away and offering Add Stop Button (the launcher suite hears a track play on through a scene's empty slot without one, and the slot itself launch nothing);
 - Select Scene Content selecting the scene's slots;
 - a swatch colouring a scene and Reset Color taking it away;

@@ -2446,3 +2446,7 @@ Engine and UI areas. As the reference's slot command does, Add Stop Button and R
 ## Scene colours — 2026-10-24
 
 Engine and UI areas. As the reference's scene menu ends, Reset Color and a colour grid colour a scene or take its colour away (`setSceneColours`, one undo step, saved). The scene column fills a coloured scene's cell with its colour. Checked in the groups and UI suites ([contract](research/clip-menus-contract.md)).
+
+## Cropping Session clips — 2026-10-24
+
+Engine and UI areas. The slot menu's Crop Clip keeps only what each selected Session clip plays: its loop, or its span from its start, which then begins the clip (`cropSessionClips`, one undo step). A MIDI clip loses the notes outside it, cut at its edges. A warped audio clip without warp markers gets a new sample in the project's Assets holding exactly that audio. As the reference adds it, the item is always there, greyed on an empty slot. Checked in the clip loops and UI suites ([contract](research/clip-menus-contract.md)).

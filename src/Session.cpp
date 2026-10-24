@@ -9202,6 +9202,99 @@ Result Session::moveSlotClips (const std::vector<SlotRef>& slots, int trackDelta
     endEditGesture();
     return Result::ok();
 }
+namespace
+{
+// The content a Session clip plays, in its content beats: its loop, or its span from its start.
+std::pair<double, double> playedBeats (const Session::ClipInfo& info)
+{
+    return info.loop.on ? std::pair { info.loop.start, info.loop.start + info.loop.length } : std::pair { info.contentStartBeat, info.contentStartBeat + info.lengthBeats };
+}
+bool croppable (te::Clip& clip)
+{
+    if (clip.getClipSlot() == nullptr || clip.getClipTrack()->isFrozen (te::Track::anyFreeze)) return false;
+    if (dynamic_cast<te::MidiClip*> (&clip) != nullptr) return true;
+    auto* wave = dynamic_cast<te::WaveAudioClip*> (&clip);
+    return wave != nullptr && wave->getAutoTempo() && warpMarkers (*wave).empty() && wave->getSourceFileReference().getFile().existsAsFile();
+}
+}
+Result Session::cropSessionClips (const juce::StringArray& clipIds)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before cropping clips.");
+    std::vector<te::Clip*> clips;
+    for (auto* t : te::getAudioTracks (*impl->edit))
+        for (auto* slot : t->getClipSlotList().getClipSlots())
+            if (auto* clip = slot->getClip(); clip != nullptr && clipIds.contains (clip->itemID.toString()) && croppable (*clip)) clips.push_back (clip);
+    if (clips.empty()) return Result::fail ("Choose Session clips to crop.");
+    // Each audio clip's new sample first: the played audio, read from its source at the clip's tempo.
+    auto assets = impl->assets(); if (auto r = assets.createDirectory(); r.failed()) return r;
+    std::map<te::Clip*, juce::File> samples;
+    const auto discard = [&samples] { for (auto& [clip, file] : samples) file.deleteFile(); };
+    for (auto* clip : clips)
+        if (auto* wave = dynamic_cast<te::WaveAudioClip*> (clip))
+        {
+            const auto info = describeClip (*clip);
+            const auto [from, to] = playedBeats (info);
+            const auto bpm = warpSettings (*wave).bpm;
+            std::unique_ptr<juce::AudioFormatReader> reader (impl->engine.getAudioFileFormatManager().readFormatManager.createReaderFor (wave->getSourceFileReference().getFile()));
+            if (reader == nullptr) { discard(); return Result::fail ("The audio of \"" + clip->getName() + "\" could not be read."); }
+            const auto first = (juce::int64) std::llround (from * 60 / bpm * reader->sampleRate);
+            const auto count = std::max<juce::int64> (1, std::min<juce::int64> (reader->lengthInSamples - first, (juce::int64) std::llround ((to - from) * 60 / bpm * reader->sampleRate)));
+            juce::AudioBuffer<float> audio ((int) reader->numChannels, (int) count);
+            reader->read (&audio, 0, (int) count, first, true, true);
+            const auto file = assets.getNonexistentChildFile (File::createLegalFileName (clip->getName()) + " Crop", ".wav", true);
+            juce::WavAudioFormat format; std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+            auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (reader->sampleRate).withNumChannels ((int) reader->numChannels).withBitsPerSample (32));
+            if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples())) { file.deleteFile(); discard(); return Result::fail ("Could not write the cropped audio."); }
+            samples[clip] = file;
+        }
+    closePluginEditors();
+    impl->transaction (clips.size() > 1 ? "Crop clips" : "Crop clip");
+    auto* undo = &impl->edit->getUndoManager();
+    for (auto* clip : clips)
+    {
+        const auto info = describeClip (*clip);
+        const auto [from, to] = playedBeats (info);
+        const auto length = to - from;
+        if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
+        {
+            auto& sequence = midi->getSequence();
+            for (auto* note : juce::Array<te::MidiNote*> (sequence.getNotes()))
+            {
+                const auto start = note->getStartBeat().inBeats(), end = start + note->getLengthBeats().inBeats();
+                if (end <= from + 1e-9 || start >= to - 1e-9) sequence.removeNote (*note, undo);
+                else note->setStartAndLength (te::BeatPosition::fromBeats (std::max (start, from) - from), te::BeatDuration::fromBeats (std::min (end, to) - std::max (start, from)), undo);
+            }
+            for (auto* event : juce::Array<te::MidiControllerEvent*> (sequence.getControllerEvents()))
+            {
+                const auto beat = event->getBeatPosition().inBeats();
+                if (beat < from - 1e-9 || beat >= to - 1e-9) sequence.removeControllerEvent (*event, undo);
+                else event->setBeatPosition (te::BeatPosition::fromBeats (beat - from), undo);
+            }
+        }
+        else if (auto* wave = dynamic_cast<te::WaveAudioClip*> (clip))
+        {
+            wave->getSourceFileReference().setToFile (samples[clip], te::SourceFileReference::PathStyle::alwaysAbsolute, false);
+            wave->getLoopInfo().setNumBeats (length);
+        }
+        // The played content now begins the clip, which loops over it or plays it once.
+        const auto bps = impl->edit->tempoSequence.getBeatsPerSecondAt (clip->getPosition().getStart());
+        if (info.loop.on) clip->setLoopRangeBeats ({ te::BeatPosition(), te::BeatPosition::fromBeats (length) });
+        auto position = clip->getPosition();
+        position.offset = te::TimeDuration::fromSeconds (info.loop.on ? std::max (0.0, info.contentStartBeat - from) / bps : 0.0);
+        position.time = position.time.withLength (te::TimeDuration::fromSeconds (length / bps));
+        clip->setPosition (position);
+    }
+    impl->changed(); return Result::ok();
+}
+bool Session::canCropSessionClips (const juce::StringArray& clipIds) const
+{
+    if (impl->exporting || impl->anyRecording()) return false;
+    for (auto* t : te::getAudioTracks (*impl->edit))
+        for (auto* slot : t->getClipSlotList().getClipSlots())
+            if (auto* clip = slot->getClip(); clip != nullptr && clipIds.contains (clip->itemID.toString()) && croppable (*clip)) return true;
+    return false;
+}
 Result Session::clearSlots (const std::vector<SlotRef>& slots)
 {
     if (slots.size() == 1) return clearSlot (slots[0].track, slots[0].scene);

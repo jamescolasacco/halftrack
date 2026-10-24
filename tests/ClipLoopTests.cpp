@@ -162,6 +162,19 @@ int runClipLoopTests (const juce::File& artifacts)
             check (pattern (short1, slotLoud) == "q---" && ! shortPlaying, "it plays just that beat: " + pattern (short1, slotLoud));
             ok (s.setClipLoop (slotClip().id, { true, 0, 2 }, 1), "loop it again");
             check (slotClip().loop.on, "and it loops again");
+            // Crop keeps only what the clip plays, which then begins it: here its loop over beats 1 to 3,
+            // holding the quiet note; the loud one before it goes.
+            ok (s.setClipLoop (slotClip().id, { true, 1, 2 }, 1), "loop beats 1 to 3");
+            auto [beforeCrop, beforePlaying] = launched (4);
+            check (s.canCropSessionClips ({ slotClip().id }), "the Session clip can be cropped");
+            ok (s.cropSessionClips ({ slotClip().id }), "crop it");
+            check (slotClip().notes.size() == 1 && std::abs (slotClip().notes[0].startBeat) < 1e-9 && slotClip().loop == Session::ClipLoop { true, 0, 2 }
+                       && std::abs (slotClip().contentStartBeat) < 1e-9, "only the quiet note is left, at the start of a loop of two beats");
+            auto [afterCrop, afterPlaying] = launched (4);
+            check (pattern (afterCrop, slotLoud) == pattern (beforeCrop, slotLoud) && afterPlaying, "launched, it sounds as before: " + pattern (afterCrop, slotLoud));
+            s.undo();
+            check (slotClip().notes.size() == 2 && slotClip().loop == Session::ClipLoop { true, 1, 2 }, "one undo restores the notes and the loop");
+            check (! s.canCropSessionClips ({ id }), "an Arrangement clip is cropped with a time selection instead");
         }
 
         // Warped audio: four seconds of clicks on the beat at 120 BPM, loud on even beats.
@@ -206,6 +219,27 @@ int runClipLoopTests (const juce::File& artifacts)
         ok (s.setAudioClipWarp (audioId, { Session::WarpMode::off, 120 }), "turn Warp off while it loops");
         check (! audioClip().loop.on && ! audioClip().canLoop && std::abs (audioClip().sourceOffset - 1.5) < 1e-6 && audioClip().canEditAudioRange,
                "the loop ends, the clip still starting on its fourth beat");
+        // Crop for a Session audio clip: a new sample holding only the audio it plays.
+        ok (s.importAudioToSlot (clicks, clickTrack, 0), "the clicks in a Session slot");
+        const auto sessionAudio = [&] { return s.snapshot().tracks[(size_t) clickTrack].slots[0].clip; };
+        ok (s.setAudioClipWarp (sessionAudio().id, { Session::WarpMode::beats, 120 }), "at 120 BPM");
+        ok (s.setClipLoop (sessionAudio().id, { true, 2, 2 }, 2), "looping its third and fourth beats");
+        const auto uncropped = sessionAudio().file;
+        ok (s.cropSessionClips ({ sessionAudio().id }), "crop it");
+        {
+            const auto cropped = sessionAudio();
+            juce::AudioFormatManager formats; formats.registerBasicFormats();
+            std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (cropped.file)), source (formats.createReaderFor (clicks));
+            check (reader != nullptr && reader->lengthInSamples == 48000 && cropped.file != uncropped && cropped.loop == Session::ClipLoop { true, 0, 2 },
+                   "it plays a new one-second sample, looping over it");
+            juce::AudioBuffer<float> got (1, 48000), want (1, 48000);
+            reader->read (&got, 0, 48000, 0, true, false); source->read (&want, 0, 48000, 48000, true, false);
+            double worst = 0;
+            for (int n = 0; n < 48000; ++n) worst = std::max (worst, (double) std::abs (got.getSample (0, n) - want.getSample (0, n)));
+            check (worst < 1e-6, "holding the clicks' second second exactly (max difference " + juce::String (worst, 8) + ")");
+        }
+        s.undo();
+        check (sessionAudio().file == uncropped && sessionAudio().loop == Session::ClipLoop { true, 2, 2 }, "one undo returns the clip to its sample and loop");
         root.deleteRecursively();
         std::cout << "Clip loops passed" << std::endl;
         return 0;

@@ -10812,7 +10812,7 @@ private:
         return slots;
     }
     enum SlotItem { slotCut = 500, slotCopy, slotPaste, slotDuplicate, slotDelete, slotClearEnvelopes, slotRename, slotGroove, slotActivate, slotExportMidi,
-                    slotReveal, slotSimilar, slotFreeze, slotBounceInPlace, slotBounceNew, slotInsertMidi, slotColour, slotInfo, slotStopButton };
+                    slotReveal, slotSimilar, slotFreeze, slotBounceInPlace, slotBounceNew, slotInsertMidi, slotColour, slotInfo, slotStopButton, slotCrop };
     // A Session slot's menu, in the reference's order (LSlotManager 0x103a38ce4): commands that cannot act
     // are left out, while Freeze and the bounces stay, greyed when they cannot act.
     juce::PopupMenu slotContextMenu (std::shared_ptr<int> colour) const
@@ -10851,6 +10851,11 @@ private:
             item (slotFreeze, juce::String (allFrozen ? "Unfreeze " : "Freeze ") + (freezable.size() > 1 ? "Tracks" : "Track"), ! freezable.isEmpty());
             item (slotBounceInPlace, tracks.size() > 1 ? "Bounce Tracks in Place" : "Bounce Track in Place", session.canBounceTracksInPlace (tracks));
             item (slotBounceNew, tracks.size() > 1 ? "Bounce to New Tracks" : "Bounce to New Track", session.canBounceSlotsToNewTracks (clipIds));
+        }
+        // Crop Clip, always there and greyed on an empty slot, as the reference adds it.
+        {
+            juce::StringArray clipIds; for (const auto* c : clips) clipIds.add (c->id);
+            separator(); item (slotCrop, clips.size() > 1 ? "Crop Clips" : "Crop Clip", session.canCropSessionClips (clipIds));
         }
         separator();
         // Add or Remove Stop Button: Remove while any selected slot has one (0x103a3ce34).
@@ -10913,6 +10918,7 @@ private:
                 session.endEditGesture(); break;
             }
             case slotColour: if (colour >= 0) report (session.setClipColours (clipIds, paletteColour (colour))); break;
+            case slotCrop: report (session.cropSessionClips (clipIds)); break;
             case slotStopButton:
             {
                 const auto slots = menuSlots();
@@ -14778,13 +14784,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         selectedSlots.clear(); selectLauncherSlot (t, 0);
         const juce::String paste = session.hasSlotClipboard() ? "Paste|" : "";
         const auto filled = listed (slotContextMenu (colour));
-        check (filled == "Cut|Copy|" + paste + "Duplicate|Delete|-|Rename|Edit Info Text|Extract Groove|Deactivate Clip|Export MIDI Clip...|-|Freeze Track (off)|Bounce Track in Place|Bounce to New Track|-|Remove Stop Button|-|[Clip Colours]",
+        check (filled == "Cut|Copy|" + paste + "Duplicate|Delete|-|Rename|Edit Info Text|Extract Groove|Deactivate Clip|Export MIDI Clip...|-|Freeze Track (off)|Bounce Track in Place|Bounce to New Track|-|Crop Clip|-|Remove Stop Button|-|[Clip Colours]",
                "a filled slot's menu lists the reference's commands in its order: " + filled);
         chooseSlotItem (slotColour, 7);
         check (state.tracks[(size_t) t].slots[0].clip.colour == paletteColour (7), "a swatch colours the slot's clip");
         session.undo(); refresh();
         selectLauncherSlot (t, 1);
-        check (listed (slotContextMenu (colour)) == paste + juce::String (paste.isEmpty() ? "" : "-|") + "Remove Stop Button|Insert MIDI Clip",
+        check (listed (slotContextMenu (colour)) == paste + juce::String (paste.isEmpty() ? "" : "-|") + "Crop Clip (off)|-|Remove Stop Button|Insert MIDI Clip",
                "an empty slot on a MIDI track offers Remove Stop Button and Insert MIDI Clip: " + listed (slotContextMenu (colour)));
         chooseSlotItem (slotStopButton, -1);
         check (! state.tracks[(size_t) t].slots[1].stopButton && listed (slotContextMenu (colour)).contains ("Add Stop Button"), "Remove Stop Button takes the slot's stop button away, and Add Stop Button is offered");
