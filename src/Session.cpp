@@ -4400,7 +4400,7 @@ struct Session::Impl
         {
             // Settings an older file lacks keep their defaults; a newer file's unknown ones are ignored.
             const int arm = number ("exclusiveArm", 1, 2), solo = number ("exclusiveSolo", 1, 2), warp = number ("defaultWarpMode", (int) read.defaultWarpMode, 8);
-            const int autoWarp = number ("autoWarpLongSamples", 0, 2), mode = number ("defaultLaunchMode", 0, 4), grid = number ("defaultLaunchQuantisation", 0, (int) clipLaunchGrids.size());
+            const int autoWarp = number ("autoWarpLongSamples", read.autoWarpLongSamples ? 1 : 0, 2), mode = number ("defaultLaunchMode", 0, 4), grid = number ("defaultLaunchQuantisation", 0, (int) clipLaunchGrids.size());
             const int look = number ("theme", 0, Preferences::themeCount), zoom = number ("zoomPercent", 100, 201);
             valid = arm >= 0 && solo >= 0 && warp >= 0 && autoWarp >= 0 && mode >= 0 && grid >= 0 && look >= 0 && zoom >= 0;
             read = { arm == 1, solo == 1, (WarpMode) warp, autoWarp == 1, (LaunchMode) mode, (ClipQuantisation) grid, look, zoom };

@@ -120,3 +120,14 @@ Evidence (`tests/TempoAnalysisTests.cpp`):
 The UI suite checks the menu's one-bar suggestion for two seconds at 120 BPM. It also checks that Warp From Here reports finding no steady beat in two seconds of clicks, changing nothing.
 
 Missing: the reference's Warp From Here (with tempo changes), Warp From Here (Start at the project tempo), Warp N Bars From Here, and Set 1.1.1 Here.
+
+## First play of a warped clip (2026-10-24)
+
+A warped clip's first play after the playback graph was built began late by its stretcher's latency, about 150 ms in Complex and half a second in Beats, in the Arrangement and the Session alike; later plays began on time. The readers prime their stretcher with the clip's first audio when the graph builds them, and in real time they read the file cache without waiting, so audio not yet cached primed them with silence, kept until they were repositioned. `cmake/PatchStretchPriming.cmake` lets the cache reader wait for that audio while the graph builds them, then read without waiting ([dependencies](../dependencies.md)). The warp modes suite plays a constant level's first Arrangement play and first Session launch in Complex and Beats and finds each sounding as the next play does, near the unwarped clip.
+
+Seeking during playback to audio not yet cached can still begin silently for the stretcher's latency, as reading must not wait in the audio callback.
+
+## Defaults not yet the reference's
+
+The reference warps in Beats by default and warps long samples (static reading of its preferences; see the [preferences contract](preferences-contract.md)). Halftrack keeps Complex and leaves long samples unwarped until its Beats plays as cleanly: switching showed a 0.25 s constant clip falling silent between Beats segments when its tempo differs (Halftrack's transient loop is off by default), and a constant level overshooting its gain slightly in Beats. These are recorded in the [open questions](../open-questions.md).
+

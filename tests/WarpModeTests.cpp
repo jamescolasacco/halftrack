@@ -249,6 +249,51 @@ int runWarpModeTests (const juce::File& artifacts)
             const auto heard = captureSyntheticTestDevice (live, 400);
             check (heard.getMagnitude (0, 0, heard.getNumSamples()) > .3f, "it plays live");
         }
+        // A stretched clip's first play starts on time: its readers prime with its first audio as the
+        // graph builds them, even when that audio was not yet cached, in the Arrangement and the Session.
+        {
+            const auto level = root.getChildFile ("level.wav");
+            write (level, [] (int) { return .5f; }, at (8));
+            const auto firstLoud = [] (const juce::AudioBuffer<float>& b)
+            { for (int n = 0; n < b.getNumSamples(); ++n) if (std::abs (b.getSample (0, n)) > .4f) return n; return -1; };
+            int baseline = -1;
+            {
+                Session plain (false, makeSyntheticTestDeviceType());
+                ok (plain.importAudio (level, 0, 0), "import a constant level"); pumpSyntheticTestDevice (plain, 8);
+                plain.seek (0); ok (plain.play(), "play it unwarped");
+                baseline = firstLoud (captureSyntheticTestDevice (plain, 200)); plain.stop();
+                check (baseline >= 0 && baseline < 512, "unwarped, it sounds within two blocks (" + juce::String (baseline) + ")");
+            }
+            for (const auto mode : { Mode::stretch, Mode::beats })
+            {
+                const juce::String name = mode == Mode::beats ? "Beats" : "Complex";
+                Session arrangement (false, makeSyntheticTestDeviceType());
+                ok (arrangement.importAudio (level, 0, 0), "import it for " + name);
+                ok (arrangement.setAudioClipWarp (arrangement.snapshot().tracks[0].clips[0].id, { mode, 120 }), "warp it in " + name);
+                pumpSyntheticTestDevice (arrangement, 8);
+                arrangement.seek (0); ok (arrangement.play(), "play it");
+                const auto first = firstLoud (captureSyntheticTestDevice (arrangement, 200)); arrangement.stop();
+                pumpSyntheticTestDevice (arrangement, 8); arrangement.seek (0); ok (arrangement.play(), "play it again");
+                const auto second = firstLoud (captureSyntheticTestDevice (arrangement, 200)); arrangement.stop();
+                check (first >= 0 && first == second && std::abs (first - baseline) < 128,
+                       "in " + name + ", its first play sounds as its next does, near the unwarped clip (" + juce::String (first) + ", " + juce::String (second) + ")");
+                Session session (false, makeSyntheticTestDeviceType());
+                ok (session.importAudioToSlot (level, 0, 0), "put it in a Session slot for " + name);
+                ok (session.setAudioClipWarp (session.snapshot().tracks[0].slots[0].clip.id, { mode, 120 }), "warp the Session clip in " + name);
+                pumpSyntheticTestDevice (session, 8);
+                ok (session.launchSlot (0, 0), "launch it");
+                const auto playing = [&] { const auto slot = session.snapshot().tracks[0].slots[0]; return slot.playing && ! slot.queued; };
+                for (int i = 0; i < 2000 && ! playing(); ++i) pumpSyntheticTestDevice (session, 1);
+                const auto launched = firstLoud (captureSyntheticTestDevice (session, 200));
+                session.stop(); pumpSyntheticTestDevice (session, 8);
+                ok (session.launchSlot (0, 0), "launch it again");
+                for (int i = 0; i < 2000 && ! playing(); ++i) pumpSyntheticTestDevice (session, 1);
+                const auto relaunched = firstLoud (captureSyntheticTestDevice (session, 200));
+                session.stop();
+                check (launched >= 0 && launched == relaunched && launched < 128,
+                       "in " + name + ", the Session clip's first launch sounds as its next does, at once (" + juce::String (launched) + ", " + juce::String (relaunched) + ")");
+            }
+        }
         std::cout << "Warp modes passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL warp modes: " << e.what() << std::endl; return 1; }

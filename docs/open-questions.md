@@ -829,3 +829,7 @@ Main menu bar ([contract](research/main-menu-contract.md)). Defaults where the r
 - **Labels.** Items are named plainly for their commands, as the reference's English text is in its encrypted language file. Undo and Redo do not name the step to undo.
 - **Preferences.** Preferences is one window with the reference's tabs (see the [preferences contract](research/preferences-contract.md)).
 
+Warp defaults ([warp contract](research/warp-contract.md#defaults-not-yet-the-references)):
+
+- **Default warp mode and Auto-Warp.** The reference's are Beats and on; Halftrack keeps Complex and off until its Beats plays a slowed constant clip without silences between segments and a constant level without overshoot. Which transient loop mode the reference's Beats uses by default was not read.
+

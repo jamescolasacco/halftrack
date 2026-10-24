@@ -5,7 +5,8 @@ function(halftrack_patch_clip_gain source_dir)
     if(source_hash STREQUAL "b7c3e5191bb380770db9b6e5aa8da5a3fd2131aee102d28485be669c807c9d76"
        OR source_hash STREQUAL "a723324379bc424d352772f91f538f6a457a9559caa34fd80b9699484e3f7fc2"
        OR source_hash STREQUAL "2f2a0038be5991510a1d0222f166d831fa9865dfe6f9d42e4dbbe4e20c6b2cd0"
-       OR source_hash STREQUAL "04ccc34aa76ca5f81534007a7d68da4e595b6680b323879d7ffe6b69d947b269") # Later clip-activation, stretch-alignment and warp-timing patches.
+       OR source_hash STREQUAL "04ccc34aa76ca5f81534007a7d68da4e595b6680b323879d7ffe6b69d947b269"
+       OR source_hash STREQUAL "2e4354f76d96dc25dc489042afa6a3263439dbc3b3095b8639d008cd94b7a7d9") # Later clip-activation, stretch-alignment, warp-timing and stretch-priming patches.
         return()
     endif()
     if(NOT source_hash STREQUAL "1b92d35da33ca2495f3a2627f4a985c54c651285370e63f036491de953cdd980")

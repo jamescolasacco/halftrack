@@ -199,7 +199,7 @@ void MidiNode::processSection (Node::ProcessContext& pc,
     if (wasMute.exchange (false, std::memory_order_relaxed))
         shouldCreateMessagesForTime = true;]=])
     # The later stretch-alignment and warp-timing patches build on this WaveNode result.
-    set(downstream0 "2f2a0038be5991510a1d0222f166d831fa9865dfe6f9d42e4dbbe4e20c6b2cd0" "04ccc34aa76ca5f81534007a7d68da4e595b6680b323879d7ffe6b69d947b269")
+    set(downstream0 "2f2a0038be5991510a1d0222f166d831fa9865dfe6f9d42e4dbbe4e20c6b2cd0" "04ccc34aa76ca5f81534007a7d68da4e595b6680b323879d7ffe6b69d947b269" "2e4354f76d96dc25dc489042afa6a3263439dbc3b3095b8639d008cd94b7a7d9")
     set(downstream1 "012a4ac8ea6c65ffb647e8d0244ecf5c0ce62d6f1841e72009c14309cb3307e1") # The later MIDI variations patch.
     foreach(index RANGE 0 3)
         file(SHA256 "${source${index}}" hash)
