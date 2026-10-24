@@ -109,3 +109,7 @@ After the reference's manual ([Automation and Editing Envelopes](https://www.abl
 
 Not yet: Shift's finer steps, and holding B to switch Draw Mode for the moment.
 
+## Clear Envelope (2026-10-24)
+
+The reference's hidden menu registers Clear Envelope (`clen`) on Cmd+Delete, and its key list calls it Delete Selected Breakpoint Envelope ([Live keyboard shortcuts](https://www.ableton.com/en/live-manual/12/live-keyboard-shortcuts/), consulted 2026-10-24). In Automation Mode a click on an envelope selects it, and Cmd+Delete then clears its breakpoints, one undo step; a click elsewhere, or leaving Automation Mode, drops the selection. The envelope's context menu offers Clear Envelope too, before Simplify Envelope. The UI suite clicks a lane's envelope, clears it with Cmd+Delete and undoes it.
+

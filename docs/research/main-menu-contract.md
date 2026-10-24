@@ -57,6 +57,7 @@ What moved with the rebuild:
 From the reference's list of keys ([Live keyboard shortcuts](https://www.ableton.com/en/live-manual/12/live-keyboard-shortcuts/), consulted 2026-10-24), these act without a menu item:
 - **R** reverses, and **Shift+Cmd+J** crops, as the reference's hidden menu has them (`rvrs`, `crop`; Option+Cmd+Delete is its Reset Fades, `rsfd`, and Cmd+6 to Cmd+0 its grid items `gri6` to `qno `), the Arrangement's time selection or a lone selected clip ([clip menus](clip-menus-contract.md)).
 - **Cmd+Option+Delete** deletes the fades and crossfades of the selected Arrangement clips, as Reset Fades does.
+- **Cmd+Delete** clears the envelope last clicked in Automation Mode ([automation contract](arrangement-automation-contract.md#clear-envelope-2026-10-24)).
 - **F1 to F8** switch the tracks numbered 1 to 8 on and off, groups counted, as their activators do.
 - **Escape** jumps to the selected track's title bar: the headers then take Edit's commands.
 - **Cmd+6 to Cmd+9 and Cmd+0** set the global launch quantization to 1/16, 1/8, 1/4, 1 Bar and None.

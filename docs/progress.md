@@ -2581,3 +2581,7 @@ UI area. As the reference's key list gives them, in the browser Right opens the 
 
 UI area. The alternates the reference's menu builders register now reach the same items: F11, Cmd+underscore, F12, Option+Cmd+B, Option+Cmd+G, Shift+U, = and _, Shift+X, and Shift with H, W, T and R. Cmd+Option+G no longer groups tracks on its way to the Groove Pool ([menu contract](research/main-menu-contract.md)). Checked in the UI suite.
 
+## Clear Envelope — 2026-10-24
+
+UI area. In Automation Mode, Cmd+Delete clears the envelope last clicked, as the reference's hidden menu has it, and the envelope's context menu offers Clear Envelope ([automation contract](research/arrangement-automation-contract.md#clear-envelope-2026-10-24)). Checked in the UI suite.
+

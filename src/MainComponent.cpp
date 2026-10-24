@@ -993,6 +993,10 @@ public:
             if (code == 'I' && shift) { menuItemSelected (68, 4); return true; }
             if (code == 'I' && ! showSession && ! key.getModifiers().isAltDown()) { menuItemSelected (74, 1); return true; }
             if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && shift && ! showSession) { menuItemSelected (75, 1); return true; }
+            // Cmd+Delete clears the envelope last clicked, as the reference's key does.
+            if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && ! shift && ! key.getModifiers().isAltDown() && automationMode && ! showSession && ! showPiano
+                && selectedEnvelopeKey.isNotEmpty())
+            { clearEnvelope (selectedEnvelopeTrack, selectedEnvelopeKey); return true; }
             // Cmd+Option+Delete deletes the selected clips' fades and crossfades, as the reference's key does.
             if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && key.getModifiers().isAltDown() && ! showSession && ! showPiano)
             { if (canResetFades()) resetSelectionFades(); return true; }
@@ -1189,6 +1193,7 @@ private:
     std::map<juce::String, juce::StringArray> automationLanes;  // Track id to the keys shown in lanes below it.
     arrangementAutomation::Envelope envelope;
     juce::String envelopeTrack, envelopeKey;                    // The envelope a pointer gesture is editing.
+    juce::String selectedEnvelopeTrack, selectedEnvelopeKey;    // The envelope last clicked, which Cmd+Delete clears.
     juce::String shownKey (const Session::TrackInfo& t) const
     { const auto found = shownAutomation.find (t.id); return found != shownAutomation.end() ? found->second : arrangementAutomation::volumeKey (t); }
     std::optional<arrangementAutomation::Target> automationTarget (const juce::String& trackId, const juce::String& key)
@@ -1209,18 +1214,30 @@ private:
         t.sends = g.sends; t.plugins = g.plugins;
         return t;
     }
-    void setAutomationMode (bool on) { automationMode = on; refresh(); resized(); canvas.repaint(); }
+    void setAutomationMode (bool on) { automationMode = on; if (! on) { selectedEnvelopeTrack.clear(); selectedEnvelopeKey.clear(); } refresh(); resized(); canvas.repaint(); }
+    // Clear Envelope, as the reference's (Cmd+Delete): every breakpoint of an envelope goes, one undo step.
+    void clearEnvelope (const juce::String& trackId, const juce::String& key)
+    {
+        const auto target = automationTarget (trackId, key);
+        if (! target || target->lane.points.empty()) return;
+        auto lane = target->lane; lane.points.clear();
+        session.beginEditGesture ("Clear " + target->control + " envelope");
+        report (arrangementAutomation::write (session, *target, lane));
+        session.endEditGesture(); refresh();
+    }
     // An envelope's context menu: Simplify Envelope over the time selection, as the reference's.
     void envelopeMenu (const arrangementAutomation::Target& target)
     {
         const auto range = envelope.selectedBeats ? envelope.selectedBeats (target.trackId) : std::nullopt;
         juce::PopupMenu menu;
+        menu.addItem (2, "Clear Envelope", ! target.lane.points.empty());
         menu.addItem (1, "Simplify Envelope", range.has_value() && target.lane.points.size() > 2);
         auto safe = juce::Component::SafePointer<Impl> (this);
         menu.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId = target.trackId, key = target.key, range] (int choice)
         {
-            if (safe == nullptr || choice != 1 || ! range) return;
-            safe->simplifyEnvelope (trackId, key, *range);
+            if (safe == nullptr) return;
+            if (choice == 2) safe->clearEnvelope (trackId, key);
+            else if (choice == 1 && range) safe->simplifyEnvelope (trackId, key, *range);
         });
     }
     void simplifyEnvelope (const juce::String& trackId, const juce::String& key, std::pair<double, double> range)
@@ -3537,7 +3554,11 @@ private:
                 {
                     if (e.mods.isPopupMenu()) if (const auto target = owner.automationTarget (trackId, key)) { owner.envelopeMenu (*target); return; }
                     if (const auto target = owner.automationTarget (trackId, key); target && owner.envelope.mouseDown (owner.session, *target, area, e))
-                    { owner.envelopeTrack = trackId; owner.envelopeKey = key; envelopeArea = area; owner.refresh(); return; }
+                    {
+                        owner.envelopeTrack = owner.selectedEnvelopeTrack = trackId; owner.envelopeKey = owner.selectedEnvelopeKey = key;
+                        envelopeArea = area; owner.refresh(); return;
+                    }
+                    owner.selectedEnvelopeTrack.clear(); owner.selectedEnvelopeKey.clear();
                 }
                 // An automation lane's background selects time, as the reference's does; it holds no clips.
             }
@@ -17243,6 +17264,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             session.undo(); refresh();
             check (handleKey (juce::KeyPress ('b')) && ! drawMode && volume().points.size() == 2, "B leaves Draw Mode");
             setGrid (oldGrid);
+            // Cmd+Delete clears the envelope last clicked, as the reference's Clear Envelope does.
+            const auto middle = juce::Point<float> (xOf (3), inLane.getBottom() - (proportion (-24) + proportion (0)) / 2 * inLane.getHeight());
+            canvas.mouseDown (event (middle, middle, false)); canvas.mouseUp (event (middle, middle, false)); refresh();
+            check (volume().points.size() == 3 && selectedEnvelopeKey.isNotEmpty(), "clicking the envelope adds a breakpoint and selects the envelope");
+            check (handleKey (juce::KeyPress (juce::KeyPress::backspaceKey, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)) && volume().points.empty(),
+                   "Cmd+Delete clears every breakpoint of the selected envelope");
+            session.undo(); refresh();
+            check (volume().points.size() == 3, "one undo brings them back");
+            session.undo(); refresh();
         }
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
