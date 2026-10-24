@@ -32,7 +32,7 @@ The reference's Arrangement menu, with what Halftrack shows:
 | Rename | not for Main | Rename: the name edits in place in the Arrangement, in a dialog from a Session title |
 | Edit Info Text | the header has editable info text | Edit Info Text, for the clicked track or group: a dialog edits its own text (`setInfoText`, saved, one undo step), which the Info view shows while pointing at its Arrangement header, Session title or Session mixer strip |
 | Freeze / Unfreeze, plural for more than one | selected tracks that can freeze; Unfreeze when all are frozen | the same, over the selected tracks with Arrangement clips or frozen. Each track's freeze is its own undo step |
-| Bounce Track in Place | | not yet. Halftrack keeps its Flatten for a frozen clicked track there until it has Bounce Track in Place; the reference's 12.2.1 has no Flatten |
+| Bounce Track in Place, plural for more than one | the selected audio and MIDI tracks (the freeze list) | the same (`bounceTracksInPlace`; see the [freeze contract](freeze-contract.md)). Tracks with Session clips are refused for now. The reference's 12.2.1 has no Flatten, so the menu no longer offers it |
 | Insert Audio Track, Insert MIDI Track | always | the same |
 | Insert Return Track | fewer than 12 returns | the same; `addReturnTrack` refuses a thirteenth too (`maximumReturnTracks`) |
 | Group Tracks, Ungroup Tracks | the grouping rule; one selected group | the same |

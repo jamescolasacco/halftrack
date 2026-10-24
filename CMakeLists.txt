@@ -121,6 +121,8 @@ include(cmake/PatchFaderLaws.cmake)
 halftrack_patch_fader_laws("${tracktion_SOURCE_DIR}")
 include(cmake/PatchMeterBars.cmake)
 halftrack_patch_meter_bars("${tracktion_SOURCE_DIR}")
+include(cmake/PatchFreezeTails.cmake)
+halftrack_patch_freeze_tails("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"

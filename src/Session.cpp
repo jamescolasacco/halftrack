@@ -3564,6 +3564,17 @@ struct Session::Impl
                         for (const auto& a : externalAutomation (*external)) add (deviceKey (external->itemID.toString(), a.parameter));
         return keys;
     }
+    // The tracks Bounce Track in Place acts on, as the reference's freeze list (0x10028b258): the
+    // selected audio and MIDI tracks, top-most; groups and returns contribute nothing.
+    juce::Array<te::AudioTrack*> bounceable (const juce::StringArray& ids) const
+    {
+        juce::Array<te::AudioTrack*> tracks;
+        for (const auto& id : ids)
+            if (auto* t = track (id); t != nullptr && ! isReturn (*t)) tracks.add (t);
+        for (auto* root : roots (ids)) if (dynamic_cast<te::FolderTrack*> (root) != nullptr)
+            tracks.removeIf ([root] (te::AudioTrack* t) { return inside (*t, *dynamic_cast<te::FolderTrack*> (root)); });
+        return tracks;
+    }
     // The headers' Copy: each copied top-most track's or group's state, in order.
     std::vector<juce::ValueTree> trackClipboard;
     // A group, other than `keep`, that grouping these would leave empty, as the reference's Group Tracks never does.
@@ -10416,6 +10427,121 @@ Result Session::flattenTrack (const String& trackId)
     clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
     giveDefaultFades (*clip, &impl->edit->getUndoManager());
     impl->refreshRouting(); impl->changed(); return Result::ok();
+}
+// Bounce Track in Place, after a static reading of the reference's (0x10325bbc8 -> 0x1025a8d30):
+// each track's freeze, made first if it has none, replaces its clips and devices, cut at the
+// original clips' edges with a tail after a clip whose sound rings on.
+Result Session::bounceTracksInPlace (const juce::StringArray& ids)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before bouncing tracks.");
+    const auto tracks = impl->bounceable (ids);
+    if (tracks.isEmpty()) return Result::fail ("Choose audio or MIDI tracks to bounce.");
+    for (auto* t : tracks)
+    {
+        if (static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) && Impl::instrument (*t) == nullptr && ! t->isFrozen (te::Track::individualFreeze))
+            return Result::fail ("\"" + shownName (*t) + "\" has no instrument, so it has no sound to bounce.");
+        for (auto* slot : t->getClipSlotList().getClipSlots())
+            if (slot->getClip() != nullptr) return Result::fail ("\"" + shownName (*t) + "\" has Session clips, which Halftrack does not bounce yet.");
+    }
+    closePluginEditors();
+    auto assets = impl->assets(); if (auto r = assets.createDirectory(); r.failed()) return r;
+    // Each track's render: its freeze, made now outside history when it has none, so undoing the
+    // bounce restores the unfrozen track and its devices, and redo needs no render.
+    std::vector<te::AudioTrack*> frozenHere;
+    const auto restore = [&] { for (auto* t : frozenHere) t->state.setProperty (te::IDs::frozenIndividually, false, nullptr); };
+    struct Render { te::AudioTrack* track; juce::File file; juce::AudioBuffer<float> audio; double rate = 0; };
+    std::vector<Render> renders;
+    for (auto* t : tracks)
+    {
+        if (! t->isFrozen (te::Track::individualFreeze) && ! t->getClips().isEmpty())
+        {
+            const te::Edit::UndoTransactionInhibitor inhibitor (*impl->edit);
+            {
+                const FreezeRender render ({ t });
+                t->state.setProperty (te::IDs::frozenIndividually, true, nullptr);
+                impl->edit->dispatchPendingUpdatesSynchronously();
+            }
+            if (! t->isFrozen (te::Track::individualFreeze)) { restore(); return Result::fail ("\"" + shownName (*t) + "\" could not be rendered."); }
+            frozenHere.push_back (t);
+        }
+        Render render { t, {}, {}, 0 };
+        if (t->isFrozen (te::Track::individualFreeze))
+        {
+            std::unique_ptr<juce::AudioFormatReader> reader (impl->engine.getAudioFileFormatManager().readFormatManager.createReaderFor (te::TemporaryFileManager::getFreezeFileForTrack (*t)));
+            if (reader == nullptr || reader->lengthInSamples <= 0) { restore(); return Result::fail ("\"" + shownName (*t) + "\" has no render to bounce. Unfreeze and freeze it again."); }
+            render.audio.setSize ((int) reader->numChannels, (int) reader->lengthInSamples);
+            render.rate = reader->sampleRate;
+            if (! reader->read (&render.audio, 0, render.audio.getNumSamples(), 0, true, true)) { restore(); return Result::fail ("The render of \"" + shownName (*t) + "\" could not be read."); }
+            // The render becomes ordinary project audio: a 32-bit float WAV in the Assets folder.
+            render.file = assets.getNonexistentChildFile (File::createLegalFileName (shownName (*t)) + " Bounce", ".wav", true);
+            juce::WavAudioFormat format; std::unique_ptr<juce::OutputStream> stream (render.file.createOutputStream());
+            auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (render.rate).withNumChannels (render.audio.getNumChannels()).withBitsPerSample (32));
+            if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (render.audio, 0, render.audio.getNumSamples())) { render.file.deleteFile(); restore(); return Result::fail ("Could not write the bounced audio."); }
+        }
+        renders.push_back (std::move (render));
+    }
+    impl->transaction (tracks.size() > 1 ? "Bounce Tracks in Place" : "Bounce Track in Place");
+    auto* undo = &impl->edit->getUndoManager();
+    for (auto& render : renders)
+    {
+        auto* track = render.track;
+        // The clips the render replaces, in order.
+        struct Original { String name; double start = 0, end = 0; };
+        std::vector<Original> originals;
+        for (auto* clip : track->getClips()) originals.push_back ({ clip->getName(), clip->getPosition().getStart().inSeconds(), clip->getPosition().getEnd().inSeconds() });
+        std::sort (originals.begin(), originals.end(), [] (const Original& a, const Original& b) { return a.start < b.start; });
+        const bool midi = track->state.getProperty (midiTrackProperty, false);
+        // A MIDI track named after its instrument or a clip keeps that name as an audio track.
+        if (midi && Impl::ownName (*track).isEmpty() && impl->automaticPart (*track) != "MIDI") track->setName (impl->automaticPart (*track));
+        track->state.setProperty (te::IDs::frozenIndividually, false, nullptr);
+        // Every device goes, with its automation; the mixer, meter and sends stay.
+        for (auto* plugin : track->pluginList.getPlugins())
+            if (dynamic_cast<NativeEffectPlugin*> (plugin) || dynamic_cast<te::ExternalPlugin*> (plugin) || dynamic_cast<UtilityPlugin*> (plugin)
+                || dynamic_cast<SubtractiveSynthPlugin*> (plugin) || dynamic_cast<te::FreezePointPlugin*> (plugin))
+                plugin->deleteFromParent();
+        for (auto* clip : track->getClips()) clip->removeFromParent();
+        if (auto lanes = track->state.getChildWithName (takeLanesType); lanes.isValid()) track->state.removeChild (lanes, undo);
+        if (midi)
+        {
+            track->state.setProperty (midiTrackProperty, false, undo);
+            for (auto* input : impl->edit->getAllInputDevices())
+                if (input->getTargets().contains (track->itemID)) [[maybe_unused]] auto removed = input->removeTarget (track->itemID, undo);
+        }
+        if (render.file == juce::File()) continue;
+        const auto seconds = render.audio.getNumSamples() / render.rate;
+        // The last sound between two times, with a little margin, or nothing if it is silent there.
+        const auto lastSound = [&render] (double from, double to) -> std::optional<double>
+        {
+            const auto first = (int) std::ceil (from * render.rate), last = std::min (render.audio.getNumSamples(), (int) std::floor (to * render.rate));
+            for (int n = last; --n >= first;)
+                for (int c = 0; c < render.audio.getNumChannels(); ++c)
+                    if (std::abs (render.audio.getSample (c, n)) > 1.0e-4f) return std::min (to, (n + 1) / render.rate + 0.01);
+            return std::nullopt;
+        };
+        const auto place = [&] (const String& name, double start, double end)
+        {
+            if (end - start < 1.0e-4 || start >= seconds) return;
+            auto clip = te::insertWaveClip (*track, name, render.file, { { te::TimePosition::fromSeconds (start), te::TimePosition::fromSeconds (std::min (end, seconds)) }, te::TimeDuration::fromSeconds (start) }, te::DeleteExistingClips::no);
+            if (! clip) return;
+            clip->getSourceFileReference().setToFile (render.file, te::SourceFileReference::PathStyle::alwaysAbsolute, false);
+            clip->setAutoTempo (false); clip->setAutoPitch (false);
+            clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
+            giveDefaultFades (*clip, undo);
+        };
+        for (size_t i = 0; i < originals.size(); ++i)
+        {
+            const auto& o = originals[i];
+            place (o.name + " Bounce", o.start, o.end);
+            const auto next = i + 1 < originals.size() ? originals[i + 1].start : seconds;
+            if (const auto tail = lastSound (o.end, next)) place (o.name + " Bounce Tail", o.end, *tail);
+        }
+    }
+    impl->refreshRouting(); impl->changed(); return Result::ok();
+}
+bool Session::canBounceTracksInPlace (const juce::StringArray& ids) const
+{
+    return ! impl->exporting && ! impl->anyRecording() && ! impl->bounceable (ids).isEmpty();
 }
 Result Session::removeTrack (int index)
 {

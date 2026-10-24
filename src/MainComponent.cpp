@@ -10183,7 +10183,7 @@ private:
     // that cannot act there is left out, and a separator only comes between items. The Arrangement's
     // has the take lane and link items; the Session view's titles do not. A colour picked in the grid
     // is put in `colour`.
-    enum HeaderItem { headerCut = 100, headerCopy, headerPaste, headerDuplicate = 1, headerDelete, headerRename, headerFreeze, headerFlatten, headerInsertAudio, headerInsertMidi, headerInsertReturn,
+    enum HeaderItem { headerCut = 100, headerCopy, headerPaste, headerDuplicate = 1, headerDelete, headerRename, headerFreeze, headerBounce, headerInsertAudio, headerInsertMidi, headerInsertReturn,
                       headerGroup, headerUngroup, headerSelectContent, headerEditInfo, headerClearEnvelopes, headerInsertTakeLane, headerShowTakeLanes, headerDeleteTakeLanes, headerLink, headerUnlink, headerColour };
     juce::PopupMenu headerMenu (const juce::String& id, bool arrangement, std::shared_ptr<int> colour, bool join) const
     {
@@ -10209,7 +10209,12 @@ private:
         const bool allFrozen = ! freezable.isEmpty() && std::all_of (freezable.begin(), freezable.end(), [this] (const juce::String& t) { return trackInfo (t)->frozen; });
         if (! freezable.isEmpty()) item (headerFreeze, juce::String (allFrozen ? "Unfreeze " : "Freeze ") + (freezable.size() > 1 ? "Tracks" : "Track"));
         const auto* track = trackInfo (id);
-        if (track != nullptr && track->frozen) item (headerFlatten, "Flatten");
+        // Bounce Track in Place, for the selected audio and MIDI tracks, as the reference's freeze list has them.
+        if (session.canBounceTracksInPlace (ids))
+        {
+            int bounced = 0; for (const auto& t : ids) if (const auto* info = trackInfo (t); info != nullptr && ! info->isReturn) ++bounced;
+            item (headerBounce, bounced > 1 ? "Bounce Tracks in Place" : "Bounce Track in Place");
+        }
         separator();
         item (headerInsertAudio, "Insert Audio Track"); item (headerInsertMidi, "Insert MIDI Track");
         if (std::count_if (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return t.isReturn; }) < Session::maximumReturnTracks) item (headerInsertReturn, "Insert Return Track");
@@ -10256,7 +10261,7 @@ private:
             case headerEditInfo: editInfoTextDialog (id); return;
             case headerClearEnvelopes: report (session.clearAllEnvelopes (ids)); break;
             case headerFreeze: freezeTracksFromUI (freezableTracks (ids)); return;
-            case headerFlatten: freezeTrackFromUI (id, true); return;
+            case headerBounce: report (session.bounceTracksInPlace (ids)); break;
             case headerInsertAudio: showPiano = false; addTrack(); resized(); return;
             case headerInsertMidi: addMidiTrack(); return;
             case headerInsertReturn: addReturnTrack(); return;
@@ -17455,7 +17460,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     const auto colour = std::make_shared<int> (-1);
                     check (selectForHeaderMenu (second) && selectedTrackIds() == juce::StringArray { second }, "right-clicking the second track selects it");
                     const bool clips = ! state.tracks[(size_t) indexOf (second)].clips.empty();
-                    const auto expected = juce::String ("Cut|Copy|Duplicate|Delete|-|Rename|Edit Info Text|-|") + (clips ? "Freeze Track|-|" : "")
+                    const auto expected = juce::String ("Cut|Copy|Duplicate|Delete|-|Rename|Edit Info Text|-|") + (clips ? "Freeze Track|" : "") + "Bounce Track in Place|-|"
                         + "Insert Audio Track|Insert MIDI Track|Insert Return Track|Group Tracks|-|Select Content" + (clips ? "" : " (off)")
                         + "|-|Insert Take Lane|Show Take Lanes|Delete All Take Lanes (off)|-|Link Tracks (off)|Unlink Tracks (off)|-|[colours]";
                     check (listed (headerMenu (second, true, colour, false)) == expected, "a track's menu: " + listed (headerMenu (second, true, colour, false)));

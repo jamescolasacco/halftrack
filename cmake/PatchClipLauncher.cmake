@@ -13,7 +13,8 @@ function(halftrack_patch_clip_launcher source_dir)
     file(SHA256 "${source}" source_hash)
     if(NOT source_hash STREQUAL "b5565cf52845479493ece086382d21c678b2f17ae93526f6ebf756169e03cdcc"
        AND NOT source_hash STREQUAL "b70f5b63b7c58ca0da78e6de1b49b540bbb9172ffc0b8af9f2c21e11313b2bf8"
-       AND NOT source_hash STREQUAL "de63d10123c0f286e8811a8f8a8d166b373a1be741cde8a0a34599e707d9c861")
+       AND NOT source_hash STREQUAL "de63d10123c0f286e8811a8f8a8d166b373a1be741cde8a0a34599e707d9c861"
+       AND NOT source_hash STREQUAL "cf1765d05ea1a9484450cce0045b77f1be3f26ecc816619ab675fc2e273022ea") # The later freeze tails patch.
         message(FATAL_ERROR "Halftrack launcher patch requires pinned source: ${source}; unexpected SHA256 ${source_hash}.")
     endif()
     set(source "${source_dir}/modules/tracktion_engine/playback/graph/tracktion_ArrangerLauncherSwitchingNode.cpp")
@@ -93,7 +94,8 @@ function(halftrack_patch_clip_launcher source_dir)
     endif()
     set(source "${source_dir}/modules/tracktion_engine/model/tracks/tracktion_AudioTrack.cpp")
     file(SHA256 "${source}" source_hash)
-    if(NOT source_hash STREQUAL "b70f5b63b7c58ca0da78e6de1b49b540bbb9172ffc0b8af9f2c21e11313b2bf8")
+    if(NOT source_hash STREQUAL "b70f5b63b7c58ca0da78e6de1b49b540bbb9172ffc0b8af9f2c21e11313b2bf8"
+       AND NOT source_hash STREQUAL "cf1765d05ea1a9484450cce0045b77f1be3f26ecc816619ab675fc2e273022ea") # Already carrying the later freeze tails patch.
         file(READ "${source}" content)
         if(source_hash STREQUAL "b5565cf52845479493ece086382d21c678b2f17ae93526f6ebf756169e03cdcc")
             set(previous [=[            if (! playSlotClips.get())

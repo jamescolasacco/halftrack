@@ -952,6 +952,14 @@ public:
     juce::Result setTrackFrozen (const juce::String& trackId, bool frozen);
     // Flatten replaces a frozen track's clips and devices with one audio clip of its render.
     juce::Result flattenTrack (const juce::String& trackId);
+    // Bounce Track in Place, as the reference's: each selected audio or MIDI track (top-most; groups
+    // and returns are left out) is frozen first if it is not, outside history. Its render then
+    // replaces its Arrangement clips, cut at their edges, with a tail clip after any whose sound rings
+    // on, and its devices, their automation and its take lanes go. A MIDI track becomes an audio
+    // track. Mixer, sends, name and colour stay. One undo step, restoring the unfrozen tracks. Tracks
+    // with Session clips, or MIDI tracks without an instrument, are refused for now.
+    juce::Result bounceTracksInPlace (const juce::StringArray& trackIds);
+    bool canBounceTracksInPlace (const juce::StringArray& trackIds) const;
     // Groups audio and MIDI tracks and groups (not returns) into a new group, placed where the first
     // of them is: inside its group, if it is in one, as the reference nests groups. What is inside a
     // chosen group moves with it. Launching or stopping a group acts on every track inside it.

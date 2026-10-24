@@ -38,6 +38,49 @@ double difference (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<fl
 Session::TrackInfo track (Session& s) { const auto snapshot = s.snapshot(); return snapshot.tracks.back(); }
 bool near (float a, float b) { return std::abs (a - b) < 1e-3f; }
 
+// Bounce Track in Place, as the reference's: an audio track's render, with its Delay's echoes,
+// replaces its clip and devices, cut at the clip's end, the echoes in a tail clip after it.
+void bounceTests (const juce::File& root)
+{
+    const auto burst = root.getChildFile ("burst.wav");
+    {
+        juce::AudioBuffer<float> x (2, (int) (rate / 5));
+        for (int c = 0; c < 2; ++c) for (int n = 0; n < x.getNumSamples(); ++n) x.setSample (c, n, (float) (.5 * std::sin (n * 2 * juce::MathConstants<double>::pi * 440 / rate)));
+        juce::WavAudioFormat format; std::unique_ptr<juce::OutputStream> stream (burst.createOutputStream());
+        auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (rate).withNumChannels (2).withBitsPerSample (32));
+        check (writer && writer->writeFromAudioSampleBuffer (x, 0, x.getNumSamples()), "write a 0.2 second burst");
+    }
+    Session s (false);
+    ok (s.importAudio (burst, 0, 0), "put it on audio track A");
+    const auto a = s.snapshot().tracks[0].id;
+    ok (s.addNativeEffect (0, Session::EffectKind::delay), "echo it with a Delay");
+    const auto live = root.getChildFile ("bounce-live.wav"), bounced = root.getChildFile ("bounce.wav");
+    ok (s.exportWav (live, rate, 32, 3), "render it live, with three seconds after it");
+    const auto reference = read (live);
+    check (s.canBounceTracksInPlace ({ a }), "it can be bounced");
+    ok (s.bounceTracksInPlace ({ a }), "bounce it in place");
+    const auto t = s.snapshot().tracks[0];
+    check (t.plugins.empty() && ! t.frozen && t.clips.size() == 2 && std::abs (t.clips[0].start) < 1e-6 && std::abs (t.clips[0].length - .2) < 1e-3
+               && t.clips[0].name.endsWith ("Bounce") && std::abs (t.clips[1].start - .2) < 1e-3 && t.clips[1].length > .5 && t.clips[1].name.endsWith ("Bounce Tail"),
+           "the Delay goes, and the render is cut at the clip's end, its echoes in a tail clip: " + [&]
+           {
+               juce::String text; text << (int) t.plugins.size() << " devices, frozen " << (int) t.frozen << ";";
+               for (const auto& c : t.clips) text << " [" << c.name << " " << c.start << "+" << c.length << "]";
+               return text;
+           }());
+    ok (s.exportWav (bounced, rate, 32, 3), "render the bounced track");
+    // The render stops once the echoes stay under the engine's -70 dB silence, so the last of them, below it, are not kept.
+    check (difference (read (bounced), reference) < juce::Decibels::decibelsToGain (-70.0f), "it plays as the live track did, but for echoes below -70 dB (max difference "
+           + juce::String (difference (read (bounced), reference), 8) + ")");
+    s.undo();
+    check (s.snapshot().tracks[0].plugins.size() == 1 && s.snapshot().tracks[0].clips.size() == 1 && ! s.snapshot().tracks[0].frozen, "one undo restores the clip and the Delay, unfrozen");
+    s.redo();
+    check (s.snapshot().tracks[0].clips.size() == 2 && s.snapshot().tracks[0].plugins.empty(), "redo bounces it again, without rendering");
+    s.undo();
+    ok (s.addReturnTrack ("Room"), "add a return");
+    const auto room = s.snapshot().tracks.back().id;
+    check (! s.canBounceTracksInPlace ({ room }) && s.bounceTracksInPlace ({ room }).failed() && s.bounceTracksInPlace ({}).failed(), "returns, and nothing, are not bounced");
+}
 // A constant 0.5 signal on audio track A, played Sends Only with a 0 dB send to a return.
 void sendsOnlyTests (const juce::File& root)
 {
@@ -167,8 +210,19 @@ int runFreezeTests (const juce::File& artifacts)
         ok (s.setTrackFrozen (id, true), "the restored track can be frozen again");
         ok (s.setTrackFrozen (id, false), "unfreeze the track");
         ok (s.setNativeEffectSettings (track (s).instrument.id, changed), "devices are editable again after unfreezing");
+        ok (s.setNativeEffectSettings (track (s).instrument.id, settings), "unity Sampler playback again");
+        ok (s.bounceTracksInPlace ({ id }), "bounce the MIDI track in place");
+        const auto bouncedTrack = track (s);
+        check (! bouncedTrack.isMidi && ! bouncedTrack.frozen && ! bouncedTrack.instrument.isNativeEffect && bouncedTrack.clips.size() == 1 && bouncedTrack.clips[0].isAudio
+                   && bouncedTrack.id == id && bouncedTrack.name == track (s).name, "it becomes an audio track, the render in place of its clip");
+        ok (s.exportWav (render, rate, 32, .5), "render the bounced track");
+        check (difference (read (render), reference) < 1e-5, "the bounced clip renders like the live track");
+        s.undo();
+        check (track (s).isMidi && track (s).instrument.isNativeEffect && track (s).clips.size() == 1 && track (s).clips[0].notes.size() == 1 && ! track (s).frozen,
+               "one undo restores the MIDI track with its Sampler and notes, unfrozen");
         ok (s.addReturnTrack ("Room"), "add a return");
         check (s.setTrackFrozen (s.snapshot().tracks.back().id, true).failed(), "returns cannot be frozen");
+        bounceTests (root);
         sendsOnlyTests (root);
         std::cout << "Freeze passed: " << root.getFullPathName() << std::endl; return 0;
     }

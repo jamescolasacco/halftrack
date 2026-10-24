@@ -2361,3 +2361,9 @@ Engine and UI areas. In Automation Mode the header menu offers Clear All Envelop
 ## CI timeouts for two slow suites — 2026-10-23
 
 Root area (CMakeLists). On the macOS runner, `metronome-acceptance` has taken 258–285 s against a 300 s limit and `midi-monitor-acceptance` 82–88 s against 90 s, so runner variance timed both out twice on one commit while every other job passed. Their output stopped mid-run, not at an error. Their limits are now 600 s and 240 s. Locally both pass, three times in a row under load.
+
+## Bounce Track in Place — 2026-10-23
+
+Engine and UI areas, with an engine patch. After a static reading of the reference's command, `bounceTracksInPlace` replaces the selected audio and MIDI tracks' clips and devices with their render, freezing first outside history when needed. The render is cut at the original clips' edges, with tail clips where the sound rings on, and take lanes go. A MIDI track becomes an audio track, and the whole bounce is one undo step. The header menu offers it in place of Flatten, which the reference's 12.2.1 no longer has.
+
+`cmake/PatchFreezeTails.cmake` lets a freeze keep a tail through gaps of silence. Before, a Delay's echoes were cut at the first silent block, so frozen tracks lost them. Tracks with Session clips are refused until Session clips can be frozen. Checked in the freeze and UI suites ([contract](research/freeze-contract.md)).
