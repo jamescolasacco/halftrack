@@ -712,6 +712,9 @@ public:
     // Audio files and samples the project refers to that are not on disk. Opening and saving keep
     // their references, and clips whose file is missing play silence.
     juce::Array<juce::File> missingMedia() const;
+    // The folder the project's media is collected into: "<name> Assets" beside the project file, or a
+    // temporary one while the project is unsaved. It may not exist yet.
+    juce::File projectAssets() const;
     // Searches `folder` and its subfolders for missing files by name and relinks each readable
     // match; `found` is how many files were relinked. Not undoable; the project then needs saving.
     juce::Result locateMissingMedia (const juce::File& folder, int& found); // Copies media into <name> Assets beside the .halftrack file.
@@ -1259,6 +1262,10 @@ public:
         // The Preferences window's tab, by the reference's id ("audio", "midi"...), which opens next time
         // as the reference's window remembers its tab.
         juce::String preferencesTab;
+        // The browser's Places, after the reference's user folders: the folders added with Add Folder
+        // to Browser, in the order added, as absolute paths. A folder that is gone keeps its place
+        // until it is located again or removed.
+        juce::StringArray userFolders;
         bool operator== (const Preferences&) const = default;
     };
     // The audio device's latency as it reports it, with Driver Error Compensation. Recordings are placed
@@ -1272,6 +1279,7 @@ public:
     static constexpr int preferencesVersion = 1;
     Preferences preferences() const;
     juce::Result setPreferences (const Preferences&);
+    // Every setting back to its default; the browser's user folders stay.
     juce::Result resetPreferences();
     // Remembers the Preferences window's tab, an application setting, not a change to the project.
     void setPreferencesTab (const juce::String&);

@@ -110,15 +110,19 @@ void saveCopyKeepsTheProject (const juce::File& root)
     }
     Session session (false);
     ok (session.importAudio (source, 0), "import audio to copy");
+    check (session.projectAssets().getFileName() == "Untitled Assets" && ! session.projectAssets().isAChildOf (root),
+           "an unsaved project's media folder is a temporary one");
     const auto original = root.getChildFile ("Copy original").getChildFile ("Original.halftrack");
     ok (session.saveProject (original), "save the original project");
     const auto collected = session.snapshot().tracks[0].clips.front().file;
+    check (session.projectAssets() == original.getSiblingFile ("Original Assets") && collected.isAChildOf (session.projectAssets()),
+           "a saved project's media folder is its Assets folder, holding its collected audio");
     ok (session.addMidiTrack ("Unsaved"), "an unsaved change");
     check (session.snapshot().dirty, "the project has unsaved changes");
     const auto copy = root.getChildFile ("Copy elsewhere").getChildFile ("Copy.halftrack");
     ok (session.saveProjectCopy (copy), "save a copy");
     const auto after = session.snapshot();
-    check (after.projectFile == original && after.dirty && after.tracks[0].clips.front().file == collected,
+    check (after.projectFile == original && after.dirty && after.tracks[0].clips.front().file == collected && session.projectAssets() == original.getSiblingFile ("Original Assets"),
            "Save a Copy keeps the open project's file, its media's places and its unsaved changes");
     const auto copiedMedia = copy.getSiblingFile ("Copy Assets");
     check (copy.existsAsFile() && copiedMedia.isDirectory() && copiedMedia.findChildFiles (juce::File::findFiles, false, "*.wav").size() == 1,

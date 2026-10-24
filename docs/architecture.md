@@ -281,6 +281,8 @@ Draw Mode is window state (`Impl::drawMode`), not saved with the project. The pi
 
 `BrowserIndex` (in `src/BrowserIndex.*`, independent of the engine) indexes a folder tree on a detached worker that owns only standard-library data and a shared `Scan` record, so a blocked filesystem call can outlive the browser. A global count limits outstanding scans to four. The UI starts it with each folder listing, polls its status from the window timer, and searches it on the message thread under the scan's mutex. See the [contract](research/browser-index-contract.md).
 
+The browser's Places keep their folders in `Preferences::userFolders`, absolute paths in the order added, written as `USERFOLDER` elements of the preferences file; `resetPreferences` keeps them. The Current Project place lists `Session::projectAssets`, the folder the project's media is collected into. A place is listed and searched with the same folder scan and `BrowserIndex` as Samples, with the place's folder as the top. See the [contract](research/browser-places-contract.md).
+
 ## Hosted instruments
 
 `Session::addPlugin` puts an instrument plug-in where `Impl::instrument` finds the track's instrument, and marks its state with `halftrackInstrument`. `Impl::hostedInstrument` then finds it, so native instrument replacement and effect insertion treat it as the instrument. Effect plug-ins join the end of the chain through `Impl::chainEnd`, which `addNativeEffect` and `addUtility` share: before the track delay, sends and mixer, or for a MIDI effect immediately before the instrument. The snapshot reports it as a plug-in with `isInstrument`, and the UI hides the built-in synth panel. See the [contract](research/plugin-timing-contract.md).

@@ -104,6 +104,31 @@ int runPreferencesTests (const juce::File& artifacts)
         auto [newer, newerProblem] = reopen ("<HALFTRACKPREFERENCES version=\"7\" exclusiveArm=\"0\" futureSetting=\"42\"/>");
         expected = {}; expected.exclusiveArm = false;
         check (newer == expected && newerProblem.isEmpty(), "a newer file's unknown settings are ignored");
+        // The browser's Places: user folders in the order added, missing ones kept.
+        juce::XmlElement withPlaces ("HALFTRACKPREFERENCES"); withPlaces.setAttribute ("version", 1);
+        for (const auto* name : { "Loops", "Gone" }) withPlaces.createNewChildElement ("USERFOLDER")->setAttribute ("path", root.getChildFile (name).getFullPathName());
+        auto [places, placesProblem] = reopen (withPlaces.toString());
+        expected = {}; expected.userFolders = { root.getChildFile ("Loops").getFullPathName(), root.getChildFile ("Gone").getFullPathName() };
+        check (places == expected && placesProblem.isEmpty(), "user folders are read back in the order added, a missing one too");
+        {
+            Session s (false);
+            auto added = s.preferences(); added.userFolders.add (root.getChildFile ("Drums").getFullPathName());
+            ok (s.setPreferences (added), "add a user folder");
+            auto relative = added; relative.userFolders.add ("Drums");
+            check (s.setPreferences (relative).failed() && s.preferences() == added, "a relative folder is refused");
+            auto twice = added; twice.userFolders.add (root.getChildFile ("Loops").getFullPathName());
+            check (s.setPreferences (twice).failed() && s.preferences() == added, "and so is a folder added twice");
+            auto changed = added; changed.exclusiveArm = false;
+            ok (s.setPreferences (changed), "change a setting");
+            ok (s.resetPreferences(), "reset");
+            Session::Preferences defaults; defaults.userFolders = added.userFolders;
+            check (s.preferences() == defaults, "a reset restores the settings and keeps the user folders, which are places rather than settings");
+        }
+        {
+            Session s (false);
+            check (s.preferences().userFolders.size() == 3 && s.preferences().userFolders[2] == root.getChildFile ("Drums").getFullPathName(),
+                   "the next Session has the added folder last");
+        }
         const auto aside = file.getSiblingFile ("Halftrack Preferences (unreadable).xml");
         aside.deleteFile();
         auto [ranged, rangedProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" defaultLaunchMode=\"9\"/>");

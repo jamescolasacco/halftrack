@@ -4385,7 +4385,18 @@ struct Session::Impl
             && juce::isPositiveAndBelow (p.theme, Preferences::themeCount) && p.zoomPercent >= 50 && p.zoomPercent <= 200 && p.zoomPercent % 25 == 0
             && std::isfinite (p.driverErrorCompensationMs) && std::abs (p.driverErrorCompensationMs) <= 200
             && juce::isPositiveAndBelow ((int) p.metronomeSound, Session::metronomeSoundCount)
-            && (p.countInBars == 0 || p.countInBars == 1 || p.countInBars == 2 || p.countInBars == 4);
+            && (p.countInBars == 0 || p.countInBars == 1 || p.countInBars == 2 || p.countInBars == 4)
+            && validUserFolders (p.userFolders);
+    }
+    // Places are absolute paths, each folder once.
+    static bool validUserFolders (const juce::StringArray& folders)
+    {
+        for (int i = 0; i < folders.size(); ++i)
+        {
+            if (! File::isAbsolutePath (folders[i])) return false;
+            for (int j = 0; j < i; ++j) if (File (folders[j]) == File (folders[i])) return false;
+        }
+        return true;
     }
     void loadPreferences()
     {
@@ -4420,6 +4431,7 @@ struct Session::Impl
             const int startPlayback = number ("startPlaybackWithRecord", 1, 2);
             read.startPlaybackWithRecord = startPlayback == 1;
             read.preferencesTab = xml->getStringAttribute ("preferencesTab");
+            for (auto* folder : xml->getChildWithTagNameIterator ("USERFOLDER")) read.userFolders.add (folder->getStringAttribute ("path"));
             read.createFadesOnClipEdges = edgeFades == 1;
             read.metronomeSound = static_cast<Session::MetronomeSound> (juce::jmax (0, sound));
             valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && validPreferences (read);
@@ -4449,6 +4461,7 @@ struct Session::Impl
         xml.setAttribute ("countInBars", next.countInBars);
         xml.setAttribute ("startPlaybackWithRecord", next.startPlaybackWithRecord ? 1 : 0);
         xml.setAttribute ("preferencesTab", next.preferencesTab);
+        for (const auto& folder : next.userFolders) xml.createNewChildElement ("USERFOLDER")->setAttribute ("path", folder);
         const auto file = prefsFile();
         if (auto r = file.getParentDirectory().createDirectory(); r.failed()) return r;
         juce::TemporaryFile temporary (file);
@@ -7826,6 +7839,7 @@ Session::AudioLatency Session::audioLatency() const
     return latency;
 }
 String Session::preferencesProblem() const { return impl->prefsProblem; }
+File Session::projectAssets() const { return impl->assets(); }
 Result Session::setPreferences (const Preferences& next)
 {
     if (! Impl::validPreferences (next)) return Result::fail ("Those preferences are out of range.");
@@ -7838,7 +7852,11 @@ Result Session::setPreferences (const Preferences& next)
     impl->edit->setCountInMode (countInMode (next.countInBars));
     impl->changed(); return Result::ok();
 }
-Result Session::resetPreferences() { return setPreferences ({}); }
+Result Session::resetPreferences()
+{
+    Preferences defaults; defaults.userFolders = impl->prefs.userFolders; // The browser's places are not settings.
+    return setPreferences (defaults);
+}
 void Session::setPreferencesTab (const String& tab)
 {
     if (tab == impl->prefs.preferencesTab) return;

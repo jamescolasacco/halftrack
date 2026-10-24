@@ -830,6 +830,13 @@ Main menu bar ([contract](research/main-menu-contract.md)). Defaults where the r
 - **Preferences.** Preferences is one window with the reference's tabs (see the [preferences contract](research/preferences-contract.md)).
 - **Save a Copy and collecting.** The reference's Save Live Set As and Save a Copy keep pointing at the original samples, and Collect All and Save copies them in ([Managing Files and Sets](https://www.ableton.com/en/live-manual/12/managing-files-and-sets/), consulted 2026-10-24). Every Halftrack save collects its media into the project's Assets folder, so Save a Copy collects too and there is no Collect All and Save. Whether the reference's Save a Copy leaves the original Set open was not read; Halftrack's does.
 
+Browser Places ([contract](research/browser-places-contract.md)). Defaults where the manual is silent:
+
+- **Library > Samples.** Samples still browses a folder the user chooses. The reference's Samples label gathers the samples of its Core Library, Packs and User Library; Halftrack has no Core Library.
+- **The Current Project.** It lists the project's media folder (`<name> Assets`), as Halftrack keeps no project folder of its own beside the project file.
+- **A folder added.** It joins Places last and opens; one already there opens. A folder removed while showing returns the browser to Samples. Places are kept with the preferences and survive a preferences reset, as the reference keeps them apart from its settings.
+- **Show in Browser.** A file opens in the place holding it, the Current Project first, then the user folders, then the User Library; elsewhere, in Samples. Where the reference shows a file outside every place was not read.
+
 Note editor clicks and Draw Mode ([contract](research/note-drawing-contract.md)). Defaults where the manual is silent:
 
 - **A new note's length and velocity.** A double-clicked or drawn note is one grid step long, the step the editor's grid shows, and takes the editor's Velocity (the last selected note's). The reference's note length and velocity were not read.

@@ -503,7 +503,7 @@ public:
         for (auto* child : std::initializer_list<juce::Component*> {
                  &playButton, &stopButton, &recordButton, &overdubButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &nudgeDown, &nudgeUp, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
-                 &folderButton, &upButton, &browserSearch, &browserList, &browserCategories, &info, &overview, &ruler, &timeRuler, &viewport,
+                 &folderButton, &upButton, &browserSearch, &browserList, &browserSidebar, &info, &overview, &ruler, &timeRuler, &viewport,
                  &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain })
             addAndMakeVisible (child);
 
@@ -674,7 +674,10 @@ public:
         filesButton.onClick = [this] { setBrowserCategory (BrowserCategory::samples); };
         pluginsButton.onClick = [this] { setBrowserCategory (BrowserCategory::plugins); };
         folderButton.onClick = [this] { if (pluginBrowser()) showPlugins(); else chooseFolder(); };
-        upButton.onClick = [this] { if (sampleBrowser()) { browserFolder = browserFolder.getParentDirectory(); updateBrowser(); } };
+        upButton.onClick = [this] { if (sampleBrowser() && browserCanGoUp()) { browserFolder = browserFolder.getParentDirectory(); updateBrowser(); } };
+        browserSidebar.setViewedComponent (&browserCategories, false);
+        browserSidebar.setScrollBarsShown (true, false); browserSidebar.setScrollBarThickness (6);
+        browserSidebar.setTitle ("Browser sidebar"); browserSidebar.setDescription ("Collections, the Library's categories and Places");
         // Preview, as in the reference browser: with it on, selecting a sample plays it.
         addAndMakeVisible (previewButton); addAndMakeVisible (previewVolume);
         previewButton.setName ("Preview"); previewButton.setClickingTogglesState (true);
@@ -764,7 +767,9 @@ public:
         if (! mapping()) // The mapping list replaces the browser in MIDI and Key Map Modes.
         g.drawText (browserCategory == BrowserCategory::instruments ? "INSTRUMENTS" : browserCategory == BrowserCategory::audioEffects ? "AUDIO EFFECTS"
                         : browserCategory == BrowserCategory::midiEffects ? "MIDI EFFECTS" : pluginBrowser() ? "PLUG-INS"
-                        : browserCategory == BrowserCategory::grooves ? "GROOVES" : browserCategory == BrowserCategory::packs ? "PACKS" : browserFolder == juce::File() ? "SAMPLES"
+                        : browserCategory == BrowserCategory::grooves ? "GROOVES" : browserCategory == BrowserCategory::packs ? "PACKS"
+                        : browserCategory == BrowserCategory::place && similarFile == juce::File() && browserFolder == browserPlaceRoot ? placeName (browserPlace).toUpperCase()
+                        : browserFolder == juce::File() ? "SAMPLES"
                         : similarFile != juce::File() ? "SIMILAR TO " + similarFile.getFileNameWithoutExtension().toUpperCase() : browserFolder.getFileName().toUpperCase(),
                     browserList.getX() + 4, browserList.getY() - 22, browserList.getWidth() - 8 - indexWidth, 20, juce::Justification::centredLeft, true);
         if (indexWidth > 0)
@@ -779,6 +784,10 @@ public:
             juce::String message;
             if (pluginBrowser()) message = "No scanned plug-ins.\nUse Manage to scan your\nAudio Units and VST3 library.";
             else if (browserCategory == BrowserCategory::packs) message = "No packs installed.\nInstall one with\nFile > Install Pack...";
+            else if (browserCategory == BrowserCategory::place && browserPlace == currentProjectPlace && ! projectMediaThere)
+                message = "This project has no audio\nfiles yet. Its recordings\nand saved media show here.";
+            else if (browserCategory == BrowserCategory::place && ! placeAvailable (browserPlace))
+                message = "This folder has moved or is\nnot connected. Right-click it\nin Places to locate it, or\nremove it from the sidebar.";
             else if (browserFolder == juce::File()) message = "Choose an audio folder,\nor import audio to begin.\nYou can also drop files\ninto the arrangement.";
             else if (browserError.isNotEmpty()) message = "Cannot read this folder.\n" + browserError;
             else if (browserLoading)
@@ -894,10 +903,15 @@ public:
         auto browser = browserBounds.reduced (6, 6);
         browserSearch.setBounds (browser.removeFromTop (24));
         browser.removeFromTop (6);
-        browserCategories.setBounds (browser.removeFromLeft (categoryWidth));
+        browserSidebar.setBounds (browser.removeFromLeft (categoryWidth));
+        {
+            const int rowsHeight = browserCategories.contentHeight();
+            const bool scrolls = rowsHeight > browserSidebar.getHeight();
+            browserCategories.setSize (categoryWidth - (scrolls ? browserSidebar.getScrollBarThickness() : 0), juce::jmax (rowsHeight, browserSidebar.getHeight()));
+        }
         browser.removeFromLeft (4);
         auto actions = browser.removeFromBottom (24);
-        upButton.setVisible (sampleBrowser()); folderButton.setVisible (sampleBrowser() || pluginBrowser());
+        upButton.setVisible (sampleBrowser()); folderButton.setVisible (browserCategory == BrowserCategory::samples || pluginBrowser());
         previewButton.setVisible (sampleBrowser()); previewVolume.setVisible (sampleBrowser());
         if (sampleBrowser())
         {
@@ -908,7 +922,7 @@ public:
         folderButton.setBounds (actions);
         browser.removeFromBottom (4); browser.removeFromTop (22);
         browserList.setBounds (browser);
-        for (auto* part : std::initializer_list<juce::Component*> { &browserSearch, &browserCategories, &browserList })
+        for (auto* part : std::initializer_list<juce::Component*> { &browserSearch, &browserSidebar, &browserList })
             part->setVisible (browserShown && ! mapping());
         if (! browserShown) for (auto* part : std::initializer_list<juce::Component*> { &folderButton, &upButton, &previewButton, &previewVolume }) part->setVisible (false);
         if (mapping()) for (auto* part : std::initializer_list<juce::Component*> { &folderButton, &upButton, &previewButton, &previewVolume }) part->setVisible (false);
@@ -1979,19 +1993,30 @@ private:
         std::string error;
     };
 
-    enum class BrowserCategory { instruments, audioEffects, midiEffects, plugins, samples, grooves, packs, collection };
-    // Left column of the browser, as in the reference browser sidebar: the collections, then one row
-    // per category.
+    enum class BrowserCategory { instruments, audioEffects, midiEffects, plugins, samples, grooves, packs, collection, place };
+    // Left column of the browser, as the reference's sidebar: the collections, the Library's
+    // categories, then Places: Packs, the User Library, the Current Project, the folders added, and
+    // Add Folder. It scrolls inside the browser when taller.
     class BrowserCategories final : public juce::Component
     {
     public:
         explicit BrowserCategories (Impl& o) : owner (o) { setName ("Browser categories"); }
+        int contentHeight() const { return placeBounds (placeRows()).getBottom() + 6; }
         void paint (juce::Graphics& g) override
         {
             g.fillAll (themes::colour (0xff272727));
             g.setColour (muted); g.setFont (font (9.5f, true));
             g.drawText ("COLLECTIONS", 6, 0, getWidth() - 8, headerHeight, juce::Justification::centredLeft);
-            g.drawText ("CATEGORIES", 6, categoriesTop() - headerHeight, getWidth() - 8, headerHeight, juce::Justification::centredLeft);
+            g.drawText ("LIBRARY", 6, categoriesTop() - headerHeight, getWidth() - 8, headerHeight, juce::Justification::centredLeft);
+            g.drawText ("PLACES", 6, placesTop() - headerHeight, getWidth() - 8, headerHeight, juce::Justification::centredLeft);
+            // A place being scanned spins beside the label, as the reference's does.
+            if (owner.placeIndexing())
+            {
+                const auto x = 6.0f + juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), "PLACES") + 9.0f, y = (float) (placesTop() - headerHeight / 2);
+                const auto turn = (float) std::fmod (juce::Time::getMillisecondCounterHiRes() / 1000.0, 1.0) * juce::MathConstants<float>::twoPi;
+                juce::Path arc; arc.addCentredArc (x, y, 3.5f, 3.5f, turn, 0.0f, juce::MathConstants<float>::pi * 1.5f, true);
+                g.strokePath (arc, juce::PathStrokeType (1.4f));
+            }
             for (int i = 0; i < Collections::count; ++i)
             {
                 const auto row = collectionBounds (i);
@@ -2001,36 +2026,52 @@ private:
                 g.setColour (selected ? orange : ink.withAlpha (0.85f)); g.setFont (font (11.0f, selected));
                 g.drawText (Collections::name (i), row.withTrimmedLeft (20), juce::Justification::centredLeft, true);
             }
-            for (int i = 0; i < (int) entries.size(); ++i)
+            const auto drawRow = [&] (juce::Rectangle<int> row, const juce::String& text, bool selected, bool available)
             {
-                const auto row = rowBounds (i); const bool selected = owner.browserCategory == entries[(size_t) i].first;
                 if (selected) { g.setColour (raised); g.fillRect (row); }
-                g.setColour (selected ? orange : ink.withAlpha (0.85f)); g.setFont (font (11.0f, selected));
-                g.drawText (entries[(size_t) i].second, row.withTrimmedLeft (8), juce::Justification::centredLeft, true);
-            }
+                g.setColour (selected ? orange : available ? ink.withAlpha (0.85f) : muted.withAlpha (0.7f)); g.setFont (font (11.0f, selected));
+                g.drawText (text, row.withTrimmedLeft (8), juce::Justification::centredLeft, true);
+            };
+            for (int i = 0; i < (int) entries.size(); ++i)
+                drawRow (rowBounds (i), entries[(size_t) i].second, owner.browserCategory == entries[(size_t) i].first, true);
+            drawRow (placeBounds (0), "Packs", owner.browserCategory == BrowserCategory::packs, true);
+            for (int place = 0; place < owner.placeCount(); ++place)
+                drawRow (placeBounds (place + 1), owner.placeName (place), owner.browserCategory == BrowserCategory::place && owner.browserPlace == place, owner.placeAvailable (place));
+            drawRow (placeBounds (placeRows()), "Add Folder...", false, true);
             g.setColour (line); g.drawVerticalLine (getWidth() - 1, 0.0f, (float) getHeight());
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
-            for (int i = 0; i < Collections::count; ++i) if (collectionBounds (i).contains (e.getPosition())) { owner.showBrowserCollection (i); return; }
-            for (int i = 0; i < (int) entries.size(); ++i) if (rowBounds (i).contains (e.getPosition())) { owner.setBrowserCategory (entries[(size_t) i].first); return; }
+            const auto at = e.getPosition();
+            for (int i = 0; i < Collections::count; ++i) if (collectionBounds (i).contains (at)) { owner.leavePlace(); owner.showBrowserCollection (i); return; }
+            for (int i = 0; i < (int) entries.size(); ++i) if (rowBounds (i).contains (at)) { owner.leavePlace(); owner.setBrowserCategory (entries[(size_t) i].first); return; }
+            if (placeBounds (0).contains (at)) { owner.leavePlace(); owner.setBrowserCategory (BrowserCategory::packs); return; }
+            for (int place = 0; place < owner.placeCount(); ++place)
+                if (placeBounds (place + 1).contains (at)) { if (e.mods.isPopupMenu()) owner.placeMenu (place); else owner.showPlace (place); return; }
+            if (placeBounds (placeRows()).contains (at)) owner.addFolderToBrowser();
         }
         juce::Point<int> collectionPoint (int collection) const { return collectionBounds (collection).getCentre(); }
         juce::Point<int> categoryPoint (BrowserCategory category) const
         {
+            if (category == BrowserCategory::packs) return placeBounds (0).getCentre();
             for (int i = 0; i < (int) entries.size(); ++i) if (entries[(size_t) i].first == category) return rowBounds (i).getCentre();
             return {};
         }
+        juce::Point<int> placePoint (int place) const { return placeBounds (place + 1).getCentre(); }
+        juce::Point<int> addFolderPoint() const { return placeBounds (placeRows()).getCentre(); }
     private:
         static constexpr int headerHeight = 20, rowHeight = 22;
         int categoriesTop() const { return headerHeight + Collections::count * rowHeight + 6 + headerHeight; }
+        int placesTop() const { return categoriesTop() + (int) entries.size() * rowHeight + 6 + headerHeight; }
+        // Packs, then a row per place; Add Folder follows them.
+        int placeRows() const { return 1 + owner.placeCount(); }
         juce::Rectangle<int> collectionBounds (int i) const { return { 0, headerHeight + i * rowHeight, getWidth() - 1, rowHeight }; }
         juce::Rectangle<int> rowBounds (int i) const { return { 0, categoriesTop() + i * rowHeight, getWidth() - 1, rowHeight }; }
+        juce::Rectangle<int> placeBounds (int i) const { return { 0, placesTop() + i * rowHeight, getWidth() - 1, rowHeight }; }
         Impl& owner;
-        const std::array<std::pair<BrowserCategory, const char*>, 7> entries {{ { BrowserCategory::instruments, "Instruments" },
+        const std::array<std::pair<BrowserCategory, const char*>, 6> entries {{ { BrowserCategory::instruments, "Instruments" },
             { BrowserCategory::audioEffects, "Audio Effects" }, { BrowserCategory::midiEffects, "MIDI Effects" },
-            { BrowserCategory::plugins, "Plug-ins" }, { BrowserCategory::samples, "Samples" }, { BrowserCategory::grooves, "Grooves" },
-            { BrowserCategory::packs, "Packs" } }};
+            { BrowserCategory::plugins, "Plug-Ins" }, { BrowserCategory::samples, "Samples" }, { BrowserCategory::grooves, "Grooves" } }};
     };
 
     // A linked track's header indicator: hovering outlines the tracks in its link; clicking selects them.
@@ -9864,6 +9905,7 @@ private:
     double similarShownAt = 0;
     juce::Slider previewVolume;
     BrowserCategories browserCategories { *this };
+    juce::Viewport browserSidebar; // Scrolls the sidebar when its rows outgrow the browser.
     Canvas canvas;
     Ruler ruler;
     LauncherGrid launcher;
@@ -10289,7 +10331,8 @@ private:
     bool insertMarkerLit() const noexcept { return (ticks / insertBlinkTicks) % 2 == 0; }
     BrowserCategory browserCategory = BrowserCategory::instruments;
     bool pluginBrowser() const noexcept { return browserCategory == BrowserCategory::plugins; }
-    bool sampleBrowser() const noexcept { return browserCategory == BrowserCategory::samples; }
+    // Samples and Places list files: a folder's audio files and the folders in it.
+    bool sampleBrowser() const noexcept { return browserCategory == BrowserCategory::samples || browserCategory == BrowserCategory::place; }
     // Built-in device rows: a header names a group; kind -2 is the built-in synth, -3 the Utility.
     // Grooves list Halftrack's library (by index) and groove files in the User Library.
     // A row of the device lists. In a collection, samples and plug-ins are rows too.
@@ -10314,6 +10357,147 @@ private:
     Collections collections;
     int browserCollection = 0;
     void showBrowserCollection (int collection) { browserCollection = collection; setBrowserCategory (BrowserCategory::collection); }
+    // The browser's Places, after the reference's: the User Library, the Current Project (the
+    // project's media folder) and the folders added with Add Folder, numbered in that order. A place
+    // lists its folder as Samples does, and Up stops at it.
+    static constexpr int userLibraryPlace = 0, currentProjectPlace = 1, firstUserFolderPlace = 2;
+    int browserPlace = userLibraryPlace;
+    juce::File browserPlaceRoot, samplesFolder; // The place's folder; the Samples folder left for it.
+    juce::StringArray userFolders;              // The preferences' user folders, and which are there.
+    std::vector<bool> userFoldersThere;
+    int placeCount() const { return firstUserFolderPlace + userFolders.size(); }
+    juce::File placeFolder (int place) const
+    {
+        if (place == userLibraryPlace) return userLibrary;
+        if (place == currentProjectPlace) return session.projectAssets();
+        return juce::isPositiveAndBelow (place - firstUserFolderPlace, userFolders.size()) ? juce::File (userFolders[place - firstUserFolderPlace]) : juce::File();
+    }
+    juce::String placeName (int place) const
+    { return place == userLibraryPlace ? "User Library" : place == currentProjectPlace ? "Current Project" : placeFolder (place).getFileName(); }
+    // A folder that has moved or gone shows greyed, as the reference's do; so does a missing User Library.
+    bool placeAvailable (int place) const
+    {
+        if (place == userLibraryPlace) return userLibrary != juce::File();
+        if (place == currentProjectPlace) return true;
+        const auto index = (size_t) (place - firstUserFolderPlace);
+        return index < userFoldersThere.size() && userFoldersThere[index];
+    }
+    bool projectMediaThere = false;
+    bool placeIndexing() const { return browserCategory == BrowserCategory::place && (shownIndex.indexing || browserLoading); }
+    // The user folders as the preferences hold them, and which folders are there, looked for as the browser updates.
+    void updatePlaces()
+    {
+        userFolders = session.preferences().userFolders;
+        userFoldersThere.clear();
+        for (const auto& folder : userFolders) userFoldersThere.push_back (juce::File (folder).isDirectory());
+        projectMediaThere = session.projectAssets().isDirectory();
+    }
+    void showPlace (int place)
+    {
+        if (! juce::isPositiveAndBelow (place, placeCount())) return;
+        if (place == userLibraryPlace && userLibrary == juce::File()) { report (juce::Result::fail ("There is no User Library.")); return; }
+        if (browserCategory != BrowserCategory::place) samplesFolder = browserFolder;
+        browserPlace = place; browserPlaceRoot = placeFolder (place); browserFolder = browserPlaceRoot; similarFile = juce::File();
+        setBrowserCategory (BrowserCategory::place);
+    }
+    // The sidebar's other rows return from a place to the Samples folder it was left at.
+    void leavePlace() { if (browserCategory == BrowserCategory::place) browserFolder = samplesFolder; }
+    bool browserCanGoUp() const
+    {
+        return browserFolder != juce::File() && browserFolder.getParentDirectory() != browserFolder
+            && ! (browserCategory == BrowserCategory::place && (browserFolder == browserPlaceRoot || ! browserFolder.isAChildOf (browserPlaceRoot)));
+    }
+    // Add Folder to Browser, as the reference's File menu and Places' Add Folder have it: the folder
+    // chosen joins Places, kept with the preferences, and opens.
+    void addFolderToBrowser()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Add Folder to Browser", juce::File::getSpecialLocation (juce::File::userHomeDirectory));
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+            [safe = juce::Component::SafePointer<Impl> (this)] (const juce::FileChooser& fc)
+            { if (safe != nullptr && fc.getResult() != juce::File()) safe->addUserFolder (fc.getResult()); });
+    }
+    void addUserFolder (const juce::File& folder)
+    {
+        if (! folder.isDirectory()) { report (juce::Result::fail ("\"" + folder.getFullPathName() + "\" is not a folder.")); return; }
+        auto preferences = session.preferences();
+        int index = 0;
+        while (index < preferences.userFolders.size() && juce::File (preferences.userFolders[index]) != folder) ++index;
+        const bool added = index == preferences.userFolders.size();
+        if (added)
+        {
+            preferences.userFolders.add (folder.getFullPathName());
+            if (const auto result = session.setPreferences (preferences); result.failed()) { report (result); return; }
+        }
+        updatePlaces();
+        if (! showBrowser) { showBrowser = true; resized(); }
+        showPlace (firstUserFolderPlace + index);
+        report (juce::Result::ok(), added ? "Added " + folder.getFileName() + " to Places." : folder.getFileName() + " is already in Places.");
+    }
+    // Remove from Sidebar: the folder leaves Places; nothing on disk changes.
+    void removeUserFolder (int place)
+    {
+        auto preferences = session.preferences();
+        const int index = place - firstUserFolderPlace;
+        if (! juce::isPositiveAndBelow (index, preferences.userFolders.size())) return;
+        const auto name = placeName (place);
+        preferences.userFolders.remove (index);
+        if (const auto result = session.setPreferences (preferences); result.failed()) { report (result); return; }
+        updatePlaces();
+        if (browserCategory == BrowserCategory::place && browserPlace == place) { leavePlace(); setBrowserCategory (BrowserCategory::samples); }
+        else if (browserCategory == BrowserCategory::place && browserPlace > place) --browserPlace;
+        report (juce::Result::ok(), "Removed " + name + " from Places. The folder itself is unchanged.");
+        updateBrowser();
+    }
+    // Locate Folder, for a folder that has moved: the place follows the folder chosen.
+    void locateUserFolder (int place)
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Locate " + placeName (place), placeFolder (place).getParentDirectory());
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+            [safe = juce::Component::SafePointer<Impl> (this), place] (const juce::FileChooser& fc)
+            { if (safe != nullptr && fc.getResult() != juce::File()) safe->relocateUserFolder (place, fc.getResult()); });
+    }
+    void relocateUserFolder (int place, const juce::File& folder)
+    {
+        auto preferences = session.preferences();
+        const int index = place - firstUserFolderPlace;
+        if (! juce::isPositiveAndBelow (index, preferences.userFolders.size()) || ! folder.isDirectory()) return;
+        preferences.userFolders.set (index, folder.getFullPathName());
+        if (const auto result = session.setPreferences (preferences); result.failed())
+        { report (juce::Result::fail (folder.getFileName() + " is already in Places.")); return; }
+        updatePlaces(); showPlace (place);
+    }
+    // A place's menu: the Current Project shows its folder, as the reference's does; a user folder can
+    // be located when gone, and removed.
+    enum PlaceCommand { placeShowFolder = 1, placeLocate, placeRemove };
+    juce::PopupMenu placeMenuFor (int place) const
+    {
+        juce::PopupMenu menu;
+       #if JUCE_MAC
+        const juce::String showText = "Show in Finder";
+       #else
+        const juce::String showText = "Show in Explorer";
+       #endif
+        if (place == currentProjectPlace) menu.addItem (placeShowFolder, showText, placeFolder (place).isDirectory());
+        else if (place >= firstUserFolderPlace)
+        {
+            if (! placeAvailable (place)) menu.addItem (placeLocate, "Locate Folder...");
+            menu.addItem (placeRemove, "Remove from Sidebar");
+        }
+        return menu;
+    }
+    void runPlaceCommand (int place, int command)
+    {
+        if (command == placeShowFolder) placeFolder (place).revealToUser();
+        else if (command == placeLocate) locateUserFolder (place);
+        else if (command == placeRemove) removeUserFolder (place);
+    }
+    void placeMenu (int place)
+    {
+        auto menu = placeMenuFor (place);
+        if (menu.getNumItems() > 0)
+            menu.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Impl> (this), place] (int choice)
+                                { if (safe != nullptr) safe->runPlaceCommand (place, choice); });
+    }
     // The collection key of a browser row, or empty for headers and folders.
     juce::String browserKey (int row) const
     {
@@ -12373,6 +12557,10 @@ private:
             else { selectedClip = -1; selectedLauncherClipId.clear(); }
         }
         if (state.recording && ! previous.recording) recordingStart = state.position;
+        // The Current Project lists the project's media again after a recording, a save or another project.
+        if (browserCategory == BrowserCategory::place && browserPlace == currentProjectPlace
+            && (state.projectFile != previous.projectFile || (previous.recording && ! state.recording) || (previous.dirty && ! state.dirty)))
+        { scannedBrowserFolder = juce::File(); updateBrowser(); }
         if (selectedTrack >= (int) state.tracks.size()) { selectedTrack = (int) state.tracks.size() - 1; selectedClip = -1; }
         if (selectedTrack < 0 && ! state.tracks.empty()) selectedTrack = 0;
         if (const auto* track = currentTrack(); track == nullptr || selectedClip >= (int) track->clips.size()) selectedClip = -1;
@@ -12485,6 +12673,7 @@ private:
     void timerCallback() override
     {
         pollBrowserScan(); pollBrowserIndex(); releaseComputerKeys();
+        if (placeIndexing()) browserCategories.repaint();
         // An audio device that disappeared or came back says so for ten seconds.
         if (const auto notice = session.takeDeviceNotice(); notice.isNotEmpty()) { status = notice; statusFrames = 240; repaint(); }
         if (statusFrames > 0 && --statusFrames == 0) status.clear();
@@ -12759,6 +12948,7 @@ private:
                     menuSelectLoop, menuPlaySelection, menuSetClipStart, menuSetLoopStart, menuSetLoopEnd, menuSetClipEnd,
                     menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
                     menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
+                    menuAddFolder,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410 }; // Plus Session::TimeFormat.
@@ -13249,7 +13439,7 @@ private:
         {
             add (1, "New Project"); add (2, "Open Project...");
             popup.addSeparator();
-            add (15, "Install Pack...", packsFolder() != juce::File());
+            add (15, "Install Pack...", packsFolder() != juce::File()); add (menuAddFolder, "Add Folder to Browser...");
             popup.addSeparator();
             add (12, "Locate Missing Media...", ! session.missingMedia().isEmpty());
             popup.addSeparator();
@@ -13523,6 +13713,7 @@ private:
             case 3: saveProject (false); break;
             case 4: saveProject (true); break;
             case menuSaveCopy: saveCopyDialog(); return;
+            case menuAddFolder: addFolderToBrowser(); return;
             case 5: importFileDialog(); break;
             case 6: exportDialog(); break;
             case 14: showPreferences(); break;
@@ -15342,13 +15533,19 @@ private:
     void updateBrowser()
     {
         browserItems.clear(); deviceItems.clear();
+        updatePlaces();
+        if (browserCategory == BrowserCategory::place && ! juce::isPositiveAndBelow (browserPlace, placeCount())) { leavePlace(); browserCategory = BrowserCategory::samples; }
+        // A place's folder can change under it: the Current Project's follows the project.
+        if (browserCategory == BrowserCategory::place)
+            if (const auto root = placeFolder (browserPlace); root != browserPlaceRoot) { browserPlaceRoot = root; browserFolder = root; similarFile = juce::File(); }
         const auto query = browserSearch.getText().trim();
         folderButton.setButtonText (pluginBrowser() ? "Manage / Scan..." : "Choose Folder...");
-        upButton.setEnabled (browserFolder != juce::File() && browserFolder.getParentDirectory() != browserFolder);
+        upButton.setEnabled (browserCanGoUp());
         browserSearch.setTextToShowWhenEmpty ("Search (" + juce::String (browserCategory == BrowserCategory::collection ? Collections::name (browserCollection)
             : browserCategory == BrowserCategory::instruments ? "Instruments"
             : browserCategory == BrowserCategory::audioEffects ? "Audio Effects" : browserCategory == BrowserCategory::midiEffects ? "MIDI Effects"
-            : pluginBrowser() ? "Plug-ins" : browserCategory == BrowserCategory::grooves ? "Grooves" : browserCategory == BrowserCategory::packs ? "Packs" : "Samples") + ")", muted);
+            : pluginBrowser() ? "Plug-Ins" : browserCategory == BrowserCategory::grooves ? "Grooves" : browserCategory == BrowserCategory::packs ? "Packs"
+            : browserCategory == BrowserCategory::place ? placeName (browserPlace) : "Samples") + ")", muted);
         if (browserFolder != scannedBrowserFolder) startBrowserScan();
         const auto matches = [&query] (const juce::String& label) { return query.isEmpty() || label.containsIgnoreCase (query); };
         if (browserCategory == BrowserCategory::collection)
@@ -15654,15 +15851,30 @@ private:
     static constexpr int showSimilarItem = 100, maximumSimilarFiles = 50;
     // Show Similar Files, after the reference's: the folder's sounds most like this one, nearest
     // first, filling in as they are measured. A search or another folder leaves it.
-    // Show in Browser: the browser's samples at the file's folder, with the file selected, as the
-    // reference's clip menus show a clip's sample.
+    // Show in Browser: the file's folder in the browser, with the file selected, as the reference's
+    // clip menus show a clip's sample. A file in a place shows there, the Current Project first;
+    // any other file shows in Samples.
     void showInBrowser (const juce::File& file)
     {
         if (! file.existsAsFile()) return;
         showBrowser = true; similarFile = juce::File();
         browserSearch.setText ({}, juce::dontSendNotification);
+        updatePlaces();
+        std::vector<int> order { currentProjectPlace };
+        for (int place = firstUserFolderPlace; place < placeCount(); ++place) order.push_back (place);
+        order.push_back (userLibraryPlace);
+        int holder = -1;
+        for (const int place : order)
+            if (const auto root = placeFolder (place); root != juce::File() && file.isAChildOf (root)) { holder = place; break; }
+        if (holder >= 0)
+        {
+            if (browserCategory != BrowserCategory::place) samplesFolder = browserFolder;
+            browserPlace = holder; browserPlaceRoot = placeFolder (holder);
+        }
+        else leavePlace();
         browserFolder = file.getParentDirectory(); shownBrowserFile = file;
-        setBrowserCategory (BrowserCategory::samples);
+        scannedBrowserFolder = juce::File(); // Listed afresh, so a file new to the folder is found.
+        setBrowserCategory (holder >= 0 ? BrowserCategory::place : BrowserCategory::samples);
         selectShownBrowserFile();
     }
     // The file Show in Browser asked for, selected once its folder is listed.
@@ -15700,13 +15912,22 @@ private:
     {
         for (const auto& path : files)
             if (isAudio (juce::File (path)) || juce::File (path).hasFileExtension ("halftrack") || (video::supported() && video::isMovie (juce::File (path)))) return true;
-        return false;
+        return droppedFolders (files);
     }
+    // Folders dropped on the browser join Places, as the reference's sidebar takes them.
+    static bool droppedFolders (const juce::StringArray& files)
+    { return ! files.isEmpty() && std::all_of (files.begin(), files.end(), [] (const juce::String& path) { return juce::File (path).isDirectory(); }); }
     void fileDragEnter (const juce::StringArray&, int, int) override { canvas.dragHover = true; canvas.repaint(); }
     void fileDragExit (const juce::StringArray&) override { canvas.dragHover = false; canvas.repaint(); }
     void filesDropped (const juce::StringArray& files, int x, int y) override
     {
         canvas.dragHover = false;
+        if (droppedFolders (files))
+        {
+            if (showBrowser && ! mapping() && browserBounds.contains (x, y)) for (const auto& path : files) addUserFolder (juce::File (path));
+            else report (juce::Result::fail ("Drop folders on the browser to add them to Places."));
+            return;
+        }
         if (files.size() == 1 && juce::File (files[0]).hasFileExtension ("halftrack"))
         {
             auto safe = juce::Component::SafePointer<Impl> (this); auto file = juce::File (files[0]);
@@ -16569,6 +16790,122 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         root.deleteRecursively();
     }
     {
+        // Places, as the reference's sidebar has them after the Library: Packs, the User Library, the
+        // Current Project, the folders added (kept with the preferences), and Add Folder.
+        const auto category = browserCategory; const auto folder = browserFolder; const auto library = userLibrary; const bool browserWas = showBrowser;
+        const auto before = session.preferences();
+        const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-places-ui-" + juce::Uuid().toString());
+        userLibrary = root.getChildFile ("User Library");
+        for (const auto* name : { "User Library/Samples/Clap.wav", "Loops/Beat.wav", "Loops/Fills/Fill.wav", "Breaks/Amen.wav", "Elsewhere/Tom.wav" })
+        {
+            const auto file = root.getChildFile (name);
+            check (file.getParentDirectory().createDirectory().wasOk() && file.replaceWithText ({}), "write a Places fixture");
+        }
+        const auto settle = [&]
+        {
+            for (int i = 0; i < 1000 && (browserIndex.status().indexing || browserLoading); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
+            pollBrowserIndex();
+        };
+        const auto click = [&] (juce::Point<int> at)
+        {
+            browserCategories.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at.toFloat(), juce::ModifierKeys(), 1.0f, 0, 0, 0, 0,
+                                                           &browserCategories, &browserCategories, juce::Time::getCurrentTime(), {}, juce::Time::getCurrentTime(), 1, false));
+        };
+        const auto rowOf = [&] (const juce::File& file) { for (int r = 0; r < (int) browserItems.size(); ++r) if (browserItems[(size_t) r].file == file) return r; return -1; };
+        const auto listed = [] (const juce::PopupMenu& menu)
+        {
+            juce::StringArray texts;
+            for (juce::PopupMenu::MenuItemIterator items (menu); items.next();)
+                texts.add (items.getItem().isSeparator ? "-" : items.getItem().text + (items.getItem().isEnabled ? "" : " (off)"));
+            return texts.joinIntoString ("|");
+        };
+        showBrowser = true; resized();
+        updateBrowser();
+        check (browserCategories.categoryPoint (BrowserCategory::packs).y > browserCategories.categoryPoint (BrowserCategory::grooves).y
+                   && browserCategories.placePoint (userLibraryPlace).y > browserCategories.categoryPoint (BrowserCategory::packs).y
+                   && browserCategories.placePoint (currentProjectPlace).y > browserCategories.placePoint (userLibraryPlace).y
+                   && browserCategories.addFolderPoint().y > browserCategories.placePoint (currentProjectPlace).y
+                   && placeName (userLibraryPlace) == "User Library" && placeName (currentProjectPlace) == "Current Project",
+               "Places follow the Library: Packs, the User Library, the Current Project, then Add Folder");
+        // Samples keeps its own folder while the places are browsed.
+        setBrowserCategory (BrowserCategory::samples); browserFolder = root.getChildFile ("Elsewhere"); updateBrowser(); settle();
+        click (browserCategories.placePoint (userLibraryPlace)); settle();
+        check (browserCategory == BrowserCategory::place && browserFolder == userLibrary && getNumRows() == 1 && ! upButton.isEnabled() && ! folderButton.isVisible()
+                   && upButton.isVisible(), "the User Library lists its folders, without Choose Folder, and Up stops at it");
+        activateBrowserRow (0); settle();
+        check (browserFolder == userLibrary.getChildFile ("Samples") && rowOf (userLibrary.getChildFile ("Samples/Clap.wav")) >= 0 && upButton.isEnabled(), "a folder in it opens");
+        check (browserListKey (juce::KeyPress (juce::KeyPress::leftKey)) && browserFolder == userLibrary, "Left goes back up to the place");
+        check (browserListKey (juce::KeyPress (juce::KeyPress::leftKey)) && browserFolder == userLibrary, "and no further");
+        click (browserCategories.categoryPoint (BrowserCategory::samples)); settle();
+        check (browserCategory == BrowserCategory::samples && browserFolder == root.getChildFile ("Elsewhere"), "Samples returns to the folder it was left at");
+        // Add Folder to Browser: the File menu offers it beside Install Pack, and the folder joins Places and opens.
+        {
+            juce::StringArray fileItems;
+            const auto fileMenu = getMenuForIndex (0, {});
+            for (juce::PopupMenu::MenuItemIterator items (fileMenu); items.next();) fileItems.add (items.getItem().text);
+            check (fileItems.indexOf ("Add Folder to Browser...") == fileItems.indexOf ("Install Pack...") + 1, "the File menu offers Add Folder to Browser after Install Pack");
+        }
+        const auto loops = root.getChildFile ("Loops"), breaks = root.getChildFile ("Breaks");
+        addUserFolder (loops); settle();
+        auto withLoops = before.userFolders; withLoops.add (loops.getFullPathName());
+        check (session.preferences().userFolders == withLoops, "Add Folder keeps the folder with the preferences, after any there before");
+        const int loopsPlace = placeCount() - 1;
+        check (browserCategory == BrowserCategory::place && browserPlace == loopsPlace && browserFolder == loops && getNumRows() == 2 && placeName (loopsPlace) == "Loops",
+               "and opens it in Places, named for its folder");
+        browserSearch.setText ("fill", juce::sendNotificationSync); updateBrowser(); settle(); updateBrowser();
+        check (getNumRows() == 2 && rowOf (loops.getChildFile ("Fills")) >= 0 && rowOf (loops.getChildFile ("Fills/Fill.wav")) >= 0,
+               "a search looks through the place's folders, finding Fills and the Fill in it");
+        browserSearch.setText ({}, juce::sendNotificationSync); updateBrowser();
+        addUserFolder (breaks); settle();
+        addUserFolder (loops); settle();
+        check (session.preferences().userFolders.size() == before.userFolders.size() + 2 && browserPlace == loopsPlace, "a folder already in Places opens without being added again");
+        click (browserCategories.placePoint (loopsPlace + 1)); settle();
+        check (browserFolder == breaks && rowOf (breaks.getChildFile ("Amen.wav")) >= 0, "clicking a place opens it");
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("browser-places.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (createComponentSnapshot (getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
+        // A folder that has gone shows greyed until located; Remove from Sidebar leaves the folder on disk.
+        const auto moved = root.getChildFile ("Breaks Moved");
+        check (breaks.moveFileTo (moved), "move the folder away"); updateBrowser();
+        check (! placeAvailable (loopsPlace + 1) && placeAvailable (loopsPlace) && listed (placeMenuFor (loopsPlace + 1)) == "Locate Folder...|Remove from Sidebar"
+                   && listed (placeMenuFor (loopsPlace)) == "Remove from Sidebar", "a folder that has gone can be located or removed; one that is there, removed");
+        relocateUserFolder (loopsPlace + 1, moved); settle();
+        check (placeAvailable (loopsPlace + 1) && browserFolder == moved && session.preferences().userFolders[loopsPlace + 1 - firstUserFolderPlace] == moved.getFullPathName(),
+               "Locate Folder follows it to where it went");
+        runPlaceCommand (loopsPlace + 1, placeRemove);
+        check (session.preferences().userFolders.size() == before.userFolders.size() + 1 && placeCount() == loopsPlace + 1 && moved.isDirectory()
+                   && browserCategory == BrowserCategory::samples, "Remove from Sidebar takes the shown folder out of Places, leaving it on disk");
+        // Folders dropped on the browser join Places.
+        filesDropped ({ moved.getFullPathName() }, browserBounds.getCentreX(), browserBounds.getCentreY()); settle();
+        check (session.preferences().userFolders.size() == before.userFolders.size() + 2 && browserFolder == moved, "a folder dropped on the browser joins Places");
+        // The Current Project lists the project's media folder, and Show in Browser finds a project file there.
+        const auto assets = session.projectAssets(); const bool hadAssets = assets.isDirectory();
+        click (browserCategories.placePoint (currentProjectPlace)); settle();
+        check (browserCategory == BrowserCategory::place && browserPlace == currentProjectPlace && (hadAssets || getNumRows() == 0),
+               "the Current Project lists the project's media folder, empty before there is any");
+        const auto take = assets.getChildFile ("Places Take.wav");
+        check (assets.createDirectory().wasOk() && audioFixture.copyFileTo (take), "media in the project's folder");
+       #if JUCE_MAC
+        const juce::String showText = "Show in Finder";
+       #else
+        const juce::String showText = "Show in Explorer";
+       #endif
+        setBrowserCategory (BrowserCategory::audioEffects);
+        showInBrowser (take); settle();
+        check (browserCategory == BrowserCategory::place && browserPlace == currentProjectPlace && browserFolder == assets
+                   && browserList.getSelectedRow() == rowOf (take) && rowOf (take) >= 0 && listed (placeMenuFor (currentProjectPlace)) == showText,
+               "Show in Browser shows a project file in the Current Project, selected; its menu shows the folder in " + showText.fromLastOccurrenceOf (" ", false, false));
+        take.deleteFile(); if (! hadAssets) assets.deleteFile();
+        check (session.setPreferences (before).wasOk(), "restore the preferences");
+        leavePlace(); userLibrary = library; browserFolder = folder; setBrowserCategory (category); showBrowser = browserWas; resized();
+        root.deleteRecursively();
+    }
+    {
         // MIDI Map Mode: the switch covers the work area, clicking a control learns it, and the list edits its mapping.
         check (! midiMapMode && ! mapOverlay.isVisible(), "MIDI Map Mode starts off");
         midiMapButton.setToggleState (true, juce::dontSendNotification); midiMapButton.onClick();
@@ -17249,10 +17586,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             chooseArrangementItem (arrangementShowInBrowser, onClip, -1);
             for (int i = 0; i < 1000 && browserLoading; ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
             const auto row = browserList.getSelectedRow();
-            check (showBrowser && browserCategory == BrowserCategory::samples && browserFolder == clip().file.getParentDirectory()
+            check (showBrowser && sampleBrowser() && browserFolder == clip().file.getParentDirectory()
                        && juce::isPositiveAndBelow (row, (int) browserItems.size()) && browserItems[(size_t) row].file == clip().file,
                    "Show in Browser shows the sample's folder in the browser, the sample selected");
-            browserFolder = folder; setBrowserCategory (category);
+            leavePlace(); browserFolder = folder; setBrowserCategory (category);
         }
         // The colour grid colours the clip.
         chooseArrangementItem (arrangementColour, onClip, 5);
@@ -19332,7 +19669,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
        #endif
         const auto expect = [&] (const juce::String& name, const juce::StringArray& wanted)
         { const auto shown = texts (name); check (shown == wanted, name + " holds the reference's items in its order (" + shown.joinIntoString (" | ") + ")"); };
-        expect ("File", { "New Project", "Open Project...", "-", "Install Pack...", "-", "Locate Missing Media...", "-", "Save Project", "Save Project As...", "Save a Copy...", "Save as Default Set",
+        expect ("File", { "New Project", "Open Project...", "-", "Install Pack...", "Add Folder to Browser...", "-", "Locate Missing Media...", "-", "Save Project", "Save Project As...", "Save a Copy...", "Save as Default Set",
                           "-", "Export Audio...", "Export MIDI Clip..." });
         const juce::String loop = state.looping ? "Deactivate Loop" : "Activate Loop";
         const auto history = [this]

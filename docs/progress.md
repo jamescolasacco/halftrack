@@ -2625,3 +2625,7 @@ UI area. The control bar gains the reference's MIDI Arrangement Overdub switch, 
 
 QA area. CI run 40124051477 failed only `external-sync-acceptance` on the macOS runner, its transport ending 0.243 beats past the clock's 8.5 against a 0.2-beat tolerance while Linux and Windows passed; the run before passed there too. The check now allows 0.3 beats, as the test's earlier runner-load allowances do.
 
+
+## Browser Places — 2026-10-24
+
+Engine, UI and root areas. The browser's sidebar follows the reference's: Collections, then the Library (the Packs row moved out of it, Plug-ins spelled Plug-Ins), then Places with Packs, the User Library, the Current Project (the project's media folder, from the new `Session::projectAssets`), each folder added, and Add Folder. File > Add Folder to Browser..., the sidebar's Add Folder... and folders dropped on the browser add a folder, kept in the new `Preferences::userFolders` (a preferences reset keeps them). A place lists its folder as Samples does, Up stopping at it; moved folders grey out and can be located, Remove from Sidebar leaves them on disk, and Show in Browser opens a file's place, listing its folder afresh. A wheel beside PLACES turns while a place is indexed, and the sidebar scrolls when taller than the browser ([contract](research/browser-places-contract.md)). Checked in the preferences, Session and UI suites.

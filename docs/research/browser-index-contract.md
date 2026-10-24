@@ -37,7 +37,7 @@ The UI suite checks that the folder lists its own items, and that a search finds
 
 ## Not yet covered
 
-- Several indexed places at once (the reference's Places and Add Folder).
+- Indexing every place in the background: [Places](browser-places-contract.md) are indexed as they are opened.
 - Watching folders for changes without reindexing.
 - Searching outside the Samples browser.
 - Non-ASCII case folding.
