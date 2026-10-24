@@ -34,6 +34,10 @@ The reference's manual: Pack folders "can be unfolded to reveal the included Pac
 - **Search.** Results are a flat list, as before. Opening a folder found by a search clears it and shows the folder open in the tree.
 - **Show in Browser.** The folders down to the file open, with the file selected.
 
+## History (2026-10-24)
+
+The reference's manual: the arrow buttons left of the search bar, Browse Back and Browse Forward, go back and forward through the browser's previous searches and navigation, also with Cmd+[ and Cmd+] ([Working with the Browser](https://www.ableton.com/en/live-manual/12/working-with-the-browser/), section 4.3, consulted 2026-10-24). Halftrack's browser has the two arrows and keys. A state is the category, collection or place shown, its listed and open folders, and the search. One joins the history when the browser leaves it for another category or folder or settles on one, and a search when Return is pressed or the field is left. Stepping back and forward restores a state; a new state drops the ones ahead, and the history keeps the last 100.
+
 ## Not yet
 
 - Places are indexed when opened, not all in the background as the reference scans every added folder.
@@ -49,6 +53,7 @@ See [open questions](../open-questions.md) for the defaults taken where the manu
 `tests/PreferencesTests.cpp` reads user folders back in order, a missing one too, refuses a relative or repeated folder, keeps them through a reset, and finds the added folder in the next Session. `tests/PersistenceTests.cpp` checks the project's media folder before and after a save and through Save a Copy.
 
 The UI suite checks:
+- Browse Back left of the search bar, offered after moving about; Back returning to a search, Cmd+[ going back before it and to an earlier category, Cmd+] going forward, and a new category dropping the states ahead;
 - the folder tree: Right opening a folder in place with its items indented under it, Right going into it, Left going back and closing it, opening another closing the first unless Cmd is held, a double-click closing a folder, and Left at the top going up a folder with the one left showing open;
 - the sidebar's order: Packs, the User Library, the Current Project, then Add Folder, after the Library;
 - the User Library listing its folders without Choose Folder, a folder in it opening in place, Left going to it, closing it and going no higher than the place, and Samples returning to its own folder afterwards;

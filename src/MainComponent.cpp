@@ -510,7 +510,7 @@ public:
         for (auto* child : std::initializer_list<juce::Component*> {
                  &playButton, &stopButton, &recordButton, &overdubButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &nudgeDown, &nudgeUp, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
-                 &folderButton, &upButton, &browserSearch, &browserList, &browserSidebar, &info, &overview, &ruler, &timeRuler, &viewport,
+                 &folderButton, &upButton, &browserSearch, &browserList, &browserSidebar, &browseBack, &browseForward, &info, &overview, &ruler, &timeRuler, &viewport,
                  &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain })
             addAndMakeVisible (child);
 
@@ -685,7 +685,9 @@ public:
         {
             if (! sampleBrowser() || ! browserCanGoUp()) return;
             const auto left = browserFolder;
+            noteBrowserState();
             browserFolder = browserFolder.getParentDirectory(); openFolders = { left }; updateBrowser(); // The folder left shows open in its parent.
+            noteBrowserState();
         };
         browserSidebar.setViewedComponent (&browserCategories, false);
         browserSidebar.setScrollBarsShown (true, false); browserSidebar.setScrollBarThickness (6);
@@ -710,6 +712,16 @@ public:
         browserSearch.setTextToShowWhenEmpty ("Search this folder", muted);
         browserSearch.setFont (font (12.0f));
         browserSearch.onTextChange = [this] { similarFile = juce::File(); updateBrowser(); };
+        // A search joins the browser's history when it is finished with.
+        browserSearch.onReturnKey = browserSearch.onFocusLost = [this] { noteBrowserState(); };
+        for (const auto& [button, step, title] : { std::tuple { &browseBack, -1, "Browse back" }, std::tuple { &browseForward, 1, "Browse forward" } })
+        {
+            button->setTitle (title); button->setName (title); button->setWantsKeyboardFocus (false); button->setMouseClickGrabsKeyboardFocus (false);
+            const int by = step;
+            button->onClick = [this, by] { browseHistory (by); };
+        }
+        browseBack.setTooltip ("Browse Back: the browser's previous place, folder or search  |  Cmd+[");
+        browseForward.setTooltip ("Browse Forward: the browser's next place, folder or search  |  Cmd+]");
         // The large regions a screen reader moves between, each with what it holds.
         browserSearch.setTitle ("Browser search");
         browserList.setTitle ("Browser"); browserList.setDescription ("Devices, plug-ins, samples and grooves of the chosen category");
@@ -914,7 +926,13 @@ public:
         dividerBounds = showDetail ? detail.removeFromTop (dividerHeight) : juce::Rectangle<int>();
         deviceChain.setBounds (detail); deviceChain.setVisible (! showPiano && showDetail);
         auto browser = browserBounds.reduced (6, 6);
-        browserSearch.setBounds (browser.removeFromTop (24));
+        {
+            // Browse Back and Forward sit left of the search bar, as the reference's arrows do.
+            auto searchRow = browser.removeFromTop (24);
+            browseBack.setBounds (searchRow.removeFromLeft (22)); searchRow.removeFromLeft (2);
+            browseForward.setBounds (searchRow.removeFromLeft (22)); searchRow.removeFromLeft (4);
+            browserSearch.setBounds (searchRow);
+        }
         browser.removeFromTop (6);
         browserSidebar.setBounds (browser.removeFromLeft (categoryWidth));
         {
@@ -935,7 +953,7 @@ public:
         folderButton.setBounds (actions);
         browser.removeFromBottom (4); browser.removeFromTop (22);
         browserList.setBounds (browser);
-        for (auto* part : std::initializer_list<juce::Component*> { &browserSearch, &browserSidebar, &browserList })
+        for (auto* part : std::initializer_list<juce::Component*> { &browserSearch, &browserSidebar, &browserList, &browseBack, &browseForward })
             part->setVisible (browserShown && ! mapping());
         if (! browserShown) for (auto* part : std::initializer_list<juce::Component*> { &folderButton, &upButton, &previewButton, &previewVolume }) part->setVisible (false);
         if (mapping()) for (auto* part : std::initializer_list<juce::Component*> { &folderButton, &upButton, &previewButton, &previewVolume }) part->setVisible (false);
@@ -1020,6 +1038,9 @@ public:
         if (! cmd && ! shift && ! key.getModifiers().isAltDown() && code >= '1' && code <= '7' && browserList.hasKeyboardFocus (true) && browserList.getSelectedRow() >= 0)
         { toggleBrowserCollection (browserList.getSelectedRow(), code - '1'); return true; }
         if (browserList.hasKeyboardFocus (true) && browserListKey (key)) return true;
+        // Cmd+[ and Cmd+] step back and forward through the browser's history, as the reference's do.
+        if (cmd && ! shift && ! key.getModifiers().isAltDown() && (code == '[' || code == ']') && showBrowser && ! mapping())
+        { browseHistory (code == '[' ? -1 : 1); return true; }
         if (cmd)
         {
             // The reference's grid commands, for the Arrangement.
@@ -9941,7 +9962,7 @@ private:
     juce::TextButton followButton { "Follow" }, tapButton { "TAP" }, loopButton { "Loop" }, clickButton { "Metro" }, clickSettingsButton { "..." }, audioButton { "Audio" }, addTrackButton { "+ Audio" }, addMidiButton { "+ MIDI" }, newMidiClipButton { "+ MIDI Clip" },
                      sessionTab { "Session" }, arrangementTab { "Arrange" }, pianoTab { "Clip" }, importButton { "Import Audio" },
                      filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" }, previewButton { "Preview" },
-                     zoomIn { "+" }, zoomOut { "-" }, fitButton { "Fit" };
+                     zoomIn { "+" }, zoomOut { "-" }, fitButton { "Fit" }, browseBack { "<" }, browseForward { ">" };
     juce::Label tempo, positionLabel, projectLabel, loopStartLabel, loopLengthLabel;
     AutomatedField meterLabel; // Lit while the Arrangement has time signature changes.
     NudgeButton nudgeDown { false }, nudgeUp { true };
@@ -14625,7 +14646,13 @@ private:
         chooser = std::make_unique<juce::FileChooser> ("Choose an Audio Folder", browserFolder);
         auto safe = juce::Component::SafePointer<Impl> (this);
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
-            [safe] (const juce::FileChooser& fc) { if (safe != nullptr && fc.getResult() != juce::File()) { safe->browserFolder = fc.getResult(); safe->scannedBrowserFolder = juce::File(); safe->updateBrowser(); } });
+            [safe] (const juce::FileChooser& fc)
+            {
+                if (safe == nullptr || fc.getResult() == juce::File()) return;
+                safe->noteBrowserState();
+                safe->browserFolder = fc.getResult(); safe->scannedBrowserFolder = juce::File(); safe->updateBrowser();
+                safe->noteBrowserState();
+            });
     }
 
     void showDialog (juce::String title, std::unique_ptr<juce::Component> content, int width, int height)
@@ -15830,7 +15857,57 @@ private:
     }
     void setBrowserCategory (BrowserCategory category)
     {
+        noteBrowserState();
         browserCategory = category; browserList.deselectAllRows(); updateBrowser(); resized();
+        noteBrowserState();
+    }
+    // The browser's history, as the reference's Browse Back and Browse Forward: the categories,
+    // places, folders and searches shown, stepped through by the arrows left of the search bar or
+    // Cmd+[ and Cmd+]. A state joins it when the browser leaves it or settles on it.
+    struct BrowserState
+    {
+        BrowserCategory category = BrowserCategory::instruments;
+        int collection = 0, place = 0;
+        juce::File folder, placeRoot, samples;
+        juce::String search;
+        std::set<juce::File> open;
+        bool operator== (const BrowserState&) const = default;
+    };
+    std::vector<BrowserState> browserHistory;
+    int historyIndex = -1;
+    bool restoringHistory = false;
+    BrowserState browserState() const
+    { return { browserCategory, browserCollection, browserPlace, browserFolder, browserPlaceRoot, samplesFolder, browserSearch.getText().trim(), openFolders }; }
+    void noteBrowserState()
+    {
+        if (restoringHistory) return;
+        const auto now = browserState();
+        if (historyIndex >= 0 && browserHistory[(size_t) historyIndex] == now) return;
+        browserHistory.resize ((size_t) (historyIndex + 1)); // A new state drops the ones ahead.
+        browserHistory.push_back (now);
+        if (browserHistory.size() > 100) browserHistory.erase (browserHistory.begin());
+        historyIndex = (int) browserHistory.size() - 1;
+        updateHistoryButtons();
+    }
+    bool canBrowseBack() const { return historyIndex > 0; }
+    bool canBrowseForward() const { return historyIndex + 1 < (int) browserHistory.size(); }
+    void updateHistoryButtons() { browseBack.setEnabled (canBrowseBack()); browseForward.setEnabled (canBrowseForward()); }
+    void browseHistory (int step)
+    {
+        noteBrowserState(); // Changes not yet in it, such as folders opened.
+        const int target = historyIndex + step;
+        if (! juce::isPositiveAndBelow (target, (int) browserHistory.size())) return;
+        historyIndex = target;
+        const auto state = browserHistory[(size_t) target];
+        const juce::ScopedValueSetter<bool> restoring (restoringHistory, true);
+        browserCategory = state.category; browserCollection = state.collection; browserPlace = state.place;
+        browserFolder = state.folder; browserPlaceRoot = state.placeRoot; samplesFolder = state.samples; openFolders = state.open;
+        browserSearch.setText (state.search, juce::dontSendNotification); similarFile = juce::File();
+        for (const auto& folder : openFolders)
+            if (! folderListings.contains (folder) && ! folderScans.contains (folder))
+                if (auto scan = launchFolderScan (folder)) folderScans[folder] = scan;
+        browserList.deselectAllRows(); updateBrowser(); resized();
+        updateHistoryButtons();
     }
     void updateBrowser()
     {
@@ -17329,6 +17406,28 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         drag (getWidth());
         check (browserBounds.getWidth() == maximumBrowserWidth(), "and no wider than its maximum");
         browserWidth = defaultBrowserWidth; showBrowser = browserWas; resized();
+    }
+    {
+        // Browse Back and Forward, as the reference's: the categories, places and searches shown,
+        // by the arrows left of the search bar or Cmd+[ and Cmd+].
+        const auto category = browserCategory; const bool browserWas = showBrowser;
+        showBrowser = true; resized();
+        const juce::ModifierKeys cmd (juce::ModifierKeys::commandModifier);
+        setBrowserCategory (BrowserCategory::instruments);
+        setBrowserCategory (BrowserCategory::audioEffects);
+        browserSearch.setText ("delay", juce::sendNotificationSync); browserSearch.onReturnKey();
+        setBrowserCategory (BrowserCategory::grooves);
+        check (browseBack.isVisible() && browseBack.getX() < browserSearch.getX() && canBrowseBack() && browseBack.isEnabled() && ! browseForward.isEnabled(),
+               "after moving about, Browse Back, left of the search bar, is offered and Forward is not");
+        browseBack.onClick();
+        check (browserCategory == BrowserCategory::audioEffects && browserSearch.getText() == "delay" && browseForward.isEnabled(), "Back returns to the search in Audio Effects");
+        check (handleKey (juce::KeyPress ('[', cmd, 0)) && browserCategory == BrowserCategory::audioEffects && browserSearch.getText().isEmpty(), "Cmd+[ goes back to before the search");
+        check (handleKey (juce::KeyPress ('[', cmd, 0)) && browserCategory == BrowserCategory::instruments, "and to Instruments");
+        check (handleKey (juce::KeyPress (']', cmd, 0)) && browserCategory == BrowserCategory::audioEffects, "Cmd+] goes forward again");
+        setBrowserCategory (BrowserCategory::plugins);
+        check (! canBrowseForward() && ! browseForward.isEnabled(), "a new category drops the states ahead");
+        browserSearch.setText ({}, juce::sendNotificationSync);
+        setBrowserCategory (category); showBrowser = browserWas; resized();
     }
     {
         // MIDI Map Mode: the switch covers the work area, clicking a control learns it, and the list edits its mapping.

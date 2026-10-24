@@ -2665,3 +2665,7 @@ Engine and UI areas. Options > Delay Compensation, after the reference's: kept w
 ## The browser's folder tree — 2026-10-24
 
 UI area. The file lists in Samples and the places now unfold folders in place, as the reference's content pane does: items indented under an open folder with a triangle to open and close it, a double-click, Return or Right opening one and closing the others unless Cmd is held, Right going into an open folder, and Left closing a folder or going to the folder holding an item, at the top going up a folder (no higher than a place). Each open folder is read on a worker of its own, as the listed folder is; search results stay a flat list, and Show in Browser opens the folders down to its file ([contract](research/browser-places-contract.md#the-folder-tree-2026-10-24)). Checked in the UI suite.
+
+## Browser history — 2026-10-24
+
+UI area. The browser gains the reference's Browse Back and Browse Forward arrows left of its search bar, with Cmd+[ and Cmd+]: the categories, places, folders and searches shown join a history as the browser leaves or settles on them, and stepping through it restores them ([contract](research/browser-places-contract.md#history-2026-10-24)). Checked in the UI suite.

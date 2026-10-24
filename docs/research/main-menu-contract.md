@@ -62,6 +62,7 @@ From the reference's list of keys ([Live keyboard shortcuts](https://www.ableton
 - **F1 to F8** switch the tracks numbered 1 to 8 on and off, groups counted, as their activators do.
 - **Escape** jumps to the selected track's title bar: the headers then take Edit's commands.
 - **Cmd+6 to Cmd+9 and Cmd+0** set the global launch quantization to 1/16, 1/8, 1/4, 1 Bar and None.
+- **Cmd+[ and Cmd+]** go back and forward through the browser's [history](browser-places-contract.md#history-2026-10-24).
 - **In the browser:** Right opens the selected folder in place (with Cmd keeping the others open) or previews the selected sample, Left closes a folder or goes to the folder holding an item, and 0 takes the selected item out of every collection (1 to 7 already put it in one). See the [folder tree](browser-places-contract.md#the-folder-tree-2026-10-24).
 - **Momentary latching**, as the reference's (its key list: "Momentary latching becomes available after holding down a shortcut key for about 500 ms"): A, B, S, Z, Tab and F1 to F8 act when pressed; held for 500 ms or more, letting go returns what they changed, Z zooming back. Their repeats while held do nothing, where before a held key flipped its switch over and over.
 - **In the Arrangement:** Left and Right nudge the selected clips a grid step, their automation following, or move the time selection without one; from the headers they fold and unfold the selected track. Up and Down select the track above or below, taking a time selection along. Each nudge is one undo step.
@@ -69,7 +70,7 @@ From the reference's list of keys ([Live keyboard shortcuts](https://www.ableton
 
 ## Left out
 
-Navigate's Focus Transport, Help, Tuning and Clip Panels, its previous and next focus commands, browser history and Tab navigation options; Close Window, Collect All and Save, Apply Algorithm, the note span command, Automation Fitting, Emoji & Symbols, the Convert to MIDI commands, Return Play Position, Link, Second Window, Lessons, File Manager, Expand Clip Detail View, the clip view layouts and editors, Tuning Pool, Mod Matrix, Full Height Browser, Max for Live, Accessibility, Reduced Latency When Monitoring, Snap Automation to Grid, Step Input, Chase MIDI Notes, the controller and retune options, Legacy HiQ, and Help's items. Halftrack has none of these commands yet.
+Navigate's Focus Transport, Help, Tuning and Clip Panels, its previous and next focus commands and Tab navigation options; Close Window, Collect All and Save, Apply Algorithm, the note span command, Automation Fitting, Emoji & Symbols, the Convert to MIDI commands, Return Play Position, Link, Second Window, Lessons, File Manager, Expand Clip Detail View, the clip view layouts and editors, Tuning Pool, Mod Matrix, Full Height Browser, Max for Live, Accessibility, Reduced Latency When Monitoring, Snap Automation to Grid, Step Input, Chase MIDI Notes, the controller and retune options, Legacy HiQ, and Help's items. Halftrack has none of these commands yet.
 
 ## Evidence in Halftrack
 
