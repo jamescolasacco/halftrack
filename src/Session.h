@@ -1257,6 +1257,10 @@ public:
     // Sets a hosted plug-in parameter (by index in pluginParameters) to a 0-1 value. Like a device
     // control, it is recorded while automation is captured and otherwise overrides its automation.
     juce::Result setPluginParameterValue (const juce::String& pluginId, int parameter, float value);
+    // The hosted plug-in's own parameter behind one of pluginParameters, as its editor changes it. A
+    // change there inside the editor's gesture is recorded while automation is captured, and
+    // otherwise overrides its automation, as setPluginParameterValue's are.
+    juce::AudioProcessorParameter* hostedPluginParameter (const juce::String& pluginId, int parameter);
     // Sets a clip's envelope for its target and mode as one undo step; no points removes it.
     juce::Result setClipEnvelope (const juce::String& clipId, const ClipEnvelope&);
     // Automation Arm, after the reference. While it is on and the transport records, moving a track's

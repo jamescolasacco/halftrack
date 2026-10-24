@@ -5101,6 +5101,7 @@ struct Session::Impl
                 const auto parameters = externalParameters (*external);
                 const auto manual = manualParameterProperty (index);
                 if (! juce::isPositiveAndBelow (index, (int) parameters.size()) || parameters[(size_t) index]->hasAutomationPoints() || ! external->state.hasProperty (manual)) continue;
+                const juce::ScopedValueSetter<bool> own (settingPluginParameter, true);
                 parameters[(size_t) index]->setNormalisedParameter (static_cast<float> (external->state[manual]), juce::sendNotificationSync);
                 changedPlugins.insert (external);
             }
@@ -5350,6 +5351,7 @@ struct Session::Impl
         resetTapTempo();
         edit->editFileRetriever = [this] { return editLocation(); };
         grooveWatcher.watch (edit->state);
+        pluginEditorWatch.sync(); // Plug-in editors' moves, from now on (it keeps up on a timer).
         midiLearnTarget.clear(); keyLearnTarget.clear(); buttonValues.clear(); autoArmed.clear(); autoInput = false;
         attachRemote(); attachCapture();
         if (useDevices && ! remoteWatch.isTimerRunning()) { remoteWatch.tick = [this] { attachRemote(); attachCapture(); reconcileMidiMappings(); publishRemote(); }; remoteWatch.startTimer (1000); }
@@ -6332,6 +6334,99 @@ struct Session::Impl
     std::unique_ptr<te::Edit::UndoTransactionInhibitor> gesture;
     mutable std::map<String, std::unique_ptr<Meter>> meters;
     DeviceRestart deviceRestart { *this };
+    // The hosted plug-in's own parameter behind one of the engine's: VST3 and AU parameters are known
+    // by their index, others by their own id.
+    static juce::AudioProcessorParameter* hostedParameter (te::ExternalPlugin& plugin, const te::AutomatableParameter& p)
+    {
+        auto* instance = plugin.getAudioPluginInstance();
+        if (instance == nullptr) return nullptr;
+        const auto& all = instance->getParameters();
+        if (p.paramID.isNotEmpty() && p.paramID.containsOnly ("0123456789"))
+            return juce::isPositiveAndBelow (p.paramID.getIntValue(), all.size()) ? all[p.paramID.getIntValue()] : nullptr;
+        for (auto* hosted : all)
+        {
+            if (auto* withId = dynamic_cast<juce::AudioProcessorParameterWithID*> (hosted); withId != nullptr && withId->paramID == p.paramID) return hosted;
+            if (auto* own = dynamic_cast<juce::HostedAudioProcessorParameter*> (hosted); own != nullptr && own->getParameterID() == p.paramID) return hosted;
+        }
+        return nullptr;
+    }
+    // Set while Halftrack sets a plug-in parameter itself, so the editor watch leaves it alone.
+    bool settingPluginParameter = false;
+    // Moves in a plug-in's own editor. The engine reports them on the message thread. A change inside
+    // the editor's gesture is a move: recorded while capturing and otherwise overriding the
+    // parameter's lane, as Halftrack's own controls' are. The gesture is an edit gesture, so a touch
+    // pass ends with it. The engine passes values on after a delay, so a gesture's end takes the
+    // hosted value itself. A change outside a gesture (an editor opening, a preset) only keeps the
+    // value set by hand, and only while the parameter has no automation.
+    struct PluginEditorWatch final : te::AutomatableParameter::Listener, juce::Timer
+    {
+        explicit PluginEditorWatch (Impl& i) : impl (i) {}
+        ~PluginEditorWatch() override { stopTimer(); for (auto& [p, w] : watched) if (live (w) != nullptr) p->removeListener (this); }
+        struct Watched { juce::WeakReference<te::Selectable> parameter; String pluginId; int index = -1; };
+        static te::AutomatableParameter* live (const Watched& w) { return dynamic_cast<te::AutomatableParameter*> (w.parameter.get()); }
+        // Listens to every hosted plug-in's parameters, and no longer to those gone.
+        void sync()
+        {
+            for (auto it = watched.begin(); it != watched.end();) it = live (it->second) == nullptr ? watched.erase (it) : std::next (it);
+            std::map<te::AutomatableParameter*, Watched> current;
+            for (auto [t, list] : impl.chains())
+                for (auto* plugin : list->getPlugins())
+                    if (auto* external = dynamic_cast<te::ExternalPlugin*> (plugin))
+                    {
+                        const auto parameters = externalParameters (*external);
+                        for (size_t i = 0; i < parameters.size(); ++i) current[parameters[i]] = { parameters[i], external->itemID.toString(), (int) i };
+                    }
+            for (auto& [p, w] : watched) if (! current.contains (p)) p->removeListener (this);
+            for (auto& [p, w] : current) if (! watched.contains (p)) p->addListener (this);
+            watched = std::move (current);
+            std::erase_if (gestures, [this] (te::AutomatableParameter* p) { return ! watched.contains (p); });
+            if (! isTimerRunning()) startTimer (500);
+        }
+        void timerCallback() override { sync(); }
+        void curveHasChanged (te::AutomatableParameter&) override {}
+        void parameterChangeGestureBegin (te::AutomatableParameter& p) override
+        {
+            if (! watched.contains (&p)) return;
+            gestures.insert (&p);
+            if (! impl.gesture) { impl.owner.beginEditGesture ("Change " + p.getParameterName()); editGesture = true; }
+        }
+        void parameterChangeGestureEnd (te::AutomatableParameter& p) override
+        {
+            const auto found = watched.find (&p);
+            if (found == watched.end()) return;
+            // The last value may still be on its way: take the hosted parameter's own.
+            if (auto* external = impl.externalPlugin (found->second.pluginId))
+                if (auto* hosted = hostedParameter (*external, p)) moved (found->second, hosted->getValue());
+            gestures.erase (&p);
+            if (gestures.empty() && editGesture) { editGesture = false; impl.owner.endEditGesture(); }
+        }
+        void parameterChanged (te::AutomatableParameter& p, float) override
+        {
+            const auto found = watched.find (&p);
+            if (impl.settingPluginParameter || found == watched.end()) return;
+            if (gestures.contains (&p)) { moved (found->second, p.getCurrentNormalisedValue()); return; }
+            if (auto* external = impl.externalPlugin (found->second.pluginId); external != nullptr && ! p.hasAutomationPoints())
+                external->state.setProperty (manualParameterProperty (found->second.index), p.getCurrentNormalisedValue(), nullptr);
+        }
+        void moved (const Watched& w, float value)
+        {
+            auto* external = impl.externalPlugin (w.pluginId);
+            if (external == nullptr || impl.exporting) return;
+            const auto key = deviceKey (w.pluginId, w.index);
+            if (impl.capturing()) impl.capture (key, value);
+            else
+            {
+                impl.overrideLane (key);
+                external->state.setProperty (manualParameterProperty (w.index), value, nullptr);
+                writePluginState (*external); // Renders start from the saved state.
+            }
+            impl.changed();
+        }
+        Impl& impl;
+        std::map<te::AutomatableParameter*, Watched> watched;
+        std::set<te::AutomatableParameter*> gestures;
+        bool editGesture = false;
+    } pluginEditorWatch { *this };
     // The audio device the user chose. When it disappears the device manager falls back to another,
     // so playback stops instead of moving there; when it returns it is reopened.
     struct DeviceWatch final : juce::ChangeListener
@@ -12460,6 +12555,14 @@ Result Session::setPluginSidechain (const String& pluginId, const SidechainSetti
     external->state.setProperty (sidechainTapProperty, static_cast<int> (settings.tap), undo);
     impl->changed(); return Result::ok();
 }
+juce::AudioProcessorParameter* Session::hostedPluginParameter (const String& pluginId, int parameter)
+{
+    impl->pluginEditorWatch.sync(); // A plug-in just added is watched from now.
+    auto* external = impl->externalPlugin (pluginId);
+    if (external == nullptr) return nullptr;
+    const auto parameters = externalParameters (*external);
+    return juce::isPositiveAndBelow (parameter, (int) parameters.size()) ? Impl::hostedParameter (*external, *parameters[(size_t) parameter]) : nullptr;
+}
 Result Session::setPluginParameterValue (const String& pluginId, int parameter, float value)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -12474,7 +12577,10 @@ Result Session::setPluginParameterValue (const String& pluginId, int parameter, 
     if (target->getCurrentNormalisedValue() == value) return Result::ok();
     const auto key = Impl::deviceKey (pluginId, parameter);
     if (impl->capturing()) impl->capture (key, value); else impl->overrideLane (key);
-    target->setNormalisedParameter (value, juce::sendNotificationSync);
+    {
+        const juce::ScopedValueSetter<bool> own (impl->settingPluginParameter, true);
+        target->setNormalisedParameter (value, juce::sendNotificationSync);
+    }
     if (! impl->capturing()) external->state.setProperty (Impl::manualParameterProperty (parameter), value, nullptr);
     impl->changed(); return Result::ok();
 }

@@ -27,4 +27,13 @@ Correction: undoing a plug-in's automation left the parameter where the automati
 - that at 60 BPM the lane keeps its beats;
 - that a switched-off lane holds one value, and that a value set by hand then applies.
 
-Missing: override and Automation Arm recording when a parameter moves in the plug-in's own editor, host learn, parameter-count changes, and automation of plug-ins inside racks.
+- **The plug-in's own editor.** A move there overrides the parameter's lane, or with Automation Arm on while recording writes it, as Halftrack's own controls do. The engine reports editor changes on the message thread, so Halftrack listens to every hosted plug-in's parameters, keeping up as plug-ins come and go.
+  - A change inside the editor's gesture (its begin and end) counts as a move. The gesture is an edit gesture: a recorded pass is a touch pass, ending on release, and an override joins its undo step.
+  - The engine passes values on after a delay, so the gesture's end takes the hosted parameter's own value, which keeps the last move.
+  - A change outside a gesture, as some editors send when they open or load a preset, only updates the value set by hand, and only while the parameter has no automation.
+  - Each move writes the plug-in's saved state too, as renders start from it.
+  - `hostedPluginParameter(pluginId, index)` gives the hosted parameter behind one of `pluginParameters`, which the suite moves as an editor does. The older index-based `setPluginParameter`, which moves it the same way, now overrides too.
+
+  The plug-in automation suite checks that a change outside a gesture leaves the lane playing, that a gesture's moves override it while keeping its points, that the value at the gesture's end becomes the value set by hand and plays in the render, and that Re-Enable Automation brings the ramp back. Through the synthetic device with Automation Arm on, an editor gesture records its values from .3 to the .7 it ended on, and one undo removes them.
+
+Missing: host learn, parameter-count changes, and automation of plug-ins inside racks.

@@ -66,7 +66,7 @@ The UI suite checks the live faders, their thumb colours, the override, Re-Enabl
 ## Not implemented
 
 - Recording into Session clips (the reference records Session automation as clip envelopes).
-- Utility and third-party plug-in controls.
+- Utility controls. (Third-party plug-ins' parameters are captured and overridden from their own editors as well as Halftrack's controls; see the [plug-in automation contract](plugin-automation-contract.md).)
 - Per-control Re-Enable Automation from a context menu.
 - Greying overridden device knobs.
 - Measured comparison with the reference's recorded point density.

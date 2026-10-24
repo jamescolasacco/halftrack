@@ -10,6 +10,8 @@
 // through a tempo change; switched off, the manual value applies again.
 namespace halftrack
 {
+std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
+float pumpSyntheticTestDevice (Session&, int blocks);
 namespace
 {
 void check (bool v, const juce::String& text)
@@ -110,6 +112,51 @@ int runPluginAutomationTests (const juce::File& artifacts)
         ok (s.setPluginParameter (0, position, 0, .25f), "set Gain by hand");
         const auto manual = render (s, root.getChildFile ("manual.wav"));
         check (std::abs (at (manual, .1) - .125f) < 1e-6f && std::abs (at (manual, 3.9) - .125f) < 1e-6f, "and the value set by hand applies");
+        {
+            // Moves in the plug-in's own editor: inside its gesture they override the lane, as Halftrack's
+            // own controls do; a change outside a gesture, as editors send on opening, leaves it playing.
+            auto on = s.snapshot().tracks[0].plugins.back().automation[0].lane; on.enabled = true;
+            ok (s.setDeviceAutomation (reopenedId, 0, on), "switch the lane back on");
+            auto* hosted = s.hostedPluginParameter (reopenedId, 0);
+            check (hosted != nullptr && hosted->getName (16) == "Gain" && s.hostedPluginParameter (reopenedId, 2) == nullptr && s.hostedPluginParameter ("missing", 0) == nullptr,
+                   "the hosted Gain parameter, and none for unknown ones");
+            const auto settle = [] { juce::MessageManager::getInstance()->runDispatchLoopUntil (80); };
+            const auto lane = [&s] { return s.snapshot().tracks[0].plugins.back().automation[0].lane; };
+            hosted->setValueNotifyingHost (.4f); settle();
+            check (lane().enabled && ! s.snapshot().automationOverridden, "a change outside a gesture leaves the lane playing");
+            hosted->beginChangeGesture(); hosted->setValueNotifyingHost (.6f); settle();
+            check (! lane().enabled && lane().points.size() == 2 && s.snapshot().automationOverridden, "a move inside the editor's gesture overrides the lane, keeping its points");
+            hosted->setValueNotifyingHost (.8f); hosted->endChangeGesture(); settle();
+            check (std::abs (s.pluginParameters (reopenedId)[0].value - .8f) < 1e-4f, "the gesture's last value, taken at its end, is the value set by hand");
+            const auto moved = render (s, root.getChildFile ("editor-moved.wav"));
+            check (std::abs (at (moved, .1) - .4f) < 1e-3f && std::abs (at (moved, 3.9) - .4f) < 1e-3f, "and the render plays it, the lane overridden");
+            ok (s.reEnableAutomation(), "Re-Enable Automation");
+            check (lane().enabled && std::abs (at (render (s, root.getChildFile ("editor-reenabled.wav")), 2) - .25f) < .01f, "brings the ramp back, half way at two seconds at 60 BPM");
+        }
+        {
+            // While recording with Automation Arm on, a gesture in the plug-in's editor records a touch pass.
+            Session live (false, makeSyntheticTestDeviceType());
+            ok (live.addPlugin (0, *descriptions[0]), "insert the gain fixture where automation records");
+            const auto liveId = live.snapshot().tracks[0].plugins.back().id;
+            auto* gain = live.hostedPluginParameter (liveId, 0);
+            check (gain != nullptr, "its hosted Gain");
+            ok (live.setAutomationArm (true), "turn on Automation Arm");
+            pumpSyntheticTestDevice (live, 8);
+            ok (live.record(), "record automation");
+            pumpSyntheticTestDevice (live, 188);
+            gain->beginChangeGesture(); gain->setValueNotifyingHost (.3f);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
+            pumpSyntheticTestDevice (live, 188);
+            gain->setValueNotifyingHost (.7f); gain->endChangeGesture();
+            pumpSyntheticTestDevice (live, 188);
+            live.stop();
+            const auto recorded = live.snapshot().tracks[0].plugins.back().automation;
+            check (recorded.size() == 1 && recorded[0].parameter == 0 && recorded[0].lane.points.size() >= 2
+                       && std::abs (recorded[0].lane.points.front().value - .3f) < 1e-3f && std::abs (recorded[0].lane.points.back().value - .7f) < 1e-3f,
+                   "a gesture in the plug-in's editor records its values, from .3 to the .7 it ended on");
+            live.undo();
+            check (live.snapshot().tracks[0].plugins.back().automation.empty(), "and one undo removes them");
+        }
         std::cout << "Plug-in automation passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL plug-in automation: " << e.what() << std::endl; return 1; }
