@@ -232,13 +232,26 @@ int runTrackOrderTests (const juce::File& artifacts)
             ok (s.saveProject (mixed), "save the Arrangement's controls"); ok (s.newProject(), "a new project for the controls");
             check (s.arrangementControls() == Session::ArrangementControls {}, "which has the defaults");
             ok (s.loadProject (mixed), "reopen with the controls"); check (s.arrangementControls() == controls, "and the saved controls come back");
-            // And Lock Envelopes, off at first.
+            // And Lock Envelopes, off at first: an application setting, as the reference's is.
             check (! s.lockEnvelopes(), "Lock Envelopes is off at first");
+            ok (s.saveProject (mixed), "save the project");
             s.setLockEnvelopes (true);
-            check (s.lockEnvelopes() && ! s.canUndo(), "turning it on is view state, outside the undo history");
-            ok (s.saveProject (mixed), "save it on"); ok (s.newProject(), "a new project for Lock Envelopes");
-            check (! s.lockEnvelopes(), "which has it off");
-            ok (s.loadProject (mixed), "reopen with it on"); check (s.lockEnvelopes(), "and the saved project keeps it on");
+            check (s.lockEnvelopes() && s.preferences().lockEnvelopes && ! s.canUndo() && ! s.snapshot().dirty,
+                   "turning it on sets a preference, outside the undo history, leaving the project saved");
+            ok (s.newProject(), "a new project"); check (s.lockEnvelopes(), "keeps it on");
+            {
+                Session next (false);
+                check (next.lockEnvelopes(), "and so does the next Session");
+            }
+            s.setLockEnvelopes (false);
+            check (! s.lockEnvelopes(), "off again");
+            // And Snap Automation to Grid, on at first as in the reference's default Set, kept with the project.
+            check (s.snapAutomationToGrid(), "Snap Automation to Grid is on at first");
+            s.setSnapAutomationToGrid (false);
+            check (! s.snapAutomationToGrid() && ! s.canUndo() && s.snapshot().dirty, "switching it off is view state, outside the undo history");
+            ok (s.saveProject (mixed), "save it off"); ok (s.newProject(), "a new project for Snap Automation to Grid");
+            check (s.snapAutomationToGrid(), "which has it on");
+            ok (s.loadProject (mixed), "reopen with it off"); check (! s.snapAutomationToGrid(), "and the saved project keeps it off");
         }
         {
             // Where Insert puts a track, and automatic names, as the reference's (static reading of its code).

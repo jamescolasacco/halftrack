@@ -64,7 +64,7 @@ const juce::Identifier firstClipNameProperty { "halftrackFirstClipName" }, first
 const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsProperty { "halftrackMixerSends" }, mixerReturnsProperty { "halftrackMixerReturns" }, mixerVolumeProperty { "halftrackMixerVolume" },
                        mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" }, mixerShownProperty { "halftrackMixerInSession" },
                        arrangementOverviewProperty { "halftrackArrangementOverview" }, timeRulerFormatProperty { "halftrackTimeRulerFormat" },
-                       lockEnvelopesProperty { "halftrackLockEnvelopes" }, arrangementInOutProperty { "halftrackArrangementInOut" },
+                       snapAutomationProperty { "halftrackSnapAutomationToGrid" }, arrangementInOutProperty { "halftrackArrangementInOut" },
                        arrangementVolumeProperty { "halftrackArrangementVolume" }, arrangementTrackOptionsProperty { "halftrackArrangementTrackOptions" },
                        arrangementReturnsProperty { "halftrackArrangementReturns" }, arrangementOverdubProperty { "halftrackArrangementOverdub" },
                        sceneSettingsShownProperty { "halftrackSceneSettingsShown" };
@@ -4428,14 +4428,15 @@ struct Session::Impl
             read.vst3CustomFolder = xml->getStringAttribute ("vst3CustomFolder");
             const int edgeFades = number ("createFadesOnClipEdges", 1, 2), sound = number ("metronomeSound", 0, Session::metronomeSoundCount), countIn = number ("countInBars", 0, 5);
             read.countInBars = countIn;
-            const int startPlayback = number ("startPlaybackWithRecord", 1, 2);
+            const int startPlayback = number ("startPlaybackWithRecord", 1, 2), locked = number ("lockEnvelopes", 0, 2);
             read.startPlaybackWithRecord = startPlayback == 1;
+            read.lockEnvelopes = locked == 1;
             read.preferencesTab = xml->getStringAttribute ("preferencesTab");
             for (auto* folder : xml->getChildWithTagNameIterator ("USERFOLDER")) read.userFolders.add (folder->getStringAttribute ("path"));
             for (auto* project : xml->getChildWithTagNameIterator ("RECENTPROJECT")) read.recentProjects.add (project->getStringAttribute ("path"));
             read.createFadesOnClipEdges = edgeFades == 1;
             read.metronomeSound = static_cast<Session::MetronomeSound> (juce::jmax (0, sound));
-            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && validPreferences (read);
+            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && locked >= 0 && validPreferences (read);
         }
         if (valid) { prefs = read; fadesOnClipEdges = prefs.createFadesOnClipEdges; return; }
         // Set an unreadable file aside rather than lose it, and keep the defaults.
@@ -4461,6 +4462,7 @@ struct Session::Impl
         xml.setAttribute ("metronomeSound", (int) next.metronomeSound);
         xml.setAttribute ("countInBars", next.countInBars);
         xml.setAttribute ("startPlaybackWithRecord", next.startPlaybackWithRecord ? 1 : 0);
+        xml.setAttribute ("lockEnvelopes", next.lockEnvelopes ? 1 : 0);
         xml.setAttribute ("preferencesTab", next.preferencesTab);
         for (const auto& folder : next.userFolders) xml.createNewChildElement ("USERFOLDER")->setAttribute ("path", folder);
         for (const auto& project : next.recentProjects) xml.createNewChildElement ("RECENTPROJECT")->setAttribute ("path", project);
@@ -7849,14 +7851,10 @@ Result Session::setPreferences (const Preferences& next)
     const bool sound = next.metronomeSound != impl->prefs.metronomeSound;
     if (next.countInBars != impl->prefs.countInBars && impl->edit->getTransport().isRecording())
         return Result::fail ("Stop recording before changing the count-in.");
-    // The lists kept with the preferences, the browser's places and the recent projects, leave the project unchanged.
-    const auto settings = [] (Preferences p) { p.userFolders.clear(); p.recentProjects.clear(); p.preferencesTab.clear(); return p; };
-    const bool listsOnly = settings (next) == settings (impl->prefs);
     if (auto r = impl->savePreferences (next); r.failed()) return r;
-    if (listsOnly) return Result::ok();
     if (sound) impl->applyMetronomeSound();
-    impl->edit->setCountInMode (countInMode (next.countInBars));
-    impl->changed(); return Result::ok();
+    impl->edit->setCountInMode (countInMode (next.countInBars)); // An application setting too.
+    sendChangeMessage(); return Result::ok();
 }
 Result Session::resetPreferences()
 {
@@ -14139,12 +14137,18 @@ void Session::setArrangementOverdub (bool on)
     impl->edit->state.setProperty (arrangementOverdubProperty, on, nullptr);
     impl->viewStateChanged();
 }
-bool Session::lockEnvelopes() const { return impl->edit->state.getProperty (lockEnvelopesProperty, false); }
+bool Session::snapAutomationToGrid() const { return impl->edit->state.getProperty (snapAutomationProperty, true); }
+void Session::setSnapAutomationToGrid (bool on)
+{
+    if (on == snapAutomationToGrid()) return;
+    impl->edit->state.setProperty (snapAutomationProperty, on, nullptr);
+    impl->viewStateChanged();
+}
+bool Session::lockEnvelopes() const { return impl->prefs.lockEnvelopes; }
 void Session::setLockEnvelopes (bool locked)
 {
-    if (locked == lockEnvelopes()) return;
-    impl->edit->state.setProperty (lockEnvelopesProperty, locked, nullptr);
-    impl->viewStateChanged();
+    auto next = impl->prefs; next.lockEnvelopes = locked;
+    setPreferences (next);
 }
 bool Session::arrangementOverview() const { return impl->edit->state.getProperty (arrangementOverviewProperty, true); }
 void Session::setArrangementOverview (bool shown)

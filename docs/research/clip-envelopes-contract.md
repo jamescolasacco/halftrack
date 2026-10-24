@@ -20,7 +20,7 @@ Halftrack's clip envelopes follow the reference's clip envelopes for mixer and d
 - **The editor.**
   - In the clip view, an audio clip's Envelope chooser, at the foot of its Clip box, picks a control by device, under Modulation and, for Session clips, Automation. The chosen envelope is drawn over the waveform.
   - A MIDI clip's envelopes are chosen in the piano roll's lane chooser, under Envelope and Envelope automation, and drawn in the lane.
-  - Clicking adds a point and drags it, and double-clicking or right-clicking a point deletes it. Each edit is one undo step.
+  - Clicking adds a point and drags it, and double-clicking or right-clicking a point deletes it. Each edit is one undo step. A point placed or dragged near one of the editor's grid lines snaps to it while Snap Automation to Grid is on ([automation contract](arrangement-automation-contract.md#snap-automation-to-grid-2026-10-24)).
   - In Draw Mode a drag draws steps as wide as the clip's grid, or freehand with its snapping off or bypassed, as the Arrangement's envelopes do ([automation contract](arrangement-automation-contract.md#draw-mode-2026-10-24)); the drawing shows while the button is held and is one undo step.
 - **Editing.** `setClipEnvelope` sets one envelope as one undo step, and no points removes it. Envelopes are kept when a clip is split, duplicated, saved and reopened. A duplicated track's clips modulate the duplicate's own devices. Malformed envelope values in a project file are refused before the open project is replaced.
 
@@ -49,7 +49,7 @@ Native devices read a modulated control's value even when no curve sets it. See 
 
 The UI suite:
 - picks Track Volume in an audio clip's Envelope chooser, which offers an Arrangement clip modulation only;
-- clicks the waveform to add a point at the pointer's beat and level, drags out a second point and double-clicks the first to delete it, undoing each;
+- clicks the waveform to add a point at the pointer's beat and level, drags out a second point and double-clicks the first to delete it, undoing each, and places a point near a grid line to find it on the line;
 - adds a pan modulation point to a MIDI clip from the piano roll's lane;
 - checks that a Session clip's lane also offers automation envelopes.
 

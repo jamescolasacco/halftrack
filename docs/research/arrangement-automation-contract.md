@@ -118,7 +118,7 @@ The reference's hidden menu registers Clear Envelope (`clen`) on Cmd+Delete, and
 The reference's manual: "Live normally moves all automation with the clip", and the Lock Envelopes switch, also in the Options menu, locks the envelopes to the song position instead ([Automation and Editing Envelopes](https://www.ableton.com/en/live-manual/12/automation-and-editing-envelopes/), consulted 2026-10-24). The Options builder places Lock Envelopes (`lock`) after Solo in Place, between separators.
 - **Moving.** A clip moved along its own track, by a drag or by `moveClip`, `moveMidiClip` or `moveAudioClip`, takes the shape of each of its track's envelopes over its span along (the mixer's, the sends' and the devices'). Where the span was, the envelope keeps its values at both ends, as Delete Selection leaves it; where it lands, the moved shape replaces what was there, which goes on after it, with the 1 ms steps Halftrack's lanes use. A linked clip's automation moves with it.
 - **Drags.** A drag moves its clips on their own and hands the whole move over when it ends (`moveAutomationWithClips`), so automation the clips pass over is untouched and touching clips move theirs as one. A copying drag copies the automation, keeping the original.
-- **Lock Envelopes** (Options), off at first and kept with the project outside the undo history, leaves the automation where it is.
+- **Lock Envelopes** (Options), off at first, leaves the automation where it is. It is an application setting kept with the [preferences](preferences-contract.md), outside the undo history, as the reference keeps it with its song preference data (static reading: `ASongPrefData::mpLockEnvelope`, default off), not in Sets.
 - **Not covered.** A move to another track leaves the automation. Cut, Copy, Paste and Duplicate of clips do not carry automation yet.
 
 The automation suite moves a clip three seconds and finds its two breakpoints six beats on and nothing left inside its old span, a point after it untouched; one undo, Lock Envelopes leaving the lane as it was, a drag's deferred move matching a single move, and a move to another track leaving it. The UI suite drags a clip a second on with its automation, undoes it, and drags it again with Options > Lock Envelopes on.
@@ -129,3 +129,11 @@ The reference's manual: right-clicking a time selection offers shapes, the top r
 
 Not yet: the bottom row's ramps and ADSR, which join the values before and after the selection, and the handles that stretch and skew a selection's automation.
 
+
+## Snap Automation to Grid (2026-10-24)
+
+The reference's manual: "Breakpoints created close to a grid line will automatically snap to that line", and Cmd (Alt on Windows) bypasses snapping while dragging ([Automation and Editing Envelopes](https://www.ableton.com/en/live-manual/12/automation-and-editing-envelopes/), section 25.5.2, consulted 2026-10-24). Its Options menu has Snap Automation to Grid (`satg`) after Snap to Grid, handled by the Arrangement and the clip view, and its Set keeps the setting (static reading: `LSong::mpSnapAutomationToGrid`; the bundled default Set has it on).
+- **Snapping.** A breakpoint placed or moved within 6 pixels of a grid line lands on it, in the Arrangement's lanes and in clip envelopes. Elsewhere it stays where it was placed. Cmd (Alt elsewhere), or the grid's snapping switched off, leaves it where it is.
+- **The setting.** Options > Snap Automation to Grid, on at first, is kept with the project outside the undo history. Off, breakpoints never snap to the grid. Draw Mode's steps follow the grid either way.
+
+The track order suite checks the setting's default, that it stays outside the undo history, and that a saved project keeps it. The UI suite places a breakpoint 3 pixels from a grid line and finds it on the line, one between lines staying put, and one near a line staying off it with the setting switched off from the Options menu; and a clip envelope point near a grid line snapping to it.

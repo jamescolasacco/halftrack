@@ -34,6 +34,11 @@ A research agent read the reference's Preferences window statically (Live 12.2.1
 | Count-In | None | Bars recording waits for: None, 1, 2 or 4 ([metronome contract](metronome-contract.md#count-in)). |
 | Metronome Sound | Classic | The metronome's ticks: Classic, Click or Wood ([metronome contract](metronome-contract.md)). |
 | Theme, Zoom Display | Dark, 100% | The interface's theme (Dark, Light or High Contrast) and scale, 50-200% in steps of 25 ([themes contract](themes-contract.md)). |
+| Lock Envelopes | off | Options > Lock Envelopes: automation stays where it is when clips move. The reference keeps it with its song preference data (static reading: `ASongPrefData::mpLockEnvelope`, off), not in Sets ([automation contract](arrangement-automation-contract.md#automation-follows-clips-and-lock-envelopes-2026-10-24)). |
+
+Two lists are kept beside the settings: the browser's user folders ([Places](browser-places-contract.md)) and File > Open Recent Project's projects ([menu contract](main-menu-contract.md)). Reset to Defaults keeps them.
+
+Preferences belong to the application, as the reference's do: changing one, from the window, a menu or a list, leaves the open project's unsaved state as it was.
 
 An import that the preferences warp is still one undo step.
 
@@ -44,7 +49,7 @@ An import that the preferences warp is still one undo step.
 - **Older file.** Its settings are kept, and settings it lacks get their defaults.
 - **Newer file.** Its unknown settings are ignored.
 - **Unreadable file.** A file that cannot be read, or that holds an out-of-range value, is moved aside as "Halftrack Preferences (unreadable).xml" unchanged. The defaults apply, and the app reports the reason when it starts.
-- **Reset.** Reset to Defaults writes the defaults.
+- **Reset.** Reset to Defaults writes the defaults, keeping the user folders and recent projects.
 
 ## Evidence
 

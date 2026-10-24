@@ -810,10 +810,14 @@ public:
     // notes to the clips it records over instead of replacing them. Kept with the project; off at first.
     bool arrangementOverdub() const;
     void setArrangementOverdub (bool);
-    // Options > Lock Envelopes: automation stays at its place in the song instead of moving with clips.
-    // Kept with the project, outside the undo history; off at first, as the reference's.
+    // Options > Lock Envelopes: Preferences::lockEnvelopes, set outside the undo history.
     bool lockEnvelopes() const;
     void setLockEnvelopes (bool);
+    // Options > Snap Automation to Grid, as the reference's: automation breakpoints placed or moved near
+    // a grid line snap to it. Kept with the project, outside the undo history; on at first, as in the
+    // reference's default Set.
+    bool snapAutomationToGrid() const;
+    void setSnapAutomationToGrid (bool);
     // Kept with the project as view state, as the reference's Set keeps its SmpteFormat (minutes and
     // seconds in its default Set).
     TimeFormat timeRulerFormat() const;
@@ -1273,6 +1277,9 @@ public:
         juce::StringArray userFolders;
         // File > Open Recent Project: projects opened and saved, the latest first, as absolute paths.
         juce::StringArray recentProjects;
+        // Options > Lock Envelopes, an application setting as the reference's is (its song preference
+        // data, off by default): automation stays at its place in the song instead of moving with clips.
+        bool lockEnvelopes = false;
         bool operator== (const Preferences&) const = default;
     };
     // The audio device's latency as it reports it, with Driver Error Compensation. Recordings are placed
@@ -1285,8 +1292,7 @@ public:
     AudioLatency audioLatency() const;
     static constexpr int preferencesVersion = 1;
     Preferences preferences() const;
-    // A change to a setting counts as a change to the project; a change only to the lists kept with
-    // the preferences (user folders, recent projects) does not.
+    // Preferences belong to the application: changing them tells listeners, and leaves the project unchanged.
     juce::Result setPreferences (const Preferences&);
     // Every setting back to its default; the browser's user folders and the recent projects stay.
     juce::Result resetPreferences();

@@ -842,6 +842,12 @@ Open Recent Project ([menu contract](research/main-menu-contract.md)). Defaults 
 - **What joins the list.** A project opened, or saved under a new name, joins the top; Save a Copy does not. The list keeps ten, kept with the preferences, and a preferences reset keeps it. The reference's own limit was not read.
 - **Names.** Each entry shows its project's file name, with its folder in brackets when another entry has the same name.
 
+Snap Automation to Grid ([automation contract](research/arrangement-automation-contract.md#snap-automation-to-grid-2026-10-24)). Defaults where the reference was not read:
+
+- **How near.** A breakpoint within 6 pixels of a grid line snaps to it; the reference's distance was not read. Its snapping to neighbouring breakpoints' times is not done.
+- **Draw Mode.** Drawing keeps to the grid's cells with the setting off too.
+- **When it can be chosen.** As the grid items, while the Arrangement or a clip editor has a grid.
+
 Project backups ([contract](research/backups-contract.md)). Defaults where the reference was not read:
 
 - **Where.** In a `Backup` folder inside the project's Assets, Halftrack's project-owned folder, standing in for the reference's project folder.
@@ -859,7 +865,7 @@ Note editor clicks and Draw Mode ([contract](research/note-drawing-contract.md))
 - **Folding and Scale Highlighting.** Fold to Notes, Fold to Scale and Scale Highlighting belong to the window and start off; whether the reference saves them with the Set or its preferences was not read. With both folds on, the rows with notes show. A folded clip without notes shows every row.
 - **Note editor keys.** The key list names Option+Up and Option+Down "Select Next/Previous Note"; Halftrack takes them as the previous and next note in time. Velocity and range move one MIDI step a press, chance 1%. Shift with Page Up and Page Down scrolls one row.
 - **Arrangement Overdub.** The setting is kept with the project. A merged MIDI take takes the notes of the clips beneath it; a looped clip beneath gives its notes as stored, not unrolled.
-- **Automation following clips.** A clip's span of automation moves with it along its track; a move to another track leaves it, and the reference's choice there was not read. Where the span was, the envelope keeps its values at both ends. Lock Envelopes is kept with the project.
+- **Automation following clips.** A clip's span of automation moves with it along its track; a move to another track leaves it, and the reference's choice there was not read. Where the span was, the envelope keeps its values at both ends.
 - **Drawn envelopes.** Steps change value across a 960th of a beat, and the lane keeps its old values beside the drawing. Passing a cell again redraws it. In the velocity lane, Alt both bypasses the grid and draws a line on Windows and Linux; Halftrack takes it as the line there.
 
 Warp defaults ([warp contract](research/warp-contract.md#defaults-not-yet-the-references)):

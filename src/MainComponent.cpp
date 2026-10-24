@@ -478,7 +478,13 @@ public:
         state = session.snapshot();
         envelope.xOfBeat = [this] (double beat) { return (float) ((secondsAt (beat) - viewStart) * pixelsPerSecond); };
         envelope.beatOfX = [this] (float x) { return beatsAt (juce::jmax (0.0, viewStart + x / pixelsPerSecond)); };
-        envelope.snapBeat = [this] (double beat) { return beatsAt (snapSeconds (secondsAt (beat))); };
+        // Breakpoints snap to a grid line near them, as the reference's do, with Snap Automation to Grid on.
+        envelope.snapBeat = [this] (double beat)
+        {
+            if (! session.snapAutomationToGrid()) return beat;
+            const auto snapped = beatsAt (snapSeconds (secondsAt (beat)));
+            return std::abs (secondsAt (snapped) - secondsAt (beat)) * pixelsPerSecond <= automationMagnet ? snapped : beat;
+        };
         // Draw Mode's steps fill the Arrangement grid's cells; with its snapping off it draws freehand.
         envelope.gridCell = [this] (double beat) -> std::optional<std::pair<double, double>>
         {
@@ -1982,6 +1988,7 @@ private:
     static constexpr int minimumClipViewHeight = 340, dividerHeight = 5;
     double clipViewFraction = .58;
     juce::Rectangle<int> dividerBounds;
+    static constexpr float automationMagnet = 6; // How near a grid line, in pixels, a breakpoint snaps to it.
     static constexpr int categoryWidth = 98, browserWidth = 300, trackWidth = 252, trackHeight = 72, rulerHeight = 60,
                          deviceHeight = 268, statusHeight = 24;
     struct BrowserItem { juce::File file; bool directory = false, found = false; }; // found: a search result from the index.
@@ -6384,7 +6391,7 @@ private:
             if (e.mods.isPopupMenu()) return;
             if (hit < 0)
             {
-                const Session::AutomationPoint point { juce::jlimit (0.0, endBeat, beatAt (e.position.x)), value ((area.getBottom() - e.position.y) / area.getHeight()) };
+                const Session::AutomationPoint point { juce::jlimit (0.0, endBeat, snapped (beatAt (e.position.x), e.position.x, beatAt, e.mods)), value ((area.getBottom() - e.position.y) / area.getHeight()) };
                 const auto at = std::lower_bound (list.begin(), list.end(), point.beat, [] (const auto& p, double b) { return p.beat < b; });
                 if (at != list.end() && std::abs (at->beat - point.beat) < 1e-6) return;
                 hit = (int) (at - list.begin()); list.insert (at, point);
@@ -6398,7 +6405,7 @@ private:
             auto& list = *preview;
             const double low = dragged > 0 ? list[(size_t) dragged - 1].beat + 1.0 / 960 : 0;
             const double high = (size_t) dragged + 1 < list.size() ? list[(size_t) dragged + 1].beat - 1.0 / 960 : endBeat;
-            list[(size_t) dragged] = { juce::jlimit (low, juce::jmax (low, high), beatAt (e.position.x)), value ((area.getBottom() - e.position.y) / area.getHeight()) };
+            list[(size_t) dragged] = { juce::jlimit (low, juce::jmax (low, high), snapped (beatAt (e.position.x), e.position.x, beatAt, e.mods)), value ((area.getBottom() - e.position.y) / area.getHeight()) };
         }
         void mouseUp (const Session::ClipInfo& clip)
         {
@@ -6410,6 +6417,14 @@ private:
         juce::String clipId;
         arrangementAutomation::Drawing sketch;
         bool drawing = false;
+        // A breakpoint near a grid line snaps to it, with Snap Automation to Grid on and the grid's snapping not bypassed.
+        double snapped (double beat, float x, const std::function<double (float)>& beatAt, juce::ModifierKeys mods) const
+        {
+            const auto step = gridStep ? gridStep() : 0.0;
+            if (step <= 0 || ! snaps || ! snaps (mods) || ! owner.session.snapAutomationToGrid()) return beat;
+            const auto line = std::round (beat / step) * step;
+            return line >= beatAt (x - automationMagnet) && line <= beatAt (x + automationMagnet) ? line : beat;
+        }
         // Steps as wide as the editor's grid, or freehand with its snapping off or bypassed; the drawing shows until release.
         void drawTo (const juce::MouseEvent& e, juce::Rectangle<float> area, const std::function<double (float)>& beatAt, double endBeat)
         {
@@ -12951,7 +12966,7 @@ private:
                     menuSelectLoop, menuPlaySelection, menuSetClipStart, menuSetLoopStart, menuSetLoopEnd, menuSetClipEnd,
                     menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
                     menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
-                    menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects, menuShowBackups, menuRevealBackups,
+                    menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects, menuShowBackups, menuRevealBackups, menuSnapAutomation,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410, // Plus Session::TimeFormat.
@@ -13702,6 +13717,7 @@ private:
             const auto g = place ? gridAt (*place) : editGrid;
             add (93, "Narrow Grid", place.has_value()); add (94, "Widen Grid", place.has_value());
             add (95, "Triplet Grid", place.has_value(), g.tuplet == 3); add (96, "Snap to Grid", place.has_value(), g.snap);
+            add (menuSnapAutomation, "Snap Automation to Grid", place.has_value(), session.snapAutomationToGrid());
             add (97, "Fixed Grid", place.has_value(), g.fixed);
             popup.addSeparator();
             add (menuDrawMode, "Draw Mode", true, drawMode);
@@ -13744,6 +13760,7 @@ private:
             case 4: saveProject (true); break;
             case menuSaveCopy: saveCopyDialog(); return;
             case menuAddFolder: addFolderToBrowser(); return;
+            case menuSnapAutomation: session.setSnapAutomationToGrid (! session.snapAutomationToGrid()); refresh(); return;
             case menuRemoveUnavailableProjects: removeUnavailableProjects(); return;
             case menuShowBackups: if (const auto kept = session.projectBackups(); ! kept.isEmpty()) showInBrowser (kept[0]); return;
             case menuRevealBackups: if (const auto kept = session.projectBackups(); ! kept.isEmpty()) kept[0].revealToUser(); return;
@@ -17949,6 +17966,37 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto empty = juce::Point<float> (xOf (4), main.getY() + 4);
         canvas.mouseDoubleClick (event (empty, empty, false, 2)); refresh();
         check (volume().points.size() == 1 && std::abs (volume().points[0].beat - 4) < .26 && volume().points[0].value > 3, "double-clicking empty space adds a breakpoint there");
+        {
+            // A breakpoint placed near a grid line snaps to it while Options > Snap Automation to Grid is on,
+            // as the reference's do; one placed between lines stays where it was placed.
+            const auto lineY = yOf (main, volume().points[0].value);
+            const auto click = [&] (float x) { const juce::Point<float> at (x, lineY); canvas.mouseDown (event (at, at, false)); canvas.mouseUp (event (at, at, false)); refresh(); };
+            const auto has = [&] (double beat, double tolerance)
+            { const auto points = volume().points; return std::any_of (points.begin(), points.end(), [&] (const auto& p) { return std::abs (p.beat - beat) < tolerance; }); };
+            const double step = gridBeats();
+            const auto stepPixels = xOf (8 + step) - xOf (8);
+            check (stepPixels > 2 * automationMagnet + 2 && session.snapAutomationToGrid(), "grid steps wide enough to click between them, with Snap Automation to Grid on at first ("
+                   + juce::String (step) + " beats, " + juce::String (stepPixels) + " px)");
+            click (xOf (8) + automationMagnet / 2);
+            check (volume().points.size() == 2 && has (8, 1e-9), "a breakpoint placed near a grid line snaps to it");
+            click (xOf (8 + 2.5 * step));
+            check (volume().points.size() == 3 && has (8 + 2.5 * step, step * .1) && ! has (8 + 2 * step, 1e-6) && ! has (8 + 3 * step, 1e-6), "one placed between grid lines stays there");
+            const auto ticked = [this]
+            {
+                const auto options = getMenuForIndex (getMenuBarNames().indexOf ("Options"), "Options");
+                for (juce::PopupMenu::MenuItemIterator it (options); it.next();) if (it.getItem().itemID == menuSnapAutomation) return it.getItem().isTicked;
+                return false;
+            };
+            check (ticked(), "Options shows it ticked");
+            menuItemSelected (menuSnapAutomation, 0);
+            check (! session.snapAutomationToGrid() && ! ticked(), "Options > Snap Automation to Grid switches it off");
+            click (xOf (8 + 5 * step) + automationMagnet / 2);
+            check (volume().points.size() == 4 && has (8 + 5 * step, step * .2) && ! has (8 + 5 * step, 1e-6), "with it off, a breakpoint near a line stays off it");
+            menuItemSelected (menuSnapAutomation, 0);
+            check (session.snapAutomationToGrid(), "and on again");
+            session.undo(); session.undo(); session.undo(); refresh();
+            check (volume().points.size() == 1, "three undo steps take the breakpoints away");
+        }
         laneButton->onClick(); refresh();
         check (automationLanes[trackId].size() == 1 && shownKey (state.tracks[(size_t) t]) == "none" && device->getText() == "None",
                "the lane button moves the envelope into its own lane");
@@ -19873,7 +19921,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                          "Zoom In", "Zoom Out", "Zoom Out Completely", "Zoom Back" });
         expect ("View", view);
         juce::StringArray options { "Edit MIDI Map", "Edit Key Map", "Computer MIDI Keyboard", "MIDI Prelisten", "Browser Pre-Hear", "-", "External Sync", "-", "Time Ruler Format >", "-", "Narrow Grid", "Widen Grid", "Triplet Grid", "Snap to Grid",
-                                    "Fixed Grid", "-", "Draw Mode", "-", "Scale Highlighting", "-", "Solo Switches", "Cue Switches", "Solo in Place", "-", "Lock Envelopes", "Arrangement Overdub", "-", "Audio Engine On" };
+                                    "Snap Automation to Grid", "Fixed Grid", "-", "Draw Mode", "-", "Scale Highlighting", "-", "Solo Switches", "Cue Switches", "Solo in Place", "-", "Lock Envelopes", "Arrangement Overdub", "-", "Audio Engine On" };
        #if ! JUCE_MAC
         options.addArray ({ "-", "Preferences..." });
        #endif
@@ -20458,6 +20506,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (envelopes().size() == 1 && envelopes()[0].points.size() == 1 && std::abs (envelopes()[0].points[0].value - .75f) < .02f, "double-clicking a point deletes it");
         session.undo(); session.undo(); session.undo(); refresh();
         check (envelopes().empty(), "each edit is one undo step");
+        {
+            // A point placed near a grid line snaps to it, as automation breakpoints do with Snap Automation to Grid on.
+            const auto step = audioClipView.snapGrid();
+            const auto xAt = [&] (double beat) { return area.getX() + (float) ((beat - first) / length) * area.getWidth(); };
+            const auto line = first + std::round (length / 2 / step) * step;
+            const juce::Point<float> near { xAt (line) + automationMagnet / 2, area.getBottom() - area.getHeight() * .5f };
+            audioClipView.mouseDown (press (audioClipView, near, near, false, 1)); audioClipView.mouseUp (press (audioClipView, near, near, false, 1)); refresh();
+            check (step > 0 && envelopes().size() == 1 && envelopes()[0].points.size() == 1 && std::abs (envelopes()[0].points[0].beat - line) < 1e-9,
+                   "a clip envelope point placed near a grid line snaps to it");
+            session.undo(); refresh();
+        }
         chooser->setSelectedId (1, juce::sendNotificationSync); closeClipView();
 
         check (session.addMidiTrack ("Envelope").wasOk(), "add a MIDI track for clip envelopes"); refresh();
