@@ -846,6 +846,8 @@ Window layout ([contract](research/window-layout-contract.md)). With Full Height
 
 Browser width. The browser's right edge drags to resize it, from 220 pixels to the smaller of 640 and half the window, starting at 300; the width lasts while the window is open. The reference's limits, and whether it keeps the width with the Set, were not read.
 
+Hot-Swap ([presets contract](research/presets-contract.md#hot-swap-2026-10-24)). A category the device's kin are not in ends the link, standing in for the reference's "navigating from the browser to another view"; after a swap the link follows the new device. The built-in synth's row cannot be swapped in, as it is not a device of its own.
+
 Delay Compensation ([contract](research/delay-compensation-contract.md)). With it off, renders still compensate and Track Delay keeps its value without applying it; the reference's renders and Track Delay values while off were not read.
 
 Quantize ([contract](research/midi-tools-contract.md#quantize-2026-10-24)). Defaults where the manual is silent:

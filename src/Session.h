@@ -1754,6 +1754,20 @@ public:
     juce::Result saveDevicePreset (const juce::String& pluginId, const juce::File&, const juce::String& name, bool overwrite = false);
     // Adds the preset's device to a track (an instrument preset replaces the instrument) in one undo step.
     juce::Result loadDevicePreset (int trackIndex, const juce::File&, juce::String& pluginId);
+    // Hot-Swap, as the reference's: a chain's device (a track's instrument included) replaced in its
+    // place, in one undo step, by a preset, a native device's defaults, the Utility or a plug-in of the
+    // same type: instrument, audio effect or MIDI effect. A preset of the device's own kind loads into
+    // it, keeping it. `resultId` is the device then in its place.
+    struct HotSwapSource
+    {
+        juce::File preset;                            // A device preset, or
+        std::optional<EffectKind> kind;               // a native device's defaults, or
+        bool utility = false;                         // the Utility, or
+        std::optional<juce::PluginDescription> plugin; // a plug-in.
+    };
+    juce::Result hotSwapDevice (const juce::String& chainId, const juce::String& pluginId, const HotSwapSource&, juce::String& resultId);
+    // A hosted plug-in's description, by its device id.
+    std::optional<juce::PluginDescription> pluginDescription (const juce::String& pluginId) const;
     // Devices inside racks share these commands and setDeviceAutomation with track devices.
     juce::Result setNativeEffectSettings (const juce::String& pluginId, const EffectSettings&);
     // Racks: each command is one undo step and validates everything before changing the project.

@@ -7631,6 +7631,115 @@ Result Session::loadDevicePreset (int trackIndex, const File& file, String& plug
     if (result.failed()) { if (added && canUndo()) undo(); return result; }
     return Result::ok();
 }
+Result Session::hotSwapDevice (const String& chainId, const String& pluginId, const HotSwapSource& source, String& resultId)
+{
+    resultId.clear();
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    // The device, in the chain's devices or as a track's instrument.
+    const auto before = snapshot();
+    const TrackInfo* track = nullptr; int trackIndex = -1;
+    for (int i = 0; i < (int) before.tracks.size(); ++i) if (before.tracks[(size_t) i].id == chainId) { track = &before.tracks[(size_t) i]; trackIndex = i; }
+    const std::vector<PluginInfo>* devices = track != nullptr ? &track->plugins : chainId == mainChain ? &before.mainPlugins : nullptr;
+    if (devices == nullptr) for (const auto& g : before.groups) if (g.id == chainId) devices = &g.plugins;
+    if (devices == nullptr) return Result::fail ("That device chain is gone.");
+    const bool isInstrument = track != nullptr && track->hasInstrument && track->instrument.id == pluginId;
+    int index = -1;
+    for (int i = 0; i < (int) devices->size(); ++i) if ((*devices)[(size_t) i].id == pluginId) index = i;
+    if (! isInstrument && index < 0) return Result::fail ("The device to hot-swap is not in that chain.");
+    const auto& old = isInstrument ? track->instrument : (*devices)[(size_t) index];
+    DevicePreset preset;
+    const bool fromPreset = source.preset != File();
+    if (fromPreset) if (auto r = readDevicePreset (source.preset, preset); r.failed()) return r;
+    auto plugin = fromPreset && preset.plugin ? std::optional<juce::PluginDescription> (preset.description) : source.plugin;
+    if (plugin)
+        for (const auto& known : knownPlugins().getTypes()) // A scanned plug-in of the same identity, where it is now.
+            if (known.pluginFormatName == plugin->pluginFormatName && known.uniqueId == plugin->uniqueId && known.name == plugin->name) { plugin = known; break; }
+    const bool utility = fromPreset ? preset.utility : source.utility;
+    const std::optional<EffectKind> kind = fromPreset ? (! preset.utility && ! preset.plugin ? std::optional<EffectKind> (preset.effect.kind) : std::nullopt) : source.kind;
+    if (! plugin && ! utility && ! kind) return Result::fail ("Choose a preset or device to hot-swap in.");
+    // Only a device of the same type takes the place.
+    enum class Type { instrument, audio, midi };
+    const auto typeOf = [] (std::optional<EffectKind> k, bool isUtility, const juce::PluginDescription* d)
+    {
+        if (isUtility) return Type::audio;
+        if (k) return effectIsInstrument (*k) ? Type::instrument : effectIsMidi (*k) ? Type::midi : Type::audio;
+        const auto role = pluginRole (*d);
+        return role == PluginRole::instrument ? Type::instrument : role == PluginRole::midiEffect ? Type::midi : Type::audio;
+    };
+    juce::PluginDescription oldDescription;
+    if (! old.isNativeEffect && ! old.isUtility)
+        if (auto* external = impl->externalPlugin (old.id)) oldDescription = external->desc;
+    const auto oldType = isInstrument ? Type::instrument : typeOf (old.isNativeEffect ? std::optional<EffectKind> (old.effect.kind) : std::nullopt, old.isUtility, &oldDescription);
+    if (typeOf (kind, utility, plugin ? &*plugin : nullptr) != oldType)
+        return Result::fail ("Only a device of the same type can be hot-swapped in: an instrument for an instrument, an audio effect for an audio effect, a MIDI effect for a MIDI effect.");
+    const auto name = fromPreset ? preset.name : plugin ? plugin->name : utility ? String ("Utility") : String (effectName (*kind));
+    const auto steps = undoSteps().size();
+    beginEditGesture ("Hot-swap " + name);
+    auto result = Result::ok();
+    const auto applyPreset = [&] (const String& id)
+    {
+        if (! fromPreset) return Result::ok();
+        if (preset.utility) return setUtilitySettings (id, preset.settings);
+        if (! preset.plugin) return setNativeEffectSettings (id, preset.effect);
+        auto* external = impl->externalPlugin (id);
+        auto* instance = external != nullptr ? external->getAudioPluginInstance() : nullptr;
+        if (instance == nullptr) return Result::fail ("The preset's plug-in could not be found.");
+        instance->setStateInformation (preset.state.getData(), (int) preset.state.getSize()); external->flushPluginStateToValueTree();
+        return Result::ok();
+    };
+    // The device's own kind takes the preset in place.
+    if (fromPreset && ((kind && old.isNativeEffect && old.effect.kind == *kind && ! old.isRack) || (utility && old.isUtility)))
+    { result = applyPreset (old.id); resultId = old.id; }
+    else if (isInstrument)
+    {
+        result = plugin ? addPlugin (trackIndex, *plugin) : setTrackInstrument (chainId, kind);
+        if (result.wasOk()) { resultId = snapshot().tracks[(size_t) trackIndex].instrument.id; result = applyPreset (resultId); }
+    }
+    else
+    {
+        // A new device added to the chain, put where the old one is, which then goes.
+        result = plugin ? addPlugin (chainId, *plugin) : utility ? addUtility (chainId) : addNativeEffect (chainId, *kind);
+        const auto chainNow = [&]
+        {
+            const auto now = snapshot();
+            for (const auto& t : now.tracks) if (t.id == chainId) return t.plugins;
+            if (chainId == mainChain) return now.mainPlugins;
+            for (const auto& g : now.groups) if (g.id == chainId) return g.plugins;
+            return std::vector<PluginInfo>();
+        };
+        if (result.wasOk())
+        {
+            auto after = chainNow();
+            int added = -1;
+            for (int i = 0; i < (int) after.size(); ++i)
+                if (std::none_of (devices->begin(), devices->end(), [&] (const auto& p) { return p.id == after[(size_t) i].id; })) added = i;
+            if (added < 0) result = Result::fail ("The new device could not be found.");
+            else
+            {
+                resultId = after[(size_t) added].id;
+                result = applyPreset (resultId);
+                int oldNow = -1;
+                for (int i = 0; i < (int) after.size(); ++i) if (after[(size_t) i].id == pluginId) oldNow = i;
+                if (result.wasOk() && oldNow >= 0 && added != oldNow) result = movePlugin (chainId, added, oldNow);
+                if (result.wasOk())
+                {
+                    after = chainNow(); oldNow = -1;
+                    for (int i = 0; i < (int) after.size(); ++i) if (after[(size_t) i].id == pluginId) oldNow = i;
+                    result = oldNow >= 0 ? removePlugin (chainId, oldNow) : Result::fail ("The device to hot-swap went missing.");
+                }
+            }
+        }
+    }
+    endEditGesture();
+    // A swap that failed part way is taken back whole.
+    if (result.failed()) { while (undoSteps().size() > steps && canUndo()) undo(); resultId.clear(); return result; }
+    return Result::ok();
+}
+std::optional<juce::PluginDescription> Session::pluginDescription (const String& pluginId) const
+{
+    if (auto* external = impl->externalPlugin (pluginId)) return external->desc;
+    return std::nullopt;
+}
 Result Session::sliceToNewMidiTrack (const String& clipId, SliceBy by, String& trackId)
 {
     if (impl->exporting || impl->anyRecording()) return Result::fail ("Stop recording or finish exporting before slicing.");

@@ -84,6 +84,53 @@ int runPresetTests (const juce::File& artifacts)
         ok (s.saveDevicePreset (last (s, lead).id, arp, "Arp"), "save the arpeggiator preset");
         check (s.loadDevicePreset (0, arp, loaded).failed(), "a MIDI effect preset needs a MIDI track");
 
+        // Hot-Swap: a device replaced in its place by a preset or a device of the same type, in one undo step.
+        {
+            const auto chain = s.snapshot().tracks[0].id;
+            const auto devicesOf = [&] (int t) { const auto snapshot = s.snapshot(); return snapshot.tracks[(size_t) t].plugins; };
+            const auto before = devicesOf (0);
+            check (before.size() == 2 && before[0].effect.kind == Kind::saturator && before[1].isUtility, "track 1 holds a Saturator, then a Utility");
+            juce::String swapped;
+            auto changed = before[0].effect; changed.values[(size_t) effectParameterIndex (Kind::saturator, "driveDb")] = 3;
+            ok (s.setNativeEffectSettings (before[0].id, changed), "change the Saturator");
+            Session::HotSwapSource warmSource; warmSource.preset = warm;
+            ok (s.hotSwapDevice (chain, before[0].id, warmSource, swapped), "hot-swap Warm onto it");
+            check (swapped == before[0].id && devicesOf (0)[0].effect.values == settings.values, "a preset of its own kind loads into the device, keeping it");
+            Session::HotSwapSource eq; eq.kind = Kind::eqThree;
+            ok (s.hotSwapDevice (chain, before[0].id, eq, swapped), "hot-swap an EQ Three in");
+            auto after = devicesOf (0);
+            check (after.size() == 2 && after[0].id == swapped && after[0].effect.kind == Kind::eqThree && after[1].id == before[1].id,
+                   "another audio effect takes its place, first in the chain");
+            check (s.undoDescription().containsIgnoreCase ("hot-swap"), "as one Hot-swap step (" + s.undoDescription() + ")");
+            s.undo();
+            after = devicesOf (0);
+            check (after.size() == 2 && after[0].id == before[0].id && after[0].effect.kind == Kind::saturator, "one undo brings the Saturator back in its place");
+            Session::HotSwapSource narrowSource; narrowSource.preset = narrow;
+            ok (s.hotSwapDevice (chain, before[1].id, warmSource, swapped), "hot-swap the Saturator preset onto the Utility");
+            after = devicesOf (0);
+            check (after.size() == 2 && after[1].effect.kind == Kind::saturator && after[1].effect.values == settings.values && after[0].id == before[0].id,
+                   "an audio effect's preset can take the Utility's place, last in the chain");
+            s.undo();
+            Session::HotSwapSource padSource; padSource.preset = pad;
+            check (s.hotSwapDevice (chain, before[0].id, padSource, swapped).failed() && devicesOf (0)[0].id == before[0].id, "an instrument cannot take an audio effect's place");
+            const auto leadId = s.snapshot().tracks[(size_t) lead].id;
+            Session::HotSwapSource fm; fm.kind = Kind::fmSynth;
+            ok (s.hotSwapDevice (leadId, s.snapshot().tracks[(size_t) lead].instrument.id, fm, swapped), "hot-swap an FM Synth for the Poly Synth");
+            check (s.snapshot().tracks[(size_t) lead].instrument.effect.kind == Kind::fmSynth && swapped == s.snapshot().tracks[(size_t) lead].instrument.id,
+                   "an instrument takes the instrument's place");
+            s.undo();
+            check (s.snapshot().tracks[(size_t) lead].instrument.effect.kind == Kind::polySynth, "undo restores the Poly Synth");
+            const auto arpId = last (s, lead).id;
+            Session::HotSwapSource chord; chord.kind = Kind::chord;
+            ok (s.hotSwapDevice (leadId, arpId, chord, swapped), "hot-swap a Chord for the arpeggiator");
+            check (last (s, lead).effect.kind == Kind::chord && last (s, lead).id == swapped, "a MIDI effect takes a MIDI effect's place");
+            juce::String unused;
+            const auto refused = s.hotSwapDevice (leadId, swapped, narrowSource, unused);
+            check (refused.failed() && refused.getErrorMessage().contains ("same type") && last (s, lead).id == swapped, "the Utility cannot take a MIDI effect's place");
+            s.undo();
+            check (s.hotSwapDevice ("missing", arpId, chord, swapped).failed() && s.hotSwapDevice (leadId, "missing", chord, swapped).failed(), "unknown chains and devices are refused");
+        }
+
         // Damaged presets.
         const auto corrupt = [&] (const juce::String& name, const std::function<void (juce::XmlElement&)>& change)
         {

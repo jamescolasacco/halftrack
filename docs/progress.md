@@ -2677,3 +2677,7 @@ UI area. The sidebar takes the keyboard, as the reference's does: a click focuse
 ## The detail view under the browser — 2026-10-24
 
 UI area. As the reference's Full Height Browser is off by default (its song preference data and its manual's offer to "expand the browser to full height"), the detail view now spans the window under the browser by default, the browser and Info View standing above it. View > Full Height Browser, a preference, restores the old layout. Tests that assumed the clip editor's width now use its own beat mapping, and one clip-envelope check accepts Snap Automation to Grid's pull ([contract](research/window-layout-contract.md)). Checked in the UI and preferences suites, with the snapshots looked over.
+
+## Hot-Swap — 2026-10-24
+
+Engine and UI areas. `Session::hotSwapDevice` replaces a chain's device in its place, in one undo step, by a preset, a native device's defaults, the Utility or a plug-in of the same type, a preset of the device's own kind loading into it. In the app, as the reference's: Q or a new arrows button in each device's title bar links the device to the browser, which shows its category with its row selected and a Hot-Swap bar naming it; Return or a double-click swaps the chosen device or preset in, the link following it; Q, Escape, the bar's X or the button end it ([contract](research/presets-contract.md#hot-swap-2026-10-24)). Checked in the presets and UI suites.

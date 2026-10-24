@@ -510,7 +510,7 @@ public:
         for (auto* child : std::initializer_list<juce::Component*> {
                  &playButton, &stopButton, &recordButton, &overdubButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &nudgeDown, &nudgeUp, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
-                 &folderButton, &upButton, &browserSearch, &browserList, &browserSidebar, &browseBack, &browseForward, &info, &overview, &ruler, &timeRuler, &viewport,
+                 &folderButton, &upButton, &browserSearch, &browserList, &browserSidebar, &browseBack, &browseForward, &hotSwapLabel, &hotSwapClose, &info, &overview, &ruler, &timeRuler, &viewport,
                  &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain })
             addAndMakeVisible (child);
 
@@ -721,6 +721,10 @@ public:
             button->onClick = [this, by] { browseHistory (by); };
         }
         browseBack.setTooltip ("Browse Back: the browser's previous place, folder or search  |  Cmd+[");
+        hotSwapLabel.setName ("Hot-Swap"); hotSwapLabel.setFont (font (11.0f, true));
+        hotSwapLabel.setColour (juce::Label::backgroundColourId, orange.withAlpha (0.85f)); hotSwapLabel.setColour (juce::Label::textColourId, themes::colour (0xff1a1a1a));
+        hotSwapClose.setName ("End Hot-Swap"); hotSwapClose.setTitle ("End Hot-Swap"); hotSwapClose.setTooltip ("End Hot-Swap  |  Q or Esc");
+        hotSwapClose.setWantsKeyboardFocus (false); hotSwapClose.onClick = [this] { endHotSwap(); };
         browseForward.setTooltip ("Browse Forward: the browser's next place, folder or search  |  Cmd+]");
         // The large regions a screen reader moves between, each with what it holds.
         browserSearch.setTitle ("Browser search");
@@ -958,6 +962,12 @@ public:
         if (sampleBrowser()) upButton.setBounds (actions.removeFromLeft (29));
         folderButton.setBounds (actions);
         browser.removeFromBottom (4); browser.removeFromTop (22);
+        if (hotSwap && browserShown && ! mapping())
+        {
+            auto bar = browser.removeFromTop (22); browser.removeFromTop (2);
+            hotSwapClose.setBounds (bar.removeFromRight (22)); hotSwapLabel.setBounds (bar);
+        }
+        updateHotSwapBar();
         browserList.setBounds (browser);
         for (auto* part : std::initializer_list<juce::Component*> { &browserSearch, &browserSidebar, &browserList, &browseBack, &browseForward })
             part->setVisible (browserShown && ! mapping());
@@ -1044,6 +1054,9 @@ public:
         if (! cmd && ! shift && ! key.getModifiers().isAltDown() && code >= '1' && code <= '7' && browserList.hasKeyboardFocus (true) && browserList.getSelectedRow() >= 0)
         { toggleBrowserCollection (browserList.getSelectedRow(), code - '1'); return true; }
         if (browserList.hasKeyboardFocus (true) && browserListKey (key)) return true;
+        // Q links the selected device to the browser for Hot-Swap, or ends it; Escape ends it too.
+        if (! cmd && ! shift && ! key.getModifiers().isAltDown() && (code == 'q' || code == 'Q')) { toggleHotSwap(); return true; }
+        if (hotSwap && code == juce::KeyPress::escapeKey) { endHotSwap(); return true; }
         // Cmd+[ and Cmd+] step back and forward through the browser's history, as the reference's do.
         if (cmd && ! shift && ! key.getModifiers().isAltDown() && (code == '[' || code == ']') && showBrowser && ! mapping())
         { browseHistory (code == '[' ? -1 : 1); return true; }
@@ -9722,13 +9735,37 @@ private:
 
     // One device in the inline chain: a title bar (on/off, name, window, remove)
     // over the device's own compact controls.
+    // A device's Hot-Swap button: two arrows passing each other, lit while the device is linked to the browser.
+    class HotSwapButton final : public juce::Button
+    {
+    public:
+        HotSwapButton() : juce::Button ("Hot-Swap")
+        {
+            setTitle ("Hot-Swap Presets"); setTooltip ("Hot-Swap Presets: link this device to the browser, to replace it from there  |  Q");
+            setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false);
+        }
+        std::function<bool()> lit;
+        void paintButton (juce::Graphics& g, bool over, bool) override
+        {
+            const auto r = getLocalBounds().toFloat().reduced (4.0f, 6.0f);
+            g.setColour (lit && lit() ? orange : over ? ink : muted);
+            const auto top = r.getY() + r.getHeight() * .25f, bottom = r.getY() + r.getHeight() * .75f;
+            g.drawLine (r.getX(), top, r.getRight() - 2, top, 1.3f); g.drawLine (r.getX() + 2, bottom, r.getRight(), bottom, 1.3f);
+            juce::Path heads;
+            heads.addTriangle (r.getRight(), top, r.getRight() - 4, top - 2.5f, r.getRight() - 4, top + 2.5f);
+            heads.addTriangle (r.getX(), bottom, r.getX() + 4, bottom - 2.5f, r.getX() + 4, bottom + 2.5f);
+            g.fillPath (heads);
+        }
+    };
     class DevicePanel final : public juce::Component
     {
     public:
         DevicePanel (Impl& o, const Session::PluginInfo& info) : owner (o), pluginId (info.id), native (info.isNativeEffect)
         {
-            for (auto* button : { &power, &open, &remove })
+            for (auto* button : std::initializer_list<juce::Button*> { &power, &open, &remove, &swap })
             { addAndMakeVisible (*button); button->setWantsKeyboardFocus (false); button->setMouseClickGrabsKeyboardFocus (false); }
+            swap.lit = [this] { return owner.hotSwapping (pluginId); };
+            swap.onClick = [this] { if (owner.hotSwapping (pluginId)) owner.endHotSwap(); else owner.startHotSwap (owner.deviceChainId(), pluginId); };
             power.setClickingTogglesState (true); power.setName ("Device on");
             power.setTooltip ("Turn this device on or off (bypass)");
             power.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); power.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
@@ -9766,7 +9803,7 @@ private:
         void resized() override
         {
             auto title = getLocalBounds().removeFromTop (titleHeight).reduced (2);
-            power.setBounds (title.removeFromLeft (18)); remove.setBounds (title.removeFromRight (18)); open.setBounds (title.removeFromRight (22));
+            power.setBounds (title.removeFromLeft (18)); remove.setBounds (title.removeFromRight (18)); open.setBounds (title.removeFromRight (22)); swap.setBounds (title.removeFromRight (22));
             if (body) body->setTopLeftPosition (1, titleHeight);
             if (controls) controls->setBounds (1, titleHeight, getWidth() - 2, getHeight() - titleHeight - 1);
         }
@@ -9776,7 +9813,7 @@ private:
             g.fillAll (themes::colour (0xff303030));
             g.setColour (selected ? themes::colour (0xff5e5e5e) : enabled ? themes::colour (0xff4a4a4a) : themes::colour (0xff383838)); g.fillRect (0, 0, getWidth(), titleHeight);
             g.setColour (enabled ? ink : muted); g.setFont (font (11.0f, true));
-            g.drawText (name, 24, 0, getWidth() - 70, titleHeight, juce::Justification::centredLeft, true);
+            g.drawText (name, 24, 0, getWidth() - 92, titleHeight, juce::Justification::centredLeft, true);
             if (! native && missing)
             {
                 g.setColour (red); g.setFont (font (10.5f, true));
@@ -9849,6 +9886,7 @@ private:
         bool native = false, enabled = true, midi = false, rack = false, missing = false;
         int chains = 0;
         juce::TextButton power { "" }, open { "^" }, remove { "x" };
+        HotSwapButton swap;
         std::unique_ptr<juce::Component> body;
     public:
         std::unique_ptr<PluginControls> controls; // A hosted plug-in's configured parameters.
@@ -10495,6 +10533,96 @@ private:
         const auto result = packs::uninstall (id, packsFolder(), kept);
         report (result, kept != juce::File() ? "Pack removed. Your own files in it were kept in " + kept.getFullPathName() + "." : juce::String ("Pack removed."));
         updateBrowser();
+    }
+    // Hot-Swap, as the reference's: a device linked to the browser, which shows it among its kin;
+    // Return or a double-click puts the chosen preset or device of the same type in its place. Q,
+    // Escape, the Hot-Swap bar's X or the device's button end it.
+    struct HotSwapTarget { juce::String chainId, pluginId, name; };
+    std::optional<HotSwapTarget> hotSwap;
+    juce::Label hotSwapLabel;
+    juce::TextButton hotSwapClose { "x" };
+    bool hotSwapping (const juce::String& pluginId) const { return hotSwap && hotSwap->pluginId == pluginId; }
+    // The chain's device and the category its kin are in.
+    std::optional<std::pair<Session::PluginInfo, BrowserCategory>> hotSwapDevice (const juce::String& chainId, const juce::String& pluginId) const
+    {
+        const Session::TrackInfo* track = nullptr;
+        for (const auto& t : state.tracks) if (t.id == chainId) track = &t;
+        const std::vector<Session::PluginInfo>* devices = track != nullptr ? &track->plugins : chainId == Session::mainChain ? &state.mainPlugins : nullptr;
+        if (devices == nullptr) if (const auto* g = groupInfo (chainId)) devices = &g->plugins;
+        if (track != nullptr && track->hasInstrument && track->instrument.id == pluginId) return std::pair { track->instrument, BrowserCategory::instruments };
+        if (devices != nullptr)
+            for (const auto& p : *devices)
+                if (p.id == pluginId)
+                    return std::pair { p, ! p.isNativeEffect && ! p.isUtility ? BrowserCategory::plugins
+                                          : p.isNativeEffect && effectIsInstrument (p.effect.kind) ? BrowserCategory::instruments
+                                          : p.isNativeEffect && effectIsMidi (p.effect.kind) ? BrowserCategory::midiEffects : BrowserCategory::audioEffects };
+        return std::nullopt;
+    }
+    void startHotSwap (const juce::String& chainId, const juce::String& pluginId)
+    {
+        const auto device = hotSwapDevice (chainId, pluginId);
+        if (! device) return;
+        const auto& [info, category] = *device;
+        if (! showBrowser) showBrowser = true;
+        leavePlace(); browserSearch.setText ({}, juce::dontSendNotification);
+        hotSwap.reset(); setBrowserCategory (category); // A category change ends a hot-swap, so the link comes after.
+        hotSwap = HotSwapTarget { chainId, pluginId, info.name };
+        // The device's own row selected, as the reference selects it in its folder.
+        const auto identifier = ! info.isNativeEffect && ! info.isUtility ? session.pluginDescription (pluginId) : std::nullopt;
+        for (int row = 0; row < (int) deviceItems.size(); ++row)
+        {
+            const auto& item = deviceItems[(size_t) row];
+            if (item.header || item.preset != juce::File()) continue;
+            if ((info.isUtility && item.kind == -3) || (info.isNativeEffect && item.kind == (int) info.effect.kind && item.pluginId.isEmpty())
+                || (identifier && item.pluginId == identifier->createIdentifierString()))
+            { browserList.selectRow (row); browserList.scrollToEnsureRowIsOnscreen (row); break; }
+        }
+        updateHotSwapBar(); resized(); deviceChain.repaint();
+    }
+    void endHotSwap()
+    {
+        if (! hotSwap) return;
+        hotSwap.reset(); updateHotSwapBar(); resized(); deviceChain.repaint();
+    }
+    void updateHotSwapBar()
+    {
+        hotSwapLabel.setText (hotSwap ? "Hot-Swap: " + hotSwap->name : juce::String(), juce::dontSendNotification);
+        hotSwapLabel.setVisible (hotSwap.has_value() && showBrowser && ! mapping()); hotSwapClose.setVisible (hotSwapLabel.isVisible());
+    }
+    // Q, as the reference's: the selected device, or with none the first audio effect on an audio
+    // track or the instrument on a MIDI track.
+    void toggleHotSwap()
+    {
+        if (hotSwap) { endHotSwap(); return; }
+        const auto chainId = deviceChainId();
+        if (chainId.isEmpty()) return;
+        if (! selectedDevices.isEmpty() && hotSwapDevice (chainId, selectedDevices[0])) { startHotSwap (chainId, selectedDevices[0]); return; }
+        if (const auto* track = selectedChain.isEmpty() ? currentTrack() : nullptr)
+        {
+            if (track->isMidi && track->hasInstrument) { startHotSwap (chainId, track->instrument.id); return; }
+            for (const auto& p : track->plugins) if (! (p.isNativeEffect && effectIsMidi (p.effect.kind))) { startHotSwap (chainId, p.id); return; }
+        }
+        else if (const auto* devices = chainDevices(); devices != nullptr && ! devices->empty()) startHotSwap (chainId, devices->front().id);
+    }
+    // In Hot-Swap, Return or a double-click on a device, preset or plug-in of the device's type puts it in the device's place.
+    void hotSwapRow (int row)
+    {
+        if (! hotSwap || ! juce::isPositiveAndBelow (row, (int) deviceItems.size()) || sampleBrowser()) { report (juce::Result::fail ("Only presets and devices can be hot-swapped in.")); return; }
+        const auto& item = deviceItems[(size_t) row];
+        if (item.header) return;
+        Session::HotSwapSource source;
+        if (item.preset != juce::File()) source.preset = item.preset;
+        else if (item.pluginId.isNotEmpty())
+        {
+            for (const auto& type : session.knownPlugins().getTypes()) if (type.createIdentifierString() == item.pluginId) source.plugin = type;
+        }
+        else if (item.kind == -3) source.utility = true;
+        else if (item.kind >= 0) source.kind = static_cast<Session::EffectKind> (item.kind);
+        if (source.preset == juce::File() && ! source.plugin && ! source.utility && ! source.kind) { report (juce::Result::fail ("Only presets and devices can be hot-swapped in.")); return; }
+        juce::String replaced;
+        const auto result = session.hotSwapDevice (hotSwap->chainId, hotSwap->pluginId, source, replaced);
+        report (result);
+        if (result.wasOk()) { hotSwap->pluginId = replaced; refresh(); if (const auto now = hotSwapDevice (hotSwap->chainId, replaced)) hotSwap->name = now->first.name; updateHotSwapBar(); }
     }
     Collections collections;
     int browserCollection = 0;
@@ -15941,6 +16069,8 @@ private:
     }
     void setBrowserCategory (BrowserCategory category)
     {
+        if (hotSwap && category != BrowserCategory::plugins && category != BrowserCategory::collection)
+            if (const auto device = hotSwapDevice (hotSwap->chainId, hotSwap->pluginId); ! device || device->second != category) endHotSwap();
         noteBrowserState();
         browserCategory = category; browserList.deselectAllRows(); updateBrowser(); resized();
         noteBrowserState();
@@ -16263,6 +16393,7 @@ private:
     void activateBrowserRow (int row)
     {
         if (row < 0 || row >= getNumRows()) return;
+        if (hotSwap) { hotSwapRow (row); return; }
         if (sampleBrowser())
         {
             auto item = browserItems[(size_t) row];
@@ -20340,6 +20471,42 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (session.resetPreferences().wasOk(), "restore the default sources");
         useHardClipEdges (session);
         empty.deleteRecursively();
+    }
+    {
+        // Hot-Swap, as the reference's: Q or a device's button links it to the browser, which shows it
+        // among its kin; Return on another device or preset of its type puts it in its place; Q, Escape,
+        // the Hot-Swap bar's X or a category its kin are not in end it.
+        check (session.newProject().wasOk(), "a fresh project for Hot-Swap"); refresh();
+        showArrangementView(); selectTrack (0); closeClipView(); showBrowser = true; refresh(); resized();
+        check (session.addNativeEffect (0, Session::EffectKind::saturator).wasOk() && session.addNativeEffect (0, Session::EffectKind::delay).wasOk(), "two devices on track 1"); refresh();
+        const auto devices = [this] { return state.tracks[0].plugins; };
+        selectedDevices.clear(); selectDevice (devices()[0].id, {});
+        const auto selectedKind = [this] { const int r = browserList.getSelectedRow(); return juce::isPositiveAndBelow (r, (int) deviceItems.size()) ? deviceItems[(size_t) r].kind : -100; };
+        check (handleKey (juce::KeyPress ('q', {}, 'q')) && hotSwapping (devices()[0].id) && browserCategory == BrowserCategory::audioEffects
+                   && hotSwapLabel.isVisible() && hotSwapLabel.getText().contains ("Saturator") && selectedKind() == (int) Session::EffectKind::saturator,
+               "Q links the selected Saturator to the browser, its row selected, the Hot-Swap bar naming it");
+        int eqRow = -1;
+        for (int r = 0; r < (int) deviceItems.size(); ++r) if (deviceItems[(size_t) r].kind == (int) Session::EffectKind::eqThree && deviceItems[(size_t) r].preset == juce::File()) eqRow = r;
+        browserList.selectRow (eqRow); activateBrowserRow (eqRow); refresh();
+        check (devices().size() == 2 && devices()[0].effect.kind == Session::EffectKind::eqThree && devices()[1].effect.kind == Session::EffectKind::delay
+                   && hotSwapping (devices()[0].id) && hotSwapLabel.getText() == "Hot-Swap: " + devices()[0].name,
+               "Return on EQ Three puts it in the Saturator's place, the link following it");
+        check (handleKey (juce::KeyPress (juce::KeyPress::escapeKey)) && ! hotSwap && ! hotSwapLabel.isVisible(), "Escape ends Hot-Swap");
+        session.undo(); refresh();
+        check (devices()[0].effect.kind == Session::EffectKind::saturator, "one undo brings the Saturator back");
+        auto* swap = dynamic_cast<juce::Button*> (findNamed (deviceChain, "Hot-Swap"));
+        check (swap != nullptr && swap->isVisible(), "each device's title bar has a Hot-Swap button");
+        swap->onClick();
+        check (hotSwapping (devices()[0].id), "the button links its device");
+        hotSwapClose.onClick();
+        check (! hotSwap, "and the bar's X ends it");
+        check (session.addMidiTrack ("Swap Keys").wasOk(), "a MIDI track"); refresh();
+        selectTrack ((int) state.tracks.size() - 1); selectedDevices.clear(); refresh();
+        check (handleKey (juce::KeyPress ('q', {}, 'q')) && hotSwap && hotSwap->pluginId == currentTrack()->instrument.id && browserCategory == BrowserCategory::instruments,
+               "with no device selected on a MIDI track, Q links its instrument");
+        setBrowserCategory (BrowserCategory::samples);
+        check (! hotSwap, "a category its kin are not in ends Hot-Swap");
+        check (session.newProject().wasOk(), "leave Hot-Swap"); refresh();
     }
     {
         // Templates, as the reference's: Save as Template keeps the project in the User Library's

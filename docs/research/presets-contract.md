@@ -52,3 +52,16 @@ A plug-in's preset keeps its identity (its `PluginDescription`) and the state it
 - **The browser.** The Plug-ins list shows each plug-in's presets under it, and they can be put in collections.
 
 `tests/PluginPresetTests.cpp` saves the controlled VST3 gain plug-in at a quarter gain as a preset. It then checks that loading the preset onto a track playing 0.5 renders 0.125, that one undo renders dry again, and that overwriting without asking and a preset without its plug-in are refused. The UI suite lists a preset under a stand-in plug-in. Plug-ins' own preset formats (`.vstpreset`, `.aupreset`) and program lists are not read.
+
+## Hot-Swap (2026-10-24)
+
+The reference's manual: Q or a device's Hot-Swap Presets button links the device to the browser, which selects it in its folder; Return or a double-click loads the chosen preset in its place, from its own folder or another device's, of the same device type; loading a device's folder loads its defaults. Q, Escape, the X in the Hot-Swap bar above the browser's list, the device's own button and leaving the browser end it. With no device selected, Q takes an audio track's first audio effect or a MIDI track's instrument ([Working with Instruments and Effects](https://www.ableton.com/en/live-manual/12/working-with-instruments-and-effects/), section 23.2.4, consulted 2026-10-24).
+
+- **The engine.** `Session::hotSwapDevice` replaces a chain's device (a track's instrument included) in its place, in one undo step named Hot-swap, by a preset, a native device's defaults, the Utility or a plug-in. Only the same type takes the place: instrument for instrument, audio effect for audio effect, MIDI effect for MIDI effect. A preset of the device's own kind loads into it and keeps it. A swap that fails part way is taken back whole.
+- **Linking.** Q, or the arrows button in a device's title bar, links the selected device, or with none an audio track's first audio effect or a MIDI track's instrument. The browser shows the device's category (Plug-Ins for a plug-in) with its row selected, and a bar above the list names it.
+- **Swapping.** Return or a double-click on a device, preset or plug-in puts it in the device's place, and the link follows the new device, so swapping can go on.
+- **Ending.** Q, Escape, the bar's X, the device's button again, or a category the device's kin are not in (Plug-Ins and the collections keep it).
+
+`tests/PresetTests.cpp` checks a preset of the device's own kind loading into it, another audio effect and an audio effect's preset taking a device's place in the chain's order, one undo restoring it, an instrument and a MIDI effect swapping for their own types, and the refusal of other types and unknown chains or devices. The UI suite links a Saturator with Q, swaps an EQ Three in with Return, ends it with Escape and undoes the swap, links and unlinks a device from its button and the bar's X, links a MIDI track's instrument, and ends a link by choosing Samples.
+
+Not yet: hot-swapping samples in the Sampler, Drum Sampler and drum pads, devices inside racks, and the reference's option to replace a device as soon as a preset is selected.
