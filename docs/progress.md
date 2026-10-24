@@ -2557,3 +2557,7 @@ Engine and UI areas. Edit > Select Loop (Shift+Cmd+L) selects the loop's time ac
 
 UI area. The Loop box gains the reference's Set buttons beside Start, End, Position and Length: while the clip plays, each puts its marker at the play position, rounded to the global launch quantization. Edit > Clip Markers (Cmd+F9 to F12) sets the same markers for the MIDI clip in the clip view, at the play position or else the note editor's insert marker ([clip loops contract](research/clip-loops-contract.md)). Checked in the UI suite.
 
+## F1 to F8 and Cmd+Option+Delete — 2026-10-24
+
+UI area. As the reference's keys do, F1 to F8 switch the tracks numbered 1 to 8 on and off, groups counted, and Cmd+Option+Delete deletes the selected Arrangement clips' fades ([menu contract](research/main-menu-contract.md#keys-outside-the-menus)). Checked in the UI suite.
+

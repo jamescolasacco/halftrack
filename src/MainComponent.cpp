@@ -984,6 +984,9 @@ public:
             if (code == 'I' && shift) { menuItemSelected (68, 4); return true; }
             if (code == 'I' && ! showSession && ! key.getModifiers().isAltDown()) { menuItemSelected (74, 1); return true; }
             if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && shift && ! showSession) { menuItemSelected (75, 1); return true; }
+            // Cmd+Option+Delete deletes the selected clips' fades and crossfades, as the reference's key does.
+            if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && key.getModifiers().isAltDown() && ! showSession && ! showPiano)
+            { if (canResetFades()) resetSelectionFades(); return true; }
             if (code == 'G') { if (shift) ungroupSelectedTrack(); else groupSelectedTracks(); return true; }
             if ((code == 'E' || code == 'e') && shift && key.getModifiers().isAltDown()) { menuItemSelected (13, 1); return true; }
             if (code == 'C' && shift) { captureFromUI(); return true; }
@@ -1062,6 +1065,8 @@ public:
         if (code == juce::KeyPress::homeKey) { session.returnToStart(); refresh(); return true; }
         if (code == juce::KeyPress::escapeKey) { session.stop(); session.returnToStart(); refresh(); return true; }
         if (code == juce::KeyPress::F9Key && ! cmd) { report (session.recordButton (shift)); refresh(); return true; }
+        // F1 to F8 switch tracks 1 to 8 on and off by their numbers, groups counted, as the reference's keys do.
+        if (! cmd && ! shift && ! key.getModifiers().isAltDown() && code >= juce::KeyPress::F1Key && code <= juce::KeyPress::F8Key) { toggleNumberedTrack (code - juce::KeyPress::F1Key + 1); return true; }
         if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && ! cmd)
         {
             if (headerFocus) { deleteSelectedHeaders(); return true; }
@@ -12586,6 +12591,15 @@ private:
         else { if (state.playing) session.stop(); report (session.play()); }
         refresh();
     }
+    // A track or group by the number its activator shows, switched on or off.
+    void toggleNumberedTrack (int number)
+    {
+        const auto label = juce::String (number);
+        for (int t = 0; t < (int) state.tracks.size(); ++t)
+            if (! state.tracks[(size_t) t].isReturn && state.tracks[(size_t) t].numberLabel == label) { report (session.setTrackMute (t, ! state.tracks[(size_t) t].mute)); refresh(); return; }
+        for (const auto& group : state.groups)
+            if (group.numberLabel == label) { report (session.setGroupMute (group.id, ! group.mute)); refresh(); return; }
+    }
     // The Arrangement's own keys for a clip command, as the reference's R (Reverse) and Shift+Cmd+J
     // (Crop): over the time selection, or the lone clip selected.
     void runArrangementKey (int item)
@@ -16591,6 +16605,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (listed (arrangementMenu (inside, colour)).contains ("Reset Fades|"), "Reset Fades is offered for a fade of its own");
         chooseArrangementItem (arrangementResetFades, inside, -1);
         check (clip().audio.defaultFadeIn == session.preferences().createFadesOnClipEdges, "Reset Fades returns it to the default");
+        session.undo(); refresh();
+        check (! clip().audio.defaultFadeIn, "undo brings the fade back");
+        check (handleKey (juce::KeyPress (juce::KeyPress::backspaceKey, juce::ModifierKeys (juce::ModifierKeys::commandModifier | juce::ModifierKeys::altModifier), 0))
+                   && clip().audio.defaultFadeIn == session.preferences().createFadesOnClipEdges, "Cmd+Option+Delete deletes the selection's fades, as the reference's key does");
         session.undo(); session.undo(); refresh();
         // Crop and Bounce to New Track over part of the clip.
         timeSelection = { 2.02, 2.06, { trackId } };
@@ -18628,6 +18646,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             menuItemSelected (menuUndoHistory, 4); refresh();
             check (undoHistory() == nullptr && ! entry ("View", menuUndoHistory)->isTicked, "choosing it again closes the window");
             session.undo(); session.undo(); refresh();
+        }
+        {
+            // F1 to F8 switch tracks 1 to 8 on and off by their numbers, as the reference's keys do.
+            const auto first = std::find_if (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return t.numberLabel == "1"; });
+            check (first != state.tracks.end() && ! first->mute, "track 1 is on");
+            const auto index = (size_t) std::distance (state.tracks.begin(), first);
+            check (handleKey (juce::KeyPress (juce::KeyPress::F1Key)) && state.tracks[index].mute, "F1 switches track 1 off");
+            check (handleKey (juce::KeyPress (juce::KeyPress::F1Key)) && ! state.tracks[index].mute, "and on again");
         }
         {
             // Navigate's focus commands show their part of the window and give it Edit's commands.

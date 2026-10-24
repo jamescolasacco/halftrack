@@ -52,6 +52,13 @@ What moved with the rebuild:
 - Save a Copy writes the project to another file, with its media collected beside it, and keeps the open project's file, media and unsaved changes. Every Halftrack save collects its media, where the reference collects only with Collect All and Save (see [open questions](../open-questions.md)).
 - Import Audio and Import MIDI File became Import File, which takes both. Cmd+F searches the browser, and Follow moved to Option+Shift+F; Cmd+I inserts a scene in the Session; Shift+Cmd+R exports; Option+Cmd+O is the overview's, not Open's.
 
+## Keys outside the menus
+
+From the reference's list of keys ([Live keyboard shortcuts](https://www.ableton.com/en/live-manual/12/live-keyboard-shortcuts/), consulted 2026-10-24), these act without a menu item:
+- **R** reverses, and **Shift+Cmd+J** crops, the Arrangement's time selection or a lone selected clip ([clip menus](clip-menus-contract.md)).
+- **Cmd+Option+Delete** deletes the fades and crossfades of the selected Arrangement clips, as Reset Fades does.
+- **F1 to F8** switch the tracks numbered 1 to 8 on and off, groups counted, as their activators do.
+
 ## Left out
 
 Navigate's Focus Transport, Help, Tuning and Clip Panels, its previous and next focus commands, browser history and Tab navigation options; Close Window, Add Folder to Browser, Backups, Collect All and Save, Save as Template, Apply Algorithm, the note span command, Quantize Settings, Automation Fitting, Emoji & Symbols, the Convert to MIDI commands, Return Play Position, Start Transport With Tap Tempo, Link, Second Window, Lessons, File Manager, Expand Clip Detail View, the clip view layouts and editors, Tuning Pool, Mod Matrix, Full Height Browser, Max for Live, Arrangement Track Controls, Accessibility, MIDI Prelisten, Browser Pre-Hear, Delay Compensation, Snap Automation to Grid, Step Input, Chase MIDI Notes, the controller and retune options, Lock Envelopes, Arrangement Overdub, Legacy HiQ, and Help's items. Halftrack has none of these commands yet.
@@ -68,6 +75,7 @@ The UI suite compares each menu with the reference's order, filtered to Halftrac
 - Solo Switches and Cue Switches greyed without a Cue Out of their own, and switching the Solo/Cue mode with one;
 - Draw Mode showing B, ticked while on, and following the control bar's pencil;
 - Shift+Cmd+L selecting the loop's time across every track, Play Arrangement Selection's two names, and Option+Space playing the selection from its start and stopping at its end (the transport suite checks the stop within 60 ms, 12 ms locally, as Halftrack watches the range from the message thread every 2 ms; the reference's precision was not measured); Select Loop in the clip view selecting the notes in the clip's loop;
+- F1 switching track 1 off and on, and Cmd+Option+Delete deleting a fade (in the Arrangement menu checks);
 - Navigate's Option+1 and Option+2 showing the Session and Arrangement Views with Edit acting there, Focus Device View and Focus Clip View likewise, Focus Browser showing the browser, and Option+Shift+M showing the Session's hidden mixer;
 - Undo History opening from Option+Cmd+Z without undoing, listing the steps from the start with the latest selected, a click on an earlier step undoing back to it and on the latest redoing, the main window's menus working while it is open, and choosing it again closing it;
 - Plug-In Windows hiding and showing the plug-in windows (the plug-in editor suite hides an open editor's window, shows it again, and sees opening an editor bring the windows back);
