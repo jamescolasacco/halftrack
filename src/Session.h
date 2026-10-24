@@ -966,9 +966,11 @@ public:
     // Bounce Track in Place, as the reference's: each selected audio or MIDI track (top-most; groups
     // and returns are left out) is frozen first if it is not, outside history. Its render then
     // replaces its Arrangement clips, cut at their edges, with a tail clip after any whose sound rings
-    // on, and its devices, their automation and its take lanes go. A MIDI track becomes an audio
-    // track. Mixer, sends, name and colour stay. One undo step, restoring the unfrozen tracks. Tracks
-    // with Session clips, or MIDI tracks without an instrument, are refused for now.
+    // on, and its devices, their automation and its take lanes go. Each active Session clip is rendered
+    // through the devices into an audio clip in its slot (one loop, seamless, for a looping clip), with
+    // its launch settings, follow actions and colour; deactivated ones go. A MIDI track becomes an audio
+    // track. Mixer, sends, name and colour stay. One undo step, restoring the unfrozen tracks. MIDI
+    // tracks without an instrument are refused, and frozen tracks with Session clips.
     juce::Result bounceTracksInPlace (const juce::StringArray& trackIds);
     bool canBounceTracksInPlace (const juce::StringArray& trackIds) const;
     // Bounce to New Track, as the reference's clip-area command: each of the tracks with an active clip
@@ -981,6 +983,12 @@ public:
     // the latter; canBounceToNewTracks only asks for an active clip in the range, as its menu does.
     juce::Result bounceToNewTracks (const juce::StringArray& trackIds, double startSeconds, double endSeconds, juce::StringArray& newTrackIds);
     bool canBounceToNewTracks (const juce::StringArray& trackIds, double startSeconds, double endSeconds) const;
+    // Bounce to New Track from Session slots, as the reference's slot command: each source track's listed
+    // active Session clips are rendered through its devices into a new audio track after it, made as
+    // bounceToNewTracks makes one, in the same slots and with the clips' settings, and the clips are
+    // deactivated. One undo step.
+    juce::Result bounceSlotsToNewTracks (const juce::StringArray& clipIds, juce::StringArray& newTrackIds);
+    bool canBounceSlotsToNewTracks (const juce::StringArray& clipIds) const;
     // Groups audio and MIDI tracks and groups (not returns) into a new group, placed where the first
     // of them is: inside its group, if it is in one, as the reference nests groups. What is inside a
     // chosen group moves with it. Launching or stopping a group acts on every track inside it.

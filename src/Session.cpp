@@ -3593,6 +3593,131 @@ struct Session::Impl
                 for (auto* c : t->getClips()) if (activeWithin (*c, start, end)) { tracks.addIfNotAlreadyThere (t); break; }
         return tracks;
     }
+    // The slots' Bounce to New Track's sources: by track, in track order, the listed Session clips that are active.
+    std::vector<std::pair<te::AudioTrack*, std::vector<te::ClipSlot*>>> slotBounceSources (const juce::StringArray& clipIds) const
+    {
+        std::vector<std::pair<te::AudioTrack*, std::vector<te::ClipSlot*>>> sources;
+        for (auto* t : te::getAudioTracks (*edit))
+        {
+            if (isReturn (*t)) continue;
+            std::vector<te::ClipSlot*> slots;
+            for (auto* slot : t->getClipSlotList().getClipSlots())
+                if (auto* clip = slot->getClip(); clip != nullptr && ! clip->isMuted() && clipIds.contains (clip->itemID.toString())) slots.push_back (slot);
+            if (! slots.empty()) sources.push_back ({ t, std::move (slots) });
+        }
+        return sources;
+    }
+    // The devices a bounce takes off a track: everything before its mixer, and the engine's freeze point.
+    static bool bouncedDevice (te::Plugin* plugin)
+    {
+        return dynamic_cast<NativeEffectPlugin*> (plugin) || dynamic_cast<te::ExternalPlugin*> (plugin) || dynamic_cast<UtilityPlugin*> (plugin)
+            || dynamic_cast<SubtractiveSynthPlugin*> (plugin) || dynamic_cast<te::FreezePointPlugin*> (plugin);
+    }
+    // A Session clip's sound through its track's devices, written to a file, as the reference renders
+    // each Session clip it bounces (0x1025a5a90). Outside history, a copy of the clip plays once in the
+    // Arrangement past everything else, where automation holds its last values, and only that copy is
+    // rendered, up to the track's mixer as a freeze is. A looping clip renders one loop's length from
+    // its start, its tail wrapped onto the beginning so the render loops seamlessly; another renders its
+    // length and then its tail. The copy is taken out again. bpm is the tempo the render played at.
+    Result renderSessionClip (te::AudioTrack& t, te::Clip& clip, const juce::File& destination, double& bpm)
+    {
+        const bool looping = clip.isLooping();
+        const auto length = looping ? clip.getLoopLength() : clip.getPosition().getLength();
+        if (length.inSeconds() < 1.0e-3) return Result::fail ("\"" + clip.getName() + "\" is too short to bounce.");
+        const te::Edit::UndoTransactionInhibitor inhibitor (*edit);
+        auto copy = clip.state.createCopy();
+        te::EditItemID::remapIDs (copy, nullptr, *edit);
+        renewMidiNoteIDs (copy);
+        const auto at = te::TimePosition::fromSeconds (std::ceil (edit->getLength().inSeconds()) + 10.0);
+        bpm = edit->tempoSequence.getBeatsPerSecondAt (at) * 60;
+        copy.setProperty (te::IDs::start, at.inSeconds(), nullptr);
+        copy.setProperty (te::IDs::length, length.inSeconds(), nullptr);
+        t.state.addChild (copy, -1, nullptr);
+        struct Removal { juce::ValueTree parent, child; ~Removal() { parent.removeChild (child, nullptr); } } removal { t.state, copy };
+        auto* played = te::findClipForID (*edit, te::EditItemID::fromID (copy));
+        if (played == nullptr) return Result::fail ("\"" + clip.getName() + "\" could not be rendered.");
+        te::Renderer::Parameters r (*edit);
+        r.tracksToDo.setBit (t.getIndexInEditTrackList());
+        r.allowedClips.add (played);
+        r.destFile = destination;
+        juce::WavAudioFormat wav; r.audioFormat = &wav; r.bitDepth = 32;
+        auto& devices = engine.getDeviceManager();
+        r.blockSizeForAudio = devices.getBlockSize(); r.sampleRateForAudio = devices.getSampleRate();
+        r.time = { at, at + length };
+        juce::Array<te::EditItemID> ids { t.itemID };
+        r.endAllowance = te::RenderOptions::findEndAllowance (*edit, &ids, nullptr);
+        r.silenceBeforeStopping = te::TimeDuration::fromSeconds (3.0);
+        r.wrapRemainder = looping;
+        r.canRenderInMono = false; r.usePlugins = true; r.useMasterPlugins = false;
+        {
+            auto* mixer = t.getVolumePlugin();
+            const FreezeRender sendsOnly ({ &t });
+            const te::FreezePointPlugin::ScopedPluginDisabler mixerOff (t, { mixer != nullptr ? t.pluginList.indexOf (mixer) : t.pluginList.size(), t.pluginList.size() });
+            const te::FreezePointPlugin::ScopedTrackUnsoloer unsoloed (*edit);
+            const auto muted = t.state[te::IDs::mute];
+            t.state.setProperty (te::IDs::mute, false, nullptr);
+            te::Renderer::renderToFile ("Bouncing \"" + clip.getName() + "\"", r);
+            t.state.setProperty (te::IDs::mute, muted, nullptr);
+        }
+        return destination.existsAsFile() ? Result::ok() : Result::fail ("\"" + clip.getName() + "\" could not be rendered.");
+    }
+    // Bounce to New Track's track: a copy of the source right after it, in its group, keeping its mixer,
+    // sends, track delay, monitoring, crossfade assignment, colour and output, with their automation, as
+    // the reference's; without devices, clips, take lanes or info text, and named after it with
+    // " Bounce". Inside the bounce's transaction.
+    te::AudioTrack* bounceTrackFor (te::AudioTrack& source)
+    {
+        auto* undo = &edit->getUndoManager();
+        source.flushStateToValueTree();
+        auto made = edit->copyTrack (te::Track::Ptr (&source), te::TrackInsertPoint (source, false));
+        auto* track = dynamic_cast<te::AudioTrack*> (made.get());
+        if (track == nullptr) return nullptr;
+        const auto monitor = source.state[monitorProperty];
+        freshCopy (*track, source.state);
+        track->state.setProperty (monitorProperty, monitor, undo);
+        for (auto* plugin : track->pluginList.getPlugins()) if (bouncedDevice (plugin)) plugin->deleteFromParent();
+        for (auto* clip : allTrackClips (*track)) clip->removeFromParent();
+        if (auto lanes = track->state.getChildWithName (takeLanesType); lanes.isValid()) track->state.removeChild (lanes, undo);
+        track->state.setProperty (midiTrackProperty, false, undo);
+        track->state.setProperty (te::IDs::frozenIndividually, false, nullptr);
+        track->state.removeProperty (infoTextProperty, undo);
+        auto name = ownName (source).isNotEmpty() ? ownName (source) : automaticPart (source);
+        if (! name.endsWith (" Bounce")) name << " Bounce";
+        track->setName (name);
+        return track;
+    }
+    // A bounced Session clip in its slot: the render, warped at the tempo it was rendered at, as Session
+    // clips always follow the tempo here, looping over its whole length when its clip looped. It is named
+    // after the clip with " Bounce", with its colour, launch settings and follow actions, as the reference
+    // copies a Session clip's settings to its bounce (0x10221a450). Inside the bounce's transaction; the
+    // caller then gives it the preferred warp mode.
+    te::WaveAudioClip* placeSessionBounce (te::ClipSlot& slot, const juce::File& file, const juce::ValueTree& original, bool looping, double bpm)
+    {
+        auto* undo = &edit->getUndoManager();
+        const auto seconds = te::AudioFile (engine, file).getLength();
+        if (seconds <= 0) return nullptr;
+        const te::TimeRange range { te::TimePosition(), te::TimePosition::fromSeconds (seconds) };
+        auto clip = te::insertWaveClip (slot, original[te::IDs::name].toString() + " Bounce", file, { range, {} }, te::DeleteExistingClips::no);
+        if (! clip) return nullptr;
+        clip->getSourceFileReference().setToFile (file, te::SourceFileReference::PathStyle::alwaysAbsolute, false);
+        clip->setAutoTempo (true); clip->setAutoPitch (false); clip->setUsesProxy (false);
+        const auto beats = bpm * seconds / 60;
+        clip->getLoopInfo().setNumBeats (beats);
+        if (looping) clip->setLoopRangeBeats ({ te::BeatPosition(), te::BeatPosition::fromBeats (beats) });
+        clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
+        giveDefaultFades (*clip, undo);
+        for (const auto& id : { launchModeProperty, launchQuantisationProperty, launchLegatoProperty, launchVelocityProperty, clipColourProperty,
+                                te::IDs::followActionBeats, te::IDs::followActionDurationType })
+            if (original.hasProperty (id)) clip->state.setProperty (id, original[id], undo);
+        if (const auto actions = original.getChildWithName (te::IDs::FOLLOWACTIONS); actions.isValid())
+        {
+            if (auto existing = clip->state.getChildWithName (te::IDs::FOLLOWACTIONS); existing.isValid()) clip->state.removeChild (existing, undo);
+            auto copied = actions.createCopy();
+            te::EditItemID::remapIDs (copied, nullptr, *edit);
+            clip->state.addChild (copied, -1, undo);
+        }
+        return clip.get();
+    }
     // Clips show their track's colour until they have one of their own. As the reference's clips take
     // their track's colour when made and keep it (0x1021d6554), a track about to change colour gives
     // its clips without one the colour they show; one undo step with the change.
@@ -10588,11 +10713,29 @@ Result Session::bounceTracksInPlace (const juce::StringArray& ids)
     {
         if (static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) && Impl::instrument (*t) == nullptr && ! t->isFrozen (te::Track::individualFreeze))
             return Result::fail ("\"" + shownName (*t) + "\" has no instrument, so it has no sound to bounce.");
-        for (auto* slot : t->getClipSlotList().getClipSlots())
-            if (slot->getClip() != nullptr) return Result::fail ("\"" + shownName (*t) + "\" has Session clips, which Halftrack does not bounce yet.");
+        // Halftrack's freeze renders the Arrangement only, so a frozen track's Session clips have no render.
+        if (t->isFrozen (te::Track::anyFreeze))
+            for (auto* slot : t->getClipSlotList().getClipSlots())
+                if (slot->getClip() != nullptr) return Result::fail ("Unfreeze \"" + shownName (*t) + "\" before bouncing its Session clips.");
     }
     closePluginEditors();
     auto assets = impl->assets(); if (auto r = assets.createDirectory(); r.failed()) return r;
+    // Each active Session clip's render, made first, while the devices play.
+    struct SlotRender { te::ClipSlot* slot; juce::File file; juce::ValueTree original; bool looping = false; double bpm = 120; };
+    std::vector<SlotRender> slotRenders;
+    for (auto* t : tracks)
+        for (auto* slot : t->getClipSlotList().getClipSlots())
+            if (auto* clip = slot->getClip(); clip != nullptr && ! clip->isMuted())
+            {
+                const auto file = assets.getNonexistentChildFile (File::createLegalFileName (shownName (*t)) + " Bounce", ".wav", true);
+                double bpm = 120;
+                if (auto rendered = impl->renderSessionClip (*t, *clip, file, bpm); rendered.failed())
+                {
+                    for (const auto& made : slotRenders) made.file.deleteFile();
+                    return rendered;
+                }
+                slotRenders.push_back ({ slot, file, clip->state.createCopy(), clip->isLooping(), bpm });
+            }
     // Each track's render: its freeze, made now outside history when it has none, so undoing the
     // bounce restores the unfrozen track and its devices, and redo needs no render.
     std::vector<te::AudioTrack*> frozenHere;
@@ -10628,26 +10771,33 @@ Result Session::bounceTracksInPlace (const juce::StringArray& ids)
         }
         renders.push_back (std::move (render));
     }
+    // The preferred warp mode for the Session clips' bounces is set as each is placed, in the same undo step.
+    const auto warp = impl->prefs.defaultWarpMode;
+    const OneUndoStep step (*this, ! slotRenders.empty() && warp != WarpMode::stretch, impl->gesture != nullptr, tracks.size() > 1 ? "Bounce Tracks in Place" : "Bounce Track in Place");
     impl->transaction (tracks.size() > 1 ? "Bounce Tracks in Place" : "Bounce Track in Place");
     auto* undo = &impl->edit->getUndoManager();
     for (auto& render : renders)
     {
         auto* track = render.track;
         // The clips the render replaces, in order.
-        struct Original { String name; double start = 0, end = 0; };
+        struct Original { String name; double start = 0, end = 0; juce::var colour; };
         std::vector<Original> originals;
-        for (auto* clip : track->getClips()) originals.push_back ({ clip->getName(), clip->getPosition().getStart().inSeconds(), clip->getPosition().getEnd().inSeconds() });
+        for (auto* clip : track->getClips())
+            originals.push_back ({ clip->getName(), clip->getPosition().getStart().inSeconds(), clip->getPosition().getEnd().inSeconds(), clip->state[clipColourProperty] });
         std::sort (originals.begin(), originals.end(), [] (const Original& a, const Original& b) { return a.start < b.start; });
         const bool midi = track->state.getProperty (midiTrackProperty, false);
         // A MIDI track named after its instrument or a clip keeps that name as an audio track.
         if (midi && Impl::ownName (*track).isEmpty() && impl->automaticPart (*track) != "MIDI") track->setName (impl->automaticPart (*track));
         track->state.setProperty (te::IDs::frozenIndividually, false, nullptr);
         // Every device goes, with its automation; the mixer, meter and sends stay.
-        for (auto* plugin : track->pluginList.getPlugins())
-            if (dynamic_cast<NativeEffectPlugin*> (plugin) || dynamic_cast<te::ExternalPlugin*> (plugin) || dynamic_cast<UtilityPlugin*> (plugin)
-                || dynamic_cast<SubtractiveSynthPlugin*> (plugin) || dynamic_cast<te::FreezePointPlugin*> (plugin))
-                plugin->deleteFromParent();
+        for (auto* plugin : track->pluginList.getPlugins()) if (Impl::bouncedDevice (plugin)) plugin->deleteFromParent();
         for (auto* clip : track->getClips()) clip->removeFromParent();
+        // Every Session clip goes, and the active ones' bounces take their slots, as the reference's do.
+        for (auto* slot : track->getClipSlotList().getClipSlots()) if (auto* clip = slot->getClip()) clip->removeFromParent();
+        for (const auto& made : slotRenders)
+            if (&made.slot->track == track)
+                if (auto* bounced = impl->placeSessionBounce (*made.slot, made.file, made.original, made.looping, made.bpm); bounced != nullptr && warp != WarpMode::stretch)
+                    if (auto warped = setAudioClipWarp (bounced->itemID.toString(), { warp, made.bpm }); warped.failed()) return warped;
         if (auto lanes = track->state.getChildWithName (takeLanesType); lanes.isValid()) track->state.removeChild (lanes, undo);
         if (midi)
         {
@@ -10666,7 +10816,7 @@ Result Session::bounceTracksInPlace (const juce::StringArray& ids)
                     if (std::abs (render.audio.getSample (c, n)) > 1.0e-4f) return std::min (to, (n + 1) / render.rate + 0.01);
             return std::nullopt;
         };
-        const auto place = [&] (const String& name, double start, double end)
+        const auto place = [&] (const String& name, double start, double end, const juce::var& colour)
         {
             if (end - start < 1.0e-4 || start >= seconds) return;
             auto clip = te::insertWaveClip (*track, name, render.file, { { te::TimePosition::fromSeconds (start), te::TimePosition::fromSeconds (std::min (end, seconds)) }, te::TimeDuration::fromSeconds (start) }, te::DeleteExistingClips::no);
@@ -10675,13 +10825,14 @@ Result Session::bounceTracksInPlace (const juce::StringArray& ids)
             clip->setAutoTempo (false); clip->setAutoPitch (false);
             clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
             giveDefaultFades (*clip, undo);
+            if (! colour.isVoid()) clip->state.setProperty (clipColourProperty, colour, undo);
         };
         for (size_t i = 0; i < originals.size(); ++i)
         {
             const auto& o = originals[i];
-            place (o.name + " Bounce", o.start, o.end);
+            place (o.name + " Bounce", o.start, o.end, o.colour);
             const auto next = i + 1 < originals.size() ? originals[i + 1].start : seconds;
-            if (const auto tail = lastSound (o.end, next)) place (o.name + " Bounce Tail", o.end, *tail);
+            if (const auto tail = lastSound (o.end, next)) place (o.name + " Bounce Tail", o.end, *tail, o.colour);
         }
     }
     impl->refreshRouting(); impl->changed(); return Result::ok();
@@ -10744,34 +10895,17 @@ Result Session::bounceToNewTracks (const juce::StringArray& trackIds, double sta
     for (const auto& render : renders)
     {
         auto* source = render.track;
-        // The new track: right after the source, in its group, with its mixer, sends, track delay,
-        // monitoring, crossfade assignment, colour and output, and their automation, as the reference's.
-        source->flushStateToValueTree();
-        auto made = impl->edit->copyTrack (te::Track::Ptr (source), te::TrackInsertPoint (*source, false));
-        auto* track = dynamic_cast<te::AudioTrack*> (made.get());
+        auto* track = impl->bounceTrackFor (*source);
         if (track == nullptr) { impl->changed(); return Result::fail ("Could not make the new track."); }
-        const auto monitor = source->state[monitorProperty];
-        impl->freshCopy (*track, source->state);
-        track->state.setProperty (monitorProperty, monitor, undo);
-        for (auto* plugin : track->pluginList.getPlugins())
-            if (dynamic_cast<NativeEffectPlugin*> (plugin) || dynamic_cast<te::ExternalPlugin*> (plugin) || dynamic_cast<UtilityPlugin*> (plugin)
-                || dynamic_cast<SubtractiveSynthPlugin*> (plugin) || dynamic_cast<te::FreezePointPlugin*> (plugin))
-                plugin->deleteFromParent();
-        for (auto* clip : allTrackClips (*track)) clip->removeFromParent();
-        if (auto lanes = track->state.getChildWithName (takeLanesType); lanes.isValid()) track->state.removeChild (lanes, undo);
-        track->state.setProperty (midiTrackProperty, false, undo);
-        track->state.setProperty (te::IDs::frozenIndividually, false, nullptr);
-        track->state.removeProperty (infoTextProperty, undo);
-        auto name = (Impl::ownName (*source).isNotEmpty() ? Impl::ownName (*source) : impl->automaticPart (*source));
-        if (! name.endsWith (" Bounce")) name << " Bounce";
-        track->setName (name);
         // The render, cut at the bounced clips' edges, with a tail after one whose sound rings on.
-        struct Part { String name; double from = 0, to = 0; };
+        struct Part { String name; double from = 0, to = 0; juce::var colour; };
         std::vector<Part> parts;
         for (auto* clip : source->getClips())
-            if (inRange (*clip)) parts.push_back ({ clip->getName(), std::max (startSeconds, clip->getPosition().getStart().inSeconds()), std::min (endSeconds, clip->getPosition().getEnd().inSeconds()) });
+            if (inRange (*clip))
+                parts.push_back ({ clip->getName(), std::max (startSeconds, clip->getPosition().getStart().inSeconds()), std::min (endSeconds, clip->getPosition().getEnd().inSeconds()),
+                                   clip->state[clipColourProperty] });
         std::sort (parts.begin(), parts.end(), [] (const Part& a, const Part& b) { return a.from < b.from; });
-        const auto place = [&] (const String& clipName, double from, double to)
+        const auto place = [&] (const String& clipName, double from, double to, const juce::var& colour)
         {
             if (to - from < 1.0e-4) return;
             auto clip = te::insertWaveClip (*track, clipName, render.file,
@@ -10781,6 +10915,7 @@ Result Session::bounceToNewTracks (const juce::StringArray& trackIds, double sta
             clip->setAutoTempo (false); clip->setAutoPitch (false);
             clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
             giveDefaultFades (*clip, undo);
+            if (! colour.isVoid()) clip->state.setProperty (clipColourProperty, colour, undo);
         };
         const auto lastSound = [&render, startSeconds] (double from, double to) -> std::optional<double>
         {
@@ -10792,9 +10927,9 @@ Result Session::bounceToNewTracks (const juce::StringArray& trackIds, double sta
         };
         for (size_t i = 0; i < parts.size(); ++i)
         {
-            place (parts[i].name + " Bounce", parts[i].from, parts[i].to);
+            place (parts[i].name + " Bounce", parts[i].from, parts[i].to, parts[i].colour);
             const auto next = i + 1 < parts.size() ? parts[i + 1].from : endSeconds;
-            if (const auto tail = lastSound (parts[i].to, next)) place (parts[i].name + " Bounce Tail", parts[i].to, *tail);
+            if (const auto tail = lastSound (parts[i].to, next)) place (parts[i].name + " Bounce Tail", parts[i].to, *tail, parts[i].colour);
         }
         // The source keeps its devices; its bounced clips, split at the range's edges, go quiet.
         for (const auto at : { startSeconds, endSeconds }) splitTrackAt (*source, te::TimePosition::fromSeconds (at), undo);
@@ -10803,6 +10938,61 @@ Result Session::bounceToNewTracks (const juce::StringArray& trackIds, double sta
         created.add (track->itemID.toString());
     }
     impl->refreshRouting(); impl->changed(); newTrackIds = created; return Result::ok();
+}
+// Bounce to New Track from Session slots, after a static reading of the reference's slot command (enabled
+// 0x103a417f0): each source track's selected active clips render to a new track after it, in the same
+// slots, and the clips are deactivated.
+Result Session::bounceSlotsToNewTracks (const juce::StringArray& clipIds, juce::StringArray& newTrackIds)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before bouncing clips.");
+    const auto sources = impl->slotBounceSources (clipIds);
+    if (sources.empty()) return Result::fail ("Choose active Session clips to bounce.");
+    for (const auto& [t, slots] : sources)
+    {
+        if (t->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze \"" + shownName (*t) + "\" before bouncing its clips to a new track.");
+        if (static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) && Impl::instrument (*t) == nullptr)
+            return Result::fail ("\"" + shownName (*t) + "\" has no instrument, so it has no sound to bounce.");
+    }
+    closePluginEditors();
+    auto assets = impl->assets(); if (auto r = assets.createDirectory(); r.failed()) return r;
+    struct SlotRender { int index = -1; juce::File file; juce::ValueTree original; bool looping = false; double bpm = 120; };
+    std::vector<std::vector<SlotRender>> renders;
+    const auto discard = [&renders] { for (const auto& list : renders) for (const auto& made : list) made.file.deleteFile(); };
+    for (const auto& [t, slots] : sources)
+    {
+        auto& list = renders.emplace_back();
+        for (auto* slot : slots)
+        {
+            auto* clip = slot->getClip();
+            const auto file = assets.getNonexistentChildFile (File::createLegalFileName (shownName (*t)) + " Bounce", ".wav", true);
+            double bpm = 120;
+            if (auto rendered = impl->renderSessionClip (*t, *clip, file, bpm); rendered.failed()) { discard(); return rendered; }
+            list.push_back ({ slot->getIndex(), file, clip->state.createCopy(), clip->isLooping(), bpm });
+        }
+    }
+    const auto warp = impl->prefs.defaultWarpMode;
+    const auto name = sources.size() > 1 ? "Bounce to New Tracks" : "Bounce to New Track";
+    const OneUndoStep step (*this, warp != WarpMode::stretch, impl->gesture != nullptr, name);
+    impl->transaction (name);
+    juce::StringArray created;
+    for (size_t i = 0; i < sources.size(); ++i)
+    {
+        auto* track = impl->bounceTrackFor (*sources[i].first);
+        if (track == nullptr) { impl->changed(); return Result::fail ("Could not make the new track."); }
+        track->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
+        for (const auto& made : renders[i])
+            if (auto* slot = track->getClipSlotList().getClipSlots()[made.index])
+                if (auto* bounced = impl->placeSessionBounce (*slot, made.file, made.original, made.looping, made.bpm); bounced != nullptr && warp != WarpMode::stretch)
+                    if (auto warped = setAudioClipWarp (bounced->itemID.toString(), { warp, made.bpm }); warped.failed()) return warped;
+        for (auto* slot : sources[i].second) if (auto* clip = slot->getClip()) clip->setMuted (true);
+        created.add (track->itemID.toString());
+    }
+    impl->refreshRouting(); impl->changed(); newTrackIds = created; return Result::ok();
+}
+bool Session::canBounceSlotsToNewTracks (const juce::StringArray& clipIds) const
+{
+    return ! impl->exporting && ! impl->anyRecording() && ! impl->slotBounceSources (clipIds).empty();
 }
 bool Session::canBounceToNewTracks (const juce::StringArray& ids, double startSeconds, double endSeconds) const
 {

@@ -2391,3 +2391,9 @@ Engine area. After the static reading of the reference's command, `bounceToNewTr
 ## Scrolling during Arrangement drags — 2026-10-24
 
 UI area. A drag that reaches the timeline's left or right edge now scrolls the time, and one that reaches the top or bottom of the lanes shown scrolls the lanes. This applies to clips, clip edges and fades, time selections, take lane selections, and the headers of tracks and groups. It goes faster the further the pointer goes and keeps going while the pointer rests. A dragged clip stays under the pointer as the time scrolls. The speeds are Halftrack's own; the reference's drag scrolling was neither read nor measured. Checked in the UI suite ([contract](research/timeline-navigation-contract.md)).
+
+## Bouncing Session clips — 2026-10-24
+
+Engine area. Bounce Track in Place now renders each active Session clip through the track's devices into a warped audio clip in its slot. A looping clip becomes one seamless loop, with its tail wrapped onto its start. The bounce keeps the clip's launch settings, follow actions and colour, and deactivated Session clips go. `bounceSlotsToNewTracks` is the Session view's Bounce to New Track: selected active clips render into the same slots of a new track after theirs, and are deactivated. Bounced Arrangement clips and their tails keep the original clips' colours.
+
+A correction came with it: native instruments and the built-in synth reported no tail, so freezes and bounces cut a note's release at the clip's end. They now report 20 seconds, and renders stop once the sound has died away. The earlier check of a held note's release compared exports, which do not play the freeze, so it now listens to the freeze through a bounce. Checked in the freeze suite ([contract](research/freeze-contract.md#session-clips)).

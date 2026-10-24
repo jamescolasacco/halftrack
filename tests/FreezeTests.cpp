@@ -251,15 +251,32 @@ int runFreezeTests (const juce::File& artifacts)
         ok (s.setTrackFrozen (id, false), "unfreeze the track");
         ok (s.setNativeEffectSettings (track (s).instrument.id, changed), "devices are editable again after unfreezing");
         ok (s.setNativeEffectSettings (track (s).instrument.id, settings), "unity Sampler playback again");
+        // A Session clip playing the same note, in Gate mode, which keeps its colour when the track changes colour.
+        ok (s.addMidiClipToSlot (id, 0, 4), "add a Session clip");
+        const auto sessionClip = [&s] { return track (s).slots.at (0).clip; };
+        ok (s.addMidiNote (sessionClip().id, 60, 0, 1.5, 1), "the same note in it");
+        { auto launch = sessionClip().launch; launch.mode = Session::LaunchMode::gate; ok (s.setClipLaunchSettings (sessionClip().id, launch), "Gate mode"); }
+        const auto clipColour = sessionClip().colour;
+        ok (s.setTrackColours ({ id }, juce::Colours::teal), "a new track colour, the clip keeping the one it showed");
+        const bool looped = sessionClip().loop.on;
         ok (s.bounceTracksInPlace ({ id }), "bounce the MIDI track in place");
         const auto bouncedTrack = track (s);
         check (! bouncedTrack.isMidi && ! bouncedTrack.frozen && ! bouncedTrack.instrument.isNativeEffect && bouncedTrack.clips.size() == 1 && bouncedTrack.clips[0].isAudio
                    && bouncedTrack.id == id && bouncedTrack.name == track (s).name, "it becomes an audio track, the render in place of its clip");
         ok (s.exportWav (render, rate, 32, .5), "render the bounced track");
         check (difference (read (render), reference) < 1e-5, "the bounced clip renders like the live track");
+        {
+            const auto& slot = bouncedTrack.slots.at (0);
+            check (slot.hasClip && slot.clip.isAudio && slot.clip.name.endsWith ("Bounce") && slot.clip.launch.mode == Session::LaunchMode::gate && slot.clip.loop.on == looped
+                       && slot.clip.colour == clipColour && slot.clip.warp.mode != Session::WarpMode::off,
+                   "the Session clip's render takes its slot, warped, with its launch mode, looping and colour");
+            check (difference (read (slot.clip.file), reference) < 1e-5, "the Session clip's render sounds as the same note in the Arrangement did (max difference "
+                   + juce::String (difference (read (slot.clip.file), reference), 8) + ")");
+        }
         s.undo();
-        check (track (s).isMidi && track (s).instrument.isNativeEffect && track (s).clips.size() == 1 && track (s).clips[0].notes.size() == 1 && ! track (s).frozen,
-               "one undo restores the MIDI track with its Sampler and notes, unfrozen");
+        check (track (s).isMidi && track (s).instrument.isNativeEffect && track (s).clips.size() == 1 && track (s).clips[0].notes.size() == 1 && ! track (s).frozen
+                   && sessionClip().isMidi && sessionClip().notes.size() == 1 && sessionClip().launch.mode == Session::LaunchMode::gate,
+               "one undo restores the MIDI track with its Sampler, notes and Session clip, unfrozen");
         {
             juce::StringArray made;
             ok (s.bounceToNewTracks ({ id }, 0, 2, made), "bounce the MIDI track's clip to a new track");
@@ -270,8 +287,26 @@ int runFreezeTests (const juce::File& artifacts)
                    "a new audio track after the MIDI track holds its render; the MIDI track keeps its Sampler, its clip deactivated");
             ok (s.exportWav (render, rate, 32, .5), "render the new track");
             check (difference (read (render), reference) < 1e-5, "the new track plays as the MIDI track did (max difference " + juce::String (difference (read (render), reference), 8) + ")");
+            check (! n.slots.at (0).hasClip && midi.slots.at (0).hasClip && midi.slots.at (0).clip.active, "a time range leaves the Session clips alone");
             s.undo();
             check (track (s).id == id && track (s).clips[0].active, "one undo removes the new track");
+        }
+        {
+            // Bounce to New Track from the Session slot.
+            juce::StringArray made;
+            const auto clipId = sessionClip().id;
+            check (s.canBounceSlotsToNewTracks ({ clipId }) && ! s.canBounceSlotsToNewTracks ({ "none" }), "the Session clip can be bounced to a new track");
+            ok (s.bounceSlotsToNewTracks ({ clipId }, made), "bounce the Session clip to a new track");
+            const auto shot = s.snapshot();
+            const auto& n = shot.tracks.back(); const auto& midi = shot.tracks[shot.tracks.size() - 2];
+            check (made.size() == 1 && n.id == made[0] && ! n.isMidi && n.clips.empty() && n.slots.at (0).hasClip && n.slots.at (0).clip.isAudio
+                       && n.slots.at (0).clip.launch.mode == Session::LaunchMode::gate && midi.id == id && midi.instrument.isNativeEffect && ! midi.slots.at (0).clip.active
+                       && midi.clips.at (0).active,
+                   "a new audio track after the MIDI track holds the clip's render in the same slot; the clip is deactivated, the Sampler and Arrangement clip untouched");
+            check (difference (read (n.slots.at (0).clip.file), reference) < 1e-5, "the new track's clip holds the Session clip's sound");
+            check (! s.canBounceSlotsToNewTracks ({ clipId }), "a deactivated clip is not offered");
+            s.undo();
+            check (track (s).id == id && sessionClip().active, "one undo removes the new track and reactivates the clip");
         }
         ok (s.addReturnTrack ("Room"), "add a return");
         check (s.setTrackFrozen (s.snapshot().tracks.back().id, true).failed(), "returns cannot be frozen");
@@ -294,9 +329,41 @@ int runFreezeTests (const juce::File& artifacts)
             ok (s.exportWav (liveRelease, rate, 32, 1), "render it live with a second after it");
             const auto live = read (liveRelease);
             check (live.getMagnitude ((int) (rate * .55), (int) (rate * .2)) > .01f, "the release sounds after the clip's half second");
+            // Exports render a frozen track from its clips, so the freeze itself is heard through a bounce.
             ok (s.setTrackFrozen (held, true), "freeze it");
-            ok (s.exportWav (frozenRelease, rate, 32, 1), "render it frozen");
-            check (difference (read (frozenRelease), live) < juce::Decibels::decibelsToGain (-70.0f), "the frozen render keeps the release (max difference " + juce::String (difference (read (frozenRelease), live), 8) + ")");
+            ok (s.bounceTracksInPlace ({ held }), "bounce it in place from its freeze");
+            ok (s.exportWav (frozenRelease, rate, 32, 1), "render the bounce");
+            check (heldTrack().clips.size() == 2 && heldTrack().clips[1].name.endsWith ("Bounce Tail")
+                       && difference (read (frozenRelease), live) < juce::Decibels::decibelsToGain (-70.0f),
+                   "the freeze keeps the release, which the bounce puts in a tail clip (max difference " + juce::String (difference (read (frozenRelease), live), 8) + ")");
+            s.undo();
+            check (heldTrack().isMidi && heldTrack().clips.size() == 1 && ! heldTrack().frozen, "undo restores the MIDI track, unfrozen");
+            // The same note in a looping Session clip bounces to one loop, the release wrapped onto its start
+            // so it loops on seamlessly; unlooped, the release follows the clip.
+            ok (s.addMidiClipToSlot (held, 0, 1), "a one-beat Session clip");
+            const auto slotClip = [&heldTrack] { return heldTrack().slots.at (0).clip; };
+            ok (s.addMidiNote (slotClip().id, 60, 0, 1, 1), "the note to its end");
+            ok (s.setClipLoop (slotClip().id, { true, 0, 1 }, 0), "looping over its beat");
+            juce::StringArray made;
+            const auto bouncedRender = [&s, &made]
+            {
+                for (const auto& t : s.snapshot().tracks) if (! made.isEmpty() && t.id == made[0]) return read (t.slots.at (0).clip.file);
+                throw std::runtime_error ("the bounced track is missing");
+            };
+            ok (s.bounceSlotsToNewTracks ({ slotClip().id }, made), "bounce the looping clip to a new track");
+            const int loop = (int) (rate / 2);
+            juce::AudioBuffer<float> folded (2, loop); folded.clear();
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < live.getNumSamples(); ++i) folded.addSample (c, i % loop, live.getSample (c, i));
+            const auto looped = bouncedRender();
+            check (looped.getNumSamples() == loop && difference (looped, folded) < juce::Decibels::decibelsToGain (-70.0f),
+                   "looping, it renders one loop, the release wrapped onto its start (" + juce::String (looped.getNumSamples()) + " samples, max difference "
+                       + juce::String (difference (looped, folded), 8) + ")");
+            s.undo();
+            ok (s.setClipLoop (slotClip().id, { false, 0, 1 }, 0), "unlooped");
+            ok (s.bounceSlotsToNewTracks ({ slotClip().id }, made), "bounce it unlooped");
+            const auto plain = bouncedRender();
+            check (plain.getNumSamples() > loop && difference (plain, live) < juce::Decibels::decibelsToGain (-70.0f),
+                   "unlooped, it renders the clip and then the release (max difference " + juce::String (difference (plain, live), 8) + ")");
         }
         bounceTests (root);
         sendsOnlyTests (root);

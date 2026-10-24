@@ -18,10 +18,11 @@ Freeze and Flatten follow the reference workflow of rendering a track's devices 
 - `bounceTracksInPlace(ids)` is the reference's Bounce Track in Place, after a static reading of it (0x10325bbc8 -> 0x1025a8d30, track list 0x10028b258). `canBounceTracksInPlace(ids)` says whether it would act.
   - It acts on the selected audio and MIDI tracks, top-most; a selected group and returns contribute nothing, as in the reference.
   - A track without a freeze is frozen first, outside history. Its render, or an existing freeze's, is written to the project's Assets.
-  - The render replaces the track's Arrangement clips, cut at their edges and named after them ("… Bounce"). Where the sound rings on after a clip, a tail clip follows it ("… Bounce Tail"), up to the next clip or the end of the render.
+  - The render replaces the track's Arrangement clips, cut at their edges and named after them ("… Bounce"). Where the sound rings on after a clip, a tail clip follows it ("… Bounce Tail"), up to the next clip or the end of the render. Bounced clips and tails keep the original clip's colour (0x102214bb4).
+  - Each active Session clip is rendered through the track's devices into an audio clip in its slot, as the reference renders each Session clip that is not deactivated. Deactivated Session clips go, as the reference's appear to (low confidence). See [Session clips](#session-clips) below.
   - Every device goes, with its automation, and so do the take lanes. A MIDI track becomes an audio track, keeping a name its instrument or a clip gave it. Mixer, sends, name and colour stay.
   - It is one undo step. Undo restores the clips and devices, unfrozen; redo needs no render.
-  - Refused for now: tracks with Session clips (the reference renders each Session clip too; Halftrack does not freeze Session clips yet) and MIDI tracks without an instrument (the reference's sErrorNoAudioBounce).
+  - Refused: MIDI tracks without an instrument (the reference's sErrorNoAudioBounce), and frozen tracks with Session clips, since Halftrack's freeze renders the Arrangement only.
   - The clip names and the tail threshold (−80 dB, with 10 ms after the last sound) are Halftrack's; the reference's suffixes are in its encrypted text, and its tail rule was not decoded.
 - `bounceToNewTracks(ids, start, end, newIds)` is the reference's Bounce to New Track, after the same static reading (section 2 of `artifacts/reverse-engineering/bounce/findings.md`). `canBounceToNewTracks(ids, start, end)` says whether it is offered.
   - It is offered when the listed tracks have an active Arrangement clip in the range, as the reference's clip-area menu offers it with a time selection holding a clip that is not deactivated. Returns are left out.
@@ -31,7 +32,18 @@ Freeze and Flatten follow the reference workflow of rendering a track's devices 
   - The source keeps its devices. Its clips are split at the range's edges and deactivated inside it, so the new track plays in their place.
   - It is one undo step.
   - When it runs, MIDI tracks without an instrument are refused, as the reference refuses them. So are frozen tracks: the reference keeps a frozen source frozen with its bounced clips deactivated inside its per-clip freeze, while Halftrack's freeze is one render of the track, which would play them on. Unfreeze first.
-  - Session clips are not bounced yet, and the interface does not offer the command yet.
+  - A time range leaves Session clips alone. The interface does not offer the command yet.
+- `bounceSlotsToNewTracks(clipIds, newIds)` is the reference's Bounce to New Track from the Session view (enabled 0x103a417f0: a selected slot with an active clip). `canBounceSlotsToNewTracks(clipIds)` says whether it is offered.
+  - Each track with listed active Session clips gets one new track, made as `bounceToNewTracks` makes one. Each clip's render goes into the same slot on it, and the clip is deactivated.
+  - It is one undo step. Frozen tracks and MIDI tracks without an instrument are refused, as above.
+
+### Session clips
+
+A Session clip renders the way the reference bounces each Session clip (0x1025a5a90), with Halftrack's own details:
+- Outside history, a copy of the clip plays once in the Arrangement after everything else, where automation holds its last values. Only that copy is rendered, up to the track's mixer, as a freeze is. The copy is then taken out.
+- A looping clip renders one loop's length from its start, with its tail wrapped onto the beginning so that it loops seamlessly. The reference caps a computed loop length (sErrorSessionLoopLengthLimitBounce), which was not decoded. A clip that does not loop renders its length and then its tail.
+- The render becomes a Session audio clip, warped at the tempo it was rendered at, since Session clips always follow the tempo here, and in the preferred warp mode. It loops over its whole length when its clip looped, and is named after the clip with " Bounce".
+- It takes the clip's launch mode, quantization, legato, velocity amount, follow actions and colour, as the reference copies a Session clip's settings to its bounce (0x10221a450, medium confidence). The reference also copies the groove and time signature; Halftrack's audio bounce has neither.
 - In the interface, the track header menu offers Freeze Track/Unfreeze Track and Bounce Track in Place (Tracks for more than one), as the reference's has them; its 12.2.1 has no Flatten, so the menu no longer offers it. Frozen clips show an icy hatch, and the device chain is dimmed and disabled.
 
 ## Corrections
@@ -39,6 +51,8 @@ Freeze and Flatten follow the reference workflow of rendering a track's devices 
 - **Tails.** A freeze renders on past the last clip for as long as the devices say their tails may ring. The engine stopped at the first silent block, so a Delay's echoes were cut at the gap after the dry sound and frozen tracks lost them. `cmake/PatchFreezeTails.cmake` holds silent blocks back and stops only after three seconds of silence; a tail that sounds again within them is written whole. Other renders stop as before. The echoes then end where they fall below the engine's −70 dB silence.
 
 None of the following needs an engine patch.
+
+- **Instrument tails** (2026-10-24). Native instruments and the built-in synth reported no tail, so a freeze ended at the last clip's end and cut each note's release there. Both now report 20 seconds, at least the longest release of their envelopes, and the render stops once the sound has died away. An earlier check of a held note's release compared exports, which render a frozen track from its clips; it now listens to the freeze through a bounce.
 
 - **MIDI tracks.** The engine's freeze checks that a track's graph produces audio. Native instruments and the built-in synth did not report that they sound without audio input, so freezing a MIDI track rendered nothing. Both now override `producesAudioWhenNoAudioInput`.
 - **Sends Only tracks.** The engine renders a freeze through its render graph, which leaves a Sends Only track's own output out of the mix (see the [routing contract](routing-contract.md#engine-fix)). The render was silent, so the engine unfroze the track and freezing failed with "The track could not be frozen." While a freeze renders (freezing, and redoing a freeze), Session now plays the track into Master outside history, then returns it to Sends Only.
@@ -85,9 +99,16 @@ For Bounce to New Track, the freeze suite bounces the Delay track's first second
 
 It also bounces the Sampler MIDI track to a new audio track that renders like the live track (max difference under 1e-5), the MIDI track keeping its Sampler with its clip deactivated.
 
+For Session clips, the freeze suite gives the Sampler track a Session clip with the same note, in Gate mode and with a colour of its own. It checks that:
+- Bounce Track in Place puts the clip's render in its slot, warped, with its launch mode, looping and colour, sounding as the same note in the Arrangement did (max difference 0), and one undo restores the MIDI clip;
+- a time range leaves the Session clip alone;
+- the slot's Bounce to New Track puts the render in the same slot of a new audio track and deactivates the clip, leaving the Sampler and the Arrangement clip, and is not offered for a deactivated clip;
+- with a 400 ms release on a one-beat note, a looping clip renders exactly one loop with the release wrapped onto its start, and an unlooped one renders the clip and then its release, both matching the live render (max difference 0);
+- a frozen track bounced in place keeps the release in a tail clip, matching the live render.
+
 ## Not implemented
 
-- Freezing and bouncing Session clips.
+- Freezing Session clips: Halftrack's freeze renders the Arrangement only.
 - Bounce to New Track from a frozen source, and from the interface.
 - Undoing a bounce of a track frozen before it, which comes back unfrozen, as after a Flatten.
 - Portable freeze renders.

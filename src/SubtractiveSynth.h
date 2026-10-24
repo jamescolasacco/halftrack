@@ -78,6 +78,7 @@ public:
     void applyToBuffer (const tracktion::PluginRenderContext&) override;
     bool isSynth() override { return true; }
     bool producesAudioWhenNoAudioInput() override { return true; }
+    double getTailLength() const override { return 20.0; } // The longest release; renders stop once it has died away.
     bool takesMidiInput() override { return true; }
     bool takesAudioInput() override { return false; }
     int getNumOutputChannelsGivenInputs (int) override { return 2; }

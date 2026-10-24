@@ -567,7 +567,9 @@ double effectTailSeconds (Kind kind, double rate) noexcept
         case Kind::filterDelay: return 1800.0; // Feedback can ring for a long time, as with the Stereo Delay.
         case Kind::resonators: return 25.0; // The longest Decay, plus room for the input filter.
         case Kind::arpeggiator: case Kind::chord: case Kind::scale: case Kind::pitch: case Kind::velocity: case Kind::random: case Kind::noteLength: case Kind::ccControl: case Kind::noteEcho: case Kind::midiMonitor: return 0.0;
-        case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return 0.0;
+        // An instrument's notes ring on after they end for their release, up to 10 s for the envelopes here, or
+        // for a sample's length; renders that ask stop once the sound has died away.
+        case Kind::polySynth: case Kind::fmSynth: case Kind::drumKit: case Kind::wavetableSynth: case Kind::sampler: case Kind::drumSampler: return 20.0;
         case Kind::instrumentRack: case Kind::audioEffectRack: case Kind::midiEffectRack: case Kind::drumRack: return 0.0; // Racks report their chains.
     }
     return 0.0;
