@@ -123,3 +123,9 @@ The reference's manual: "Live normally moves all automation with the clip", and 
 
 The automation suite moves a clip three seconds and finds its two breakpoints six beats on and nothing left inside its old span, a point after it untouched; one undo, Lock Envelopes leaving the lane as it was, a drag's deferred move matching a single move, and a move to another track leaving it. The UI suite drags a clip a second on with its automation, undoes it, and drags it again with Options > Lock Envelopes on.
 
+## Shapes (2026-10-24)
+
+The reference's manual: right-clicking a time selection offers shapes, the top row sine, triangle, sawtooth, inverse sawtooth and square, "scaled horizontally to the time selection and vertically to the automated parameter range", or to the current grid size without a selection ([Automation and Editing Envelopes](https://www.ableton.com/en/live-manual/12/automation-and-editing-envelopes/), consulted 2026-10-24). The envelope's context menu lists them under Shapes. Each draws one cycle from the bottom of the control's range: the sine from its middle, peaking at a quarter; the triangle up to the top at the middle; the sawtooth rising and the inverse falling; the square at the top for the first half. The lane keeps its shape around the shape, as a drawing does, and each is one undo step. The UI suite inserts the triangle, sine and square over two beats and undoes each.
+
+Not yet: the bottom row's ramps and ADSR, which join the values before and after the selection, and the handles that stretch and skew a selection's automation.
+

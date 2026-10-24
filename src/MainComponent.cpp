@@ -1237,19 +1237,55 @@ private:
         session.endEditGesture(); refresh();
     }
     // An envelope's context menu: Simplify Envelope over the time selection, as the reference's.
-    void envelopeMenu (const arrangementAutomation::Target& target)
+    // The reference's automation shapes: the waveforms of its envelope menu's top row, one cycle over the
+    // time selection (or a grid step without one) across the control's whole range.
+    enum class EnvelopeShape { sine = 10, triangle, sawtooth, inverseSawtooth, square };
+    void envelopeMenu (const arrangementAutomation::Target& target, double clickedBeat = 0)
     {
         const auto range = envelope.selectedBeats ? envelope.selectedBeats (target.trackId) : std::nullopt;
         juce::PopupMenu menu;
         menu.addItem (2, "Clear Envelope", ! target.lane.points.empty());
         menu.addItem (1, "Simplify Envelope", range.has_value() && target.lane.points.size() > 2);
+        menu.addSectionHeader ("Shapes");
+        for (const auto& [shape, name] : { std::pair { EnvelopeShape::sine, "Sine" }, { EnvelopeShape::triangle, "Triangle" }, { EnvelopeShape::sawtooth, "Sawtooth" },
+                                          { EnvelopeShape::inverseSawtooth, "Inverse Sawtooth" }, { EnvelopeShape::square, "Square" } })
+            menu.addItem ((int) shape, name);
+        const auto span = range ? *range : std::pair { gridLine (clickedBeat, -1), gridLine (gridLine (clickedBeat, -1) + 1.0e-6, 1) };
         auto safe = juce::Component::SafePointer<Impl> (this);
-        menu.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId = target.trackId, key = target.key, range] (int choice)
+        menu.showMenuAsync (juce::PopupMenu::Options(), [safe, trackId = target.trackId, key = target.key, range, span] (int choice)
         {
             if (safe == nullptr) return;
             if (choice == 2) safe->clearEnvelope (trackId, key);
             else if (choice == 1 && range) safe->simplifyEnvelope (trackId, key, *range);
+            else if (choice >= (int) EnvelopeShape::sine && choice <= (int) EnvelopeShape::square) safe->insertEnvelopeShape (trackId, key, static_cast<EnvelopeShape> (choice), span);
         });
+    }
+    void insertEnvelopeShape (const juce::String& trackId, const juce::String& key, EnvelopeShape shape, std::pair<double, double> span)
+    {
+        const auto target = automationTarget (trackId, key);
+        const auto [from, to] = span;
+        if (! target || ! (to > from)) return;
+        // The shape as the pointer would draw it freehand, so the lane keeps its shape around it.
+        arrangementAutomation::Drawing drawing;
+        drawing.begin (target->lane.points);
+        const auto length = to - from, gap = arrangementAutomation::Drawing::stepGap;
+        const auto add = [&] (double at, float proportion) { drawing.add (from + at, proportion, {}); };
+        switch (shape)
+        {
+            case EnvelopeShape::sine:
+                for (int i = 0; i <= 32; ++i) add (std::min (length - gap, length * i / 32.0), .5f + .5f * (float) std::sin (juce::MathConstants<double>::twoPi * i / 32.0));
+                break;
+            case EnvelopeShape::triangle: add (0, 0); add (length / 2, 1); add (length - gap, 0); break;
+            case EnvelopeShape::sawtooth: add (0, 0); add (length - gap, 1); break;
+            case EnvelopeShape::inverseSawtooth: add (0, 1); add (length - gap, 0); break;
+            case EnvelopeShape::square: add (0, 1); add (length / 2 - gap, 1); add (length / 2, 0); add (length - gap, 0); break;
+        }
+        auto lane = target->lane;
+        lane.points = drawing.points ([&target] (float p) { return arrangementAutomation::fromProportion (*target, p); },
+                                      [&target] (float v) { return arrangementAutomation::toProportion (*target, v); }, target->manual);
+        session.beginEditGesture ("Insert envelope shape");
+        report (arrangementAutomation::write (session, *target, lane));
+        session.endEditGesture(); refresh();
     }
     void simplifyEnvelope (const juce::String& trackId, const juce::String& key, std::pair<double, double> range)
     {
@@ -3575,7 +3611,7 @@ private:
                 juce::String trackId, key; juce::Rectangle<float> area;
                 if (envelopeAt (e.y, trackId, key, area))
                 {
-                    if (e.mods.isPopupMenu()) if (const auto target = owner.automationTarget (trackId, key)) { owner.envelopeMenu (*target); return; }
+                    if (e.mods.isPopupMenu()) if (const auto target = owner.automationTarget (trackId, key)) { owner.envelopeMenu (*target, owner.envelope.beatOfX (e.position.x)); return; }
                     if (const auto target = owner.automationTarget (trackId, key); target && owner.envelope.mouseDown (owner.session, *target, area, e))
                     {
                         owner.envelopeTrack = owner.selectedEnvelopeTrack = trackId; owner.envelopeKey = owner.selectedEnvelopeKey = key;
@@ -17621,6 +17657,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             session.undo(); menuItemSelected (menuLockEnvelopes, 6); refresh();
             session.undo(); session.undo(); refresh();
             check (state.tracks[(size_t) t].clips.empty() && volume().points.size() == lanesBefore.points.size(), "undo removes the clip and its automation");
+            // The envelope menu's shapes: one cycle over the time selection across the control's whole range.
+            const auto key = "mixer:" + trackId + ":volume";
+            const auto top = Session::automationProportionToValue (Session::AutomationTarget::volume, 1), bottom = Session::automationProportionToValue (Session::AutomationTarget::volume, 0);
+            const auto at = [&] (double beat, float db)
+            { const auto list = volume().points; return std::any_of (list.begin(), list.end(), [&] (const auto& p) { return std::abs (p.beat - beat) < 1e-3 && std::abs (p.value - db) < .1f; }); };
+            insertEnvelopeShape (trackId, key, EnvelopeShape::triangle, { 2.0, 4.0 });
+            check (at (2, bottom) && at (3, top) && at (4 - arrangementAutomation::Drawing::stepGap, bottom) && at (1, -24) && at (5, 0),
+                   "a triangle rises from the bottom to the top of the range at the selection's middle and falls back, the lane kept around it");
+            session.undo(); refresh();
+            insertEnvelopeShape (trackId, key, EnvelopeShape::sine, { 2.0, 4.0 });
+            check (at (2.5, top) && at (3.5, bottom), "a sine peaks a quarter of the way along and dips at three quarters");
+            session.undo(); refresh();
+            insertEnvelopeShape (trackId, key, EnvelopeShape::square, { 2.0, 4.0 });
+            check (at (2, top) && at (3, bottom), "a square holds the top for the first half, then the bottom");
+            session.undo(); refresh();
+            check (volume().points.size() == lanesBefore.points.size(), "each shape is one undo step");
         }
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())

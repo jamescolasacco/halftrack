@@ -2609,3 +2609,7 @@ UI area. As in the reference, a background drag in the note editor now selects i
 
 Engine and UI areas. View > Arrangement Track Controls shows and hides the Arrangement headers' routing, volume and pan, and Track Delay, and the return tracks, with the reference's default Set's defaults; Option+Cmd+I and Option+Cmd+R toggle In/Out and Returns in the Arrangement. They are kept with the project ([mixer sections contract](research/mixer-sections-contract.md#arrangement-track-controls-2026-10-24)). Checked in the track order and UI suites.
 
+## Automation shapes — 2026-10-24
+
+UI area. The envelope's context menu offers the reference's waveform shapes, sine, triangle, sawtooth, inverse sawtooth and square, one cycle over the time selection or a grid step, across the control's whole range ([automation contract](research/arrangement-automation-contract.md#shapes-2026-10-24)). Checked in the UI suite.
+
