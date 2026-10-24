@@ -5501,6 +5501,19 @@ private:
             position.onTextChange = [this] { edit (position); };
             length.onTextChange = [this] { edit (length); };
             loop.onClick = [this] { toggle(); };
+            // The Set buttons, as the reference's: while the clip plays, each puts its marker at the play
+            // position, rounded to the global launch quantization.
+            const char* names[] { "Set start", "Set end", "Set loop position", "Set loop length" };
+            for (int i = 0; i < 4; ++i)
+            {
+                auto& button = set[(size_t) i];
+                addAndMakeVisible (button); button.setName (names[i]); button.setWantsKeyboardFocus (false); button.setMouseClickGrabsKeyboardFocus (false);
+                button.setTooltip (juce::String (names[i]).replace ("Set ", "Set the ") + " at the play position while the clip plays");
+                button.onClick = [this, i]
+                {
+                    if (const auto beat = owner.clipPlayBeat (clip)) owner.setClipMarker (clip, static_cast<ClipMarker> (i), owner.globallyQuantised (*beat));
+                };
+            }
         }
         void setClip (const Session::ClipInfo& shown)
         {
@@ -5515,15 +5528,18 @@ private:
             start.setEnabled (enabled); loop.setEnabled (enabled);
             end.setEnabled (enabled && ! clip.loop.on);
             position.setEnabled (enabled && clip.loop.on); length.setEnabled (enabled && clip.loop.on);
+            const bool playing = enabled && owner.clipPlayBeat (clip).has_value();
+            for (int i = 0; i < 4; ++i) set[(size_t) i].setEnabled (playing && (i != (int) ClipMarker::end || ! clip.loop.on));
             repaint();
         }
         void resized() override
         {
             auto area = getLocalBounds().reduced (6, 0).withTrimmedTop (28);
-            const auto row = [&] (juce::Component& c) { auto r = area.removeFromTop (22); r.removeFromLeft (54); c.setBounds (r); area.removeFromTop (6); };
-            row (start); row (end);
+            const auto row = [&] (juce::Component& c, juce::Component& button)
+            { auto r = area.removeFromTop (22); r.removeFromLeft (54); button.setBounds (r.removeFromRight (26)); r.removeFromRight (3); c.setBounds (r); area.removeFromTop (6); };
+            row (start, set[0]); row (end, set[1]);
             loop.setBounds (area.removeFromTop (22)); area.removeFromTop (6);
-            row (position); row (length);
+            row (position, set[2]); row (length, set[3]);
         }
         void paint (juce::Graphics& g) override
         {
@@ -5544,6 +5560,7 @@ private:
         Session::ClipInfo clip;
         juce::Label start, end, position, length;
         juce::TextButton loop { "Loop" };
+        std::array<juce::TextButton, 4> set { juce::TextButton ("Set"), juce::TextButton ("Set"), juce::TextButton ("Set"), juce::TextButton ("Set") };
         void edit (juce::Label& field)
         {
             const auto& meter = owner.state.timeSignature;
@@ -9690,6 +9707,69 @@ private:
         undoHistoryWindow = new UndoHistoryWindow (*this, theme);
         undoHistoryWindow->toFront (true);
     }
+    // A clip's markers, as the Loop box's Set buttons and Edit > Clip Markers set them: its start and end,
+    // and its loop's start and end, which also turn the loop on. The start stays inside a loop.
+    enum class ClipMarker { start, end, loopStart, loopEnd };
+    void setClipMarker (const Session::ClipInfo& clip, ClipMarker which, double beat)
+    {
+        beat = std::max (0.0, beat);
+        auto next = clip.loop;
+        auto from = clip.contentStartBeat;
+        switch (which)
+        {
+            case ClipMarker::end:
+                if (clip.loop.on || beat <= clip.contentStartBeat) { report (juce::Result::fail ("The end goes after the start, on a clip that does not loop.")); return; }
+                report (session.setClipBeats (clip.id, clip.startBeat, beat - clip.contentStartBeat, clip.contentStartBeat)); refresh(); return;
+            case ClipMarker::start: from = beat; break;
+            case ClipMarker::loopStart: next.start = beat; next.on = true; break;
+            case ClipMarker::loopEnd:
+                if (beat <= next.start) { report (juce::Result::fail ("The loop's end goes after its start.")); return; }
+                next.length = beat - next.start; next.on = true; break;
+        }
+        if (next.on && (from < next.start || from >= next.start + next.length)) from = next.start;
+        report (session.setClipLoop (clip.id, next, from)); refresh();
+    }
+    // Where a clip plays, in its content's beats, while the transport plays it.
+    std::optional<double> clipPlayBeat (const Session::ClipInfo& clip) const
+    {
+        if (! state.playing) return std::nullopt;
+        for (const auto& track : state.tracks)
+            for (const auto& slot : track.slots)
+                if (slot.hasClip && slot.clip.id == clip.id) return slot.playing && slot.playPositionBeats >= 0 ? std::optional<double> (slot.playPositionBeats) : std::nullopt;
+        const auto into = beatsAt (state.position) - clip.startBeat;
+        if (into < 0 || into > clip.lengthBeats) return std::nullopt;
+        return contentBeatAt (clip, into);
+    }
+    // A beat rounded to the global launch quantization, as the Set buttons round the play position.
+    double globallyQuantised (double beat) const
+    {
+        using Q = Session::LaunchQuantisation;
+        const auto bar = state.timeSignature.beatsPerBar();
+        double step = 0;
+        switch (state.launchQuantisation)
+        {
+            case Q::none: break;
+            case Q::eightBars: step = 8 * bar; break; case Q::fourBars: step = 4 * bar; break; case Q::twoBars: step = 2 * bar; break; case Q::bar: step = bar; break;
+            case Q::half: step = 2; break; case Q::halfTriplet: step = 4.0 / 3; break; case Q::beat: step = 1; break; case Q::quarterTriplet: step = 2.0 / 3; break;
+            case Q::eighth: step = .5; break; case Q::eighthTriplet: step = 1.0 / 3; break; case Q::sixteenth: step = .25; break;
+            case Q::sixteenthTriplet: step = 1.0 / 6; break; case Q::thirtysecond: step = .125; break;
+        }
+        return step > 0 ? std::round (beat / step) * step : beat;
+    }
+    // Edit > Clip Markers, for the MIDI clip in the clip view: at the play position while it plays,
+    // rounded as the Set buttons round it, or else at the note editor's insert marker.
+    bool canSetClipMarker (ClipMarker which) const
+    {
+        const auto* clip = showPiano ? currentMidiClip() : nullptr;
+        return clip != nullptr && (which != ClipMarker::end || ! clip->loop.on);
+    }
+    void clipMarkerFromMenu (ClipMarker which)
+    {
+        if (! canSetClipMarker (which)) return;
+        const auto clip = *currentMidiClip();
+        const auto playing = clipPlayBeat (clip);
+        setClipMarker (clip, which, playing ? globallyQuantised (*playing) : pianoRoll.insertion());
+    }
     // Navigate's focus commands, as the reference's: the part shows and takes the keys, and Edit's
     // commands act there.
     void focusPart (int command)
@@ -12216,7 +12296,7 @@ private:
                     menuExternalSync, menuSplitStop, menuDetailView, menuInvertSelection, menuPluginWindows, menuOverview, menuSceneSettings,
                     menuSoloSwitches, menuCueSwitches, menuSaveCopy, menuDrawMode, menuFoldToNotes, menuFoldToScale, menuScaleHighlighting, menuUndoHistory,
                     menuFocusSession, menuFocusArrangement, menuFocusClip, menuFocusDevices, menuFocusBrowser, menuFocusGroovePool, menuFocusMixer,
-                    menuSelectLoop, menuPlaySelection,
+                    menuSelectLoop, menuPlaySelection, menuSetClipStart, menuSetLoopStart, menuSetLoopEnd, menuSetClipEnd,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410 }; // Plus Session::TimeFormat.
@@ -12258,6 +12338,7 @@ private:
             { menuFocusSession, key ('1', alt) }, { menuFocusArrangement, key ('2', alt) }, { menuFocusClip, key ('3', alt) }, { menuFocusDevices, key ('4', alt) },
             { menuFocusBrowser, key ('5', alt) }, { menuFocusGroovePool, key ('6', alt) }, { menuFocusMixer, key ('m', alt | shift) },
             { menuSelectLoop, key ('l', cmd | shift) }, { menuPlaySelection, key (KeyPress::spaceKey, alt) },
+            { menuSetClipStart, key (KeyPress::F9Key, cmd) }, { menuSetLoopStart, key (KeyPress::F10Key, cmd) }, { menuSetLoopEnd, key (KeyPress::F11Key, cmd) }, { menuSetClipEnd, key (KeyPress::F12Key, cmd) },
             { 93, key ('1', cmd) }, { 94, key ('2', cmd) }, { 95, key ('3', cmd) }, { 96, key ('4', cmd) }, { 97, key ('5', cmd) }, { 13, key ('e', cmd | shift | alt) } };
         for (const auto& [id, press] : shortcuts)
         {
@@ -12648,6 +12729,12 @@ private:
             add (menuSelectLoop, "Select Loop", canSelectLoop (area));
             // Loop Selection, or the loop switched on or off, as the clip menu's.
             if (area == EditArea::arrangement) command (79, "Loop Selection"); else add (79, state.looping ? "Deactivate Loop" : "Activate Loop");
+            juce::PopupMenu markers;
+            markers.addItem (menuEntry (menuSetClipStart, "Set Clip Start", canSetClipMarker (ClipMarker::start)));
+            markers.addItem (menuEntry (menuSetLoopStart, "Set Loop Start", canSetClipMarker (ClipMarker::loopStart)));
+            markers.addItem (menuEntry (menuSetLoopEnd, "Set Loop End", canSetClipMarker (ClipMarker::loopEnd)));
+            markers.addItem (menuEntry (menuSetClipEnd, "Set Clip End", canSetClipMarker (ClipMarker::end)));
+            popup.addSubMenu ("Clip Markers", markers, ! menusBlocked());
             popup.addSeparator();
             // Group and Ungroup make racks in the device view, and keep their track names elsewhere, as the reference's.
             const bool devices = area == EditArea::devices;
@@ -12903,6 +12990,10 @@ private:
             case 79: if (editArea() == EditArea::arrangement) runAreaCommand (id); else session.setLoop (! state.looping, state.loopStart, state.loopEnd); break;
             case menuSelectAll: selectAll (editArea()); return;
             case menuSelectLoop: selectLoop (editArea()); return;
+            case menuSetClipStart: clipMarkerFromMenu (ClipMarker::start); return;
+            case menuSetLoopStart: clipMarkerFromMenu (ClipMarker::loopStart); return;
+            case menuSetLoopEnd: clipMarkerFromMenu (ClipMarker::loopEnd); return;
+            case menuSetClipEnd: clipMarkerFromMenu (ClipMarker::end); return;
             case menuPlaySelection: playSelectionFromUI(); return;
             case 74: { const auto [a, b] = editRange(); report (session.insertTime (a, b - a)); refresh(); break; }
             case 75: { const auto [a, b] = editRange(); report (session.deleteTime (a, b - a)); timeSelection = {}; refresh(); break; }
@@ -18472,7 +18563,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             return juce::StringArray { session.canUndo() ? "Undo" + step (session.undoDescription()) : "Can't Undo", session.canRedo() ? "Redo" + step (session.redoDescription()) : "Can't Redo" };
         }();
         check (history[0] == "Undo Add MIDI track" && history[1] == "Can't Redo", "Edit names the step Undo takes back (" + history.joinIntoString (", ") + ")");
-        expect ("Edit", { history[0], history[1], "-", "Cut", "Copy", "Paste", "Duplicate", "Delete", "-", "Deactivate Clip", "-", "Select All", "Invert Selection", "Select Loop", loop, "-", "Group Tracks", "Ungroup Tracks", "-",
+        expect ("Edit", { history[0], history[1], "-", "Cut", "Copy", "Paste", "Duplicate", "Delete", "-", "Deactivate Clip", "-", "Select All", "Invert Selection", "Select Loop", loop, "Clip Markers >", "-", "Group Tracks", "Ungroup Tracks", "-",
                           "Cut Time (Loop Range)", "Paste Time", "Duplicate Time (Loop Range)", "Delete Time (Loop Range)", "-", "Rename", "Edit Info Text", "-", "Solo", "Arm", "-",
                           "Freeze Track", "Bounce Track in Place", "Bounce to New Track", "-", "Split", "Consolidate", "-", "Quantize", "Extract Groove", "Record Quantization >" });
         expect ("Create", { "Insert Audio Track", "Insert MIDI Track", "Insert Return Track", "Insert Take Lane", "-", "Insert Silence (Loop Range)", "Capture and Insert Scene",
@@ -19190,6 +19281,36 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 for (int step = 0; step < 3; ++step) session.undo();
                 refresh();
                 check (loopClip().loop == Session::ClipLoop { true, 1, 2 } && loopClip().contentStartBeat == 1, "each drag is one undo step");
+                // Edit > Clip Markers (Cmd+F9 to F12) sets a marker at the note editor's insert marker; the Loop
+                // box's Set buttons wait for the clip to play, then set theirs at the play position.
+                const auto placeInsert = [&] (double beat)
+                {
+                    const auto x = (float) (55 + beat * rollBeat), y = 48.0f;
+                    pianoRoll.mouseDown (rollEvent (x, y, x, false)); pianoRoll.mouseUp (rollEvent (x, y, x, false)); refresh();
+                };
+                auto* setPosition = dynamic_cast<juce::Button*> (findNamed (clipLoop, "Set loop position"));
+                check (setPosition != nullptr && ! setPosition->isEnabled(), "the Loop box's Set buttons wait while the clip is stopped");
+                const auto historyBefore = session.undoSteps().size();
+                placeInsert (2.5); menuItemSelected (menuSetLoopEnd, 1); refresh();
+                check (loopClip().loop == Session::ClipLoop { true, 1, 1.5 } && loopClip().contentStartBeat == 1, "Set Loop End puts the loop's end at the insert marker");
+                placeInsert (.5); menuItemSelected (menuSetLoopStart, 1); refresh();
+                check (loopClip().loop == Session::ClipLoop { true, .5, 1.5 } && loopClip().contentStartBeat == 1, "Set Loop Start moves the loop to start there, keeping its length");
+                check (! canSetClipMarker (ClipMarker::end), "Set Clip End is greyed while the clip loops");
+                placeInsert (1.5);
+                check (handleKey (juce::KeyPress (juce::KeyPress::F9Key, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)) && loopClip().contentStartBeat == 1.5,
+                       "Cmd+F9 sets the clip's start at the insert marker");
+                const auto grid = state.launchQuantisation;
+                check (session.setLaunchQuantisation (Session::LaunchQuantisation::none).wasOk(), "no launch quantization, so the play position is used as it is");
+                session.seek (0); check (session.play().wasOk(), "play the clip from its start"); pumpSyntheticTestDevice (session, 48000 / 256 / 4); refresh();
+                const auto played = clipPlayBeat (loopClip());
+                check (played.has_value() && setPosition->isEnabled(), "while it plays the Set buttons can act");
+                setPosition->onClick(); refresh();
+                session.stop(); refresh();
+                check (std::abs (loopClip().loop.start - *played) < .4 && loopClip().loop.on, "Set at the loop's Position puts the loop's start at the play position (" + juce::String (loopClip().loop.start, 3) + ")");
+                check (session.setLaunchQuantisation (grid).wasOk(), "the launch quantization as it was");
+                while (session.undoSteps().size() > historyBefore && session.canUndo()) session.undo();
+                refresh(); session.seek (0); refresh();
+                check (loopClip().loop == Session::ClipLoop { true, 1, 2 } && loopClip().contentStartBeat == 1 && state.launchQuantisation == grid, "undo returns the markers");
             }
             const auto edgeEvent = [&] (juce::Point<float> at, juce::Point<float> down, bool dragged)
             {

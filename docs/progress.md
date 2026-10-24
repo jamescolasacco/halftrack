@@ -2553,3 +2553,7 @@ UI area. The menu bar gains the reference's Navigate menu, between View and Opti
 
 Engine and UI areas. Edit > Select Loop (Shift+Cmd+L) selects the loop's time across every track, or in the clip view the notes inside the clip's loop brace. Playback > Play Arrangement Selection (Option+Space) plays the time selection and stops at its end (`Session::playRange`), and without one reads Play from Insert Marker. In the Arrangement, R reverses and Shift+Cmd+J crops the time selection or a lone selected clip, as the reference's keys do ([menu contract](research/main-menu-contract.md), [clip menus](research/clip-menus-contract.md)). The new menu items had reached the ids kept for the Slice items, so Option+Space would have sliced the selected clip; those ranges now start at 400, and a compile-time check keeps them apart. Checked in the transport and UI suites.
 
+## Clip markers and Set buttons — 2026-10-24
+
+UI area. The Loop box gains the reference's Set buttons beside Start, End, Position and Length: while the clip plays, each puts its marker at the play position, rounded to the global launch quantization. Edit > Clip Markers (Cmd+F9 to F12) sets the same markers for the MIDI clip in the clip view, at the play position or else the note editor's insert marker ([clip loops contract](research/clip-loops-contract.md)). Checked in the UI suite.
+

@@ -41,6 +41,9 @@ Looping, the clip plays from its start into the loop and round it for as long as
 - **Start** and **End**. End applies to unlooped Arrangement clips.
 - **Loop.** Turning it on loops what the clip plays.
 - **Position** and **Length**, enabled while looping. Moving the loop past the start takes the start with it.
+- **Set** buttons beside Start, End, Position and Length, as the reference's ([Clip View](https://www.ableton.com/en/live-manual/12/clip-view/), consulted 2026-10-24). While the clip plays, each puts its marker at the play position rounded to the global launch quantization; Position's and Length's turn the loop on. Set beside End waits while the clip loops.
+
+**Edit > Clip Markers** (Set Clip Start, Set Loop Start, Set Loop End, Set Clip End, on Cmd+F9 to Cmd+F12 as the reference's keys) sets the same markers for the MIDI clip in the clip view: at the play position while it plays, rounded the same way, or else at the note editor's insert marker.
 
 **The editors.** The note editor and the warped waveform:
 
@@ -90,7 +93,7 @@ It also checks:
   - unlooping, which ends the clip with its audio;
   - Warp off, which ends the loop where it starts.
 
-The main UI suite turns Loop on from the Loop box and sets Length and Position, and checks that a start outside the loop is refused. It drags the loop brace's end, the brace and the start marker in the note editor's ruler, undoing each. It also lengthens a warped clip's loop by its brace in the waveform. It drags a looped clip's right edge to repeat it and its left edge to trim it, undoing each, and shows the Loop box for a warped audio clip.
+The main UI suite turns Loop on from the Loop box and sets Length and Position, and checks that a start outside the loop is refused. It drags the loop brace's end, the brace and the start marker in the note editor's ruler, undoing each. It also lengthens a warped clip's loop by its brace in the waveform. It sets the loop's end and start at the insert marker from Edit > Clip Markers, greys Set Clip End while looping, sets the start with Cmd+F9, and while the clip plays sets the loop's Position from its Set button. It drags a looped clip's right edge to repeat it and its left edge to trim it, undoing each, and shows the Loop box for a warped audio clip.
 
 ## Not yet covered
 
