@@ -2948,3 +2948,7 @@ Engine and UI areas. A research agent read five small behaviours of the referenc
 
 Engine and UI areas. As the reference's manual describes for take lanes (section 21.4), a MIDI file dropped onto a MIDI track's take lane now goes into it, several one after another or with Cmd one to a lane. Dropped onto a MIDI track's main lane it becomes a clip there; dropped elsewhere it imports as Import File does, where before drops of MIDI files were ignored. `Session::importMidiFileToTrack` puts every track of the file into one clip named for it, one undo step. The MIDI file reading shared with Import File moved into `readMidiFileParts` ([take lanes contract](research/take-lanes-contract.md#samples-and-midi-files-onto-lanes-2026-10-25)).
 
+## Moving splits between MIDI comp parts — 2026-10-25
+
+UI area. As the reference's manual describes for every comp (section 21.7), dragging a source highlight's edge now also moves the split between two unlooped MIDI comp parts. The parts stay within the takes they came from, and the right part's notes stay where they play (`Session::setClipBeats`); one undo step. A UI check that crashed once on a missing group (reading past `state.groups`) now fails with the groups it finds.
+

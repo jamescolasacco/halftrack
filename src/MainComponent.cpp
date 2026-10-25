@@ -4040,12 +4040,22 @@ private:
         std::vector<std::unique_ptr<TakeLaneHeader>> takeHeaders;
         bool selectingTake = false;
         // A source highlight's edge dragged in a take lane moves the split between the two comp parts that meet
-        // there, as the reference's does (its manual, section 21.7): audio parts, within their material.
-        struct CompSplit { Session::ClipInfo left, right; double minimum = 0, maximum = 0; };
+        // there, as the reference's does (its manual, section 21.7): audio parts within their sound, unlooped MIDI
+        // parts within the takes they came from.
+        struct CompSplit { Session::ClipInfo left, right; double minimum = 0, maximum = 0; bool midi = false; };
         std::optional<CompSplit> compSplit;
         std::optional<CompSplit> compSplitAt (const Session::TrackInfo& track, const Session::TakeLaneInfo& lane, float x) const
         {
             constexpr double shortest = 0.01;
+            // The take a MIDI part came from, around a time in it: where that take starts and ends.
+            const auto takeAround = [&] (const Session::ClipInfo& part, double at) -> std::optional<std::pair<double, double>>
+            {
+                for (const auto& l : track.takeLanes)
+                    if (l.id == part.compSource)
+                        for (const auto& c : l.clips)
+                            if (c.start <= at + 1e-6 && c.start + c.length >= at - 1e-6) return std::pair { c.start, c.start + c.length };
+                return std::nullopt;
+            };
             for (const auto& take : lane.clips)
                 for (const auto& [from, to] : Impl::compSourceRanges (track, lane, take))
                     for (const auto edge : { from, to })
@@ -4057,9 +4067,16 @@ private:
                             if (std::abs (c.start + c.length - edge) < 1e-6) left = &c;
                             if (std::abs (c.start - edge) < 1e-6) right = &c;
                         }
-                        if (left == nullptr || right == nullptr || ! left->isAudio || ! right->isAudio || ! left->canEditAudioRange || ! right->canEditAudioRange) continue;
-                        return CompSplit { *left, *right, std::max (left->start + shortest, right->start - right->sourceOffset),
-                                           std::min (right->start + right->length - shortest, left->start + left->sourceLength - left->sourceOffset) };
+                        if (left == nullptr || right == nullptr) continue;
+                        if (left->isAudio && right->isAudio && left->canEditAudioRange && right->canEditAudioRange)
+                            return CompSplit { *left, *right, std::max (left->start + shortest, right->start - right->sourceOffset),
+                                               std::min (right->start + right->length - shortest, left->start + left->sourceLength - left->sourceOffset) };
+                        if (left->isMidi && right->isMidi && ! left->loop.on && ! right->loop.on)
+                        {
+                            const auto leftTake = takeAround (*left, edge), rightTake = takeAround (*right, edge);
+                            return CompSplit { *left, *right, std::max (left->start + shortest, rightTake ? rightTake->first : right->start),
+                                               std::min (right->start + right->length - shortest, leftTake ? leftTake->second : edge), true };
+                        }
                     }
             return std::nullopt;
         }
@@ -4767,11 +4784,15 @@ private:
             }
             if (compSplit)
             {
-                const auto& [left, right, minimum, maximum] = *compSplit;
+                const auto& [left, right, minimum, maximum, midi] = *compSplit;
                 const auto at = juce::jlimit (minimum, juce::jmax (minimum, maximum), owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods));
-                // The part that shrinks goes first, so the two never overlap.
-                const auto moveLeft = [&] { return owner.session.setAudioClipRange (left.id, left.start, at - left.start, left.sourceOffset); };
-                const auto moveRight = [&] { return owner.session.setAudioClipRange (right.id, at, right.start + right.length - at, right.sourceOffset + (at - right.start)); };
+                // The part that shrinks goes first, so the two never overlap. MIDI parts keep their notes in place, the
+                // right one's content beat at its start moving with its edge.
+                const auto beat = owner.beatsAt (at);
+                const auto moveLeft = [&] { return midi ? owner.session.setClipBeats (left.id, left.startBeat, beat - left.startBeat, left.contentStartBeat)
+                                                        : owner.session.setAudioClipRange (left.id, left.start, at - left.start, left.sourceOffset); };
+                const auto moveRight = [&] { return midi ? owner.session.setClipBeats (right.id, beat, right.startBeat + right.lengthBeats - beat, right.contentStartBeat + (beat - right.startBeat))
+                                                         : owner.session.setAudioClipRange (right.id, at, right.start + right.length - at, right.sourceOffset + (at - right.start)); };
                 const auto current = [&] { for (const auto& c : owner.state.tracks[(size_t) owner.selectedTrack].clips) if (c.id == left.id) return c.start + c.length; return left.start + left.length; }();
                 if (at >= current) { owner.report (moveRight()); owner.report (moveLeft()); }
                 else { owner.report (moveLeft()); owner.report (moveRight()); }
@@ -22491,6 +22512,33 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "dropped onto the main lane it becomes a clip there, two beats long, one undo step");
         session.undo(); refresh();
         check (state.tracks[(size_t) t].clips.empty(), "undo takes it back");
+        {
+            // Two MIDI takes comped, and the split between their parts dragged, as the reference's comps move theirs.
+            juce::String secondLane, clipA, clipB;
+            check (session.insertTakeLane (trackId, secondLane).wasOk() && session.importMidiFileToTrack ({}, laneId, midiFile.getFile(), 0, clipA).wasOk()
+                       && session.importMidiFileToTrack ({}, secondLane, midiFile.getFile(), 0, clipB).wasOk(), "the same notes in two take lanes from the start");
+            check (session.compTake (laneId, 0, .5).wasOk() && session.compTake (secondLane, .5, 1).wasOk(), "comp the first half from Take 1 and the second from Take 2");
+            refresh(); resized();
+            const auto parts = [&] { auto clips = state.tracks[(size_t) t].clips; std::sort (clips.begin(), clips.end(), [] (const auto& a, const auto& b) { return a.start < b.start; }); return clips; };
+            const auto before = parts();
+            check (before.size() == 2 && std::abs (before[0].start + before[0].length - .5) < 1e-6 && std::abs (before[1].start - .5) < 1e-6, "the main lane's two parts meet at half a second");
+            const auto* first = laneOf (true);
+            const auto y = (float) (first->y + first->height / 2);
+            const auto xAt = [&] (double seconds) { return (float) ((seconds - viewStart) * pixelsPerSecond); };
+            const auto now = juce::Time::getCurrentTime();
+            const juce::ModifierKeys mods (juce::ModifierKeys::leftButtonModifier | bypassModifier);
+            const juce::Point<float> edge { xAt (.5), y }, later { xAt (.75), y };
+            const auto mouse = [&] (juce::Point<float> at, bool dragged) { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, mods, 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, edge, now, 1, dragged); };
+            const auto steps = session.undoSteps().size();
+            canvas.mouseDown (mouse (edge, false)); canvas.mouseDrag (mouse (later, true)); canvas.mouseUp (mouse (later, true)); refresh();
+            const auto after = parts();
+            const auto tolerance = 1.5 / pixelsPerSecond;
+            check (after.size() == 2 && std::abs (after[0].start + after[0].length - .75) < tolerance && std::abs (after[1].start - .75) < tolerance
+                       && std::abs ((after[1].startBeat - after[1].contentStartBeat) - (before[1].startBeat - before[1].contentStartBeat)) < 1e-6 && session.undoSteps().size() == steps + 1,
+                   "dragging Take 1's highlight edge moves the split between the MIDI parts, their notes in place, one undo step");
+            session.undo(); refresh();
+            check (std::abs (parts()[1].start - .5) < 1e-6, "undo puts it back");
+        }
         takeLanesShown.erase (trackId);
         check (session.removeTrack (t).wasOk(), "remove the MIDI drop track"); refresh();
     }
@@ -28224,6 +28272,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 canvas.mouseDoubleClick (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), empty, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
                                                            &canvas, &canvas, when, empty, when, 2, false));
                 refresh();
+                // A missing group fails here rather than reading past the groups (seen once on the Mac, 2026-10-25).
+                juce::StringArray groupsNow;
+                for (const auto& g : state.groups) groupsNow.add (g.name + " (" + g.id + ")");
+                check (groupInfo (inner) != nullptr, "the inner group is still there after the double-click (groups: " + groupsNow.joinIntoString (", ") + ")");
                 const auto lane = groupInfo (inner)->volumeAutomation;
                 check (lane.points.size() == 1 && std::abs (lane.points[0].beat - 4) < .26 && lane.points[0].value > 0, "double-clicking the group's lane adds a breakpoint to its volume");
                 // The group's + moves the envelope into a lane below the group, as a track's does.

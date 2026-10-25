@@ -76,7 +76,9 @@ Evidence: Live 12 manual, [Comping](https://www.ableton.com/en/live-manual/12/co
 Halftrack:
 
 - **Highlights.** A take lane clip shows the material the main lane plays from it in the clip's colour, and the rest in a desaturated, darker shade of it. A main-lane clip counts where it was comped or recorded from that lane and still plays the same material at the same time: the same file at the same alignment for audio, the same content beat for MIDI. A part moved away loses its highlight. `ClipInfo::compSource` reports the lane a main-lane clip came from.
-- **Moving a split.** Dragging a highlight's edge, within 4 pixels, where two audio comp parts meet moves the split between them, each part's edge going with it within its material and at least 10 ms long. It is one undo step.
+- **Moving a split.** Dragging a highlight's edge, within 4 pixels, where two comp parts meet moves the split between them, each part at least 10 ms long. It is one undo step.
+  - Audio parts move within their sound.
+  - Unlooped MIDI parts (2026-10-25) move within the takes they came from, their notes staying where they play (`setClipBeats`).
 - **Drawing.** In Draw Mode a drag across a take lane comps the range it covers on release, one undo step.
 - **Fades.** Comp parts are new clips and split edges, so Create Fades on Clip Edges already gives them their default fades ([clip fades contract](clip-fades-contract.md)).
 
@@ -105,4 +107,6 @@ Halftrack:
 
 The take lanes suite puts a half-second sample into Take 1 at 3 s from the project's media, the main lane unchanged, refuses an unknown lane and a missing file, and undoes it. It puts a MIDI file of two tracks into a MIDI track's take lane at beat 4: one clip named for the file, with both tracks' notes, three beats long, the main lane unchanged, undone in one step. It then puts the file onto the main lane, and refuses an audio track's lane, an unknown lane and a missing file. The UI suite drops a sound onto Take 2 in one undo step, and two sounds with Cmd, one going to Take 2 and one to a new lane, which one undo takes back with the lane. It drops a MIDI file onto a MIDI track's take lane and its main lane, each one undo step.
 
-Missing: moving a split between MIDI comp parts, MIDI comping through the UI, and MIDI files dropped into Session slots.
+The UI suite also comps two MIDI takes of the same notes, the first half from Take 1 and the second from Take 2, and drags the split between the parts a quarter second later: one undo step, the right part's notes staying where they played. Undo puts the split back.
+
+Missing: MIDI files dropped into Session slots.
