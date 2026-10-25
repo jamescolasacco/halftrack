@@ -28381,6 +28381,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 headerFocusWatcher.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { 10.0f, 10.0f }, {}, 1.0f, 0, 0, 0, 0, &canvas, &canvas, now2, { 10.0f, 10.0f }, now2, 1, false));
                 check (! headerFocus, "a click in the lanes takes the focus from the headers");
                 // Automation Mode: a group's header offers its mixer, as a track's does, and its lane draws and edits the envelope.
+                {
+                    // The inner group has gone missing here under load once (2026-10-25); the steps say how.
+                    juce::StringArray groupsNow, history;
+                    for (const auto& g : state.groups) groupsNow.add (g.name + " (" + g.id + ")");
+                    for (const auto& step : session.undoSteps()) if (history.size() < 8) history.add (step);
+                    check (groupInfo (inner) != nullptr, "the inner group is there before Automation Mode (groups: " + groupsNow.joinIntoString (", ")
+                                                              + "; latest undo steps: " + history.joinIntoString (" < ") + ")");
+                }
                 setAutomationMode (true); refresh();
                 const auto automated = groupLane (inner);
                 juce::Component* header = canvas.getComponentAt (canvas.timelineWidth() + 60, automated.y + 28);
@@ -28395,9 +28403,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                                                            &canvas, &canvas, when, empty, when, 2, false));
                 refresh();
                 // A missing group fails here rather than reading past the groups (seen once on the Mac, 2026-10-25).
-                juce::StringArray groupsNow;
+                juce::StringArray groupsNow, history;
                 for (const auto& g : state.groups) groupsNow.add (g.name + " (" + g.id + ")");
-                check (groupInfo (inner) != nullptr, "the inner group is still there after the double-click (groups: " + groupsNow.joinIntoString (", ") + ")");
+                for (const auto& step : session.undoSteps()) if (history.size() < 8) history.add (step);
+                check (groupInfo (inner) != nullptr, "the inner group is still there after the double-click (groups: " + groupsNow.joinIntoString (", ")
+                                                          + "; latest undo steps: " + history.joinIntoString (" < ") + ")");
                 const auto lane = groupInfo (inner)->volumeAutomation;
                 check (lane.points.size() == 1 && std::abs (lane.points[0].beat - 4) < .26 && lane.points[0].value > 0, "double-clicking the group's lane adds a breakpoint to its volume");
                 // The group's + moves the envelope into a lane below the group, as a track's does.
